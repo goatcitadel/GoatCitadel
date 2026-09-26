@@ -48,6 +48,7 @@ import {
   parseOrchestrationWorkflowPayload,
 } from "./orchestration-lifecycle-state-helpers.js";
 import { publishOrchestrationRealtime, throwIfWorkflowAborted } from "./orchestration-realtime-helpers.js";
+import type { OrchestrationWorktreeReleaseResult } from "./orchestration-worktree-service.js";
 
 export { parseOrchestrationWorkflowPayload } from "./orchestration-lifecycle-state-helpers.js";
 
@@ -103,7 +104,7 @@ export interface OrchestrationLifecycleRuntimeDeps {
     release(input: {
       run: OrchestrationRun;
       reason: "completed" | "failed" | "stopped_by_limit" | "cancelled";
-    }): Promise<void>;
+    }): Promise<OrchestrationWorktreeReleaseResult | void>;
     ensureLeaseForExecution(run: OrchestrationRun): Promise<OrchestrationRun>;
   };
   readonly phaseExecutor: {
@@ -239,7 +240,21 @@ async function releaseOrchestrationWorktreeIfAvailable(
   reason: "completed" | "failed" | "stopped_by_limit" | "cancelled",
 ): Promise<void> {
   try {
-    await runtime.worktrees.release({ run, reason });
+    const released = await runtime.worktrees.release({ run, reason });
+    if (released?.outcome === "retained_dirty") {
+      await persistRunEvent(host, run, "run.worktree_retained_dirty", {
+        reason,
+        worktreePath: released.worktreePath,
+        changedPathCount: released.changedPathCount,
+        changedPaths: released.changedPaths,
+      });
+    } else if (released?.outcome === "retained_unverified") {
+      await persistRunEvent(host, run, "run.worktree_retained_unverified", {
+        reason,
+        worktreePath: released.worktreePath,
+        error: released.error,
+      });
+    }
   } catch (error) {
     await persistRunEvent(host, run, "run.worktree_cleanup_failed", {
       reason,

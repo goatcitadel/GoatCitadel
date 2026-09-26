@@ -16,6 +16,25 @@ const DEFAULT_WORKTREE_LEASE_DURATION_MS = 5 * 60 * 1000;
 
 export type OrchestrationWorktreeReleaseReason = "completed" | "failed" | "stopped_by_limit" | "cancelled";
 
+/** How many changed paths a retained worktree reports; the full count is always included. */
+const MAX_REPORTED_CHANGED_PATHS = 20;
+
+export type OrchestrationWorktreeReleaseResult =
+  | { outcome: "removed" | "missing" | "not_allocated" }
+  | {
+      /** The worktree had uncommitted work, so it was kept and its lease released. */
+      outcome: "retained_dirty";
+      worktreePath: string;
+      changedPathCount: number;
+      changedPaths: string[];
+    }
+  | {
+      /** Git could not report whether the worktree holds uncommitted work, so it was kept and its lease released. */
+      outcome: "retained_unverified";
+      worktreePath: string;
+      error: string;
+    };
+
 export interface OrchestrationWorktreeServiceDeps {
   readonly config: Pick<GatewayRuntimeConfig, "rootDir" | "assistant" | "toolPolicy">;
   readonly orchestrationRuns: Pick<
@@ -167,10 +186,13 @@ export class OrchestrationWorktreeService {
     return adopted;
   }
 
-  public async release(input: { run: OrchestrationRun; reason: OrchestrationWorktreeReleaseReason }): Promise<void> {
+  public async release(input: {
+    run: OrchestrationRun;
+    reason: OrchestrationWorktreeReleaseReason;
+  }): Promise<OrchestrationWorktreeReleaseResult> {
     const worktreePath = input.run.worktreePath?.trim();
     if (!worktreePath) {
-      return;
+      return { outcome: "not_allocated" };
     }
     const worktreesRoot = this.resolveWorktreesRoot();
     const resolvedPath = path.resolve(worktreePath);
@@ -178,25 +200,86 @@ export class OrchestrationWorktreeService {
     assertWritePathInJail(resolvedPath, this.deps.config.toolPolicy.sandbox.writeJailRoots);
     if (!fsSync.existsSync(resolvedPath)) {
       await this.releaseMissingPathLease(input.run, resolvedPath);
-      return;
+      return { outcome: "missing" };
     }
     const cleanupLease = await this.acquireCleanupLease(input.run, resolvedPath);
     this.stopLeaseHeartbeat(resolvedPath, cleanupLease);
     const manager = this.createManager(worktreesRoot);
-    try {
-      await manager.remove(resolvedPath);
-    } catch (error) {
-      log.warn("git worktree remove failed; falling back to filesystem cleanup", {
-        runId: input.run.runId,
-        reason: input.reason,
-        worktreePath: resolvedPath,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      await fs.rm(resolvedPath, { recursive: true, force: true });
+    const changes = await manager.listChanges(resolvedPath);
+    const unregisteredHasContent =
+      changes.status === "unregistered" && (await hasDirectoryEntriesOrUnreadable(resolvedPath));
+    if (
+      changes.status === "unreadable" ||
+      unregisteredHasContent ||
+      (changes.status === "read" && changes.changedPaths.length > 0)
+    ) {
+      // Removing the worktree would destroy uncommitted work, or might when git
+      // cannot tell. Keep it and give up ownership; the orphan reaper also
+      // leaves such worktrees in place.
+      if (!(await this.deps.worktreeLeases.release({ ...cleanupLease, releasedAt: this.now() }))) {
+        throw new Error(`Orchestration worktree lease changed before retention completed: ${resolvedPath}`);
+      }
+      return changes.status === "read"
+        ? {
+            outcome: "retained_dirty",
+            worktreePath: resolvedPath,
+            changedPathCount: changes.changedPaths.length,
+            changedPaths: changes.changedPaths.slice(0, MAX_REPORTED_CHANGED_PATHS),
+          }
+        : {
+            outcome: "retained_unverified",
+            worktreePath: resolvedPath,
+            error:
+              changes.status === "unreadable"
+                ? changes.error
+                : "Git does not register this nonempty worktree directory",
+          };
     }
-    // ORCH-004: prune stale `.git/worktrees/<id>` metadata after every removal
-    // path (including the filesystem fallback), so git's worktree registry does
-    // not accumulate orphaned entries for reclaimed run worktrees.
+    if (changes.status === "unregistered") {
+      try {
+        // An empty directory can be removed atomically; a new file makes rmdir
+        // fail rather than letting recursive cleanup destroy it.
+        await fs.rmdir(resolvedPath);
+      } catch (error) {
+        if (await pathMayExist(resolvedPath)) {
+          if (!(await this.deps.worktreeLeases.release({ ...cleanupLease, releasedAt: this.now() }))) {
+            throw new Error(`Orchestration worktree lease changed before retention completed: ${resolvedPath}`, {
+              cause: error,
+            });
+          }
+          return {
+            outcome: "retained_unverified",
+            worktreePath: resolvedPath,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
+    } else {
+      try {
+        await manager.remove(resolvedPath);
+      } catch (error) {
+        if (await pathMayExist(resolvedPath)) {
+          log.warn("git worktree remove failed; retaining worktree", {
+            runId: input.run.runId,
+            reason: input.reason,
+            worktreePath: resolvedPath,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          if (!(await this.deps.worktreeLeases.release({ ...cleanupLease, releasedAt: this.now() }))) {
+            throw new Error(`Orchestration worktree lease changed before retention completed: ${resolvedPath}`, {
+              cause: error,
+            });
+          }
+          return {
+            outcome: "retained_unverified",
+            worktreePath: resolvedPath,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
+    }
+    // ORCH-004: prune stale `.git/worktrees/<id>` metadata after removal so
+    // git's worktree registry does not accumulate orphaned entries.
     const pruned = await this.pruneWorktreeMetadata(manager, input.run.runId, input.reason, resolvedPath);
     if (
       pruned &&
@@ -207,6 +290,7 @@ export class OrchestrationWorktreeService {
     ) {
       throw new Error(`Orchestration worktree lease changed before cleanup completed: ${resolvedPath}`);
     }
+    return { outcome: "removed" };
   }
 
   private async acquireCleanupLease(
@@ -425,13 +509,23 @@ export class OrchestrationWorktreeService {
       dryRun?: boolean;
       minAgeMs?: number;
     } = {},
-  ): Promise<{ dryRun: boolean; scanned: number; removed: string[]; skippedActive: string[] }> {
+  ): Promise<{
+    dryRun: boolean;
+    scanned: number;
+    removed: string[];
+    skippedActive: string[];
+    /** Orphaned worktrees kept because they hold uncommitted work. */
+    skippedDirty: string[];
+    /** Orphaned worktrees kept because git could not report whether they hold uncommitted work. */
+    skippedUnverified: string[];
+  }> {
     const dryRun = input.dryRun ?? true;
     const minAgeMs = Math.max(0, input.minAgeMs ?? 60 * 60 * 1000);
     const worktreesRoot = this.resolveWorktreesRoot();
     if (!fsSync.existsSync(worktreesRoot)) {
-      return { dryRun, scanned: 0, removed: [], skippedActive: [] };
+      return { dryRun, scanned: 0, removed: [], skippedActive: [], skippedDirty: [], skippedUnverified: [] };
     }
+    const manager = this.createManager(worktreesRoot);
 
     const activeStatuses = new Set<OrchestrationRun["status"]>(["queued", "running", "paused"]);
     const activeWorktreePaths = new Set(
@@ -443,6 +537,9 @@ export class OrchestrationWorktreeService {
     const entries = await fs.readdir(worktreesRoot, { withFileTypes: true });
     const removed: string[] = [];
     const skippedActive: string[] = [];
+    const skippedDirty: string[] = [];
+    const skippedUnverified: string[] = [];
+    const skippedFor = { dirty: skippedDirty, unverified: skippedUnverified };
     const scanNow = this.now();
     const now = Date.parse(scanNow);
 
@@ -470,7 +567,12 @@ export class OrchestrationWorktreeService {
         continue;
       }
       if (dryRun) {
-        removed.push(candidatePath);
+        const retention = await readRetentionNeed(manager, candidatePath);
+        if (retention === "dirty" || retention === "unverified") {
+          skippedFor[retention].push(candidatePath);
+        } else {
+          removed.push(candidatePath);
+        }
         continue;
       }
       const claimed = await this.deps.worktreeLeases.claim({
@@ -484,14 +586,42 @@ export class OrchestrationWorktreeService {
         skippedActive.push(candidatePath);
         continue;
       }
-      await fs.rm(candidatePath, { recursive: true, force: true });
+      const retention = await readRetentionNeed(manager, candidatePath);
+      if (retention === "dirty" || retention === "unverified") {
+        if (!(await this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
+          throw new Error(`Orchestration worktree lease changed before orphan scan completed: ${candidatePath}`);
+        }
+        skippedFor[retention].push(candidatePath);
+        continue;
+      }
+      if (retention === "empty_unregistered") {
+        try {
+          await fs.rmdir(candidatePath);
+        } catch {
+          if (!(await this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
+            throw new Error(`Orchestration worktree lease changed before orphan scan completed: ${candidatePath}`);
+          }
+          ((await pathMayExist(candidatePath)) ? skippedUnverified : removed).push(candidatePath);
+          continue;
+        }
+      } else {
+        try {
+          await manager.remove(candidatePath);
+        } catch {
+          if (!(await this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
+            throw new Error(`Orchestration worktree lease changed before orphan scan completed: ${candidatePath}`);
+          }
+          ((await pathMayExist(candidatePath)) ? skippedUnverified : removed).push(candidatePath);
+          continue;
+        }
+      }
       if (!(await this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
         throw new Error(`Orchestration worktree lease changed before orphan cleanup completed: ${candidatePath}`);
       }
       removed.push(candidatePath);
     }
 
-    return { dryRun, scanned: entries.length, removed, skippedActive };
+    return { dryRun, scanned: entries.length, removed, skippedActive, skippedDirty, skippedUnverified };
   }
 
   private resolveWorktreesRoot(): string {
@@ -524,6 +654,43 @@ export class OrchestrationWorktreeService {
 
   private now(): string {
     return this.deps.now?.() ?? new Date().toISOString();
+  }
+}
+
+/**
+ * Whether an orphaned worktree can be removed. Git, reading it through its
+ * registration, must report no uncommitted work. An unregistered directory is
+ * removable only when it is empty. One git cannot read is kept, since it may
+ * hold work.
+ */
+async function readRetentionNeed(
+  manager: WorktreeManager,
+  worktreePath: string,
+): Promise<"registered_clean" | "empty_unregistered" | "dirty" | "unverified"> {
+  const changes = await manager.listChanges(worktreePath);
+  if (changes.status === "unreadable") {
+    return "unverified";
+  }
+  if (changes.status === "unregistered") {
+    return (await hasDirectoryEntriesOrUnreadable(worktreePath)) ? "unverified" : "empty_unregistered";
+  }
+  return changes.changedPaths.length > 0 ? "dirty" : "registered_clean";
+}
+
+async function hasDirectoryEntriesOrUnreadable(worktreePath: string): Promise<boolean> {
+  try {
+    return (await fs.readdir(worktreePath)).length > 0;
+  } catch {
+    return true;
+  }
+}
+
+async function pathMayExist(worktreePath: string): Promise<boolean> {
+  try {
+    await fs.lstat(worktreePath);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
   }
 }
 
