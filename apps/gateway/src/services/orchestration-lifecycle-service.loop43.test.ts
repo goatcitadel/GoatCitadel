@@ -6,10 +6,10 @@ import {
   approvePhase,
   cancelOrchestrationRun,
   executeDurableOrchestrationRun,
-  failOrchestrationRunForWorkflowError,
   listRunCheckpoints,
   parseOrchestrationWorkflowPayload,
   reconcileTerminalOrchestrationRuns,
+  settleOrchestrationRunForEndedDurableRun,
   runOrchestrationPlan,
   type OrchestrationLifecycleHost,
   type OrchestrationLifecycleRuntimeDeps,
@@ -1406,7 +1406,7 @@ describe("orchestration lifecycle keeps runs in step with their durable runs", (
     expect(harness.host.requestDurableRunProcessing).not.toHaveBeenCalled();
   });
 
-  it("fails the orchestration run of a workflow that threw, under the durable lease", async () => {
+  it("settles the orchestration run once its durable run has failed for a workflow error", async () => {
     const harness = createHarness({
       run: {
         ...buildRun(),
@@ -1417,20 +1417,24 @@ describe("orchestration lifecycle keeps runs in step with their durable runs", (
         durableRunId: "durable-run-1",
         worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
       },
+      durableRun: buildDurableRun({
+        status: "failed",
+        lastError: "plan storage unavailable",
+        finishedAt: "2026-05-15T12:10:00.000Z",
+        leaseOwnerId: undefined,
+      }),
     });
     enforceCompareAndSet(harness);
 
-    await failOrchestrationRunForWorkflowError(
-      harness.host,
-      harness.runtime,
-      harness.getDurableRun(),
-      new Error("plan storage unavailable"),
-    );
+    await settleOrchestrationRunForEndedDurableRun(harness.host, harness.runtime, harness.getDurableRun(), {
+      reason: "workflow_error",
+    });
 
     expect(harness.getRun()).toMatchObject({
       status: "failed",
       executionState: "failed",
-      lastError: "Durable orchestration workflow failed: plan storage unavailable",
+      lastError: "plan storage unavailable",
+      endedAt: "2026-05-15T12:10:00.000Z",
     });
     expect(harness.runtime.worktrees.release).toHaveBeenCalledWith({
       run: expect.objectContaining({ status: "failed" }),
@@ -1439,27 +1443,98 @@ describe("orchestration lifecycle keeps runs in step with their durable runs", (
     expect(harness.host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
       "run-1",
       "run.failed",
-      expect.objectContaining({ reason: "workflow_error", durableRunId: "durable-run-1" }),
+      expect.objectContaining({
+        reason: "workflow_error",
+        durableTerminalStatus: "failed",
+        terminalWinner: "durable_run",
+      }),
     );
   });
 
-  it("leaves a workflow-error run to the new lease owner when this worker lost the lease", async () => {
+  it("leaves the orchestration run alone when its durable run did not end, such as after a pause took the lease", async () => {
     const harness = createHarness({
       run: { ...buildRun(), status: "running", executionState: "running", durableRunId: "durable-run-1" },
+      durableRun: buildDurableRun({ status: "paused", leaseOwnerId: undefined }),
     });
     enforceCompareAndSet(harness);
-    const claimedByAnotherWorker = { ...harness.getDurableRun(), leaseOwnerId: "worker-b" };
-    harness.setDurableRun(claimedByAnotherWorker);
 
-    await failOrchestrationRunForWorkflowError(
-      harness.host,
-      harness.runtime,
-      buildDurableRun({ leaseOwnerId: "worker-a" }),
-      new Error("stale worker"),
-    );
+    await settleOrchestrationRunForEndedDurableRun(harness.host, harness.runtime, harness.getDurableRun(), {
+      reason: "workflow_error",
+    });
 
     expect(harness.getRun()).toMatchObject({ status: "running", executionState: "running" });
     expect(harness.runtime.worktrees.release).not.toHaveBeenCalled();
+    expect(harness.host.storage.orchestration.appendRunEvent).not.toHaveBeenCalled();
+  });
+
+  it("redacts and bounds the durable error it copies into the run and its realtime event", async () => {
+    const secret = "settle-secret-token-1234567890";
+    const harness = createHarness({
+      run: { ...buildRun(), status: "running", executionState: "running", durableRunId: "durable-run-1" },
+      durableRun: buildDurableRun({
+        status: "failed",
+        lastError: `Provider call failed: Authorization: Bearer ${secret} ${"x".repeat(5000)}`,
+        finishedAt: "2026-05-15T12:10:00.000Z",
+        leaseOwnerId: undefined,
+      }),
+    });
+    enforceCompareAndSet(harness);
+
+    await settleOrchestrationRunForEndedDurableRun(harness.host, harness.runtime, harness.getDurableRun(), {
+      reason: "workflow_error",
+    });
+
+    const lastError = harness.getRun().lastError ?? "";
+    expect(lastError).toMatch(/^Provider call failed: /);
+    expect(lastError).not.toContain(secret);
+    expect(lastError.length).toBeLessThanOrEqual(2000 + " [truncated]".length);
+    expect(JSON.stringify(vi.mocked(harness.host.publishRealtime).mock.calls)).not.toContain(secret);
+  });
+
+  it.each([
+    ["failed", "failed"],
+    ["completed", "completed"],
+    ["stopped_by_limit", "completed"],
+  ] as const)(
+    "settles a durable run whose orchestration run already %s, without executing anything",
+    async (status, outcome) => {
+      const harness = createHarness({
+        run: {
+          ...buildRun(),
+          status,
+          executionState: status,
+          currentPhaseId: "phase-1",
+          durableRunId: "durable-run-1",
+          endedAt: "2026-05-15T12:05:00.000Z",
+        },
+      });
+
+      const result = await executeDurableOrchestrationRun(harness.host, harness.runtime, harness.getDurableRun());
+
+      expect(result.outcome).toBe(outcome);
+      expect(harness.getRun()).toMatchObject({ status, executionState: status });
+      expect(harness.runtime.worktrees.ensureLeaseForExecution).not.toHaveBeenCalled();
+      expect(harness.runtime.phaseExecutor.execute).not.toHaveBeenCalled();
+      expect(harness.host.cancelDurableRun).not.toHaveBeenCalled();
+    },
+  );
+
+  it("cancels the durable run of an orchestration run that was already cancelled", async () => {
+    const harness = createHarness({
+      run: {
+        ...buildRun(),
+        status: "cancelled",
+        executionState: "cancelled",
+        currentPhaseId: "phase-1",
+        durableRunId: "durable-run-1",
+      },
+    });
+
+    const result = await executeDurableOrchestrationRun(harness.host, harness.runtime, harness.getDurableRun());
+
+    expect(result.outcome).toBe("cancelled");
+    expect(harness.host.cancelDurableRun).toHaveBeenCalledWith("durable-run-1", "orchestration");
+    expect(harness.runtime.phaseExecutor.execute).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1487,8 +1562,10 @@ describe("orchestration lifecycle keeps runs in step with their durable runs", (
     });
     enforceCompareAndSet(harness);
     (
-      harness.host.storage.orchestration as { listActiveLinkedRuns?: () => Promise<OrchestrationRun[]> }
-    ).listActiveLinkedRuns = vi.fn(async () => [harness.getRun()]);
+      harness.host.storage.orchestration as {
+        listActiveRunsWithEndedDurableRun?: () => Promise<OrchestrationRun[]>;
+      }
+    ).listActiveRunsWithEndedDurableRun = vi.fn(async () => [harness.getRun()]);
 
     await reconcileTerminalOrchestrationRuns(harness.host, harness.runtime);
 
@@ -1505,15 +1582,17 @@ describe("orchestration lifecycle keeps runs in step with their durable runs", (
     expect(harness.runtime.worktrees.release).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves active runs whose durable run is still going", async () => {
+  it("skips a listed run whose durable run has not ended after all", async () => {
     const harness = createHarness({
       run: { ...buildRun(), status: "paused", executionState: "paused_for_approval", durableRunId: "durable-run-1" },
       durableRun: buildDurableRun({ status: "paused", leaseOwnerId: undefined }),
     });
     enforceCompareAndSet(harness);
     (
-      harness.host.storage.orchestration as { listActiveLinkedRuns?: () => Promise<OrchestrationRun[]> }
-    ).listActiveLinkedRuns = vi.fn(async () => [harness.getRun()]);
+      harness.host.storage.orchestration as {
+        listActiveRunsWithEndedDurableRun?: () => Promise<OrchestrationRun[]>;
+      }
+    ).listActiveRunsWithEndedDurableRun = vi.fn(async () => [harness.getRun()]);
 
     await reconcileTerminalOrchestrationRuns(harness.host, harness.runtime);
 

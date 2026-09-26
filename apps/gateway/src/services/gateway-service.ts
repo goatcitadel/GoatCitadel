@@ -1870,10 +1870,20 @@ export class GatewayService {
         () => this.durableWorkflowRegistry,
       ),
       onRunFailed: async (run, message) => {
-        await this.improvementService.recordDurableRunFailureSignal({
-          run,
-          message,
-        });
+        try {
+          await this.improvementService.recordDurableRunFailureSignal({
+            run,
+            message,
+          });
+        } finally {
+          // The durable failure has committed; now its orchestration run can follow.
+          await orchestrationLifecycleService.settleOrchestrationRunForEndedDurableRun(
+            this,
+            this.getOrchestrationLifecycleRuntimeDeps(),
+            run,
+            { reason: "workflow_error" },
+          );
+        }
       },
       onBackgroundAttentionRequired: async (input) => {
         if (!(await this.isFeatureEnabled("notificationRoutingV1Enabled"))) return false;
@@ -2933,13 +2943,6 @@ export class GatewayService {
             this.recordImprovementDurableRunCompletion(run, checkpointState),
           executeDurableOrchestrationRun: async (run, context) =>
             await this.executeDurableOrchestrationRun(run, context),
-          failOrchestrationRunForWorkflowError: async (run, error) =>
-            await orchestrationLifecycleService.failOrchestrationRunForWorkflowError(
-              this,
-              this.getOrchestrationLifecycleRuntimeDeps(),
-              run,
-              error,
-            ),
         },
         curatorTick: {
           storage: this.storage,

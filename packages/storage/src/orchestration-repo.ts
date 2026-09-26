@@ -95,7 +95,7 @@ export class OrchestrationRepository {
   private readonly listRunsStmt;
   private readonly getLatestRunByPlanStmt;
   private readonly findActiveRunByPlanStmt;
-  private readonly listActiveLinkedRunsStmt;
+  private readonly listActiveRunsWithEndedDurableRunStmt;
   private readonly insertCheckpointStmt;
   private readonly listCheckpointsStmt;
   private readonly listCheckpointsAfterStmt;
@@ -342,11 +342,12 @@ export class OrchestrationRepository {
       LIMIT 1
     `);
 
-    this.listActiveLinkedRunsStmt = db.prepare(`
-      SELECT * FROM orchestration_runs
-      WHERE status IN ('queued', 'running', 'paused')
-        AND durable_run_id IS NOT NULL
-      ORDER BY started_at ASC, run_id ASC
+    this.listActiveRunsWithEndedDurableRunStmt = db.prepare(`
+      SELECT o.* FROM orchestration_runs o
+      JOIN durable_runs d ON d.run_id = o.durable_run_id
+      WHERE o.status IN ('queued', 'running', 'paused')
+        AND d.status IN ('completed', 'failed', 'cancelled', 'dead_lettered')
+      ORDER BY o.started_at ASC, o.run_id ASC
       LIMIT @limit
     `);
 
@@ -578,10 +579,14 @@ export class OrchestrationRepository {
     return mapRunRow(row);
   }
 
-  /** Active (queued, running, or paused) runs linked to a durable run, oldest first. */
-  public listActiveLinkedRuns(limit = 200): OrchestrationRun[] {
+  /**
+   * Active (queued, running, or paused) runs whose linked durable run has
+   * already ended, oldest first. Only rows that need settling are returned, so
+   * long-lived active runs cannot crowd them out of a bounded scan.
+   */
+  public listActiveRunsWithEndedDurableRun(limit = 200): OrchestrationRun[] {
     const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
-    return toOrchestrationRunRows(this.listActiveLinkedRunsStmt.all({ limit: safeLimit })).map(mapRunRow);
+    return toOrchestrationRunRows(this.listActiveRunsWithEndedDurableRunStmt.all({ limit: safeLimit })).map(mapRunRow);
   }
 
   public listRuns(limit = 1000): OrchestrationRun[] {

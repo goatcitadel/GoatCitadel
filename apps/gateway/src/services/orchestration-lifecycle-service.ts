@@ -9,6 +9,7 @@
 import {
   ConflictError,
   isChatTurnTerminalStatus,
+  redactSecretText,
   redactStructuredSecrets,
   type ChatTurnTraceRecord,
   type DurableChildWatcherCreateRequest,
@@ -166,8 +167,8 @@ export interface OrchestrationLifecycleHost {
       listCheckpoints(runId: string): Promise<OrchestrationCheckpoint[]>;
       listRunEvents?(runId: string): Promise<OrchestrationRunEventRecord[]>;
       getRun(runId: string): Promise<OrchestrationRun>;
-      /** Active runs linked to a durable run, oldest first. */
-      listActiveLinkedRuns?(limit?: number): Promise<OrchestrationRun[]>;
+      /** Active runs whose linked durable run has already ended, oldest first. */
+      listActiveRunsWithEndedDurableRun?(limit?: number): Promise<OrchestrationRun[]>;
     };
     runtimeDecisionTraces?: {
       append(input: RuntimeDecisionTraceAppendInput): Promise<RuntimeDecisionTraceRecord>;
@@ -254,6 +255,16 @@ function isOrchestrationRunTerminal(run: OrchestrationRun): boolean {
 
 function isDurableRunTerminal(run: DurableRunRecord): boolean {
   return ["completed", "failed", "cancelled", "dead_lettered"].includes(run.status);
+}
+
+const RUN_ERROR_MAX_CHARACTERS = 2000;
+
+/** Redacts secrets from, and bounds, error text copied into run state, events, and realtime payloads. */
+function boundRunError(message: string): string {
+  const redacted = redactSecretText(message).value;
+  return redacted.length > RUN_ERROR_MAX_CHARACTERS
+    ? `${redacted.slice(0, RUN_ERROR_MAX_CHARACTERS)} [truncated]`
+    : redacted;
 }
 
 function isWorkflowAbort(error: unknown, context?: DurableWorkflowExecutionContext): boolean {
@@ -518,7 +529,7 @@ async function commitLinkedDurableTerminalWinner(
     endedAt: linked.finishedAt ?? new Date().toISOString(),
     lastError:
       winnerStatus === "failed" || winnerStatus === "cancelled"
-        ? (linked.lastError ?? `Linked durable run ${linked.runId} finished as ${linked.status}.`)
+        ? boundRunError(linked.lastError ?? `Linked durable run ${linked.runId} finished as ${linked.status}.`)
         : undefined,
     pendingApprovalPhaseId: undefined,
     pendingApprovedBy: undefined,
@@ -1519,7 +1530,7 @@ export async function reconcileTerminalOrchestrationRuns(
   runtime: OrchestrationLifecycleRuntimeDeps,
   limit = 200,
 ): Promise<void> {
-  const activeRuns = (await host.storage.orchestration.listActiveLinkedRuns?.(limit)) ?? [];
+  const activeRuns = (await host.storage.orchestration.listActiveRunsWithEndedDurableRun?.(limit)) ?? [];
   const failures: unknown[] = [];
   for (const run of activeRuns) {
     try {
@@ -1542,83 +1553,52 @@ export async function reconcileTerminalOrchestrationRuns(
 }
 
 /**
- * Fails the orchestration run of a durable workflow that threw, just before
- * the durable worker fails the durable run, so the two agree. The write is
- * fenced by the durable lease: a worker that lost the lease leaves the run to
- * its new owner, or to the terminal reconciler.
+ * The durable outcome for an orchestration run that is already terminal. A
+ * cancelled run cancels its durable run, since the worker does not settle a
+ * cancelled outcome itself.
  */
-export async function failOrchestrationRunForWorkflowError(
+async function settleDurableRunForTerminalOrchestrationRun(
+  host: OrchestrationLifecycleHost,
+  plan: OrchestrationPlan,
+  run: OrchestrationRun,
+  durableRun: DurableRunRecord,
+): Promise<OrchestrationExecutionResult> {
+  const checkpointState = buildCheckpointDetails(plan, run, durableRun.runId, { alreadyTerminal: run.status });
+  if (run.status === "cancelled") {
+    await host.cancelDurableRun(durableRun.runId, "orchestration");
+    return { outcome: "cancelled", checkpointState };
+  }
+  return { outcome: run.status === "failed" ? "failed" : "completed", checkpointState };
+}
+
+/**
+ * Settles the orchestration run linked to a durable orchestration run that has
+ * just ended, such as one the durable worker failed after its workflow threw.
+ * It runs only after the durable run's own terminal transition has committed,
+ * so an orchestration run never ends ahead of its durable run; if the durable
+ * transition did not happen (an operator pause or cancel took the lease
+ * first), the orchestration run is left to that owner. The terminal reconciler
+ * retries anything this misses.
+ */
+export async function settleOrchestrationRunForEndedDurableRun(
   host: OrchestrationLifecycleHost,
   runtime: OrchestrationLifecycleRuntimeDeps,
   durableRun: DurableRunRecord,
-  error: unknown,
+  details: Record<string, unknown>,
 ): Promise<void> {
+  if (!isDurableRunTerminal(durableRun)) {
+    return;
+  }
   const payload = parseOrchestrationWorkflowPayload(durableRun);
-  const leaseOwnerId = durableRun.leaseOwnerId?.trim();
-  if (!payload || !leaseOwnerId) {
+  if (!payload) {
     return;
   }
   const run = await getOrchestrationRunIfAvailable(host, payload.orchestrationRunId);
   if (!run || run.durableRunId !== durableRun.runId || isOrchestrationRunTerminal(run)) {
     return;
   }
-  // The plan may be what failed to load; the run still fails without it.
-  let plan: OrchestrationPlan | undefined;
-  try {
-    plan = await host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
-  } catch {
-    plan = undefined;
-  }
-  const message = `Durable orchestration workflow failed: ${error instanceof Error ? error.message : String(error)}`;
-  let failed: OrchestrationRun | undefined;
-  await host.storage.runImmediateTransaction(async () => {
-    if (!(await host.storage.durableRuns.lockFreshActiveLeaseForUpdate(durableRun.runId, leaseOwnerId))) {
-      return;
-    }
-    failed = await host.storage.orchestration.updateRunIfCurrentState(
-      {
-        ...run,
-        status: "failed",
-        executionState: "failed",
-        endedAt: new Date().toISOString(),
-        lastError: message,
-        pendingApprovalPhaseId: undefined,
-        pendingApprovedBy: undefined,
-        pendingCostIncrementUsd: undefined,
-      },
-      { status: run.status, executionState: run.executionState },
-    );
-    if (failed && plan) {
-      await persistCheckpoint(
-        host,
-        plan,
-        failed,
-        "run_failed",
-        buildCheckpointDetails(plan, failed, durableRun.runId, { error: message, reason: "workflow_error" }),
-      );
-    }
-  });
-  if (!failed) {
-    return;
-  }
-  await persistRunEvent(host, failed, "run.failed", {
-    error: message,
-    reason: "workflow_error",
-    durableRunId: durableRun.runId,
-  });
-  if (plan) {
-    await publishRunRealtime(host, plan, failed, { event: "run_failed", error: message });
-  }
-  if (failed.currentPhaseId) {
-    const current = await getDurableRunIfAvailable(host, durableRun.runId);
-    await cancelOrphanedPhaseChild(
-      host,
-      failed,
-      current ? readRecoverableChildPhase(current, failed.currentPhaseId)?.childRunId : undefined,
-      "orchestration",
-    );
-  }
-  await releaseOrchestrationWorktreeIfAvailable(runtime, host, failed, "failed");
+  const plan = await host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
+  await commitLinkedDurableTerminalWinner(host, runtime, plan, run, durableRun, details);
 }
 
 /** Server-owned records read to decide whether a parked phase's child has settled. */
@@ -1839,6 +1819,12 @@ export async function executeDurableOrchestrationRun(
   }
   const plan = await host.storage.orchestration.getPlan(payload.planId, runWorkspaceId);
   host.orchestrationEngine.validate(plan);
+  if (isOrchestrationRunTerminal(run)) {
+    // The run already ended, but its durable run did not: something (such as
+    // an operator pause) took the lease between the two terminal writes. Settle
+    // the durable run to the run's outcome without executing anything.
+    return await settleDurableRunForTerminalOrchestrationRun(host, plan, run, durableRun);
+  }
   run = await runtime.worktrees.ensureLeaseForExecution(run);
   const worktreeExecutionFence = readOrchestrationWorktreeExecutionFence(run);
   const policyContext: OrchestrationRunPolicyContext = {

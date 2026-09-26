@@ -4587,9 +4587,15 @@ test(
         "running",
       );
       orchestration.updateRun({ ...orchestration.getRun(orchestrationRunId), durableRunId: `durable-${suffix}` });
+      durableRuns.createRun({
+        runId: `durable-${suffix}`,
+        workflowKey: "orchestration.plan.execute",
+        status: "cancelled",
+        finishedAt: "2026-07-11T00:01:00.000Z",
+      });
       assert.ok(
-        orchestration.listActiveLinkedRuns(1000).some((run) => run.runId === orchestrationRunId),
-        "an active durable-linked orchestration run is listed",
+        orchestration.listActiveRunsWithEndedDurableRun(1000).some((run) => run.runId === orchestrationRunId),
+        "an active orchestration run whose durable run ended is listed",
       );
       const generationOwner = orchestration.updateRun({
         ...orchestration.getRun(orchestrationRunId),
