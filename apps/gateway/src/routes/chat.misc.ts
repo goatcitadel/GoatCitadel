@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { sessionParamsSchema } from "./chat.shared.js";
+import { rejectUnboundChatPolicyScope, sessionParamsSchema } from "./chat.shared.js";
 import { sendRouteError } from "./_error-handler.js";
 
 const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
@@ -235,6 +235,9 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
         },
       });
     }
+    if (await rejectUnboundChatPolicyScope(fastify, request, reply, params.data.sessionId, body.data)) {
+      return reply;
+    }
     try {
       return reply.send(
         await chatSupport().parseChatCommand(params.data.sessionId, body.data.commandText, {
@@ -265,6 +268,9 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
           body: body.success ? undefined : body.error.flatten(),
         },
       });
+    }
+    if (await rejectUnboundChatPolicyScope(fastify, request, reply, params.data.sessionId, body.data)) {
+      return reply;
     }
     try {
       return reply.send(

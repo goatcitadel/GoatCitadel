@@ -20,6 +20,7 @@ import {
   streamResumeQuerySchema,
   streamSseReply,
   sendChatWriteError,
+  assertChatPolicyScope,
 } from "./chat.shared.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { projectAndCapChatHistoryWindow, projectChatHistoryContinuation } from "../services/chat-history-service.js";
@@ -31,6 +32,7 @@ import {
   resolveSendAdmissionArgs,
 } from "./session-control-request-context.js";
 import { registerChatSecureConfigurationRoute } from "./chat.secure-configuration.js";
+import type { CallerPolicyScope } from "../services/chat-policy-scope-service.js";
 
 const listMessagesSchema = z.object({
   limit: z.coerce.number().int().positive().max(1000).default(200),
@@ -387,6 +389,8 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
   // delegated `read`, or — for sends — a signed request, control token, `send`,
   // generation, and live lease enforced during canonical admission.
   const operatorOrCompanionRoute = withRouteAccess(fastify, "operator-or-session-control-companion");
+  const assertPolicyScope = async (sessionId: string, scope: CallerPolicyScope) =>
+    await assertChatPolicyScope(fastify, sessionId, scope);
 
   fastify.get("/api/v1/chat/sessions/:sessionId/messages", operatorOrCompanionRoute, async (request, reply) => {
     reply.header("cache-control", "private, no-store");
@@ -538,6 +542,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       // are absent for a purpose-bound companion, and returns undefined for
       // operators (who keep the unchanged send path).
       const externalCompanion = resolveExternalCompanionAdmissionContext(request);
+      await assertPolicyScope(params.data.sessionId, body.data);
       if (!externalCompanion) {
         const decisionRejected = await requireFreshRouteDecision(reply, fastify.services.chatMessages, {
           sessionId: params.data.sessionId,
@@ -574,6 +579,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
+      await assertPolicyScope(params.data.sessionId, body.data);
       const result = await fastify.services.chatMessages.routePreflight(params.data.sessionId, {
         ...body.data,
         operatorId: request.authActorId,
@@ -619,6 +625,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       let externalCompanion: ReturnType<typeof resolveExternalCompanionAdmissionContext>;
       try {
         externalCompanion = resolveExternalCompanionAdmissionContext(request);
+        await assertPolicyScope(params.data.sessionId, body.data);
         if (!externalCompanion) {
           const decisionRejected = await requireFreshRouteDecision(reply, fastify.services.chatMessages, {
             sessionId: params.data.sessionId,
@@ -795,6 +802,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
+      await assertPolicyScope(params.data.sessionId, body.data);
       const decisionRejected = await requireFreshRouteDecision(reply, fastify.services.chatMessages, {
         sessionId: params.data.sessionId,
         action: "retry",
@@ -831,6 +839,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
+      await assertPolicyScope(params.data.sessionId, body.data);
       const decisionRejected = await requireFreshRouteDecision(reply, fastify.services.chatMessages, {
         sessionId: params.data.sessionId,
         action: "retry",
@@ -873,6 +882,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
+      await assertPolicyScope(params.data.sessionId, body.data);
       const decisionRejected = await requireFreshRouteDecision(reply, fastify.services.chatMessages, {
         sessionId: params.data.sessionId,
         action: "edit",
@@ -909,6 +919,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
+      await assertPolicyScope(params.data.sessionId, body.data);
       const decisionRejected = await requireFreshRouteDecision(reply, fastify.services.chatMessages, {
         sessionId: params.data.sessionId,
         action: "edit",

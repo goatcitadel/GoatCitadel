@@ -691,6 +691,16 @@ Approval creation should attach explicit linkage before the approval is surfaced
 - attach request attribution (`correlationId`, `traceId`) when available
 - attach `durableRunId` from approval-wait lifecycle linkage when a durable wait/run owns the resolution path
 
+### Caller-supplied policy scope
+
+Chat send, retry, edit, route-preflight, delegate, delegate-accept, command-parse, and research routes accept an optional `policyRunId` and `policyTaskId`. Tool policy matches task-scoped grants on the task id and links approvals to the run id, so the Gateway binds both to the request's Chat session before any work starts:
+
+- a run id must name a delegation run of that session (a turn's orchestration run is one) or a durable run whose payload names the session;
+- a task id must be the task of one of the session's delegation runs, or a task in the session's workspace whose agentic context names the session as parent or child;
+- anything else, including an id that names no record, is a `409` conflict.
+
+Server-side callers that set these ids themselves, such as orchestration phases and delegation children, do not pass through these routes.
+
 ## Read Precedence
 
 Operator-facing runtime lifecycle reads should follow this order:

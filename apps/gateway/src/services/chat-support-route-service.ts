@@ -25,6 +25,7 @@ import type {
   ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 import type { ChatCommandOptions, ChatCommandResult } from "./chat-command-service.js";
+import type { CallerPolicyScope } from "./chat-policy-scope-service.js";
 
 export interface ChatSupportRouteDependencies {
   changePlans: {
@@ -153,10 +154,18 @@ export interface ChatSupportRouteDependencies {
     setChatSessionGoal(sessionId: string, body: ChatGoalRequest): Promise<ChatGoalStatusResponse>;
     clearChatSessionGoal(sessionId: string, expectedRevision?: number): Promise<ChatGoalStatusResponse>;
   };
+  policyScope: {
+    assertCallerPolicyScope(sessionId: string, scope: CallerPolicyScope): Promise<void>;
+  };
 }
 
 export class ChatSupportRouteService {
   public constructor(private readonly deps: ChatSupportRouteDependencies) {}
+
+  /** Rejects a caller-supplied `policyTaskId` or `policyRunId` that does not belong to the session. */
+  public assertCallerPolicyScope(sessionId: string, scope: CallerPolicyScope) {
+    return this.deps.policyScope.assertCallerPolicyScope(sessionId, scope);
+  }
 
   public createChatChangePlan(sessionId: string, input: Omit<ChatChangePlanCreateInput, "sessionId">) {
     return this.deps.changePlans.create(sessionId, input);
