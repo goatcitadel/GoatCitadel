@@ -590,6 +590,7 @@ describe("delegated filesystem scope expansion", () => {
       index: 0,
       status: "running",
       startedAt: new Date().toISOString(),
+      childTurnId: "turn-resume",
       durableRunId: "durable-scope-child",
       workResult: {
         disposition: "scope_expansion",
@@ -630,6 +631,7 @@ describe("delegated filesystem scope expansion", () => {
       payload: {
         stepId: "step-resume",
         delegationRunId: "delegation-resume",
+        childTurnId: "turn-resume",
         durableRunId: "durable-scope-child",
       },
     });
@@ -703,8 +705,10 @@ describe("delegated filesystem scope expansion", () => {
     });
     expect(resume).toHaveBeenCalledTimes(2);
     expect(resume).toHaveBeenLastCalledWith({
+      approvalId: approval.approvalId,
       delegationRunId: "delegation-resume",
       stepId: "step-resume",
+      childTurnId: "turn-resume",
       durableRunId: "durable-scope-child",
     });
     storage.close();
@@ -786,6 +790,7 @@ describe("delegated filesystem scope expansion", () => {
       payload: {
         stepId: "step-rejected",
         delegationRunId: "delegation-rejected",
+        childTurnId: "turn-rejected",
         durableRunId: "durable-rejected",
       },
     });

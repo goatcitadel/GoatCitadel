@@ -160,7 +160,6 @@ export class ChatDurableFanoutService {
           policyRunId: parentRunId,
           policyTaskId: `fanout:${activeInvocation.invocationId}`,
           fullWebAccess: input.fullWebAccess,
-          parentSubagentDepth: 0,
         },
         callbacks,
         options,

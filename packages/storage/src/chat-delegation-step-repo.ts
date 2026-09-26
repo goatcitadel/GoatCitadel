@@ -15,6 +15,7 @@ interface ChatDelegationStepRow {
   step_id: string;
   run_id: string;
   role: string;
+  instruction_snapshot_json: string | null;
   label: string | null;
   step_index: number;
   status: ChatDelegationStepStatus;
@@ -91,6 +92,7 @@ export class ChatDelegationStepRepository {
   private readonly finishOwnedDispatchWithResponseStmt;
   private readonly releaseOwnedWaitingDispatchStmt;
   private readonly finishUnclaimedPendingWithErrorStmt;
+  private readonly failUnownedPreAdmissionStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.databaseNowStmt = db.prepare(
@@ -116,12 +118,12 @@ export class ChatDelegationStepRepository {
     );
     this.insertStmt = db.prepare(`
       INSERT INTO chat_delegation_steps (
-        step_id, run_id, role, label, step_index, status, parallelizable, depends_on_step_ids_json,
+        step_id, run_id, role, instruction_snapshot_json, label, step_index, status, parallelizable, depends_on_step_ids_json,
         provider_id, model, summary, output, error, started_at, finished_at, duration_ms
         , failure_guidance, durable_run_id, child_session_id, child_turn_id, citations_json, degraded_handoff_step_ids_json,
         work_result_json, scope_control_json
       ) VALUES (
-        @stepId, @runId, @role, @label, @index, @status, @parallelizable, @dependsOnStepIdsJson,
+        @stepId, @runId, @role, @instructionSnapshotJson, @label, @index, @status, @parallelizable, @dependsOnStepIdsJson,
         @providerId, @model, @summary, @output, @error, @startedAt, @finishedAt, @durationMs,
         @failureGuidance, @durableRunId, @childSessionId, @childTurnId, @citationsJson, @degradedHandoffStepIdsJson,
         @workResultJson, @scopeControlJson
@@ -504,6 +506,31 @@ export class ChatDelegationStepRepository {
             )
         `,
     );
+    this.failUnownedPreAdmissionStmt = db.prepare(
+      db.dialect === "postgres"
+        ? `
+          UPDATE chat_delegation_steps
+          SET status = 'failed', summary = @summary, error = @error,
+              failure_guidance = @failureGuidance, finished_at = @finishedAt,
+              duration_ms = @durationMs, dispatch_claim_token = NULL, dispatch_claim_expires_at = NULL
+          WHERE step_id = @stepId AND run_id = @runId AND status IN ('pending', 'running')
+            AND child_session_id IS NULL AND child_turn_id IS NULL AND durable_run_id IS NULL
+            AND ((dispatch_claim_token IS NULL AND dispatch_claim_expires_at IS NULL)
+              OR (dispatch_claim_token IS NOT NULL AND dispatch_claim_expires_at IS NOT NULL
+                AND gc_try_parse_timestamptz(dispatch_claim_expires_at) <= clock_timestamp()))
+        `
+        : `
+          UPDATE chat_delegation_steps
+          SET status = 'failed', summary = @summary, error = @error,
+              failure_guidance = @failureGuidance, finished_at = @finishedAt,
+              duration_ms = @durationMs, dispatch_claim_token = NULL, dispatch_claim_expires_at = NULL
+          WHERE step_id = @stepId AND run_id = @runId AND status IN ('pending', 'running')
+            AND child_session_id IS NULL AND child_turn_id IS NULL AND durable_run_id IS NULL
+            AND ((dispatch_claim_token IS NULL AND dispatch_claim_expires_at IS NULL)
+              OR (dispatch_claim_token IS NOT NULL AND dispatch_claim_expires_at IS NOT NULL
+                AND julianday(dispatch_claim_expires_at) <= julianday('now')))
+        `,
+    );
   }
 
   public get(stepId: string): ChatDelegationStepRecord {
@@ -553,6 +580,7 @@ export class ChatDelegationStepRepository {
     stepId: string;
     runId: string;
     role: string;
+    instructionSnapshot?: ChatDelegationStepRecord["instructionSnapshot"];
     label?: string;
     index: number;
     status?: ChatDelegationStepStatus;
@@ -579,6 +607,7 @@ export class ChatDelegationStepRepository {
       stepId: input.stepId,
       runId: input.runId,
       role: input.role,
+      instructionSnapshotJson: input.instructionSnapshot === undefined ? null : JSON.stringify(input.instructionSnapshot),
       label: input.label ?? null,
       index: input.index,
       status: input.status ?? "pending",
@@ -1089,6 +1118,23 @@ export class ChatDelegationStepRepository {
     return Number(result.changes ?? 0) > 0 ? this.get(input.stepId) : undefined;
   }
 
+  /** Fails a legacy plan before any child admission, fenced by the database claim clock. */
+  public failUnownedPreAdmission(input: {
+    stepId: string;
+    runId: string;
+    summary: string;
+    error: string;
+    failureGuidance: string;
+    finishedAt: string;
+    durationMs: number;
+  }): ChatDelegationStepRecord | undefined {
+    const result = this.failUnownedPreAdmissionStmt.run({
+      ...input,
+      durationMs: Math.max(0, Math.floor(input.durationMs)),
+    });
+    return Number(result.changes ?? 0) > 0 ? this.get(input.stepId) : undefined;
+  }
+
   public listParentsByChildSessionIds(
     sessionIds: string[],
     workspaceId?: string,
@@ -1157,6 +1203,7 @@ function isChatDelegationStepRow(value: unknown): value is ChatDelegationStepRow
     typeof value.step_id === "string" &&
     typeof value.run_id === "string" &&
     typeof value.role === "string" &&
+    (typeof value.instruction_snapshot_json === "string" || value.instruction_snapshot_json === null) &&
     (typeof value.label === "string" || value.label === null) &&
     typeof value.step_index === "number" &&
     typeof value.status === "string" &&
@@ -1211,6 +1258,7 @@ function mapRow(row: ChatDelegationStepRow): ChatDelegationStepRecord {
     stepId: row.step_id,
     runId: row.run_id,
     role: row.role,
+    instructionSnapshot: parseInstructionSnapshot(row.instruction_snapshot_json),
     label: row.label ?? undefined,
     status: row.status,
     index: row.step_index,
@@ -1233,6 +1281,23 @@ function mapRow(row: ChatDelegationStepRow): ChatDelegationStepRecord {
     workResult: parseWorkResult(row.work_result_json),
     scopeControl: parseScopeControl(row.scope_control_json),
   };
+}
+
+function parseInstructionSnapshot(
+  raw: string | null,
+): ChatDelegationStepRecord["instructionSnapshot"] {
+  if (raw === null) return undefined;
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error("Delegation step has a malformed instruction snapshot.");
+  }
+  if (!isRecord(value) || Object.keys(value).some((key) => !["objective", "label", "expectedOutput"].includes(key)) ||
+    [value.objective, value.label, value.expectedOutput].some((field) => field !== undefined && typeof field !== "string")) {
+    throw new Error("Delegation step has a malformed instruction snapshot.");
+  }
+  return value as ChatDelegationStepRecord["instructionSnapshot"];
 }
 
 function parseScopeControl(raw: string | null | undefined): DelegatedFilesystemScopeControl | undefined {

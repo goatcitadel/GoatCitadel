@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 250,
+      "expectedCount": 251,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 250,
+      "expectedLastVersion": 251,
       "migrations": [
         {
           "version": 1,
@@ -1758,15 +1758,22 @@
           "groupName": "canonical",
           "definitionSha256": "319460ffd7f1430bf68e698d1350693cb4d23d48d484f1be41d21126d3df089d",
           "implementationSha256": "f707c9e7a832dba082847ad4d55625b9d32b84cf1b602184c1eb86214ca4eb1e"
+        },
+        {
+          "version": 251,
+          "name": "delegation_step_instruction_snapshots",
+          "groupName": "canonical",
+          "definitionSha256": "5ca35d69032f4e67b87f439af5a7214f911bb7f916620590a5891af54fac5ddf",
+          "implementationSha256": "637c983f3fd971ec8946c78f40e182ad059595f750e52ce7c5b3fefa15fd6ff8"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 196,
+      "expectedCount": 197,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 196,
+      "expectedLastVersion": 197,
       "migrations": [
         {
           "version": 1,
@@ -2945,6 +2952,13 @@
           "name": "additive_schema_shape_convergence",
           "definitionSha256": "35751f5310b93c37c69197eb172175c2f45fe4b3496d0d02957f0d01c9fa755d",
           "runtimeIntegritySha256": "217269a7ec078f2013e9aaa61ace846d9e449d683536aaa147cc3fa215066ec7"
+        },
+        {
+          "version": 197,
+          "name": "delegation_step_instruction_snapshots",
+          "definitionSha256": "ba71f1f3a7855d9ba9c029cc6fc17afb7d93c9c52f398c76339c25bb6d817220",
+          "sqlPayloadSha256": "677c0605943f23a1dd1199eae2796a482a3048685cf54ae0f782f49586181940",
+          "runtimeIntegritySha256": "3bd160c4ee905f45f5dae335227e252757a4c2560abc64f00b29115b7ab2e041"
         }
       ]
     }

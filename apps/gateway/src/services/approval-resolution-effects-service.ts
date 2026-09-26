@@ -17,6 +17,10 @@ import {
   hasApprovedToolPreDispatchEvidence,
 } from "./approved-tool-boundary-evidence.js";
 import { RemoteWorkerApprovalResumeRequiredError } from "./remote-worker-approved-action-guard.js";
+import {
+  StaleDelegationScopeResumeError,
+  UnverifiableDelegationInstructionsError,
+} from "./chat-delegation-service.js";
 import { isNativeExecutionApproval, readPendingNativeApprovalParentWake } from "./approval-native-runtime-parent.js";
 import type {
   ApprovalEffectRecord,
@@ -374,7 +378,13 @@ export interface ApprovalEffectsServiceDeps {
   ): Promise<DurableWakeResult>;
   requestRunProcessing(runId: string): void;
   reconcileGeneralChatPostCommit?(runId: string): Promise<boolean>;
-  resumeDelegatedScopeExpansion?(input: { delegationRunId: string; stepId: string; durableRunId: string }): Promise<{
+  resumeDelegatedScopeExpansion?(input: {
+    approvalId: string;
+    delegationRunId: string;
+    stepId: string;
+    childTurnId: string;
+    durableRunId: string;
+  }): Promise<{
     runId: string;
     status: ChatDelegationRunStatus;
     reenteredPersistedStep: boolean;
@@ -1958,11 +1968,12 @@ export class ApprovalEffectsService {
   private async handleDelegationScopeExpansionResume(effect: ApprovalEffectRecord): Promise<void> {
     const stepId = asOptionalString(effect.payload.stepId);
     const delegationRunId = asOptionalString(effect.payload.delegationRunId);
+    const childTurnId = asOptionalString(effect.payload.childTurnId);
     const durableRunId = asOptionalString(effect.payload.durableRunId);
-    if (!stepId || !delegationRunId || !durableRunId) {
+    if (!stepId || !delegationRunId || !childTurnId || !durableRunId) {
       await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: "Delegation scope resume effect is missing its immutable child binding.",
-        result: { stepId, delegationRunId, durableRunId },
+        result: { stepId, delegationRunId, childTurnId, durableRunId },
       });
       return;
     }
@@ -2019,7 +2030,7 @@ export class ApprovalEffectsService {
       }
       const resume = this.deps.resumeDelegatedScopeExpansion;
       if (!resume) throw new Error("Delegated scope resume executor is not configured.");
-      const resumed = await resume({ delegationRunId, stepId, durableRunId });
+      const resumed = await resume({ approvalId: effect.approvalId, delegationRunId, stepId, childTurnId, durableRunId });
       const resumedStep = await this.ctx.storage.chatDelegationSteps.get(stepId);
       const stillWaitingOnSameApproval =
         resumedStep.status === "running" &&
@@ -2059,6 +2070,22 @@ export class ApprovalEffectsService {
       if (!completed) throw new Error(`Delegation scope resume effect ${effect.effectId} lost its completion lease.`);
     } catch (error) {
       if (!(await this.isEffectStillClaimed(effect.effectId))) return;
+      if (error instanceof UnverifiableDelegationInstructionsError || error instanceof StaleDelegationScopeResumeError) {
+        const reason = error instanceof UnverifiableDelegationInstructionsError
+          ? "unverifiable_delegation_instructions"
+          : "stale_delegation_scope_resume";
+        await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+          lastError: error.message,
+          result: {
+            resumed: false,
+            reason,
+            stepId,
+            delegationRunId,
+            durableRunId,
+          },
+        });
+        return;
+      }
       await this.deferClaimedEffectForRetry(effect, this.workerId, error, {
         deliveryState: "retry_scheduled",
         stepId,

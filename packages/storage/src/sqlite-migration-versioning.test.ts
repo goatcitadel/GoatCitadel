@@ -42,8 +42,8 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 250,
-        name: "remote_worker_runtime_install_evidence",
+        version: 251,
+        name: "delegation_step_instruction_snapshots",
       },
     );
     db.close();
@@ -1207,6 +1207,7 @@ describe("sqlite schema migrations", () => {
     assert.ok(delegationStepColumns.some((column) => column.name === "depends_on_step_ids_json"));
     assert.ok(delegationStepColumns.some((column) => column.name === "dispatch_claim_token"));
     assert.ok(delegationStepColumns.some((column) => column.name === "dispatch_claim_expires_at"));
+    assert.ok(delegationStepColumns.some((column) => column.name === "instruction_snapshot_json"));
 
     const approvalsIndexes = db.prepare("PRAGMA index_list(approvals)").all() as Array<{ name: string }>;
     assert.ok(approvalsIndexes.some((index) => index.name === "idx_approvals_status_created"));

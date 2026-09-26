@@ -33,6 +33,14 @@ import {
 } from "./chat-durable-runtime-authority.js";
 import { markGeneralChatPostCommitPending } from "./chat-durable-run-service.js";
 import { RemoteWorkerApprovalResumeRequiredError } from "./remote-worker-approved-action-guard.js";
+import {
+  StaleDelegationScopeResumeError,
+  UnverifiableDelegationInstructionsError,
+} from "./chat-delegation-service.js";
+import {
+  DELEGATION_SCOPE_EXPANSION_EFFECT_KIND,
+  DELEGATION_SCOPE_EXPANSION_RESUME_EFFECT_KIND,
+} from "./delegated-work-result-service.js";
 import { DURABLE_RETRY_POLICY_DEFAULT } from "./durable-retry-policy.js";
 import {
   computeEffectiveChatTurnRequestMaterialSha256,
@@ -47,6 +55,81 @@ const APPROVAL_TEST_POST_COMMIT_ELIGIBILITY = {
 };
 
 describe("approval-resolution-effects-service", () => {
+  it.each([
+    { error: new UnverifiableDelegationInstructionsError(), terminal: true },
+    { error: new StaleDelegationScopeResumeError(), terminal: true },
+    { error: new Error("temporary storage failure"), terminal: false },
+  ])("settles an unverifiable delegation resume without retrying other failures ($terminal)", async ({ error, terminal }) => {
+    const scopeEffect = createEffect({
+      effectId: "scope-effect",
+      effectKind: DELEGATION_SCOPE_EXPANSION_EFFECT_KIND,
+      status: "completed",
+      result: { applied: true },
+    });
+    let resumeEffect = createEffect({
+      effectId: "scope-resume-effect",
+      effectKind: DELEGATION_SCOPE_EXPANSION_RESUME_EFFECT_KIND,
+      status: "running",
+      payload: {
+        stepId: "step-1",
+        delegationRunId: "delegation-1",
+        childTurnId: "turn-1",
+        durableRunId: "child-1",
+      },
+    });
+    const failEffect = vi.fn();
+    const deferEffectForRetry = vi.fn(() => ({ ...resumeEffect, status: "pending" as const }));
+    const resumeDelegatedScopeExpansion = vi.fn(async () => { throw error; });
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: {
+            get: vi.fn(() => resumeEffect),
+            listByApproval: vi.fn(() => [scopeEffect, resumeEffect]),
+            failEffect,
+            deferEffectForRetry,
+          },
+          durableRuns: { getRun: vi.fn(() => ({ runId: "child-1", status: "completed" })) },
+        },
+      } as unknown as ServiceContext,
+      {
+        ...createApprovalEffectDeps(),
+        resumeDelegatedScopeExpansion,
+      },
+    );
+    resumeEffect = claimEffectForService(service, resumeEffect);
+    await (service as unknown as { handleDelegationScopeExpansionResume(effect: ApprovalEffectRecord): Promise<void> })
+      .handleDelegationScopeExpansionResume(resumeEffect);
+    expect(resumeDelegatedScopeExpansion).toHaveBeenCalledWith({
+      approvalId: resumeEffect.approvalId,
+      delegationRunId: "delegation-1",
+      stepId: "step-1",
+      childTurnId: "turn-1",
+      durableRunId: "child-1",
+    });
+
+    if (terminal) {
+      expect(failEffect).toHaveBeenCalledWith(
+        resumeEffect.effectId,
+        resumeEffect.claimedBy,
+        resumeEffect.version,
+        expect.objectContaining({
+          lastError: error.message,
+          result: expect.objectContaining({
+            reason: error instanceof UnverifiableDelegationInstructionsError
+              ? "unverifiable_delegation_instructions"
+              : "stale_delegation_scope_resume",
+            resumed: false,
+          }),
+        }),
+      );
+      expect(deferEffectForRetry).not.toHaveBeenCalled();
+    } else {
+      expect(failEffect).not.toHaveBeenCalled();
+      expect(deferEffectForRetry).toHaveBeenCalledOnce();
+    }
+  });
+
   it("defers a denied approval wake until its waiting generation settles, then resumes once", async () => {
     const effect = createEffect({
       effectKind: "linked_chat_turn_wake",
