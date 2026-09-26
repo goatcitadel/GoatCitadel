@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OrchestrationRun } from "@goatcitadel/contracts";
+import type { WorktreeChanges } from "@goatcitadel/orchestration";
 import { createDatabase, OrchestrationWorktreeLeaseRepository } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 
@@ -10,6 +11,8 @@ const worktreeManagerMocks = vi.hoisted(() => ({
   create: vi.fn(),
   remove: vi.fn(),
   prune: vi.fn(),
+  // Clean unless a test says otherwise; an undefined result also counts as clean.
+  listChanges: vi.fn(async (): Promise<WorktreeChanges> => ({ status: "read", changedPaths: [] })),
   constructor: vi.fn(),
 }));
 
@@ -20,6 +23,7 @@ vi.mock("@goatcitadel/orchestration", () => ({
       create: worktreeManagerMocks.create,
       remove: worktreeManagerMocks.remove,
       prune: worktreeManagerMocks.prune,
+      listChanges: worktreeManagerMocks.listChanges,
     };
   }),
 }));
@@ -122,17 +126,18 @@ describe("OrchestrationWorktreeService loop31 tails", () => {
     expect(worktreeManagerMocks.create).toHaveBeenCalledWith("run-1", "HEAD");
   });
 
-  it("falls back to filesystem cleanup when git worktree removal fails", async () => {
+  it("retains the worktree when git worktree removal fails", async () => {
     const rootDir = await makeTempDir();
     const worktreePath = path.join(rootDir, ".worktrees", "orchestration", "run-1");
     await fs.mkdir(worktreePath, { recursive: true });
     worktreeManagerMocks.remove.mockRejectedValueOnce("git remove failed");
+    const leaseDeps = buildLeaseDeps();
     const service = new OrchestrationWorktreeService({
       config: buildConfig(rootDir),
       orchestrationRuns: {
         listRuns: vi.fn(() => []),
       },
-      ...buildLeaseDeps(),
+      ...leaseDeps,
     });
 
     await expect(
@@ -140,13 +145,34 @@ describe("OrchestrationWorktreeService loop31 tails", () => {
         run: buildRun({ worktreePath }),
         reason: "failed",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ outcome: "retained_unverified", worktreePath, error: "git remove failed" });
 
     expect(worktreeManagerMocks.remove).toHaveBeenCalledWith(worktreePath);
-    // ORCH-004: even when git removal fails and we fall back to fs.rm, the
-    // stale .git/worktrees/<id> metadata must be pruned.
+    expect(worktreeManagerMocks.prune).not.toHaveBeenCalled();
+    expect(leaseDeps.worktreeLeases.get(worktreePath)).toMatchObject({ releasedAt: leaseNow });
+    await expect(fs.stat(worktreePath)).resolves.toBeTruthy();
+  });
+
+  it("does not claim retention when git errors after removing the directory", async () => {
+    const rootDir = await makeTempDir();
+    const worktreePath = path.join(rootDir, ".worktrees", "orchestration", "run-partial-remove");
+    await fs.mkdir(worktreePath, { recursive: true });
+    worktreeManagerMocks.remove.mockImplementationOnce(async () => {
+      await fs.rmdir(worktreePath);
+      throw new Error("git metadata cleanup failed");
+    });
+    const leaseDeps = buildLeaseDeps();
+    const service = new OrchestrationWorktreeService({
+      config: buildConfig(rootDir),
+      orchestrationRuns: { listRuns: vi.fn(() => []) },
+      ...leaseDeps,
+    });
+
+    await expect(
+      service.release({ run: buildRun({ runId: "run-partial-remove", worktreePath }), reason: "failed" }),
+    ).resolves.toEqual({ outcome: "removed" });
     expect(worktreeManagerMocks.prune).toHaveBeenCalledTimes(1);
-    await expect(fs.stat(worktreePath)).rejects.toThrow();
+    expect(leaseDeps.worktreeLeases.get(worktreePath)).toMatchObject({ releasedAt: leaseNow });
   });
 
   it("uses git worktree removal when it succeeds and prunes stale metadata", async () => {
@@ -166,7 +192,7 @@ describe("OrchestrationWorktreeService loop31 tails", () => {
         run: buildRun({ worktreePath }),
         reason: "completed",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ outcome: "removed" });
 
     expect(worktreeManagerMocks.remove).toHaveBeenCalledWith(worktreePath);
     // ORCH-004: prune after a successful removal keeps git's worktree registry clean.
@@ -237,7 +263,7 @@ describe("OrchestrationWorktreeService loop31 tails", () => {
         run: buildRun({ runId: "run-prune-failed", worktreePath }),
         reason: "failed",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ outcome: "removed" });
 
     expect(leases.get(worktreePath)).toMatchObject({
       ownerId: "cleanup-owner",
@@ -271,7 +297,28 @@ describe("OrchestrationWorktreeService loop31 tails", () => {
     await expect(fs.stat(dryRunPath)).resolves.toBeTruthy();
   });
 
-  it("records Error messages when git worktree cleanup falls back", async () => {
+  it("keeps an orphan when git refuses removal after the status check", async () => {
+    const rootDir = await makeTempDir();
+    const worktreePath = path.join(rootDir, ".worktrees", "orchestration", "run-late-write");
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(path.join(worktreePath, "notes.md"), "new work\n", "utf8");
+    worktreeManagerMocks.remove.mockRejectedValueOnce(new Error("worktree contains modified files"));
+    const leaseDeps = buildLeaseDeps();
+    const service = new OrchestrationWorktreeService({
+      config: buildConfig(rootDir),
+      orchestrationRuns: { listRuns: vi.fn(() => []) },
+      ...leaseDeps,
+    });
+
+    await expect(service.reapOrphaned({ dryRun: false, minAgeMs: 0 })).resolves.toMatchObject({
+      removed: [],
+      skippedUnverified: [worktreePath],
+    });
+    expect(leaseDeps.worktreeLeases.get(worktreePath)).toMatchObject({ releasedAt: leaseNow });
+    await expect(fs.readFile(path.join(worktreePath, "notes.md"), "utf8")).resolves.toBe("new work\n");
+  });
+
+  it("records Error messages when git worktree cleanup is retained", async () => {
     const rootDir = await makeTempDir();
     const worktreePath = path.join(rootDir, ".worktrees", "orchestration", "run-error");
     await fs.mkdir(worktreePath, { recursive: true });
@@ -289,8 +336,8 @@ describe("OrchestrationWorktreeService loop31 tails", () => {
         run: buildRun({ runId: "run-error", worktreePath }),
         reason: "failed",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ outcome: "retained_unverified", worktreePath, error: "git remove threw" });
 
-    await expect(fs.stat(worktreePath)).rejects.toThrow();
+    await expect(fs.stat(worktreePath)).resolves.toBeTruthy();
   });
 });

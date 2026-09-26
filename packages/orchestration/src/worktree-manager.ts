@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
 import { promisify } from "node:util";
 import path from "node:path";
 import { GIT_REPOSITORY_ENV_KEYS, buildScrubbedSpawnEnv } from "@goatcitadel/contracts";
@@ -15,6 +16,18 @@ export interface WorktreeOptions {
   /** Operator opt-out (`sandbox.spawnEnvPassthrough`) for otherwise-scrubbed keys, e.g. credential-helper config. */
   spawnEnvPassthrough?: readonly string[];
 }
+
+/** What git reported about a worktree's uncommitted work. */
+export type WorktreeChanges =
+  /** The path is not one of this repository's registered worktrees. */
+  | { status: "unregistered" }
+  /** Git could not report on the worktree, so whether it holds uncommitted work is unknown. */
+  | { status: "unreadable"; error: string }
+  /** Modified, staged, untracked, or ignored paths; empty when the worktree has no local files to retain. */
+  | { status: "read"; changedPaths: string[] };
+
+/** How much of a git failure a change report carries. */
+const MAX_GIT_ERROR_CHARACTERS = 500;
 
 export class WorktreeManager {
   public constructor(private readonly options: WorktreeOptions) {}
@@ -48,13 +61,112 @@ export class WorktreeManager {
 
   public async remove(worktreePath: string): Promise<void> {
     const resolvedPath = path.resolve(worktreePath);
-    // Run-scoped orchestration worktrees are disposable, detached, and almost
-    // always dirty (agents write into them), so a plain `git worktree remove`
-    // fails. `--force` is safe here and lets the git-side removal succeed.
+    // Callers decide with `listChanges`, which reads the worktree through its
+    // registration. Without --force, git re-checks by running `git status` with
+    // GIT_DIR set to the worktree's own `.git` file, read again after git has
+    // validated it, so a writer that swaps the file in between points git at a
+    // git dir whose config or hooks run commands.
     await execFileAsync("git", ["worktree", "remove", "--force", resolvedPath], {
       cwd: this.options.repoRoot,
       env: this.gitEnv(),
     });
+  }
+
+  /**
+   * Reports the paths with local content (modified, staged, untracked, or ignored)
+   * in a worktree this repository registered. A failure to read the
+   * registrations or the worktree is reported as `unreadable`, never as clean.
+   *
+   * Agents can write inside a worktree, including its `.git` file, which could
+   * point git at a directory whose config runs commands. Git therefore reads the
+   * worktree through its registration under the repository's own git dir, never
+   * through that file, and with the fsmonitor hook off.
+   */
+  public async listChanges(worktreePath: string): Promise<WorktreeChanges> {
+    const resolvedPath = path.resolve(worktreePath);
+    const registration = await this.findRegisteredAdminDir(resolvedPath);
+    if (registration.status !== "found") {
+      return registration;
+    }
+    const adminDir = registration.adminDir;
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        [
+          "--git-dir",
+          adminDir,
+          "--work-tree",
+          resolvedPath,
+          "-c",
+          "core.fsmonitor=false",
+          "status",
+          "--porcelain",
+          "-z",
+          "--untracked-files=all",
+          "--ignored=matching",
+        ],
+        { cwd: this.options.repoRoot, env: this.gitEnv(), maxBuffer: 16 * 1024 * 1024 },
+      );
+      return { status: "read", changedPaths: parsePorcelainPaths(stdout) };
+    } catch (error) {
+      return { status: "unreadable", error: describeGitFailure(error) };
+    }
+  }
+
+  /** The registration (`<git dir>/worktrees/<id>`) that git recorded for a worktree directory. */
+  private async findRegisteredAdminDir(
+    resolvedPath: string,
+  ): Promise<{ status: "found"; adminDir: string } | Exclude<WorktreeChanges, { status: "read" }>> {
+    let adminRoot: string;
+    try {
+      const { stdout } = await execFileAsync("git", ["rev-parse", "--git-common-dir"], {
+        cwd: this.options.repoRoot,
+        // Untranslated messages, so a missing repository is recognized below.
+        env: { ...this.gitEnv(), LC_ALL: "C" },
+      });
+      adminRoot = path.join(path.resolve(this.options.repoRoot, stdout.trim()), "worktrees");
+    } catch (error) {
+      // Without a repository nothing is registered, so there is no uncommitted
+      // work git could report. Any other failure could hide a registration.
+      return isNotARepositoryError(error)
+        ? { status: "unregistered" }
+        : { status: "unreadable", error: describeGitFailure(error) };
+    }
+    let names: string[];
+    try {
+      names = await fs.readdir(adminRoot);
+    } catch (error) {
+      // No `worktrees` directory means git has no worktrees registered.
+      return isMissingPathError(error)
+        ? { status: "unregistered" }
+        : { status: "unreadable", error: describeGitFailure(error) };
+    }
+    let target: string;
+    try {
+      target = await realpathOrResolve(resolvedPath);
+    } catch (error) {
+      return { status: "unreadable", error: describeGitFailure(error) };
+    }
+    let unreadableRegistration: unknown;
+    for (const name of names) {
+      const adminDir = path.join(adminRoot, name);
+      try {
+        // `gitdir` names the worktree's `.git` file; compare the directories that hold it.
+        const recordedGitFile = (await fs.readFile(path.join(adminDir, "gitdir"), "utf8")).trim();
+        if (samePath(await realpathOrResolve(path.dirname(path.resolve(adminDir, recordedGitFile))), target)) {
+          return { status: "found", adminDir };
+        }
+      } catch (error) {
+        // A registration without a `gitdir` file is not one git can use; any
+        // other failure could hide this worktree's registration.
+        if (!isMissingPathError(error)) {
+          unreadableRegistration = error;
+        }
+      }
+    }
+    return unreadableRegistration === undefined
+      ? { status: "unregistered" }
+      : { status: "unreadable", error: describeGitFailure(unreadableRegistration) };
   }
 
   public async prune(): Promise<void> {
@@ -66,4 +178,61 @@ export class WorktreeManager {
       env: this.gitEnv(),
     });
   }
+}
+
+/** Paths named by `git status --porcelain -z`; a rename or copy is followed by its source path. */
+function parsePorcelainPaths(stdout: string): string[] {
+  const records = stdout.split("\0");
+  const paths: string[] = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index]!;
+    if (record.length < 4) {
+      continue;
+    }
+    paths.push(record.slice(3));
+    if (/[RC]/.test(record.slice(0, 2))) {
+      index += 1;
+    }
+  }
+  return paths;
+}
+
+function isNotARepositoryError(error: unknown): boolean {
+  const stderr = (error as { stderr?: unknown } | undefined)?.stderr;
+  return typeof stderr === "string" && /not a git repository/i.test(stderr);
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+}
+
+/** A bounded, single-line description of a git or filesystem failure. */
+function describeGitFailure(error: unknown): string {
+  const stderr = (error as { stderr?: unknown } | undefined)?.stderr;
+  const detail =
+    typeof stderr === "string" && stderr.trim() ? stderr : error instanceof Error ? error.message : String(error);
+  const singleLine = detail.replace(/\s+/g, " ").trim();
+  return singleLine.length > MAX_GIT_ERROR_CHARACTERS
+    ? `${singleLine.slice(0, MAX_GIT_ERROR_CHARACTERS)}...`
+    : singleLine;
+}
+
+/**
+ * The canonical path, or the lexical one when the path does not exist. Any
+ * other failure, such as a denied parent or a symlink loop, is thrown: a
+ * lexical guess there could miss the registration that names the directory.
+ */
+async function realpathOrResolve(candidate: string): Promise<string> {
+  try {
+    return await fs.realpath(candidate);
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return path.resolve(candidate);
+    }
+    throw error;
+  }
+}
+
+function samePath(left: string, right: string): boolean {
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 }

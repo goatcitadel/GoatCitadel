@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -83,6 +84,8 @@ describe("OrchestrationWorktreeService", () => {
       scanned: 0,
       removed: [],
       skippedActive: [],
+      skippedDirty: [],
+      skippedUnverified: [],
     });
   });
 
@@ -174,6 +177,43 @@ describe("OrchestrationWorktreeService", () => {
       ownerId: "test-worktree-owner",
       generation: 1,
       releasedAt: leaseNow,
+    });
+  });
+
+  it("retains files in an unregistered worktree directory during release and orphan cleanup", async () => {
+    const rootDir = await makeTempDir();
+    const worktreePath = path.join(rootDir, ".worktrees", "orchestration", "unregistered-run");
+    const savedPath = path.join(worktreePath, "notes.md");
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(savedPath, "keep this work\n", "utf8");
+    const leaseDeps = buildLeaseDeps();
+    const service = new OrchestrationWorktreeService({
+      config: buildConfig(rootDir),
+      orchestrationRuns: { listRuns: vi.fn(() => []) },
+      ...leaseDeps,
+    });
+
+    await expect(
+      service.release({
+        run: buildRun({ runId: "unregistered-run", status: "completed", worktreePath }),
+        reason: "completed",
+      }),
+    ).resolves.toMatchObject({ outcome: "retained_unverified", worktreePath });
+    expect(leaseDeps.worktreeLeases.get(worktreePath)).toMatchObject({ releasedAt: leaseNow });
+    await expect(service.reapOrphaned({ dryRun: true, minAgeMs: 0 })).resolves.toMatchObject({
+      removed: [],
+      skippedUnverified: [worktreePath],
+    });
+    await expect(service.reapOrphaned({ dryRun: false, minAgeMs: 0 })).resolves.toMatchObject({
+      removed: [],
+      skippedUnverified: [worktreePath],
+    });
+    await expect(fs.readFile(savedPath, "utf8")).resolves.toBe("keep this work\n");
+
+    await fs.rm(savedPath);
+    await expect(service.reapOrphaned({ dryRun: false, minAgeMs: 0 })).resolves.toMatchObject({
+      removed: [worktreePath],
+      skippedUnverified: [],
     });
   });
 
@@ -577,14 +617,152 @@ describe("OrchestrationWorktreeService", () => {
     });
     const missingWorktreePath = path.join(rootDir, ".worktrees", "orchestration", "missing-run");
 
-    await expect(
-      service.release({ run: buildRun({ worktreePath: undefined }), reason: "cancelled" }),
-    ).resolves.toBeUndefined();
+    await expect(service.release({ run: buildRun({ worktreePath: undefined }), reason: "cancelled" })).resolves.toEqual(
+      { outcome: "not_allocated" },
+    );
     await expect(
       service.release({
         run: buildRun({ worktreePath: missingWorktreePath }),
         reason: "completed",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ outcome: "missing" });
+  });
+
+  describe("with a real git repository", () => {
+    async function createGitRoot(): Promise<string> {
+      const rootDir = await fs.realpath(await makeTempDir());
+      const git = (...args: string[]) =>
+        execFileSync("git", args, {
+          cwd: rootDir,
+          stdio: "ignore",
+          env: {
+            ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+            GIT_TERMINAL_PROMPT: "0",
+          },
+        });
+      await fs.writeFile(path.join(rootDir, "tracked.txt"), "original\n", "utf8");
+      await fs.writeFile(path.join(rootDir, ".gitignore"), "ignored/\n", "utf8");
+      git("init", "-q");
+      git("add", "-A");
+      git(
+        "-c",
+        "user.name=GoatCitadel Test",
+        "-c",
+        "user.email=worktree-service@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+      );
+      return rootDir;
+    }
+
+    async function allocateRun(service: OrchestrationWorktreeService, runId: string): Promise<OrchestrationRun> {
+      const allocation = await service.allocate({ runId, workspaceId: "default" });
+      return buildRun({ runId, status: "completed", ...allocation });
+    }
+
+    it("removes a clean worktree when its run ends", async () => {
+      const rootDir = await createGitRoot();
+      const service = new OrchestrationWorktreeService({
+        config: buildConfig(rootDir),
+        orchestrationRuns: { listRuns: vi.fn(() => []) },
+        ...buildLeaseDeps(),
+      });
+      const run = await allocateRun(service, "run-clean");
+
+      await expect(service.release({ run, reason: "completed" })).resolves.toEqual({ outcome: "removed" });
+
+      await expect(fs.stat(run.worktreePath!)).rejects.toThrow();
+    });
+
+    it("keeps ignored files in a run worktree", async () => {
+      const rootDir = await createGitRoot();
+      const service = new OrchestrationWorktreeService({
+        config: buildConfig(rootDir),
+        orchestrationRuns: { listRuns: vi.fn(() => []) },
+        ...buildLeaseDeps(),
+      });
+      const run = await allocateRun(service, "run-ignored");
+      const ignoredPath = path.join(run.worktreePath!, "ignored", "output.txt");
+      await fs.mkdir(path.dirname(ignoredPath));
+      await fs.writeFile(ignoredPath, "keep this output\n", "utf8");
+
+      await expect(service.release({ run, reason: "completed" })).resolves.toMatchObject({
+        outcome: "retained_dirty",
+        worktreePath: run.worktreePath,
+        changedPathCount: 1,
+        changedPaths: ["ignored/"],
+      });
+      await expect(fs.readFile(ignoredPath, "utf8")).resolves.toBe("keep this output\n");
+    });
+
+    it("keeps a worktree with uncommitted work, releases its lease, and the reaper leaves it until it is clean", async () => {
+      const rootDir = await createGitRoot();
+      const leaseDeps = buildLeaseDeps();
+      const listRuns = vi.fn((): OrchestrationRun[] => []);
+      const service = new OrchestrationWorktreeService({
+        config: buildConfig(rootDir),
+        orchestrationRuns: { listRuns },
+        ...leaseDeps,
+      });
+      const run = await allocateRun(service, "run-dirty");
+      listRuns.mockReturnValue([run]);
+      const originalTrackedContents = await fs.readFile(path.join(run.worktreePath!, "tracked.txt"));
+      await fs.writeFile(path.join(run.worktreePath!, "tracked.txt"), "edited\n", "utf8");
+      await fs.writeFile(path.join(run.worktreePath!, "notes.md"), "draft\n", "utf8");
+
+      await expect(service.release({ run, reason: "completed" })).resolves.toEqual({
+        outcome: "retained_dirty",
+        worktreePath: run.worktreePath,
+        changedPathCount: 2,
+        changedPaths: expect.arrayContaining(["tracked.txt", "notes.md"]),
+      });
+      await expect(fs.readFile(path.join(run.worktreePath!, "notes.md"), "utf8")).resolves.toBe("draft\n");
+      expect(leaseDeps.worktreeLeases.get(run.worktreePath!)).toMatchObject({ releasedAt: leaseNow });
+
+      const dryRun = await service.reapOrphaned({ dryRun: true, minAgeMs: 0 });
+      expect(dryRun).toMatchObject({ removed: [], skippedDirty: [run.worktreePath] });
+      const kept = await service.reapOrphaned({ dryRun: false, minAgeMs: 0 });
+      expect(kept).toMatchObject({ removed: [], skippedDirty: [run.worktreePath] });
+      await expect(fs.stat(run.worktreePath!)).resolves.toBeTruthy();
+      expect(leaseDeps.worktreeLeases.get(run.worktreePath!)).toMatchObject({ releasedAt: leaseNow });
+
+      // Once the work is committed or discarded, the orphan reaper reclaims the directory.
+      await fs.writeFile(path.join(run.worktreePath!, "tracked.txt"), originalTrackedContents);
+      await fs.rm(path.join(run.worktreePath!, "notes.md"));
+      const reclaimed = await service.reapOrphaned({ dryRun: false, minAgeMs: 0 });
+      expect(reclaimed).toMatchObject({ removed: [run.worktreePath], skippedDirty: [] });
+    });
+
+    it("keeps a worktree git cannot read, since it may hold work, and the reaper keeps it too", async () => {
+      const rootDir = await createGitRoot();
+      const leaseDeps = buildLeaseDeps();
+      const service = new OrchestrationWorktreeService({
+        config: buildConfig(rootDir),
+        orchestrationRuns: { listRuns: vi.fn(() => []) },
+        ...leaseDeps,
+      });
+      const run = await allocateRun(service, "run-unreadable");
+      await fs.writeFile(path.join(run.worktreePath!, "notes.md"), "draft\n", "utf8");
+      // Break the worktree's registration so git cannot report its status.
+      await fs.writeFile(path.join(rootDir, ".git", "worktrees", "run-unreadable", "HEAD"), "not a ref\n", "utf8");
+
+      await expect(service.release({ run, reason: "failed" })).resolves.toEqual({
+        outcome: "retained_unverified",
+        worktreePath: run.worktreePath,
+        error: expect.any(String),
+      });
+      await expect(fs.readFile(path.join(run.worktreePath!, "notes.md"), "utf8")).resolves.toBe("draft\n");
+      expect(leaseDeps.worktreeLeases.get(run.worktreePath!)).toMatchObject({ releasedAt: leaseNow });
+
+      const dryRun = await service.reapOrphaned({ dryRun: true, minAgeMs: 0 });
+      expect(dryRun).toMatchObject({ removed: [], skippedDirty: [], skippedUnverified: [run.worktreePath] });
+      const kept = await service.reapOrphaned({ dryRun: false, minAgeMs: 0 });
+      expect(kept).toMatchObject({ removed: [], skippedUnverified: [run.worktreePath] });
+      await expect(fs.readFile(path.join(run.worktreePath!, "notes.md"), "utf8")).resolves.toBe("draft\n");
+    });
   });
 });

@@ -1401,6 +1401,120 @@ describe("orchestration-lifecycle-service", () => {
     expect(updateRun).toHaveBeenCalledTimes(1);
   });
 
+  it("records a worktree kept for uncommitted work when the run ends", async () => {
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            durableRunId: "durable-run-1",
+            executionState: "queued",
+            worktreeStatus: "ready",
+            worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+      orchestrationEngine: {
+        ...base.orchestrationEngine,
+        advancePhase: vi.fn(
+          (_currentPlan, currentRun) =>
+            ({
+              ...currentRun,
+              status: "completed",
+              currentWaveId: undefined,
+              currentPhaseId: undefined,
+              totalIterations: 1,
+            }) as OrchestrationRun,
+        ),
+      },
+    });
+    const runtime = createRuntimeDeps({
+      worktrees: {
+        release: vi.fn(async () => ({
+          outcome: "retained_dirty" as const,
+          worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          changedPathCount: 3,
+          changedPaths: ["notes.md", "src/a.ts", "src/b.ts"],
+        })),
+      },
+    });
+
+    const result = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+
+    expect(result.outcome).toBe("completed");
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith("run-1", "run.worktree_retained_dirty", {
+      reason: "completed",
+      worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+      changedPathCount: 3,
+      changedPaths: ["notes.md", "src/a.ts", "src/b.ts"],
+    });
+    expect(host.storage.orchestration.appendRunEvent).not.toHaveBeenCalledWith(
+      "run-1",
+      "run.worktree_cleanup_failed",
+      expect.anything(),
+    );
+  });
+
+  it("records a worktree kept because git could not report whether it holds uncommitted work", async () => {
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            durableRunId: "durable-run-1",
+            executionState: "queued",
+            worktreeStatus: "ready",
+            worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+      orchestrationEngine: {
+        ...base.orchestrationEngine,
+        advancePhase: vi.fn(
+          (_currentPlan, currentRun) =>
+            ({
+              ...currentRun,
+              status: "completed",
+              currentWaveId: undefined,
+              currentPhaseId: undefined,
+              totalIterations: 1,
+            }) as OrchestrationRun,
+        ),
+      },
+    });
+    const runtime = createRuntimeDeps({
+      worktrees: {
+        release: vi.fn(async () => ({
+          outcome: "retained_unverified" as const,
+          worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          error: "fatal: not a git repository: .git/worktrees/run-1",
+        })),
+      },
+    });
+
+    const result = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+
+    expect(result.outcome).toBe("completed");
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "run.worktree_retained_unverified",
+      {
+        reason: "completed",
+        worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+        error: "fatal: not a git repository: .git/worktrees/run-1",
+      },
+    );
+    expect(host.storage.orchestration.appendRunEvent).not.toHaveBeenCalledWith(
+      "run-1",
+      "run.worktree_cleanup_failed",
+      expect.anything(),
+    );
+  });
+
   it("records durable execution checkpoints and run events in lifecycle order", async () => {
     const host = createHost({
       storage: {
