@@ -243,7 +243,9 @@ export class OrchestrationWorktreeService {
       } catch (error) {
         if (await pathMayExist(resolvedPath)) {
           if (!(await this.deps.worktreeLeases.release({ ...cleanupLease, releasedAt: this.now() }))) {
-            throw new Error(`Orchestration worktree lease changed before retention completed: ${resolvedPath}`);
+            throw new Error(`Orchestration worktree lease changed before retention completed: ${resolvedPath}`, {
+              cause: error,
+            });
           }
           return {
             outcome: "retained_unverified",
@@ -264,7 +266,9 @@ export class OrchestrationWorktreeService {
             error: error instanceof Error ? error.message : String(error),
           });
           if (!(await this.deps.worktreeLeases.release({ ...cleanupLease, releasedAt: this.now() }))) {
-            throw new Error(`Orchestration worktree lease changed before retention completed: ${resolvedPath}`);
+            throw new Error(`Orchestration worktree lease changed before retention completed: ${resolvedPath}`, {
+              cause: error,
+            });
           }
           return {
             outcome: "retained_unverified",
