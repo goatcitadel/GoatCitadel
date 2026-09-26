@@ -475,14 +475,26 @@ async function markOrchestrationRunCancelled(
       await persistCancellationCheckpoint(cancellation.run);
     });
   } else {
-    try {
-      await host.cancelDurableRun(linkedDurable.runId, actorId);
-    } catch (error) {
-      const raced = await host.getDurableRun(linkedDurable.runId);
-      if (isDurableRunTerminal(raced) && raced.status !== "cancelled") {
-        return commitLinkedDurableTerminalWinner(host, runtime, plan, run, raced, durableWinnerDetails);
+    let observedVersion = linkedDurable.version;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await host.cancelDurableRun(linkedDurable.runId, actorId);
+        break;
+      } catch (error) {
+        const raced = await host.getDurableRun(linkedDurable.runId);
+        if (raced.status === "cancelled") {
+          // A post-commit publication failure must not undo canonical cancellation.
+          break;
+        }
+        if (isDurableRunTerminal(raced)) {
+          return commitLinkedDurableTerminalWinner(host, runtime, plan, run, raced, durableWinnerDetails);
+        }
+        if (attempt === 0 && raced.version !== observedVersion) {
+          observedVersion = raced.version;
+          continue;
+        }
+        throw error;
       }
-      throw error;
     }
     await storage.runImmediateTransaction(async () => {
       cancellation = await commitRunCandidate(cancellationCandidate);
@@ -879,7 +891,7 @@ async function persistPolicyGateEvent(
       entityId: input.entityId,
       outcome: input.outcome,
       phaseId: input.phaseId,
-      blockedReason: input.blockedReason,
+      blockedReason: input.blockedReason === undefined ? undefined : boundRunError(input.blockedReason),
       patchKeys: input.patch ? Object.keys(input.patch).sort() : [],
       approvalRequired: input.approvalRequired ?? false,
     });
@@ -1257,6 +1269,66 @@ async function finishOrchestrationRunCreation(
   return await allocateOrchestrationOwnership(host, runtime, plan, run);
 }
 
+function isInterruptedQueueResume(owner: OrchestrationRun | undefined, durable: DurableRunRecord | undefined): boolean {
+  const payload =
+    durable?.workflowKey === "orchestration.plan.execute" ? parseOrchestrationWorkflowPayload(durable) : undefined;
+  return Boolean(
+    owner &&
+    durable &&
+    payload &&
+    owner.status === "queued" &&
+    owner.executionState === "queued" &&
+    owner.worktreeStatus === "ready" &&
+    owner.worktreePath &&
+    owner.durableRunId === durable.runId &&
+    durable.status === "paused" &&
+    durable.startedAt === undefined &&
+    payload.orchestrationRunId === owner.runId &&
+    payload.planId === owner.planId &&
+    payload.workspaceId === (owner.workspaceId ?? DEFAULT_WORKSPACE_ID),
+  );
+}
+
+/** Repairs only the initial pause left by a crash after the queue commit. */
+async function recoverInterruptedQueueResume(
+  host: OrchestrationLifecycleHost,
+  owner: OrchestrationRun,
+  durable: DurableRunRecord,
+): Promise<boolean> {
+  if (!isInterruptedQueueResume(owner, durable)) {
+    return false;
+  }
+  const currentOwner = await getOrchestrationRunIfAvailable(host, owner.runId);
+  const currentDurable = await getDurableRunIfAvailable(host, durable.runId);
+  if (!currentOwner || !currentDurable || !isInterruptedQueueResume(currentOwner, currentDurable)) {
+    return false;
+  }
+  try {
+    await host.resumeDurableRun(durable.runId, "orchestration_recovery");
+  } catch (error) {
+    const racedOwner = await getOrchestrationRunIfAvailable(host, owner.runId);
+    const racedDurable = await getDurableRunIfAvailable(host, durable.runId);
+    if (!racedOwner || !racedDurable || isOrchestrationRunTerminal(racedOwner) || isDurableRunTerminal(racedDurable)) {
+      return false;
+    }
+    if (
+      racedOwner.durableRunId !== durable.runId ||
+      racedOwner.planId !== owner.planId ||
+      (racedOwner.workspaceId ?? DEFAULT_WORKSPACE_ID) !== (owner.workspaceId ?? DEFAULT_WORKSPACE_ID) ||
+      racedDurable.startedAt === undefined
+    ) {
+      throw error;
+    }
+    if (racedOwner.status !== "queued" || racedOwner.executionState !== "queued" || racedDurable.status !== "queued") {
+      // Another resume already advanced this run, possibly into a later pause.
+      return true;
+    }
+  }
+  await persistRunEvent(host, currentOwner, "run.queue_resume_recovered", { durableRunId: durable.runId });
+  await host.requestDurableRunProcessing(durable.runId);
+  return true;
+}
+
 /**
  * Idempotently nudges an already-active run for a plan toward execution:
  * requeue a worktree-ready run, request processing for a queued run, or simply
@@ -1270,6 +1342,11 @@ async function resumeExistingActiveRun(
   activeRun: OrchestrationRun,
 ): Promise<OrchestrationRun> {
   if (activeRun.durableRunId && activeRun.executionState === "queued") {
+    const durable = await getDurableRunIfAvailable(host, activeRun.durableRunId);
+    if (durable?.status === "paused") {
+      await recoverInterruptedQueueResume(host, activeRun, durable);
+      return await host.storage.orchestration.getRun(activeRun.runId);
+    }
     await host.requestDurableRunProcessing(activeRun.durableRunId);
   }
   if (activeRun.durableRunId && activeRun.executionState === "worktree_ready") {
@@ -1349,14 +1426,18 @@ async function queueOrchestrationRun(
     if (isOrchestrationRunTerminal(current)) {
       return current;
     }
-    throw error;
+    const durable = await getDurableRunIfAvailable(host, queued.durableRunId!);
+    if (durable?.status !== "queued" && durable?.status !== "running") {
+      throw error;
+    }
   }
-  await host.updateDurableRunState({
-    runId: queued.durableRunId!,
-    metadata: buildDurableMetadata(plan, queued, {
-      lifecycleState: "queued",
-    }),
-  });
+  const current = await host.storage.orchestration.getRun(queued.runId);
+  const durable = await getDurableRunIfAvailable(host, queued.durableRunId!);
+  if (current.status !== "queued" || current.executionState !== "queued" || durable?.status !== "queued") {
+    return current;
+  }
+  // The worker may claim the durable immediately after this read. Never replace
+  // its metadata here: it may already hold a child-dispatch recovery breadcrumb.
   await persistCheckpoint(host, plan, queued, "run_queued", buildCheckpointDetails(plan, queued));
   await persistRunEvent(host, queued, "run.queued", {
     durableRunId: queued.durableRunId,
@@ -1387,7 +1468,7 @@ async function failRunBlockedByHook(
   run: OrchestrationRun,
   reason: string,
 ): Promise<never> {
-  const message = `Blocked by orchestration.run.before hook: ${reason}`;
+  const message = boundRunError(`Blocked by orchestration.run.before hook: ${reason}`);
   const blocked = await commitRunIfUnchanged(host, run, {
     ...run,
     status: "failed",
@@ -1688,6 +1769,9 @@ export async function reconcileTerminalOrchestrationRuns(
               continue;
             }
             const owner = await getOrchestrationRunIfAvailable(host, payload.orchestrationRunId);
+            if (owner && durable && (await recoverInterruptedQueueResume(host, owner, durable))) {
+              continue;
+            }
             if (
               !owner ||
               (owner.status !== "cancelled" && owner.status !== "failed") ||

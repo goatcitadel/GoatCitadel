@@ -262,4 +262,40 @@ describe("DurableRunService child watchers", () => {
     expect(reconcileWaitingOrchestrationPhases).toHaveBeenCalled();
     expect(reconcileTerminalOrchestrationRuns).toHaveBeenCalled();
   });
+
+  it("logs bounded redacted details for orchestration recovery failures", async () => {
+    const { context } = createHarness();
+    const secret = "recovery-secret-token-1234567890";
+    const logger = { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const backgroundTasks = new Set<Promise<void>>();
+    const restarted = new DurableRunService({ ...(context as object), logger } as never, {
+      backgroundTasks,
+      reconcileTerminalOrchestrationRuns: vi.fn(async () => {
+        throw new AggregateError(
+          [
+            new Error(`Authorization: Bearer ${secret} ${"x".repeat(1_000)}`),
+            ...Array.from({ length: 11 }, (_, index) => new Error(`run-${index} failed`)),
+          ],
+          "Orchestration recovery could not settle every run.",
+        );
+      }),
+      workflowRegistry: {
+        executeWorkflow: vi.fn(),
+        isWorkflowRecoverable: vi.fn(() => ({ recoverable: true })),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+
+    restarted.startWorker();
+    await Promise.all([...backgroundTasks]);
+    restarted.stopWorker();
+
+    const logged = logger.warn.mock.calls.find(
+      ([, message]) => message === "orchestration terminal reconciliation deferred",
+    )?.[0] as { error: string; failures: string[] } | undefined;
+    expect(logged?.error).toBe("Orchestration recovery could not settle every run.");
+    expect(logged?.failures).toHaveLength(10);
+    expect(logged?.failures[0]).not.toContain(secret);
+    expect(logged?.failures.every((failure) => failure.length <= 500)).toBe(true);
+  });
 });

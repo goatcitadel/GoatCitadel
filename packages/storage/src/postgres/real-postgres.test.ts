@@ -4624,9 +4624,20 @@ test(
         status: "cancelled",
         finishedAt: "2026-07-11T00:01:00.000Z",
       });
-      assert.ok(
-        orchestration.listActiveRunsWithEndedDurableRun(1000).some((run) => run.runId === orchestrationRunId),
-        "an active orchestration run whose durable run ended is listed",
+      const activeDurableId = `durable-active-${suffix}`;
+      const activeRunId = `orchestration-active-${suffix}`;
+      durableRuns.createRun({
+        runId: activeDurableId,
+        workflowKey: "orchestration.plan.execute",
+        status: "paused",
+      });
+      orchestration.createRun({ ...orchestrationRun, runId: activeRunId, durableRunId: activeDurableId });
+      assert.deepEqual(
+        orchestration
+          .listActiveRunsWithEndedDurableRun(1000)
+          .filter((run) => run.planId === planId)
+          .map((run) => run.runId),
+        [orchestrationRunId],
       );
       const generationOwner = orchestration.updateRun({
         ...orchestration.getRun(orchestrationRunId),

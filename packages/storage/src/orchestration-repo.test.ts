@@ -508,12 +508,18 @@ describe("OrchestrationRepository", () => {
     repo.createRun({ ...base, runId: "run-parked", durableRunId: "d-waiting" });
     repo.createRun({ ...base, runId: "run-unlinked", startedAt: "2026-02-27T00:00:01.000Z" });
     repo.createRun({ ...base, runId: "run-missing-durable", durableRunId: "d-missing" });
+    repo.createRun({
+      ...base,
+      runId: "run-completed-peer",
+      startedAt: "2026-02-27T00:00:04.000Z",
+      durableRunId: "d-done",
+    });
     // Already settled.
     repo.createRun({ ...base, runId: "run-done", status: "completed", durableRunId: "d-done" });
 
     assert.deepEqual(
       repo.listActiveRunsWithEndedDurableRun().map((run) => run.runId),
-      ["run-early", "run-queued", "run-late"],
+      ["run-early", "run-queued", "run-late", "run-completed-peer"],
     );
     assert.deepEqual(
       repo.listActiveRunsWithEndedDurableRun(1).map((run) => run.runId),

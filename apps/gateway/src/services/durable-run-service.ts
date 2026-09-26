@@ -27,6 +27,7 @@ import {
   isChatTurnTerminalStatus,
   isDurableRunTerminal,
   NotFoundError,
+  redactSecretText,
   redactStructuredSecrets,
   assertDurableChildWatcherCreateRequestBounds,
   assertDurableChildWatcherIdBounds,
@@ -443,6 +444,11 @@ function redactRawRemoteApprovalBearers<T>(value: T): T {
 
 function redactRawRemoteApprovalBearerText(value: string): string {
   return value.replace(RAW_REMOTE_APPROVAL_BEARER_GLOBAL_PATTERN, "[REDACTED]");
+}
+
+function boundedRecoveryError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return redactRawRemoteApprovalBearerText(redactSecretText(message).value).slice(0, 500);
 }
 
 type LinkedFinalizationPending = ExactLinkedFinalizationPendingMarker;
@@ -4454,7 +4460,10 @@ export class DurableRunService {
     } catch (error) {
       this.resolveLogger().warn(
         {
-          error: error instanceof Error ? error.message : String(error),
+          error: boundedRecoveryError(error),
+          ...(error instanceof AggregateError
+            ? { failures: error.errors.slice(0, 10).map((inner: unknown) => boundedRecoveryError(inner)) }
+            : {}),
         },
         "orchestration terminal reconciliation deferred",
       );
