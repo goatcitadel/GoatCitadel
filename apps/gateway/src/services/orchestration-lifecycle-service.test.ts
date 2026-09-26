@@ -3030,6 +3030,81 @@ describe("orchestration phase child parking", () => {
     );
   });
 
+  it("keeps the child breadcrumb until the harvested phase advances, so an interruption harvests again", async () => {
+    let run = buildParkedRun();
+    let failPhaseExecutedEvent = true;
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => run),
+          updateRun: vi.fn((value: OrchestrationRun) => {
+            run = value;
+            return value;
+          }),
+          appendRunEvent: vi.fn(async (_runId: string, eventType: string) => {
+            if (eventType === "phase.executed" && failPhaseExecutedEvent) {
+              failPhaseExecutedEvent = false;
+              throw new Error("event store unavailable");
+            }
+          }),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+      orchestrationEngine: {
+        ...base.orchestrationEngine,
+        advancePhase: vi.fn(
+          (_currentPlan, currentRun) =>
+            ({
+              ...currentRun,
+              status: "completed",
+              currentWaveId: undefined,
+              currentPhaseId: undefined,
+              totalIterations: currentRun.totalIterations + 1,
+            }) as OrchestrationRun,
+        ),
+      },
+    });
+    const waitingPhase = buildParkedParent().metadata?.waitingPhase;
+    await host.updateDurableRunState({ runId: "durable-run-1", metadata: { waitingPhase } });
+    const getParentDurableRun = host.getDurableRun;
+    (host as unknown as { getDurableRun: OrchestrationLifecycleHost["getDurableRun"] }).getDurableRun = vi.fn(
+      (runId: string) => (runId === CHILD_RUN_ID ? buildChildDurableRun() : getParentDurableRun(runId)),
+    );
+    const execute = vi.fn();
+    const harvest = vi.fn(async () => ({
+      phaseId: "phase-1",
+      ownerAgentId: "agent-1",
+      status: "completed" as const,
+      startedAt: "2026-04-12T00:00:01.000Z",
+      finishedAt: "2026-04-12T00:01:02.000Z",
+      outputSummary: "Canonical child output",
+      outputText: "Canonical child output",
+      childSessionId: "sess_phase",
+      childTurnId: "turn_phase",
+      childRunId: CHILD_RUN_ID,
+      costUsd: 0.25,
+    }));
+    const runtime = createRuntimeDeps({ phaseExecutor: { execute, harvest } });
+
+    // The resume commits, then a write fails before the phase advance commits.
+    await expect(executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"))).rejects.toThrow(
+      "event store unavailable",
+    );
+    expect(run).toMatchObject({ status: "running", executionState: "running", currentPhaseId: "phase-1" });
+    expect(host.getDurableRun("durable-run-1").metadata?.waitingPhase).toEqual(waitingPhase);
+
+    // Recovery harvests the same child again instead of dispatching the phase.
+    const retried = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+
+    expect(retried.outcome).toBe("completed");
+    expect(execute).not.toHaveBeenCalled();
+    expect(harvest).toHaveBeenCalledTimes(2);
+    expect(host.orchestrationEngine.advancePhase).toHaveBeenCalledTimes(1);
+    // The advance commit drops the breadcrumb together with the phase.
+    expect(host.getDurableRun("durable-run-1").metadata).not.toHaveProperty("waitingPhase");
+  });
+
   it("does not flag cost as unreported when the phase reported its full cost", async () => {
     const host = createHost({
       storage: {

@@ -1771,24 +1771,32 @@ export async function executeDurableOrchestrationRun(
       executionState: "running",
       lastError: undefined,
     };
+    const resumeCommit: OrchestrationDurableCommitOptions = {};
+    if (recoverableChildPhase) {
+      // Keep the child breadcrumb until the phase advance (or failure) commits:
+      // an interruption before then must harvest this child again, never
+      // dispatch the phase a second time.
+      resumeCommit.durableMetadataExtras = {
+        [recoverableChildPhase.breadcrumbKey]: recoverableChildPhase.payload,
+      };
+    }
+    if (resumedFromChild) {
+      resumeCommit.durableTimeline = {
+        eventType: "run_resumed",
+        payload: {
+          phaseId: resumedRun.currentPhaseId,
+          waveId: resumedRun.currentWaveId,
+          resumedFrom: "child_phase_wait",
+        },
+      };
+    }
     await recordUpdate(
       resumedRun,
       resumedFromChild ? "run_resumed" : undefined,
       {
         resumedFrom,
       },
-      resumedFromChild
-        ? {
-            durableTimeline: {
-              eventType: "run_resumed",
-              payload: {
-                phaseId: resumedRun.currentPhaseId,
-                waveId: resumedRun.currentWaveId,
-                resumedFrom: "child_phase_wait",
-              },
-            },
-          }
-        : {},
+      resumeCommit,
     );
     if (resumedFromChild) {
       await persistRunEvent(host, run, "run.resumed", {
@@ -2225,18 +2233,24 @@ export async function executeDurableOrchestrationRun(
 function readRecoverableChildPhase(
   durableRun: DurableRunRecord,
   currentPhaseId: string,
-): { childRunId?: string; payload: Record<string, unknown> } | undefined {
+):
+  | { childRunId?: string; payload: Record<string, unknown>; breadcrumbKey: "waitingPhase" | "dispatchedPhase" }
+  | undefined {
   const metadata = asRecord(durableRun.metadata);
   const waitingPhase = asRecord(metadata?.waitingPhase);
   if (waitingPhase && asString(waitingPhase.phaseId) === currentPhaseId) {
     const childRunId = asString(waitingPhase.childRunId);
     if (childRunId) {
-      return { childRunId, payload: waitingPhase };
+      return { childRunId, payload: waitingPhase, breadcrumbKey: "waitingPhase" };
     }
   }
   const dispatchedPhase = asRecord(metadata?.dispatchedPhase);
   if (dispatchedPhase && asString(dispatchedPhase.phaseId) === currentPhaseId) {
-    return { childRunId: asString(dispatchedPhase.childRunId), payload: dispatchedPhase };
+    return {
+      childRunId: asString(dispatchedPhase.childRunId),
+      payload: dispatchedPhase,
+      breadcrumbKey: "dispatchedPhase",
+    };
   }
   return undefined;
 }
