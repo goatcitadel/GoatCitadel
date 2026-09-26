@@ -1375,8 +1375,15 @@ export class ChatDelegationService {
       }
       stableParentRun = concurrentRun;
       existingSteps = await deps.storage.chatDelegationSteps.listByRun(runId);
-      // Run the plan the concurrent winner persisted, not the one this call requested.
-      delegationSteps = rebuildResumableDelegationPlan(existingSteps, normalizedRequestedSteps);
+      const winningPlan = rebuildResumableDelegationPlan(existingSteps, normalizedRequestedSteps);
+      // The task lists its child runs by this call's step ids, so a winner that
+      // persisted other ids cannot be adopted; its own call runs that plan.
+      if (winningPlan.some((step, index) => step.stepId !== normalizedRequestedSteps[index]?.stepId)) {
+        throw new ConflictError({
+          message: `Delegation run ${runId} was persisted concurrently with different step ids.`,
+        });
+      }
+      delegationSteps = winningPlan;
       stages = buildDelegationStages(delegationSteps);
       resumedExistingRun = true;
     }
@@ -1700,19 +1707,37 @@ export class ChatDelegationService {
           if (!dependency.withheld) {
             continue;
           }
-          await deps.taskLifecycleService.appendTaskActivity(task.taskId, {
-            activityType: "diagnostic",
-            agentId: step.role,
-            message: `Withheld ${dependency.role} output from ${step.role}: it matched the promptware safety filter (${dependency.withheld.ruleId}).`,
-            metadata: {
-              reason: DELEGATED_OUTPUT_PROMPT_INJECTION_REASON,
+          // A re-dispatched step withholds the same output again; record it once.
+          const withheldActivity = await deps.taskLifecycleService.persistDelegationActivityOnce(
+            buildStableDelegationId(
+              "delegation-withheld-output-activity",
               runId,
-              stepId: step.stepId,
-              dependencyStepId: dependency.stepId,
-              ruleId: dependency.withheld.ruleId,
-              evidenceHash: dependency.withheld.evidenceHash,
+              step.stepId,
+              dependency.stepId,
+              dependency.withheld.ruleId,
+              dependency.withheld.evidenceHash,
+            ),
+            task.taskId,
+            {
+              activityType: "diagnostic",
+              agentId: step.role,
+              message: `Withheld ${dependency.role} output from ${step.role}: it matched the promptware safety filter (${dependency.withheld.ruleId}).`,
+              metadata: {
+                reason: DELEGATED_OUTPUT_PROMPT_INJECTION_REASON,
+                runId,
+                stepId: step.stepId,
+                dependencyStepId: dependency.stepId,
+                ruleId: dependency.withheld.ruleId,
+                evidenceHash: dependency.withheld.evidenceHash,
+              },
             },
-          });
+            startedAt,
+          );
+          if (withheldActivity.created) {
+            await publishDelegationPostCommitSafely("withheld dependency output", () =>
+              deps.taskLifecycleService.publishDelegationActivity(withheldActivity.activity),
+            );
+          }
         }
         scheduleLateSettleRecord = (event) => {
           if (lateSettleRecordScheduled) {
@@ -3826,11 +3851,11 @@ function rebuildResumableDelegationPlan(
       const dependencyIndex = requestedIndexById.get(dependencyId);
       return dependencyIndex === undefined ? dependencyId : (actualIdByIndex.get(dependencyIndex) ?? dependencyId);
     });
+    // Only the id and dependencies come from the persisted step; the request
+    // keeps its per-step instructions (objective, label, expected output).
     return {
+      ...requested,
       stepId: persisted?.stepId ?? requested.stepId,
-      index: requested.index,
-      role: requested.role,
-      parallelizable: requested.parallelizable,
       dependsOnStepIds: dedupeStrings(persisted ? (persisted.dependsOnStepIds ?? []) : requestedDependencies),
     };
   });
