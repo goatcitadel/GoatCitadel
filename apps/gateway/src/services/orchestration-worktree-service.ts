@@ -206,7 +206,13 @@ export class OrchestrationWorktreeService {
     this.stopLeaseHeartbeat(resolvedPath, cleanupLease);
     const manager = this.createManager(worktreesRoot);
     const changes = await manager.listChanges(resolvedPath);
-    if (changes.status === "unreadable" || (changes.status === "read" && changes.changedPaths.length > 0)) {
+    const unregisteredHasContent =
+      changes.status === "unregistered" && (await hasDirectoryEntriesOrUnreadable(resolvedPath));
+    if (
+      changes.status === "unreadable" ||
+      unregisteredHasContent ||
+      (changes.status === "read" && changes.changedPaths.length > 0)
+    ) {
       // Removing the worktree would destroy uncommitted work, or might when git
       // cannot tell. Keep it and give up ownership; the orphan reaper also
       // leaves such worktrees in place.
@@ -220,22 +226,56 @@ export class OrchestrationWorktreeService {
             changedPathCount: changes.changedPaths.length,
             changedPaths: changes.changedPaths.slice(0, MAX_REPORTED_CHANGED_PATHS),
           }
-        : { outcome: "retained_unverified", worktreePath: resolvedPath, error: changes.error };
+        : {
+            outcome: "retained_unverified",
+            worktreePath: resolvedPath,
+            error:
+              changes.status === "unreadable"
+                ? changes.error
+                : "Git does not register this nonempty worktree directory",
+          };
     }
-    try {
-      await manager.remove(resolvedPath);
-    } catch (error) {
-      log.warn("git worktree remove failed; falling back to filesystem cleanup", {
-        runId: input.run.runId,
-        reason: input.reason,
-        worktreePath: resolvedPath,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      await fs.rm(resolvedPath, { recursive: true, force: true });
+    if (changes.status === "unregistered") {
+      try {
+        // An empty directory can be removed atomically; a new file makes rmdir
+        // fail rather than letting recursive cleanup destroy it.
+        await fs.rmdir(resolvedPath);
+      } catch (error) {
+        if (await pathMayExist(resolvedPath)) {
+          if (!(await this.deps.worktreeLeases.release({ ...cleanupLease, releasedAt: this.now() }))) {
+            throw new Error(`Orchestration worktree lease changed before retention completed: ${resolvedPath}`);
+          }
+          return {
+            outcome: "retained_unverified",
+            worktreePath: resolvedPath,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
+    } else {
+      try {
+        await manager.remove(resolvedPath);
+      } catch (error) {
+        if (await pathMayExist(resolvedPath)) {
+          log.warn("git worktree remove failed; retaining worktree", {
+            runId: input.run.runId,
+            reason: input.reason,
+            worktreePath: resolvedPath,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          if (!(await this.deps.worktreeLeases.release({ ...cleanupLease, releasedAt: this.now() }))) {
+            throw new Error(`Orchestration worktree lease changed before retention completed: ${resolvedPath}`);
+          }
+          return {
+            outcome: "retained_unverified",
+            worktreePath: resolvedPath,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
     }
-    // ORCH-004: prune stale `.git/worktrees/<id>` metadata after every removal
-    // path (including the filesystem fallback), so git's worktree registry does
-    // not accumulate orphaned entries for reclaimed run worktrees.
+    // ORCH-004: prune stale `.git/worktrees/<id>` metadata after removal so
+    // git's worktree registry does not accumulate orphaned entries.
     const pruned = await this.pruneWorktreeMetadata(manager, input.run.runId, input.reason, resolvedPath);
     if (
       pruned &&
@@ -524,7 +564,11 @@ export class OrchestrationWorktreeService {
       }
       if (dryRun) {
         const retention = await readRetentionNeed(manager, candidatePath);
-        (retention === "removable" ? removed : skippedFor[retention]).push(candidatePath);
+        if (retention === "dirty" || retention === "unverified") {
+          skippedFor[retention].push(candidatePath);
+        } else {
+          removed.push(candidatePath);
+        }
         continue;
       }
       const claimed = await this.deps.worktreeLeases.claim({
@@ -539,14 +583,34 @@ export class OrchestrationWorktreeService {
         continue;
       }
       const retention = await readRetentionNeed(manager, candidatePath);
-      if (retention !== "removable") {
+      if (retention === "dirty" || retention === "unverified") {
         if (!(await this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
           throw new Error(`Orchestration worktree lease changed before orphan scan completed: ${candidatePath}`);
         }
         skippedFor[retention].push(candidatePath);
         continue;
       }
-      await fs.rm(candidatePath, { recursive: true, force: true });
+      if (retention === "empty_unregistered") {
+        try {
+          await fs.rmdir(candidatePath);
+        } catch {
+          if (!(await this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
+            throw new Error(`Orchestration worktree lease changed before orphan scan completed: ${candidatePath}`);
+          }
+          ((await pathMayExist(candidatePath)) ? skippedUnverified : removed).push(candidatePath);
+          continue;
+        }
+      } else {
+        try {
+          await manager.remove(candidatePath);
+        } catch {
+          if (!(await this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
+            throw new Error(`Orchestration worktree lease changed before orphan scan completed: ${candidatePath}`);
+          }
+          ((await pathMayExist(candidatePath)) ? skippedUnverified : removed).push(candidatePath);
+          continue;
+        }
+      }
       if (!(await this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
         throw new Error(`Orchestration worktree lease changed before orphan cleanup completed: ${candidatePath}`);
       }
@@ -591,19 +655,39 @@ export class OrchestrationWorktreeService {
 
 /**
  * Whether an orphaned worktree can be removed. Git, reading it through its
- * registration, must report no uncommitted work; a directory git does not know
- * as a worktree holds none git could report and is removed as before. One git
- * cannot read is kept, since it may hold work.
+ * registration, must report no uncommitted work. An unregistered directory is
+ * removable only when it is empty. One git cannot read is kept, since it may
+ * hold work.
  */
 async function readRetentionNeed(
   manager: WorktreeManager,
   worktreePath: string,
-): Promise<"removable" | "dirty" | "unverified"> {
+): Promise<"registered_clean" | "empty_unregistered" | "dirty" | "unverified"> {
   const changes = await manager.listChanges(worktreePath);
   if (changes.status === "unreadable") {
     return "unverified";
   }
-  return changes.status === "read" && changes.changedPaths.length > 0 ? "dirty" : "removable";
+  if (changes.status === "unregistered") {
+    return (await hasDirectoryEntriesOrUnreadable(worktreePath)) ? "unverified" : "empty_unregistered";
+  }
+  return changes.changedPaths.length > 0 ? "dirty" : "registered_clean";
+}
+
+async function hasDirectoryEntriesOrUnreadable(worktreePath: string): Promise<boolean> {
+  try {
+    return (await fs.readdir(worktreePath)).length > 0;
+  } catch {
+    return true;
+  }
+}
+
+async function pathMayExist(worktreePath: string): Promise<boolean> {
+  try {
+    await fs.lstat(worktreePath);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
 }
 
 function toLeaseToken(lease: OrchestrationWorktreeLeaseRecord): OrchestrationWorktreeLeaseToken {

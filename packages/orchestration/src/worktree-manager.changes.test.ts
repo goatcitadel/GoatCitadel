@@ -52,7 +52,7 @@ function createRepo(): { root: string; repoRoot: string; manager: WorktreeManage
 }
 
 describe("WorktreeManager.listChanges", () => {
-  it("reports a fresh worktree as clean and lists modified and untracked, unignored files", async () => {
+  it("reports a fresh worktree as clean and lists modified, untracked, and ignored files", async () => {
     const { manager } = createRepo();
     const worktreePath = await manager.create("run-1");
 
@@ -66,9 +66,22 @@ describe("WorktreeManager.listChanges", () => {
 
     const changes = await manager.listChanges(worktreePath);
     expect(changes.status === "read" ? changes.changedPaths.sort() : changes).toEqual([
+      "ignored/",
       "notes/draft.md",
       "tracked.txt",
     ]);
+  });
+
+  it("does not classify an ignored-only worktree as clean", async () => {
+    const { manager } = createRepo();
+    const worktreePath = await manager.create("run-ignored");
+    fs.mkdirSync(path.join(worktreePath, "ignored"));
+    fs.writeFileSync(path.join(worktreePath, "ignored", "output.txt"), "keep\n");
+
+    await expect(manager.listChanges(worktreePath)).resolves.toEqual({
+      status: "read",
+      changedPaths: ["ignored/"],
+    });
   });
 
   it("reports a directory the repository did not register as unregistered", async () => {

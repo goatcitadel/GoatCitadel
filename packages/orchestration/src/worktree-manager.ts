@@ -23,7 +23,7 @@ export type WorktreeChanges =
   | { status: "unregistered" }
   /** Git could not report on the worktree, so whether it holds uncommitted work is unknown. */
   | { status: "unreadable"; error: string }
-  /** Modified, staged, or untracked and not ignored paths; empty when the worktree is clean. */
+  /** Modified, staged, untracked, or ignored paths; empty when the worktree has no local files to retain. */
   | { status: "read"; changedPaths: string[] };
 
 /** How much of a git failure a change report carries. */
@@ -61,18 +61,17 @@ export class WorktreeManager {
 
   public async remove(worktreePath: string): Promise<void> {
     const resolvedPath = path.resolve(worktreePath);
-    // Run-scoped orchestration worktrees are disposable and detached. Callers
-    // check `listChanges` first and keep a worktree with uncommitted work, so
-    // `--force` only has to get past git's own cleanliness check.
-    await execFileAsync("git", ["worktree", "remove", "--force", resolvedPath], {
+    // Git rechecks tracked and untracked files immediately before removal.
+    // A caller's earlier status check is not authority to force deletion.
+    await execFileAsync("git", ["worktree", "remove", resolvedPath], {
       cwd: this.options.repoRoot,
       env: this.gitEnv(),
     });
   }
 
   /**
-   * Reports the paths with uncommitted work (modified, staged, or untracked and
-   * not ignored) in a worktree this repository registered. A failure to read the
+   * Reports the paths with local content (modified, staged, untracked, or ignored)
+   * in a worktree this repository registered. A failure to read the
    * registrations or the worktree is reported as `unreadable`, never as clean.
    *
    * Agents can write inside a worktree, including its `.git` file, which could
@@ -101,6 +100,7 @@ export class WorktreeManager {
           "--porcelain",
           "-z",
           "--untracked-files=all",
+          "--ignored=matching",
         ],
         { cwd: this.options.repoRoot, env: this.gitEnv(), maxBuffer: 16 * 1024 * 1024 },
       );

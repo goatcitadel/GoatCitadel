@@ -21,7 +21,7 @@ describe("worktree manager coverage", () => {
     vi.restoreAllMocks();
   });
 
-  it("creates worktrees and force-removes them so dirty run-scoped worktrees are reclaimed", async () => {
+  it("creates worktrees and removes them without forcing away late edits", async () => {
     await import("./index.js");
     const { WorktreeManager } = await import("./worktree-manager.js");
     const manager = new WorktreeManager({
@@ -39,9 +39,7 @@ describe("worktree manager coverage", () => {
     expect(execFileMock.mock.calls[0]?.[0]).toBe("git");
     expect(execFileMock.mock.calls[0]?.[1]).toEqual(["worktree", "add", "--detach", expectedPath, "main"]);
     expect(execFileMock.mock.calls[1]?.[0]).toBe("git");
-    // ORCH-004: dirty agent worktrees fail plain `remove`; --force makes the
-    // git-side removal succeed for these disposable, detached run worktrees.
-    expect(execFileMock.mock.calls[1]?.[1]).toEqual(["worktree", "remove", "--force", expectedResolvedPath]);
+    expect(execFileMock.mock.calls[1]?.[1]).toEqual(["worktree", "remove", expectedResolvedPath]);
   });
 
   it("prunes stale worktree metadata so .git/worktrees entries are not orphaned", async () => {
