@@ -1859,16 +1859,31 @@ export class GatewayService {
       reconcileWaitingChatDelegations: () => this.chatTurnControl.reconcileWaitingDelegations(),
       reconcileWaitingOrchestrationPhases: () =>
         orchestrationLifecycleService.reconcileWaitingOrchestrationPhases(this),
+      reconcileTerminalOrchestrationRuns: () =>
+        orchestrationLifecycleService.reconcileTerminalOrchestrationRuns(
+          this,
+          this.getOrchestrationLifecycleRuntimeDeps(),
+        ),
       onChatTurnCancelled: (sessionId, turnId, actorId) =>
         this.chatTurnControl.onChatTurnCancelled(sessionId, turnId, actorId),
       workflowRegistry: durableExecutionService.createDeferredDurableWorkflowExecutorRegistry(
         () => this.durableWorkflowRegistry,
       ),
       onRunFailed: async (run, message) => {
-        await this.improvementService.recordDurableRunFailureSignal({
-          run,
-          message,
-        });
+        try {
+          await this.improvementService.recordDurableRunFailureSignal({
+            run,
+            message,
+          });
+        } finally {
+          // The durable failure has committed; now its orchestration run can follow.
+          await orchestrationLifecycleService.settleOrchestrationRunForEndedDurableRun(
+            this,
+            this.getOrchestrationLifecycleRuntimeDeps(),
+            run,
+            { reason: "workflow_error" },
+          );
+        }
       },
       onBackgroundAttentionRequired: async (input) => {
         if (!(await this.isFeatureEnabled("notificationRoutingV1Enabled"))) return false;
@@ -6943,7 +6958,13 @@ export class GatewayService {
     return await this.durableOperatorService.listRunCheckpoints(runId, limit);
   }
 
-  public async createDurableRun(input: DurableRunCreateRequest): Promise<DurableRunRecord> {
+  public async createDurableRun(
+    input: DurableRunCreateRequest,
+    internalOptions?: { initialStatus: "paused" },
+  ): Promise<DurableRunRecord> {
+    if (internalOptions?.initialStatus === "paused") {
+      return await this.durableRunService.createDurableRun(input, { initialStatus: "paused" });
+    }
     return await this.durableOperatorService.createRun(input);
   }
 

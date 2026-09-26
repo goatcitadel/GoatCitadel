@@ -27,6 +27,7 @@ import {
   isChatTurnTerminalStatus,
   isDurableRunTerminal,
   NotFoundError,
+  redactSecretText,
   redactStructuredSecrets,
   assertDurableChildWatcherCreateRequestBounds,
   assertDurableChildWatcherIdBounds,
@@ -445,6 +446,11 @@ function redactRawRemoteApprovalBearerText(value: string): string {
   return value.replace(RAW_REMOTE_APPROVAL_BEARER_GLOBAL_PATTERN, "[REDACTED]");
 }
 
+function boundedRecoveryError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return redactRawRemoteApprovalBearerText(redactSecretText(message).value).slice(0, 500);
+}
+
 type LinkedFinalizationPending = ExactLinkedFinalizationPendingMarker;
 
 interface DurableChatCancellationLink {
@@ -713,6 +719,8 @@ export class DurableRunService {
       reconcileWaitingChatDelegations?: () => Promise<void>;
       /** Wakes orchestration runs parked on a phase child that has already settled. */
       reconcileWaitingOrchestrationPhases?: () => Promise<void>;
+      /** Settles active orchestration runs whose linked durable run already ended. */
+      reconcileTerminalOrchestrationRuns?: () => Promise<void>;
       onBackgroundAttentionRequired?: (
         input: DurableBackgroundAttentionNotificationInput,
       ) => Promise<boolean | void> | boolean | void;
@@ -3337,7 +3345,7 @@ export class DurableRunService {
 
   async createDurableRun(
     input: DurableRunCreateRequest,
-    options: { publishRealtime?: boolean; idempotentIfExists?: boolean } = {},
+    options: { publishRealtime?: boolean; idempotentIfExists?: boolean; initialStatus?: "paused" } = {},
   ): Promise<DurableRunRecord> {
     await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertNoRawRemoteApprovalBearer(input);
@@ -3353,6 +3361,9 @@ export class DurableRunService {
     if (!workflowKey) {
       throw new Error("workflowKey is required");
     }
+    if (options.initialStatus === "paused" && (workflowKey !== "orchestration.plan.execute" || input.waitForEvent)) {
+      throw new Error("Only orchestration ownership setup may create a paused durable run.");
+    }
     const retryPolicy = this.normalizeDurableRetryPolicy(input.retryPolicy);
     if (
       workflowKey === "chat.turn.execute" &&
@@ -3362,7 +3373,7 @@ export class DurableRunService {
       throw new Error("Admitted v2 Chat runs require the exact canonical retry policy.");
     }
     const now = new Date().toISOString();
-    const status: DurableRunRecord["status"] = input.waitForEvent ? "waiting" : "queued";
+    const status: DurableRunRecord["status"] = options.initialStatus ?? (input.waitForEvent ? "waiting" : "queued");
     const metadata = {
       ...(input.metadata ?? {}),
       retryPolicy,
@@ -3388,7 +3399,7 @@ export class DurableRunService {
           maxAttempts: retryPolicy.maxAttempts,
           payload: input.payload ?? {},
           metadata,
-          startedAt: status === "queued" ? undefined : now,
+          startedAt: status === "waiting" ? now : undefined,
           now,
         });
         await this.createDurableCheckpoint({
@@ -4442,6 +4453,19 @@ export class DurableRunService {
           error: error instanceof Error ? error.message : String(error),
         },
         "orchestration phase wake reconciliation deferred",
+      );
+    }
+    try {
+      await this.deps?.reconcileTerminalOrchestrationRuns?.();
+    } catch (error) {
+      this.resolveLogger().warn(
+        {
+          error: boundedRecoveryError(error),
+          ...(error instanceof AggregateError
+            ? { failures: error.errors.slice(0, 10).map((inner: unknown) => boundedRecoveryError(inner)) }
+            : {}),
+        },
+        "orchestration terminal reconciliation deferred",
       );
     }
   }

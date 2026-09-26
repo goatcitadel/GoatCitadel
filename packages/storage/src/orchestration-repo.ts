@@ -95,6 +95,8 @@ export class OrchestrationRepository {
   private readonly listRunsStmt;
   private readonly getLatestRunByPlanStmt;
   private readonly findActiveRunByPlanStmt;
+  private readonly listActiveRunsWithEndedDurableRunStmt;
+  private readonly listUnlinkedCreatedRunsStmt;
   private readonly insertCheckpointStmt;
   private readonly listCheckpointsStmt;
   private readonly listCheckpointsAfterStmt;
@@ -104,6 +106,7 @@ export class OrchestrationRepository {
   public constructor(private readonly db: DatabaseClient) {
     const optionalExpectedExecutionState =
       db.dialect === "postgres" ? "CAST(@expectedExecutionState AS TEXT)" : "@expectedExecutionState";
+    const optionalAfterRunId = db.dialect === "postgres" ? "CAST(@afterRunId AS TEXT)" : "@afterRunId";
     // Postgres cannot infer a parameter's type from an IS [NOT] NULL test alone
     // ("could not determine data type of parameter"), and these two tests are the
     // only places the lease generation appears without a column to infer from —
@@ -341,6 +344,24 @@ export class OrchestrationRepository {
       LIMIT 1
     `);
 
+    this.listActiveRunsWithEndedDurableRunStmt = db.prepare(`
+      SELECT o.* FROM orchestration_runs o
+      JOIN durable_runs d ON d.run_id = o.durable_run_id
+      WHERE o.status IN ('queued', 'running', 'paused')
+        AND d.status IN ('completed', 'failed', 'cancelled', 'dead_lettered')
+      ORDER BY o.started_at ASC, o.run_id ASC
+      LIMIT @limit
+    `);
+    this.listUnlinkedCreatedRunsStmt = db.prepare(`
+      SELECT * FROM orchestration_runs
+      WHERE status IN ('queued', 'running', 'paused')
+        AND execution_state = 'created'
+        AND durable_run_id IS NULL
+        AND (${optionalAfterRunId} IS NULL OR run_id > @afterRunId)
+      ORDER BY run_id ASC
+      LIMIT @limit
+    `);
+
     this.insertCheckpointStmt = db.prepare(`
       INSERT INTO orchestration_checkpoints (
         checkpoint_id, run_id, plan_id, wave_id, phase_id,
@@ -567,6 +588,24 @@ export class OrchestrationRepository {
       return undefined;
     }
     return mapRunRow(row);
+  }
+
+  /**
+   * Active (queued, running, or paused) runs whose linked durable run has
+   * already ended, oldest first. Only rows that need settling are returned, so
+   * long-lived active runs cannot crowd them out of a bounded scan.
+   */
+  public listActiveRunsWithEndedDurableRun(limit = 200): OrchestrationRun[] {
+    const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
+    return toOrchestrationRunRows(this.listActiveRunsWithEndedDurableRunStmt.all({ limit: safeLimit })).map(mapRunRow);
+  }
+
+  /** Unlinked ownership setups, paged so recovery can inspect every candidate. */
+  public listUnlinkedCreatedRuns(limit = 200, afterRunId?: string): OrchestrationRun[] {
+    const safeLimit = Math.max(1, Math.min(1_000, Math.floor(limit)));
+    return toOrchestrationRunRows(
+      this.listUnlinkedCreatedRunsStmt.all({ afterRunId: afterRunId ?? null, limit: safeLimit }),
+    ).map(mapRunRow);
   }
 
   public listRuns(limit = 1000): OrchestrationRun[] {

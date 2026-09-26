@@ -4467,6 +4467,17 @@ test(
       assert.deepEqual(durableRuns.listPendingAutonomousChatPostCommitRunIds(), [autonomousRunId]);
       assert.deepEqual(durableRuns.listPendingGeneralChatPostCommitRunIds(), [generalRunId]);
       assert.deepEqual(durableRuns.listPendingGeneralChatPostCommitRunIds(500, generalRunId), []);
+      const pausedFirstId = `d-paused-${suffix}`;
+      const pausedSecondId = `e-paused-${suffix}`;
+      durableRuns.createRun({ runId: pausedFirstId, workflowKey: "orchestration.plan.execute", status: "paused" });
+      durableRuns.createRun({ runId: pausedSecondId, workflowKey: "orchestration.plan.execute", status: "paused" });
+      durableRuns.createRun({ runId: `f-other-${suffix}`, workflowKey: "chat.turn.execute", status: "paused" });
+      const queuedId = `g-queued-${suffix}`;
+      durableRuns.createRun({ runId: queuedId, workflowKey: "orchestration.plan.execute", status: "queued" });
+      assert.deepEqual(durableRuns.listUnstartedOrchestrationRunIds(1), [pausedFirstId]);
+      assert.deepEqual(durableRuns.listUnstartedOrchestrationRunIds(1, pausedFirstId), [pausedSecondId]);
+      assert.deepEqual(durableRuns.listUnstartedOrchestrationRunIds(1, pausedSecondId), [queuedId]);
+      assert.deepEqual(durableRuns.listUnstartedOrchestrationRunIds(1, queuedId), []);
 
       const mutationIdempotency = new MutationIdempotencyRepository(syncClient);
       const mutationIdentity = {
@@ -4588,12 +4599,45 @@ test(
         totalIterations: 0,
         workspaceId: "default",
       });
+      const unlinkedSetupId = `orchestration-setup-${suffix}`;
+      orchestration.createRun({
+        ...orchestrationRun,
+        runId: unlinkedSetupId,
+        executionState: "created",
+      });
+      assert.deepEqual(
+        orchestration.listUnlinkedCreatedRuns(1).map((run) => run.runId),
+        [unlinkedSetupId],
+      );
+      assert.deepEqual(orchestration.listUnlinkedCreatedRuns(1, unlinkedSetupId), []);
       assert.equal(
         orchestration.updateRunIfCurrentState(
           { ...orchestrationRun, status: "running", executionState: "queued" },
           { status: "queued", executionState: undefined },
         )?.status,
         "running",
+      );
+      orchestration.updateRun({ ...orchestration.getRun(orchestrationRunId), durableRunId: `durable-${suffix}` });
+      durableRuns.createRun({
+        runId: `durable-${suffix}`,
+        workflowKey: "orchestration.plan.execute",
+        status: "cancelled",
+        finishedAt: "2026-07-11T00:01:00.000Z",
+      });
+      const activeDurableId = `durable-active-${suffix}`;
+      const activeRunId = `orchestration-active-${suffix}`;
+      durableRuns.createRun({
+        runId: activeDurableId,
+        workflowKey: "orchestration.plan.execute",
+        status: "paused",
+      });
+      orchestration.createRun({ ...orchestrationRun, runId: activeRunId, durableRunId: activeDurableId });
+      assert.deepEqual(
+        orchestration
+          .listActiveRunsWithEndedDurableRun(1000)
+          .filter((run) => run.planId === planId)
+          .map((run) => run.runId),
+        [orchestrationRunId],
       );
       const generationOwner = orchestration.updateRun({
         ...orchestration.getRun(orchestrationRunId),
