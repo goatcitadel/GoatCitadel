@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { isGoatError, type ChatDelegateRequest } from "@goatcitadel/contracts";
 import { z } from "zod";
 import {
@@ -9,6 +9,7 @@ import {
 } from "../services/chat-secret-projection.js";
 import { projectPublicErrorValue } from "../services/public-secret-projection.js";
 import { projectWorkspaceExplorerText } from "../services/workspace-explorer-path-projection.js";
+import { sendRouteError } from "./_error-handler.js";
 import { sessionParamsSchema, getPublicChatSseErrorMessage, rejectUnboundChatPolicyScope } from "./chat.shared.js";
 import { writeSseChunk, writeSsePayload } from "./sse-writer.js";
 
@@ -115,12 +116,7 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
         ),
       );
     } catch (error) {
-      return reply.code(400).send({
-        error:
-          body.data.executionProfile === "read_only_explorer"
-            ? projectWorkspaceExplorerError(error)
-            : (error as Error).message,
-      });
+      return sendDelegateRouteError(request, reply, error, body.data.executionProfile === "read_only_explorer");
     }
   });
 
@@ -322,7 +318,7 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
         ),
       );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendDelegateRouteError(request, reply, error);
     }
   });
 
@@ -350,9 +346,28 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
         ),
       );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendDelegateRouteError(request, reply, error);
     }
   });
+}
+
+/**
+ * Typed errors keep their status and message; anything else is an internal
+ * failure and answers a redacted 500. Explorer messages keep the explorer path
+ * projection because they can name host paths.
+ */
+function sendDelegateRouteError(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  error: unknown,
+  readOnlyExplorer = false,
+): ReturnType<FastifyReply["send"]> {
+  if (readOnlyExplorer && isGoatError(error)) {
+    const message = projectWorkspaceExplorerError(error);
+    request.log.warn({ code: error.code }, message);
+    return reply.code(error.httpStatus).send({ error: message, code: error.code });
+  }
+  return sendRouteError(reply, error, request.log);
 }
 
 function projectWorkspaceExplorerError(error: unknown): string {

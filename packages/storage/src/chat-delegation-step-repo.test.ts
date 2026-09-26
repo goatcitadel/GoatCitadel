@@ -64,12 +64,17 @@ function createDelegationRun(db: DatabaseClient, runId: string, sessionId: strin
 
 describe("ChatDelegationStepRepository", () => {
   it("creates, patches, gets, and lists delegation steps", () => {
-    const { repo } = createStore();
+    const { db, repo } = createStore();
 
     const full = repo.create({
       stepId: "step-b",
       runId: "run-a",
       role: "QA",
+      instructionSnapshot: {
+        objective: "Review the retry queue",
+        label: "Review",
+        expectedOutput: "A test report",
+      },
       label: "Review",
       index: 1,
       status: "running",
@@ -104,6 +109,11 @@ describe("ChatDelegationStepRepository", () => {
     assert.equal(full.providerId, "openai");
     assert.equal(full.model, "gpt-test");
     assert.equal(full.label, "Review");
+    assert.deepEqual(full.instructionSnapshot, {
+      objective: "Review the retry queue",
+      label: "Review",
+      expectedOutput: "A test report",
+    });
     assert.equal(full.summary, "Working");
     assert.equal(full.output, "Partial output");
     assert.equal(full.error, "none");
@@ -115,10 +125,15 @@ describe("ChatDelegationStepRepository", () => {
     assert.deepEqual(full.degradedHandoffStepIds, ["step-researcher"]);
     assert.equal(full.durationMs, 1000);
     assert.equal(minimal.status, "pending");
+    assert.equal(minimal.instructionSnapshot, undefined);
     assert.equal(minimal.parallelizable, false);
     assert.deepEqual(minimal.dependsOnStepIds, []);
     assert.equal(minimal.citations, undefined);
     assert.equal(minimal.degradedHandoffStepIds, undefined);
+    assert.throws(
+      () => db.prepare("UPDATE chat_delegation_steps SET instruction_snapshot_json = '{}' WHERE step_id = ?").run("step-b"),
+      /delegation step instruction snapshot cannot change/,
+    );
 
     const patched = repo.patch("step-b", {
       status: "completed",
@@ -140,6 +155,7 @@ describe("ChatDelegationStepRepository", () => {
       durationMs: 2000,
     });
     assert.equal(patched.status, "completed");
+    assert.deepEqual(patched.instructionSnapshot, full.instructionSnapshot);
     assert.equal(patched.parallelizable, true);
     assert.deepEqual(patched.dependsOnStepIds, []);
     assert.equal(patched.providerId, "anthropic");
@@ -1177,5 +1193,45 @@ describe("ChatDelegationStepRepository", () => {
     setStepField(db, "step-a", "child_session_id", "child-a");
     db.prepare("UPDATE chat_delegation_runs SET session_id = zeroblob(1) WHERE run_id = ?").run("run-a");
     assert.equal(repo.listParentsByChildSessionIds(["child-a"]).size, 0);
+  });
+
+  it("fails only unowned pre-admission steps using the database claim clock", () => {
+    const { db, repo } = createStore();
+    const input = {
+      runId: "run-legacy",
+      summary: "Cannot resume.",
+      error: "Frozen instructions unavailable.",
+      failureGuidance: "Start a new delegation.",
+      finishedAt: "2026-09-26T00:00:00.000Z",
+      durationMs: 0,
+    };
+    repo.create({ stepId: "pending", runId: input.runId, role: "coder", index: 0 });
+    repo.create({ stepId: "active", runId: input.runId, role: "qa", index: 1, status: "running" });
+    repo.create({ stepId: "expired", runId: input.runId, role: "qa", index: 2, status: "running" });
+    repo.create({
+      stepId: "admitted",
+      runId: input.runId,
+      role: "qa",
+      index: 3,
+      status: "running",
+      childSessionId: "child-1",
+    });
+    db.prepare(`
+      UPDATE chat_delegation_steps
+      SET dispatch_claim_token = ?, dispatch_claim_expires_at = ?
+      WHERE step_id = ?
+    `).run("active-claim", "2099-01-01T00:00:00.000Z", "active");
+    db.prepare(`
+      UPDATE chat_delegation_steps
+      SET dispatch_claim_token = ?, dispatch_claim_expires_at = ?
+      WHERE step_id = ?
+    `).run("expired-claim", "2000-01-01T00:00:00.000Z", "expired");
+
+    assert.equal(repo.failUnownedPreAdmission({ ...input, stepId: "pending" })?.status, "failed");
+    assert.equal(repo.failUnownedPreAdmission({ ...input, stepId: "active" }), undefined);
+    assert.equal(repo.get("active").status, "running");
+    assert.equal(repo.failUnownedPreAdmission({ ...input, stepId: "expired" })?.status, "failed");
+    assert.equal(repo.failUnownedPreAdmission({ ...input, stepId: "admitted" }), undefined);
+    assert.equal(repo.get("admitted").status, "running");
   });
 });

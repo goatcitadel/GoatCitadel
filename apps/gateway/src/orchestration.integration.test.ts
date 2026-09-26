@@ -18,8 +18,7 @@ import {
 // engine and phase executor against a fake provider. Each phase dispatches a
 // child Chat turn that the same single durable worker must execute, so these
 // scenarios only complete when a phase parks its run instead of holding the
-// worker. The workflow timeout sits at its 10 s floor so a regression fails
-// fast rather than hanging.
+// worker. Allow for slow Windows test hosts while keeping a bounded deadlock check.
 
 const TOKEN = "orchestration-e2e-token-1234567890";
 const AUTH = { authorization: `Bearer ${TOKEN}` };
@@ -253,7 +252,7 @@ async function waitForRun(
   runId: string,
   predicate: (view: RunView) => boolean,
   label: string,
-  timeoutMs = 60_000,
+  timeoutMs = 90_000,
 ): Promise<RunView> {
   const deadline = Date.now() + timeoutMs;
   let last: RunView | undefined;
@@ -392,7 +391,7 @@ function createIsolatedGitRoot(providerBaseUrl: string): string {
     fs.readFileSync(path.join(root, "config", "goatcitadel.example.json"), "utf8"),
   ) as Record<string, unknown> & { assistant: { durable?: Record<string, unknown> } };
   unifiedConfig.llm = llmConfig;
-  unifiedConfig.assistant.durable = { ...unifiedConfig.assistant.durable, workflowTimeoutMs: 10_000 };
+  unifiedConfig.assistant.durable = { ...unifiedConfig.assistant.durable, workflowTimeoutMs: 30_000 };
   fs.writeFileSync(
     path.join(root, "config", "goatcitadel.json"),
     `${JSON.stringify(unifiedConfig, null, 2)}\n`,

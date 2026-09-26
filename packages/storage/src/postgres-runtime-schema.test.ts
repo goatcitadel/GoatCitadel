@@ -490,6 +490,14 @@ describe("Postgres runtime schema generation", () => {
     );
   });
 
+  it("freezes delegation step instructions in a forward Postgres migration", () => {
+    const migration = POSTGRES_MIGRATIONS.find((item) => item.name === "delegation_step_instruction_snapshots");
+    assert.equal(migration?.version, 197);
+    assert.match(migration?.sql ?? "", /ADD COLUMN IF NOT EXISTS instruction_snapshot_json TEXT/);
+    assert.match(migration?.sql ?? "", /NEW\.instruction_snapshot_json IS DISTINCT FROM OLD\.instruction_snapshot_json/);
+    assert.match(migration?.sql ?? "", /CREATE TRIGGER trg_chat_delegation_step_instruction_snapshot_immutable/);
+  });
+
   it("adds private delegation dispatch-claim columns as a new forward migration", () => {
     const claimMigration = POSTGRES_MIGRATIONS.find(
       (migration) => migration.name === "chat_delegation_dispatch_claim_lease",

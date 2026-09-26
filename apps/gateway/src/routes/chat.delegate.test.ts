@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { ConflictError, PolicyViolationError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, PolicyViolationError, ValidationError } from "@goatcitadel/contracts";
 import { registerChatDelegateRoutes } from "./chat.delegate.js";
 
 describe("chat delegate routes", () => {
@@ -262,9 +262,12 @@ describe("chat delegate routes", () => {
 
   it("maps validation, service, not-found, and Goat errors to the public route contract", async () => {
     const chatDelegate = {
-      runChatDelegation: vi.fn(async () => {
-        throw new Error("delegation failed");
-      }),
+      runChatDelegation: vi
+        .fn()
+        .mockRejectedValueOnce(new ValidationError({ field: "steps", message: "delegation steps contain a cycle" }))
+        .mockRejectedValueOnce(new ConflictError({ message: "Durable parent run-1 has a different persisted plan." }))
+        .mockRejectedValueOnce(new NotFoundError({ entity: "Session", id: "sess-1" }))
+        .mockRejectedValueOnce(new Error("delegation failed; Authorization: Bearer delegate-secret")),
       getChatDelegationRun: vi
         .fn()
         .mockImplementationOnce(() => {
@@ -273,48 +276,61 @@ describe("chat delegate routes", () => {
         .mockImplementationOnce(() => {
           throw new PolicyViolationError({ message: "delegation forbidden" });
         }),
-      suggestChatDelegation: vi.fn(async () => {
-        throw new Error("suggest failed");
-      }),
-      acceptChatDelegation: vi.fn(async () => {
-        throw new Error("accept failed");
-      }),
+      suggestChatDelegation: vi
+        .fn()
+        .mockRejectedValueOnce(
+          new ValidationError({ code: "FIELD_REQUIRED", field: "objective", message: "No objective" }),
+        )
+        .mockRejectedValueOnce(new Error("suggest failed")),
+      acceptChatDelegation: vi
+        .fn()
+        .mockRejectedValueOnce(new ValidationError({ field: "roles", message: "at least one role is required" }))
+        .mockRejectedValueOnce(new Error("accept failed")),
     };
     app = buildApp(chatDelegate);
+    const post = async (url: string, payload: Record<string, unknown>) =>
+      await app!.inject({ method: "POST", url: `/api/v1/chat/sessions/sess-1${url}`, payload });
+    const run = { objective: "run", roles: ["QA"] };
 
-    await expect(
-      app.inject({ method: "POST", url: "/api/v1/chat/sessions/sess-1/delegate", payload: { roles: [] } }),
-    ).resolves.toMatchObject({ statusCode: 400 });
-    await expect(
-      app.inject({
-        method: "POST",
-        url: "/api/v1/chat/sessions/sess-1/delegate",
-        payload: { objective: "run", roles: ["QA"] },
-      }),
-    ).resolves.toMatchObject({ statusCode: 400 });
+    await expect(post("/delegate", { roles: [] })).resolves.toMatchObject({ statusCode: 400 });
+    expect(chatDelegate.runChatDelegation).not.toHaveBeenCalled();
+    // Typed service errors keep their status and message.
+    const invalid = await post("/delegate", run);
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json()).toEqual({
+      error: "delegation steps contain a cycle",
+      code: "FIELD_INVALID",
+      details: { field: "steps" },
+    });
+    const conflict = await post("/delegate", run);
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toMatchObject({ error: "Durable parent run-1 has a different persisted plan." });
+    await expect(post("/delegate", run)).resolves.toMatchObject({ statusCode: 404 });
+    // Anything else is an internal failure: a generic 500 that echoes nothing.
+    const internal = await post("/delegate", run);
+    expect(internal.statusCode).toBe(500);
+    expect(internal.json()).toEqual({ error: "Internal server error" });
+    expect(internal.body).not.toContain("delegate-secret");
+
     await expect(
       app.inject({ method: "GET", url: "/api/v1/chat/sessions/sess-1/delegations/run-missing" }),
     ).resolves.toMatchObject({ statusCode: 404 });
     await expect(
       app.inject({ method: "GET", url: "/api/v1/chat/sessions/sess-1/delegations/run-forbidden" }),
     ).resolves.toMatchObject({ statusCode: 403 });
-    await expect(
-      app.inject({ method: "POST", url: "/api/v1/chat/sessions/sess-1/delegate/suggest", payload: {} }),
-    ).resolves.toMatchObject({ statusCode: 400 });
-    await expect(
-      app.inject({
-        method: "POST",
-        url: "/api/v1/chat/sessions/sess-1/delegate/suggest",
-        payload: { objective: "suggest", roles: ["QA"] },
-      }),
-    ).resolves.toMatchObject({ statusCode: 400 });
-    await expect(
-      app.inject({
-        method: "POST",
-        url: "/api/v1/chat/sessions/sess-1/delegate/accept",
-        payload: { objective: "accept", roles: ["QA"] },
-      }),
-    ).resolves.toMatchObject({ statusCode: 400 });
+
+    const noObjective = await post("/delegate/suggest", {});
+    expect(noObjective.statusCode).toBe(400);
+    expect(noObjective.json()).toMatchObject({ error: "No objective", code: "FIELD_REQUIRED" });
+    const suggestFailure = await post("/delegate/suggest", { objective: "suggest", roles: ["QA"] });
+    expect(suggestFailure.statusCode).toBe(500);
+    expect(suggestFailure.json()).toEqual({ error: "Internal server error" });
+
+    const accept = { objective: "accept", roles: ["QA"] };
+    await expect(post("/delegate/accept", accept)).resolves.toMatchObject({ statusCode: 400 });
+    const acceptFailure = await post("/delegate/accept", accept);
+    expect(acceptFailure.statusCode).toBe(500);
+    expect(acceptFailure.json()).toEqual({ error: "Internal server error" });
   });
 
   it.each([
@@ -330,30 +346,37 @@ describe("chat delegate routes", () => {
     ],
   ])("contains %s host paths and secrets in direct explorer errors", async (_platform, serviceMessage, safeMessage) => {
     const chatDelegate = {
-      runChatDelegation: vi.fn(async () => {
-        throw new Error(`${serviceMessage}; Authorization: Bearer explorer-secret`);
-      }),
+      runChatDelegation: vi
+        .fn()
+        .mockRejectedValueOnce(
+          new ValidationError({ message: `${serviceMessage}; Authorization: Bearer explorer-secret` }),
+        )
+        .mockRejectedValueOnce(new Error(`${serviceMessage}; Authorization: Bearer explorer-secret`)),
     };
     app = buildApp(chatDelegate);
+    const explore = async () =>
+      await app!.inject({
+        method: "POST",
+        url: "/api/v1/chat/sessions/sess-1/delegate",
+        payload: {
+          objective: "Inspect the workspace",
+          roles: ["Workspace explorer"],
+          mode: "sequential",
+          executionProfile: "read_only_explorer",
+          policyRunId: "durable-parent",
+        },
+      });
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/v1/chat/sessions/sess-1/delegate",
-      payload: {
-        objective: "Inspect the workspace",
-        roles: ["Workspace explorer"],
-        mode: "sequential",
-        executionProfile: "read_only_explorer",
-        policyRunId: "durable-parent",
-      },
-    });
-
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({
-      error: safeMessage,
-    });
-    expect(response.body).not.toContain("operator");
-    expect(response.body).not.toContain("explorer-secret");
+    const rejected = await explore();
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json()).toEqual({ error: safeMessage, code: "FIELD_INVALID" });
+    const failed = await explore();
+    expect(failed.statusCode).toBe(500);
+    expect(failed.json()).toEqual({ error: "Internal server error" });
+    for (const response of [rejected, failed]) {
+      expect(response.body).not.toContain("operator");
+      expect(response.body).not.toContain("explorer-secret");
+    }
   });
 
   it("lists server-owned scope candidates and accepts only opaque candidate ids", async () => {
