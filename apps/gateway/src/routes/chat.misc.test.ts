@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ConflictError } from "@goatcitadel/contracts";
 import { registerChatMiscRoutes } from "./chat.misc.js";
 
 describe("chat misc routes", () => {
@@ -17,7 +18,9 @@ describe("chat misc routes", () => {
     app = Fastify();
     app.decorateRequest("authActorId", "operator-test");
     app.decorateRequest("authActorSource", "loopback");
-    app.decorate("services", { chatSupport } as never);
+    app.decorate("services", {
+      chatSupport: { assertCallerPolicyScope: vi.fn(async () => undefined), ...chatSupport },
+    } as never);
     registerChatMiscRoutes(app);
     return app;
   }
@@ -126,6 +129,42 @@ describe("chat misc routes", () => {
         surface: "chat",
       }),
     );
+  });
+
+  it("checks that caller policy ids belong to the session and rejects foreign ones", async () => {
+    const parseChatCommand = vi.fn();
+    const runChatResearch = vi.fn();
+    const assertCallerPolicyScope = vi.fn(async (_sessionId: string, scope: { policyTaskId?: string }) => {
+      if (scope.policyTaskId === "foreign-task") {
+        throw new ConflictError({ message: "policyTaskId foreign-task does not belong to Chat session session-1." });
+      }
+    });
+    createApp({ parseChatCommand, runChatResearch, assertCallerPolicyScope });
+
+    const command = await app!.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/session-1/commands/parse",
+      payload: { commandText: "/delegate QA :: verify", policyRunId: "parent-run-1", policyTaskId: "foreign-task" },
+    });
+    const research = await app!.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/session-1/research/run",
+      payload: { query: "policy context", policyTaskId: "foreign-task" },
+    });
+
+    for (const response of [command, research]) {
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        error: "policyTaskId foreign-task does not belong to Chat session session-1.",
+      });
+    }
+    expect(assertCallerPolicyScope).toHaveBeenNthCalledWith(1, "session-1", {
+      policyRunId: "parent-run-1",
+      policyTaskId: "foreign-task",
+    });
+    expect(assertCallerPolicyScope).toHaveBeenNthCalledWith(2, "session-1", { policyTaskId: "foreign-task" });
+    expect(parseChatCommand).not.toHaveBeenCalled();
+    expect(runChatResearch).not.toHaveBeenCalled();
   });
 
   it("server-stamps proactive triggers with the authenticated actor for later policy decisions", async () => {

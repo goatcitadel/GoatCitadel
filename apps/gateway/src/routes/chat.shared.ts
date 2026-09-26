@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { isGoatError, redactStructuredSecrets } from "@goatcitadel/contracts";
 import { env } from "../env.js";
@@ -11,6 +11,7 @@ import {
   markMutationFailedBeforeCommit,
 } from "../plugins/idempotency.js";
 import type { ChatStreamMutationLifecycle } from "../services/chat-turn-types.js";
+import type { CallerPolicyScope } from "../services/chat-policy-scope-service.js";
 
 export const CHAT_SSE_HEARTBEAT_INTERVAL_MS = 15_000;
 
@@ -43,6 +44,45 @@ export function getPublicChatSseErrorMessage(error: unknown): string {
     return error.message;
   }
   return "Chat stream failed before completion. Check gateway diagnostics and retry.";
+}
+
+/**
+ * Throws a `ConflictError` when a caller-supplied `policyTaskId` or
+ * `policyRunId` does not belong to the Chat session. Tool policy matches
+ * task-scoped grants on the task id and links approvals to the run id.
+ */
+export async function assertChatPolicyScope(
+  fastify: FastifyInstance,
+  sessionId: string,
+  scope: CallerPolicyScope,
+): Promise<void> {
+  if (!scope.policyTaskId?.trim() && !scope.policyRunId?.trim()) {
+    return;
+  }
+  await fastify.services.chatSupport.assertCallerPolicyScope(sessionId, {
+    policyTaskId: scope.policyTaskId,
+    policyRunId: scope.policyRunId,
+  });
+}
+
+/**
+ * Answers a request whose policy ids do not belong to its Chat session (409).
+ * Returns true when the request was answered.
+ */
+export async function rejectUnboundChatPolicyScope(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  sessionId: string,
+  scope: CallerPolicyScope,
+): Promise<boolean> {
+  try {
+    await assertChatPolicyScope(fastify, sessionId, scope);
+    return false;
+  } catch (error) {
+    sendRouteError(reply, error, request.log);
+    return true;
+  }
 }
 
 export function sendChatWriteError(reply: FastifyReply, error: unknown) {
