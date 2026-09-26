@@ -1451,6 +1451,45 @@ describe("orchestration lifecycle keeps runs in step with their durable runs", (
     );
   });
 
+  it("cancels the child and releases the worktree when realtime publication fails after terminal state commits", async () => {
+    const harness = createHarness({
+      run: {
+        ...buildRun(),
+        status: "running",
+        executionState: "running",
+        currentPhaseId: "phase-1",
+        durableRunId: "durable-run-1",
+        worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+      },
+      durableRun: buildDurableRun({
+        status: "failed",
+        finishedAt: "2026-05-15T12:10:00.000Z",
+        leaseOwnerId: undefined,
+        metadata: { dispatchedPhase: { phaseId: "phase-1", childRunId: "child-run-1" } },
+      }),
+    });
+    enforceCompareAndSet(harness);
+    vi.mocked(harness.host.getDurableRun).mockImplementation(async (runId) =>
+      runId === "child-run-1"
+        ? buildDurableRun({ runId: "child-run-1", status: "running" })
+        : harness.getDurableRun(),
+    );
+    vi.mocked(harness.host.publishRealtime).mockRejectedValueOnce(new Error("realtime unavailable"));
+
+    await expect(
+      settleOrchestrationRunForEndedDurableRun(harness.host, harness.runtime, harness.getDurableRun(), {
+        reason: "workflow_error",
+      }),
+    ).rejects.toThrow("realtime unavailable");
+
+    expect(harness.getRun()).toMatchObject({ status: "failed", executionState: "failed" });
+    expect(harness.host.cancelDurableRun).toHaveBeenCalledWith("child-run-1", "orchestration");
+    expect(harness.runtime.worktrees.release).toHaveBeenCalledWith({
+      run: expect.objectContaining({ status: "failed" }),
+      reason: "failed",
+    });
+  });
+
   it("leaves the orchestration run alone when its durable run did not end, such as after a pause took the lease", async () => {
     const harness = createHarness({
       run: { ...buildRun(), status: "running", executionState: "running", durableRunId: "durable-run-1" },

@@ -600,20 +600,26 @@ async function commitLinkedDurableTerminalWinner(
         : winnerStatus === "cancelled"
           ? "run.cancelled"
           : "run.failed";
-  await persistRunEvent(host, terminal.run, event, winnerDetails);
-  await publishRunRealtime(host, plan, terminal.run, {
-    event: event.replace("run.", "run_"),
-    ...(winnerStatus === "failed" || winnerStatus === "cancelled" ? { error: terminal.run.lastError } : {}),
-  });
-  if ((winnerStatus === "failed" || winnerStatus === "cancelled") && run.currentPhaseId) {
-    await cancelOrphanedPhaseChild(
-      host,
-      terminal.run,
-      readRecoverableChildPhase(linked, run.currentPhaseId)?.childRunId,
-      "orchestration",
-    );
+  try {
+    await persistRunEvent(host, terminal.run, event, winnerDetails);
+    await publishRunRealtime(host, plan, terminal.run, {
+      event: event.replace("run.", "run_"),
+      ...(winnerStatus === "failed" || winnerStatus === "cancelled" ? { error: terminal.run.lastError } : {}),
+    });
+  } finally {
+    try {
+      if ((winnerStatus === "failed" || winnerStatus === "cancelled") && run.currentPhaseId) {
+        await cancelOrphanedPhaseChild(
+          host,
+          terminal.run,
+          readRecoverableChildPhase(linked, run.currentPhaseId)?.childRunId,
+          "orchestration",
+        );
+      }
+    } finally {
+      await releaseOrchestrationWorktreeIfAvailable(runtime, host, terminal.run, winnerStatus);
+    }
   }
-  await releaseOrchestrationWorktreeIfAvailable(runtime, host, terminal.run, winnerStatus);
   return terminal.run;
 }
 
