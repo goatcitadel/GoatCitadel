@@ -61,6 +61,8 @@ export async function requestRuntimeTruthApproval(gatewayUrl, input, deps) {
   const preflight = await requestJson(gatewayUrl, `${route}/route-preflight`, { method: "POST", body: request });
   assertOk(preflight, "preflight runtime-truth tool request");
   assert.ok(preflight.body?.decision, "runtime-truth preflight omitted its route decision");
+  assert.equal(preflight.body.capabilityProfile, undefined, "new Chat preflight froze a capability profile");
+  assert.equal(preflight.body.decision.capabilityFingerprint, undefined, "new Chat preflight froze a capability fingerprint");
   input.llmStub.replaceDispatchPlan([
     { type: "tool_call", name: "fs_read", arguments: { path: input.notePath }, callId: "runtime_truth_read" },
   ]);
@@ -93,6 +95,8 @@ export async function requestRuntimeTruthApproval(gatewayUrl, input, deps) {
       assertOk(thread, "read runtime-truth approval thread");
       const turn = thread.body?.turns?.find((entry) => entry.userMessage?.content === content);
       if (turn?.trace?.status === "waiting_for_approval") {
+        assert.equal(turn.trace.capabilityProfileId, undefined, "new Chat trace froze a capability profile");
+        assert.equal(turn.trace.capabilityProfileHash, undefined, "new Chat trace froze a capability hash");
         const tools = (turn.toolRuns ?? []).filter((tool) => tool.toolName === "fs.read");
         assert.equal(tools.length, 1, "runtime-truth must park exactly one real file read");
         const tool = tools[0];

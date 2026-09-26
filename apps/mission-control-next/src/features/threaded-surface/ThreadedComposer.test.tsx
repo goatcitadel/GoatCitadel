@@ -456,14 +456,14 @@ describe("ThreadedComposer", () => {
     expect(callbacks.onSend).toHaveBeenCalledTimes(1);
   });
 
-  it("arms a one-shot point-in-time workspace snapshot and exposes refresh only while armed", async () => {
+  it("blocks new workspace snapshots and lets a saved request be removed", async () => {
     const onToggleWorkspaceSnapshot = vi.fn();
     const onRefreshWorkspaceSnapshot = vi.fn();
     const unarmed = await renderComposer({ onToggleWorkspaceSnapshot, onRefreshWorkspaceSnapshot });
-    expect(collectText(unarmed.root)).toContain("Workspace snapshot for next turn");
+    expect(collectText(unarmed.root)).toContain("Workspace snapshots temporarily unavailable");
     expect(findButtons(unarmed.root, "Refresh snapshot")).toHaveLength(0);
-    await click(findButton(unarmed.root, "Workspace snapshot for next turn"));
-    expect(onToggleWorkspaceSnapshot).toHaveBeenCalledTimes(1);
+    expect(findButton(unarmed.root, "Workspace snapshots temporarily unavailable").props.disabled).toBe(true);
+    expect(onToggleWorkspaceSnapshot).not.toHaveBeenCalled();
     unarmed.unmount();
 
     const armed = await renderComposer({
@@ -472,14 +472,23 @@ describe("ThreadedComposer", () => {
       onRefreshWorkspaceSnapshot,
     });
     const text = collectText(armed.root);
-    expect(text).toContain("Point-in-time");
-    expect(text).toContain("It grants no folder access");
+    expect(text).toContain("Workspace snapshot is temporarily unavailable");
+    expect(text).toContain("Remove this saved request before sending");
     expect(findSuggestionButton(armed.root, "Attach context").props["aria-pressed"]).toBe(true);
-    await click(findButton(armed.root, "Refresh snapshot"));
+    expect(findButtons(armed.root, "Refresh snapshot")).toHaveLength(0);
     await click(findButton(armed.root, "Remove snapshot"));
-    expect(onRefreshWorkspaceSnapshot).toHaveBeenCalledTimes(1);
-    expect(onToggleWorkspaceSnapshot).toHaveBeenCalledTimes(2);
+    expect(onRefreshWorkspaceSnapshot).not.toHaveBeenCalled();
+    expect(onToggleWorkspaceSnapshot).toHaveBeenCalledTimes(1);
     armed.unmount();
+  });
+
+  it("explains why a saved routed-context selection blocks Send", () => {
+    const markup = buildMarkup({
+      canSend: false,
+      profileDependentAdmissionBlockReason: "Routed documents are temporarily unavailable. Remove the document selection to send.",
+    });
+    expect(markup).toContain("Sending is unavailable: Routed documents are temporarily unavailable.");
+    expect(markup).toContain("Remove the document selection to send.");
   });
 
   it("requests only a selected server-owned delegated scope candidate", async () => {
@@ -1204,7 +1213,7 @@ describe("ThreadedComposer", () => {
     expect(buildMarkup({ mode: "code" })).toContain("Implement");
   });
 
-  it("renders subagent suggestions as an inline composer approval", async () => {
+  it("shows saved subagent suggestions as unavailable and dismissible", async () => {
     const onAcceptDelegation = vi.fn(async () => undefined);
     const onDismissDelegationSuggestion = vi.fn();
     const renderer = await renderComposer({
@@ -1226,16 +1235,16 @@ describe("ThreadedComposer", () => {
 
     const text = collectText(renderer.root);
     expect(text).toContain("Subagent approval");
-    expect(text).toContain("Approve subagents for this run?");
-    expect(text).toContain("2 subagents");
+    expect(text).toContain("Subagents unavailable");
+    expect(text).toContain("Subagent delegation is temporarily unavailable");
     expect(text).toContain("82% confidence");
     expect(text).toContain("Researcher");
     expect(text).toContain("QA");
 
-    await click(findButton(renderer.root, "Approve subagents"));
+    expect(findButton(renderer.root, "Subagents unavailable").props.disabled).toBe(true);
     await click(findButton(renderer.root, "Keep single run"));
 
-    expect(onAcceptDelegation).toHaveBeenCalledTimes(1);
+    expect(onAcceptDelegation).not.toHaveBeenCalled();
     expect(onDismissDelegationSuggestion).toHaveBeenCalledTimes(1);
   });
 
@@ -1949,22 +1958,23 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     });
 
     expect(markup).toContain("Sources for this turn");
-    expect(markup).toContain("1 selected for the next turn");
+    expect(markup).toContain("1 selected; clear the selection before sending");
     expect(markup).not.toContain("item-attachment-1");
     expect(markup).not.toContain(FULL_SHA);
     expect(markup).not.toContain('"attachmentId"');
     expect(markup).not.toContain('"normalizedArtifactSha256"');
   });
 
-  it("toggles explicit per-turn selection through an accessible checkbox and clears it", async () => {
+  it("lets an existing external source selection be removed", async () => {
     const controls = externalControls({ selectedAttachmentIds: ["attachment-1"] });
     const renderer = await renderComposer({ externalSourceControls: controls });
     await click(findButton(renderer.root, "Choose sources"));
 
     const checkbox = renderer.root.find(
-      (node) => node.type === "input" && node.props["aria-label"] === "Include Read-only source in the next turn",
+      (node) => node.type === "input" && node.props["aria-label"] === "Remove Read-only source from the next turn",
     );
     expect(checkbox.props.checked).toBe(true);
+    expect(checkbox.props.disabled).toBe(false);
     await act(async () => {
       checkbox.props.onChange({ target: { checked: false } });
     });
@@ -2053,7 +2063,7 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     renderer.unmount();
   });
 
-  it("makes an attached import selectable after the Gateway refresh returns it", async () => {
+  it("keeps an attached import inspectable but unavailable for new turn selection", async () => {
     const controls = externalControls({ attachments: [] });
     const renderer = await renderComposer({ externalSourceControls: controls });
     await click(findButton(renderer.root, "Choose sources"));
@@ -2083,11 +2093,11 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     });
     const sourceCheckbox = renderer.root.find(
       (node) =>
-        node.type === "input" && node.props["aria-label"] === "Include Imported Codex sessions in the next turn",
+        node.type === "input" && node.props["aria-label"] === "Remove Imported Codex sessions from the next turn",
     );
     expect(collectText(renderer.root)).toContain("Imported");
-    await act(async () => sourceCheckbox.props.onChange({ target: { checked: true } }));
-    expect(confirmed.onToggleSelect).toHaveBeenCalledWith("attachment-confirmed");
+    expect(sourceCheckbox.props.disabled).toBe(true);
+    expect(confirmed.onToggleSelect).not.toHaveBeenCalled();
     renderer.unmount();
   });
 

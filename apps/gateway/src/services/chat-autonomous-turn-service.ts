@@ -279,6 +279,21 @@ export async function runCronAgentTurn(
     const task = await deps.createCronInboxTask(input.job, inboxTaskId ? { taskId: inboxTaskId } : undefined);
     return { mode: "inbox", taskId: task.taskId };
   }
+  if (isNewAutonomousChatTurnAdmissionPaused()) {
+    let historicalRunExists = false;
+    if (admissionIdentity) {
+      try {
+        await deps.storage.chatTurnTraces.get(admissionIdentity.turnId);
+        historicalRunExists = true;
+      } catch (error) {
+        if (!(error instanceof NotFoundError)) throw error;
+      }
+    }
+    if (!historicalRunExists) {
+      const task = await deps.createCronInboxTask(input.job, inboxTaskId ? { taskId: inboxTaskId } : undefined);
+      return { mode: "inbox", taskId: task.taskId };
+    }
+  }
   // Validate the canonical cron owner before creating or mutating a session.
   const sessionId = await ensureCronAgentSession(deps, input.job.jobId, input.config.sessionId);
   const systemActorId = `system:cron:${input.job.jobId}`;
@@ -846,6 +861,11 @@ export async function enqueueAutonomousChatTurn(
       ...(admissionIdentity ? { admissionIdentity } : {}),
     };
   }
+  if (isNewAutonomousChatTurnAdmissionPaused()) {
+    throw new Error(
+      "Scheduled and heartbeat Chat execution is temporarily unavailable while new turns use live capabilities.",
+    );
+  }
   const turnAdmission =
     heartbeatOccurrence?.turnAdmission ??
     (await deps.sessionControlRuntimeOwner.admitSystemChatTurn({
@@ -1040,6 +1060,13 @@ export async function enqueueAutonomousChatTurn(
       });
     }
   }
+}
+
+export function isNewAutonomousChatTurnAdmissionPaused(): boolean {
+  // The enqueue path still binds a frozen profile for autonomous replay.
+  // Preserve historical replay, but admit no new autonomous turn until that
+  // authority path has an explicit live replacement.
+  return true;
 }
 
 function buildAutonomousChatChildIdentity(input: {

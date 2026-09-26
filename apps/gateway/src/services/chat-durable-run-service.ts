@@ -410,11 +410,8 @@ export async function beginDurableChatRun(
   if ((deps.chatTurnCapabilityProfiles || deps.capabilityCatalogSnapshots) && !deps.sessionMutationAdmissions) {
     throw new Error("Durable Chat capability profile binding store is not configured.");
   }
-  if (
-    (deps.chatTurnCapabilityProfiles || deps.capabilityCatalogSnapshots) &&
-    (!prepared.capabilityProfile || !prepared.capabilityCatalogSnapshot)
-  ) {
-    throw new Error(`Durable Chat turn ${prepared.turnId} cannot be admitted without its capability profile.`);
+  if (Boolean(prepared.capabilityProfile) !== Boolean(prepared.capabilityCatalogSnapshot)) {
+    throw new Error(`Durable Chat turn ${prepared.turnId} has an incomplete historical capability binding.`);
   }
   const mode = resolvePreparedTurnMode(prepared);
   const runId = options?.runId ?? randomUUID();
@@ -596,7 +593,11 @@ type PreparedAgentChatTurnWithRoutedContext = PreparedAgentChatTurn & {
 
 function hasOwnRoutedContextRefs(input: ChatSendMessageRequest): boolean {
   const request = input as ChatSendMessageRequest & { contextRefs?: unknown };
-  return Object.prototype.hasOwnProperty.call(request, "contextRefs") && request.contextRefs !== undefined;
+  return (
+    Object.prototype.hasOwnProperty.call(request, "contextRefs") &&
+    request.contextRefs !== undefined &&
+    (!Array.isArray(request.contextRefs) || request.contextRefs.length > 0)
+  );
 }
 
 function readPreparedRoutedContextSnapshot(

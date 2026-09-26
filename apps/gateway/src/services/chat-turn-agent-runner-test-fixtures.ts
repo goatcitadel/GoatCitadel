@@ -64,6 +64,22 @@ export class EffectAwareChatTurnAgentRunner extends ChatTurnAgentRunner {
 
 export function createToolCatalog(toolNames: string[] = ["browser.search"]): ToolCatalogEntry[] {
   return toolNames.map((toolName) => {
+    if (toolName === "citations.build") {
+      return {
+        toolName,
+        category: "research",
+        riskLevel: "safe",
+        requiresApproval: false,
+        description: "Build citation bundle from gathered sources.",
+        argSchema: {
+          type: "object",
+          properties: { sources: { type: "array", items: { type: "object" } } },
+          required: ["sources"],
+        },
+        examples: [],
+        pack: "core",
+      };
+    }
     if (toolName === "runtime.configure") {
       return {
         toolName,

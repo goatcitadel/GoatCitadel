@@ -91,7 +91,7 @@ describe("chat-durable-run-service", () => {
 
   it("creates and schedules a durable chat run", async () => {
     const prepared = createPreparedTurn();
-    const input = createSendRequest();
+    const input = { ...createSendRequest(), contextRefs: [] };
     const streamChunks: Array<{ chunk: ChatStreamChunkDraft; durableRunId?: string }> = [];
     const requestedRunIds: string[] = [];
     const createInputs: DurableRunCreateRequest[] = [];
@@ -167,7 +167,7 @@ describe("chat-durable-run-service", () => {
     expect(requestedRunIds).toEqual(["run-1"]);
   });
 
-  it("binds task-scoped durable Chat to the immutable remote-worker parent context without widening ordinary Chat", async () => {
+  it("keeps task-linked profile-free Chat admissible without a remote worker context", async () => {
     const createInputs: DurableRunCreateRequest[] = [];
     const prepared = createPreparedTurn({
       workspaceId: "stale-projection",
@@ -206,6 +206,7 @@ describe("chat-durable-run-service", () => {
       remoteWorkerAssignmentParentContext: buildRemoteWorkerAssignmentParentContext(parentInput),
       remoteWorkerAssignmentParentContextSha256: remoteWorkerAssignmentParentContextSha256(parentInput),
     });
+    expect(createInputs[0]?.metadata).not.toHaveProperty("remoteWorkerChatContextSha256");
     expect(createInputs[0]?.metadata).not.toHaveProperty("remoteWorkerAssignmentLeaseToken");
   });
 

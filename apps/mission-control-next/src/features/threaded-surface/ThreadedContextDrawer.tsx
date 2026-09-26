@@ -245,7 +245,7 @@ function ThreadedDocumentsPanel({ props }: { props: MissionThreadedContextDockPr
             Refresh
           </button>
         </div>
-        <p>Opening a document never adds it to model context. Use “Include in next turn” explicitly.</p>
+        <p>Opening a document never adds it to model context. Including documents in a turn is temporarily unavailable.</p>
         <div className="mc-next-context-actions" role="list" aria-label="Chat documents">
           {documents.notes.map((note) => (
             <button
@@ -281,9 +281,10 @@ function ThreadedDocumentsPanel({ props }: { props: MissionThreadedContextDockPr
               type="button"
               className="mc-next-panel-button"
               aria-pressed={included}
+              disabled={!included}
               onClick={() => documents.onToggleInclude(selectedRef)}
             >
-              {included ? "Included in next turn" : "Include in next turn"}
+              {included ? "Remove from next turn" : "Include in next turn temporarily unavailable"}
             </button>
           </div>
           {editable ? (
@@ -756,6 +757,7 @@ export function ThreadedContextDrawer({
               <span>Subagents</span>
               <select
                 value={effectiveSubagentPolicy}
+                disabled
                 onChange={(event) => handleSubagentPolicyChange(event.target.value as ChatSubagentPolicy)}
                 aria-label="Subagent policy"
               >
@@ -767,16 +769,8 @@ export function ThreadedContextDrawer({
               </select>
             </label>
             <div className="mc-next-context-field" role="status" aria-live="polite">
-              <span>Automatic fan-out</span>
-              <p>
-                {automaticFanout?.enabled
-                  ? `Available for this project until ${new Date(automaticFanout.grant!.expiresAt).toLocaleString()}. Up to ${automaticFanout.grant!.maxActivations ?? "the grant limit"} child activations are governed by its budget.`
-                  : `${automaticFanout?.unavailableReason ?? "Ask remains active. Auto when useful requires an active, expiring automatic fan-out grant for this exact project."}${
-                      subagentPolicy === "auto_when_useful"
-                        ? " The saved Auto when useful preference is not authority; this Chat session is effectively asking until a valid project grant is present."
-                        : ""
-                    }`}
-              </p>
+              <span>Subagent delegation</span>
+              <p>Temporarily unavailable for new Chat turns. Your saved preference remains visible.</p>
             </div>
             <div className="mc-next-context-actions">
               <button
@@ -836,9 +830,10 @@ export function ThreadedContextDrawer({
                 <button
                   type="button"
                   className="mc-next-panel-button primary"
+                  disabled
                   onClick={() => void props.onAcceptDelegation()}
                 >
-                  Use subagents
+                  Subagents unavailable
                 </button>
               </div>
             </section>

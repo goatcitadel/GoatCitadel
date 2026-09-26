@@ -852,6 +852,7 @@ async function runAgentSendChatMessageLlmPath(
     let turnId = prepared.turnId;
     let turnResult = await host.turnRuntime.run({
       sessionId,
+      workspaceId: prepared.workspaceId,
       turnId,
       userMessageId: prepared.userEventId,
       ...(prepared.parentDelegationStepId ? { parentDelegationStepId: prepared.parentDelegationStepId } : {}),
@@ -952,6 +953,7 @@ async function runAgentSendChatMessageLlmPath(
       }
       const retryResult = await host.turnRuntime.run({
         sessionId,
+        workspaceId: prepared.workspaceId,
         turnId: retryTurnId,
         userMessageId: prepared.userEventId,
         ...(prepared.parentDelegationStepId ? { parentDelegationStepId: prepared.parentDelegationStepId } : {}),

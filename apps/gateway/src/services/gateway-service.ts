@@ -476,6 +476,7 @@ import {
   type ChatAutonomousTurnDeps,
   enqueueAutonomousChatTurn,
   isHeartbeatEligibleSession,
+  isNewAutonomousChatTurnAdmissionPaused,
   runCommitmentSweep,
   runCronAgentTurn,
   runHeartbeatSweep,
@@ -1934,7 +1935,9 @@ export class GatewayService {
       storage: this.storage,
       sessionControlRuntimeOwner: this.sessionControlRuntimeOwner,
       canEnqueueHeartbeat: async () =>
-        !(await this.isFeatureEnabled("autonomyV1Disabled")) && (await this.isFeatureEnabled("durableKernelV1Enabled")),
+        !isNewAutonomousChatTurnAdmissionPaused() &&
+        !(await this.isFeatureEnabled("autonomyV1Disabled")) &&
+        (await this.isFeatureEnabled("durableKernelV1Enabled")),
       enqueuePreclaimedHeartbeat: async (input) => {
         const run = await enqueueAutonomousChatTurn(this.chatAutonomousTurnDeps(), {
           sessionId: input.occurrence.sessionId,
@@ -8349,11 +8352,13 @@ export class GatewayService {
   }
 
   private async runCommitmentSweep(): Promise<void> {
+    if (isNewAutonomousChatTurnAdmissionPaused()) return;
     await runCommitmentSweep(this.chatAutonomousTurnDeps());
   }
 
   private async runHeartbeatSweep(): Promise<void> {
     await this.heartbeatOccurrenceService.recoverAll();
+    if (isNewAutonomousChatTurnAdmissionPaused()) return;
     await runHeartbeatSweep(this.chatAutonomousTurnDeps());
   }
 

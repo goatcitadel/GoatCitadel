@@ -16,6 +16,8 @@ import type {
 
 export interface TurnRuntimeRequest {
   sessionId: string;
+  /** Canonical workspace scope for policy when a new turn has no frozen profile. */
+  workspaceId?: string;
   turnId: string;
   userMessageId: string;
   /** Canonical persisted delegation step for a server-created worker turn. */

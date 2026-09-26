@@ -115,6 +115,11 @@ export async function startDeterministicLlmStub(options = {}) {
       model: typeof body?.model === "string" ? body.model : undefined,
       stream: body?.stream === true,
       messageCount: Array.isArray(body?.messages) ? body.messages.length : undefined,
+      toolNames: Array.isArray(body?.tools)
+        ? body.tools.slice(0, 256)
+            .map((tool) => tool?.function?.name ?? tool?.name)
+            .filter((name) => typeof name === "string" && /^[a-zA-Z0-9_]{1,128}$/u.test(name))
+        : undefined,
       startedAt: new Date().toISOString(),
     };
     requestSummaries.push(requestSummary);

@@ -2040,9 +2040,8 @@ export async function executeDurableChatTurnRun(
   if (remoteContext) {
     injectDurableChatWorkerContext(prepared, remoteContext, run, payload.request.content, resumedContent);
   }
-  // Explicit legacy-only backfill: runs admitted before capability profiles
-  // existed may receive one here. Newly admitted runs always carry payload
-  // profile references and take the fail-closed branch above.
+  // Preserve the historical backfill path for runs that already have a stored
+  // profile. New profile-free runs do not enter this branch.
   if (prepared.capabilityProfile && !existingCapabilityProfile && !payload.capabilityProfileId) {
     if (!capabilityProfileStore || !host.storage.capabilityCatalogSnapshots) {
       throw new Error(`Durable Chat run ${run.runId} cannot persist its legacy capability profile backfill.`);

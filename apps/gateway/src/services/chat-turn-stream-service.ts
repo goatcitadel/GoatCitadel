@@ -2315,6 +2315,7 @@ export async function* streamPreparedAgentChatTurn(
             () => {
               const runnerInput: ChatTurnAgentRunnerInput = {
                 sessionId,
+                workspaceId: prepared.workspaceId,
                 turnId,
                 userMessageId: prepared.userEventId,
                 ...(prepared.parentDelegationStepId ? { parentDelegationStepId: prepared.parentDelegationStepId } : {}),

@@ -74,6 +74,9 @@ describe("live data detection", () => {
     ).toBe(true);
     expect(hasExternalResearchIntent("Conduct research into PostgreSQL checkpoint behavior.")).toBe(true);
     expect(hasExternalResearchIntent("Conduct market research into CCG competitors.")).toBe(true);
+    expect(
+      hasExternalResearchIntent("Please do some deep research into the best things to include in an agentic harness."),
+    ).toBe(true);
     expect(hasExternalResearchIntent(marketResearchDeckRequest)).toBe(true);
     expect(hasExternalResearchIntent("Please research whether the claim is supported by reliable sources.")).toBe(true);
 
@@ -97,5 +100,10 @@ describe("live data detection", () => {
     expect(extractExternalResearchSubject(marketResearchDeckRequest)).toBe(
       "CCGs and what makes each one unique and better than the competition",
     );
+    expect(
+      extractExternalResearchSubject(
+        "Please do some deep research into the best things to include in an agentic harness.",
+      ),
+    ).toBe("the best things to include in an agentic harness");
   });
 });

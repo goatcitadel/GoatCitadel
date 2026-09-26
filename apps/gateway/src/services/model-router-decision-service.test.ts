@@ -141,6 +141,19 @@ describe("model-router decision service", () => {
     });
   });
 
+  it("routes a deep research request to governed web tools", () => {
+    expect(
+      routeWithModelRouter({
+        prompt: "Please do some deep research into the best things to include in an agentic harness.",
+      }),
+    ).toMatchObject({
+      route: "research",
+      selectedEngine: "web_research",
+      requiresTools: true,
+      reasons: expect.arrayContaining(["external research requested"]),
+    });
+  });
+
   it("never bypasses orchestration for tool, vision, image, confirmation, reasoning, or attachment turns", () => {
     const blockedInputs = [
       { prompt: "what is in this screenshot" },

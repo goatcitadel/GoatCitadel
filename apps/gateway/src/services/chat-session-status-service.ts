@@ -319,7 +319,7 @@ export class ChatSessionStatusService {
     snapshot: Awaited<ReturnType<Storage["routedContextSnapshots"]["findByTurn"]>>,
   ): ChatSessionStatusSection<ChatSessionStatusCapabilities> {
     if (!turnId || !profile) {
-      return unavailable("No persisted capability profile is available for the latest turn.");
+      return unavailable("This turn uses the live callable catalog and current tool policy; no frozen capability profile is recorded.");
     }
     const attachedContextTools = snapshot?.entries.some(
       (entry) => entry.disposition !== "omitted" && entry.admittedText.length > 0,

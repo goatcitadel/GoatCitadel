@@ -11,7 +11,7 @@ import {
 import { createHash } from "node:crypto";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { LlmService } from "./llm-service.js";
-import { splitChatPrefsPatch, shouldAllowCrossProviderFallback } from "./chat-session-utils.js";
+import { splitChatPrefsPatch } from "./chat-session-utils.js";
 
 type LlmRuntimeConfig = ReturnType<LlmService["getRuntimeConfig"]>;
 type RuntimeProvider = LlmRuntimeConfig["providers"][number];
@@ -288,45 +288,6 @@ export async function resolveChatRouteDescriptor(
   }
   const effectiveProviderId = requestedProvider.providerId;
   const effectiveModel = effectiveModelResolution.model;
-  const requestShape = {
-    providerId:
-      selectionSource === "manual"
-        ? input.providerId
-        : selectionSource === "session"
-          ? previewPrefs.providerId
-          : undefined,
-    model: selectionSource === "manual" ? input.model : selectionSource === "session" ? previewPrefs.model : undefined,
-  };
-  const fallbackPolicy =
-    !effectiveProviderId || !effectiveModel
-      ? "off"
-      : shouldAllowCrossProviderFallback(requestShape) &&
-          deps.resolveFallbackTargets(runtime, effectiveProviderId, effectiveModel).length > 0
-        ? "armed"
-        : "off";
-  const fallbackTarget =
-    fallbackPolicy === "armed" && effectiveProviderId && effectiveModel
-      ? deps.resolveFallbackTargets(runtime, effectiveProviderId, effectiveModel)[0]
-      : undefined;
-  const fallbackResult = !fallbackTarget
-    ? "not_applicable"
-    : classifyRuntime(requestedProvider) ===
-        classifyRuntime(runtime.providers.find((provider) => provider.providerId === fallbackTarget.providerId))
-      ? "same_boundary"
-      : runtimeClass === "local"
-        ? "local_to_cloud"
-        : "cloud_to_local";
-  const degradedReason =
-    fallbackPolicy === "armed"
-      ? fallbackResult === "same_boundary"
-        ? "Fallback is armed if the primary route fails."
-        : fallbackResult === "local_to_cloud"
-          ? "Fallback may move this run from local to cloud if the primary route fails."
-          : fallbackResult === "cloud_to_local"
-            ? "Fallback may move this run from cloud to local if the primary route fails."
-            : undefined
-      : undefined;
-
   return {
     requestedProviderId,
     requestedModel,
@@ -334,13 +295,14 @@ export async function resolveChatRouteDescriptor(
     effectiveModel,
     selectionSource,
     normalizationReason: effectiveModelResolution.normalizationReason,
-    fallbackPolicy,
-    fallbackResult,
+    // Cross-provider fallback depended on the removed frozen turn binding.
+    fallbackPolicy: "off",
+    fallbackResult: "not_applicable",
     runtimeClass,
     blockedReason: effectiveModelResolution.blockedReason,
-    degradedReason,
+    degradedReason: undefined,
     runtimeProvider: requestedProvider,
-    fallbackTarget,
+    fallbackTarget: undefined,
   };
 }
 
@@ -377,16 +339,6 @@ export async function preflightChatRoute(
     runtimeReachability = "not_checked";
   }
 
-  const capabilityProfile =
-    input.content?.trim() && deps.resolveCapabilityPreflight
-      ? await deps.resolveCapabilityPreflight(sessionId, input, {
-          ...descriptor,
-          blockedReason,
-        })
-      : undefined;
-  const frozenFallbackPolicy = capabilityProfile ? "off" : descriptor.fallbackPolicy;
-  const frozenFallbackResult = capabilityProfile ? "not_applicable" : descriptor.fallbackResult;
-
   const resultWithoutDecision = {
     requestedProviderId: descriptor.requestedProviderId,
     requestedModel: descriptor.requestedModel,
@@ -394,13 +346,14 @@ export async function preflightChatRoute(
     effectiveModel: descriptor.effectiveModel,
     selectionSource: descriptor.selectionSource,
     normalizationReason: descriptor.normalizationReason,
-    fallbackPolicy: frozenFallbackPolicy,
-    fallbackResult: frozenFallbackResult,
+    // Every new send, edit, and retry stays on its preflight route until a
+    // replacement authority can govern cross-provider fallback.
+    fallbackPolicy: "off",
+    fallbackResult: "not_applicable",
     runtimeReachability,
     runtimeClass: descriptor.runtimeClass,
     blockedReason,
-    degradedReason: descriptor.degradedReason,
-    ...(capabilityProfile ? { capabilityProfile } : {}),
+    degradedReason: undefined,
   } satisfies Omit<RoutingPreflightResult, "decision">;
 
   return {

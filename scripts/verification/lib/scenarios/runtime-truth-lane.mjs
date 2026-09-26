@@ -1,19 +1,7 @@
-// verify:runtime:truth browser lane library.
-//
-// The lane proves two things about approval-gated durable work:
-//   1. it survives a gateway restart and resumes the SAME durable run
-//      (the backend truth — gateway only), and
-//   2. the canonical Mission Control Next shell reflects that recovered truth
-//      (the browser cross-check — needs a served UI and a browser runtime).
-//
-// These are split into two scenarios so a host that cannot serve the UI or
-// launch a browser still EXECUTES the backend truth and merely reports the
-// shell cross-check as a documented conditional SKIP (never a failure) — the
-// same posture the sibling proof lanes use for their live-PostgreSQL row. The
-// gateway alone is started here (`includeUi: false`); the UI is brought up
-// separately, and only for the cross-check, so a missing UI-served environment
-// can no longer hard-throw inside `startVerificationStack({ includeUi: true })`
-// and mask the backend truth.
+// verify:runtime:truth starts an isolated Gateway, proves profile-free Chat
+// approval admission, then restarts the Gateway and resumes the same durable
+// run. The Next-shell cross-check uses the recovered identifiers when a browser
+// and served UI are available.
 import {
   prepareRuntimeTruthApproval,
   requestRuntimeTruthApproval,
@@ -59,6 +47,8 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
   // (conditional) shell cross-check scenario, which asserts against the SAME
   // recovered approval it would have observed inline.
   let durableTruth = null;
+  let admission = null;
+  let seeded = null;
   try {
     llmStub = await startDeterministicLlmStub({
       replyText: "Verification restart reply.",
@@ -83,17 +73,17 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
     });
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-runtime-truth");
 
-    // Scenario 1 — the backend durable truth. Gateway only; always executed.
+    // New Chat admission must produce a real approval wait without a profile.
     await runScenario(
       context,
       {
-        id: "runtime-truth.approval-restart-durable-truth",
+        id: "runtime-truth.profile-free-approval-admission",
         lane: "runtime-truth",
-        title: "Approval-gated durable work survives a gateway restart and resumes the same durable run",
+        title: "A profile-free Chat turn parks an approval-required tool in its durable run",
         subsystem: "mission-control",
       },
       async () => {
-        const seeded = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/seed", {
+        seeded = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/seed", {
           method: "POST",
           body: {
             workspaceName: "Runtime Truth Verification Workspace",
@@ -104,7 +94,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
         });
         assertOk(seeded, "seed runtime-truth workspace");
 
-        const approvalRequest = await requestRuntimeTruthApproval(
+        admission = await requestRuntimeTruthApproval(
           stack.gatewayUrl,
           {
             sessionId: seeded.body?.sessionId,
@@ -122,8 +112,40 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
               ),
           },
         );
-        activeChatTransport = approvalRequest.transport;
-        const approvalSeed = { body: approvalRequest.approval };
+        activeChatTransport = admission.transport;
+        const outPath = path.join(context.artifactRoot, "diagnostics", "runtime-truth-profile-free-approval.json");
+        await writeJson(outPath, admission.approval);
+        return {
+          status: "passed",
+          metrics: {
+            durableRunId: admission.approval.chatTurnDurableRunId,
+            approvalId: admission.approval.approvalId,
+          },
+          artifacts: {
+            diagnostics: [relativeToRun(context, outPath)],
+            screenshots: [], traces: [], logs: [], perf: [], playwright: [],
+          },
+        };
+      },
+    );
+
+    // The recovery scenario restarts and resumes the exact profile-free run.
+    await runScenario(
+      context,
+      {
+        id: "runtime-truth.approval-restart-durable-truth",
+        lane: "runtime-truth",
+        title: "Approval-gated durable work survives a gateway restart and resumes the same durable run",
+        subsystem: "mission-control",
+      },
+      async () => {
+        if (!admission?.approval) {
+          return {
+            status: "skipped",
+            notes: ["The admission scenario did not produce an approval to restart and resume."],
+          };
+        }
+        const approvalSeed = { body: admission.approval };
 
         const approvalId = approvalSeed.body?.approvalId;
         const sessionId = approvalSeed.body?.sessionId;
@@ -270,7 +292,76 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
       },
     );
 
-    // Scenario 2 — the canonical Next shell reflects the recovered truth.
+    await runScenario(
+      context,
+      {
+        id: "runtime-truth.deep-research-tool-exposure",
+        lane: "runtime-truth",
+        title: "The reported deep-research prompt reaches the provider with web and citation tools",
+        subsystem: "mission-control",
+      },
+      async () => {
+        const created = await requestJson(stack.gatewayUrl, "/api/v1/chat/sessions", {
+          method: "POST",
+          body: { title: "Deep research tool exposure verification" },
+        });
+        assertOk(created, "create deep-research session");
+        const route = `/api/v1/chat/sessions/${encodeURIComponent(created.body.sessionId)}`;
+        const prefs = await requestJson(stack.gatewayUrl, `${route}/prefs`);
+        assertOk(prefs, "read deep-research preferences");
+        const controls = {
+          providerId: llmStub.providerId,
+          model: llmStub.model,
+          webMode: "deep",
+          memoryMode: "off",
+          thinkingLevel: "off",
+          subagentPolicy: "off",
+          toolAutonomy: "safe_auto",
+          orchestrationEnabled: false,
+        };
+        assertOk(await requestJson(stack.gatewayUrl, `${route}/prefs`, {
+          method: "PATCH",
+          body: { ...controls, expectedRevision: prefs.body.revision },
+        }), "set deep-research preferences");
+        const content = "Please do some deep research into the best things to include in an agentic harness.";
+        const request = { action: "send", content, ...controls, fullWebAccess: true, prefsOverride: controls };
+        const preflight = await requestJson(stack.gatewayUrl, `${route}/route-preflight`, {
+          method: "POST",
+          body: request,
+        });
+        assertOk(preflight, "preflight deep-research turn");
+        if (!preflight.body?.decision || preflight.body.capabilityProfile !== undefined) {
+          throw new Error("Deep-research preflight did not produce a profile-free route decision.");
+        }
+        const before = llmStub.requestSummaries().length;
+        const sent = await requestJson(stack.gatewayUrl, `${route}/agent-send`, {
+          method: "POST",
+          body: { ...request, routeDecision: preflight.body.decision },
+        });
+        assertOk(sent, "send deep-research turn");
+        const providerRequests = llmStub.requestSummaries().slice(before)
+          .filter((entry) => entry.path === "/v1/chat/completions" || entry.path === "/v1/responses");
+        const required = ["browser_search", "browser_navigate", "citations_build"];
+        const withRequiredTools = providerRequests.find(
+          (entry) => required.every((name) => entry.toolNames?.includes(name)),
+        );
+        if (!withRequiredTools) {
+          throw new Error(`Deep-research provider request omitted tools: ${JSON.stringify(providerRequests.map((entry) => entry.toolNames ?? []))}`);
+        }
+        const outPath = path.join(context.artifactRoot, "diagnostics", "runtime-truth-deep-research-tools.json");
+        await writeJson(outPath, { sessionId: created.body.sessionId, required, providerRequests });
+        return {
+          status: "passed",
+          metrics: { providerRequests: providerRequests.length, requiredTools: required.length },
+          artifacts: {
+            diagnostics: [relativeToRun(context, outPath)],
+            screenshots: [], traces: [], logs: [], perf: [], playwright: [],
+          },
+        };
+      },
+    );
+
+    // The canonical Next shell reflects the recovered truth.
     // Conditionally SKIPPED (never failed) when this host cannot launch a
     // browser or serve the UI: those are environmental preconditions, exactly
     // like the sibling lanes' live-PostgreSQL provisioning. Once BOTH hold,

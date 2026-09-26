@@ -564,6 +564,8 @@ interface CoworkContinuationProgressSnapshot {
 
 export interface ChatTurnAgentRunnerInput {
   sessionId: string;
+  /** Canonical workspace scope, independent of historical capability profiles. */
+  workspaceId?: string;
   turnId: string;
   userMessageId: string;
   /** Canonical persisted delegation step for a server-created worker turn. */
@@ -1055,6 +1057,7 @@ export function buildTurnToolPolicyContext(
 ): ToolPolicyActorContext {
   return {
     ...(input.policyContext ?? {}),
+    workspaceId: input.workspaceId ?? input.capabilityProfile?.identity.workspaceId ?? input.policyContext?.workspaceId,
     operatorId: input.operatorId ?? input.policyContext?.operatorId,
     authActorId: input.authActorId ?? input.policyContext?.authActorId,
     authActorSource: input.authActorSource ?? input.policyContext?.authActorSource,
@@ -3496,6 +3499,14 @@ export class ChatTurnAgentRunner {
 
     const promptLabCoworkPromptSpecificWebLookup =
       promptLabHarnessTurn && input.mode === "cowork" && Boolean(derivePromptSpecificWebQuery(input.content));
+    const controllerWebLookupRequested =
+      detectExplicitWebLookupIntent(input.content) ||
+      hasLiveDataIntent(input.content) ||
+      Boolean(extractExternalResearchSubject(input.content)) ||
+      Boolean(derivePromptSpecificWebQuery(input.content)) ||
+      (detectDirectUrlIntent(input.content) &&
+        /\b(?:help me|increase|improve|audit|compare|research|analy[sz]e)\b/i.test(input.content)) ||
+      (input.webMode === "deep" && intents.webLookup);
     if (
       !assistantContent &&
       !approvalPayload &&
@@ -3505,6 +3516,7 @@ export class ChatTurnAgentRunner {
       input.toolAutonomy !== "manual" &&
       input.webMode !== "off" &&
       intents.webLookup &&
+      controllerWebLookupRequested &&
       !promptLabContract.toolUseSuppressed &&
       !(promptLabHarnessTurn && promptLabContract.explicitTools && input.mode === "chat") &&
       (!localFileIntent || promptLabCoworkPromptSpecificWebLookup) &&
@@ -5606,6 +5618,7 @@ export class ChatTurnAgentRunner {
     input: Pick<
       ChatTurnAgentRunnerInput,
       | "sessionId"
+      | "workspaceId"
       | "turnId"
       | "webMode"
       | "mode"
@@ -5768,7 +5781,7 @@ export class ChatTurnAgentRunner {
       this.deps.durableChatFanoutV1Enabled?.() ?? Promise.resolve(false),
       this.deps.isDurableFanoutAvailable?.({
         sessionId: input.sessionId,
-        workspaceId: input.capabilityProfile?.identity.workspaceId ?? input.policyContext?.workspaceId,
+        workspaceId: input.workspaceId ?? input.capabilityProfile?.identity.workspaceId ?? input.policyContext?.workspaceId,
       }) ?? Promise.resolve(false),
       this.deps.attachedContextToolsV1Enabled?.() ?? Promise.resolve(false),
       this.deps.delegationScopeExpansionV1Enabled?.() ?? Promise.resolve(false),
@@ -5830,7 +5843,7 @@ export class ChatTurnAgentRunner {
       ) {
         continue;
       }
-      if (suppressLocalPathTools && LOCAL_PATH_TOOL_NAMES.has(tool.toolName)) {
+      if (input.capabilityProfile && suppressLocalPathTools && LOCAL_PATH_TOOL_NAMES.has(tool.toolName)) {
         continue;
       }
       if (
@@ -5868,6 +5881,7 @@ export class ChatTurnAgentRunner {
       }
       if (
         !quickWebProfile &&
+        input.capabilityProfile &&
         !shouldExposeWebToolForTurn({
           toolName: tool.toolName,
           mode: input.mode,
@@ -6005,8 +6019,12 @@ export class ChatTurnAgentRunner {
       selectedCatalog.push(candidate);
       selectedNames.add(candidate.toolName);
     }
-    const toolCountCap = quickWebProfile ? 1 : MAX_EXPOSED_TOOLS_PER_TURN[input.mode];
-    let schemaTokenBudget = quickWebProfile ? 600 : TOOL_SCHEMA_TOKEN_BUDGET[input.mode];
+    const toolCountCap = input.capabilityProfile
+      ? (quickWebProfile ? 1 : MAX_EXPOSED_TOOLS_PER_TURN[input.mode])
+      : scoredCatalog.length;
+    let schemaTokenBudget = input.capabilityProfile
+      ? (quickWebProfile ? 600 : TOOL_SCHEMA_TOKEN_BUDGET[input.mode])
+      : Number.POSITIVE_INFINITY;
     for (const tool of selectedCatalog) {
       schemaTokenBudget -= cachedEstimateToolTokens(JSON.stringify(tool), tool.toolName);
     }
@@ -6074,7 +6092,37 @@ export class ChatTurnAgentRunner {
     tool: { toolName: string; args: Record<string, unknown> },
   ): Promise<{ blockedReason?: string; reasonCodes: string[] }> {
     if (!input.capabilityProfile) {
-      return { reasonCodes: [] };
+      if (!this.toolAccessProbe) {
+        // The Gateway executor still owns deny-wins policy at invocation.
+        // This preserves embedded runtimes without a separate policy probe.
+        return { reasonCodes: [] };
+      }
+      try {
+        const current = await this.toolAccessProbe({
+          toolName: tool.toolName,
+          sessionId: input.sessionId,
+          agentId: "assistant",
+          taskId: input.policyTaskId,
+          runId: input.policyRunId,
+          args: tool.args,
+          permissionProfileId: input.permissionProfileId,
+          localOperatorOverrideId: input.localOperatorOverrideId,
+          surface: input.mode,
+          policyContext: buildTurnToolPolicyContext(input),
+        });
+        if (!current.allowed) {
+          return {
+            blockedReason: `Current deny-wins policy blocks ${tool.toolName}.`,
+            reasonCodes: [...current.reasonCodes],
+          };
+        }
+        return { reasonCodes: [...current.reasonCodes] };
+      } catch {
+        return {
+          blockedReason: "Current tool policy evaluation failed before execution.",
+          reasonCodes: ["policy_evaluation_failed"],
+        };
+      }
     }
     const frozen = input.capabilityProfile.governance.policyDecisions.find(
       (decision) => decision.toolName === tool.toolName,
@@ -6947,7 +6995,7 @@ export class ChatTurnAgentRunner {
           sessionId: input.input.sessionId,
           turnId: input.turnId,
           toolRunId: created.toolRunId,
-          workspaceId: input.input.capabilityProfile?.identity.workspaceId,
+          workspaceId: input.input.workspaceId ?? input.input.capabilityProfile?.identity.workspaceId,
           routedContextSnapshotId: input.input.serverContextUsageAttribution?.contextSnapshotId,
           routedContextSnapshotHash: input.input.serverContextUsageAttribution?.contextResolutionHash,
           taskId: input.input.policyTaskId,

@@ -4,6 +4,8 @@ Last updated: 2026-08-14
 
 This document defines the repo-native authority model for the core runtime nouns that appear across Gateway, Mission Control, storage, and replay.
 
+**2026-09-25 transition:** New Chat turns do not create a frozen capability profile or catalog snapshot. The runner exposes tools from the current callable catalog after Gateway policy checks and rechecks authority when a tool is invoked. Approval-required tools retain their canonical durable wait and resume path. New cross-provider fallback, routed-context and workspace snapshots, Work Passport, automatic remote placement, dynamic requester MCP/mesh tools, delegated fan-out, governed code delegation, and model council are temporarily disabled. New scheduled agent turns fall back to deterministic inbox tasks; new heartbeat and commitment Chat turns are paused. Sections below that describe frozen profiles and their dependent records apply to historical turns and guarded replay only. Permission profiles and their security checks remain active.
+
 ## Purpose
 
 GoatCitadel uses several operator-facing terms that are easy to blur together during implementation:
