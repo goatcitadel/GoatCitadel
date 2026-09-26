@@ -27,7 +27,7 @@ export interface ChatModelCouncilRequest {
   enabled: true;
 }
 export type ChatNormalizationProfile = "live" | "prompt_pack_harness" | "quick_web";
-export type ChatTurnExecutionProfile = "standard" | "quick_web";
+export type ChatTurnExecutionProfile = "standard" | "quick_web" | "sustained_local_coding";
 export interface ChatPromptContextBudgetReceipt {
   executionProfile: ChatTurnExecutionProfile;
   messageCount: number;
@@ -1526,6 +1526,17 @@ export interface ChatTurnTraceRecord {
       };
     };
     executionProfile?: ChatTurnExecutionProfile;
+    codingRun?: {
+      activeLimitMs: number;
+      activeUsedMs: number;
+      toolRunLimit: number;
+      toolRunsUsed: number;
+      windowIndex: number;
+      nextAction: string;
+      latestTest?: { passed: boolean; summary?: string; evidenceLabel?: string };
+      latestFailure?: string;
+      unmetCriteria?: string[];
+    };
     promptContextBudget?: ChatPromptContextBudgetReceipt;
     routedContext?: import("./routed-context.js").ChatRoutedContextBindingReceipt;
     usedVisionFallback?: boolean;
@@ -1543,6 +1554,7 @@ export interface ChatTurnTraceRecord {
         | "research_list"
         | "cowork_research_list"
         | "research_artifact"
+        | "sustained_local_coding"
         | "default";
       promotionReason?: "explicit_research_artifact";
       turnBudgetMs: number;
@@ -1653,6 +1665,8 @@ export interface ChatDelegationStepRecord {
   stepId: string;
   runId: string;
   role: string;
+  /** Frozen step instructions used to reject replay drift and restore pending work. */
+  instructionSnapshot?: { objective?: string; label?: string; expectedOutput?: string };
   label?: string;
   status: ChatDelegationStepStatus;
   index: number;

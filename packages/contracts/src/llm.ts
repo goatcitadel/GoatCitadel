@@ -559,6 +559,8 @@ export interface ChatCompletionMessage {
 export interface ChatCompletionRequest {
   providerId?: string;
   model?: string;
+  /** Internal run constraint: hooks and fallback routing must preserve this selected target. */
+  requiredRuntimeTarget?: { providerId: string; model?: string };
   messages: ChatCompletionMessage[];
   signal?: AbortSignal;
   memory?: {

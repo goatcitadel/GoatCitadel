@@ -7311,6 +7311,22 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         up: createRemoteWorkerNativePolicyReservationSchema,
       },
       { version: 250, name: "remote_worker_runtime_install_evidence", up: createRemoteWorkerRuntimeInstallSchema },
+      {
+        version: 251,
+        name: "delegation_step_instruction_snapshots",
+        up: (db) => {
+          if (!tableExists(db, "chat_delegation_steps")) return;
+          addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "instruction_snapshot_json", "TEXT");
+          db.exec(`
+            CREATE TRIGGER IF NOT EXISTS trg_chat_delegation_step_instruction_snapshot_immutable
+            BEFORE UPDATE OF instruction_snapshot_json ON chat_delegation_steps
+            WHEN NEW.instruction_snapshot_json IS NOT OLD.instruction_snapshot_json
+            BEGIN
+              SELECT RAISE(ABORT, 'delegation step instruction snapshot cannot change');
+            END;
+          `);
+        },
+      },
     ],
   },
 ];

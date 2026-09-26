@@ -4,6 +4,7 @@ import type {
   ChatDelegateResponse,
   ChatDelegationRunRecord,
   ChatDelegationStepRecord,
+  ChatFanoutInvocationRecord,
   ChatSendMessageRequest,
   ChatSendMessageResponse,
   ChatSessionPrefsRecord,
@@ -11,15 +12,19 @@ import type {
   TaskActivityRecord,
 } from "@goatcitadel/contracts";
 import { canonicalJsonString, NotFoundError } from "@goatcitadel/contracts";
+import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { describe, expect, it, vi } from "vitest";
 import {
   assertEligibleReadOnlyExplorerDurableParent,
   ChatDelegationService,
   DELEGATED_OUTPUT_PROMPT_INJECTION_REASON,
   READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE,
+  StaleDelegationScopeResumeError,
+  UnverifiableDelegationInstructionsError,
   type ChatDelegationServiceHost,
 } from "./chat-delegation-service.js";
 import { buildDeterministicAgentDurableRunId } from "./chat-turn-entry-service.js";
+import { CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE } from "./chat-durable-fanout-service.js";
 
 function buildPrefs(overrides: Partial<ChatSessionPrefsRecord> = {}): ChatSessionPrefsRecord {
   return {
@@ -56,6 +61,7 @@ function createStepRecord(
     stepId: input.stepId,
     runId: input.runId,
     role: input.role,
+    instructionSnapshot: input.instructionSnapshot,
     status: input.status ?? "pending",
     label: input.label,
     index: input.index,
@@ -285,6 +291,7 @@ function createHarness(options: { prefs?: ChatSessionPrefsRecord; projectId?: st
   const runs = new Map<string, ChatDelegationRunRecord>();
   const durableRuns = new Map<string, DurableRunRecord>();
   const steps = new Map<string, ChatDelegationStepRecord>();
+  const fanoutInvocations = new Map<string, ChatFanoutInvocationRecord>();
   const dispatchClaims = new Map<string, { token: string; expiresAt: string }>();
   const tasks = new Map<
     string,
@@ -466,6 +473,13 @@ function createHarness(options: { prefs?: ChatSessionPrefsRecord; projectId?: st
       updateTaskSubagent: vi.fn(),
     },
     storage: {
+      chatFanoutInvocations: {
+        get: vi.fn((invocationId: string) => {
+          const invocation = fanoutInvocations.get(invocationId);
+          if (!invocation) throw new NotFoundError({ entity: "Chat fan-out invocation", id: invocationId });
+          return invocation;
+        }),
+      },
       chatSessionPrefs: {
         ensure: vi.fn(() => prefs),
       },
@@ -934,6 +948,70 @@ function createHarness(options: { prefs?: ChatSessionPrefsRecord; projectId?: st
             return next;
           },
         ),
+        failUnownedPreAdmission: vi.fn((input: {
+          stepId: string;
+          runId: string;
+          summary: string;
+          error: string;
+          failureGuidance: string;
+          finishedAt: string;
+          durationMs: number;
+        }) => {
+          const current = steps.get(input.stepId);
+          const claim = dispatchClaims.get(input.stepId);
+          if (
+            !current || current.runId !== input.runId ||
+            (current.status !== "pending" && current.status !== "running") ||
+            current.childSessionId || current.childTurnId || current.durableRunId ||
+            (claim && Date.parse(claim.expiresAt) > Date.parse(databaseNowIso))
+          ) return undefined;
+          const next = {
+            ...current,
+            status: "failed" as const,
+            summary: input.summary,
+            error: input.error,
+            failureGuidance: input.failureGuidance,
+            finishedAt: input.finishedAt,
+            durationMs: input.durationMs,
+          };
+          steps.set(input.stepId, next);
+          dispatchClaims.delete(input.stepId);
+          return next;
+        }),
+        materializeDurableOutcome: vi.fn((input: {
+          stepId: string;
+          expectedChildSessionId: string;
+          expectedChildTurnId: string;
+          expectedDurableRunId: string;
+          status: "completed" | "failed" | "cancelled";
+          summary: string;
+          output?: string;
+          error?: string;
+          failureGuidance?: string;
+          citations: ChatCitationRecord[];
+          finishedAt: string;
+        }) => {
+          const current = steps.get(input.stepId)!;
+          if (
+            current.status !== "running" ||
+            current.childSessionId !== input.expectedChildSessionId ||
+            current.childTurnId !== input.expectedChildTurnId ||
+            current.durableRunId !== input.expectedDurableRunId ||
+            dispatchClaims.has(input.stepId)
+          ) return { outcome: "rejected" as const, step: current };
+          const next = {
+            ...current,
+            status: input.status,
+            summary: input.summary,
+            output: input.output,
+            error: input.error,
+            failureGuidance: input.failureGuidance,
+            citations: input.citations,
+            finishedAt: input.finishedAt,
+          };
+          steps.set(input.stepId, next);
+          return { outcome: "applied" as const, step: next };
+        }),
       },
       taskSubagents: {
         findByAgentSessionId: vi.fn(() => undefined),
@@ -948,6 +1026,7 @@ function createHarness(options: { prefs?: ChatSessionPrefsRecord; projectId?: st
     runs,
     durableRuns,
     steps,
+    fanoutInvocations,
     dispatchClaims,
     tasks,
     traces,
@@ -1482,7 +1561,7 @@ describe("ChatDelegationService loop 20 coverage", () => {
       toolAutonomy: "manual",
       retrievalMode: "standard",
     });
-    const { deps, dispatchClaims, durableRuns, service, steps } = createHarness({ prefs: originalPrefs });
+    const { deps, dispatchClaims, durableRuns, service, steps, traces } = createHarness({ prefs: originalPrefs });
     deps.resolveToolPolicyContext = vi.fn((input) => ({
       ...input,
       permissionProfileId: "profile-restricted",
@@ -1590,6 +1669,8 @@ describe("ChatDelegationService loop 20 coverage", () => {
           index: 1,
           parallelizable: false,
           dependsOnStepIds: ["implementation"],
+          objective: "Verify the scoped change",
+          expectedOutput: "A concise test report",
         },
       ],
       operatorId: "operator-1",
@@ -1648,6 +1729,50 @@ describe("ChatDelegationService loop 20 coverage", () => {
     deps.resolveToolPolicyContext.mockRejectedValue(new Error("live policy must not be recomputed"));
     deps.inheritDelegatedSessionToolGrants.mockClear();
     deps.updateChatSessionPrefs.mockClear();
+    const approvedStep = steps.get(scopeStep.stepId)!;
+    const secondApprovalStep: ChatDelegationStepRecord = {
+      ...approvedStep,
+      workResult: {
+        ...approvedStep.workResult!,
+        scopeExpansion: {
+          ...approvedStep.workResult!.scopeExpansion!,
+          approvalId: "approval-scope-2",
+          decision: undefined,
+          resolvedAt: undefined,
+        },
+      },
+    };
+    steps.set(scopeStep.stepId, secondApprovalStep);
+    await expect(service.resumePersistedChatDelegation({
+      delegationRunId: waiting.runId,
+      stepId: scopeStep.stepId,
+      durableRunId: "durable-child-scope-1",
+      approvalId: "approval-scope-1",
+      childTurnId: frozenIdentity!.turnId,
+    })).rejects.toBeInstanceOf(StaleDelegationScopeResumeError);
+    expect(steps.get(scopeStep.stepId)).toMatchObject({ status: "running", workResult: secondApprovalStep.workResult });
+    expect(dispatchClaims.has(scopeStep.stepId)).toBe(false);
+    expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
+
+    steps.set(scopeStep.stepId, approvedStep);
+    const listForUpdate = deps.storage.chatDelegationSteps.listByRunForUpdate;
+    listForUpdate.mockImplementationOnce((runId: string) => {
+      steps.set(scopeStep.stepId, secondApprovalStep);
+      return [...steps.values()].filter((candidate) => candidate.runId === runId)
+        .sort((left, right) => left.index - right.index);
+    });
+    await expect(service.resumePersistedChatDelegation({
+      delegationRunId: waiting.runId,
+      stepId: scopeStep.stepId,
+      durableRunId: "durable-child-scope-1",
+      approvalId: "approval-scope-1",
+      childTurnId: frozenIdentity!.turnId,
+    })).rejects.toBeInstanceOf(StaleDelegationScopeResumeError);
+    expect(steps.get(scopeStep.stepId)).toMatchObject({ status: "running", workResult: secondApprovalStep.workResult });
+    expect(dispatchClaims.has(scopeStep.stepId)).toBe(false);
+    expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
+    steps.set(scopeStep.stepId, approvedStep);
+
     const dispatchExpiry = "2026-07-11T01:00:00.000Z";
     dispatchClaims.set(scopeStep.stepId, {
       token: `delegation-dispatch:v1:${Date.parse(dispatchExpiry)}:${frozenIdentity!.turnId}:existing-owner`,
@@ -1657,20 +1782,46 @@ describe("ChatDelegationService loop 20 coverage", () => {
       delegationRunId: waiting.runId,
       stepId: scopeStep.stepId,
       durableRunId: "durable-child-scope-1",
+      approvalId: "approval-scope-1",
+      childTurnId: frozenIdentity!.turnId,
     });
     expect(noOp.reenteredPersistedStep).toBe(false);
     expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
+
+    const frozenScopeStep = steps.get(scopeStep.stepId)!;
+    traces.set(frozenIdentity!.turnId, {
+      ...createIdentifiedChatResponse("delegate-session-1", frozenIdentity!).trace!,
+      durable: { runId: "durable-child-scope-1", status: "completed" },
+    });
+    steps.set(scopeStep.stepId, { ...frozenScopeStep, instructionSnapshot: undefined });
+    await expect(service.resumePersistedChatDelegation({
+      delegationRunId: waiting.runId,
+      stepId: scopeStep.stepId,
+      durableRunId: "durable-child-scope-1",
+      approvalId: "approval-scope-1",
+      childTurnId: frozenIdentity!.turnId,
+    })).rejects.toBeInstanceOf(StaleDelegationScopeResumeError);
+    expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
+    steps.set(scopeStep.stepId, frozenScopeStep);
 
     dispatchClaims.delete(scopeStep.stepId);
     const resumed = await service.resumePersistedChatDelegation({
       delegationRunId: waiting.runId,
       stepId: scopeStep.stepId,
       durableRunId: "durable-child-scope-1",
+      approvalId: "approval-scope-1",
+      childTurnId: frozenIdentity!.turnId,
     });
     expect(resumed.reenteredPersistedStep).toBe(true);
     expect(resumed.status).toBe("completed");
     expect(resumed.steps.map((step) => step.role)).toEqual(["coder", "qa"]);
     expect(resumed.steps[1]?.dependsOnStepIds).toEqual([resumed.steps[0]!.stepId]);
+    expect((deps.agentSendChatMessage.mock.calls.at(-1)?.[1] as ChatSendMessageRequest).content).toContain(
+      "[Subagent Task] Verify the scoped change",
+    );
+    expect((deps.agentSendChatMessage.mock.calls.at(-1)?.[1] as ChatSendMessageRequest).content).toContain(
+      "Expected output: A concise test report",
+    );
     expect(deps.resolveToolPolicyContext).not.toHaveBeenCalled();
     expect(deps.inheritDelegatedSessionToolGrants).not.toHaveBeenCalled();
     expect(deps.updateChatSessionPrefs).toHaveBeenCalledTimes(1);
@@ -1683,6 +1834,166 @@ describe("ChatDelegationService loop 20 coverage", () => {
         codeAutoApply: "manual",
       }),
     );
+  });
+
+  it("settles a terminal legacy child and blocks only unclaimed siblings after exact scope approval", async () => {
+    const { deps, durableRuns, runs, service, steps, tasks, traces } = createHarness();
+    let identity: TestAgentTurnIdentity | undefined;
+    let frozenRequest: ChatSendMessageRequest | undefined;
+    deps.agentSendChatMessage = vi.fn(async (
+      childSessionId: string,
+      request: ChatSendMessageRequest,
+      options?: { turnIdentity?: TestAgentTurnIdentity },
+    ): Promise<ChatSendMessageResponse> => {
+      identity = options?.turnIdentity;
+      frozenRequest = request;
+      const response = createIdentifiedChatResponse(childSessionId, identity!);
+      return {
+        ...response,
+        trace: {
+          ...response.trace!,
+          status: "waiting_for_approval",
+          durable: { runId: "durable-legacy-child", status: "waiting" },
+        },
+      };
+    }) as never;
+    const request = {
+      objective: "Implement and verify the scoped change",
+      roles: ["coder", "qa"],
+      mode: "sequential" as const,
+      policyRunId: "durable-parent-legacy-scope",
+      steps: [
+        { stepId: "implementation", role: "coder", index: 0, objective: "Implement the scoped change" },
+        { stepId: "verification", role: "qa", index: 1, dependsOnStepIds: ["implementation"], objective: "Run tests" },
+      ],
+    };
+    const waiting = await service.runChatDelegation("sess-1", request);
+    expect(waiting.steps.map((step) => step.status)).toEqual(["running", "pending"]);
+    const running = steps.get(waiting.steps[0]!.stepId)!;
+    steps.set(running.stepId, {
+      ...running,
+      instructionSnapshot: undefined,
+      workResult: {
+        disposition: "scope_expansion",
+        summary: "Need test scope.",
+        changedFiles: [],
+        evidenceRefs: [],
+        scopeHash: "old-scope",
+        dispatchGeneration: "generation-1",
+        scopeExpansion: {
+          requestedPaths: ["apps/gateway"],
+          reason: "Need tests.",
+          scopeHash: "old-scope",
+          approvalId: "scope-approval-1",
+          requestedAt: "2026-07-11T00:00:00.000Z",
+          decision: "approved",
+          resolvedAt: "2026-07-11T00:00:01.000Z",
+        },
+      },
+    });
+    durableRuns.set("durable-legacy-child", buildPersistedChildDurableRun({
+      runId: "durable-legacy-child",
+      sessionId: running.childSessionId!,
+      workspaceId: "default",
+      identity: identity!,
+      request: frozenRequest!,
+    }));
+    traces.set(identity!.turnId, {
+      ...createIdentifiedChatResponse(running.childSessionId!, identity!).trace!,
+      durable: { runId: "durable-legacy-child", status: "completed" },
+    });
+    const sqlite = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    sqlite.chatDelegationRuns.create(runs.get(waiting.runId)!);
+    for (const persisted of steps.values()) sqlite.chatDelegationSteps.create(persisted);
+    sqlite.chatTurnTraces.create(traces.get(identity!.turnId)!);
+    const durableStorage = createSqliteAsyncStorage(sqlite);
+    const persistedService = new ChatDelegationService({
+      ...deps,
+      storage: {
+        ...deps.storage,
+        chatDelegationRuns: durableStorage.chatDelegationRuns,
+        chatDelegationSteps: durableStorage.chatDelegationSteps,
+        chatTurnTraces: durableStorage.chatTurnTraces,
+        runImmediateTransaction: durableStorage.runImmediateTransaction,
+      },
+    } as unknown as ChatDelegationServiceHost);
+    const resume = {
+      delegationRunId: waiting.runId,
+      stepId: running.stepId,
+      durableRunId: "durable-legacy-child",
+      childTurnId: identity!.turnId,
+      approvalId: "scope-approval-1",
+    };
+    await expect(persistedService.resumePersistedChatDelegation({ ...resume, approvalId: "another-approval" }))
+      .rejects.toBeInstanceOf(StaleDelegationScopeResumeError);
+    expect((await durableStorage.chatDelegationSteps.get(running.stepId)).status).toBe("running");
+    expect((await durableStorage.chatDelegationSteps.get(waiting.steps[1]!.stepId)).status).toBe("pending");
+
+    await expect(persistedService.resumePersistedChatDelegation(resume))
+      .rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
+    expect((await durableStorage.chatDelegationSteps.get(running.stepId)).status).toBe("completed");
+    expect((await durableStorage.chatDelegationSteps.get(waiting.steps[1]!.stepId)).status).toBe("failed");
+    expect((await durableStorage.chatDelegationRuns.get(waiting.runId)).status).toBe("partial");
+    expect(tasks.get(waiting.taskId)?.status).toBe("blocked");
+    expect(deps.taskLifecycleService.appendTaskActivity).toHaveBeenCalledWith(
+      waiting.taskId,
+      expect.objectContaining({
+        activityType: "diagnostic",
+        metadata: expect.objectContaining({ reason: "unverifiable_delegation_instructions" }),
+      }),
+    );
+    expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
+    await durableStorage.close();
+  });
+
+  it("fails an unowned legacy pre-admission plan but preserves an active dispatch owner", async () => {
+    const { deps, dispatchClaims, runs, service, steps, tasks } = createHarness();
+    const policyRunId = "durable-parent-legacy-preadmission";
+    const runId = buildStableTestDelegationId("delegation-run", "sess-1", policyRunId);
+    const taskId = buildStableTestDelegationId("delegation-task", runId);
+    const stepId = buildStableTestDelegationId("delegation-step", runId, "0", "coder");
+    const request = {
+      objective: "Patch the retry queue",
+      roles: ["coder"],
+      mode: "sequential" as const,
+      policyRunId,
+    };
+    runs.set(runId, {
+      runId,
+      parentRunId: policyRunId,
+      sessionId: "sess-1",
+      taskId,
+      objective: request.objective,
+      roles: ["coder"],
+      mode: "sequential",
+      status: "running",
+      citations: [],
+      startedAt: "2026-07-11T00:00:00.000Z",
+    });
+    tasks.set(taskId, { taskId, status: "in_progress" });
+    steps.set(stepId, createStepRecord({
+      stepId,
+      runId,
+      role: "coder",
+      index: 0,
+      status: "running",
+      startedAt: "2026-07-11T00:00:00.000Z",
+    }));
+    dispatchClaims.set(stepId, { token: "active-owner", expiresAt: "2026-07-11T01:00:00.000Z" });
+
+    await expect(service.runChatDelegation("sess-1", request)).rejects.toMatchObject(
+      conflictingPlan(/active child or dispatch owner/),
+    );
+    expect(steps.get(stepId)?.status).toBe("running");
+    expect(runs.get(runId)?.status).toBe("running");
+
+    dispatchClaims.set(stepId, { token: "expired-owner", expiresAt: "2026-07-10T23:00:00.000Z" });
+    await expect(service.runChatDelegation("sess-1", request))
+      .rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
+    expect(steps.get(stepId)?.status).toBe("failed");
+    expect(runs.get(runId)?.status).toBe("failed");
+    expect(tasks.get(taskId)?.status).toBe("blocked");
+    expect(deps.agentSendChatMessage).not.toHaveBeenCalled();
   });
 
   it("suggests delegation from the latest user message and falls back to default roles for blank explicit roles", async () => {
@@ -2471,6 +2782,7 @@ describe("ChatDelegationService loop 20 coverage", () => {
           stepId,
           runId: input.runId,
           role: "coder",
+          instructionSnapshot: { objective: "Patch the retry queue" },
           index: 0,
           parallelizable: false,
           dependsOnStepIds: [],
@@ -2508,6 +2820,7 @@ describe("ChatDelegationService loop 20 coverage", () => {
           stepId: "legacy-step-0",
           runId: input.runId,
           role: "coder",
+          instructionSnapshot: {},
           index: 0,
           parallelizable: false,
           dependsOnStepIds: [],
@@ -2584,6 +2897,120 @@ describe("ChatDelegationService loop 20 coverage", () => {
     expect((deps.agentSendChatMessage.mock.calls[1]?.[1] as ChatSendMessageRequest).content).toMatch(
       /^\[Subagent Task\] Review the chosen library\n/,
     );
+  });
+
+  it("rejects a stable replay that changes a pending step's frozen instructions", async () => {
+    const { deps, service } = createHarness();
+    deps.agentSendChatMessage = vi.fn(async (childSessionId: string): Promise<ChatSendMessageResponse> => {
+      const response = createChatResponse(childSessionId);
+      return deps.agentSendChatMessage.mock.calls.length === 1
+        ? { ...response, trace: { ...response.trace!, status: "waiting_for_approval", durable: { runId: `durable-${childSessionId}`, status: "waiting" } } }
+        : response;
+    }) as never;
+    const request = {
+      objective: "Implement and review the queue",
+      roles: ["coder", "qa"],
+      mode: "sequential" as const,
+      policyRunId: "durable-parent-frozen-step-instructions",
+      steps: [
+        { stepId: "implementation", role: "coder", objective: "Patch the queue" },
+        { stepId: "review", role: "qa", dependsOnStepIds: ["implementation"], objective: "Review the patch", expectedOutput: "A test report" },
+      ],
+    };
+    const waiting = await service.runChatDelegation("sess-1", request);
+    expect(waiting.steps.map((step) => step.status)).toEqual(["running", "pending"]);
+
+    await expect(new ChatDelegationService(deps).runChatDelegation("sess-1", {
+      ...request,
+      steps: [request.steps[0], { ...request.steps[1], objective: "Skip the review" }],
+    })).rejects.toMatchObject(conflictingPlan(/does not match the durable parent plan/));
+    expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers legacy fan-out instructions only from the exactly bound frozen invocation", async () => {
+    const { deps, fanoutInvocations, runs, service, steps } = createHarness();
+    deps.agentSendChatMessage = vi.fn(async (childSessionId: string): Promise<ChatSendMessageResponse> => {
+      const response = createChatResponse(childSessionId);
+      return {
+        ...response,
+        trace: {
+          ...response.trace!,
+          status: "waiting_for_approval",
+          durable: { runId: `durable-${childSessionId}`, status: "waiting" },
+        },
+      };
+    }) as never;
+    const invocationId = "chat-fanout-frozen-1";
+    const trimmedBoundaryObjective = "A".repeat(1_999);
+    const request = {
+      objective: trimmedBoundaryObjective,
+      roles: ["worker"],
+      mode: "parallel" as const,
+      policyRunId: "durable-parent-fanout-1",
+      steps: [{
+        stepId: "fanout-child-1",
+        index: 0,
+        role: "worker",
+        parallelizable: true,
+        objective: "Inspect retry behavior",
+        label: "Retry audit",
+        expectedOutput: "A concise risk list",
+      }],
+    };
+    const options = {
+      workflowTemplate: CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE,
+      executionPlanId: invocationId,
+      stableRunKey: invocationId,
+    };
+    const waiting = await service.runChatDelegation("sess-1", request, undefined, options);
+    expect(waiting.status).toBe("running");
+    const persistedStep = steps.get(waiting.steps[0]!.stepId)!;
+    steps.set(persistedStep.stepId, { ...persistedStep, instructionSnapshot: undefined });
+    const invocation: ChatFanoutInvocationRecord = {
+      invocationId,
+      parentRunId: request.policyRunId,
+      toolRunId: "tool-1",
+      delegationRunId: waiting.runId,
+      sessionId: "sess-1",
+      workspaceId: "default",
+      projectId: "project-1",
+      status: "waiting",
+      childCount: 1,
+      subtasks: [{ objective: "Inspect retry behavior", label: "Retry audit", expectedOutput: "A concise risk list" }],
+      grantId: "grant-1",
+      reservedActivations: 1,
+      reservedBudgetUsd: 0.25,
+      objective: `${trimmedBoundaryObjective} `,
+      projectBindingHash: "project-hash",
+      grantBindingHash: "grant-hash",
+      createdAt: "2026-07-11T00:00:00.000Z",
+      updatedAt: "2026-07-11T00:00:00.000Z",
+    };
+    fanoutInvocations.set(invocationId, invocation);
+
+    const recovered = await new ChatDelegationService(deps).runChatDelegation("sess-1", request, undefined, options);
+    expect(recovered.runId).toBe(waiting.runId);
+    await expect(service.runChatDelegation("sess-1", {
+      ...request,
+      steps: [{ ...request.steps[0]!, objective: "Do something different" }],
+    }, undefined, options)).rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
+    fanoutInvocations.set(invocationId, { ...invocation, delegationRunId: "another-delegation" });
+    await expect(service.runChatDelegation("sess-1", request, undefined, options))
+      .rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
+    fanoutInvocations.set(invocationId, { ...invocation, parentRunId: "another-parent" });
+    await expect(service.runChatDelegation("sess-1", request, undefined, options))
+      .rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
+    fanoutInvocations.set(invocationId, invocation);
+    const terminalStep = steps.get(persistedStep.stepId)!;
+    steps.set(terminalStep.stepId, {
+      ...terminalStep,
+      status: "completed",
+      output: "The retry queue is bounded.",
+      finishedAt: "2026-07-11T00:00:01.000Z",
+    });
+    runs.set(waiting.runId, { ...runs.get(waiting.runId)!, status: "completed" });
+    const terminalReplay = await service.runChatDelegation("sess-1", request, undefined, options);
+    expect(terminalReplay.status).toBe("completed");
   });
 
   it("fences delegated outputs as data and withholds one that matches the promptware filter", async () => {

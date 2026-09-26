@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ConflictError } from "@goatcitadel/contracts";
 import { chatRoutes } from "./chat.js";
 
 describe("chat message route-decision tails", () => {
@@ -151,13 +152,17 @@ describe("chat message route-decision tails", () => {
     });
     const retryChatTurn = vi.fn(async () => ({ turnId: "turn-retry", status: "queued" }));
     const editChatTurn = vi.fn(async () => ({ turnId: "turn-edit", status: "queued" }));
-    app = buildApp({
-      routePreflight,
-      agentSendChatMessage,
-      agentSendChatMessageStream,
-      retryChatTurn,
-      editChatTurn,
-    });
+    const assertCallerPolicyScope = vi.fn(async () => undefined);
+    app = buildApp(
+      {
+        routePreflight,
+        agentSendChatMessage,
+        agentSendChatMessageStream,
+        retryChatTurn,
+        editChatTurn,
+      },
+      { assertCallerPolicyScope },
+    );
 
     const send = await app.inject({
       method: "POST",
@@ -220,6 +225,48 @@ describe("chat message route-decision tails", () => {
     );
     expect(retryChatTurn).toHaveBeenCalledWith("sess-1", "turn-1", expect.objectContaining(governance), undefined);
     expect(editChatTurn).toHaveBeenCalledWith("sess-1", "turn-2", expect.objectContaining(governance), undefined);
+    expect(assertCallerPolicyScope).toHaveBeenCalledTimes(4);
+    for (const call of assertCallerPolicyScope.mock.calls as unknown[][]) {
+      expect(call).toEqual(["sess-1", { policyRunId: "run-release", policyTaskId: "task-release" }]);
+    }
+  });
+
+  it("rejects policy ids that do not belong to the session before any turn entry route acts", async () => {
+    const services = {
+      routePreflight: vi.fn(),
+      agentSendChatMessage: vi.fn(),
+      agentSendChatMessageStream: vi.fn(),
+      retryChatTurn: vi.fn(),
+      retryChatTurnStream: vi.fn(),
+      editChatTurn: vi.fn(),
+      editChatTurnStream: vi.fn(),
+    };
+    const assertCallerPolicyScope = vi.fn(async () => {
+      throw new ConflictError({ message: "policyRunId foreign-run does not belong to Chat session sess-1." });
+    });
+    app = buildApp(services, { assertCallerPolicyScope });
+    const foreign = { policyRunId: "foreign-run", policyTaskId: "foreign-task" };
+
+    for (const [url, payload] of [
+      ["/api/v1/chat/sessions/sess-1/agent-send", { content: "hi", ...foreign }],
+      ["/api/v1/chat/sessions/sess-1/agent-send/stream", { content: "hi", ...foreign }],
+      ["/api/v1/chat/sessions/sess-1/route-preflight", { action: "send", content: "hi", ...foreign }],
+      ["/api/v1/chat/sessions/sess-1/turns/turn-1/retry", { ...foreign }],
+      ["/api/v1/chat/sessions/sess-1/turns/turn-1/retry/stream", { ...foreign }],
+      ["/api/v1/chat/sessions/sess-1/turns/turn-1/edit", { content: "edited", ...foreign }],
+      ["/api/v1/chat/sessions/sess-1/turns/turn-1/edit/stream", { content: "edited", ...foreign }],
+    ] as const) {
+      const response = await app.inject({ method: "POST", url, payload });
+      expect(response.statusCode, url).toBe(409);
+      expect(response.json()).toMatchObject({
+        error: "policyRunId foreign-run does not belong to Chat session sess-1.",
+      });
+    }
+
+    expect(assertCallerPolicyScope).toHaveBeenCalledTimes(7);
+    for (const service of Object.values(services)) {
+      expect(service).not.toHaveBeenCalled();
+    }
   });
 
   it("rejects action, turn, invalid expiry, and route-preflight failures before mutating", async () => {
@@ -276,10 +323,13 @@ describe("chat message route-decision tails", () => {
   });
 });
 
-function buildApp(chatMessages: Record<string, unknown>): FastifyInstance {
+function buildApp(
+  chatMessages: Record<string, unknown>,
+  chatSupport: Record<string, unknown> = { assertCallerPolicyScope: vi.fn(async () => undefined) },
+): FastifyInstance {
   const next = Fastify();
   next.decorate("requireOperatorAuth", async () => undefined);
-  next.decorate("services", { chatMessages } as never);
+  next.decorate("services", { chatMessages, chatSupport } as never);
   void next.register(chatRoutes);
   return next;
 }

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ownershipPathEscapesRoot } from "./ownership-matrix.js";
 
 const ID_MAX_LENGTH = 256;
 const TEXT_MAX_LENGTH = 2048;
@@ -68,6 +69,15 @@ export const planSchema = z
           });
         }
         ownerIds.add(owner.agentId);
+        owner.paths.forEach((ownedPath, pathIndex) => {
+          if (ownershipPathEscapesRoot(ownedPath)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["waves", waveIndex, "ownership", ownerIndex, "paths", pathIndex],
+              message: `Ownership path ${ownedPath} must stay inside the repository root.`,
+            });
+          }
+        });
       });
 
       wave.phases.forEach((phase, phaseIndex) => {

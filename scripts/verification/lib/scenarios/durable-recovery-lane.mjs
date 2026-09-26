@@ -162,6 +162,21 @@ export async function runDurableRecoveryLane(context, _options = {}, deps) {
         "src/services/approval-resolution-effects-service.test.ts",
       ],
     },
+    {
+      id: "durable-recovery.gateway.orchestration-phase-parking-tests",
+      title: "Orchestration phases park the durable worker and wake from their child turn",
+      args: [
+        "--filter",
+        "@goatcitadel/gateway",
+        "exec",
+        "vitest",
+        "run",
+        "src/services/orchestration-lifecycle-service.test.ts",
+        "src/services/orchestration-phase-execution-service.test.ts",
+        "src/services/durable-child-watcher-service.test.ts",
+        "src/orchestration.integration.test.ts",
+      ],
+    },
   ];
 
   for (const command of commands) {

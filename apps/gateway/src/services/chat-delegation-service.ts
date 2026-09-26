@@ -12,6 +12,7 @@ import type {
   ChatDelegateSuggestResponse,
   ChatDelegationRunRecord,
   ChatDelegationStepRecord,
+  ChatFanoutInvocationRecord,
   ChatDelegationSuggestionRecord,
   ChatWorkspaceExplorerReport,
   ChatMode,
@@ -44,6 +45,7 @@ import {
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 import { scanPromptwareContent, type PromptwareRuleId } from "./assembled-prompt-injection-guard.js";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
+import { CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE } from "./chat-durable-fanout-service.js";
 import { buildDeterministicAgentDurableRunId } from "./chat-turn-entry-service.js";
 import type { ChildTimeoutLateSettleEvent } from "./subagent-budget-enforcer.js";
 import {
@@ -77,6 +79,25 @@ const EXPLORER_RECONCILIATION_POLL_MS = 25;
 
 export { READ_ONLY_EXPLORER_PERMISSION_PROFILE_ID } from "./workspace-explorer-path-projection.js";
 export const READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE = "read_only_workspace_explorer";
+
+/** A legacy row has no trustworthy per-step instructions unless another frozen plan proves them. */
+export class UnverifiableDelegationInstructionsError extends ConflictError {
+  public constructor() {
+    super({
+      message: "Persisted delegation cannot resume because its frozen step instructions are unavailable.",
+      details: { reason: "unverifiable_delegation_instructions" },
+    });
+  }
+}
+
+export class StaleDelegationScopeResumeError extends ConflictError {
+  public constructor() {
+    super({
+      message: "Delegation scope resume no longer matches its approved child binding.",
+      details: { reason: "stale_delegation_scope_resume" },
+    });
+  }
+}
 export const READ_ONLY_EXPLORER_ALLOWED_TOOLS = [
   "fs.read",
   "fs.list",
@@ -264,6 +285,7 @@ interface PersistedDelegationResumeAuthority {
   durableRunId: string;
   childSessionId: string;
   childTurnId: string;
+  approvalId?: string;
   workspaceId: string;
   request: ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext };
   dispatchAcquired?: boolean;
@@ -312,6 +334,9 @@ class DelegationDurableLaunchRecoveryRequiredError extends Error {
 
 export interface ChatDelegationServiceHost {
   storage: {
+    chatFanoutInvocations?: {
+      get(invocationId: string): Promise<ChatFanoutInvocationRecord>;
+    };
     chatSessionPrefs: {
       ensure(sessionId: string): Promise<ChatSessionPrefsRecord>;
     };
@@ -478,6 +503,15 @@ export interface ChatDelegationServiceHost {
         summary?: string;
         error: string;
         failureGuidance?: string;
+        finishedAt: string;
+        durationMs: number;
+      }): Promise<ChatDelegationStepRecord | undefined>;
+      failUnownedPreAdmission(input: {
+        stepId: string;
+        runId: string;
+        summary: string;
+        error: string;
+        failureGuidance: string;
         finishedAt: string;
         durationMs: number;
       }): Promise<ChatDelegationStepRecord | undefined>;
@@ -906,6 +940,8 @@ export class ChatDelegationService {
     delegationRunId: string;
     stepId: string;
     durableRunId: string;
+    approvalId?: string;
+    childTurnId?: string;
   }): Promise<ChatDelegateResponse & { reenteredPersistedStep: boolean }> {
     const persisted = await this.deps.storage.chatDelegationRuns.get(input.delegationRunId);
     if (!persisted.parentRunId?.trim()) {
@@ -919,10 +955,12 @@ export class ChatDelegationService {
       resumeStep.status !== "running" ||
       resumeStep.durableRunId !== input.durableRunId ||
       !resumeStep.childSessionId ||
-      !resumeStep.childTurnId
+      !resumeStep.childTurnId ||
+      (input.childTurnId !== undefined && input.childTurnId !== resumeStep.childTurnId)
     ) {
-      throw new Error(`Delegation scope resume ${input.stepId} has no exact active child binding.`);
+      throw new StaleDelegationScopeResumeError();
     }
+    assertDelegationScopeResumeApproval(resumeStep, input.approvalId);
     const childRun = await this.deps.getDurableRun(input.durableRunId);
     const authority = childRun
       ? readDurableChatTurnExecutionPayloadAuthority({
@@ -944,7 +982,11 @@ export class ChatDelegationService {
       authority.request.policyRunId !== persisted.runId ||
       authority.request.policyTaskId !== persisted.taskId
     ) {
-      throw new Error(`Delegation scope resume ${input.stepId} durable authority does not match its persisted step.`);
+      throw new StaleDelegationScopeResumeError();
+    }
+    if (persistedSteps.some((step) => !step.instructionSnapshot)) {
+      await settleUnverifiableLegacyDelegation(this.deps, persisted, resumeStep, childRun!, input);
+      throw new UnverifiableDelegationInstructionsError();
     }
     const request = restorePersistedDelegationRequest(authority.request, authority.requestActor);
     const persistedResume: PersistedDelegationResumeAuthority = {
@@ -953,6 +995,7 @@ export class ChatDelegationService {
       durableRunId: input.durableRunId,
       childSessionId: resumeStep.childSessionId,
       childTurnId: resumeStep.childTurnId,
+      approvalId: input.approvalId,
       workspaceId: authority.workspaceId,
       request,
     };
@@ -970,6 +1013,7 @@ export class ChatDelegationService {
           role: step.role,
           parallelizable: Boolean(step.parallelizable),
           dependsOnStepIds: [...(step.dependsOnStepIds ?? [])],
+          ...step.instructionSnapshot,
         })),
         operatorId: request.operatorId,
         authActorId: request.authActorId,
@@ -1196,6 +1240,15 @@ export class ChatDelegationService {
     const normalizedRequestedSteps = stablePolicyRunId
       ? stabilizeDelegationPlan(runId, requestedDelegationSteps)
       : requestedDelegationSteps;
+    if (stableParentRun) {
+      existingSteps = await recoverLegacyFanoutInstructions(
+        deps,
+        stableParentRun,
+        existingSteps,
+        normalizedRequestedSteps,
+        sessionWorkspaceId,
+      );
+    }
     let delegationSteps = rebuildResumableDelegationPlan(existingSteps, normalizedRequestedSteps);
     let frozenExplorerScope = explorerProfile ? existingSteps[0]?.scopeControl : undefined;
     if (explorerProfile && stableParentRun && !frozenExplorerScope) {
@@ -1226,6 +1279,7 @@ export class ChatDelegationService {
         stableParentRun.runId,
         stableParentRun.taskId,
         normalizedRequestedSteps,
+        sessionWorkspaceId,
       );
       if (terminalReplay.kind === "terminal") {
         if (terminalReplay.committedAggregate) {
@@ -1260,6 +1314,13 @@ export class ChatDelegationService {
       }
       repairStableParentBeforeDispatch = true;
       existingSteps = await deps.storage.chatDelegationSteps.listByRun(runId);
+      existingSteps = await recoverLegacyFanoutInstructions(
+        deps,
+        stableParentRun,
+        existingSteps,
+        normalizedRequestedSteps,
+        sessionWorkspaceId,
+      );
       delegationSteps = rebuildResumableDelegationPlan(existingSteps, normalizedRequestedSteps);
     }
     let stages = buildDelegationStages(delegationSteps);
@@ -1349,6 +1410,7 @@ export class ChatDelegationService {
           status: "pending",
           parallelizable: step.parallelizable,
           dependsOnStepIds: step.dependsOnStepIds,
+          instructionSnapshot: delegationStepInstructions(step),
           ...(explorerProfile && step.index === 0 ? { scopeControl: frozenExplorerScope } : {}),
           startedAt: plannedAt,
         });
@@ -1375,6 +1437,13 @@ export class ChatDelegationService {
       }
       stableParentRun = concurrentRun;
       existingSteps = await deps.storage.chatDelegationSteps.listByRun(runId);
+      existingSteps = await recoverLegacyFanoutInstructions(
+        deps,
+        stableParentRun,
+        existingSteps,
+        normalizedRequestedSteps,
+        sessionWorkspaceId,
+      );
       const winningPlan = rebuildResumableDelegationPlan(existingSteps, normalizedRequestedSteps);
       // The task lists its child runs by this call's step ids, so a winner that
       // persisted other ids cannot be adopted; its own call runs that plan.
@@ -1528,14 +1597,38 @@ export class ChatDelegationService {
         await options.preDispatchGuard?.({ stepId: step.stepId, index: step.index, role: step.role });
         throwIfChatDelegationAborted(options.abortSignal);
         enforceMaxDepth({ depth: childDepth, maxDepth: subagentDefaults.maxDepth });
-        const dispatchLease = await acquireDelegationDispatchLease(deps, {
+        const dispatchInput = {
           stepId: step.stepId,
           turnIdentity,
           startedAt,
           leaseDurationMs: explorerProfile
             ? EXPLORER_PRE_ADMISSION_LEASE_MS
             : Math.max(60_000, (childTimeoutSeconds + 60) * 1000),
-        });
+        };
+        const dispatchLease = options.persistedResume
+          ? await deps.storage.runImmediateTransaction(async () => {
+              const resume = options.persistedResume!;
+              const lockedSteps = await deps.storage.chatDelegationSteps.listByRunForUpdate(resume.runId);
+              const current = lockedSteps.find((candidate) => candidate.stepId === resume.stepId);
+              if (
+                !current || current.runId !== resume.runId ||
+                current.childSessionId !== resume.childSessionId ||
+                current.childTurnId !== resume.childTurnId ||
+                current.durableRunId !== resume.durableRunId
+              ) {
+                throw new StaleDelegationScopeResumeError();
+              }
+              if (current.status === "running") {
+                assertDelegationScopeResumeApproval(current, resume.approvalId);
+              } else if (
+                !resume.dispatchAcquired ||
+                (current.status !== "completed" && current.status !== "failed" && current.status !== "cancelled")
+              ) {
+                throw new StaleDelegationScopeResumeError();
+              }
+              return await acquireDelegationDispatchLease(deps, dispatchInput);
+            })
+          : await acquireDelegationDispatchLease(deps, dispatchInput);
         if (!dispatchLease) {
           const current = await deps.storage.chatDelegationSteps.get(step.stepId);
           return {
@@ -2215,6 +2308,9 @@ export class ChatDelegationService {
           completed: !incomplete && !waiting,
         };
       } catch (error) {
+        if (error instanceof StaleDelegationScopeResumeError) {
+          throw error;
+        }
         if (isAuthoritativeModelUsageAccountingError(error)) {
           const authoritativeTimeout = error instanceof SubagentBudgetError && error.code === "timeout_exceeded";
           timeoutFailureFenceState = authoritativeTimeout ? "won" : "lost";
@@ -2818,6 +2914,14 @@ export class ChatDelegationService {
   }
 }
 
+function assertDelegationScopeResumeApproval(step: ChatDelegationStepRecord, approvalId?: string): void {
+  const expansion = step.workResult?.scopeExpansion;
+  if (approvalId === undefined && expansion === undefined) return;
+  if (!approvalId || expansion?.approvalId !== approvalId || expansion?.decision !== "approved") {
+    throw new StaleDelegationScopeResumeError();
+  }
+}
+
 interface DelegationAggregateCommitResult {
   persistedSteps: ChatDelegationStepRecord[];
   stitchedOutput: string;
@@ -2839,6 +2943,161 @@ interface DelegationAggregateLocks {
   subagent?: TaskSubagentSession;
 }
 
+async function settleUnverifiableLegacyDelegation(
+  deps: ChatDelegationServiceHost,
+  run: ChatDelegationRunRecord,
+  step: ChatDelegationStepRecord,
+  childRun: DurableRunRecord,
+  input: {
+    delegationRunId: string;
+    stepId: string;
+    durableRunId: string;
+    approvalId?: string;
+    childTurnId?: string;
+  },
+): Promise<void> {
+  if (!isDurableRunTerminal(childRun.status)) {
+    throw new Error("Delegated child has not reached a terminal durable state.");
+  }
+  const trace = await deps.storage.chatTurnTraces.get(step.childTurnId!);
+  const childStatus = trace.status === "completed"
+    ? "completed" as const
+    : trace.status === "cancelled"
+      ? "cancelled" as const
+      : trace.status === "failed" || trace.status === "partial"
+        ? "failed" as const
+        : undefined;
+  if (!childStatus) {
+    throw new Error("Delegated child terminal trace is not yet available.");
+  }
+  if (
+    trace.turnId !== step.childTurnId ||
+    trace.sessionId !== step.childSessionId ||
+    trace.durable?.runId !== childRun.runId ||
+    trace.userMessageId !== buildStableDelegationTurnIdentity(run.runId, step.stepId).userMessageId
+  ) {
+    throw new StaleDelegationScopeResumeError();
+  }
+  const finishedAt = trace.finishedAt ?? await deps.storage.chatDelegationSteps.readDatabaseNow();
+  const error = "Delegation cannot dispatch remaining steps because its frozen step instructions are unavailable.";
+  const committed = await deps.storage.runImmediateTransaction(async () => {
+    const locks = await lockDelegationAggregateTruth(deps, run.runId, run.taskId);
+    const current = locks.persistedSteps.find((candidate) => candidate.stepId === step.stepId);
+    const approval = current?.workResult?.scopeExpansion;
+    if (
+      locks.parent.runId !== input.delegationRunId ||
+      !current || current.runId !== run.runId || current.status !== "running" ||
+      current.childSessionId !== step.childSessionId ||
+      current.childTurnId !== step.childTurnId ||
+      current.durableRunId !== input.durableRunId ||
+      (input.childTurnId !== undefined && current.childTurnId !== input.childTurnId) ||
+      (input.approvalId !== undefined && approval?.approvalId !== input.approvalId) ||
+      (approval !== undefined && approval.decision !== "approved") ||
+      (input.approvalId !== undefined && approval === undefined) ||
+      await deps.storage.chatDelegationSteps.getDispatchClaim(current.stepId)
+    ) {
+      throw new StaleDelegationScopeResumeError();
+    }
+    const settled = await deps.storage.chatDelegationSteps.materializeDurableOutcome({
+      stepId: current.stepId,
+      expectedChildSessionId: current.childSessionId!,
+      expectedChildTurnId: current.childTurnId!,
+      expectedDurableRunId: input.durableRunId,
+      status: childStatus,
+      ...(current.output ? { output: current.output } : {}),
+      summary: childStatus === "completed" ? "Delegated child completed." : "Delegated child ended.",
+      ...(childStatus !== "completed"
+        ? {
+            error: trace.failure?.message?.slice(0, 500) || "Delegated child did not complete.",
+            failureGuidance: buildDelegationFailureGuidance(error, current.role),
+          }
+        : {}),
+      citations: trace.citations ?? [],
+      finishedAt,
+    });
+    if (settled.outcome !== "applied") {
+      throw new StaleDelegationScopeResumeError();
+    }
+    for (const pending of locks.persistedSteps) {
+      if (pending.status !== "pending") continue;
+      await deps.storage.chatDelegationSteps.finishUnclaimedPendingWithError({
+        stepId: pending.stepId,
+        status: "failed",
+        label: pending.role,
+        summary: "Delegation could not resume.",
+        error,
+        failureGuidance: "Start a new delegation with a freshly admitted plan.",
+        finishedAt,
+        durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(pending.startedAt)),
+      });
+    }
+    const aggregate = await persistDelegationAggregateFromLockedTruth(
+      deps,
+      { runId: run.runId, taskId: run.taskId, trace: run.trace, observedAt: finishedAt },
+      locks,
+    );
+    const activity = await deps.taskLifecycleService.persistDelegationActivity(
+      run.taskId,
+      {
+        activityType: "diagnostic",
+        message: error,
+        metadata: { runId: run.runId, stepId: step.stepId, reason: "unverifiable_delegation_instructions" },
+      },
+      finishedAt,
+    );
+    return { aggregate, activity };
+  });
+  await publishDelegationAggregateCommit(deps, committed.aggregate);
+  await publishDelegationPostCommitSafely("legacy delegation diagnostic", () =>
+    deps.taskLifecycleService.publishDelegationActivity(committed.activity));
+}
+
+async function settleUnverifiableLegacyPreAdmission(
+  deps: ChatDelegationServiceHost,
+  run: ChatDelegationRunRecord,
+): Promise<void> {
+  const error = "Delegation cannot dispatch because its frozen step instructions are unavailable.";
+  const finishedAt = await deps.storage.chatDelegationSteps.readDatabaseNow();
+  const committed = await deps.storage.runImmediateTransaction(async () => {
+    const locks = await lockDelegationAggregateTruth(deps, run.runId, run.taskId);
+    const unfinished = locks.persistedSteps.filter((step) => step.status === "pending" || step.status === "running");
+    if (unfinished.length === 0) return undefined;
+    for (const step of unfinished) {
+      const failed = await deps.storage.chatDelegationSteps.failUnownedPreAdmission({
+        stepId: step.stepId,
+        runId: run.runId,
+        summary: "Delegation could not resume.",
+        error,
+        failureGuidance: "Start a new delegation with a freshly admitted plan.",
+        finishedAt,
+        durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(step.startedAt)),
+      });
+      if (!failed) {
+        throw new ConflictError({ message: "Persisted delegation still has an active child or dispatch owner." });
+      }
+    }
+    const aggregate = await persistDelegationAggregateFromLockedTruth(
+      deps,
+      { runId: run.runId, taskId: run.taskId, trace: run.trace, observedAt: finishedAt },
+      locks,
+    );
+    const activity = await deps.taskLifecycleService.persistDelegationActivity(
+      run.taskId,
+      {
+        activityType: "diagnostic",
+        message: error,
+        metadata: { runId: run.runId, reason: "unverifiable_delegation_instructions" },
+      },
+      finishedAt,
+    );
+    return { aggregate, activity };
+  });
+  if (!committed) return;
+  await publishDelegationAggregateCommit(deps, committed.aggregate);
+  await publishDelegationPostCommitSafely("legacy delegation diagnostic", () =>
+    deps.taskLifecycleService.publishDelegationActivity(committed.activity));
+}
+
 type StableTerminalDelegationReplay =
   | { kind: "resume" }
   | {
@@ -2854,10 +3113,18 @@ async function resolveStableTerminalDelegationReplay(
   runId: string,
   taskId: string,
   requestedSteps: readonly NormalizedDelegationStep[],
+  workspaceId: string,
 ): Promise<StableTerminalDelegationReplay> {
   return await deps.storage.runImmediateTransaction(async () => {
     const locks = await lockDelegationAggregateTruth(deps, runId, taskId);
-    rebuildResumableDelegationPlan(locks.persistedSteps, requestedSteps);
+    const verifiedSteps = await recoverLegacyFanoutInstructions(
+      deps,
+      locks.parent,
+      locks.persistedSteps,
+      requestedSteps,
+      workspaceId,
+    );
+    rebuildResumableDelegationPlan(verifiedSteps, requestedSteps);
     const projection = deriveDelegationAggregate(locks.persistedSteps);
     if (projection.status === "running") {
       return { kind: "resume" };
@@ -3781,6 +4048,76 @@ async function attachDelegationChildWatcher(
   });
 }
 
+async function recoverLegacyFanoutInstructions(
+  deps: ChatDelegationServiceHost,
+  run: ChatDelegationRunRecord,
+  persistedSteps: ChatDelegationStepRecord[],
+  requestedSteps: readonly NormalizedDelegationStep[],
+  workspaceId: string,
+): Promise<ChatDelegationStepRecord[]> {
+  if (persistedSteps.every((step) => step.instructionSnapshot)) {
+    return persistedSteps;
+  }
+  if (
+    run.workflowTemplate !== CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE ||
+    !run.executionPlanId ||
+    !deps.storage.chatFanoutInvocations
+  ) {
+    await settleUnverifiableLegacyPreAdmission(deps, run);
+    throw new UnverifiableDelegationInstructionsError();
+  }
+  let invocation: ChatFanoutInvocationRecord;
+  try {
+    invocation = await deps.storage.chatFanoutInvocations.get(run.executionPlanId);
+  } catch {
+    throw new UnverifiableDelegationInstructionsError();
+  }
+  if (
+    invocation.invocationId !== run.executionPlanId ||
+    invocation.delegationRunId !== run.runId ||
+    invocation.parentRunId !== run.parentRunId ||
+    invocation.sessionId !== run.sessionId ||
+    invocation.workspaceId !== workspaceId ||
+    invocation.objective.trim() !== run.objective ||
+    run.mode !== "parallel" ||
+    run.roles.length !== 1 || run.roles[0] !== "worker" ||
+    invocation.childCount !== invocation.subtasks.length ||
+    invocation.childCount !== requestedSteps.length ||
+    persistedSteps.length > invocation.childCount
+  ) {
+    throw new UnverifiableDelegationInstructionsError();
+  }
+  const frozenByIndex = invocation.subtasks.map((subtask, index) => {
+    const frozen = delegationStepInstructions({
+      objective: subtask.objective.trim(),
+      label: subtask.label?.trim(),
+      expectedOutput: subtask.expectedOutput?.trim(),
+    });
+    const requested = requestedSteps[index];
+    const expectedStepId = buildStableDelegationId("delegation-step", run.runId, String(index), "worker");
+    if (
+      !requested || requested.index !== index || requested.stepId !== expectedStepId ||
+      requested.role !== "worker" || !requested.parallelizable || requested.dependsOnStepIds.length !== 0 ||
+      !sameDelegationStepInstructions(frozen, delegationStepInstructions(requested))
+    ) {
+      throw new UnverifiableDelegationInstructionsError();
+    }
+    return frozen;
+  });
+  return persistedSteps.map((step) => {
+    const frozen = frozenByIndex[step.index];
+    const expectedStepId = buildStableDelegationId("delegation-step", run.runId, String(step.index), "worker");
+    if (
+      !frozen || step.stepId !== expectedStepId || step.role !== "worker" ||
+      !step.parallelizable || (step.dependsOnStepIds?.length ?? 0) !== 0 ||
+      (step.instructionSnapshot && !sameDelegationStepInstructions(step.instructionSnapshot, frozen))
+    ) {
+      throw new UnverifiableDelegationInstructionsError();
+    }
+    return step.instructionSnapshot ? step : { ...step, instructionSnapshot: frozen };
+  });
+}
+
 function rebuildResumableDelegationPlan(
   existingSteps: readonly ChatDelegationStepRecord[],
   requestedSteps: readonly NormalizedDelegationStep[],
@@ -3802,7 +4139,8 @@ function rebuildResumableDelegationPlan(
       !requested ||
       requested.index !== step.index ||
       requested.role !== step.role ||
-      requested.parallelizable !== Boolean(step.parallelizable)
+      requested.parallelizable !== Boolean(step.parallelizable) ||
+      !sameDelegationStepInstructions(step.instructionSnapshot, delegationStepInstructions(requested))
     ) {
       throw new ConflictError({
         message: `Persisted delegation step ${step.stepId} does not match the durable parent plan.`,
@@ -3851,14 +4189,39 @@ function rebuildResumableDelegationPlan(
       const dependencyIndex = requestedIndexById.get(dependencyId);
       return dependencyIndex === undefined ? dependencyId : (actualIdByIndex.get(dependencyIndex) ?? dependencyId);
     });
-    // Only the id and dependencies come from the persisted step; the request
-    // keeps its per-step instructions (objective, label, expected output).
+    // The persisted snapshot is authoritative. A legacy row has no provable
+    // instructions, so the comparison above must reject its replay.
     return {
       ...requested,
+      ...persisted?.instructionSnapshot,
       stepId: persisted?.stepId ?? requested.stepId,
       dependsOnStepIds: dedupeStrings(persisted ? (persisted.dependsOnStepIds ?? []) : requestedDependencies),
     };
   });
+}
+
+function delegationStepInstructions(
+  step: Pick<NormalizedDelegationStep, "objective" | "label" | "expectedOutput">,
+): NonNullable<ChatDelegationStepRecord["instructionSnapshot"]> {
+  return {
+    ...(step.objective ? { objective: step.objective } : {}),
+    ...(step.label ? { label: step.label } : {}),
+    ...(step.expectedOutput ? { expectedOutput: step.expectedOutput } : {}),
+  };
+}
+
+function sameDelegationStepInstructions(
+  persisted: ChatDelegationStepRecord["instructionSnapshot"],
+  requested: NonNullable<ChatDelegationStepRecord["instructionSnapshot"]>,
+): boolean {
+  // Pre-migration rows cannot prove their original instructions, including
+  // whether they were originally blank. Never infer a fresh plan from them.
+  if (!persisted) {
+    return false;
+  }
+  return persisted.objective === requested.objective &&
+    persisted.label === requested.label &&
+    persisted.expectedOutput === requested.expectedOutput;
 }
 
 function buildDelegationStitchedOutput(steps: readonly ChatDelegationStepRecord[]): string {

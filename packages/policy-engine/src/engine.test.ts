@@ -5040,6 +5040,39 @@ describe("ToolPolicyEngine outside-root read access", () => {
 });
 
 describe("ToolPolicyEngine scoped mutation gating", () => {
+  it("keeps fs.patch approval-governed and lets an explicit denial win", async () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockResolvedValue([{
+      grantId: "allow-patch",
+      toolPattern: "fs.patch",
+      decision: "allow",
+      scope: "session",
+      scopeRef: "session-1",
+      grantType: "persistent",
+      createdBy: "test",
+      createdAt: new Date().toISOString(),
+    }]);
+    const request = {
+      toolName: "fs.patch",
+      args: { path: "./workspace/output.txt", expectedSha256: "a".repeat(64), oldText: "old", newText: "new" },
+      agentId: "agent",
+      sessionId: "session-1",
+    };
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+    expect(await engine.evaluateAccess(request)).toMatchObject({ allowed: true, requiresApproval: true });
+    vi.mocked(storage.toolGrants.list).mockResolvedValue([{
+      grantId: "deny-patch",
+      toolPattern: "fs.patch",
+      decision: "deny",
+      scope: "session",
+      scopeRef: "session-1",
+      grantType: "persistent",
+      createdBy: "test",
+      createdAt: new Date().toISOString(),
+    }]);
+    expect(await engine.evaluateAccess(request)).toMatchObject({ allowed: false });
+  });
+
   it("treats task-scoped grants as first mutation per task instead of per session", async () => {
     const storage = createStorageStub();
     vi.mocked(storage.toolGrants.list).mockImplementation(async (scope, scopeRef) => {

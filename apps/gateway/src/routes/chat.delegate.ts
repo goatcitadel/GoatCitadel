@@ -10,7 +10,7 @@ import {
 import { projectPublicErrorValue } from "../services/public-secret-projection.js";
 import { projectWorkspaceExplorerText } from "../services/workspace-explorer-path-projection.js";
 import { sendRouteError } from "./_error-handler.js";
-import { sessionParamsSchema, getPublicChatSseErrorMessage } from "./chat.shared.js";
+import { sessionParamsSchema, getPublicChatSseErrorMessage, rejectUnboundChatPolicyScope } from "./chat.shared.js";
 import { writeSseChunk, writeSsePayload } from "./sse-writer.js";
 
 const delegateStepSchema = z.object({
@@ -103,6 +103,9 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
         },
       });
     }
+    if (await rejectUnboundChatPolicyScope(fastify, request, reply, params.data.sessionId, body.data)) {
+      return reply;
+    }
     try {
       return reply.send(
         projectChatDelegateResponseForPublic(
@@ -127,6 +130,9 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
           body: body.success ? undefined : body.error.flatten(),
         },
       });
+    }
+    if (await rejectUnboundChatPolicyScope(fastify, request, reply, params.data.sessionId, body.data)) {
+      return reply;
     }
 
     const raw = reply.raw;
@@ -326,6 +332,9 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
           body: body.success ? undefined : body.error.flatten(),
         },
       });
+    }
+    if (await rejectUnboundChatPolicyScope(fastify, request, reply, params.data.sessionId, body.data)) {
+      return reply;
     }
     try {
       return reply.send(

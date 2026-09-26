@@ -9,6 +9,7 @@ import * as chatGeneratedArtifactService from "./chat-generated-artifact-service
 import * as chatHistoryService from "./chat-history-service.js";
 import * as chatMessageRouteRuntime from "./chat-message-route-runtime.js";
 import * as chatSessionService from "./chat-session-service.js";
+import { assertCallerPolicyScopeBound } from "./chat-policy-scope-service.js";
 import {
   buildWorkspaceExplorerReport,
   isReadOnlyWorkspaceExplorerRun,
@@ -745,6 +746,9 @@ export function composeChatRouteDependencies(
           handleChatGoalSetRequest({ sessionId, body, chatSessionMeta: gateway.storage.chatSessionMeta }),
         clearChatSessionGoal: (sessionId, expectedRevision) =>
           handleChatGoalClearRequest({ sessionId, expectedRevision, chatSessionMeta: gateway.storage.chatSessionMeta }),
+      },
+      policyScope: {
+        assertCallerPolicyScope: (sessionId, scope) => assertCallerPolicyScopeBound(gateway.storage, sessionId, scope),
       },
     },
     chatTools,

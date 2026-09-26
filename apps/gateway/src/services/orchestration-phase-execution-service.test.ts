@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,16 +6,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ChatSendMessageResponse,
   ChatSessionRecord,
+  ChatTurnTraceRecord,
   DurableRunRecord,
   OrchestrationPhase,
   OrchestrationPlan,
   OrchestrationRun,
 } from "@goatcitadel/contracts";
-import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execution-service.js";
+import {
+  buildOrchestrationPhaseTurnIdentity,
+  OrchestrationPhaseExecutionService,
+  type OrchestrationPhaseExecutionServiceDeps,
+} from "./orchestration-phase-execution-service.js";
 
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -224,13 +231,15 @@ describe("OrchestrationPhaseExecutionService", () => {
       onChildDispatched: (dispatch) => dispatches.push(dispatch),
     });
 
+    const childTurnId = buildOrchestrationPhaseTurnIdentity("run-1", "phase-1").turnId;
     expect(result.status).toBe("completed");
-    // First breadcrumb: session known before dispatch, run id not yet known.
-    expect(dispatches[0]).toEqual({ phaseId: "phase-1", childSessionId: "child-session-1" });
+    // First breadcrumb: session and deterministic turn known before dispatch, run id not yet known.
+    expect(dispatches[0]).toEqual({ phaseId: "phase-1", childSessionId: "child-session-1", childTurnId });
     // Second breadcrumb: durable child run id surfaced the instant it is created.
     expect(dispatches[1]).toEqual({
       phaseId: "phase-1",
       childSessionId: "child-session-1",
+      childTurnId,
       childRunId: "child-run-1",
     });
   });
@@ -267,7 +276,7 @@ describe("OrchestrationPhaseExecutionService", () => {
     });
   });
 
-  it("maps child approval waits to waiting phase results", async () => {
+  it("maps a child waiting on an approval to a phase that waits on the child, not the approval", async () => {
     const worktreePath = await makeTempDir();
     const service = new OrchestrationPhaseExecutionService({
       rootDir: worktreePath,
@@ -317,12 +326,13 @@ describe("OrchestrationPhaseExecutionService", () => {
       childSessionId: "child-session-1",
       childTurnId: "turn-approval",
       childRunId: "child-run-approval",
-      approvalId: "approval-phase-1",
-      outputSummary: "Tool approval required.",
     });
+    // The operator resolves the approval in Chat; the parent only waits for the child to settle.
+    expect(result.approvalId).toBeUndefined();
+    expect(result.outputSummary).toBeUndefined();
   });
 
-  it("maps child user-input waits to failed phase results until parent wake support exists", async () => {
+  it("fails a phase whose child turn stops for user input orchestration cannot answer", async () => {
     const worktreePath = await makeTempDir();
     const service = new OrchestrationPhaseExecutionService({
       rootDir: worktreePath,
@@ -527,6 +537,180 @@ describe("OrchestrationPhaseExecutionService", () => {
     );
   });
 
+  it.skipIf(process.platform === "win32")(
+    "refuses a phase spec symlink that points outside the orchestration workspace",
+    async () => {
+      const worktreePath = await makeTempDir();
+      const outsideDir = await makeTempDir();
+      await fs.writeFile(path.join(outsideDir, "secret.txt"), "outside secret", "utf8");
+      await fs.symlink(path.join(outsideDir, "secret.txt"), path.join(worktreePath, "spec.md"));
+      const agentSendChatMessage = vi.fn(
+        async () =>
+          ({
+            sessionId: "child-session-1",
+            userMessage: {} as never,
+            assistantMessage: { content: "done" } as never,
+            transport: "llm",
+            turnId: "turn-1",
+            trace: { status: "completed" } as never,
+          }) as ChatSendMessageResponse,
+      );
+      const service = new OrchestrationPhaseExecutionService({
+        rootDir: worktreePath,
+        createChatSession: vi.fn(() => ({ sessionId: "child-session-1" }) as ChatSessionRecord),
+        updateChatSessionPrefs: vi.fn(),
+        agentSendChatMessage,
+        normalizeWorkspaceId: (workspaceId) => workspaceId,
+      });
+
+      await service.execute({
+        plan: buildPlan(),
+        run: buildRun(worktreePath),
+        phase: buildPhase(),
+        durableRun: buildDurableRun(),
+      });
+
+      const sentPrompt = agentSendChatMessage.mock.calls[0]?.[1].content ?? "";
+      expect(sentPrompt).toContain("Spec path spec.md resolves outside the orchestration workspace and was not read.");
+      expect(sentPrompt).not.toContain("outside secret");
+    },
+  );
+
+  it("reads a phase spec reached through a symlink that stays inside the workspace", async () => {
+    const worktreePath = await makeTempDir();
+    await fs.mkdir(path.join(worktreePath, "specs"));
+    await fs.writeFile(path.join(worktreePath, "specs", "real.md"), "Inside spec.", "utf8");
+    await fs.symlink(path.join(worktreePath, "specs", "real.md"), path.join(worktreePath, "spec.md"));
+    const agentSendChatMessage = vi.fn(
+      async () =>
+        ({
+          sessionId: "child-session-1",
+          userMessage: {} as never,
+          assistantMessage: { content: "done" } as never,
+          transport: "llm",
+          turnId: "turn-1",
+          trace: { status: "completed" } as never,
+        }) as ChatSendMessageResponse,
+    );
+    const service = new OrchestrationPhaseExecutionService({
+      rootDir: worktreePath,
+      createChatSession: vi.fn(() => ({ sessionId: "child-session-1" }) as ChatSessionRecord),
+      updateChatSessionPrefs: vi.fn(),
+      agentSendChatMessage,
+      normalizeWorkspaceId: (workspaceId) => workspaceId,
+    });
+
+    await service.execute({
+      plan: buildPlan(),
+      run: buildRun(worktreePath),
+      phase: buildPhase(),
+      durableRun: buildDurableRun(),
+    });
+
+    expect(agentSendChatMessage.mock.calls[0]?.[1].content).toContain("Phase spec:\nInside spec.");
+  });
+
+  describe.skipIf(process.platform === "win32")("phase spec reads racing a workspace change", () => {
+    async function executeWithSpec(worktreePath: string): Promise<string> {
+      const agentSendChatMessage = vi.fn(
+        async () =>
+          ({
+            sessionId: "child-session-1",
+            userMessage: {} as never,
+            assistantMessage: { content: "done" } as never,
+            transport: "llm",
+            turnId: "turn-1",
+            trace: { status: "completed" } as never,
+          }) as ChatSendMessageResponse,
+      );
+      const service = new OrchestrationPhaseExecutionService({
+        rootDir: worktreePath,
+        createChatSession: vi.fn(() => ({ sessionId: "child-session-1" }) as ChatSessionRecord),
+        updateChatSessionPrefs: vi.fn(),
+        agentSendChatMessage,
+        normalizeWorkspaceId: (workspaceId) => workspaceId,
+      });
+      await service.execute({
+        plan: buildPlan(),
+        run: buildRun(worktreePath),
+        phase: { ...buildPhase(), specPath: "specs/real.md" },
+        durableRun: buildDurableRun(),
+      });
+      return agentSendChatMessage.mock.calls[0]?.[1].content ?? "";
+    }
+
+    async function prepareSwap(): Promise<{
+      worktreePath: string;
+      swapIn(): Promise<void>;
+      swapBack(): Promise<void>;
+    }> {
+      const worktreePath = await makeTempDir();
+      const outsideDir = await makeTempDir();
+      await fs.mkdir(path.join(worktreePath, "specs"));
+      await fs.writeFile(path.join(worktreePath, "specs", "real.md"), "Inside spec.", "utf8");
+      await fs.writeFile(path.join(outsideDir, "real.md"), "outside secret", "utf8");
+      return {
+        worktreePath,
+        // Replace the spec's parent directory with a symlink out of the workspace.
+        swapIn: async () => {
+          await fs.rename(path.join(worktreePath, "specs"), path.join(worktreePath, "specs-moved"));
+          await fs.symlink(outsideDir, path.join(worktreePath, "specs"));
+        },
+        swapBack: async () => {
+          await fs.unlink(path.join(worktreePath, "specs"));
+          await fs.rename(path.join(worktreePath, "specs-moved"), path.join(worktreePath, "specs"));
+        },
+      };
+    }
+
+    it("refuses a spec whose parent directory is swapped for an outside symlink as it is opened", async () => {
+      const { worktreePath, swapIn } = await prepareSwap();
+      const realOpen = fs.open.bind(fs);
+      const open = vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+        await swapIn();
+        return await realOpen(...args);
+      });
+
+      const prompt = await executeWithSpec(worktreePath);
+
+      expect(open).toHaveBeenCalled();
+      expect(prompt).toContain(
+        "Spec path specs/real.md resolves outside the orchestration workspace and was not read.",
+      );
+      expect(prompt).not.toContain("outside secret");
+    });
+
+    it("refuses a spec opened through a swapped directory even when the swap is undone before the check", async () => {
+      const { worktreePath, swapIn, swapBack } = await prepareSwap();
+      const realOpen = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+        await swapIn();
+        try {
+          return await realOpen(...args);
+        } finally {
+          await swapBack();
+        }
+      });
+
+      const prompt = await executeWithSpec(worktreePath);
+
+      expect(prompt).toContain(
+        "Spec path specs/real.md resolves outside the orchestration workspace and was not read.",
+      );
+      expect(prompt).not.toContain("outside secret");
+    });
+
+    it("rejects a FIFO spec without waiting for a writer", async () => {
+      const worktreePath = await makeTempDir();
+      await fs.mkdir(path.join(worktreePath, "specs"));
+      execFileSync("mkfifo", [path.join(worktreePath, "specs", "real.md")]);
+
+      const prompt = await executeWithSpec(worktreePath);
+
+      expect(prompt).toContain("Unable to read specs/real.md: not a regular file.");
+    }, 10_000);
+  });
+
   it("maps failed child traces without assistant text to failed phase output", async () => {
     const worktreePath = await makeTempDir();
     const service = new OrchestrationPhaseExecutionService({
@@ -621,9 +805,9 @@ describe("OrchestrationPhaseExecutionService", () => {
 
     expect(result).toMatchObject({
       status: "failed",
-      outputSummary: undefined,
-      outputText: undefined,
-      error: undefined,
+      outputSummary: "Phase child turn finished without assistant output.",
+      outputText: "Phase child turn finished without assistant output.",
+      error: "Phase child turn finished without assistant output.",
     });
     expect(agentSendChatMessage.mock.calls[0]?.[1].content).toContain("[Spec truncated after 24000 characters.]");
   });
@@ -648,5 +832,208 @@ describe("OrchestrationPhaseExecutionService", () => {
         signal: controller.signal,
       }),
     ).rejects.toThrow("Orchestration phase aborted.");
+  });
+});
+
+describe("OrchestrationPhaseExecutionService child parking", () => {
+  function buildTrace(overrides: Partial<ChatTurnTraceRecord> = {}): ChatTurnTraceRecord {
+    return {
+      turnId: "turn-1",
+      sessionId: "child-session-1",
+      status: "completed",
+      startedAt: "2026-04-12T00:00:01.000Z",
+      finishedAt: "2026-04-12T00:00:09.000Z",
+      assistantMessageId: "assistant-1",
+      model: "gpt-test",
+      toolRuns: [],
+      citations: [],
+      ...overrides,
+    } as ChatTurnTraceRecord;
+  }
+
+  function buildService(overrides: Partial<OrchestrationPhaseExecutionServiceDeps> = {}) {
+    return new OrchestrationPhaseExecutionService({
+      rootDir: os.tmpdir(),
+      createChatSession: vi.fn(() => ({ sessionId: "child-session-1" }) as ChatSessionRecord),
+      updateChatSessionPrefs: vi.fn(),
+      agentSendChatMessage: vi.fn(),
+      normalizeWorkspaceId: (workspaceId) => workspaceId,
+      readChatTurnTrace: vi.fn(async () => buildTrace()),
+      readChatMessageContent: vi.fn(async () => "Phase output from the child."),
+      readChatTurnUsage: vi.fn(async () => ({ costUsd: 0.42, costComplete: true, inputTokens: 100, outputTokens: 40 })),
+      ...overrides,
+    });
+  }
+
+  const harvestInput = {
+    phaseId: "phase-1",
+    ownerAgentId: "agent-1",
+    childRunId: "child-run-1",
+    childSessionId: "child-session-1",
+    childTurnId: "turn-1",
+    startedAt: "2026-04-12T00:00:00.500Z",
+  };
+
+  it("dispatches a deterministic child turn and returns once the child is admitted", async () => {
+    const worktreePath = await makeTempDir();
+    const agentSendChatMessage = vi.fn(async () => ({
+      sessionId: "child-session-1",
+      userMessage: {} as never,
+      transport: "llm" as const,
+      turnId: "orchestration-turn-x",
+      trace: { status: "running", durable: { runId: "child-run-1" } } as never,
+    }));
+    const service = buildService({ agentSendChatMessage });
+
+    const result = await service.execute({
+      plan: buildPlan(),
+      run: buildRun(worktreePath),
+      phase: buildPhase(),
+      durableRun: buildDurableRun(),
+    });
+
+    expect(result).toMatchObject({
+      status: "waiting",
+      childSessionId: "child-session-1",
+      childTurnId: "orchestration-turn-x",
+      childRunId: "child-run-1",
+    });
+    const options = agentSendChatMessage.mock.calls[0]?.[2] as Record<string, unknown> | undefined;
+    expect(options).toMatchObject({
+      turnIdentity: buildOrchestrationPhaseTurnIdentity("run-1", "phase-1"),
+      returnAfterDurableAdmission: true,
+      onChildDurableRunLaunched: expect.any(Function),
+    });
+  });
+
+  it("derives a stable child turn identity per run and phase", () => {
+    const identity = buildOrchestrationPhaseTurnIdentity("run-1", "phase-1");
+    expect(buildOrchestrationPhaseTurnIdentity("run-1", "phase-1")).toEqual(identity);
+    expect(buildOrchestrationPhaseTurnIdentity("run-1", "phase-2").turnId).not.toBe(identity.turnId);
+    expect(buildOrchestrationPhaseTurnIdentity("run-2", "phase-1").turnId).not.toBe(identity.turnId);
+    // Length-prefixed parts keep ("a|b", "c") and ("a", "b|c") distinct.
+    expect(buildOrchestrationPhaseTurnIdentity("a|b", "c").turnId).not.toBe(
+      buildOrchestrationPhaseTurnIdentity("a", "b|c").turnId,
+    );
+    expect(identity.turnId).toMatch(/^orchestration-turn-[a-f0-9]{32}$/);
+    expect(identity.userMessageId).toMatch(/^orchestration-user-[a-f0-9]{32}$/);
+    expect(identity.assistantMessageId).toMatch(/^orchestration-assistant-[a-f0-9]{32}$/);
+  });
+
+  it("harvests a completed child from its canonical trace, message and model usage", async () => {
+    const service = buildService();
+
+    const result = await service.harvest(harvestInput);
+
+    expect(result).toMatchObject({
+      phaseId: "phase-1",
+      ownerAgentId: "agent-1",
+      status: "completed",
+      startedAt: "2026-04-12T00:00:00.500Z",
+      finishedAt: "2026-04-12T00:00:09.000Z",
+      outputText: "Phase output from the child.",
+      childRunId: "child-run-1",
+      childTurnId: "turn-1",
+      model: "gpt-test",
+      costUsd: 0.42,
+      inputTokens: 100,
+      outputTokens: 40,
+    });
+    expect(result?.costUnreported).toBeUndefined();
+    expect(result?.error).toBeUndefined();
+  });
+
+  it("flags harvested cost as unreported when a model call reported none", async () => {
+    const service = buildService({
+      readChatTurnUsage: vi.fn(async () => ({ costUsd: 0.1, costComplete: false })),
+    });
+
+    const result = await service.harvest(harvestInput);
+
+    expect(result).toMatchObject({ status: "completed", costUsd: 0.1, costUnreported: true });
+  });
+
+  it("flags cost as unreported when usage cannot be read", async () => {
+    const service = buildService({ readChatTurnUsage: undefined });
+
+    const result = await service.harvest(harvestInput);
+
+    expect(result).toMatchObject({ status: "completed", costUnreported: true });
+    expect(result?.costUsd).toBeUndefined();
+  });
+
+  it.each(["queued", "running", "waiting_for_approval", "waiting_for_tool"] as const)(
+    "keeps waiting while the child turn is %s",
+    async (status) => {
+      const service = buildService({ readChatTurnTrace: vi.fn(async () => buildTrace({ status })) });
+
+      await expect(service.harvest(harvestInput)).resolves.toBeUndefined();
+    },
+  );
+
+  it("keeps waiting when the child trace or turn id is not available", async () => {
+    await expect(buildService({ readChatTurnTrace: vi.fn(async () => undefined) }).harvest(harvestInput)).resolves.toBe(
+      undefined,
+    );
+    await expect(buildService().harvest({ ...harvestInput, childTurnId: undefined })).resolves.toBeUndefined();
+  });
+
+  it("fails the phase when the child turn stops for user input", async () => {
+    const service = buildService({
+      readChatTurnTrace: vi.fn(async () => buildTrace({ status: "waiting_for_user_input", finishedAt: undefined })),
+      readChatMessageContent: vi.fn(async () => "Which environment should I use?"),
+    });
+
+    const result = await service.harvest(harvestInput);
+
+    expect(result).toMatchObject({
+      status: "failed",
+      outputText: "Which environment should I use?",
+      error: expect.stringContaining("waiting for user input"),
+    });
+  });
+
+  it("fails the phase with the child's failure when the child turn failed", async () => {
+    const service = buildService({
+      readChatTurnTrace: vi.fn(async () =>
+        buildTrace({
+          status: "failed",
+          assistantMessageId: undefined,
+          failure: { failureClass: "provider_error", message: "Provider rejected the request." } as never,
+        }),
+      ),
+    });
+
+    const result = await service.harvest(harvestInput);
+
+    expect(result).toMatchObject({
+      status: "failed",
+      outputText: "Provider rejected the request.",
+      error: "Provider rejected the request.",
+    });
+  });
+
+  it("reads an already settled replayed child through its canonical records", async () => {
+    const worktreePath = await makeTempDir();
+    const service = buildService({
+      agentSendChatMessage: vi.fn(async () => ({
+        sessionId: "child-session-1",
+        userMessage: {} as never,
+        // The replayed response's own message cost covers only the last model call.
+        assistantMessage: { content: "Phase output from the child.", costUsd: 0.01 } as never,
+        transport: "llm" as const,
+        turnId: "turn-1",
+        trace: { status: "completed", durable: { runId: "child-run-1" } } as never,
+      })),
+    });
+
+    const result = await service.execute({
+      plan: buildPlan(),
+      run: buildRun(worktreePath),
+      phase: buildPhase(),
+      durableRun: buildDurableRun(),
+    });
+
+    expect(result).toMatchObject({ status: "completed", childRunId: "child-run-1", costUsd: 0.42 });
   });
 });

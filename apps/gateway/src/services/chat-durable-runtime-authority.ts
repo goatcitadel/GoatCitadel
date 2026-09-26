@@ -1112,7 +1112,9 @@ function assertRuntimeAuthorityTransitionShape(material: ChatTurnRuntimeAuthorit
       (material.durableStatus === "completed" &&
         (material.traceStatus === "completed" || material.traceStatus === "partial") &&
         exactCompletedOutput) ||
-      (material.durableStatus === "failed" && material.traceStatus === "failed" && !material.terminalOutput) ||
+      (material.durableStatus === "failed" &&
+        (material.traceStatus === "failed" || material.traceStatus === "partial") &&
+        !material.terminalOutput) ||
       (material.durableStatus === "cancelled" && material.traceStatus === "cancelled" && !material.terminalOutput);
     if (
       !exactTerminalPair ||

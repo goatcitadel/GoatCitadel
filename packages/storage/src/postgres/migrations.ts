@@ -15018,6 +15018,27 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     sql: POSTGRES_SCHEMA_CONVERGENCE_V196_SQL,
     integritySha256: "217269a7ec078f2013e9aaa61ace846d9e449d683536aaa147cc3fa215066ec7",
   },
+  {
+    version: 197,
+    name: "delegation_step_instruction_snapshots",
+    sql: `
+      ALTER TABLE chat_delegation_steps ADD COLUMN IF NOT EXISTS instruction_snapshot_json TEXT;
+      CREATE OR REPLACE FUNCTION gc_chat_delegation_step_instruction_snapshot_immutable()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.instruction_snapshot_json IS DISTINCT FROM OLD.instruction_snapshot_json THEN
+          RAISE EXCEPTION 'delegation step instruction snapshot cannot change' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS trg_chat_delegation_step_instruction_snapshot_immutable ON chat_delegation_steps;
+      CREATE TRIGGER trg_chat_delegation_step_instruction_snapshot_immutable
+        BEFORE UPDATE OF instruction_snapshot_json ON chat_delegation_steps
+        FOR EACH ROW EXECUTE FUNCTION gc_chat_delegation_step_instruction_snapshot_immutable();
+    `,
+    integritySha256: "3bd160c4ee905f45f5dae335227e252757a4c2560abc64f00b29115b7ab2e041",
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

@@ -9,6 +9,8 @@ export type OrchestrationExecutionState =
   | "worktree_ready"
   | "queued"
   | "running"
+  /** Parked while the current phase's child Chat turn runs on its own durable run. */
+  | "waiting_for_child"
   | "paused_for_approval"
   | "resume_requested"
   | "completed"
@@ -48,6 +50,11 @@ export interface OrchestrationPhaseExecutionResult {
   responseId?: string;
   model?: string;
   costUsd?: number;
+  /**
+   * True when the provider did not report a cost for every model call in the
+   * phase, so `costUsd` (and the plan's cost limits) may understate real spend.
+   */
+  costUnreported?: boolean;
   inputTokens?: number;
   outputTokens?: number;
   citations?: unknown[];
@@ -145,8 +152,16 @@ export interface OrchestrationRun extends OrchestrationRunPolicyContext {
   worktreeLeaseGeneration?: number;
   /** Advisory expiry for the current worktree owner lease. */
   worktreeLeaseExpiresAt?: string;
+  /**
+   * The approval-gated phase an operator approved. Set by the approve action
+   * (run stays `paused`, `executionState: "resume_requested"`), kept while the
+   * durable worker runs that phase, and cleared when the phase advances. An
+   * approval-gated phase can only advance while this names it.
+   */
   pendingApprovalPhaseId?: string;
+  /** Actor that approved `pendingApprovalPhaseId`; cleared with it. */
   pendingApprovedBy?: string;
+  /** Retired: approval no longer carries a cost (phase cost is measured from execution); always cleared. */
   pendingCostIncrementUsd?: number;
   lastError?: string;
 }

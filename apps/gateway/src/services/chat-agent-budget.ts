@@ -67,6 +67,9 @@ export const CHAT_COMPLETION_TIMEOUT_MS_BY_MODE = {
 
 export type ChatLoopLimitBehavior = "terminal" | "checkpoint_continue";
 
+export const SUSTAINED_LOCAL_CODING_ACTIVE_BUDGET_MS = 90 * 60_000;
+export const SUSTAINED_LOCAL_CODING_TOOL_RUN_LIMIT = 120;
+
 export interface ChatExecutionBudget {
   readonly profile?:
     | "quick_web"
@@ -78,6 +81,7 @@ export interface ChatExecutionBudget {
     // Read compatibility for traces emitted before the one-Chat migration.
     | "cowork_research_list"
     | "research_artifact"
+    | "sustained_local_coding"
     | "default";
   readonly promotionReason?: "explicit_research_artifact";
   readonly turnBudgetMs: number;
@@ -103,6 +107,7 @@ export interface ResolveChatExecutionBudgetInput {
   readonly providerId?: string;
   readonly model?: string;
   readonly executionProfile?: ChatTurnExecutionProfile;
+  readonly modelOutputTokenLimit?: number;
 }
 
 export class ChatTurnBudgetExceededError extends BudgetExceededError {
@@ -134,7 +139,22 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
   const defaultMaxTokens = defaultThinkingTokens(input.thinkingLevel);
   const loopLimitBehavior = resolveLoopLimitBehavior(input);
   let budget: ChatExecutionBudget;
-  if (input.executionProfile === "quick_web") {
+  if (input.executionProfile === "sustained_local_coding") {
+    budget = {
+      profile: "sustained_local_coding",
+      turnBudgetMs: 12 * 60_000,
+      completionTimeoutMs: 6 * 60_000,
+      maxToolLoops: 8,
+      loopLimitBehavior: "checkpoint_continue",
+      maxToolRunsPerTurn: 12,
+      searchMaxResults: input.webMode === "off" ? 0 : 4,
+      maxTokens: input.modelOutputTokenLimit && input.modelOutputTokenLimit > 0
+        ? Math.min(4096, Math.floor(input.modelOutputTokenLimit))
+        : 4096,
+      minSynthesisReserveMs: 30_000,
+      expensiveToolMinimumRemainingMs: 45_000,
+    };
+  } else if (input.executionProfile === "quick_web") {
     budget = {
       profile: "quick_web",
       turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.quickWeb,
@@ -267,7 +287,7 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
     promptLabExplicitTools: input.promptLabExplicitTools,
   });
   budget = applyResearchListExtendedBudget(budget, input);
-  if (input.executionProfile === "quick_web") {
+  if (input.executionProfile === "quick_web" || input.executionProfile === "sustained_local_coding") {
     return budget;
   }
   if (!shouldUseConstrainedLocalAgentProfile(input.providerId, input.model)) {
@@ -300,7 +320,8 @@ function resolveLoopLimitBehavior(input: ResolveChatExecutionBudgetInput): ChatL
   // the one Chat surface. Continue bounded tool windows for intents that
   // genuinely require multi-step execution instead of keying the behavior only
   // to the retired surface label.
-  return input.mode === "cowork" ||
+  return input.executionProfile === "sustained_local_coding" ||
+    input.mode === "cowork" ||
     Boolean(input.researchListIntent) ||
     Boolean(input.artifactIntent) ||
     Boolean(input.promptLabHarness)

@@ -764,6 +764,15 @@ test(
         citations: [],
         startedAt: "2026-07-11T00:00:00.000Z",
       });
+      // The session-and-task lookup the Chat policy-scope check uses.
+      assert.equal(
+        setupStorage.chatDelegationRuns.findLatestBySessionAndTask(parentSessionId, `task-${suffix}`)?.runId,
+        runId,
+      );
+      assert.equal(
+        setupStorage.chatDelegationRuns.findLatestBySessionAndTask(parentSessionId, `missing-${suffix}`),
+        undefined,
+      );
       const children = {
         a: { sessionId: `child-a-${suffix}`, turnId: `turn-a-${suffix}`, stepId: `step-a-${suffix}` },
         b: { sessionId: `child-b-${suffix}`, turnId: `turn-b-${suffix}`, stepId: `step-b-${suffix}` },

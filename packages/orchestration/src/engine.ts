@@ -11,10 +11,44 @@ export interface RunLimitState {
 
 export interface PhaseApprovalOptions {
   now?: string;
+}
+
+export interface PhaseAdvanceOptions {
+  now?: string;
   costIncrementUsd?: number;
 }
 
-export type PhaseAdvanceOptions = PhaseApprovalOptions;
+export type LimitOverrun =
+  | { kind: "plan_cost"; limitUsd: number; spentUsd: number }
+  | { kind: "wave_cost"; waveId: string; limitUsd: number; spentUsd: number }
+  | { kind: "runtime"; limitMinutes: number; elapsedMinutes: number };
+
+/**
+ * Lists the plan limits a run went past. Limits only stop further work, so a
+ * final phase can finish over budget or over time; callers report the overrun
+ * alongside the completed run instead of hiding it.
+ */
+export function listLimitOverruns(
+  plan: OrchestrationPlan,
+  run: OrchestrationRun,
+  now: string = run.endedAt ?? new Date().toISOString(),
+): LimitOverrun[] {
+  const overruns: LimitOverrun[] = [];
+  if (run.totalCostUsd > plan.maxCostUsd) {
+    overruns.push({ kind: "plan_cost", limitUsd: plan.maxCostUsd, spentUsd: run.totalCostUsd });
+  }
+  for (const wave of plan.waves) {
+    const spentUsd = run.waveCostUsdByWaveId?.[wave.waveId] ?? 0;
+    if (wave.budgetUsd > 0 && spentUsd > wave.budgetUsd) {
+      overruns.push({ kind: "wave_cost", waveId: wave.waveId, limitUsd: wave.budgetUsd, spentUsd });
+    }
+  }
+  const elapsedMinutes = Math.max(0, (Date.parse(now) - Date.parse(run.startedAt)) / 60000);
+  if (elapsedMinutes > plan.maxRuntimeMinutes) {
+    overruns.push({ kind: "runtime", limitMinutes: plan.maxRuntimeMinutes, elapsedMinutes });
+  }
+  return overruns;
+}
 
 export class OrchestrationEngine {
   public validate(plan: OrchestrationPlan): void {
@@ -52,13 +86,23 @@ export class OrchestrationEngine {
     const first = this.firstPhase(plan);
     return {
       ...run,
-      status: this.shouldPauseAtPhase(plan, first.phaseId) ? "paused" : "running",
+      status: this.isApprovalGated(plan, first.phaseId) ? "paused" : "running",
       currentWaveId: first.waveId,
       currentPhaseId: first.phaseId,
       endedAt: undefined,
     };
   }
 
+  /**
+   * Approves the paused, approval-gated current phase so that it runs.
+   *
+   * Approval gates entry: the run resumes at the same phase and records
+   * `pendingApprovalPhaseId` as the "approved, not yet run" marker that
+   * {@link advancePhase} consumes once the phase has executed. Approval never
+   * advances, counts an iteration, or attributes cost. If a plan limit was
+   * reached while the run waited (for example its runtime), the run stops
+   * instead of starting more work.
+   */
   public approvePhase(
     plan: OrchestrationPlan,
     run: OrchestrationRun,
@@ -76,12 +120,35 @@ export class OrchestrationEngine {
         `Run ${run.runId} expected phase ${run.currentPhaseId ?? "<none>"} but received approval for ${approvedPhaseId}`,
       );
     }
-    const currentPhase = this.findPhase(plan, approvedPhaseId);
-    if (!this.requiresApproval(plan, currentPhase.phaseId)) {
+    if (!this.isApprovalGated(plan, approvedPhaseId)) {
       throw new Error(`Phase ${approvedPhaseId} is not approval-gated for run ${run.runId}`);
     }
 
-    return this.advanceFromPhase(plan, run, approvedPhaseId, options);
+    const now = options.now ?? new Date().toISOString();
+    if (
+      this.shouldStopByLimits(plan, {
+        iterations: run.totalIterations,
+        runtimeMinutes: this.runtimeMinutes(run, now),
+        costUsd: run.totalCostUsd,
+      })
+    ) {
+      return {
+        ...run,
+        status: "stopped_by_limit",
+        stopReason: "plan_limit",
+        pendingApprovalPhaseId: undefined,
+        pendingApprovedBy: undefined,
+        pendingCostIncrementUsd: undefined,
+        endedAt: now,
+      };
+    }
+
+    return {
+      ...run,
+      status: "running",
+      pendingApprovalPhaseId: approvedPhaseId,
+      endedAt: undefined,
+    };
   }
 
   public advancePhase(
@@ -100,7 +167,7 @@ export class OrchestrationEngine {
         `Run ${run.runId} expected phase ${run.currentPhaseId ?? "<none>"} but received advancement for ${phaseId}`,
       );
     }
-    if (this.requiresApproval(plan, phaseId)) {
+    if (this.isApprovalGated(plan, phaseId) && run.pendingApprovalPhaseId !== phaseId) {
       throw new Error(`Phase ${phaseId} requires approval and cannot auto-advance for run ${run.runId}`);
     }
     return this.advanceFromPhase(plan, run, phaseId, options);
@@ -155,8 +222,14 @@ export class OrchestrationEngine {
     throw new Error(`Phase ${currentPhaseId} not found in plan ${plan.planId}`);
   }
 
-  private shouldPauseAtPhase(plan: OrchestrationPlan, phaseId: string): boolean {
-    return plan.mode === "hitl" || this.requiresApproval(plan, phaseId);
+  /** A phase waits for operator approval before it runs: every phase in `hitl` mode, or one marked `requiresApproval`. */
+  private isApprovalGated(plan: OrchestrationPlan, phaseId: string): boolean {
+    const phase = this.findPhase(plan, phaseId);
+    return plan.mode === "hitl" || phase.requiresApproval;
+  }
+
+  private runtimeMinutes(run: OrchestrationRun, now: string): number {
+    return Math.max(0, (Date.parse(now) - Date.parse(run.startedAt)) / 60000);
   }
 
   private advanceFromPhase(
@@ -185,11 +258,22 @@ export class OrchestrationEngine {
       waveCostUsdByWaveId,
       currentWaveId: next?.waveId,
       currentPhaseId: next?.phaseId,
-      status: next ? (this.shouldPauseAtPhase(plan, next.phaseId) ? "paused" : "running") : "completed",
+      // Any approval for the phase that just ran has been consumed.
+      pendingApprovalPhaseId: undefined,
+      pendingApprovedBy: undefined,
+      pendingCostIncrementUsd: undefined,
+      status: next ? (this.isApprovalGated(plan, next.phaseId) ? "paused" : "running") : "completed",
       endedAt: next ? undefined : now,
     };
 
-    const runtimeMinutes = Math.max(0, (Date.parse(now) - Date.parse(run.startedAt)) / 60000);
+    // Limits stop further work. When the final phase has run there is no further
+    // work, so reaching a limit there leaves the run completed; callers report any
+    // overrun with listLimitOverruns.
+    if (!next) {
+      return candidate;
+    }
+
+    const runtimeMinutes = this.runtimeMinutes(run, now);
 
     if (
       this.shouldStopByLimits(plan, {
@@ -231,10 +315,6 @@ export class OrchestrationEngine {
       }
     }
     throw new Error(`Phase ${phaseId} not found in plan ${plan.planId}`);
-  }
-
-  private requiresApproval(plan: OrchestrationPlan, phaseId: string): boolean {
-    return this.findPhase(plan, phaseId).requiresApproval;
   }
 
   private findPhase(plan: OrchestrationPlan, phaseId: string) {

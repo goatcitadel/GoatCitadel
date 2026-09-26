@@ -33,6 +33,7 @@ import type {
   ChatTurnBranchKind,
   ChatTurnTraceRecord,
   ChatTurnCapabilityProfileRecord,
+  ChatTurnExecutionProfile,
   ModelUsageAttributionContext,
   RuntimeDecisionTraceAppendInput,
   SessionMeta,
@@ -43,7 +44,10 @@ import {
   type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import { normalizeAgentInputFromSend, type NormalizedAgentInputFromSend } from "./chat-agent-input-normalization.js";
-import { executionProfileFromNormalizationProfile } from "./chat-turn-execution-profile.js";
+import {
+  executionProfileFromNormalizationProfile,
+  resolveSustainedLocalCodingProfile,
+} from "./chat-turn-execution-profile.js";
 import { extractPrimaryUserTaskContent } from "./chat-agent-prompt-lab-contract.js";
 import { assertChatSessionActive, splitChatPrefsPatch } from "./chat-session-utils.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
@@ -240,6 +244,7 @@ export interface ChatTurnPrepHost {
   ): Promise<ChatCompletionResponse>;
   recordRuntimeDecision?(input: RuntimeDecisionTraceAppendInput): Promise<void>;
   isFeatureEnabled(flag: string): Promise<boolean>;
+  isDurableChatExecutionEnabled?(): Promise<boolean>;
   /**
    * Frozen cross-session operator-profile digest (P2-S4b), composed once per
    * session and byte-stable per workspace+revision (cached). Fed to the base
@@ -303,6 +308,7 @@ export interface PreparedAgentChatTurn {
   autonomy: SessionAutonomyPrefsRecord;
   normalized: NormalizedAgentInputFromSend;
   effectiveMode: ChatSessionPrefsRecord["mode"];
+  executionProfile?: ChatTurnExecutionProfile;
   modelRouterDecision: NonNullable<ChatTurnTraceRecord["routing"]["modelRouter"]>;
   retrievalTrace: NonNullable<ChatTurnTraceRecord["retrieval"]>;
   threadKnowledgeCitations: ChatCitationRecord[];
@@ -844,6 +850,13 @@ export async function prepareAgentChatTurn(
     effectiveProviderRoute?.effectiveModel ??
     input.model ??
     prefs.model;
+  const sustainedExecutionProfile = resolveSustainedLocalCodingProfile({
+    content: capabilityProfileContent ?? content,
+    providerId: effectiveProviderId,
+    durableEnabled: (await host.isDurableChatExecutionEnabled?.()) ?? false,
+    normalizationProfile: normalized.normalizationProfile,
+    serverOnlyTurn: Boolean(systemHeartbeatPosture || input.parentDelegationStepId),
+  });
   const persistedAutonomy = systemHeartbeatPosture
     ? await host.storage.sessionAutonomyPrefs.get(sessionId)
     : await host.getSessionAutonomyPrefs(sessionId);
@@ -960,6 +973,9 @@ export async function prepareAgentChatTurn(
     personalityOverlay,
     sideChatSystemInstruction,
     buildPlanningModeSystemInstruction(prefs.planningMode),
+    sustainedExecutionProfile === "sustained_local_coding"
+      ? "This is a sustained coding task. Inspect the target files and actual failures, make focused changes, run requested tests after the last edit, and independently check results when asked. After the final command, use fs.stat or a file read to confirm each required file still exists. Keep constraints and the next repair step in view. State only outcomes supported by tool evidence. A shell working directory alone does not prove that writes were confined to it."
+      : undefined,
     missingRequiredProjectBinding
       ? "Code mode requires a bound project before execution-heavy work. Until a project is attached, stay in planning and review posture, and do not imply that repository-bound edits or filesystem inspection were executed."
       : undefined,
@@ -1202,6 +1218,7 @@ export async function prepareAgentChatTurn(
     autonomy,
     normalized,
     effectiveMode,
+    executionProfile: sustainedExecutionProfile,
     modelRouterDecision,
     retrievalTrace,
     threadKnowledgeCitations: threadKnowledgeContext.citations,

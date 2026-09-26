@@ -208,10 +208,15 @@ if (!/verify:catalog:parity` must execute the runtime-backed operator action cla
   errors.push("docs/ENGINEERING_HANDBOOK.md must describe catalog-parity as scenario-backed runtime action proof, not blanket catalog coverage.");
 }
 if (
-  !/Orchestration runs are durable-run backed and worktree-owned/i.test(handbook) ||
-  !/release or reap orchestration worktrees/i.test(handbook)
+  !/Orchestration runs are durable-run backed/i.test(handbook) ||
+  !/phase agents run as child Chat turns with the session's normal workspace scope, not inside the run worktree/i.test(handbook) ||
+  !/Terminal cleanup removes the run worktree/i.test(handbook) ||
+  !/orphan reaper/i.test(handbook)
 ) {
-  errors.push("docs/ENGINEERING_HANDBOOK.md must describe orchestration as durable-run backed, worktree-owned, and covered by allocation/release/orphan cleanup truth.");
+  errors.push("docs/ENGINEERING_HANDBOOK.md must describe orchestration as durable-run backed, with a leased run worktree that phase agents do not run inside, and with terminal-cleanup and orphan-reaper truth.");
+}
+if (/worktree-owned/i.test(handbook)) {
+  errors.push("docs/ENGINEERING_HANDBOOK.md must not describe orchestration runs as worktree-owned: phase agents do not run inside the run worktree.");
 }
 if (!/not hostile-code sandboxing or virtualization/i.test(handbook)) {
   errors.push("docs/ENGINEERING_HANDBOOK.md must avoid claiming worktree-backed orchestration is hostile-code sandboxing or virtualization.");

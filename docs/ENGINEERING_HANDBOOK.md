@@ -311,16 +311,19 @@ Core endpoints:
 
 Behavior:
 
-- Plan validation via schema and ownership overlap checks.
+- Plan validation via schema and ownership overlap checks. Ownership paths are normalized (`./`, `..`, separators, letter case) before they are compared, a path that climbs above the repository root, or is drive-qualified or UNC, is rejected, and a glob is compared by its literal prefix, so `apps/web*` conflicts with `apps/website`.
 - Run creation with checkpoints and run events.
-- Start transitions to `running` or `paused` based on run mode.
-- Phase approval advances to next phase/wave and increments iteration/cost.
-- Hard limits (`maxIterations`, `maxRuntimeMinutes`, `maxCostUsd`) can terminate run with `stopped_by_limit`.
+- Start transitions to `running`, or to `paused` when the first phase is approval-gated (`requiresApproval`, or every phase in `hitl` mode).
+- An approval-gated phase pauses before it runs. Phase approval records intent and leaves the run paused; the durable worker then runs the approved phase. Approval does not accept an operator-supplied cost.
+- Each phase runs as a child Chat turn on its own durable run. The orchestration run parks (`executionState: waiting_for_child`) until the child settles, then reads the child's output and recorded model usage; a phase with any unreported model cost is flagged `costUnreported`.
+- Advancing after a phase executes increments the iteration count and adds the phase's measured cost.
+- Hard limits (`maxIterations`, `maxRuntimeMinutes`, `maxCostUsd`) are checked between phases, not during one. Reaching a limit with phases remaining stops the run with `stopped_by_limit`; a final phase that reaches or passes a limit completes the run, and any cost or runtime overrun is recorded on the completion event.
 
 Current scope:
 
 - State machine and checkpoints are implemented.
-- Orchestration runs are durable-run backed and worktree-owned: runtime loops allocate a run worktree, execute phases from that worktree context, and release or reap orchestration worktrees during terminal cleanup.
+- Orchestration runs are durable-run backed. Runtime loops allocate and lease a run worktree and read phase specs from it; phase agents run as child Chat turns with the session's normal workspace scope, not inside the run worktree. Wave ownership paths are validated for overlap but not enforced on tool writes.
+- Terminal cleanup removes the run worktree only when git, reading it through its registration, reports no staged, modified, untracked, or ignored files and the removal succeeds, or when an unregistered directory is empty. It keeps local files (`run.worktree_retained_dirty`) or directories git cannot verify or remove (`run.worktree_retained_unverified`); the hourly orphan reaper skips them until git reports them clean or an unregistered directory is empty.
 - Worktree ownership is not hostile-code sandboxing or virtualization; host filesystem controls, policy, approvals, and Code Mode sandbox requirements remain separate safety boundaries.
 
 ## 5. Persistence Model

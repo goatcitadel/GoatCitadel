@@ -161,6 +161,67 @@ describe("chat delegate routes", () => {
     expect(rawRun.finalSummary).toContain("get-run-secret");
   });
 
+  it("rejects policy ids that do not belong to the session before delegating", async () => {
+    const chatDelegate = {
+      runChatDelegation: vi.fn(),
+      runChatDelegationStream: vi.fn(),
+      acceptChatDelegation: vi.fn(),
+    };
+    const assertCallerPolicyScope = vi.fn(async () => {
+      throw new ConflictError({ message: "policyRunId foreign-run does not belong to Chat session sess-1." });
+    });
+    app = buildApp(chatDelegate, { assertCallerPolicyScope });
+
+    for (const [path, payload] of [
+      ["delegate", { objective: "Review", roles: ["QA"], policyRunId: "foreign-run" }],
+      ["delegate/stream", { objective: "Review", roles: ["QA"], policyRunId: "foreign-run" }],
+      [
+        "delegate/accept",
+        { objective: "Review", roles: ["QA"], policyRunId: "foreign-run", policyTaskId: "foreign-task" },
+      ],
+    ] as const) {
+      const response = await app.inject({ method: "POST", url: `/api/v1/chat/sessions/sess-1/${path}`, payload });
+      expect(response.statusCode, path).toBe(409);
+      expect(response.json()).toMatchObject({
+        error: "policyRunId foreign-run does not belong to Chat session sess-1.",
+        code: "STATE_CONFLICT",
+      });
+    }
+
+    expect(assertCallerPolicyScope).toHaveBeenCalledTimes(3);
+    expect(assertCallerPolicyScope).toHaveBeenNthCalledWith(1, "sess-1", { policyRunId: "foreign-run" });
+    expect(assertCallerPolicyScope).toHaveBeenNthCalledWith(3, "sess-1", {
+      policyRunId: "foreign-run",
+      policyTaskId: "foreign-task",
+    });
+    expect(chatDelegate.runChatDelegation).not.toHaveBeenCalled();
+    expect(chatDelegate.runChatDelegationStream).not.toHaveBeenCalled();
+    expect(chatDelegate.acceptChatDelegation).not.toHaveBeenCalled();
+  });
+
+  it("does not look up the policy scope of a delegation without policy ids", async () => {
+    const assertCallerPolicyScope = vi.fn();
+    const runChatDelegation = vi.fn(async () => ({
+      runId: "run-1",
+      taskId: "task-1",
+      status: "completed",
+      steps: [],
+      stitchedOutput: "done",
+      citations: [],
+    }));
+    app = buildApp({ runChatDelegation }, { assertCallerPolicyScope });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/delegate",
+      payload: { objective: "Review", roles: ["QA"] },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(assertCallerPolicyScope).not.toHaveBeenCalled();
+    expect(runChatDelegation).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps Explorer SSE observation detached from durable cancellation authority", async () => {
     const runChatDelegationStream = vi.fn(async function* () {
       yield {
@@ -520,9 +581,12 @@ describe("chat delegate routes", () => {
   });
 });
 
-function buildApp(chatDelegate: Record<string, unknown>): FastifyInstance {
+function buildApp(
+  chatDelegate: Record<string, unknown>,
+  chatSupport: Record<string, unknown> = { assertCallerPolicyScope: vi.fn(async () => undefined) },
+): FastifyInstance {
   const next = Fastify();
-  next.decorate("services", { chatDelegate } as never);
+  next.decorate("services", { chatDelegate, chatSupport } as never);
   registerChatDelegateRoutes(next);
   return next;
 }

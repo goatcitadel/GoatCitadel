@@ -23,6 +23,7 @@ import {
   type ChatSpeedMode,
   type ChatSubagentPolicy,
   type ChatThinkingLevel,
+  type ChatTurnExecutionProfile,
   type ChatTurnCapabilityProfilePreview,
   type ChatTurnCapabilityProfileRecord,
   type ChatWorkspaceSnapshotRecord,
@@ -90,6 +91,7 @@ export interface ChatTurnCapabilityProfileResolveInput {
   speedMode: ChatSpeedMode;
   subagentPolicy: ChatSubagentPolicy;
   normalizationProfile?: ChatNormalizationProfile;
+  executionProfile?: ChatTurnExecutionProfile;
   toolAutonomy: "safe_auto" | "manual";
   routedContextRequested?: boolean;
   historyMessages: ChatCompletionRequest["messages"];
@@ -128,6 +130,7 @@ export interface ChatTurnCapabilityProfileResolveDeps {
       speedMode: ChatSpeedMode;
       subagentPolicy: ChatSubagentPolicy;
       normalizationProfile?: ChatNormalizationProfile;
+      executionProfile?: ChatTurnExecutionProfile;
       toolAutonomy: "safe_auto" | "manual";
       routedContextRequested?: boolean;
       operatorId?: string;
@@ -366,6 +369,7 @@ export async function resolveChatTurnCapabilityProfile(
     speedMode: input.speedMode,
     subagentPolicy: input.subagentPolicy,
     normalizationProfile: input.normalizationProfile,
+    executionProfile: input.executionProfile,
     toolAutonomy: input.toolAutonomy,
     routedContextRequested: input.routedContextRequested,
     operatorId: input.operatorId,

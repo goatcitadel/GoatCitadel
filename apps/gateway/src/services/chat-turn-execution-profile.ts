@@ -87,3 +87,46 @@ export function executionProfileFromNormalizationProfile(
 ): ChatTurnExecutionProfile {
   return normalizationProfile === "quick_web" ? "quick_web" : "standard";
 }
+
+const CODING_ACTION_RE = /\b(?:build|create|implement|debug|fix|repair|modify|patch|write|generate|run|execute|test|validate)\b/iu;
+const CODING_TARGET_RE =
+  /\b(?:codebase|repository|repo|project|module|script|test suite|production code)\b|\b[\w.-]+\.(?:ps1|psm1|py|ts|tsx|js|jsx|mjs|cjs|rs|go|java|cs|sh|bat|cmd)\b/iu;
+const CODING_ITERATION_RE =
+  /\b(?:tests?|debug|failures?|bugs?|repair|fix|validate|verification|implement|execute|run)\b/iu;
+const DIRECT_CODING_ACTION_RE = /\b(?:build|implement|debug|fix|repair|patch)\b/iu;
+const CODE_FILE_ACTION_RE =
+  /\b(?:create|write|generate|modify)\b[^\r\n.!?]{0,80}(?:\b(?:module|script|code)\b|\b[\w.-]+\.(?:ps1|psm1|py|ts|tsx|js|jsx|mjs|cjs|rs|go|java|cs|sh|bat|cmd)\b)/iu;
+
+/** Server-owned admission hint. A local route and durable execution are required separately. */
+export function detectSustainedCodingIntent(content: string): boolean {
+  const text = content.trim();
+  if (!text || !CODING_ACTION_RE.test(text) || !CODING_TARGET_RE.test(text) ||
+      !(CODING_ITERATION_RE.test(text) || DIRECT_CODING_ACTION_RE.test(text) || CODE_FILE_ACTION_RE.test(text))) {
+    return false;
+  }
+  if (/^\s*(?:build|create|write|generate)\s+(?:a|an|the)?\s*(?:report|document|presentation|summary)\b/iu.test(text) &&
+      !CODE_FILE_ACTION_RE.test(text)) return false;
+  // A request to discuss a project is not authorization to edit or run it.
+  if (/^\s*(?:explain|compare|review|plan|describe|summari[sz]e|how|why)\b/iu.test(text) &&
+      !/\b(?:please\s+)?(?:implement|fix|repair|build|run\s+the\s+tests?|create\s+(?:the|a)\s+(?:project|script|module))\b/iu.test(text)) {
+    return false;
+  }
+  return true;
+}
+
+export function resolveSustainedLocalCodingProfile(input: {
+  content: string;
+  providerId?: string;
+  durableEnabled: boolean;
+  normalizationProfile?: ChatNormalizationProfile;
+  serverOnlyTurn?: boolean;
+}): ChatTurnExecutionProfile {
+  if (input.normalizationProfile === "quick_web" || input.normalizationProfile === "prompt_pack_harness" ||
+      input.serverOnlyTurn || !input.durableEnabled || !detectSustainedCodingIntent(input.content)) {
+    return executionProfileFromNormalizationProfile(input.normalizationProfile);
+  }
+  const providerId = input.providerId?.trim().toLowerCase();
+  return providerId && ["genie-ir20", "llamacpp", "lmstudio", "localai", "ollama"].includes(providerId)
+    ? "sustained_local_coding"
+    : "standard";
+}

@@ -1008,12 +1008,12 @@ test("current registries and checked-in manifest cover every migration exactly",
 
   // These reviewed literals are intentionally independent from the generated
   // manifest so an accidental registry-plus-manifest edit cannot self-certify.
-  assert.equal(sqlite.migrations.length, 250);
-  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 250]);
-  assert.equal(postgres.migrations.length, 196);
-  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 196]);
-  assert.equal(sqlite.migrations.at(-1)?.name, "remote_worker_runtime_install_evidence");
-  assert.equal(postgres.migrations.at(-1)?.name, "additive_schema_shape_convergence");
+  assert.equal(sqlite.migrations.length, 251);
+  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 251]);
+  assert.equal(postgres.migrations.length, 197);
+  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 197]);
+  assert.equal(sqlite.migrations.at(-1)?.name, "delegation_step_instruction_snapshots");
+  assert.equal(postgres.migrations.at(-1)?.name, "delegation_step_instruction_snapshots");
   assert.equal(postgres.migrations.find(record => record.version === 195)?.name, "remote_worker_runtime_install_evidence");
   assert.equal(sqlite.migrations.find(record => record.version === 249)?.name, "remote_worker_native_policy_reservations");
   assert.equal(postgres.migrations.find(record => record.version === 194)?.name, "remote_worker_native_policy_reservations");
