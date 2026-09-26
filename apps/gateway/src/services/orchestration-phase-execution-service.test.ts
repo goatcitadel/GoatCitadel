@@ -527,6 +527,79 @@ describe("OrchestrationPhaseExecutionService", () => {
     );
   });
 
+  it.skipIf(process.platform === "win32")(
+    "refuses a phase spec symlink that points outside the orchestration workspace",
+    async () => {
+      const worktreePath = await makeTempDir();
+      const outsideDir = await makeTempDir();
+      await fs.writeFile(path.join(outsideDir, "secret.txt"), "outside secret", "utf8");
+      await fs.symlink(path.join(outsideDir, "secret.txt"), path.join(worktreePath, "spec.md"));
+      const agentSendChatMessage = vi.fn(
+        async () =>
+          ({
+            sessionId: "child-session-1",
+            userMessage: {} as never,
+            assistantMessage: { content: "done" } as never,
+            transport: "llm",
+            turnId: "turn-1",
+            trace: { status: "completed" } as never,
+          }) as ChatSendMessageResponse,
+      );
+      const service = new OrchestrationPhaseExecutionService({
+        rootDir: worktreePath,
+        createChatSession: vi.fn(() => ({ sessionId: "child-session-1" }) as ChatSessionRecord),
+        updateChatSessionPrefs: vi.fn(),
+        agentSendChatMessage,
+        normalizeWorkspaceId: (workspaceId) => workspaceId,
+      });
+
+      await service.execute({
+        plan: buildPlan(),
+        run: buildRun(worktreePath),
+        phase: buildPhase(),
+        durableRun: buildDurableRun(),
+      });
+
+      const sentPrompt = agentSendChatMessage.mock.calls[0]?.[1].content ?? "";
+      expect(sentPrompt).toContain("Spec path spec.md resolves outside the orchestration workspace and was not read.");
+      expect(sentPrompt).not.toContain("outside secret");
+    },
+  );
+
+  it("reads a phase spec reached through a symlink that stays inside the workspace", async () => {
+    const worktreePath = await makeTempDir();
+    await fs.mkdir(path.join(worktreePath, "specs"));
+    await fs.writeFile(path.join(worktreePath, "specs", "real.md"), "Inside spec.", "utf8");
+    await fs.symlink(path.join(worktreePath, "specs", "real.md"), path.join(worktreePath, "spec.md"));
+    const agentSendChatMessage = vi.fn(
+      async () =>
+        ({
+          sessionId: "child-session-1",
+          userMessage: {} as never,
+          assistantMessage: { content: "done" } as never,
+          transport: "llm",
+          turnId: "turn-1",
+          trace: { status: "completed" } as never,
+        }) as ChatSendMessageResponse,
+    );
+    const service = new OrchestrationPhaseExecutionService({
+      rootDir: worktreePath,
+      createChatSession: vi.fn(() => ({ sessionId: "child-session-1" }) as ChatSessionRecord),
+      updateChatSessionPrefs: vi.fn(),
+      agentSendChatMessage,
+      normalizeWorkspaceId: (workspaceId) => workspaceId,
+    });
+
+    await service.execute({
+      plan: buildPlan(),
+      run: buildRun(worktreePath),
+      phase: buildPhase(),
+      durableRun: buildDurableRun(),
+    });
+
+    expect(agentSendChatMessage.mock.calls[0]?.[1].content).toContain("Phase spec:\nInside spec.");
+  });
+
   it("maps failed child traces without assistant text to failed phase output", async () => {
     const worktreePath = await makeTempDir();
     const service = new OrchestrationPhaseExecutionService({

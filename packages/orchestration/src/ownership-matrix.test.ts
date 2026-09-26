@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OrchestrationWave } from "@goatcitadel/contracts";
-import { findOwnershipConflicts } from "./ownership-matrix.js";
+import { findOwnershipConflicts, ownershipPathEscapesRoot } from "./ownership-matrix.js";
 
 describe("findOwnershipConflicts", () => {
   it("finds overlaps in a wave", () => {
@@ -79,6 +79,57 @@ describe("findOwnershipConflicts", () => {
       ],
     };
     expect(findOwnershipConflicts(slashRoot).length).toBeGreaterThan(0);
+  });
+
+  function waveOf(pathA: string, pathB: string): OrchestrationWave {
+    return {
+      waveId: "wave-1",
+      verify: [],
+      budgetUsd: 10,
+      ownership: [
+        { agentId: "a", paths: [pathA] },
+        { agentId: "b", paths: [pathB] },
+      ],
+      phases: [],
+    };
+  }
+
+  it.each([
+    ["./apps/web", "apps/web/src"],
+    ["apps//web/", "apps/web"],
+    ["apps/./web", "apps\\web\\src"],
+    ["apps/api/../web", "apps/web/components/**"],
+    ["Apps/Web", "apps/web/index.ts"],
+    ["apps/web*", "apps/website"],
+    ["apps/*/src", "apps/web/src/index.ts"],
+    ["apps/web/**", "apps/web"],
+    ["*.md", "docs/readme.md"],
+  ])("reports %s and %s as overlapping after normalization", (pathA, pathB) => {
+    expect(findOwnershipConflicts(waveOf(pathA, pathB))).toHaveLength(1);
+  });
+
+  it.each([
+    ["apps/web", "apps/webapp/**"],
+    ["apps/web/**", "apps/webapp/**"],
+    ["apps/web", "apps/website"],
+    ["apps/web/src/*.ts", "apps/web/lib/**"],
+  ])("keeps %s and %s separate", (pathA, pathB) => {
+    expect(findOwnershipConflicts(waveOf(pathA, pathB))).toEqual([]);
+  });
+
+  it("reports normalized paths without trailing globs", () => {
+    expect(findOwnershipConflicts(waveOf("./apps/web/**", "apps/web/src"))).toEqual([
+      { waveId: "wave-1", agentA: "a", pathA: "apps/web", agentB: "b", pathB: "apps/web/src" },
+    ]);
+  });
+
+  it("identifies ownership paths that climb above the repository root", () => {
+    expect(ownershipPathEscapesRoot("../outside")).toBe(true);
+    expect(ownershipPathEscapesRoot("apps/../../outside")).toBe(true);
+    expect(ownershipPathEscapesRoot("..\\outside")).toBe(true);
+    expect(ownershipPathEscapesRoot("apps/../web")).toBe(false);
+    expect(ownershipPathEscapesRoot("/apps/web")).toBe(false);
+    expect(ownershipPathEscapesRoot("..foo/bar")).toBe(false);
   });
 
   it("allows empty ownership", () => {

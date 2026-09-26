@@ -1,3 +1,4 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -18,6 +19,7 @@ import type {
 import { renderVersionedTextPrompt } from "../orchestration/prompt-registry.js";
 
 const DEFAULT_WORKSPACE_ID = "default";
+const PHASE_SPEC_MAX_CHARACTERS = 24000;
 
 export interface OrchestrationPhaseExecutionServiceDeps {
   readonly rootDir: string;
@@ -206,19 +208,52 @@ export class OrchestrationPhaseExecutionService {
   }
 
   private async readPhaseSpec(run: OrchestrationRun, phase: OrchestrationPhase): Promise<string> {
+    const outsideWorkspace = `Spec path ${phase.specPath} resolves outside the orchestration workspace and was not read.`;
     const basePath = path.resolve(run.worktreePath ?? this.deps.rootDir);
     const targetPath = path.resolve(basePath, phase.specPath);
-    const relative = path.relative(basePath, targetPath);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      return `Spec path ${phase.specPath} resolves outside the orchestration workspace and was not read.`;
+    if (!isStrictlyWithin(basePath, targetPath)) {
+      return outsideWorkspace;
     }
     try {
-      const text = await fs.readFile(targetPath, "utf8");
-      return text.length > 24000 ? `${text.slice(0, 24000)}\n\n[Spec truncated after 24000 characters.]` : text;
+      // Check containment again after resolving symlinks, so a link inside the
+      // workspace cannot pull a file from outside it into the phase prompt.
+      const [realBase, realTarget] = await Promise.all([fs.realpath(basePath), fs.realpath(targetPath)]);
+      if (!isStrictlyWithin(realBase, realTarget)) {
+        return outsideWorkspace;
+      }
+      const noFollow = process.platform === "win32" ? 0 : (fsConstants.O_NOFOLLOW ?? 0);
+      const handle = await fs.open(realTarget, fsConstants.O_RDONLY | noFollow);
+      try {
+        if (!(await handle.stat()).isFile()) {
+          return `Unable to read ${phase.specPath}: not a regular file.`;
+        }
+        // Read at most what the prompt can use (4 bytes per character covers UTF-8).
+        const buffer = Buffer.alloc(PHASE_SPEC_MAX_CHARACTERS * 4 + 4);
+        let bytesRead = 0;
+        while (bytesRead < buffer.length) {
+          const chunk = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+          if (chunk.bytesRead === 0) {
+            break;
+          }
+          bytesRead += chunk.bytesRead;
+        }
+        const text = buffer.subarray(0, bytesRead).toString("utf8");
+        return text.length > PHASE_SPEC_MAX_CHARACTERS
+          ? `${text.slice(0, PHASE_SPEC_MAX_CHARACTERS)}\n\n[Spec truncated after ${PHASE_SPEC_MAX_CHARACTERS} characters.]`
+          : text;
+      } finally {
+        await handle.close();
+      }
     } catch (error) {
       return `Unable to read ${phase.specPath}: ${error instanceof Error ? error.message : String(error)}`;
     }
   }
+}
+
+/** True when `target` is inside `base` (and not `base` itself). */
+function isStrictlyWithin(base: string, target: string): boolean {
+  const relative = path.relative(base, target);
+  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
 function throwIfPhaseAborted(signal?: AbortSignal): void {

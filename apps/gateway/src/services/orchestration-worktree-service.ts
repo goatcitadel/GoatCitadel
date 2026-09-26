@@ -16,6 +16,19 @@ const DEFAULT_WORKTREE_LEASE_DURATION_MS = 5 * 60 * 1000;
 
 export type OrchestrationWorktreeReleaseReason = "completed" | "failed" | "stopped_by_limit" | "cancelled";
 
+/** How many changed paths a retained worktree reports; the full count is always included. */
+const MAX_REPORTED_CHANGED_PATHS = 20;
+
+export type OrchestrationWorktreeReleaseResult =
+  | { outcome: "removed" | "missing" | "not_allocated" }
+  | {
+      /** The worktree had uncommitted work, so it was kept and its lease released. */
+      outcome: "retained_dirty";
+      worktreePath: string;
+      changedPathCount: number;
+      changedPaths: string[];
+    };
+
 export interface OrchestrationWorktreeServiceDeps {
   readonly config: Pick<GatewayRuntimeConfig, "rootDir" | "assistant" | "toolPolicy">;
   readonly orchestrationRuns: Pick<
@@ -167,10 +180,13 @@ export class OrchestrationWorktreeService {
     return adopted;
   }
 
-  public async release(input: { run: OrchestrationRun; reason: OrchestrationWorktreeReleaseReason }): Promise<void> {
+  public async release(input: {
+    run: OrchestrationRun;
+    reason: OrchestrationWorktreeReleaseReason;
+  }): Promise<OrchestrationWorktreeReleaseResult> {
     const worktreePath = input.run.worktreePath?.trim();
     if (!worktreePath) {
-      return;
+      return { outcome: "not_allocated" };
     }
     const worktreesRoot = this.resolveWorktreesRoot();
     const resolvedPath = path.resolve(worktreePath);
@@ -178,11 +194,25 @@ export class OrchestrationWorktreeService {
     assertWritePathInJail(resolvedPath, this.deps.config.toolPolicy.sandbox.writeJailRoots);
     if (!fsSync.existsSync(resolvedPath)) {
       await this.releaseMissingPathLease(input.run, resolvedPath);
-      return;
+      return { outcome: "missing" };
     }
     const cleanupLease = await this.acquireCleanupLease(input.run, resolvedPath);
     this.stopLeaseHeartbeat(resolvedPath, cleanupLease);
     const manager = this.createManager(worktreesRoot);
+    const changedPaths = await manager.listChanges(resolvedPath);
+    if (changedPaths && changedPaths.length > 0) {
+      // Removing the worktree would destroy uncommitted work. Keep it and give
+      // up ownership; the orphan reaper also leaves dirty worktrees in place.
+      if (!(await this.deps.worktreeLeases.release({ ...cleanupLease, releasedAt: this.now() }))) {
+        throw new Error(`Orchestration worktree lease changed before retention completed: ${resolvedPath}`);
+      }
+      return {
+        outcome: "retained_dirty",
+        worktreePath: resolvedPath,
+        changedPathCount: changedPaths.length,
+        changedPaths: changedPaths.slice(0, MAX_REPORTED_CHANGED_PATHS),
+      };
+    }
     try {
       await manager.remove(resolvedPath);
     } catch (error) {
@@ -207,6 +237,7 @@ export class OrchestrationWorktreeService {
     ) {
       throw new Error(`Orchestration worktree lease changed before cleanup completed: ${resolvedPath}`);
     }
+    return { outcome: "removed" };
   }
 
   private async acquireCleanupLease(
@@ -425,13 +456,21 @@ export class OrchestrationWorktreeService {
       dryRun?: boolean;
       minAgeMs?: number;
     } = {},
-  ): Promise<{ dryRun: boolean; scanned: number; removed: string[]; skippedActive: string[] }> {
+  ): Promise<{
+    dryRun: boolean;
+    scanned: number;
+    removed: string[];
+    skippedActive: string[];
+    /** Orphaned worktrees kept because they hold uncommitted work. */
+    skippedDirty: string[];
+  }> {
     const dryRun = input.dryRun ?? true;
     const minAgeMs = Math.max(0, input.minAgeMs ?? 60 * 60 * 1000);
     const worktreesRoot = this.resolveWorktreesRoot();
     if (!fsSync.existsSync(worktreesRoot)) {
-      return { dryRun, scanned: 0, removed: [], skippedActive: [] };
+      return { dryRun, scanned: 0, removed: [], skippedActive: [], skippedDirty: [] };
     }
+    const manager = this.createManager(worktreesRoot);
 
     const activeStatuses = new Set<OrchestrationRun["status"]>(["queued", "running", "paused"]);
     const activeWorktreePaths = new Set(
@@ -443,6 +482,7 @@ export class OrchestrationWorktreeService {
     const entries = await fs.readdir(worktreesRoot, { withFileTypes: true });
     const removed: string[] = [];
     const skippedActive: string[] = [];
+    const skippedDirty: string[] = [];
     const scanNow = this.now();
     const now = Date.parse(scanNow);
 
@@ -470,7 +510,11 @@ export class OrchestrationWorktreeService {
         continue;
       }
       if (dryRun) {
-        removed.push(candidatePath);
+        if (await hasUncommittedWork(manager, candidatePath)) {
+          skippedDirty.push(candidatePath);
+        } else {
+          removed.push(candidatePath);
+        }
         continue;
       }
       const claimed = await this.deps.worktreeLeases.claim({
@@ -484,6 +528,13 @@ export class OrchestrationWorktreeService {
         skippedActive.push(candidatePath);
         continue;
       }
+      if (await hasUncommittedWork(manager, candidatePath)) {
+        if (!(await this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
+          throw new Error(`Orchestration worktree lease changed before orphan scan completed: ${candidatePath}`);
+        }
+        skippedDirty.push(candidatePath);
+        continue;
+      }
       await fs.rm(candidatePath, { recursive: true, force: true });
       if (!(await this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
         throw new Error(`Orchestration worktree lease changed before orphan cleanup completed: ${candidatePath}`);
@@ -491,7 +542,7 @@ export class OrchestrationWorktreeService {
       removed.push(candidatePath);
     }
 
-    return { dryRun, scanned: entries.length, removed, skippedActive };
+    return { dryRun, scanned: entries.length, removed, skippedActive, skippedDirty };
   }
 
   private resolveWorktreesRoot(): string {
@@ -525,6 +576,15 @@ export class OrchestrationWorktreeService {
   private now(): string {
     return this.deps.now?.() ?? new Date().toISOString();
   }
+}
+
+/**
+ * True when git, reading the worktree through its registration, reports
+ * uncommitted work. A directory git cannot read that way is not treated as
+ * holding any, so it is removed as it was before this check.
+ */
+async function hasUncommittedWork(manager: WorktreeManager, worktreePath: string): Promise<boolean> {
+  return ((await manager.listChanges(worktreePath))?.length ?? 0) > 0;
 }
 
 function toLeaseToken(lease: OrchestrationWorktreeLeaseRecord): OrchestrationWorktreeLeaseToken {

@@ -147,6 +147,24 @@ describe("OrchestrationEngine", () => {
     );
   });
 
+  it("rejects ownership paths that climb above the repository root", () => {
+    const engine = new OrchestrationEngine();
+    const invalidPlan: OrchestrationPlan = {
+      ...plan,
+      waves: [
+        {
+          ...plan.waves[0]!,
+          ownership: [{ agentId: "agent-a", paths: ["apps/../../outside"] }],
+          phases: [plan.waves[0]!.phases[0]!],
+        },
+      ],
+    };
+
+    expect(() => engine.validate(invalidPlan)).toThrow(
+      "Ownership path apps/../../outside climbs above the repository root.",
+    );
+  });
+
   it("rejects verify entries that do not point at a declared phase", () => {
     const engine = new OrchestrationEngine();
     const invalidPlan: OrchestrationPlan = {

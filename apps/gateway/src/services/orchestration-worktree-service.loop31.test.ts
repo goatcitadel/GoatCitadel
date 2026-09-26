@@ -10,6 +10,8 @@ const worktreeManagerMocks = vi.hoisted(() => ({
   create: vi.fn(),
   remove: vi.fn(),
   prune: vi.fn(),
+  // Clean unless a test says otherwise; an undefined result also counts as clean.
+  listChanges: vi.fn(async (): Promise<string[] | undefined> => []),
   constructor: vi.fn(),
 }));
 
@@ -20,6 +22,7 @@ vi.mock("@goatcitadel/orchestration", () => ({
       create: worktreeManagerMocks.create,
       remove: worktreeManagerMocks.remove,
       prune: worktreeManagerMocks.prune,
+      listChanges: worktreeManagerMocks.listChanges,
     };
   }),
 }));
@@ -140,7 +143,7 @@ describe("OrchestrationWorktreeService loop31 tails", () => {
         run: buildRun({ worktreePath }),
         reason: "failed",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ outcome: "removed" });
 
     expect(worktreeManagerMocks.remove).toHaveBeenCalledWith(worktreePath);
     // ORCH-004: even when git removal fails and we fall back to fs.rm, the
@@ -166,7 +169,7 @@ describe("OrchestrationWorktreeService loop31 tails", () => {
         run: buildRun({ worktreePath }),
         reason: "completed",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ outcome: "removed" });
 
     expect(worktreeManagerMocks.remove).toHaveBeenCalledWith(worktreePath);
     // ORCH-004: prune after a successful removal keeps git's worktree registry clean.
@@ -237,7 +240,7 @@ describe("OrchestrationWorktreeService loop31 tails", () => {
         run: buildRun({ runId: "run-prune-failed", worktreePath }),
         reason: "failed",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ outcome: "removed" });
 
     expect(leases.get(worktreePath)).toMatchObject({
       ownerId: "cleanup-owner",
@@ -289,7 +292,7 @@ describe("OrchestrationWorktreeService loop31 tails", () => {
         run: buildRun({ runId: "run-error", worktreePath }),
         reason: "failed",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ outcome: "removed" });
 
     await expect(fs.stat(worktreePath)).rejects.toThrow();
   });
