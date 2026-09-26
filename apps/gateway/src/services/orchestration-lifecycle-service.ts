@@ -31,7 +31,7 @@ import {
   type RuntimeDecisionTraceQuery,
   ValidationError,
 } from "@goatcitadel/contracts";
-import type { OrchestrationEngine } from "@goatcitadel/orchestration";
+import { listLimitOverruns, type OrchestrationEngine } from "@goatcitadel/orchestration";
 import type { OrchestrationCheckpoint, AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { DurableWorkflowExecutionContext } from "./durable-execution-service.js";
 import {
@@ -1132,6 +1132,13 @@ export async function approvePhase(
   costIncrementUsd = 0,
   workspaceId?: string,
 ): Promise<{ run: OrchestrationRun; checkpoints: OrchestrationCheckpoint[] }> {
+  // Approval lets the phase run; its cost is measured when it executes. An
+  // operator-supplied cost would let the approver move the plan budgets.
+  if (costIncrementUsd !== 0) {
+    throw new ValidationError({
+      message: "costIncrementUsd is no longer accepted on phase approval; phase cost is measured from execution.",
+    });
+  }
   const run = assertRunWorkspaceAccess(await host.storage.orchestration.getRun(runId), workspaceId);
   let plan = await host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
   host.orchestrationEngine.validate(plan);
@@ -1147,6 +1154,15 @@ export async function approvePhase(
   }
   if (plan.mode !== "hitl" && !currentPhase.requiresApproval) {
     throw new Error(`Phase ${phaseId} is not approval-gated for run ${runId}`);
+  }
+  // The run stays paused until the durable worker applies the approval, so a
+  // repeated approval must be refused explicitly rather than by the status check.
+  if (run.executionState === "resume_requested" || run.pendingApprovalPhaseId) {
+    throw new ConflictError({
+      code: "STATE_CONFLICT",
+      message: `Run ${run.runId} approval was already requested or the run state changed.`,
+      details: { runId: run.runId, phaseId },
+    });
   }
 
   const phaseBeforeHook = await host.hooksService.runInlineHooks<OrchestrationPhaseHookPatch>({
@@ -1190,13 +1206,14 @@ export async function approvePhase(
     await host.storage.orchestration.upsertPlan(plan, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
   }
 
+  // Approval records intent only: the run stays paused and the durable worker,
+  // which owns execution, applies the approval and runs the approved phase.
   const nextRun: OrchestrationRun = {
     ...run,
-    status: "running",
     executionState: "resume_requested",
     pendingApprovalPhaseId: phaseId,
     pendingApprovedBy: approvedBy,
-    pendingCostIncrementUsd: costIncrementUsd,
+    pendingCostIncrementUsd: undefined,
   };
   const persisted = await host.storage.orchestration.updateRunIfCurrentState(nextRun, {
     status: run.status,
@@ -1233,33 +1250,7 @@ export async function approvePhase(
     phaseId,
     resumeRequested: true,
   });
-  await persistPolicyGateEvent(host, persisted, {
-    gate: "pre_output",
-    trigger: "orchestration.phase.after",
-    entityType: "orchestration_phase",
-    entityId: `${runId}:${phaseId}`,
-    outcome: "allowed",
-    phaseId,
-    approvalRequired: true,
-  });
   await publishRunRealtime(host, plan, persisted, { event: "phase_approved", approvedBy });
-
-  await host.hooksService.enqueueAfterHooks({
-    workspaceId: persisted.workspaceId ?? DEFAULT_WORKSPACE_ID,
-    trigger: "orchestration.phase.after",
-    entityType: "orchestration_phase",
-    entityId: `${runId}:${phaseId}`,
-    payload: {
-      runId,
-      planId: plan.planId,
-      phaseId,
-      approvedBy,
-      status: persisted.status,
-      currentWaveId: persisted.currentWaveId,
-      currentPhaseId: persisted.currentPhaseId,
-      executionState: persisted.executionState,
-    },
-  });
 
   if (persisted.durableRunId) {
     await host.resumeDurableRun(persisted.durableRunId, "orchestration");
@@ -1413,35 +1404,46 @@ export async function executeDurableOrchestrationRun(
     if (!run.pendingApprovalPhaseId || !run.pendingApprovedBy) {
       throw new Error(`Run ${run.runId} is missing pending approval state for durable resume.`);
     }
-    const resumedRun: OrchestrationRun = {
-      ...host.orchestrationEngine.approvePhase(plan, run, run.pendingApprovalPhaseId, {
-        costIncrementUsd: run.pendingCostIncrementUsd ?? 0,
-      }),
-      executionState: "running",
-      pendingApprovalPhaseId: undefined,
-      pendingApprovedBy: undefined,
-      pendingCostIncrementUsd: undefined,
-      lastError: undefined,
-    };
-    await recordUpdate(
-      resumedRun,
-      "run_resumed",
-      {},
-      {
-        durableTimeline: {
-          eventType: "run_resumed",
-          payload: {
-            phaseId: resumedRun.currentPhaseId,
-            waveId: resumedRun.currentWaveId,
+    // Approvals recorded before approval became intent-only stored the run as
+    // running; apply them to the paused run they were approving.
+    const pendingApproval: OrchestrationRun = run.status === "running" ? { ...run, status: "paused" } : run;
+    // The engine keeps the approval marker on the run until the approved phase
+    // has executed, so a crash mid-phase still advances it after recovery.
+    const approved = host.orchestrationEngine.approvePhase(plan, pendingApproval, run.pendingApprovalPhaseId);
+    if (approved.status !== "running" && approved.status !== "stopped_by_limit") {
+      throw new Error(`Run ${run.runId} approval produced unexpected status ${approved.status}.`);
+    }
+    if (approved.status === "running") {
+      const resumedRun: OrchestrationRun = {
+        ...approved,
+        executionState: "running",
+        pendingCostIncrementUsd: undefined,
+        lastError: undefined,
+      };
+      await recordUpdate(
+        resumedRun,
+        "run_resumed",
+        {},
+        {
+          durableTimeline: {
+            eventType: "run_resumed",
+            payload: {
+              phaseId: resumedRun.currentPhaseId,
+              waveId: resumedRun.currentWaveId,
+            },
           },
         },
-      },
-    );
-    await persistRunEvent(host, run, "run.resumed", {
-      phaseId: run.currentPhaseId,
-      waveId: run.currentWaveId,
-    });
-    await publishRunRealtime(host, plan, run, { event: "run_resumed" });
+      );
+      await persistRunEvent(host, run, "run.resumed", {
+        phaseId: run.currentPhaseId,
+        waveId: run.currentWaveId,
+      });
+      await publishRunRealtime(host, plan, run, { event: "run_resumed" });
+    } else {
+      // A plan limit was reached while the run waited for approval. The
+      // terminal section below records the stop without running the phase.
+      run = { ...approved, lastError: undefined };
+    }
   } else if (run.status === "running" && run.currentPhaseId) {
     const resumedFrom = run.executionState;
     // A phase that was already dispatched (approval wait OR an ordinary
@@ -1825,6 +1827,8 @@ export async function executeDurableOrchestrationRun(
       };
     }
 
+    // Advancing consumes the approval marker, so read the approver first.
+    const approvedBy = run.pendingApprovalPhaseId === previousPhaseId ? run.pendingApprovedBy : undefined;
     await recordUpdate(
       {
         ...host.orchestrationEngine.advancePhase(plan, run, previousPhaseId, {
@@ -1844,6 +1848,45 @@ export async function executeDurableOrchestrationRun(
       costIncrementUsd: execution.costUsd ?? 0,
       totalCostUsd: run.totalCostUsd,
     });
+    if (approvedBy) {
+      // The approval-gated phase has now run; its after-phase gate and hooks fire here, not at approval time.
+      await persistPolicyGateEvent(host, run, {
+        gate: "pre_output",
+        trigger: "orchestration.phase.after",
+        entityType: "orchestration_phase",
+        entityId: `${run.runId}:${previousPhaseId}`,
+        outcome: "allowed",
+        phaseId: previousPhaseId,
+        approvalRequired: true,
+      });
+      try {
+        await host.hooksService.enqueueAfterHooks({
+          workspaceId: run.workspaceId ?? DEFAULT_WORKSPACE_ID,
+          trigger: "orchestration.phase.after",
+          entityType: "orchestration_phase",
+          entityId: `${run.runId}:${previousPhaseId}`,
+          payload: {
+            runId: run.runId,
+            planId: plan.planId,
+            phaseId: previousPhaseId,
+            approvedBy,
+            status: run.status,
+            currentWaveId: run.currentWaveId,
+            currentPhaseId: run.currentPhaseId,
+            executionState: run.executionState,
+          },
+        });
+      } catch (error) {
+        // The phase advance is already committed. Failing the durable run here
+        // would split it from the orchestration record, so record the missed
+        // after-phase hooks where operators can see them and carry on.
+        await persistRunEvent(host, run, "phase.after_hooks_failed", {
+          phaseId: previousPhaseId,
+          trigger: "orchestration.phase.after",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     await publishRunRealtime(host, plan, run, {
       event: "phase_executed",
       nextWaveId: run.currentWaveId,
@@ -1900,17 +1943,21 @@ export async function executeDurableOrchestrationRun(
   }
 
   const terminalExecutionState = run.status === "stopped_by_limit" ? "stopped_by_limit" : "completed";
+  // A final phase can finish past a budget (limits only stop further work); report it rather than hide it.
+  const limitOverruns = listLimitOverruns(plan, run);
   await recordUpdate(
     {
       ...run,
       executionState: terminalExecutionState,
     },
     run.status === "stopped_by_limit" ? "run_stopped" : "run_completed",
+    limitOverruns.length > 0 ? { limitOverruns } : {},
   );
   await persistRunEvent(host, run, run.status === "stopped_by_limit" ? "run.stopped" : "run.completed", {
     totalIterations: run.totalIterations,
     totalCostUsd: run.totalCostUsd,
     ...(run.status === "stopped_by_limit" ? { stopReason: run.stopReason ?? "plan_limit" } : {}),
+    ...(limitOverruns.length > 0 ? { limitOverruns } : {}),
   });
   await publishRunRealtime(host, plan, run, {
     event: run.status === "stopped_by_limit" ? "run_stopped" : "run_completed",

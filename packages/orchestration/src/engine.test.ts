@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OrchestrationPlan, OrchestrationRun } from "@goatcitadel/contracts";
-import { OrchestrationEngine } from "./engine.js";
+import { OrchestrationEngine, listLimitOverruns } from "./engine.js";
 
 const plan: OrchestrationPlan = {
   planId: "plan-1",
@@ -234,13 +234,83 @@ describe("OrchestrationEngine", () => {
     expect(started.status).toBe("paused");
     expect(started.currentPhaseId).toBe("phase-1");
 
-    const afterPhase1 = engine.approvePhase(happyPathPlan, started, "phase-1", { now: testNow });
+    // Approval lets the paused phase run; it does not advance past it.
+    const approvedPhase1 = engine.approvePhase(happyPathPlan, started, "phase-1", { now: testNow });
+    expect(approvedPhase1).toMatchObject({
+      status: "running",
+      currentPhaseId: "phase-1",
+      pendingApprovalPhaseId: "phase-1",
+      totalIterations: 0,
+    });
+
+    // After the approved phase executes, advancing consumes the approval and pauses before the next gated phase.
+    const afterPhase1 = engine.advancePhase(happyPathPlan, approvedPhase1, "phase-1", { now: testNow });
     expect(afterPhase1.status).toBe("paused");
     expect(afterPhase1.currentPhaseId).toBe("phase-2");
+    expect(afterPhase1.pendingApprovalPhaseId).toBeUndefined();
+    expect(afterPhase1.totalIterations).toBe(1);
 
-    const afterPhase2 = engine.approvePhase(happyPathPlan, afterPhase1, "phase-2", { now: testNow });
+    const approvedPhase2 = engine.approvePhase(happyPathPlan, afterPhase1, "phase-2", { now: testNow });
+    expect(approvedPhase2.status).toBe("running");
+    expect(approvedPhase2.currentPhaseId).toBe("phase-2");
+
+    const afterPhase2 = engine.advancePhase(happyPathPlan, approvedPhase2, "phase-2", { now: testNow });
     expect(afterPhase2.status).toBe("completed");
     expect(afterPhase2.endedAt).toBe(testNow);
+  });
+
+  it("approves every hitl phase before it runs, including phases not marked requiresApproval", () => {
+    const engine = new OrchestrationEngine();
+    const hitlPlan: OrchestrationPlan = {
+      ...plan,
+      maxIterations: 10,
+      waves: [
+        {
+          ...plan.waves[0]!,
+          phases: plan.waves[0]!.phases.map((phase) => ({ ...phase, requiresApproval: false })),
+        },
+      ],
+    };
+
+    const started = engine.startRun(hitlPlan, engine.createRun(hitlPlan));
+    expect(started.status).toBe("paused");
+
+    const approved = engine.approvePhase(hitlPlan, started, "phase-1", { now: testNow });
+    expect(approved.status).toBe("running");
+    expect(approved.currentPhaseId).toBe("phase-1");
+
+    // Without an approval marker a hitl phase cannot advance, even though requiresApproval is false.
+    expect(() => engine.advancePhase(hitlPlan, { ...approved, pendingApprovalPhaseId: undefined }, "phase-1")).toThrow(
+      "requires approval",
+    );
+    expect(engine.advancePhase(hitlPlan, approved, "phase-1", { now: testNow }).status).toBe("paused");
+  });
+
+  it("stops instead of running an approved phase when a plan limit was reached while it waited", () => {
+    const engine = new OrchestrationEngine();
+    const paused: OrchestrationRun = {
+      runId: "run-waited",
+      planId: plan.planId,
+      status: "paused",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      currentWaveId: "wave-1",
+      currentPhaseId: "phase-1",
+      totalCostUsd: 0,
+      totalIterations: 0,
+      pendingApprovalPhaseId: "phase-1",
+      pendingApprovedBy: "operator",
+    };
+
+    // The plan allows 1000 runtime minutes; the approval arrives 1001 minutes after the run started.
+    const approved = engine.approvePhase(plan, paused, "phase-1", { now: "2026-02-27T16:41:00.000Z" });
+    expect(approved).toMatchObject({
+      status: "stopped_by_limit",
+      stopReason: "plan_limit",
+      currentPhaseId: "phase-1",
+      endedAt: "2026-02-27T16:41:00.000Z",
+    });
+    expect(approved.pendingApprovalPhaseId).toBeUndefined();
+    expect(approved.pendingApprovedBy).toBeUndefined();
   });
 
   it("starts auto runs in running state for non-approval phases and pauses only on approval-gated phases", () => {
@@ -285,8 +355,12 @@ describe("OrchestrationEngine", () => {
       status: "paused" as const,
       currentPhaseId: "phase-2",
     };
+    // Approving the gated phase runs it rather than skipping past it.
     const afterApproval = engine.approvePhase(autoPlan, waitingForApproval, "phase-2", { now: testNow });
-    expect(afterApproval.status).toBe("completed");
+    expect(afterApproval.status).toBe("running");
+    expect(afterApproval.currentPhaseId).toBe("phase-2");
+    expect(afterApproval.pendingApprovalPhaseId).toBe("phase-2");
+    expect(engine.advancePhase(autoPlan, afterApproval, "phase-2", { now: testNow }).status).toBe("completed");
 
     expect(() =>
       engine.approvePhase(autoPlan, { ...waitingForApproval, currentPhaseId: "phase-1" }, "phase-2"),
@@ -488,7 +562,7 @@ describe("OrchestrationEngine", () => {
     expect(() => engine.startRun(plan, run)).toThrow("cannot be started from status running");
   });
 
-  it("stops by limit when the final phase reaches the cost budget", () => {
+  it("completes when the final phase reaches a limit, because limits only stop further work", () => {
     const engine = new OrchestrationEngine();
     const finalPhasePlan: OrchestrationPlan = {
       ...plan,
@@ -519,11 +593,34 @@ describe("OrchestrationEngine", () => {
       totalIterations: 0,
     };
 
-    const advanced = engine.advancePhase(finalPhasePlan, run, "phase-1", { costIncrementUsd: 0.25 });
+    const advanced = engine.advancePhase(finalPhasePlan, run, "phase-1", { costIncrementUsd: 0.25, now: testNow });
 
-    expect(advanced.status).toBe("stopped_by_limit");
+    expect(advanced.status).toBe("completed");
+    expect(advanced.stopReason).toBeUndefined();
     expect(advanced.currentPhaseId).toBeUndefined();
-    expect(advanced.endedAt).toBeDefined();
+    expect(advanced.endedAt).toBe(testNow);
+    // Reaching the cap exactly is not an overrun.
+    expect(listLimitOverruns(finalPhasePlan, advanced)).toEqual([]);
+
+    // Exactly reaching maxIterations on the final phase also completes.
+    const iterationCapped = engine.advancePhase({ ...finalPhasePlan, maxIterations: 1 }, run, "phase-1", {
+      now: testNow,
+    });
+    expect(iterationCapped.status).toBe("completed");
+
+    // Spending past the cap on the final phase still completes, and the overrun is reported.
+    const overBudget = engine.advancePhase(finalPhasePlan, run, "phase-1", { costIncrementUsd: 0.4, now: testNow });
+    expect(overBudget.status).toBe("completed");
+    expect(listLimitOverruns(finalPhasePlan, overBudget)).toEqual([
+      { kind: "plan_cost", limitUsd: 0.25, spentUsd: 0.4 },
+    ]);
+
+    // Finishing the final phase after the runtime limit completes too, and reports the runtime overrun.
+    const overTime = engine.advancePhase(finalPhasePlan, run, "phase-1", { now: "2026-02-27T16:41:00.000Z" });
+    expect(overTime.status).toBe("completed");
+    expect(listLimitOverruns(finalPhasePlan, overTime)).toEqual([
+      { kind: "runtime", limitMinutes: 1000, elapsedMinutes: 1001 },
+    ]);
   });
 
   it("advances across waves and exposes direct limit checks", () => {
@@ -766,7 +863,16 @@ describe("OrchestrationEngine per-wave budget enforcement", () => {
 
   it("tracks per-wave cost independently across waves and resets enforcement per wave", () => {
     const engine = new OrchestrationEngine();
-    const plan: OrchestrationPlan = { ...multiWaveBudgetPlan, maxCostUsd: 100 };
+    const wave2 = multiWaveBudgetPlan.waves[1]!;
+    // wave-2 gets a second phase so its budget stop happens with work still remaining.
+    const plan: OrchestrationPlan = {
+      ...multiWaveBudgetPlan,
+      maxCostUsd: 100,
+      waves: [
+        multiWaveBudgetPlan.waves[0]!,
+        { ...wave2, phases: [...wave2.phases, { ...wave2.phases[0]!, phaseId: "phase-2b" }] },
+      ],
+    };
 
     // wave-1: two phases at 0.4 each -> 0.8 < budget 1, advances into wave-2.
     const afterPhase1a = engine.advancePhase(plan, runningRun(), "phase-1a", {
@@ -818,5 +924,25 @@ describe("OrchestrationEngine per-wave budget enforcement", () => {
     expect(advanced.status).toBe("running");
     expect(advanced.stopReason).toBeUndefined();
     expect(advanced.waveCostUsdByWaveId).toEqual({ "wave-1": 0 });
+  });
+
+  it("completes a final phase that overran its wave budget and reports the overrun", () => {
+    const engine = new OrchestrationEngine();
+    const plan: OrchestrationPlan = { ...multiWaveBudgetPlan, maxCostUsd: 100 };
+    const atFinalPhase = runningRun({
+      currentWaveId: "wave-2",
+      currentPhaseId: "phase-2a",
+      totalCostUsd: 0.8,
+      totalIterations: 2,
+      waveCostUsdByWaveId: { "wave-1": 0.8 },
+    });
+
+    const finished = engine.advancePhase(plan, atFinalPhase, "phase-2a", { costIncrementUsd: 1.5, now: BUDGET_NOW });
+
+    expect(finished.status).toBe("completed");
+    expect(finished.stopReason).toBeUndefined();
+    expect(listLimitOverruns(plan, finished)).toEqual([
+      { kind: "wave_cost", waveId: "wave-2", limitUsd: 1, spentUsd: 1.5 },
+    ]);
   });
 });
