@@ -8,7 +8,9 @@
 
 import {
   ConflictError,
+  isChatTurnTerminalStatus,
   redactStructuredSecrets,
+  type ChatTurnTraceRecord,
   type DurableChildWatcherCreateRequest,
   type DurableRunCreateRequest,
   type DurableRunRecord,
@@ -113,8 +115,27 @@ export interface OrchestrationLifecycleRuntimeDeps {
       signal?: AbortSignal;
       onChildDispatched?: (dispatch: OrchestrationPhaseChildDispatch) => Promise<void>;
     }): Promise<OrchestrationPhaseExecutionResult>;
+    /**
+     * Reads a parked phase's settled child turn from canonical records, or
+     * returns undefined while the child is still working.
+     */
+    harvest?(input: {
+      phaseId: string;
+      ownerAgentId: string;
+      childRunId: string;
+      childSessionId?: string;
+      childTurnId?: string;
+      startedAt?: string;
+      prompt?: OrchestrationPhaseExecutionResult["prompt"];
+    }): Promise<OrchestrationPhaseExecutionResult | undefined>;
   };
 }
+
+/**
+ * Wake key a parent orchestration run parks on while its phase's child Chat
+ * turn runs. The correlation id is the child's durable run id.
+ */
+export const ORCHESTRATION_PHASE_CHILD_WAKE_EVENT = "orchestration.phase_child.settled";
 
 export interface OrchestrationLifecycleHost {
   readonly config: {
@@ -517,6 +538,14 @@ async function markOrchestrationRunCancelled(
     return cancellation.run;
   }
   const cancelled = cancellation.run;
+  if (linkedDurable && run.currentPhaseId) {
+    await cancelOrphanedPhaseChild(
+      host,
+      cancelled,
+      readRecoverableChildPhase(linkedDurable, run.currentPhaseId)?.childRunId,
+      actorId,
+    );
+  }
   await persistRunEvent(host, cancelled, "run.cancelled", {
     actorId,
     reason,
@@ -527,6 +556,39 @@ async function markOrchestrationRunCancelled(
   });
   await releaseOrchestrationWorktreeIfAvailable(runtime, host, cancelled, "cancelled");
   return cancelled;
+}
+
+/**
+ * Cancels a phase's child Chat run that can no longer report to its parent,
+ * because the run was cancelled or the phase failed. A parked parent does not
+ * hold the child's abort signal, so this is how either outcome reaches the
+ * child. A child that settles concurrently keeps its own terminal state.
+ */
+async function cancelOrphanedPhaseChild(
+  host: OrchestrationLifecycleHost,
+  run: OrchestrationRun,
+  childRunId: string | undefined,
+  actorId: string,
+): Promise<void> {
+  if (!childRunId) {
+    return;
+  }
+  const child = await getDurableRunIfAvailable(host, childRunId);
+  if (!child || isDurableRunTerminal(child)) {
+    return;
+  }
+  try {
+    await host.cancelDurableRun(childRunId, actorId);
+  } catch (error) {
+    const current = await getDurableRunIfAvailable(host, childRunId);
+    if (current && !isDurableRunTerminal(current)) {
+      await persistRunEvent(host, run, "phase.child_cancel_failed", {
+        phaseId: run.currentPhaseId,
+        childRunId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }
 
 async function persistCheckpoint(
@@ -1280,6 +1342,155 @@ export async function cancelOrchestrationRun(
   };
 }
 
+/** Server-owned records read to decide whether a parked phase's child has settled. */
+export interface OrchestrationPhaseChildWakeHost {
+  readonly storage: {
+    orchestration: Pick<OrchestrationLifecycleHost["storage"]["orchestration"], "getRun">;
+    durableRuns: Pick<Storage["durableRuns"], "listRunIdsByStatus">;
+    durableChildWatchers: Pick<Storage["durableChildWatchers"], "getByPair">;
+    chatTurnTraces: Pick<Storage["chatTurnTraces"], "get">;
+  };
+  getDurableRun(runId: string): Promise<DurableRunRecord>;
+  wakeDurableRun(
+    runId: string,
+    event: { eventKey: string; correlationId?: string; payload?: Record<string, unknown> },
+  ): Promise<{ outcome: string }>;
+}
+
+/**
+ * Wakes the orchestration run whose parked phase waits on this durable Chat
+ * run. `orchestrationRunId` is the child's admitted policy run id. The parent
+ * wakes only when it registered exactly this child (wait correlation, phase
+ * breadcrumb and watcher agree) and the child has settled.
+ */
+export async function wakeOrchestrationPhaseParent(
+  host: OrchestrationPhaseChildWakeHost,
+  childRunId: string,
+  orchestrationRunId: string | undefined,
+): Promise<boolean> {
+  const runId = orchestrationRunId?.trim();
+  if (!runId) {
+    return false;
+  }
+  const run = await getOrchestrationRunIfAvailable(host, runId);
+  if (!run?.durableRunId || run.executionState !== "waiting_for_child") {
+    return false;
+  }
+  const parent = await getDurableRunIfAvailable(host, run.durableRunId);
+  return parent ? await wakeParkedOrchestrationPhase(host, parent, run, childRunId) : false;
+}
+
+/**
+ * Catches up wakes that were missed, for example when a child settled before
+ * its parent finished parking or the gateway restarted in between.
+ */
+export async function reconcileWaitingOrchestrationPhases(host: OrchestrationPhaseChildWakeHost): Promise<void> {
+  const failures: unknown[] = [];
+  for (const runId of await host.storage.durableRuns.listRunIdsByStatus("waiting")) {
+    try {
+      const parent = await getDurableRunIfAvailable(host, runId);
+      const childRunId = parent ? readPhaseChildWaitCorrelation(parent) : undefined;
+      const payload = parent && childRunId ? parseOrchestrationWorkflowPayload(parent) : undefined;
+      if (!parent || !childRunId || !payload) {
+        continue;
+      }
+      const run = await getOrchestrationRunIfAvailable(host, payload.orchestrationRunId);
+      if (run) {
+        await wakeParkedOrchestrationPhase(host, parent, run, childRunId);
+      }
+    } catch (error) {
+      // One unreadable parent must not starve the others; report after the scan.
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Orchestration phase wake reconciliation could not check every parked run.");
+  }
+}
+
+async function wakeParkedOrchestrationPhase(
+  host: OrchestrationPhaseChildWakeHost,
+  parent: DurableRunRecord,
+  run: OrchestrationRun,
+  childRunId: string,
+): Promise<boolean> {
+  if (
+    parent.status !== "waiting" ||
+    readPhaseChildWaitCorrelation(parent) !== childRunId ||
+    run.durableRunId !== parent.runId ||
+    run.executionState !== "waiting_for_child" ||
+    !run.currentPhaseId
+  ) {
+    return false;
+  }
+  const phase = readRecoverableChildPhase(parent, run.currentPhaseId);
+  if (phase?.childRunId !== childRunId) {
+    return false;
+  }
+  const watcher = await host.storage.durableChildWatchers.getByPair(parent.runId, childRunId);
+  if (watcher?.source !== "orchestration_phase") {
+    return false;
+  }
+  if (!(await isPhaseChildSettled(host, childRunId, asString(phase.payload.childTurnId)))) {
+    return false;
+  }
+  const result = await host.wakeDurableRun(parent.runId, {
+    eventKey: ORCHESTRATION_PHASE_CHILD_WAKE_EVENT,
+    correlationId: childRunId,
+    payload: { orchestrationRunId: run.runId, phaseId: run.currentPhaseId },
+  });
+  return result.outcome === "woke";
+}
+
+/**
+ * A phase child has settled once it cannot produce more phase output on its
+ * own: its durable run ended (or is gone), or its turn finished or stopped to
+ * ask for user input. A child waiting on an approval is still working; the
+ * operator resolves that approval in Chat.
+ */
+async function isPhaseChildSettled(
+  host: OrchestrationPhaseChildWakeHost,
+  childRunId: string,
+  childTurnId: string | undefined,
+): Promise<boolean> {
+  const child = await getDurableRunIfAvailable(host, childRunId);
+  if (!child || isDurableRunTerminal(child)) {
+    return true;
+  }
+  if (!childTurnId) {
+    return false;
+  }
+  let traceStatus: ChatTurnTraceRecord["status"];
+  try {
+    traceStatus = (await host.storage.chatTurnTraces.get(childTurnId)).status;
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      return false;
+    }
+    throw error;
+  }
+  return traceStatus === "waiting_for_user_input" || isChatTurnTerminalStatus(traceStatus);
+}
+
+function readPhaseChildWaitCorrelation(run: DurableRunRecord): string | undefined {
+  const wait = asRecord(asRecord(run.metadata)?.waitForEvent);
+  return wait?.eventKey === ORCHESTRATION_PHASE_CHILD_WAKE_EVENT ? asString(wait.correlationId) : undefined;
+}
+
+async function getOrchestrationRunIfAvailable(
+  host: Pick<OrchestrationPhaseChildWakeHost, "storage">,
+  runId: string,
+): Promise<OrchestrationRun | undefined> {
+  try {
+    return await host.storage.orchestration.getRun(runId);
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 export async function executeDurableOrchestrationRun(
   host: OrchestrationLifecycleHost,
   runtime: OrchestrationLifecycleRuntimeDeps,
@@ -1490,9 +1701,29 @@ export async function executeDurableOrchestrationRun(
           runEvent: "run.child_durable_missing",
         });
       }
-      if (!isDurableRunTerminal(childRun)) {
+      // Prefer the child's canonical Chat records: they carry its output, its
+      // full cost, and whether it stopped to ask for user input.
+      const settledChild = await runtime.phaseExecutor.harvest?.({
+        phaseId: run.currentPhaseId,
+        ownerAgentId:
+          asString(recoverableChildPhase.payload.ownerAgentId) ??
+          findPhaseInPlan(plan, run.currentPhaseId).ownerAgentId,
+        childRunId,
+        childSessionId: asString(recoverableChildPhase.payload.childSessionId),
+        childTurnId: asString(recoverableChildPhase.payload.childTurnId),
+        startedAt: asString(recoverableChildPhase.payload.startedAt),
+        prompt: asPromptReference(recoverableChildPhase.payload.prompt),
+      });
+      if (settledChild) {
+        harvestedWaitingExecution = settledChild;
+      } else if (isDurableRunTerminal(childRun)) {
+        harvestedWaitingExecution = buildHarvestedWaitingExecution(recoverableChildPhase.payload, childRun);
+      } else {
+        // The child is still working. Park again on the child wake: a wake clears
+        // waitForEvent, and a run parked without one refuses keyed wakes.
+        const waitForEvent = { eventKey: ORCHESTRATION_PHASE_CHILD_WAKE_EVENT, correlationId: childRunId };
         await recordUpdate(
-          { ...run },
+          { ...run, executionState: "waiting_for_child" },
           undefined,
           {},
           {
@@ -1502,7 +1733,11 @@ export async function executeDurableOrchestrationRun(
               clearLastError: true,
               clearLease: true,
             },
-            durableMetadata: durableRun.metadata,
+            durableMetadata: {
+              ...(durableRun.metadata ?? {}),
+              waitingPhase: recoverableChildPhase.payload,
+              waitForEvent,
+            },
             durableTimeline: {
               eventType: "run_waiting",
               payload: {
@@ -1529,7 +1764,6 @@ export async function executeDurableOrchestrationRun(
           }),
         };
       }
-      harvestedWaitingExecution = buildHarvestedWaitingExecution(recoverableChildPhase.payload, childRun);
     }
     const resumedFromChild = isApprovalResume || Boolean(recoverableChildPhase);
     const resumedRun: OrchestrationRun = {
@@ -1613,21 +1847,25 @@ export async function executeDurableOrchestrationRun(
     const previousWaveId = run.currentWaveId;
     const previousPhaseId = run.currentPhaseId;
     const phase = findPhaseInPlan(plan, previousPhaseId);
-    await persistRunEvent(host, run, "phase.started", {
-      phaseId: previousPhaseId,
-      waveId: previousWaveId,
-      ownerAgentId: phase.ownerAgentId,
-      specPath: phase.specPath,
-    });
-    await publishRunRealtime(host, plan, run, {
-      event: "phase_started",
-    });
+    const harvested = harvestedWaitingExecution?.phaseId === previousPhaseId ? harvestedWaitingExecution : undefined;
+    harvestedWaitingExecution = undefined;
+    // A harvested phase already recorded its start when it dispatched the child.
+    if (!harvested) {
+      await persistRunEvent(host, run, "phase.started", {
+        phaseId: previousPhaseId,
+        waveId: previousWaveId,
+        ownerAgentId: phase.ownerAgentId,
+        specPath: phase.specPath,
+      });
+      await publishRunRealtime(host, plan, run, {
+        event: "phase_started",
+      });
+    }
 
     let execution: OrchestrationPhaseExecutionResult;
     try {
-      if (harvestedWaitingExecution && harvestedWaitingExecution.phaseId === previousPhaseId) {
-        execution = harvestedWaitingExecution;
-        harvestedWaitingExecution = undefined;
+      if (harvested) {
+        execution = harvested;
       } else {
         execution = await runtime.phaseExecutor.execute({
           plan,
@@ -1679,12 +1917,14 @@ export async function executeDurableOrchestrationRun(
       }
     }
     const unsupportedWaitError =
-      execution.status === "waiting" && !execution.approvalId
-        ? "Phase child turn entered a wait state without an approval id; durable orchestration only supports approval-correlated child waits."
-        : execution.status === "waiting" && !execution.childRunId
-          ? "Phase child turn entered a wait state without a child durable run id; durable orchestration cannot resume an unlinked child wait."
-          : undefined;
+      execution.status === "waiting" && !execution.childRunId
+        ? "Phase child turn entered a wait state without a child durable run id; durable orchestration cannot resume an unlinked child wait."
+        : undefined;
     const executionStatus = unsupportedWaitError ? "failed" : execution.status;
+    // Cost a provider did not report is unknown, not zero. Record that so the
+    // plan's cost limits are not mistaken for enforced on this phase.
+    const costUnreported =
+      executionStatus !== "waiting" && (execution.costUnreported === true || execution.costUsd === undefined);
     const executionPayload = {
       phaseId: execution.phaseId,
       ownerAgentId: execution.ownerAgentId,
@@ -1700,6 +1940,7 @@ export async function executeDurableOrchestrationRun(
       responseId: execution.responseId,
       model: execution.model,
       costUsd: execution.costUsd ?? 0,
+      ...(costUnreported ? { costUnreported: true } : {}),
       inputTokens: execution.inputTokens,
       outputTokens: execution.outputTokens,
       citations: execution.citations,
@@ -1719,75 +1960,63 @@ export async function executeDurableOrchestrationRun(
     );
 
     if (executionStatus === "waiting") {
-      const waitForEvent = execution.approvalId
-        ? {
-            eventKey: "approval.resolved",
-            correlationId: execution.approvalId,
-          }
-        : undefined;
+      // The phase's child turn was admitted and runs on its own durable run,
+      // including any approval it waits on in Chat. Park this run so the single
+      // durable worker can execute the child; the child settling wakes this run
+      // to harvest it.
+      const waitForEvent = { eventKey: ORCHESTRATION_PHASE_CHILD_WAKE_EVENT, correlationId: execution.childRunId! };
       await recordUpdate(
         {
           ...run,
-          status: waitForEvent ? "running" : "paused",
-          executionState: "paused_for_approval",
+          status: "running",
+          executionState: "waiting_for_child",
           lastError: undefined,
         },
-        waitForEvent ? "run_paused_for_approval" : undefined,
-        waitForEvent
-          ? {
-              waitingPhase: executionPayload,
+        undefined,
+        {},
+        {
+          durableState: {
+            status: "waiting",
+            clearFinishedAt: true,
+            clearLastError: true,
+            clearLease: true,
+          },
+          durableMetadataExtras: {
+            waitForEvent,
+            waitingPhase: executionPayload,
+          },
+          durableTimeline: {
+            eventType: "run_waiting",
+            payload: {
               waitForEvent,
-            }
-          : {},
-        waitForEvent
-          ? {
-              durableState: {
-                status: "waiting",
-                clearFinishedAt: true,
-                clearLastError: true,
-                clearLease: true,
-              },
-              durableMetadataExtras: {
-                waitForEvent,
-                waitingPhase: executionPayload,
-              },
-              durableTimeline: {
-                eventType: "run_waiting",
-                payload: {
-                  waitForEvent,
-                  phaseId: previousPhaseId,
-                  childSessionId: execution.childSessionId,
-                  childTurnId: execution.childTurnId,
-                  childRunId: execution.childRunId,
-                  approvalId: execution.approvalId,
-                },
-              },
-            }
-          : {},
+              phaseId: previousPhaseId,
+              childSessionId: execution.childSessionId,
+              childTurnId: execution.childTurnId,
+              childRunId: execution.childRunId,
+              approvalId: execution.approvalId,
+            },
+          },
+        },
       );
       await publishRunRealtime(host, plan, run, {
         event: "phase_waiting",
       });
-      if (waitForEvent) {
-        await persistRunEvent(host, run, "run.paused_for_approval", {
-          phaseId: run.currentPhaseId,
-          waveId: run.currentWaveId,
+      await persistRunEvent(host, run, "run.waiting_for_child", {
+        phaseId: run.currentPhaseId,
+        waveId: run.currentWaveId,
+        waitForEvent,
+        childSessionId: execution.childSessionId,
+        childTurnId: execution.childTurnId,
+        childRunId: execution.childRunId,
+        approvalId: execution.approvalId,
+      });
+      return {
+        outcome: "paused",
+        checkpointState: buildCheckpointDetails(plan, run, durableRun.runId, {
+          waitingPhase: executionPayload,
           waitForEvent,
-          childSessionId: execution.childSessionId,
-          childTurnId: execution.childTurnId,
-          childRunId: execution.childRunId,
-          approvalId: execution.approvalId,
-        });
-        await publishRunRealtime(host, plan, run, { event: "run_paused_for_approval" });
-        return {
-          outcome: "paused",
-          checkpointState: buildCheckpointDetails(plan, run, durableRun.runId, {
-            waitingPhase: executionPayload,
-            waitForEvent,
-          }),
-        };
-      }
-      continue;
+        }),
+      };
     }
 
     if (executionStatus === "failed") {
@@ -1818,6 +2047,8 @@ export async function executeDurableOrchestrationRun(
         event: "run_failed",
         error: phaseError,
       });
+      // A child stopped for user input stays waiting; nothing will answer it now.
+      await cancelOrphanedPhaseChild(host, run, execution.childRunId, "orchestration");
       await releaseOrchestrationWorktreeIfAvailable(runtime, host, run, "failed");
       return {
         outcome: "failed",
@@ -1846,6 +2077,7 @@ export async function executeDurableOrchestrationRun(
       nextPhaseId: run.currentPhaseId,
       nextWaveId: run.currentWaveId,
       costIncrementUsd: execution.costUsd ?? 0,
+      ...(costUnreported ? { costUnreported: true } : {}),
       totalCostUsd: run.totalCostUsd,
     });
     if (approvedBy) {
@@ -2187,7 +2419,7 @@ function describeMalformedWorkspaceId(value: unknown): string {
 }
 
 async function getDurableRunIfAvailable(
-  host: OrchestrationLifecycleHost,
+  host: Pick<OrchestrationLifecycleHost, "getDurableRun">,
   runId: string,
 ): Promise<DurableRunRecord | undefined> {
   try {
@@ -2252,6 +2484,11 @@ async function failDurableOrchestrationWorkspaceMismatch(input: {
   };
 }
 
+/**
+ * Fallback harvest from durable metadata when the child's canonical Chat
+ * records are unavailable. The waiting payload was captured before the child
+ * finished, so its cost is at most a lower bound and is flagged as unreported.
+ */
 function buildHarvestedWaitingExecution(
   waitingPhase: Record<string, unknown>,
   childRun: DurableRunRecord,
@@ -2280,6 +2517,7 @@ function buildHarvestedWaitingExecution(
     responseId: asString(waitingPhase.responseId),
     model: asString(waitingPhase.model),
     costUsd: asNumber(waitingPhase.costUsd),
+    costUnreported: true,
     inputTokens: asNumber(waitingPhase.inputTokens),
     outputTokens: asNumber(waitingPhase.outputTokens),
     citations: Array.isArray(waitingPhase.citations) ? (waitingPhase.citations as unknown[]) : undefined,
@@ -2543,6 +2781,7 @@ function mapRunEventDecisionKind(eventType: string, _payload: Record<string, unk
       return "phase_child_dispatched";
     case "phase.waiting":
     case "run.paused_for_approval":
+    case "run.waiting_for_child":
       return "phase_wait_registered";
     case "phase.completed":
     case "phase.executed":

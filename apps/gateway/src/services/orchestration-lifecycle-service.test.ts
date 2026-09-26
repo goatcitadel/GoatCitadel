@@ -14,8 +14,12 @@ import {
   getRunTrace,
   runOrchestrationPlan,
   cancelOrchestrationRun,
+  ORCHESTRATION_PHASE_CHILD_WAKE_EVENT,
+  reconcileWaitingOrchestrationPhases,
+  wakeOrchestrationPhaseParent,
   type OrchestrationLifecycleHost,
   type OrchestrationLifecycleRuntimeDeps,
+  type OrchestrationPhaseChildWakeHost,
 } from "./orchestration-lifecycle-service.js";
 
 function buildPlan(): OrchestrationPlan {
@@ -1657,7 +1661,7 @@ describe("orchestration-lifecycle-service", () => {
     });
   });
 
-  it("pauses orchestration when a child phase turn is waiting instead of failing the phase", async () => {
+  it("parks on the phase child, not its approval, when the child waits on an approval in Chat", async () => {
     const host = createHost({
       storage: {
         orchestration: {
@@ -1697,20 +1701,24 @@ describe("orchestration-lifecycle-service", () => {
     expect(host.storage.orchestration.updateRun).toHaveBeenCalledWith(
       expect.objectContaining({
         status: "running",
-        executionState: "paused_for_approval",
+        executionState: "waiting_for_child",
       }),
     );
+    // The child owns its approval wait; the parent waits for the child to settle.
     expect(host.updateDurableRunState).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "durable-run-1",
         status: "waiting",
         metadata: expect.objectContaining({
           waitForEvent: {
-            eventKey: "approval.resolved",
-            correlationId: "approval-phase-1",
+            eventKey: ORCHESTRATION_PHASE_CHILD_WAKE_EVENT,
+            correlationId: "durable-child-1",
           },
         }),
       }),
+    );
+    expect(vi.mocked(host.createCheckpoint).mock.calls.map(([input]) => input.checkpointKind)).not.toContain(
+      "run_paused_for_approval",
     );
     expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
       "run-1",
@@ -1722,7 +1730,7 @@ describe("orchestration-lifecycle-service", () => {
     );
   });
 
-  it("fails child wait results that cannot be resumed by approval correlation", async () => {
+  it("parks the durable run on its phase child instead of holding the worker", async () => {
     const host = createHost({
       storage: {
         orchestration: {
@@ -1745,7 +1753,6 @@ describe("orchestration-lifecycle-service", () => {
           status: "waiting" as const,
           startedAt: "2026-04-12T00:00:01.000Z",
           finishedAt: "2026-04-12T00:00:02.000Z",
-          outputSummary: "Waiting for user input.",
           childSessionId: "sess_phase",
           childTurnId: "turn_phase",
           childRunId: "durable-child-1",
@@ -1755,30 +1762,83 @@ describe("orchestration-lifecycle-service", () => {
 
     const result = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
 
-    expect(result.outcome).toBe("failed");
+    const waitForEvent = { eventKey: ORCHESTRATION_PHASE_CHILD_WAKE_EVENT, correlationId: "durable-child-1" };
+    expect(result.outcome).toBe("paused");
     expect(host.orchestrationEngine.advancePhase).not.toHaveBeenCalled();
-    expect(host.updateDurableRunState).not.toHaveBeenCalledWith(
+    expect(host.updateDurableRunState).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "durable-run-1",
         status: "waiting",
+        clearLease: true,
+        metadata: expect.objectContaining({
+          waitForEvent,
+          waitingPhase: expect.objectContaining({ phaseId: "phase-1", childRunId: "durable-child-1" }),
+        }),
       }),
     );
+    expect(host.storage.orchestration.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "running", executionState: "waiting_for_child" }),
+    );
+    expect(vi.mocked(host.createCheckpoint).mock.calls.map(([input]) => input.checkpointKind)).toEqual(["run_started"]);
+    expect(vi.mocked(host.storage.orchestration.appendRunEvent).mock.calls.map(([, eventType]) => eventType)).toEqual([
+      "run.started",
+      "phase.started",
+      "phase.waiting",
+      "run.waiting_for_child",
+    ]);
+    // Cost is only known once the child settles, so a waiting phase does not claim it is unreported yet.
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "phase.waiting",
+      expect.not.objectContaining({ costUnreported: true }),
+    );
+  });
+
+  it("fails child waits that do not include a child durable run id", async () => {
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...createHost().storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            durableRunId: "durable-run-1",
+            executionState: "queued",
+            worktreeStatus: "ready",
+            worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const runtime = createRuntimeDeps({
+      phaseExecutor: {
+        execute: vi.fn(async () => ({
+          phaseId: "phase-1",
+          ownerAgentId: "agent-1",
+          status: "waiting" as const,
+          startedAt: "2026-04-12T00:00:01.000Z",
+          finishedAt: "2026-04-12T00:00:02.000Z",
+          childSessionId: "sess_phase",
+          childTurnId: "turn_phase",
+        })),
+      },
+    });
+
+    const result = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+
+    const unlinkedWaitError =
+      "Phase child turn entered a wait state without a child durable run id; durable orchestration cannot resume an unlinked child wait.";
+    expect(result.outcome).toBe("failed");
+    expect(host.orchestrationEngine.advancePhase).not.toHaveBeenCalled();
+    expect(host.updateDurableRunState).not.toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "durable-run-1", status: "waiting" }),
+    );
     expect(host.storage.orchestration.updateRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: "failed",
-        executionState: "failed",
-        lastError:
-          "Phase child turn entered a wait state without an approval id; durable orchestration only supports approval-correlated child waits.",
-      }),
+      expect.objectContaining({ status: "failed", executionState: "failed", lastError: unlinkedWaitError }),
     );
     expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
       "run-1",
       "phase.failed",
-      expect.objectContaining({
-        childRunId: "durable-child-1",
-        error:
-          "Phase child turn entered a wait state without an approval id; durable orchestration only supports approval-correlated child waits.",
-      }),
+      expect.objectContaining({ error: unlinkedWaitError }),
     );
   });
 
@@ -2648,5 +2708,482 @@ describe("orchestration-lifecycle-service", () => {
       run: expect.objectContaining({ status: "cancelled" }),
       reason: "cancelled",
     });
+  });
+});
+
+describe("orchestration phase child parking", () => {
+  const CHILD_RUN_ID = "durable-child-1";
+
+  function buildChildDurableRun(overrides: Partial<DurableRunRecord> = {}): DurableRunRecord {
+    return {
+      runId: CHILD_RUN_ID,
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      attemptCount: 1,
+      maxAttempts: 3,
+      version: 3,
+      payload: {},
+      metadata: {},
+      finishedAt: "2026-04-12T00:01:02.000Z",
+      createdAt: "2026-04-12T00:00:01.000Z",
+      updatedAt: "2026-04-12T00:01:02.000Z",
+      ...overrides,
+    };
+  }
+
+  function buildParkedParent(overrides: Partial<DurableRunRecord> = {}): DurableRunRecord {
+    return {
+      runId: "durable-run-1",
+      workflowKey: "orchestration.plan.execute",
+      status: "waiting",
+      attemptCount: 1,
+      maxAttempts: 3,
+      version: 4,
+      payload: {
+        version: "orchestration.plan.execute.v1",
+        orchestrationRunId: "run-1",
+        planId: "plan-1",
+        workspaceId: "default",
+        requestedAt: "2026-04-12T00:00:00.000Z",
+      },
+      metadata: {
+        waitForEvent: { eventKey: ORCHESTRATION_PHASE_CHILD_WAKE_EVENT, correlationId: CHILD_RUN_ID },
+        waitingPhase: {
+          phaseId: "phase-1",
+          ownerAgentId: "agent-1",
+          status: "waiting",
+          startedAt: "2026-04-12T00:00:01.000Z",
+          childSessionId: "sess_phase",
+          childTurnId: "turn_phase",
+          childRunId: CHILD_RUN_ID,
+        },
+      },
+      createdAt: "2026-04-12T00:00:00.000Z",
+      updatedAt: "2026-04-12T00:00:30.000Z",
+      ...overrides,
+    };
+  }
+
+  function buildParkedRun(overrides: Partial<OrchestrationRun> = {}): OrchestrationRun {
+    return {
+      ...buildRun(),
+      status: "running",
+      executionState: "waiting_for_child",
+      currentWaveId: "wave-1",
+      currentPhaseId: "phase-1",
+      durableRunId: "durable-run-1",
+      worktreeStatus: "ready",
+      worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+      ...overrides,
+    };
+  }
+
+  function createWakeHost(
+    options: {
+      run?: OrchestrationRun | undefined;
+      parent?: DurableRunRecord;
+      child?: DurableRunRecord | undefined;
+      watcherSource?: string | undefined;
+      traceStatus?: string;
+      waitingRunIds?: string[];
+      extraDurableRuns?: Record<string, DurableRunRecord | Error>;
+    } = {},
+  ) {
+    const run = "run" in options ? options.run : buildParkedRun();
+    const parent = options.parent ?? buildParkedParent();
+    const child = "child" in options ? options.child : buildChildDurableRun();
+    const watcherSource = "watcherSource" in options ? options.watcherSource : "orchestration_phase";
+    const wakeDurableRun = vi.fn(async () => ({ outcome: "woke" }));
+    const host: OrchestrationPhaseChildWakeHost = {
+      storage: {
+        orchestration: {
+          getRun: vi.fn(async (runId: string) => {
+            if (!run || runId !== run.runId) {
+              throw new NotFoundError({ entity: "Orchestration run", id: runId });
+            }
+            return run;
+          }),
+        },
+        durableRuns: {
+          listRunIdsByStatus: vi.fn(async () => options.waitingRunIds ?? [parent.runId]),
+        },
+        durableChildWatchers: {
+          getByPair: vi.fn(async (parentRunId: string, childRunId: string) =>
+            watcherSource && parentRunId === parent.runId && childRunId === CHILD_RUN_ID
+              ? ({ watcherId: "w-1", parentRunId, childRunId, source: watcherSource } as never)
+              : undefined,
+          ),
+        },
+        chatTurnTraces: {
+          get: vi.fn(async (turnId: string) => ({ turnId, status: options.traceStatus ?? "running" }) as never),
+        },
+      },
+      getDurableRun: vi.fn(async (runId: string) => {
+        const extra = options.extraDurableRuns?.[runId];
+        if (extra instanceof Error) {
+          throw extra;
+        }
+        if (extra) {
+          return extra;
+        }
+        if (runId === parent.runId) {
+          return parent;
+        }
+        if (runId === CHILD_RUN_ID && child) {
+          return child;
+        }
+        throw new NotFoundError({ entity: "Durable run", id: runId });
+      }),
+      wakeDurableRun,
+    };
+    return { host, wakeDurableRun };
+  }
+
+  it("wakes the parked parent once its registered phase child settles", async () => {
+    const { host, wakeDurableRun } = createWakeHost();
+
+    await expect(wakeOrchestrationPhaseParent(host, CHILD_RUN_ID, "run-1")).resolves.toBe(true);
+
+    expect(wakeDurableRun).toHaveBeenCalledWith("durable-run-1", {
+      eventKey: ORCHESTRATION_PHASE_CHILD_WAKE_EVENT,
+      correlationId: CHILD_RUN_ID,
+      payload: { orchestrationRunId: "run-1", phaseId: "phase-1" },
+    });
+  });
+
+  it("wakes the parent when the child stops for user input or its durable run is gone", async () => {
+    const userInput = createWakeHost({
+      child: buildChildDurableRun({ status: "waiting", finishedAt: undefined }),
+      traceStatus: "waiting_for_user_input",
+    });
+    await expect(wakeOrchestrationPhaseParent(userInput.host, CHILD_RUN_ID, "run-1")).resolves.toBe(true);
+
+    const missing = createWakeHost({ child: undefined });
+    await expect(wakeOrchestrationPhaseParent(missing.host, CHILD_RUN_ID, "run-1")).resolves.toBe(true);
+  });
+
+  it.each([
+    ["no policy run id", {}, undefined],
+    ["an unknown orchestration run", { run: undefined }, "run-1"],
+    ["a run that is not parked on a child", { run: buildParkedRun({ executionState: "running" }) }, "run-1"],
+    ["a parent that is not waiting", { parent: buildParkedParent({ status: "running" }) }, "run-1"],
+    [
+      "a parent waiting on another child",
+      {
+        parent: buildParkedParent({
+          metadata: {
+            ...buildParkedParent().metadata,
+            waitForEvent: { eventKey: ORCHESTRATION_PHASE_CHILD_WAKE_EVENT, correlationId: "other-child" },
+          },
+        }),
+      },
+      "run-1",
+    ],
+    [
+      "a parent parked on a different wake",
+      {
+        parent: buildParkedParent({
+          metadata: {
+            ...buildParkedParent().metadata,
+            waitForEvent: { eventKey: "approval.resolved", correlationId: CHILD_RUN_ID },
+          },
+        }),
+      },
+      "run-1",
+    ],
+    ["a child without the orchestration watcher", { watcherSource: undefined }, "run-1"],
+    ["a child watched by another owner", { watcherSource: "chat_delegation" }, "run-1"],
+    ["a child that is still running", { child: buildChildDurableRun({ status: "running" }) }, "run-1"],
+    [
+      "a child waiting on an approval in Chat",
+      { child: buildChildDurableRun({ status: "waiting" }), traceStatus: "waiting_for_approval" },
+      "run-1",
+    ],
+  ] as const)("does not wake for %s", async (_label, options, orchestrationRunId) => {
+    const { host, wakeDurableRun } = createWakeHost(options as Parameters<typeof createWakeHost>[0]);
+
+    await expect(wakeOrchestrationPhaseParent(host, CHILD_RUN_ID, orchestrationRunId)).resolves.toBe(false);
+
+    expect(wakeDurableRun).not.toHaveBeenCalled();
+  });
+
+  it("does not wake a parent whose breadcrumb names a different child", async () => {
+    const parent = buildParkedParent();
+    const { host, wakeDurableRun } = createWakeHost({
+      parent: {
+        ...parent,
+        metadata: {
+          ...parent.metadata,
+          waitingPhase: { ...(parent.metadata?.waitingPhase as Record<string, unknown>), childRunId: "other-child" },
+        },
+      },
+    });
+
+    await expect(wakeOrchestrationPhaseParent(host, CHILD_RUN_ID, "run-1")).resolves.toBe(false);
+    expect(wakeDurableRun).not.toHaveBeenCalled();
+  });
+
+  it("reconciles missed wakes, skipping other waits and reporting unreadable parents after the scan", async () => {
+    const otherWait = buildParkedParent({
+      runId: "chat-wait-1",
+      metadata: { waitForEvent: { eventKey: "approval.resolved", correlationId: "approval-1" } },
+    });
+    const { host, wakeDurableRun } = createWakeHost({
+      waitingRunIds: ["broken-1", "chat-wait-1", "durable-run-1"],
+      extraDurableRuns: { "broken-1": new Error("storage unavailable"), "chat-wait-1": otherWait },
+    });
+
+    await expect(reconcileWaitingOrchestrationPhases(host)).rejects.toBeInstanceOf(AggregateError);
+
+    expect(wakeDurableRun).toHaveBeenCalledTimes(1);
+    expect(wakeDurableRun).toHaveBeenCalledWith(
+      "durable-run-1",
+      expect.objectContaining({ eventKey: ORCHESTRATION_PHASE_CHILD_WAKE_EVENT, correlationId: CHILD_RUN_ID }),
+    );
+  });
+
+  it("harvests a woken phase from the child's canonical records and flags unreported cost", async () => {
+    let run = buildParkedRun();
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => run),
+          updateRun: vi.fn((value: OrchestrationRun) => {
+            run = value;
+            return value;
+          }),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+      orchestrationEngine: {
+        ...base.orchestrationEngine,
+        advancePhase: vi.fn(
+          (_currentPlan, currentRun) =>
+            ({
+              ...currentRun,
+              status: "completed",
+              currentWaveId: undefined,
+              currentPhaseId: undefined,
+              totalIterations: currentRun.totalIterations + 1,
+            }) as OrchestrationRun,
+        ),
+      },
+    });
+    // The woken parent keeps its breadcrumb; the wake itself removed waitForEvent.
+    await host.updateDurableRunState({
+      runId: "durable-run-1",
+      metadata: { waitingPhase: buildParkedParent().metadata?.waitingPhase },
+    });
+    const getParentDurableRun = host.getDurableRun;
+    (host as unknown as { getDurableRun: OrchestrationLifecycleHost["getDurableRun"] }).getDurableRun = vi.fn(
+      (runId: string) => (runId === CHILD_RUN_ID ? buildChildDurableRun() : getParentDurableRun(runId)),
+    );
+    const execute = vi.fn();
+    const harvest = vi.fn(async () => ({
+      phaseId: "phase-1",
+      ownerAgentId: "agent-1",
+      status: "completed" as const,
+      startedAt: "2026-04-12T00:00:01.000Z",
+      finishedAt: "2026-04-12T00:01:02.000Z",
+      outputSummary: "Canonical child output",
+      outputText: "Canonical child output",
+      childSessionId: "sess_phase",
+      childTurnId: "turn_phase",
+      childRunId: CHILD_RUN_ID,
+      costUnreported: true,
+    }));
+    const runtime = createRuntimeDeps({ phaseExecutor: { execute, harvest } });
+
+    const result = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+
+    expect(result.outcome).toBe("completed");
+    expect(execute).not.toHaveBeenCalled();
+    expect(harvest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phaseId: "phase-1",
+        ownerAgentId: "agent-1",
+        childRunId: CHILD_RUN_ID,
+        childSessionId: "sess_phase",
+        childTurnId: "turn_phase",
+        startedAt: "2026-04-12T00:00:01.000Z",
+      }),
+    );
+    expect(host.orchestrationEngine.advancePhase).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ currentPhaseId: "phase-1" }),
+      "phase-1",
+      { costIncrementUsd: 0 },
+    );
+    const events = vi.mocked(host.storage.orchestration.appendRunEvent).mock.calls;
+    // The phase recorded its start when it dispatched the child; harvesting does not start it again.
+    expect(events.map(([, eventType]) => eventType)).not.toContain("phase.started");
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "phase.executed",
+      expect.objectContaining({ outputText: "Canonical child output", costUsd: 0, costUnreported: true }),
+    );
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "phase.advanced",
+      expect.objectContaining({ costIncrementUsd: 0, costUnreported: true }),
+    );
+  });
+
+  it("does not flag cost as unreported when the phase reported its full cost", async () => {
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...createHost().storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            durableRunId: "durable-run-1",
+            executionState: "queued",
+            worktreeStatus: "ready",
+            worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+
+    await executeDurableOrchestrationRun(host, createRuntimeDeps(), host.getDurableRun("durable-run-1"));
+
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "phase.advanced",
+      expect.not.objectContaining({ costUnreported: true }),
+    );
+  });
+
+  it("re-parks on the child wake when a woken phase's child is still working", async () => {
+    let run = buildParkedRun();
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => run),
+          updateRun: vi.fn((value: OrchestrationRun) => {
+            run = value;
+            return value;
+          }),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    await host.updateDurableRunState({
+      runId: "durable-run-1",
+      metadata: { waitingPhase: buildParkedParent().metadata?.waitingPhase },
+    });
+    const getParentDurableRun = host.getDurableRun;
+    (host as unknown as { getDurableRun: OrchestrationLifecycleHost["getDurableRun"] }).getDurableRun = vi.fn(
+      (runId: string) =>
+        runId === CHILD_RUN_ID ? buildChildDurableRun({ status: "waiting" }) : getParentDurableRun(runId),
+    );
+    const harvest = vi.fn(async () => undefined);
+    const runtime = createRuntimeDeps({ phaseExecutor: { harvest } });
+
+    const result = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+
+    expect(result.outcome).toBe("paused");
+    expect(runtime.phaseExecutor.execute).not.toHaveBeenCalled();
+    expect(host.updateDurableRunState).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: "waiting",
+        clearLease: true,
+        metadata: expect.objectContaining({
+          waitForEvent: { eventKey: ORCHESTRATION_PHASE_CHILD_WAKE_EVENT, correlationId: CHILD_RUN_ID },
+        }),
+      }),
+    );
+    expect(run).toMatchObject({ status: "running", executionState: "waiting_for_child" });
+  });
+
+  it("cancels the parked phase child when the run is cancelled", async () => {
+    let run = buildParkedRun();
+    let parent = buildParkedParent();
+    let child = buildChildDurableRun({ status: "running", finishedAt: undefined });
+    const base = createHost();
+    const cancelDurableRun = vi.fn(async (runId: string) => {
+      if (runId === CHILD_RUN_ID) {
+        child = { ...child, status: "cancelled" };
+        return child;
+      }
+      parent = { ...parent, status: "cancelled" };
+      return parent;
+    });
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => run),
+          updateRunIfCurrentState: vi.fn((value: OrchestrationRun) => {
+            run = value;
+            return value;
+          }),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+      getDurableRun: vi.fn((runId: string) => (runId === CHILD_RUN_ID ? child : parent)),
+      cancelDurableRun,
+    });
+
+    const cancelled = await cancelOrchestrationRun(host, createRuntimeDeps(), "run-1", "operator-1");
+
+    expect(cancelled.run.status).toBe("cancelled");
+    expect(cancelDurableRun).toHaveBeenCalledWith("durable-run-1", "operator-1");
+    expect(cancelDurableRun).toHaveBeenCalledWith(CHILD_RUN_ID, "operator-1");
+    expect(child.status).toBe("cancelled");
+  });
+
+  it("cancels a child left waiting for user input when its phase fails", async () => {
+    let run = buildParkedRun();
+    const base = createHost();
+    let child = buildChildDurableRun({ status: "waiting", finishedAt: undefined });
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => run),
+          updateRun: vi.fn((value: OrchestrationRun) => {
+            run = value;
+            return value;
+          }),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    await host.updateDurableRunState({
+      runId: "durable-run-1",
+      metadata: { waitingPhase: buildParkedParent().metadata?.waitingPhase },
+    });
+    const getParentDurableRun = host.getDurableRun;
+    (host as unknown as { getDurableRun: OrchestrationLifecycleHost["getDurableRun"] }).getDurableRun = vi.fn(
+      (runId: string) => (runId === CHILD_RUN_ID ? child : getParentDurableRun(runId)),
+    );
+    const cancelParent = host.cancelDurableRun;
+    const cancelDurableRun = vi.fn(async (runId: string, actorId?: string) => {
+      if (runId !== CHILD_RUN_ID) {
+        return await cancelParent(runId, actorId);
+      }
+      child = { ...child, status: "cancelled" };
+      return child;
+    });
+    (host as unknown as { cancelDurableRun: typeof cancelDurableRun }).cancelDurableRun = cancelDurableRun;
+    const harvest = vi.fn(async () => ({
+      phaseId: "phase-1",
+      ownerAgentId: "agent-1",
+      status: "failed" as const,
+      startedAt: "2026-04-12T00:00:01.000Z",
+      finishedAt: "2026-04-12T00:01:02.000Z",
+      outputText: "Which environment should I use?",
+      childRunId: CHILD_RUN_ID,
+      error: "Phase child turn is waiting for user input.",
+    }));
+    const runtime = createRuntimeDeps({ phaseExecutor: { harvest } });
+
+    const result = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+
+    expect(result.outcome).toBe("failed");
+    expect(run).toMatchObject({ status: "failed", lastError: "Phase child turn is waiting for user input." });
+    expect(cancelDurableRun).toHaveBeenCalledWith(CHILD_RUN_ID, "orchestration");
+    expect(child.status).toBe("cancelled");
   });
 });

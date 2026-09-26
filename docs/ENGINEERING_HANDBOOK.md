@@ -315,6 +315,7 @@ Behavior:
 - Run creation with checkpoints and run events.
 - Start transitions to `running`, or to `paused` when the first phase is approval-gated (`requiresApproval`, or every phase in `hitl` mode).
 - An approval-gated phase pauses before it runs. Phase approval records intent and leaves the run paused; the durable worker then runs the approved phase. Approval does not accept an operator-supplied cost.
+- Each phase runs as a child Chat turn on its own durable run. The orchestration run parks (`executionState: waiting_for_child`) until the child settles, then reads the child's output and recorded model usage; a phase with any unreported model cost is flagged `costUnreported`.
 - Advancing after a phase executes increments the iteration count and adds the phase's measured cost.
 - Hard limits (`maxIterations`, `maxRuntimeMinutes`, `maxCostUsd`) are checked between phases, not during one. Reaching a limit with phases remaining stops the run with `stopped_by_limit`; a final phase that reaches or passes a limit completes the run, and any cost or runtime overrun is recorded on the completion event.
 

@@ -711,6 +711,8 @@ export class DurableRunService {
       /** Runs inside the cancellation transaction, after the Chat trace is fenced. */
       onChatTurnCancelled?: (sessionId: string, turnId: string, actorId: string) => Promise<void>;
       reconcileWaitingChatDelegations?: () => Promise<void>;
+      /** Wakes orchestration runs parked on a phase child that has already settled. */
+      reconcileWaitingOrchestrationPhases?: () => Promise<void>;
       onBackgroundAttentionRequired?: (
         input: DurableBackgroundAttentionNotificationInput,
       ) => Promise<boolean | void> | boolean | void;
@@ -4430,6 +4432,16 @@ export class DurableRunService {
           error: error instanceof Error ? error.message : String(error),
         },
         "durable child watcher reconciliation deferred",
+      );
+    }
+    try {
+      await this.deps?.reconcileWaitingOrchestrationPhases?.();
+    } catch (error) {
+      this.resolveLogger().warn(
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "orchestration phase wake reconciliation deferred",
       );
     }
   }

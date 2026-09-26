@@ -232,4 +232,29 @@ describe("DurableRunService child watchers", () => {
     expect(storage.durableChildWatchers.get("watcher-boot").lastConsumedSequence).toBe(1);
     expect(catchUpSpy).toHaveBeenCalledWith({ watcherLimit: 100, eventLimitPerWatcher: 100 });
   });
+
+  it("catches up parked orchestration phases even when delegation catch-up fails", async () => {
+    const { context } = createHarness();
+    const reconcileWaitingChatDelegations = vi.fn(async () => {
+      throw new Error("delegation owner unavailable");
+    });
+    const reconcileWaitingOrchestrationPhases = vi.fn(async () => undefined);
+    const backgroundTasks = new Set<Promise<void>>();
+    const restarted = new DurableRunService(context, {
+      backgroundTasks,
+      workflowRegistry: {
+        executeWorkflow: vi.fn(),
+        isWorkflowRecoverable: vi.fn(() => ({ recoverable: true })),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+      reconcileWaitingChatDelegations,
+      reconcileWaitingOrchestrationPhases,
+    });
+    restarted.startWorker();
+    await Promise.all([...backgroundTasks]);
+    restarted.stopWorker();
+
+    expect(reconcileWaitingChatDelegations).toHaveBeenCalled();
+    expect(reconcileWaitingOrchestrationPhases).toHaveBeenCalled();
+  });
 });
