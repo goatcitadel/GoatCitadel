@@ -116,6 +116,42 @@ describe("WorktreeManager.listChanges", () => {
     ).resolves.toMatchObject({ status: "unreadable", error: expect.any(String) });
   });
 
+  it.skipIf(process.platform === "win32")(
+    "reports a worktree as unreadable when a registration's recorded path cannot be resolved",
+    async () => {
+      const { root, repoRoot, manager } = createRepo();
+      const worktreePath = await manager.create("run-loop");
+      // A recorded path that fails to resolve for a reason other than being
+      // missing could name this worktree, so it is not guessed lexically.
+      const loop = path.join(root, "loop");
+      fs.symlinkSync(loop, loop);
+      fs.writeFileSync(
+        path.join(repoRoot, ".git", "worktrees", "run-loop", "gitdir"),
+        `${path.join(loop, "run-loop", ".git")}\n`,
+      );
+
+      await expect(manager.listChanges(worktreePath)).resolves.toEqual({
+        status: "unreadable",
+        error: expect.stringContaining("ELOOP"),
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "reports a worktree path that cannot be resolved as unreadable, not unregistered",
+    async () => {
+      const { root, manager } = createRepo();
+      await manager.create("run-1");
+      const loop = path.join(root, "loop");
+      fs.symlinkSync(loop, loop);
+
+      await expect(manager.listChanges(path.join(loop, "run-1"))).resolves.toEqual({
+        status: "unreadable",
+        error: expect.stringContaining("ELOOP"),
+      });
+    },
+  );
+
   it("reports a path as unregistered when the root is not a git repository at all", async () => {
     const { root } = createRepo();
     const notARepository = path.join(root, "plain");
@@ -150,4 +186,24 @@ describe("WorktreeManager.listChanges", () => {
       expect(fs.existsSync(marker)).toBe(true);
     },
   );
+});
+
+describe("WorktreeManager.remove", () => {
+  it.skipIf(process.platform === "win32")("removes a worktree without running git inside it", async () => {
+    const { root, repoRoot, manager } = createRepo();
+    const worktreePath = await manager.create("run-remove");
+    // Unforced removal re-checks with `git status` under GIT_DIR=<worktree>/.git,
+    // re-reading that file after validating it; a writer that swaps it in
+    // between chooses the git dir whose config and hooks run. This hook is
+    // configured on the repository, so any git run inside the worktree fires it.
+    const marker = path.join(root, "fsmonitor-ran");
+    const hook = path.join(root, "fsmonitor.sh");
+    fs.writeFileSync(hook, `#!/bin/sh\ntouch "${marker}"\n`, { mode: 0o755 });
+    git(repoRoot, "config", "core.fsmonitor", hook);
+
+    await manager.remove(worktreePath);
+
+    expect(fs.existsSync(worktreePath)).toBe(false);
+    expect(fs.existsSync(marker)).toBe(false);
+  });
 });

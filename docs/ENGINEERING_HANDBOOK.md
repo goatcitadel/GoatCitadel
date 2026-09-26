@@ -322,7 +322,7 @@ Current scope:
 
 - State machine and checkpoints are implemented.
 - Orchestration runs are durable-run backed. Runtime loops allocate and lease a run worktree and read phase specs from it; phase agents run as child Chat turns with the session's normal workspace scope, not inside the run worktree. Wave ownership paths are validated for overlap but not enforced on tool writes.
-- Terminal cleanup removes the run worktree only when git reports no staged, modified, untracked, or ignored files and accepts removal without force, or when an unregistered directory is empty. It keeps local files (`run.worktree_retained_dirty`) or directories git cannot verify or remove (`run.worktree_retained_unverified`); the hourly orphan reaper skips them until git reports them clean or an unregistered directory is empty.
+- Terminal cleanup removes the run worktree only when git, reading it through its registration, reports no staged, modified, untracked, or ignored files and the removal succeeds, or when an unregistered directory is empty. It keeps local files (`run.worktree_retained_dirty`) or directories git cannot verify or remove (`run.worktree_retained_unverified`); the hourly orphan reaper skips them until git reports them clean or an unregistered directory is empty.
 - Worktree ownership is not hostile-code sandboxing or virtualization; host filesystem controls, policy, approvals, and Code Mode sandbox requirements remain separate safety boundaries.
 
 ## 5. Persistence Model

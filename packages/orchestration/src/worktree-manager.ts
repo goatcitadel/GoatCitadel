@@ -61,9 +61,12 @@ export class WorktreeManager {
 
   public async remove(worktreePath: string): Promise<void> {
     const resolvedPath = path.resolve(worktreePath);
-    // Git rechecks tracked and untracked files immediately before removal.
-    // A caller's earlier status check is not authority to force deletion.
-    await execFileAsync("git", ["worktree", "remove", resolvedPath], {
+    // Callers decide with `listChanges`, which reads the worktree through its
+    // registration. Without --force, git re-checks by running `git status` with
+    // GIT_DIR set to the worktree's own `.git` file, read again after git has
+    // validated it, so a writer that swaps the file in between points git at a
+    // git dir whose config or hooks run commands.
+    await execFileAsync("git", ["worktree", "remove", "--force", resolvedPath], {
       cwd: this.options.repoRoot,
       env: this.gitEnv(),
     });
@@ -138,7 +141,12 @@ export class WorktreeManager {
         ? { status: "unregistered" }
         : { status: "unreadable", error: describeGitFailure(error) };
     }
-    const target = await realpathOrResolve(resolvedPath);
+    let target: string;
+    try {
+      target = await realpathOrResolve(resolvedPath);
+    } catch (error) {
+      return { status: "unreadable", error: describeGitFailure(error) };
+    }
     let unreadableRegistration: unknown;
     for (const name of names) {
       const adminDir = path.join(adminRoot, name);
@@ -209,11 +217,19 @@ function describeGitFailure(error: unknown): string {
     : singleLine;
 }
 
+/**
+ * The canonical path, or the lexical one when the path does not exist. Any
+ * other failure, such as a denied parent or a symlink loop, is thrown: a
+ * lexical guess there could miss the registration that names the directory.
+ */
 async function realpathOrResolve(candidate: string): Promise<string> {
   try {
     return await fs.realpath(candidate);
-  } catch {
-    return path.resolve(candidate);
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return path.resolve(candidate);
+    }
+    throw error;
   }
 }
 

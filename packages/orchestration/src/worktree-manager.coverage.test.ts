@@ -21,7 +21,7 @@ describe("worktree manager coverage", () => {
     vi.restoreAllMocks();
   });
 
-  it("creates worktrees and removes them without forcing away late edits", async () => {
+  it("creates worktrees and force-removes them once the caller's status read allows it", async () => {
     await import("./index.js");
     const { WorktreeManager } = await import("./worktree-manager.js");
     const manager = new WorktreeManager({
@@ -39,7 +39,8 @@ describe("worktree manager coverage", () => {
     expect(execFileMock.mock.calls[0]?.[0]).toBe("git");
     expect(execFileMock.mock.calls[0]?.[1]).toEqual(["worktree", "add", "--detach", expectedPath, "main"]);
     expect(execFileMock.mock.calls[1]?.[0]).toBe("git");
-    expect(execFileMock.mock.calls[1]?.[1]).toEqual(["worktree", "remove", expectedResolvedPath]);
+    // Unforced removal would run `git status` through the worktree's own `.git` file.
+    expect(execFileMock.mock.calls[1]?.[1]).toEqual(["worktree", "remove", "--force", expectedResolvedPath]);
   });
 
   it("prunes stale worktree metadata so .git/worktrees entries are not orphaned", async () => {
