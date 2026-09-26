@@ -245,6 +245,27 @@ describe("DurableRunService", () => {
     });
   });
 
+  it("creates orchestration ownership durables paused before a worker can claim them", async () => {
+    const runs = new Map<string, DurableRunRecord>();
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const service = new DurableRunService(createContext(runs, checkpoints, timeline) as unknown as ServiceContext);
+
+    const created = await service.createDurableRun(
+      { workflowKey: "orchestration.plan.execute" },
+      { initialStatus: "paused" },
+    );
+
+    expect(created.status).toBe("paused");
+    expect(created.startedAt).toBeUndefined();
+    expect(runs.get(created.runId)?.status).toBe("paused");
+    expect(checkpoints).toEqual([{ runId: created.runId, checkpointKind: "run_created" }]);
+    expect(timeline).toEqual([{ runId: created.runId, eventType: "run_created" }]);
+    await expect(
+      service.createDurableRun({ workflowKey: "chat.turn.execute" }, { initialStatus: "paused" }),
+    ).rejects.toThrow("Only orchestration ownership setup");
+  });
+
   it("rejects raw remote approval bearers before durable persistence", async () => {
     const runs = new Map<string, DurableRunRecord>();
     const service = new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext);

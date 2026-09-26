@@ -8,6 +8,8 @@ import {
   executeDurableOrchestrationRun,
   listRunCheckpoints,
   parseOrchestrationWorkflowPayload,
+  reconcileTerminalOrchestrationRuns,
+  settleOrchestrationRunForEndedDurableRun,
   runOrchestrationPlan,
   type OrchestrationLifecycleHost,
   type OrchestrationLifecycleRuntimeDeps,
@@ -1257,6 +1259,936 @@ describe("orchestration lifecycle approvals with the real engine", () => {
   });
 });
 
+describe("orchestration lifecycle keeps runs in step with their durable runs", () => {
+  function readyQueuedRun(): OrchestrationRun {
+    return {
+      ...buildRun(),
+      executionState: "queued",
+      durableRunId: "durable-run-1",
+      worktreeStatus: "ready",
+      worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+    };
+  }
+
+  /** Makes the harness's compare-and-set honour the expected state, like the real repository. */
+  function enforceCompareAndSet(harness: ReturnType<typeof createHarness>): void {
+    const orchestration = harness.host.storage.orchestration;
+    const update = orchestration.updateRun;
+    orchestration.updateRunIfCurrentState = vi.fn(async (next: OrchestrationRun, expected) => {
+      const current = harness.getRun();
+      if (current.status !== expected.status || current.executionState !== expected.executionState) {
+        return undefined;
+      }
+      return await update(next);
+    });
+  }
+
+  /** What a concurrent cancel commits to the run row. */
+  async function cancelConcurrently(harness: ReturnType<typeof createHarness>): Promise<void> {
+    await harness.host.storage.orchestration.updateRun({
+      ...harness.getRun(),
+      status: "cancelled",
+      executionState: "cancelled",
+      endedAt: "2026-05-15T12:00:05.000Z",
+      lastError: "cancelled by operator",
+    });
+  }
+
+  it("resumes the initial durable pause on active-run re-entry after a queue crash", async () => {
+    const harness = createHarness({
+      run: readyQueuedRun(),
+      durableRun: buildDurableRun({ status: "paused", startedAt: undefined, leaseOwnerId: undefined }),
+    });
+    vi.mocked(harness.host.storage.orchestration.findActiveRunByPlan).mockImplementation(() => harness.getRun());
+
+    const run = await runOrchestrationPlan(harness.host, harness.runtime, "plan-1");
+
+    expect(run).toMatchObject({ status: "queued", executionState: "queued" });
+    expect(harness.getDurableRun()).toMatchObject({ status: "queued", startedAt: expect.any(String) });
+    expect(harness.host.resumeDurableRun).toHaveBeenCalledWith("durable-run-1", "orchestration_recovery");
+    expect(harness.host.requestDurableRunProcessing).toHaveBeenCalledWith("durable-run-1");
+    expect(harness.host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "run.queue_resume_recovered",
+      { durableRunId: "durable-run-1" },
+    );
+    expect(harness.host.hooksService.runInlineHooks).not.toHaveBeenCalled();
+  });
+
+  it("resumes the initial durable pause during a restarted recovery sweep", async () => {
+    const harness = createHarness({
+      run: readyQueuedRun(),
+      durableRun: buildDurableRun({ status: "paused", startedAt: undefined, leaseOwnerId: undefined }),
+    });
+    const restartedHost = { ...harness.host, storage: { ...harness.host.storage } };
+
+    await reconcileTerminalOrchestrationRuns(restartedHost, harness.runtime);
+
+    expect(harness.getDurableRun().status).toBe("queued");
+    expect(harness.host.resumeDurableRun).toHaveBeenCalledTimes(1);
+    await reconcileTerminalOrchestrationRuns(
+      { ...harness.host, storage: { ...harness.host.storage } },
+      harness.runtime,
+    );
+    expect(harness.host.resumeDurableRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a failed initial resume on the next recovery sweep", async () => {
+    const harness = createHarness({
+      run: readyQueuedRun(),
+      durableRun: buildDurableRun({ status: "paused", startedAt: undefined, leaseOwnerId: undefined }),
+    });
+    const resumeDurableRun = harness.host.resumeDurableRun;
+    let attempts = 0;
+    harness.host.resumeDurableRun = vi.fn(async (runId: string, actorId?: string) => {
+      if (attempts++ === 0) {
+        throw new Error("temporary resume failure");
+      }
+      return await resumeDurableRun(runId, actorId);
+    });
+
+    await expect(
+      reconcileTerminalOrchestrationRuns({ ...harness.host, storage: { ...harness.host.storage } }, harness.runtime),
+    ).rejects.toThrow("Orchestration recovery could not settle every run.");
+    expect(harness.getDurableRun().status).toBe("paused");
+
+    await reconcileTerminalOrchestrationRuns(
+      { ...harness.host, storage: { ...harness.host.storage } },
+      harness.runtime,
+    );
+    expect(harness.getDurableRun().status).toBe("queued");
+    expect(harness.host.resumeDurableRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts a resume that committed before its publication failed", async () => {
+    const harness = createHarness({
+      run: readyQueuedRun(),
+      durableRun: buildDurableRun({ status: "paused", startedAt: undefined, leaseOwnerId: undefined }),
+    });
+    const resumeDurableRun = harness.host.resumeDurableRun;
+    harness.host.resumeDurableRun = vi.fn(async (runId: string, actorId?: string) => {
+      await resumeDurableRun(runId, actorId);
+      throw new Error("afterRunCommit publication failed");
+    });
+
+    await reconcileTerminalOrchestrationRuns(
+      { ...harness.host, storage: { ...harness.host.storage } },
+      harness.runtime,
+    );
+
+    expect(harness.getDurableRun().status).toBe("queued");
+    expect(harness.host.requestDurableRunProcessing).toHaveBeenCalledWith("durable-run-1");
+  });
+
+  it("accepts a competing resume that already advanced the owner and durable", async () => {
+    const harness = createHarness({
+      run: readyQueuedRun(),
+      durableRun: buildDurableRun({ status: "paused", startedAt: undefined, leaseOwnerId: undefined }),
+    });
+    const resumeDurableRun = harness.host.resumeDurableRun;
+    harness.host.resumeDurableRun = vi.fn(async (runId: string, actorId?: string) => {
+      await resumeDurableRun(runId, actorId);
+      harness.setDurableRun({ ...harness.getDurableRun(), status: "running" });
+      await harness.host.storage.orchestration.updateRun({
+        ...harness.getRun(),
+        status: "running",
+        executionState: "running",
+      });
+      throw new Error("durable run is already running");
+    });
+
+    await reconcileTerminalOrchestrationRuns(
+      { ...harness.host, storage: { ...harness.host.storage } },
+      harness.runtime,
+    );
+
+    expect(harness.getRun()).toMatchObject({ status: "running", executionState: "running" });
+    expect(harness.getDurableRun().status).toBe("running");
+    expect(harness.host.requestDurableRunProcessing).not.toHaveBeenCalled();
+  });
+
+  it("preserves a worker child breadcrumb when the live queue's resume races execution", async () => {
+    const harness = createHarness();
+    enforceCompareAndSet(harness);
+    const resumeDurableRun = harness.host.resumeDurableRun;
+    const dispatchedPhase = { phaseId: "phase-1", childRunId: "child-run-1" };
+    harness.host.resumeDurableRun = vi.fn(async (runId: string, actorId?: string) => {
+      await resumeDurableRun(runId, actorId);
+      harness.setDurableRun({
+        ...harness.getDurableRun(),
+        status: "running",
+        metadata: { ...harness.getDurableRun().metadata, dispatchedPhase },
+      });
+      await harness.host.storage.orchestration.updateRun({
+        ...harness.getRun(),
+        status: "running",
+        executionState: "running",
+      });
+      throw new Error("durable run is already running");
+    });
+
+    const run = await runOrchestrationPlan(harness.host, harness.runtime, "plan-1");
+
+    expect(run).toMatchObject({ status: "running", executionState: "running" });
+    expect(harness.getDurableRun().metadata).toMatchObject({ dispatchedPhase });
+    expect(harness.host.updateDurableRunState).not.toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ lifecycleState: "queued" }) }),
+    );
+  });
+
+  it("does not resume a durable cancelled during recovery", async () => {
+    const harness = createHarness({
+      run: readyQueuedRun(),
+      durableRun: buildDurableRun({ status: "paused", startedAt: undefined, leaseOwnerId: undefined }),
+    });
+    harness.host.resumeDurableRun = vi.fn(async () => {
+      await cancelConcurrently(harness);
+      harness.setDurableRun({ ...harness.getDurableRun(), status: "cancelled" });
+      throw new Error("durable run is already cancelled");
+    });
+
+    await reconcileTerminalOrchestrationRuns(
+      { ...harness.host, storage: { ...harness.host.storage } },
+      harness.runtime,
+    );
+
+    expect(harness.getRun().status).toBe("cancelled");
+    expect(harness.getDurableRun().status).toBe("cancelled");
+    expect(harness.host.requestDurableRunProcessing).not.toHaveBeenCalled();
+  });
+
+  it("does not override a deliberate pause after the durable run first started", async () => {
+    const harness = createHarness({
+      run: readyQueuedRun(),
+      durableRun: buildDurableRun({
+        status: "paused",
+        startedAt: "2026-05-15T12:00:01.000Z",
+        leaseOwnerId: undefined,
+      }),
+    });
+    vi.mocked(harness.host.storage.orchestration.findActiveRunByPlan).mockImplementation(() => harness.getRun());
+
+    await runOrchestrationPlan(harness.host, harness.runtime, "plan-1");
+    await reconcileTerminalOrchestrationRuns(
+      { ...harness.host, storage: { ...harness.host.storage } },
+      harness.runtime,
+    );
+
+    expect(harness.getDurableRun().status).toBe("paused");
+    expect(harness.host.resumeDurableRun).not.toHaveBeenCalled();
+    expect(harness.host.requestDurableRunProcessing).not.toHaveBeenCalled();
+  });
+
+  it("retries cancellation when recovery advances the durable version", async () => {
+    const harness = createHarness({
+      run: readyQueuedRun(),
+      durableRun: buildDurableRun({ status: "paused", startedAt: undefined, leaseOwnerId: undefined }),
+    });
+    enforceCompareAndSet(harness);
+    const cancelDurableRun = harness.host.cancelDurableRun;
+    let attempts = 0;
+    harness.host.cancelDurableRun = vi.fn(async (runId: string, actorId?: string) => {
+      if (attempts++ === 0) {
+        harness.setDurableRun({ ...harness.getDurableRun(), status: "queued", version: 2 });
+        throw new Error("durable version changed during cancellation");
+      }
+      return await cancelDurableRun(runId, actorId);
+    });
+
+    const result = await cancelOrchestrationRun(harness.host, harness.runtime, "run-1");
+
+    expect(result.run.status).toBe("cancelled");
+    expect(harness.getDurableRun().status).toBe("cancelled");
+    expect(harness.host.cancelDurableRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("trusts a durable cancellation committed before publication failed", async () => {
+    const harness = createHarness({
+      run: readyQueuedRun(),
+      durableRun: buildDurableRun({ status: "paused", startedAt: undefined, leaseOwnerId: undefined }),
+    });
+    enforceCompareAndSet(harness);
+    const cancelDurableRun = harness.host.cancelDurableRun;
+    harness.host.cancelDurableRun = vi.fn(async (runId: string, actorId?: string) => {
+      await cancelDurableRun(runId, actorId);
+      throw new Error("afterRunCommit publication failed");
+    });
+
+    const result = await cancelOrchestrationRun(harness.host, harness.runtime, "run-1");
+
+    expect(result.run.status).toBe("cancelled");
+    expect(harness.getDurableRun().status).toBe("cancelled");
+  });
+
+  it("keeps a run cancelled before its durable run was linked, and cancels that durable run", async () => {
+    const harness: ReturnType<typeof createHarness> = createHarness();
+    enforceCompareAndSet(harness);
+    const createDurableRun = harness.host.createDurableRun;
+    harness.host.createDurableRun = vi.fn(
+      async (input: Parameters<typeof createDurableRun>[0], internalOptions?: { initialStatus: "paused" }) => {
+        const paused = await createDurableRun(input, internalOptions);
+        await cancelConcurrently(harness);
+        return paused;
+      },
+    );
+
+    const result = await runOrchestrationPlan(harness.host, harness.runtime, "plan-1");
+
+    expect(result).toMatchObject({ status: "cancelled", executionState: "cancelled" });
+    expect(harness.getRun().durableRunId).toBeUndefined();
+    expect(harness.host.cancelDurableRun).toHaveBeenCalledWith("durable-run-1", "orchestration");
+    expect(harness.runtime.worktrees.allocate).not.toHaveBeenCalled();
+    expect(harness.host.resumeDurableRun).not.toHaveBeenCalled();
+  });
+
+  it("recovers a paused durable run after pre-link cancellation fails and the gateway restarts", async () => {
+    const harness = createHarness();
+    enforceCompareAndSet(harness);
+    const createDurableRun = harness.host.createDurableRun;
+    harness.host.createDurableRun = vi.fn(
+      async (input: Parameters<typeof createDurableRun>[0], internalOptions?: { initialStatus: "paused" }) => {
+        const paused = await createDurableRun(input, internalOptions);
+        await cancelConcurrently(harness);
+        return paused;
+      },
+    );
+    const cancelDurableRun = harness.host.cancelDurableRun;
+    let attempts = 0;
+    harness.host.cancelDurableRun = vi.fn(async (runId: string, actorId?: string) => {
+      if (attempts++ === 0) {
+        throw new Error("temporary durable cancellation failure");
+      }
+      return await cancelDurableRun(runId, actorId);
+    });
+
+    await runOrchestrationPlan(harness.host, harness.runtime, "plan-1");
+    expect(harness.getRun().status).toBe("cancelled");
+    expect(harness.getRun().durableRunId).toBeUndefined();
+    expect(harness.getDurableRun().status).toBe("paused");
+    expect(harness.host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "run.durable_cleanup_failed",
+      expect.objectContaining({ durableRunId: "durable-run-1" }),
+    );
+
+    const restartedHost = { ...harness.host, storage: { ...harness.host.storage } };
+    await reconcileTerminalOrchestrationRuns(restartedHost, harness.runtime);
+
+    expect(harness.getDurableRun().status).toBe("cancelled");
+    expect(harness.host.cancelDurableRun).toHaveBeenCalledTimes(2);
+    await reconcileTerminalOrchestrationRuns(restartedHost, harness.runtime);
+    expect(harness.host.cancelDurableRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails an aged created owner after a crash before durable linkage and cancels its paused durable", async () => {
+    const harness = createHarness({ durableRun: buildDurableRun({ status: "paused", leaseOwnerId: undefined }) });
+    enforceCompareAndSet(harness);
+    harness.host.storage.orchestration.listUnlinkedCreatedRuns = vi.fn((_limit, afterRunId?: string) =>
+      !afterRunId && harness.getRun().executionState === "created" ? [harness.getRun()] : [],
+    );
+
+    const restartedHost = { ...harness.host, storage: { ...harness.host.storage } };
+    await reconcileTerminalOrchestrationRuns(restartedHost, harness.runtime);
+
+    expect(harness.getRun()).toMatchObject({ status: "failed", executionState: "failed", worktreeStatus: "blocked" });
+    expect(harness.getDurableRun().status).toBe("cancelled");
+    expect(harness.host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "run.failed",
+      expect.objectContaining({ reason: "ownership_setup_interrupted" }),
+    );
+    expect(harness.runtime.worktrees.allocate).not.toHaveBeenCalled();
+  });
+
+  it("fails an aged created owner after a crash before durable creation", async () => {
+    const harness = createHarness({ durableRun: buildDurableRun({ workflowKey: "unrelated.workflow" }) });
+    enforceCompareAndSet(harness);
+    harness.host.storage.orchestration.listUnlinkedCreatedRuns = vi.fn((_limit, afterRunId?: string) =>
+      !afterRunId && harness.getRun().executionState === "created" ? [harness.getRun()] : [],
+    );
+
+    await reconcileTerminalOrchestrationRuns(harness.host, harness.runtime);
+
+    expect(harness.getRun()).toMatchObject({ status: "failed", executionState: "failed" });
+    expect(harness.host.cancelDurableRun).not.toHaveBeenCalled();
+  });
+
+  it("recovers a legacy queued durable after the owner crashed before linkage", async () => {
+    const harness = createHarness({ durableRun: buildDurableRun({ status: "queued", leaseOwnerId: undefined }) });
+    enforceCompareAndSet(harness);
+    harness.host.storage.orchestration.listUnlinkedCreatedRuns = vi.fn((_limit, afterRunId?: string) =>
+      !afterRunId && harness.getRun().executionState === "created" ? [harness.getRun()] : [],
+    );
+
+    await reconcileTerminalOrchestrationRuns(harness.host, harness.runtime);
+
+    expect(harness.getRun().status).toBe("failed");
+    expect(harness.getDurableRun().status).toBe("cancelled");
+  });
+
+  it("leaves a fresh ownership setup alone while its allocator is still linking", async () => {
+    const harness = createHarness({
+      run: { ...buildRun(), startedAt: new Date().toISOString() },
+      durableRun: buildDurableRun({ status: "paused", leaseOwnerId: undefined }),
+    });
+    harness.host.storage.orchestration.listUnlinkedCreatedRuns = vi.fn(() => [harness.getRun()]);
+
+    await reconcileTerminalOrchestrationRuns(harness.host, harness.runtime);
+
+    expect(harness.getRun()).toMatchObject({ status: "queued", executionState: "created" });
+    expect(harness.getDurableRun().status).toBe("paused");
+    expect(harness.host.cancelDurableRun).not.toHaveBeenCalled();
+  });
+
+  it("does not fail an owner when its allocator wins the linkage race", async () => {
+    const harness = createHarness({ durableRun: buildDurableRun({ status: "paused", leaseOwnerId: undefined }) });
+    enforceCompareAndSet(harness);
+    harness.host.storage.orchestration.listUnlinkedCreatedRuns = vi.fn((_limit, afterRunId?: string) =>
+      !afterRunId ? [harness.getRun()] : [],
+    );
+    const updateRun = harness.host.storage.orchestration.updateRun;
+    harness.host.storage.orchestration.updateRunIfCurrentState = vi.fn(async () => {
+      await updateRun({
+        ...harness.getRun(),
+        durableRunId: "durable-run-1",
+        executionState: "worktree_allocating",
+        worktreeStatus: "allocating",
+      });
+      return undefined;
+    });
+
+    await reconcileTerminalOrchestrationRuns(harness.host, harness.runtime);
+
+    expect(harness.getRun()).toMatchObject({ status: "queued", executionState: "worktree_allocating" });
+    expect(harness.getDurableRun().status).toBe("paused");
+    expect(harness.host.cancelDurableRun).not.toHaveBeenCalled();
+  });
+
+  it("trusts a cancellation committed before an after-commit publication error", async () => {
+    const harness = createHarness({
+      hooksService: { runInlineHooks: vi.fn(async () => ({ blockedBy: { reason: "change freeze" } })) },
+    });
+    enforceCompareAndSet(harness);
+    const cancelDurableRun = harness.host.cancelDurableRun;
+    harness.host.cancelDurableRun = vi.fn(async (runId: string, actorId?: string) => {
+      await cancelDurableRun(runId, actorId);
+      throw new Error("afterRunCommit publication failed");
+    });
+
+    await expect(runOrchestrationPlan(harness.host, harness.runtime, "plan-1")).rejects.toMatchObject({
+      name: "ConflictError",
+    });
+
+    expect(harness.getDurableRun().status).toBe("cancelled");
+    expect(harness.host.storage.orchestration.appendRunEvent).not.toHaveBeenCalledWith(
+      "run-1",
+      "run.durable_cleanup_failed",
+      expect.anything(),
+    );
+  });
+
+  it("reports a completed durable as anomalous instead of claiming it was cancelled", async () => {
+    const harness = createHarness({
+      hooksService: { runInlineHooks: vi.fn(async () => ({ blockedBy: { reason: "change freeze" } })) },
+    });
+    enforceCompareAndSet(harness);
+    harness.host.cancelDurableRun = vi.fn(async () => {
+      harness.setDurableRun({ ...harness.getDurableRun(), status: "completed" });
+      throw new Error("durable already completed");
+    });
+
+    await expect(runOrchestrationPlan(harness.host, harness.runtime, "plan-1")).rejects.toMatchObject({
+      name: "ConflictError",
+    });
+
+    expect(harness.getDurableRun().status).toBe("completed");
+    expect(harness.host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "run.durable_cleanup_failed",
+      expect.objectContaining({ durableRunId: "durable-run-1", durableStatus: "completed" }),
+    );
+  });
+
+  it("gives back a worktree allocated for a run that was cancelled meanwhile", async () => {
+    const harness: ReturnType<typeof createHarness> = createHarness({
+      runtime: {
+        worktrees: {
+          allocate: vi.fn(async () => {
+            await cancelConcurrently(harness);
+            return {
+              worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+              worktreeStatus: "ready" as const,
+              worktreeBaseRef: "HEAD",
+              worktreeLeaseOwnerId: "owner-1",
+              worktreeLeaseGeneration: 1,
+              worktreeLeaseExpiresAt: "2026-05-15T12:05:00.000Z",
+            };
+          }),
+        },
+      },
+    });
+    enforceCompareAndSet(harness);
+
+    const result = await runOrchestrationPlan(harness.host, harness.runtime, "plan-1");
+
+    expect(result).toMatchObject({ status: "cancelled", executionState: "cancelled" });
+    expect(harness.getRun()).toMatchObject({ status: "cancelled", executionState: "cancelled" });
+    expect(harness.runtime.worktrees.release).toHaveBeenCalledWith({
+      run: expect.objectContaining({
+        status: "cancelled",
+        worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+        worktreeLeaseOwnerId: "owner-1",
+        worktreeLeaseGeneration: 1,
+      }),
+      reason: "cancelled",
+    });
+    expect(harness.host.resumeDurableRun).not.toHaveBeenCalled();
+    expect(harness.host.requestDurableRunProcessing).not.toHaveBeenCalled();
+  });
+
+  it("never resumes the durable run of a run cancelled before it was queued", async () => {
+    const harness: ReturnType<typeof createHarness> = createHarness({
+      hooksService: {
+        runInlineHooks: vi.fn(async () => {
+          await cancelConcurrently(harness);
+          return { blockedBy: undefined, patch: undefined };
+        }),
+        enqueueAfterHooks: vi.fn(),
+      },
+    });
+    enforceCompareAndSet(harness);
+
+    const result = await runOrchestrationPlan(harness.host, harness.runtime, "plan-1");
+
+    expect(result).toMatchObject({ status: "cancelled" });
+    expect(harness.host.resumeDurableRun).not.toHaveBeenCalled();
+    expect(harness.host.requestDurableRunProcessing).not.toHaveBeenCalled();
+  });
+
+  it("returns the cancelled run when a cancel lands between queueing and resuming", async () => {
+    const harness: ReturnType<typeof createHarness> = createHarness();
+    enforceCompareAndSet(harness);
+    harness.host.resumeDurableRun = vi.fn(async () => {
+      await cancelConcurrently(harness);
+      throw new Error("Durable run durable-run-1 is already terminal (cancelled)");
+    });
+
+    const result = await runOrchestrationPlan(harness.host, harness.runtime, "plan-1");
+
+    expect(result).toMatchObject({ status: "cancelled" });
+    expect(harness.host.requestDurableRunProcessing).not.toHaveBeenCalled();
+  });
+
+  it("ends a run its run.before hook blocks, cleans up, and reports a conflict", async () => {
+    const harness = createHarness({
+      hooksService: {
+        runInlineHooks: vi.fn(async () => ({ blockedBy: { reason: "change freeze" } })),
+        enqueueAfterHooks: vi.fn(),
+      },
+    });
+    enforceCompareAndSet(harness);
+
+    await expect(runOrchestrationPlan(harness.host, harness.runtime, "plan-1")).rejects.toMatchObject({
+      name: "ConflictError",
+      message: "Blocked by orchestration.run.before hook: change freeze",
+    });
+
+    expect(harness.getRun()).toMatchObject({
+      status: "failed",
+      executionState: "failed",
+      lastError: "Blocked by orchestration.run.before hook: change freeze",
+    });
+    expect(harness.getDurableRun().status).toBe("cancelled");
+    expect(harness.runtime.worktrees.release).toHaveBeenCalledWith({
+      run: expect.objectContaining({ status: "failed" }),
+      reason: "failed",
+    });
+    expect(harness.host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "run.failed",
+      expect.objectContaining({ reason: "run_before_hook_blocked" }),
+    );
+    expect(harness.host.resumeDurableRun).not.toHaveBeenCalled();
+    expect(harness.host.requestDurableRunProcessing).not.toHaveBeenCalled();
+  });
+
+  it("redacts and bounds a blocked hook reason before persisting or returning it", async () => {
+    const secret = "hook-secret-token-1234567890";
+    const harness = createHarness({
+      hooksService: {
+        runInlineHooks: vi.fn(async () => ({
+          blockedBy: { reason: `Authorization: Bearer ${secret} ${"x".repeat(5_000)}` },
+        })),
+      },
+    });
+    enforceCompareAndSet(harness);
+
+    await expect(runOrchestrationPlan(harness.host, harness.runtime, "plan-1")).rejects.toMatchObject({
+      name: "ConflictError",
+      message: expect.not.stringContaining(secret),
+    });
+
+    const lastError = harness.getRun().lastError ?? "";
+    expect(lastError).toMatch(/^Blocked by orchestration.run.before hook: /);
+    expect(lastError).not.toContain(secret);
+    expect(lastError.length).toBeLessThanOrEqual(2_000 + " [truncated]".length);
+    expect(JSON.stringify(vi.mocked(harness.host.storage.orchestration.appendRunEvent).mock.calls)).not.toContain(
+      secret,
+    );
+    expect(JSON.stringify(vi.mocked(harness.host.createCheckpoint).mock.calls)).not.toContain(secret);
+    expect(JSON.stringify(vi.mocked(harness.host.publishRealtime).mock.calls)).not.toContain(secret);
+  });
+
+  it("recovers a blocked hook's paused durable run after cancellation fails and the gateway restarts", async () => {
+    const harness = createHarness({
+      hooksService: {
+        runInlineHooks: vi.fn(async () => ({ blockedBy: { reason: "change freeze" } })),
+      },
+    });
+    enforceCompareAndSet(harness);
+    const cancelDurableRun = harness.host.cancelDurableRun;
+    let attempts = 0;
+    harness.host.cancelDurableRun = vi.fn(async (runId: string, actorId?: string) => {
+      if (attempts++ === 0) {
+        throw new Error("temporary durable cancellation failure");
+      }
+      return await cancelDurableRun(runId, actorId);
+    });
+
+    await expect(runOrchestrationPlan(harness.host, harness.runtime, "plan-1")).rejects.toMatchObject({
+      name: "ConflictError",
+    });
+    expect(harness.getRun()).toMatchObject({ status: "failed", durableRunId: "durable-run-1" });
+    expect(harness.getDurableRun().status).toBe("paused");
+    expect(harness.runtime.worktrees.release).toHaveBeenCalledTimes(1);
+
+    const restartedHost = { ...harness.host, storage: { ...harness.host.storage } };
+    await reconcileTerminalOrchestrationRuns(restartedHost, harness.runtime);
+
+    expect(harness.getDurableRun().status).toBe("cancelled");
+    expect(harness.host.cancelDurableRun).toHaveBeenCalledTimes(2);
+    expect(harness.runtime.worktrees.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cancel a paused durable run while its orchestration owner is still active", async () => {
+    const harness = createHarness({
+      run: { ...buildRun(), status: "paused", executionState: "paused_for_approval", durableRunId: "durable-run-1" },
+      durableRun: buildDurableRun({ status: "paused", leaseOwnerId: undefined }),
+    });
+
+    await reconcileTerminalOrchestrationRuns(harness.host, harness.runtime);
+
+    expect(harness.getDurableRun().status).toBe("paused");
+    expect(harness.host.cancelDurableRun).not.toHaveBeenCalled();
+  });
+
+  it("reaches a cleanup candidate beyond a full page of legitimate paused runs", async () => {
+    const harness = createHarness({
+      run: { ...buildRun(), status: "cancelled", executionState: "cancelled" },
+      durableRun: buildDurableRun({ status: "paused", leaseOwnerId: undefined }),
+    });
+    const olderIds = Array.from({ length: 200 }, (_, index) => `durable-${String(index).padStart(3, "0")}`);
+    const allIds = [...olderIds, "durable-run-1"];
+    const listUnstarted = vi.fn((limit = 200, afterRunId?: string) =>
+      allIds.filter((runId) => !afterRunId || runId > afterRunId).slice(0, limit),
+    );
+    harness.host.storage.durableRuns.listUnstartedOrchestrationRunIds = listUnstarted;
+    harness.host.getDurableRun = vi.fn((runId: string) =>
+      runId === "durable-run-1"
+        ? harness.getDurableRun()
+        : buildDurableRun({
+            runId,
+            status: "paused",
+            leaseOwnerId: undefined,
+            payload: { ...buildDurableRun().payload, orchestrationRunId: "run-live" },
+          }),
+    );
+    harness.host.storage.orchestration.getRun = vi.fn((runId: string) =>
+      runId === "run-live"
+        ? { ...buildRun(), runId, status: "paused", executionState: "paused_for_approval" }
+        : harness.getRun(),
+    );
+
+    await reconcileTerminalOrchestrationRuns(harness.host, harness.runtime);
+    expect(listUnstarted).toHaveBeenNthCalledWith(2, 200, olderIds[olderIds.length - 1]);
+    expect(harness.getDurableRun().status).toBe("cancelled");
+  });
+
+  it("restarts a complete orphan sweep after a crash between pages", async () => {
+    const harness = createHarness({
+      run: { ...buildRun(), status: "cancelled", executionState: "cancelled" },
+      durableRun: buildDurableRun({ status: "paused", leaseOwnerId: undefined }),
+    });
+    const allIds = ["durable-000", "durable-run-1"];
+    let failNextPage = true;
+    const listUnstarted = vi.fn((limit = 1, afterRunId?: string) => {
+      if (afterRunId && failNextPage) {
+        failNextPage = false;
+        throw new Error("gateway crashed between recovery pages");
+      }
+      return allIds.filter((runId) => !afterRunId || runId > afterRunId).slice(0, limit);
+    });
+    harness.host.storage.durableRuns.listUnstartedOrchestrationRunIds = listUnstarted;
+    harness.host.getDurableRun = vi.fn((runId: string) =>
+      runId === "durable-run-1"
+        ? harness.getDurableRun()
+        : buildDurableRun({
+            runId,
+            status: "paused",
+            leaseOwnerId: undefined,
+            payload: { ...buildDurableRun().payload, orchestrationRunId: "run-live" },
+          }),
+    );
+    harness.host.storage.orchestration.getRun = vi.fn((runId: string) =>
+      runId === "run-live"
+        ? { ...buildRun(), runId, status: "paused", executionState: "paused_for_approval" }
+        : harness.getRun(),
+    );
+
+    await expect(reconcileTerminalOrchestrationRuns(harness.host, harness.runtime, 1)).rejects.toThrow(
+      "Orchestration recovery could not settle every run.",
+    );
+    expect(harness.getDurableRun().status).toBe("paused");
+
+    const restartedHost = { ...harness.host, storage: { ...harness.host.storage } };
+    await reconcileTerminalOrchestrationRuns(restartedHost, harness.runtime, 1);
+
+    expect(listUnstarted).toHaveBeenCalledWith(1, "durable-000");
+    expect(harness.getDurableRun().status).toBe("cancelled");
+  });
+
+  it("settles the orchestration run once its durable run has failed for a workflow error", async () => {
+    const harness = createHarness({
+      run: {
+        ...buildRun(),
+        status: "running",
+        executionState: "waiting_for_child",
+        currentWaveId: "wave-1",
+        currentPhaseId: "phase-1",
+        durableRunId: "durable-run-1",
+        worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+      },
+      durableRun: buildDurableRun({
+        status: "failed",
+        lastError: "plan storage unavailable",
+        finishedAt: "2026-05-15T12:10:00.000Z",
+        leaseOwnerId: undefined,
+      }),
+    });
+    enforceCompareAndSet(harness);
+
+    await settleOrchestrationRunForEndedDurableRun(harness.host, harness.runtime, harness.getDurableRun(), {
+      reason: "workflow_error",
+    });
+
+    expect(harness.getRun()).toMatchObject({
+      status: "failed",
+      executionState: "failed",
+      lastError: "plan storage unavailable",
+      endedAt: "2026-05-15T12:10:00.000Z",
+    });
+    expect(harness.runtime.worktrees.release).toHaveBeenCalledWith({
+      run: expect.objectContaining({ status: "failed" }),
+      reason: "failed",
+    });
+    expect(harness.host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "run.failed",
+      expect.objectContaining({
+        reason: "workflow_error",
+        durableTerminalStatus: "failed",
+        terminalWinner: "durable_run",
+      }),
+    );
+  });
+
+  it("cancels the child and releases the worktree when realtime publication fails after terminal state commits", async () => {
+    const harness = createHarness({
+      run: {
+        ...buildRun(),
+        status: "running",
+        executionState: "running",
+        currentPhaseId: "phase-1",
+        durableRunId: "durable-run-1",
+        worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+      },
+      durableRun: buildDurableRun({
+        status: "failed",
+        finishedAt: "2026-05-15T12:10:00.000Z",
+        leaseOwnerId: undefined,
+        metadata: { dispatchedPhase: { phaseId: "phase-1", childRunId: "child-run-1" } },
+      }),
+    });
+    enforceCompareAndSet(harness);
+    vi.mocked(harness.host.getDurableRun).mockImplementation(async (runId) =>
+      runId === "child-run-1" ? buildDurableRun({ runId: "child-run-1", status: "running" }) : harness.getDurableRun(),
+    );
+    vi.mocked(harness.host.publishRealtime).mockRejectedValueOnce(new Error("realtime unavailable"));
+
+    await expect(
+      settleOrchestrationRunForEndedDurableRun(harness.host, harness.runtime, harness.getDurableRun(), {
+        reason: "workflow_error",
+      }),
+    ).rejects.toThrow("realtime unavailable");
+
+    expect(harness.getRun()).toMatchObject({ status: "failed", executionState: "failed" });
+    expect(harness.host.cancelDurableRun).toHaveBeenCalledWith("child-run-1", "orchestration");
+    expect(harness.runtime.worktrees.release).toHaveBeenCalledWith({
+      run: expect.objectContaining({ status: "failed" }),
+      reason: "failed",
+    });
+  });
+
+  it("leaves the orchestration run alone when its durable run did not end, such as after a pause took the lease", async () => {
+    const harness = createHarness({
+      run: { ...buildRun(), status: "running", executionState: "running", durableRunId: "durable-run-1" },
+      durableRun: buildDurableRun({ status: "paused", leaseOwnerId: undefined }),
+    });
+    enforceCompareAndSet(harness);
+
+    await settleOrchestrationRunForEndedDurableRun(harness.host, harness.runtime, harness.getDurableRun(), {
+      reason: "workflow_error",
+    });
+
+    expect(harness.getRun()).toMatchObject({ status: "running", executionState: "running" });
+    expect(harness.runtime.worktrees.release).not.toHaveBeenCalled();
+    expect(harness.host.storage.orchestration.appendRunEvent).not.toHaveBeenCalled();
+  });
+
+  it("redacts and bounds the durable error it copies into the run and its realtime event", async () => {
+    const secret = "settle-secret-token-1234567890";
+    const harness = createHarness({
+      run: { ...buildRun(), status: "running", executionState: "running", durableRunId: "durable-run-1" },
+      durableRun: buildDurableRun({
+        status: "failed",
+        lastError: `Provider call failed: Authorization: Bearer ${secret} ${"x".repeat(5000)}`,
+        finishedAt: "2026-05-15T12:10:00.000Z",
+        leaseOwnerId: undefined,
+      }),
+    });
+    enforceCompareAndSet(harness);
+
+    await settleOrchestrationRunForEndedDurableRun(harness.host, harness.runtime, harness.getDurableRun(), {
+      reason: "workflow_error",
+    });
+
+    const lastError = harness.getRun().lastError ?? "";
+    expect(lastError).toMatch(/^Provider call failed: /);
+    expect(lastError).not.toContain(secret);
+    expect(lastError.length).toBeLessThanOrEqual(2000 + " [truncated]".length);
+    expect(JSON.stringify(vi.mocked(harness.host.publishRealtime).mock.calls)).not.toContain(secret);
+  });
+
+  it.each([
+    ["failed", "failed"],
+    ["completed", "completed"],
+    ["stopped_by_limit", "completed"],
+  ] as const)(
+    "settles a durable run whose orchestration run already %s, without executing anything",
+    async (status, outcome) => {
+      const harness = createHarness({
+        run: {
+          ...buildRun(),
+          status,
+          executionState: status,
+          currentPhaseId: "phase-1",
+          durableRunId: "durable-run-1",
+          endedAt: "2026-05-15T12:05:00.000Z",
+        },
+      });
+
+      const result = await executeDurableOrchestrationRun(harness.host, harness.runtime, harness.getDurableRun());
+
+      expect(result.outcome).toBe(outcome);
+      expect(harness.getRun()).toMatchObject({ status, executionState: status });
+      expect(harness.runtime.worktrees.ensureLeaseForExecution).not.toHaveBeenCalled();
+      expect(harness.runtime.phaseExecutor.execute).not.toHaveBeenCalled();
+      expect(harness.host.cancelDurableRun).not.toHaveBeenCalled();
+    },
+  );
+
+  it("cancels the durable run of an orchestration run that was already cancelled", async () => {
+    const harness = createHarness({
+      run: {
+        ...buildRun(),
+        status: "cancelled",
+        executionState: "cancelled",
+        currentPhaseId: "phase-1",
+        durableRunId: "durable-run-1",
+      },
+    });
+
+    const result = await executeDurableOrchestrationRun(harness.host, harness.runtime, harness.getDurableRun());
+
+    expect(result.outcome).toBe("cancelled");
+    expect(harness.host.cancelDurableRun).toHaveBeenCalledWith("durable-run-1", "orchestration");
+    expect(harness.runtime.phaseExecutor.execute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["failed", {}, { status: "failed", executionState: "failed", lastError: "worker crashed" }],
+    ["dead_lettered", {}, { status: "failed", executionState: "failed", lastError: "worker crashed" }],
+    ["cancelled", {}, { status: "cancelled", executionState: "cancelled", lastError: "worker crashed" }],
+    ["completed", { orchestration: { executionState: "stopped_by_limit" } }, { status: "stopped_by_limit" }],
+    ["completed", {}, { status: "completed", executionState: "completed", lastError: undefined }],
+  ] as const)("settles an active run whose durable run ended as %s", async (durableStatus, metadata, expected) => {
+    const harness = createHarness({
+      run: {
+        ...buildRun(),
+        status: "running",
+        executionState: "waiting_for_child",
+        durableRunId: "durable-run-1",
+        worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+      },
+      durableRun: buildDurableRun({
+        status: durableStatus,
+        lastError: "worker crashed",
+        finishedAt: "2026-05-15T12:10:00.000Z",
+        leaseOwnerId: undefined,
+        metadata,
+      }),
+    });
+    enforceCompareAndSet(harness);
+    (
+      harness.host.storage.orchestration as {
+        listActiveRunsWithEndedDurableRun?: () => Promise<OrchestrationRun[]>;
+      }
+    ).listActiveRunsWithEndedDurableRun = vi.fn(async () => [harness.getRun()]);
+
+    await reconcileTerminalOrchestrationRuns(harness.host, harness.runtime);
+
+    expect(harness.getRun()).toMatchObject({ ...expected, endedAt: "2026-05-15T12:10:00.000Z" });
+    expect(harness.host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      expect.stringMatching(/^run\./),
+      expect.objectContaining({
+        reconciledBy: "orchestration_terminal_reconciler",
+        durableTerminalStatus: durableStatus,
+        terminalWinner: "durable_run",
+      }),
+    );
+    expect(harness.runtime.worktrees.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips a listed run whose durable run has not ended after all", async () => {
+    const harness = createHarness({
+      run: { ...buildRun(), status: "paused", executionState: "paused_for_approval", durableRunId: "durable-run-1" },
+      durableRun: buildDurableRun({ status: "paused", leaseOwnerId: undefined }),
+    });
+    enforceCompareAndSet(harness);
+    (
+      harness.host.storage.orchestration as {
+        listActiveRunsWithEndedDurableRun?: () => Promise<OrchestrationRun[]>;
+      }
+    ).listActiveRunsWithEndedDurableRun = vi.fn(async () => [harness.getRun()]);
+
+    await reconcileTerminalOrchestrationRuns(harness.host, harness.runtime);
+
+    expect(harness.getRun()).toMatchObject({ status: "paused", executionState: "paused_for_approval" });
+    expect(harness.runtime.worktrees.release).not.toHaveBeenCalled();
+  });
+});
+
 type HarnessOptions = {
   plan?: OrchestrationPlan;
   run?: OrchestrationRun;
@@ -1307,6 +2239,14 @@ function createHarness(options: HarnessOptions = {}): {
         }
         return durableRun;
       }),
+      listUnstartedOrchestrationRunIds: vi.fn((limit = 200, afterRunId?: string) =>
+        (durableRun.status === "queued" || durableRun.status === "paused") &&
+        durableRun.workflowKey === "orchestration.plan.execute" &&
+        (!afterRunId || durableRun.runId > afterRunId) &&
+        limit > 0
+          ? [durableRun.runId]
+          : [],
+      ),
     },
     orchestration: {
       upsertPlan: vi.fn((next: OrchestrationPlan) => {
@@ -1330,6 +2270,7 @@ function createHarness(options: HarnessOptions = {}): {
       appendRunEvent: vi.fn(),
       listCheckpoints: vi.fn(() => checkpoints),
       getRun: vi.fn(() => run),
+      listUnlinkedCreatedRuns: vi.fn(() => []),
     },
   };
   const engine: OrchestrationLifecycleHost["orchestrationEngine"] = {
@@ -1386,7 +2327,12 @@ function createHarness(options: HarnessOptions = {}): {
     }),
     publishRealtime: vi.fn(),
     scheduleOrchestrationMemoryContext: vi.fn(),
-    createDurableRun: vi.fn(() => durableRun),
+    createDurableRun: vi.fn((_input, internalOptions) => {
+      if (internalOptions?.initialStatus === "paused") {
+        durableRun = { ...durableRun, status: "paused" };
+      }
+      return durableRun;
+    }),
     getDurableRun: vi.fn(() => durableRun),
     requestDurableRunProcessing: vi.fn(),
     pauseDurableRun: vi.fn(() => {
@@ -1394,7 +2340,12 @@ function createHarness(options: HarnessOptions = {}): {
       return durableRun;
     }),
     resumeDurableRun: vi.fn(() => {
-      durableRun = { ...durableRun, status: "queued", version: durableRun.version + 1 };
+      durableRun = {
+        ...durableRun,
+        status: "queued",
+        startedAt: durableRun.startedAt ?? new Date().toISOString(),
+        version: durableRun.version + 1,
+      };
       return durableRun;
     }),
     cancelDurableRun: vi.fn(() => {

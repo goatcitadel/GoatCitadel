@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { __sqliteInternals, createDatabase } from "./sqlite.js";
 import { OrchestrationRepository } from "./orchestration-repo.js";
+import { DurableRunRepository } from "./durable-run-repo.js";
 import type { OrchestrationPlan, OrchestrationRun } from "@goatcitadel/contracts";
 
 const createdFiles: string[] = [];
@@ -468,6 +469,92 @@ describe("OrchestrationRepository", () => {
     assert.equal(updated?.executionState, "resume_requested");
     assert.equal(stale, undefined);
     assert.equal(repo.getRun("run-cas").pendingApprovedBy, undefined);
+  });
+
+  it("lists only active runs whose durable run has ended, oldest first", () => {
+    const { db, repo } = createRepoWithDb();
+    const durableRuns = new DurableRunRepository(db);
+    repo.upsertPlan(plan);
+    for (const [runId, status] of [
+      ["d-early", "failed"],
+      ["d-queued", "cancelled"],
+      ["d-late", "dead_lettered"],
+      ["d-running", "running"],
+      ["d-waiting", "waiting"],
+      ["d-done", "completed"],
+    ] as const) {
+      durableRuns.createRun({ runId, workflowKey: "orchestration.plan.execute", status });
+    }
+    const base: OrchestrationRun = {
+      runId: "run-base",
+      planId: "plan-1",
+      status: "running",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      totalCostUsd: 0,
+      totalIterations: 0,
+      workspaceId: "default",
+    };
+    repo.createRun({ ...base, runId: "run-late", startedAt: "2026-02-27T00:00:03.000Z", durableRunId: "d-late" });
+    repo.createRun({ ...base, runId: "run-early", status: "paused", durableRunId: "d-early" });
+    repo.createRun({
+      ...base,
+      runId: "run-queued",
+      status: "queued",
+      startedAt: "2026-02-27T00:00:02.000Z",
+      durableRunId: "d-queued",
+    });
+    // Still in step with a durable run that has not ended, or with none at all.
+    repo.createRun({ ...base, runId: "run-live", startedAt: "2026-02-27T00:00:01.000Z", durableRunId: "d-running" });
+    repo.createRun({ ...base, runId: "run-parked", durableRunId: "d-waiting" });
+    repo.createRun({ ...base, runId: "run-unlinked", startedAt: "2026-02-27T00:00:01.000Z" });
+    repo.createRun({ ...base, runId: "run-missing-durable", durableRunId: "d-missing" });
+    repo.createRun({
+      ...base,
+      runId: "run-completed-peer",
+      startedAt: "2026-02-27T00:00:04.000Z",
+      durableRunId: "d-done",
+    });
+    // Already settled.
+    repo.createRun({ ...base, runId: "run-done", status: "completed", durableRunId: "d-done" });
+
+    assert.deepEqual(
+      repo.listActiveRunsWithEndedDurableRun().map((run) => run.runId),
+      ["run-early", "run-queued", "run-late", "run-completed-peer"],
+    );
+    assert.deepEqual(
+      repo.listActiveRunsWithEndedDurableRun(1).map((run) => run.runId),
+      ["run-early"],
+    );
+  });
+
+  it("pages active ownership setups that never linked a durable run", () => {
+    const repo = createRepo();
+    repo.upsertPlan(plan);
+    const base: OrchestrationRun = {
+      runId: "run-a",
+      planId: "plan-1",
+      status: "queued",
+      executionState: "created",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      totalCostUsd: 0,
+      totalIterations: 0,
+      workspaceId: "default",
+    };
+    repo.createRun(base);
+    repo.createRun({ ...base, runId: "run-b" });
+    repo.createRun({ ...base, runId: "run-c", durableRunId: "durable-c" });
+    repo.createRun({ ...base, runId: "run-d", executionState: "worktree_allocating" });
+    repo.createRun({ ...base, runId: "run-e", status: "cancelled" });
+
+    assert.deepEqual(
+      repo.listUnlinkedCreatedRuns(1).map((run) => run.runId),
+      ["run-a"],
+    );
+    assert.deepEqual(
+      repo.listUnlinkedCreatedRuns(1, "run-a").map((run) => run.runId),
+      ["run-b"],
+    );
+    assert.deepEqual(repo.listUnlinkedCreatedRuns(1, "run-b"), []);
   });
 
   it("handles missing lookups, corrupted JSON fallbacks, cursors, and run events", () => {

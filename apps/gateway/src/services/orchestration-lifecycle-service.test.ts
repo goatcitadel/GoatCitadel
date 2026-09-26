@@ -196,7 +196,12 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
     parseOrchestrationRunHookPatch: vi.fn(() => undefined),
     parseOrchestrationPhaseHookPatch: vi.fn(() => undefined),
     applyOrchestrationPhaseHookPatch: vi.fn((currentPlan) => currentPlan),
-    createDurableRun: vi.fn(async () => durableRun),
+    createDurableRun: vi.fn(async (_input, internalOptions) => {
+      if (internalOptions?.initialStatus === "paused") {
+        durableRun = { ...durableRun, status: "paused" };
+      }
+      return durableRun;
+    }),
     getDurableRun: vi.fn(() => durableRun),
     requestDurableRunProcessing: vi.fn(async () => undefined),
     pauseDurableRun: vi.fn(async () => ({
@@ -423,8 +428,9 @@ describe("orchestration-lifecycle-service", () => {
           localOperatorOverrideId: "override-1",
         }),
       }),
+      { initialStatus: "paused" },
     );
-    expect(host.pauseDurableRun).toHaveBeenCalledWith("durable-run-1", "orchestration");
+    expect(host.pauseDurableRun).not.toHaveBeenCalled();
     expect(runtime.worktrees.allocate).toHaveBeenCalled();
     expect(host.createCheckpoint).toHaveBeenCalledWith(
       expect.objectContaining({
