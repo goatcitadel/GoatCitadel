@@ -1857,6 +1857,8 @@ export class GatewayService {
     this.durableRunService = new DurableRunService(serviceCtx, {
       backgroundTasks: this.backgroundTasks,
       reconcileWaitingChatDelegations: () => this.chatTurnControl.reconcileWaitingDelegations(),
+      reconcileWaitingOrchestrationPhases: () =>
+        orchestrationLifecycleService.reconcileWaitingOrchestrationPhases(this),
       onChatTurnCancelled: (sessionId, turnId, actorId) =>
         this.chatTurnControl.onChatTurnCancelled(sessionId, turnId, actorId),
       workflowRegistry: durableExecutionService.createDeferredDurableWorkflowExecutorRegistry(
@@ -2196,6 +2198,28 @@ export class GatewayService {
       agentSendChatMessage: (sessionId, input, options) =>
         this.chatTurnRuntime.agentSendChatMessage(sessionId, input, options),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
+      readChatTurnTrace: async (turnId) => {
+        try {
+          return await this.storage.chatTurnTraces.get(turnId);
+        } catch (error) {
+          if (error instanceof NotFoundError) return undefined;
+          throw error;
+        }
+      },
+      readChatMessageContent: async (messageId) => (await this.storage.chatMessages.get(messageId))?.content,
+      readChatTurnUsage: async ({ sessionId, turnId }) => {
+        const { summary } = await this.storage.modelUsageEvents.list({ sessionId, turnId, limit: 1 });
+        return {
+          costUsd: summary.costUsd,
+          // Cost is complete only when every recorded call reported one and no dispatch is uncertain.
+          costComplete:
+            summary.attemptCount > 0 &&
+            summary.uncertainDispatchCount === 0 &&
+            summary.metricAvailability.costUsd.complete,
+          inputTokens: summary.inputTokens,
+          outputTokens: summary.outputTokens,
+        };
+      },
     });
     const subagentDefaults = AgentSubagentDefaultsSchema.parse(
       (config as { agents?: { defaults?: { subagents?: unknown } } }).agents?.defaults?.subagents ?? {},
@@ -8599,6 +8623,25 @@ export class GatewayService {
         parentDelegationStepId: prepared.parentDelegationStepId,
         trace,
         ...(assistantMessage?.content ? { output: assistantMessage.content } : {}),
+      });
+    }
+    await this.wakeOrchestrationPhaseParent(runId);
+  }
+
+  /**
+   * Wakes the orchestration run parked on this Chat run as its phase child.
+   * The child's outcome is already committed, so a failed wake is left to the
+   * durable reconciler instead of failing the child.
+   */
+  private async wakeOrchestrationPhaseParent(childRunId: string): Promise<void> {
+    try {
+      const childRun = await this.storage.durableRuns.getRun(childRunId);
+      const orchestrationRunId = durableExecutionService.parseDurableChatTurnPayload(childRun)?.request.policyRunId;
+      await orchestrationLifecycleService.wakeOrchestrationPhaseParent(this, childRunId, orchestrationRunId);
+    } catch (error) {
+      log.warn("Orchestration phase parent wake deferred to reconciliation.", {
+        childRunId,
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   }

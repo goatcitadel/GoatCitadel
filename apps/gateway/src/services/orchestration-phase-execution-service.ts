@@ -1,25 +1,55 @@
+import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type {
-  ChatSendMessageRequest,
-  ChatSendMessageResponse,
-  ChatSessionCreateInput,
-  ChatSessionPrefsPatch,
-  ChatSessionPrefsRecord,
-  ChatSessionRecord,
-  DurableRunRecord,
-  OrchestrationPhase,
-  OrchestrationPhaseChildDispatch,
-  OrchestrationPhaseExecutionResult,
-  OrchestrationPlan,
-  OrchestrationRun,
-  OrchestrationRunPolicyContext,
+import {
+  isChatTurnTerminalStatus,
+  type ChatSendMessageRequest,
+  type ChatSendMessageResponse,
+  type ChatSessionCreateInput,
+  type ChatSessionPrefsPatch,
+  type ChatSessionPrefsRecord,
+  type ChatSessionRecord,
+  type ChatTurnTraceRecord,
+  type DurableRunRecord,
+  type OrchestrationPhase,
+  type OrchestrationPhaseChildDispatch,
+  type OrchestrationPhaseExecutionResult,
+  type OrchestrationPlan,
+  type OrchestrationRun,
+  type OrchestrationRunPolicyContext,
 } from "@goatcitadel/contracts";
 import { renderVersionedTextPrompt } from "../orchestration/prompt-registry.js";
 
 const DEFAULT_WORKSPACE_ID = "default";
 const PHASE_SPEC_MAX_CHARACTERS = 24000;
+
+const UNSUPPORTED_USER_INPUT_WAIT =
+  "Phase child turn is waiting for user input, but durable orchestration can only pause/resume approval waits. Refactor this phase to: (1) detect where input is needed, (2) emit an approval-required tool/action and return waiting_for_approval, and (3) resume the run after approval to continue execution.";
+
+/** Stable child turn identity for one orchestration phase, so a re-dispatch converges on the same turn. */
+export interface OrchestrationPhaseTurnIdentity {
+  turnId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+}
+
+export interface OrchestrationPhaseChatDispatchOptions {
+  abortSignal?: AbortSignal;
+  turnIdentity?: OrchestrationPhaseTurnIdentity;
+  /** Return once the child durable run is admitted; the parent parks until the child settles. */
+  returnAfterDurableAdmission?: boolean;
+  onChildDurableRunLaunched?: (runId: string) => Promise<void>;
+}
+
+/** Canonical model usage recorded for one child Chat turn. */
+export interface OrchestrationChildTurnUsage {
+  costUsd?: number;
+  /** False when at least one model call in the turn reported no cost. */
+  costComplete: boolean;
+  inputTokens?: number;
+  outputTokens?: number;
+}
 
 export interface OrchestrationPhaseExecutionServiceDeps {
   readonly rootDir: string;
@@ -28,9 +58,23 @@ export interface OrchestrationPhaseExecutionServiceDeps {
   agentSendChatMessage(
     sessionId: string,
     input: ChatSendMessageRequest,
-    options?: { abortSignal?: AbortSignal; onChildDurableRunLaunched?: (runId: string) => Promise<void> },
+    options?: OrchestrationPhaseChatDispatchOptions,
   ): Promise<ChatSendMessageResponse>;
   normalizeWorkspaceId(workspaceId: string): string;
+  /** Canonical readers used to harvest a parked phase once its child turn settles. */
+  readChatTurnTrace?(turnId: string): Promise<ChatTurnTraceRecord | undefined>;
+  readChatMessageContent?(messageId: string): Promise<string | undefined>;
+  readChatTurnUsage?(input: { sessionId: string; turnId: string }): Promise<OrchestrationChildTurnUsage>;
+}
+
+export interface OrchestrationPhaseHarvestInput {
+  phaseId: string;
+  ownerAgentId: string;
+  childRunId: string;
+  childSessionId?: string;
+  childTurnId?: string;
+  startedAt?: string;
+  prompt?: OrchestrationPhaseExecutionResult["prompt"];
 }
 
 export interface OrchestrationPhaseExecutionInput {
@@ -57,6 +101,7 @@ export class OrchestrationPhaseExecutionService {
     const startedAt = new Date().toISOString();
     const workspaceId = this.deps.normalizeWorkspaceId(input.run.workspaceId ?? DEFAULT_WORKSPACE_ID);
     const specText = await this.readPhaseSpec(input.run, input.phase);
+    const turnIdentity = buildOrchestrationPhaseTurnIdentity(input.run.runId, input.phase.phaseId);
     const childSession = await this.deps.createChatSession({
       workspaceId,
       mode: "cowork",
@@ -69,6 +114,7 @@ export class OrchestrationPhaseExecutionService {
     await input.onChildDispatched?.({
       phaseId: input.phase.phaseId,
       childSessionId: childSession.sessionId,
+      childTurnId: turnIdentity.turnId,
     });
     await this.deps.updateChatSessionPrefs(childSession.sessionId, {
       mode: "cowork",
@@ -131,65 +177,53 @@ export class OrchestrationPhaseExecutionService {
         },
         {
           ...(input.signal ? { abortSignal: input.signal } : {}),
+          turnIdentity,
+          // The phase runs inside the durable worker, which executes one run at
+          // a time. Waiting here for the child's durable run would hold the very
+          // worker that child needs, so return once the child is admitted; the
+          // parent parks until the child settles and is then woken to harvest it.
+          returnAfterDurableAdmission: true,
           // Crash-safe breadcrumb #2: enrich the linkage with the durable child
-          // run id the instant the child run is created, before the (possibly
-          // long-running) turn settles. This is what resume harvests/reattaches.
-          onChildDurableRunLaunched: input.onChildDispatched
-            ? async (runId) =>
-                await input.onChildDispatched?.({
-                  phaseId: input.phase.phaseId,
-                  childSessionId: childSession.sessionId,
-                  childRunId: runId,
-                })
-            : undefined,
+          // run id the instant the child run is created. This is what the parent
+          // waits on and what resume harvests/reattaches.
+          onChildDurableRunLaunched: async (runId) =>
+            await input.onChildDispatched?.({
+              phaseId: input.phase.phaseId,
+              childSessionId: childSession.sessionId,
+              childTurnId: turnIdentity.turnId,
+              childRunId: runId,
+            }),
         },
       );
       throwIfPhaseAborted(input.signal);
-      const assistantText = response.assistantMessage?.content?.trim() ?? "";
-      const finishedAt = new Date().toISOString();
-      const costUsd = response.assistantMessage?.costUsd;
-      const inputTokens = response.assistantMessage?.tokenInput;
-      const outputTokens = response.assistantMessage?.tokenOutput;
-      const traceStatus = response.trace?.status;
-      const failure = response.trace?.failure?.message ?? response.trace?.failure?.failureClass;
-      const approvalId =
-        response.trace?.pendingApprovalSummary?.approvalId ??
-        response.trace?.toolRuns?.find((toolRun) => toolRun.status === "approval_required" && toolRun.approvalId)
-          ?.approvalId;
-      const waitingForApproval = traceStatus === "waiting_for_approval";
-      const waitingForUserInput = traceStatus === "waiting_for_user_input";
-      const unsupportedUserInputWait =
-        "Phase child turn is waiting for user input, but durable orchestration can only pause/resume approval waits. Refactor this phase to: (1) detect where input is needed, (2) emit an approval-required tool/action and return waiting_for_approval, and (3) resume the run after approval to continue execution.";
-      const effectiveFailure = waitingForUserInput ? unsupportedUserInputWait : failure;
-      return {
-        phaseId: input.phase.phaseId,
-        ownerAgentId: input.phase.ownerAgentId,
-        status: waitingForApproval
-          ? "waiting"
-          : traceStatus === "failed" || waitingForUserInput || !assistantText
-            ? "failed"
-            : "completed",
-        startedAt,
-        finishedAt,
-        outputSummary: summarizePhaseOutput(assistantText || effectiveFailure),
-        outputText: assistantText || effectiveFailure,
-        childSessionId: response.sessionId,
-        childTurnId: response.turnId,
-        childRunId: response.trace?.durable?.runId,
-        approvalId,
-        model: response.model ?? response.trace?.model,
-        costUsd,
-        inputTokens,
-        outputTokens,
-        citations: response.citations,
-        prompt: prompt.reference,
-        error:
-          traceStatus === "failed"
-            ? (failure ?? "Phase chat turn failed.")
-            : waitingForUserInput
-              ? unsupportedUserInputWait
-              : undefined,
-      };
+      const childRunId = response.trace?.durable?.runId;
+      if (!isChildTurnSettled(response.trace?.status)) {
+        // Admitted and still running (or waiting on an approval in Chat).
+        return {
+          phaseId: input.phase.phaseId,
+          ownerAgentId: input.phase.ownerAgentId,
+          status: "waiting",
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          childSessionId: response.sessionId ?? childSession.sessionId,
+          childTurnId: response.turnId ?? turnIdentity.turnId,
+          childRunId,
+          prompt: prompt.reference,
+        };
+      }
+      // A replayed canonical turn can already be settled; read it the way a woken phase does.
+      const harvested = childRunId
+        ? await this.harvest({
+            phaseId: input.phase.phaseId,
+            ownerAgentId: input.phase.ownerAgentId,
+            childRunId,
+            childSessionId: response.sessionId,
+            childTurnId: response.turnId,
+            startedAt,
+            prompt: prompt.reference,
+          })
+        : undefined;
+      return harvested ?? settledChildResponseResult(input.phase, startedAt, response, prompt.reference);
     } catch (error) {
       if (isPhaseAbortError(error, input.signal)) {
         throw error;
@@ -205,6 +239,56 @@ export class OrchestrationPhaseExecutionService {
         error: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  /**
+   * Reads a parked phase's child turn from its canonical trace, message, and
+   * model usage records. Returns undefined while the child is still working
+   * (running, or waiting on an approval in Chat) or when it cannot be read, so
+   * the caller keeps waiting or falls back. A child waiting for user input
+   * fails the phase, because orchestration cannot answer it.
+   */
+  public async harvest(input: OrchestrationPhaseHarvestInput): Promise<OrchestrationPhaseExecutionResult | undefined> {
+    if (!input.childTurnId || !this.deps.readChatTurnTrace) {
+      return undefined;
+    }
+    const trace = await this.deps.readChatTurnTrace(input.childTurnId);
+    if (!trace || !isChildTurnSettled(trace.status)) {
+      return undefined;
+    }
+    const assistantText = trace.assistantMessageId
+      ? ((await this.deps.readChatMessageContent?.(trace.assistantMessageId)) ?? "").trim()
+      : "";
+    const usage =
+      input.childSessionId && this.deps.readChatTurnUsage
+        ? await this.deps.readChatTurnUsage({ sessionId: input.childSessionId, turnId: input.childTurnId })
+        : undefined;
+    const { completed, error } = describeSettledChildTurn(
+      trace.status,
+      assistantText,
+      trace.failure?.message ?? trace.failure?.failureClass,
+    );
+    const outputText = assistantText || error;
+    return {
+      phaseId: input.phaseId,
+      ownerAgentId: input.ownerAgentId,
+      status: completed ? "completed" : "failed",
+      startedAt: input.startedAt ?? trace.startedAt,
+      finishedAt: trace.finishedAt ?? new Date().toISOString(),
+      outputSummary: summarizePhaseOutput(outputText),
+      outputText,
+      childSessionId: input.childSessionId,
+      childTurnId: input.childTurnId,
+      childRunId: input.childRunId,
+      model: trace.model,
+      ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+      ...(!usage?.costComplete ? { costUnreported: true } : {}),
+      ...(usage?.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
+      ...(usage?.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
+      citations: trace.citations,
+      prompt: input.prompt,
+      error,
+    };
   }
 
   private async readPhaseSpec(run: OrchestrationRun, phase: OrchestrationPhase): Promise<string> {
@@ -262,6 +346,93 @@ export class OrchestrationPhaseExecutionService {
       return `Unable to read ${phase.specPath}: ${error instanceof Error ? error.message : String(error)}`;
     }
   }
+}
+
+export function buildOrchestrationPhaseTurnIdentity(runId: string, phaseId: string): OrchestrationPhaseTurnIdentity {
+  return {
+    turnId: buildStableOrchestrationId("orchestration-turn", runId, phaseId),
+    userMessageId: buildStableOrchestrationId("orchestration-user", runId, phaseId),
+    assistantMessageId: buildStableOrchestrationId("orchestration-assistant", runId, phaseId),
+  };
+}
+
+function buildStableOrchestrationId(prefix: string, ...parts: string[]): string {
+  const digest = createHash("sha256")
+    .update(parts.map((part) => `${part.length}:${part}`).join("|"))
+    .digest("hex")
+    .slice(0, 32);
+  return `${prefix}-${digest}`;
+}
+
+/**
+ * A child turn has settled for its phase once it finished or stopped to ask for
+ * user input. Running turns and approval waits are still the child's to finish.
+ */
+function isChildTurnSettled(status: ChatTurnTraceRecord["status"] | undefined): boolean {
+  return status !== undefined && (status === "waiting_for_user_input" || isChatTurnTerminalStatus(status));
+}
+
+/**
+ * Maps a settled child turn onto its phase. Only a finished turn with assistant
+ * output completes the phase; a wait for user input fails it, because
+ * orchestration cannot answer the question.
+ */
+function describeSettledChildTurn(
+  status: ChatTurnTraceRecord["status"] | undefined,
+  assistantText: string,
+  failure: string | undefined,
+): { completed: boolean; error?: string } {
+  const finished = status === "completed" || status === "partial";
+  if (status === "waiting_for_user_input") {
+    return { completed: false, error: UNSUPPORTED_USER_INPUT_WAIT };
+  }
+  if (finished && assistantText) {
+    return { completed: true };
+  }
+  return {
+    completed: false,
+    error:
+      failure ??
+      (finished
+        ? "Phase child turn finished without assistant output."
+        : `Phase child turn ended as ${status ?? "unknown"}.`),
+  };
+}
+
+/** Maps a settled child response when its canonical records cannot be read. */
+function settledChildResponseResult(
+  phase: Pick<OrchestrationPhase, "phaseId" | "ownerAgentId">,
+  startedAt: string,
+  response: ChatSendMessageResponse,
+  prompt: OrchestrationPhaseExecutionResult["prompt"],
+): OrchestrationPhaseExecutionResult {
+  const assistantText = response.assistantMessage?.content?.trim() ?? "";
+  const { completed, error } = describeSettledChildTurn(
+    response.trace?.status,
+    assistantText,
+    response.trace?.failure?.message ?? response.trace?.failure?.failureClass,
+  );
+  const costUsd = response.assistantMessage?.costUsd;
+  return {
+    phaseId: phase.phaseId,
+    ownerAgentId: phase.ownerAgentId,
+    status: completed ? "completed" : "failed",
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    outputSummary: summarizePhaseOutput(assistantText || error),
+    outputText: assistantText || error,
+    childSessionId: response.sessionId,
+    childTurnId: response.turnId,
+    childRunId: response.trace?.durable?.runId,
+    model: response.model ?? response.trace?.model,
+    costUsd,
+    ...(costUsd === undefined ? { costUnreported: true } : {}),
+    inputTokens: response.assistantMessage?.tokenInput,
+    outputTokens: response.assistantMessage?.tokenOutput,
+    citations: response.citations,
+    prompt,
+    error,
+  };
 }
 
 /** True when `target` is inside `base` (and not `base` itself). */

@@ -9,6 +9,8 @@ export type OrchestrationExecutionState =
   | "worktree_ready"
   | "queued"
   | "running"
+  /** Parked while the current phase's child Chat turn runs on its own durable run. */
+  | "waiting_for_child"
   | "paused_for_approval"
   | "resume_requested"
   | "completed"
@@ -48,6 +50,11 @@ export interface OrchestrationPhaseExecutionResult {
   responseId?: string;
   model?: string;
   costUsd?: number;
+  /**
+   * True when the provider did not report a cost for every model call in the
+   * phase, so `costUsd` (and the plan's cost limits) may understate real spend.
+   */
+  costUnreported?: boolean;
   inputTokens?: number;
   outputTokens?: number;
   citations?: unknown[];
