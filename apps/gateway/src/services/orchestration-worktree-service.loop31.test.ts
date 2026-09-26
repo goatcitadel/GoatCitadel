@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OrchestrationRun } from "@goatcitadel/contracts";
+import type { WorktreeChanges } from "@goatcitadel/orchestration";
 import { createDatabase, OrchestrationWorktreeLeaseRepository } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 
@@ -11,7 +12,7 @@ const worktreeManagerMocks = vi.hoisted(() => ({
   remove: vi.fn(),
   prune: vi.fn(),
   // Clean unless a test says otherwise; an undefined result also counts as clean.
-  listChanges: vi.fn(async (): Promise<string[] | undefined> => []),
+  listChanges: vi.fn(async (): Promise<WorktreeChanges> => ({ status: "read", changedPaths: [] })),
   constructor: vi.fn(),
 }));
 

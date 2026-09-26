@@ -221,10 +221,24 @@ export class OrchestrationPhaseExecutionService {
       if (!isStrictlyWithin(realBase, realTarget)) {
         return outsideWorkspace;
       }
-      const noFollow = process.platform === "win32" ? 0 : (fsConstants.O_NOFOLLOW ?? 0);
-      const handle = await fs.open(realTarget, fsConstants.O_RDONLY | noFollow);
+      // Non-blocking, so a FIFO is rejected below instead of stalling the open.
+      const posixFlags =
+        process.platform === "win32" ? 0 : (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
+      const handle = await fs.open(realTarget, fsConstants.O_RDONLY | posixFlags);
       try {
-        if (!(await handle.stat()).isFile()) {
+        const opened = await handle.stat({ bigint: true });
+        // A directory swapped for a symlink between the check and the open could
+        // have redirected it; prove the path still resolves inside the workspace,
+        // to the file that was opened.
+        const reresolved = await fs.realpath(realTarget);
+        if (!isStrictlyWithin(realBase, reresolved)) {
+          return outsideWorkspace;
+        }
+        const current = await fs.stat(reresolved, { bigint: true });
+        if (current.dev !== opened.dev || current.ino !== opened.ino) {
+          return outsideWorkspace;
+        }
+        if (!opened.isFile()) {
           return `Unable to read ${phase.specPath}: not a regular file.`;
         }
         // Read at most what the prompt can use (4 bytes per character covers UTF-8).

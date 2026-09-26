@@ -311,7 +311,7 @@ Core endpoints:
 
 Behavior:
 
-- Plan validation via schema and ownership overlap checks. Ownership paths are normalized (`./`, `..`, separators, letter case) before they are compared, a path that climbs above the repository root is rejected, and a glob is compared by its literal prefix, so `apps/web*` conflicts with `apps/website`.
+- Plan validation via schema and ownership overlap checks. Ownership paths are normalized (`./`, `..`, separators, letter case) before they are compared, a path that climbs above the repository root, or is drive-qualified or UNC, is rejected, and a glob is compared by its literal prefix, so `apps/web*` conflicts with `apps/website`.
 - Run creation with checkpoints and run events.
 - Start transitions to `running` or `paused` based on run mode.
 - Phase approval advances to next phase/wave and increments iteration/cost.

@@ -56,7 +56,7 @@ describe("WorktreeManager.listChanges", () => {
     const { manager } = createRepo();
     const worktreePath = await manager.create("run-1");
 
-    await expect(manager.listChanges(worktreePath)).resolves.toEqual([]);
+    await expect(manager.listChanges(worktreePath)).resolves.toEqual({ status: "read", changedPaths: [] });
 
     fs.writeFileSync(path.join(worktreePath, "tracked.txt"), "changed\n");
     fs.mkdirSync(path.join(worktreePath, "notes"));
@@ -64,16 +64,56 @@ describe("WorktreeManager.listChanges", () => {
     fs.mkdirSync(path.join(worktreePath, "ignored"));
     fs.writeFileSync(path.join(worktreePath, "ignored", "cache.bin"), "cache");
 
-    expect((await manager.listChanges(worktreePath))?.sort()).toEqual(["notes/draft.md", "tracked.txt"]);
+    const changes = await manager.listChanges(worktreePath);
+    expect(changes.status === "read" ? changes.changedPaths.sort() : changes).toEqual([
+      "notes/draft.md",
+      "tracked.txt",
+    ]);
   });
 
-  it("returns undefined for a directory the repository did not register", async () => {
+  it("reports a directory the repository did not register as unregistered", async () => {
     const { repoRoot, manager } = createRepo();
     const stray = path.join(repoRoot, ".worktrees", "orchestration", "stray");
     fs.mkdirSync(stray, { recursive: true });
     fs.writeFileSync(path.join(stray, "file.txt"), "stray");
 
-    await expect(manager.listChanges(stray)).resolves.toBeUndefined();
+    await expect(manager.listChanges(stray)).resolves.toEqual({ status: "unregistered" });
+  });
+
+  it("reports a registered worktree git cannot read as unreadable, not clean", async () => {
+    const { repoRoot, manager } = createRepo();
+    const worktreePath = await manager.create("run-3");
+    fs.writeFileSync(path.join(worktreePath, "tracked.txt"), "changed\n");
+    // Break the registration's HEAD so `git status` fails for this worktree.
+    fs.writeFileSync(path.join(repoRoot, ".git", "worktrees", "run-3", "HEAD"), "not a ref\n");
+
+    const changes = await manager.listChanges(worktreePath);
+
+    expect(changes).toMatchObject({ status: "unreadable", error: expect.any(String) });
+    expect(changes.status === "unreadable" ? changes.error.length : 0).toBeGreaterThan(0);
+  });
+
+  it("reports worktrees as unreadable when git cannot read the repository's registrations", async () => {
+    const { repoRoot, manager } = createRepo();
+    // The registrations directory cannot be listed.
+    fs.writeFileSync(path.join(repoRoot, ".git", "worktrees"), "not a directory\n");
+
+    await expect(
+      manager.listChanges(path.join(repoRoot, ".worktrees", "orchestration", "run-1")),
+    ).resolves.toMatchObject({ status: "unreadable", error: expect.any(String) });
+  });
+
+  it("reports a path as unregistered when the root is not a git repository at all", async () => {
+    const { root } = createRepo();
+    const notARepository = path.join(root, "plain");
+    const orphan = path.join(notARepository, ".worktrees", "orchestration", "run-1");
+    fs.mkdirSync(orphan, { recursive: true });
+    const manager = new WorktreeManager({
+      repoRoot: notARepository,
+      worktreesRoot: path.join(notARepository, ".worktrees", "orchestration"),
+    });
+
+    await expect(manager.listChanges(orphan)).resolves.toEqual({ status: "unregistered" });
   });
 
   it.skipIf(process.platform === "win32")(
@@ -89,7 +129,7 @@ describe("WorktreeManager.listChanges", () => {
       fs.writeFileSync(path.join(worktreePath, ".git"), `gitdir: ${path.join(root, "hostile", ".git")}\n`);
       fs.writeFileSync(path.join(worktreePath, "tracked.txt"), "changed\n");
 
-      expect(await manager.listChanges(worktreePath)).toEqual(["tracked.txt"]);
+      expect(await manager.listChanges(worktreePath)).toEqual({ status: "read", changedPaths: ["tracked.txt"] });
       expect(fs.existsSync(marker)).toBe(false);
 
       // Control: plain `git status` inside the worktree follows the rewritten file and runs the hook.

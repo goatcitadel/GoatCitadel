@@ -147,23 +147,27 @@ describe("OrchestrationEngine", () => {
     );
   });
 
-  it("rejects ownership paths that climb above the repository root", () => {
-    const engine = new OrchestrationEngine();
-    const invalidPlan: OrchestrationPlan = {
-      ...plan,
-      waves: [
-        {
-          ...plan.waves[0]!,
-          ownership: [{ agentId: "agent-a", paths: ["apps/../../outside"] }],
-          phases: [plan.waves[0]!.phases[0]!],
-        },
-      ],
-    };
+  // Backslash forms are covered in ownership-matrix.test.ts; the error text here is JSON-escaped.
+  it.each(["apps/../../outside", "C:/outside", "//server/share"])(
+    "rejects ownership path %s, which does not stay inside the repository root",
+    (ownedPath) => {
+      const engine = new OrchestrationEngine();
+      const invalidPlan: OrchestrationPlan = {
+        ...plan,
+        waves: [
+          {
+            ...plan.waves[0]!,
+            ownership: [{ agentId: "agent-a", paths: [ownedPath] }],
+            phases: [plan.waves[0]!.phases[0]!],
+          },
+        ],
+      };
 
-    expect(() => engine.validate(invalidPlan)).toThrow(
-      "Ownership path apps/../../outside climbs above the repository root.",
-    );
-  });
+      expect(() => engine.validate(invalidPlan)).toThrow(
+        `Ownership path ${ownedPath} must stay inside the repository root.`,
+      );
+    },
+  );
 
   it("rejects verify entries that do not point at a declared phase", () => {
     const engine = new OrchestrationEngine();

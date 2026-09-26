@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,7 @@ import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execut
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -598,6 +600,107 @@ describe("OrchestrationPhaseExecutionService", () => {
     });
 
     expect(agentSendChatMessage.mock.calls[0]?.[1].content).toContain("Phase spec:\nInside spec.");
+  });
+
+  describe.skipIf(process.platform === "win32")("phase spec reads racing a workspace change", () => {
+    async function executeWithSpec(worktreePath: string): Promise<string> {
+      const agentSendChatMessage = vi.fn(
+        async () =>
+          ({
+            sessionId: "child-session-1",
+            userMessage: {} as never,
+            assistantMessage: { content: "done" } as never,
+            transport: "llm",
+            turnId: "turn-1",
+            trace: { status: "completed" } as never,
+          }) as ChatSendMessageResponse,
+      );
+      const service = new OrchestrationPhaseExecutionService({
+        rootDir: worktreePath,
+        createChatSession: vi.fn(() => ({ sessionId: "child-session-1" }) as ChatSessionRecord),
+        updateChatSessionPrefs: vi.fn(),
+        agentSendChatMessage,
+        normalizeWorkspaceId: (workspaceId) => workspaceId,
+      });
+      await service.execute({
+        plan: buildPlan(),
+        run: buildRun(worktreePath),
+        phase: { ...buildPhase(), specPath: "specs/real.md" },
+        durableRun: buildDurableRun(),
+      });
+      return agentSendChatMessage.mock.calls[0]?.[1].content ?? "";
+    }
+
+    async function prepareSwap(): Promise<{
+      worktreePath: string;
+      swapIn(): Promise<void>;
+      swapBack(): Promise<void>;
+    }> {
+      const worktreePath = await makeTempDir();
+      const outsideDir = await makeTempDir();
+      await fs.mkdir(path.join(worktreePath, "specs"));
+      await fs.writeFile(path.join(worktreePath, "specs", "real.md"), "Inside spec.", "utf8");
+      await fs.writeFile(path.join(outsideDir, "real.md"), "outside secret", "utf8");
+      return {
+        worktreePath,
+        // Replace the spec's parent directory with a symlink out of the workspace.
+        swapIn: async () => {
+          await fs.rename(path.join(worktreePath, "specs"), path.join(worktreePath, "specs-moved"));
+          await fs.symlink(outsideDir, path.join(worktreePath, "specs"));
+        },
+        swapBack: async () => {
+          await fs.unlink(path.join(worktreePath, "specs"));
+          await fs.rename(path.join(worktreePath, "specs-moved"), path.join(worktreePath, "specs"));
+        },
+      };
+    }
+
+    it("refuses a spec whose parent directory is swapped for an outside symlink as it is opened", async () => {
+      const { worktreePath, swapIn } = await prepareSwap();
+      const realOpen = fs.open.bind(fs);
+      const open = vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+        await swapIn();
+        return await realOpen(...args);
+      });
+
+      const prompt = await executeWithSpec(worktreePath);
+
+      expect(open).toHaveBeenCalled();
+      expect(prompt).toContain(
+        "Spec path specs/real.md resolves outside the orchestration workspace and was not read.",
+      );
+      expect(prompt).not.toContain("outside secret");
+    });
+
+    it("refuses a spec opened through a swapped directory even when the swap is undone before the check", async () => {
+      const { worktreePath, swapIn, swapBack } = await prepareSwap();
+      const realOpen = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+        await swapIn();
+        try {
+          return await realOpen(...args);
+        } finally {
+          await swapBack();
+        }
+      });
+
+      const prompt = await executeWithSpec(worktreePath);
+
+      expect(prompt).toContain(
+        "Spec path specs/real.md resolves outside the orchestration workspace and was not read.",
+      );
+      expect(prompt).not.toContain("outside secret");
+    });
+
+    it("rejects a FIFO spec without waiting for a writer", async () => {
+      const worktreePath = await makeTempDir();
+      await fs.mkdir(path.join(worktreePath, "specs"));
+      execFileSync("mkfifo", [path.join(worktreePath, "specs", "real.md")]);
+
+      const prompt = await executeWithSpec(worktreePath);
+
+      expect(prompt).toContain("Unable to read specs/real.md: not a regular file.");
+    }, 10_000);
   });
 
   it("maps failed child traces without assistant text to failed phase output", async () => {

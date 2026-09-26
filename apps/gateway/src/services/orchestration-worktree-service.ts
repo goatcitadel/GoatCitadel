@@ -27,6 +27,12 @@ export type OrchestrationWorktreeReleaseResult =
       worktreePath: string;
       changedPathCount: number;
       changedPaths: string[];
+    }
+  | {
+      /** Git could not report whether the worktree holds uncommitted work, so it was kept and its lease released. */
+      outcome: "retained_unverified";
+      worktreePath: string;
+      error: string;
     };
 
 export interface OrchestrationWorktreeServiceDeps {
@@ -199,19 +205,22 @@ export class OrchestrationWorktreeService {
     const cleanupLease = await this.acquireCleanupLease(input.run, resolvedPath);
     this.stopLeaseHeartbeat(resolvedPath, cleanupLease);
     const manager = this.createManager(worktreesRoot);
-    const changedPaths = await manager.listChanges(resolvedPath);
-    if (changedPaths && changedPaths.length > 0) {
-      // Removing the worktree would destroy uncommitted work. Keep it and give
-      // up ownership; the orphan reaper also leaves dirty worktrees in place.
+    const changes = await manager.listChanges(resolvedPath);
+    if (changes.status === "unreadable" || (changes.status === "read" && changes.changedPaths.length > 0)) {
+      // Removing the worktree would destroy uncommitted work, or might when git
+      // cannot tell. Keep it and give up ownership; the orphan reaper also
+      // leaves such worktrees in place.
       if (!(await this.deps.worktreeLeases.release({ ...cleanupLease, releasedAt: this.now() }))) {
         throw new Error(`Orchestration worktree lease changed before retention completed: ${resolvedPath}`);
       }
-      return {
-        outcome: "retained_dirty",
-        worktreePath: resolvedPath,
-        changedPathCount: changedPaths.length,
-        changedPaths: changedPaths.slice(0, MAX_REPORTED_CHANGED_PATHS),
-      };
+      return changes.status === "read"
+        ? {
+            outcome: "retained_dirty",
+            worktreePath: resolvedPath,
+            changedPathCount: changes.changedPaths.length,
+            changedPaths: changes.changedPaths.slice(0, MAX_REPORTED_CHANGED_PATHS),
+          }
+        : { outcome: "retained_unverified", worktreePath: resolvedPath, error: changes.error };
     }
     try {
       await manager.remove(resolvedPath);
@@ -463,12 +472,14 @@ export class OrchestrationWorktreeService {
     skippedActive: string[];
     /** Orphaned worktrees kept because they hold uncommitted work. */
     skippedDirty: string[];
+    /** Orphaned worktrees kept because git could not report whether they hold uncommitted work. */
+    skippedUnverified: string[];
   }> {
     const dryRun = input.dryRun ?? true;
     const minAgeMs = Math.max(0, input.minAgeMs ?? 60 * 60 * 1000);
     const worktreesRoot = this.resolveWorktreesRoot();
     if (!fsSync.existsSync(worktreesRoot)) {
-      return { dryRun, scanned: 0, removed: [], skippedActive: [], skippedDirty: [] };
+      return { dryRun, scanned: 0, removed: [], skippedActive: [], skippedDirty: [], skippedUnverified: [] };
     }
     const manager = this.createManager(worktreesRoot);
 
@@ -483,6 +494,8 @@ export class OrchestrationWorktreeService {
     const removed: string[] = [];
     const skippedActive: string[] = [];
     const skippedDirty: string[] = [];
+    const skippedUnverified: string[] = [];
+    const skippedFor = { dirty: skippedDirty, unverified: skippedUnverified };
     const scanNow = this.now();
     const now = Date.parse(scanNow);
 
@@ -510,11 +523,8 @@ export class OrchestrationWorktreeService {
         continue;
       }
       if (dryRun) {
-        if (await hasUncommittedWork(manager, candidatePath)) {
-          skippedDirty.push(candidatePath);
-        } else {
-          removed.push(candidatePath);
-        }
+        const retention = await readRetentionNeed(manager, candidatePath);
+        (retention === "removable" ? removed : skippedFor[retention]).push(candidatePath);
         continue;
       }
       const claimed = await this.deps.worktreeLeases.claim({
@@ -528,11 +538,12 @@ export class OrchestrationWorktreeService {
         skippedActive.push(candidatePath);
         continue;
       }
-      if (await hasUncommittedWork(manager, candidatePath)) {
+      const retention = await readRetentionNeed(manager, candidatePath);
+      if (retention !== "removable") {
         if (!(await this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
           throw new Error(`Orchestration worktree lease changed before orphan scan completed: ${candidatePath}`);
         }
-        skippedDirty.push(candidatePath);
+        skippedFor[retention].push(candidatePath);
         continue;
       }
       await fs.rm(candidatePath, { recursive: true, force: true });
@@ -542,7 +553,7 @@ export class OrchestrationWorktreeService {
       removed.push(candidatePath);
     }
 
-    return { dryRun, scanned: entries.length, removed, skippedActive, skippedDirty };
+    return { dryRun, scanned: entries.length, removed, skippedActive, skippedDirty, skippedUnverified };
   }
 
   private resolveWorktreesRoot(): string {
@@ -579,12 +590,20 @@ export class OrchestrationWorktreeService {
 }
 
 /**
- * True when git, reading the worktree through its registration, reports
- * uncommitted work. A directory git cannot read that way is not treated as
- * holding any, so it is removed as it was before this check.
+ * Whether an orphaned worktree can be removed. Git, reading it through its
+ * registration, must report no uncommitted work; a directory git does not know
+ * as a worktree holds none git could report and is removed as before. One git
+ * cannot read is kept, since it may hold work.
  */
-async function hasUncommittedWork(manager: WorktreeManager, worktreePath: string): Promise<boolean> {
-  return ((await manager.listChanges(worktreePath))?.length ?? 0) > 0;
+async function readRetentionNeed(
+  manager: WorktreeManager,
+  worktreePath: string,
+): Promise<"removable" | "dirty" | "unverified"> {
+  const changes = await manager.listChanges(worktreePath);
+  if (changes.status === "unreadable") {
+    return "unverified";
+  }
+  return changes.status === "read" && changes.changedPaths.length > 0 ? "dirty" : "removable";
 }
 
 function toLeaseToken(lease: OrchestrationWorktreeLeaseRecord): OrchestrationWorktreeLeaseToken {

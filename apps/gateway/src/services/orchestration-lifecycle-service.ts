@@ -224,6 +224,12 @@ async function releaseOrchestrationWorktreeIfAvailable(
         changedPathCount: released.changedPathCount,
         changedPaths: released.changedPaths,
       });
+    } else if (released?.outcome === "retained_unverified") {
+      await persistRunEvent(host, run, "run.worktree_retained_unverified", {
+        reason,
+        worktreePath: released.worktreePath,
+        error: released.error,
+      });
     }
   } catch (error) {
     await persistRunEvent(host, run, "run.worktree_cleanup_failed", {

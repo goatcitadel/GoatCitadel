@@ -85,6 +85,7 @@ describe("OrchestrationWorktreeService", () => {
       removed: [],
       skippedActive: [],
       skippedDirty: [],
+      skippedUnverified: [],
     });
   });
 
@@ -674,6 +675,34 @@ describe("OrchestrationWorktreeService", () => {
       await fs.rm(path.join(run.worktreePath!, "notes.md"));
       const reclaimed = await service.reapOrphaned({ dryRun: false, minAgeMs: 0 });
       expect(reclaimed).toMatchObject({ removed: [run.worktreePath], skippedDirty: [] });
+    });
+
+    it("keeps a worktree git cannot read, since it may hold work, and the reaper keeps it too", async () => {
+      const rootDir = await createGitRoot();
+      const leaseDeps = buildLeaseDeps();
+      const service = new OrchestrationWorktreeService({
+        config: buildConfig(rootDir),
+        orchestrationRuns: { listRuns: vi.fn(() => []) },
+        ...leaseDeps,
+      });
+      const run = await allocateRun(service, "run-unreadable");
+      await fs.writeFile(path.join(run.worktreePath!, "notes.md"), "draft\n", "utf8");
+      // Break the worktree's registration so git cannot report its status.
+      await fs.writeFile(path.join(rootDir, ".git", "worktrees", "run-unreadable", "HEAD"), "not a ref\n", "utf8");
+
+      await expect(service.release({ run, reason: "failed" })).resolves.toEqual({
+        outcome: "retained_unverified",
+        worktreePath: run.worktreePath,
+        error: expect.any(String),
+      });
+      await expect(fs.readFile(path.join(run.worktreePath!, "notes.md"), "utf8")).resolves.toBe("draft\n");
+      expect(leaseDeps.worktreeLeases.get(run.worktreePath!)).toMatchObject({ releasedAt: leaseNow });
+
+      const dryRun = await service.reapOrphaned({ dryRun: true, minAgeMs: 0 });
+      expect(dryRun).toMatchObject({ removed: [], skippedDirty: [], skippedUnverified: [run.worktreePath] });
+      const kept = await service.reapOrphaned({ dryRun: false, minAgeMs: 0 });
+      expect(kept).toMatchObject({ removed: [], skippedUnverified: [run.worktreePath] });
+      await expect(fs.readFile(path.join(run.worktreePath!, "notes.md"), "utf8")).resolves.toBe("draft\n");
     });
   });
 });

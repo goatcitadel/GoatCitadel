@@ -57,8 +57,9 @@ export function findOwnershipConflicts(wave: OrchestrationWave): OwnershipConfli
 }
 
 /**
- * True when an ownership path climbs above the repository root (for example
- * `../outside` or `apps/../../outside`), so it cannot name a path in the repo.
+ * True when an ownership path does not stay inside the repository: it climbs
+ * above the root (for example `../outside` or `apps/../../outside`), or it is
+ * drive-qualified or UNC (`C:\outside`, `\\server\share`).
  */
 export function ownershipPathEscapesRoot(ownedPath: string): boolean {
   return normalizeSegments(ownedPath) === undefined;
@@ -82,12 +83,19 @@ function toClaim(agentId: string, ownedPath: string): OwnershipClaim {
   };
 }
 
+/** A drive letter (`C:`), or a UNC or double-separator prefix (`\\server`, `//server`). */
+const HOST_ABSOLUTE_PREFIX = /^(?:[A-Za-z]:|[\\/]{2})/;
+
 /**
  * Splits a path into repository-relative segments: separators unified, empty
  * and `.` segments dropped, `..` resolved. Returns undefined when `..` climbs
- * above the root. A leading `/` means the repository root.
+ * above the root, and for a drive-qualified or UNC path, which names a place
+ * outside the repository. A single leading `/` means the repository root.
  */
 function normalizeSegments(ownedPath: string): string[] | undefined {
+  if (HOST_ABSOLUTE_PREFIX.test(ownedPath)) {
+    return undefined;
+  }
   const segments: string[] = [];
   for (const segment of ownedPath.replaceAll("\\", "/").split("/")) {
     if (segment === "" || segment === ".") {

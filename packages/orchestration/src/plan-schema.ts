@@ -74,7 +74,7 @@ export const planSchema = z
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               path: ["waves", waveIndex, "ownership", ownerIndex, "paths", pathIndex],
-              message: `Ownership path ${ownedPath} climbs above the repository root.`,
+              message: `Ownership path ${ownedPath} must stay inside the repository root.`,
             });
           }
         });

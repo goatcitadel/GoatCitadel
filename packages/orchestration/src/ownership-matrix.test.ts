@@ -123,10 +123,15 @@ describe("findOwnershipConflicts", () => {
     ]);
   });
 
-  it("identifies ownership paths that climb above the repository root", () => {
+  it("identifies ownership paths that do not stay inside the repository root", () => {
     expect(ownershipPathEscapesRoot("../outside")).toBe(true);
     expect(ownershipPathEscapesRoot("apps/../../outside")).toBe(true);
     expect(ownershipPathEscapesRoot("..\\outside")).toBe(true);
+    expect(ownershipPathEscapesRoot("C:\\outside")).toBe(true);
+    expect(ownershipPathEscapesRoot("c:/outside")).toBe(true);
+    expect(ownershipPathEscapesRoot("C:outside")).toBe(true);
+    expect(ownershipPathEscapesRoot("\\\\server\\share")).toBe(true);
+    expect(ownershipPathEscapesRoot("//server/share")).toBe(true);
     expect(ownershipPathEscapesRoot("apps/../web")).toBe(false);
     expect(ownershipPathEscapesRoot("/apps/web")).toBe(false);
     expect(ownershipPathEscapesRoot("..foo/bar")).toBe(false);
