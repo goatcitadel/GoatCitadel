@@ -130,6 +130,7 @@ const nullablePositive = z.number().int().positive().max(2_000_000).nullable().o
 const llamaCppConfigurationSchema = nonEmptyStrict({
   enabled: z.boolean().optional(),
   autoStart: z.boolean().optional(),
+  managementMode: z.enum(["external", "managed"]).optional(),
   baseUrl: safeRuntimeUrl.optional(),
   alias: identifier.optional(),
   ctxSize: nullablePositive,
@@ -219,6 +220,21 @@ const requestSchema = z.discriminatedUnion("kind", [
         z.object({ operation: z.literal("mesh_configuration"), config: meshConfigurationSchema }).strict(),
         z.object({ operation: z.literal("npu_configuration"), config: npuConfigurationSchema }).strict(),
         z.object({ operation: z.literal("llama_cpp_configuration"), config: llamaCppConfigurationSchema }).strict(),
+        z
+          .object({
+            operation: z.literal("llama_cpp_setup"),
+            managementMode: z.enum(["external", "managed"]),
+            baseUrl: safeRuntimeUrl,
+            model: z
+              .string()
+              .trim()
+              .min(1)
+              .max(512)
+              .refine((value) => [...value].every((character) => character.charCodeAt(0) >= 32)),
+            selectionId: identifier.optional(),
+            autoStart: z.boolean().optional(),
+          })
+          .strict(),
         z
           .object({
             operation: z.literal("feature_flags"),

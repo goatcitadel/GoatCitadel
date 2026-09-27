@@ -36,6 +36,7 @@ import {
 import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
 import { ErrorState, NativeButton, NativeMetricGrid } from "../../primitives";
 import { GuidedModelSetup } from "./GuidedModelSetup";
+import { LlamaCppSetupFlow } from "./LlamaCppSetupFlow";
 import {
   BUDGET_MODE_OPTIONS,
   buildFirstRunEvidenceSnapshot,
@@ -67,6 +68,7 @@ type OnboardingPageState = OnboardingState & {
 };
 
 export function OnboardingSection({ route, navigate, setActiveWorkspaceId, activeWorkspaceId }: SettingsSectionProps) {
+  const [modelSetup, setModelSetup] = useState<"llamacpp" | "other">(route.view === "llamacpp" ? "llamacpp" : "other");
   const [panel, setPanel] = useState<"defaults" | "verification" | "demo" | null>(null);
   const [evidenceRequested, setEvidenceRequested] = useState(false);
   const leave = useDraftLeave();
@@ -186,6 +188,9 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId, activ
   useEffect(() => {
     setPanel(null);
   }, [activeWorkspaceId]);
+  useEffect(() => {
+    if (route.view === "llamacpp") setModelSetup("llamacpp");
+  }, [route.view]);
   const openVerification = () =>
     leave.request(() => {
       setEvidenceRequested(true);
@@ -490,14 +495,35 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId, activ
             </FocusedDetail>
           ) : (
             <>
-              <GuidedModelSetup
-                workspaceId={activeWorkspaceId}
-                onboarding={data}
-                route={route}
-                navigate={navigate}
-                reloadOnboarding={reload}
-                setNotice={setNotice}
-              />
+              <SettingsButtonRow>
+                <NativeButton
+                  variant={modelSetup === "llamacpp" ? "default" : "outline"}
+                  aria-pressed={modelSetup === "llamacpp"}
+                  onClick={() => setModelSetup("llamacpp")}
+                >
+                  Set up llama.cpp
+                </NativeButton>
+                <NativeButton
+                  variant={modelSetup === "other" ? "default" : "outline"}
+                  aria-pressed={modelSetup === "other"}
+                  onClick={() => setModelSetup("other")}
+                >
+                  Other providers
+                </NativeButton>
+              </SettingsButtonRow>
+              {modelSetup === "llamacpp" ? (
+                <LlamaCppSetupFlow workspaceId={activeWorkspaceId} route={route} navigate={navigate} />
+              ) : (
+                <GuidedModelSetup
+                  excludeLlamaCpp
+                  workspaceId={activeWorkspaceId}
+                  onboarding={data}
+                  route={route}
+                  navigate={navigate}
+                  reloadOnboarding={reload}
+                  setNotice={setNotice}
+                />
+              )}
 
               <SettingsButtonRow>
                 <NativeButton variant="secondary" onClick={openVerification}>

@@ -36,31 +36,66 @@ import {
   type OpenAICodexOAuthStatus,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { getRouteReleaseScope, normalizeAppRoute, routeKicker, type AppRoute } from "@next/app/route-model";
-import {
-  useBeforeUnloadGuard,
-  useNavigateGuard,
-} from "./library/use-form-dirty";
+import { useBeforeUnloadGuard, useNavigateGuard } from "./library/use-form-dirty";
 import "./native-routes.css";
 import { BudgetSection } from "./settings/sections/BudgetSection";
-const TrustPolicySection = lazy(() => import("./settings/sections/TrustPolicySection").then((module) => ({ default: module.TrustPolicySection })));
-const WorkspaceCapabilitiesSection = lazy(() => import("./settings/sections/WorkspaceCapabilitiesSection").then((module) => ({ default: module.WorkspaceCapabilitiesSection })));
-const CitadelCapabilitiesSection = lazy(() => import("./settings/sections/CitadelCapabilitiesSection").then((module) => ({ default: module.CitadelCapabilitiesSection })));
+const TrustPolicySection = lazy(() =>
+  import("./settings/sections/TrustPolicySection").then((module) => ({ default: module.TrustPolicySection })),
+);
+const WorkspaceCapabilitiesSection = lazy(() =>
+  import("./settings/sections/WorkspaceCapabilitiesSection").then((module) => ({
+    default: module.WorkspaceCapabilitiesSection,
+  })),
+);
+const CitadelCapabilitiesSection = lazy(() =>
+  import("./settings/sections/CitadelCapabilitiesSection").then((module) => ({
+    default: module.CitadelCapabilitiesSection,
+  })),
+);
 import { UnknownSettingsSection } from "./settings/sections/UnknownSettingsSection";
-const LocalAiSection = lazy(() => import("./settings/sections/LocalAiSection").then((module) => ({ default: module.LocalAiSection })));
-const AccessSection = lazy(() => import("./settings/sections/AccessSection").then((module) => ({ default: module.AccessSection })));
+const LocalAiSection = lazy(() =>
+  import("./settings/sections/LocalAiSection").then((module) => ({ default: module.LocalAiSection })),
+);
+const AccessSection = lazy(() =>
+  import("./settings/sections/AccessSection").then((module) => ({ default: module.AccessSection })),
+);
 import { GeneralSection } from "./settings/sections/GeneralSection";
-const PersonalitiesSection = lazy(() => import("./settings/sections/PersonalitiesSection").then((module) => ({ default: module.PersonalitiesSection })));
-const ChannelsSection = lazy(() => import("./settings/sections/ChannelsSection").then((module) => ({ default: module.ChannelsSection })));
-const ToolsSection = lazy(() => import("./settings/sections/ToolsSection").then((module) => ({ default: module.ToolsSection })));
-const HooksSection = lazy(() => import("./settings/sections/HooksSection").then((module) => ({ default: module.HooksSection })));
-const RuntimeSection = lazy(() => import("./settings/sections/RuntimeSection").then((module) => ({ default: module.RuntimeSection })));
-const WorkspacesSection = lazy(() => import("./settings/sections/WorkspacesSection").then((module) => ({ default: module.WorkspacesSection })));
-const OnboardingSection = lazy(() => import("./settings/sections/OnboardingSection").then((module) => ({ default: module.OnboardingSection })));
-const AddonsSection = lazy(() => import("./settings/sections/AddonsSection").then((module) => ({ default: module.AddonsSection })));
-const PermissionsSection = lazy(() => import("./settings/sections/PermissionsSection").then((module) => ({ default: module.PermissionsSection })));
-const McpSection = lazy(() => import("./settings/sections/McpSection").then((module) => ({ default: module.McpSection })));
-const IntegrationsSection = lazy(() => import("./settings/sections/IntegrationsSection").then((module) => ({ default: module.IntegrationsSection })));
-const ProvidersSection = lazy(() => import("./settings/sections/ProvidersSection").then((module) => ({ default: module.ProvidersSection })));
+const PersonalitiesSection = lazy(() =>
+  import("./settings/sections/PersonalitiesSection").then((module) => ({ default: module.PersonalitiesSection })),
+);
+const ChannelsSection = lazy(() =>
+  import("./settings/sections/ChannelsSection").then((module) => ({ default: module.ChannelsSection })),
+);
+const ToolsSection = lazy(() =>
+  import("./settings/sections/ToolsSection").then((module) => ({ default: module.ToolsSection })),
+);
+const HooksSection = lazy(() =>
+  import("./settings/sections/HooksSection").then((module) => ({ default: module.HooksSection })),
+);
+const RuntimeSection = lazy(() =>
+  import("./settings/sections/RuntimeSection").then((module) => ({ default: module.RuntimeSection })),
+);
+const WorkspacesSection = lazy(() =>
+  import("./settings/sections/WorkspacesSection").then((module) => ({ default: module.WorkspacesSection })),
+);
+const OnboardingSection = lazy(() =>
+  import("./settings/sections/OnboardingSection").then((module) => ({ default: module.OnboardingSection })),
+);
+const AddonsSection = lazy(() =>
+  import("./settings/sections/AddonsSection").then((module) => ({ default: module.AddonsSection })),
+);
+const PermissionsSection = lazy(() =>
+  import("./settings/sections/PermissionsSection").then((module) => ({ default: module.PermissionsSection })),
+);
+const McpSection = lazy(() =>
+  import("./settings/sections/McpSection").then((module) => ({ default: module.McpSection })),
+);
+const IntegrationsSection = lazy(() =>
+  import("./settings/sections/IntegrationsSection").then((module) => ({ default: module.IntegrationsSection })),
+);
+const ProvidersSection = lazy(() =>
+  import("./settings/sections/ProvidersSection").then((module) => ({ default: module.ProvidersSection })),
+);
 import {
   SettingsActionList,
   SettingsButtonRow,
@@ -158,11 +193,19 @@ export function SettingsNativePage(props: SettingsNativePageProps) {
       description={descriptionForSettingsSection(section)}
       releaseStatus={getRouteReleaseScope(props.route).status}
     >
-      <Suspense key={`${section}:${props.activeWorkspaceId}:${props.activeCitadelId ?? "global"}`} fallback={<BlocksShuffleLoader label={`Loading ${labelForSettingsSection(section)}`} />}>
+      <Suspense
+        key={`${section}:${props.activeWorkspaceId}:${props.activeCitadelId ?? "global"}`}
+        fallback={<BlocksShuffleLoader label={`Loading ${labelForSettingsSection(section)}`} />}
+      >
         {renderSettingsSection({ ...guardedProps, section })}
       </Suspense>
-      <DraftLeaveDialog open={pending !== null} keys={pending?.keys ?? []}
-        onContinue={confirmKeep} onDiscard={confirmDiscard} onCancel={cancelDiscard} />
+      <DraftLeaveDialog
+        open={pending !== null}
+        keys={pending?.keys ?? []}
+        onContinue={confirmKeep}
+        onDiscard={confirmDiscard}
+        onCancel={cancelDiscard}
+      />
     </SettingsPageFrame>
   );
 }
@@ -514,6 +557,7 @@ export function formatProviderCredentialLabel(
   hasApiKey: boolean | undefined,
   codexOAuthStatus: OpenAICodexOAuthStatus | null,
 ): string {
+  if (providerId === "llamacpp") return "Keyless · check endpoint";
   if (providerId === "claude-code") {
     return hasApiKey ? "OAuth token ready" : "OAuth token missing";
   }

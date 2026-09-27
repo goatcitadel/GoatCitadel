@@ -136,15 +136,71 @@ export function RuntimeSection(props: SettingsSectionProps) {
     };
   }, []);
   const { loading, error, data: baseData, reload: reloadBase } = useAsyncLoad(load, [load]);
-  const llamaModelsLoad = useAsyncLoad(() => llamaRequested && !VISUAL_REGRESSION_MODE ? fetchLlamaCppModels() : Promise.resolve(null), [llamaRequested, baseData?.settings.llamaCpp?.modelsRootPath]);
-  const canReadNpuModels = npuRequested && !VISUAL_REGRESSION_MODE && Boolean(baseData?.settings.npu?.enabled && (baseData.settings.npu.status?.healthy || baseData.settings.npu.status?.processState === "running"));
-  const npuModelsLoad = useAsyncLoad(() => canReadNpuModels ? fetchNpuModels() : Promise.resolve(null), [canReadNpuModels]);
-  const data = useMemo(() => baseData ? { ...baseData, llamaModels: llamaModelsLoad.data?.items ?? [], llamaModelsWarning: llamaModelsLoad.data?.degraded ? llamaModelsLoad.data.warning : undefined, npuModels: npuModelsLoad.data?.items ?? [], issues: [...baseData.issues, ...(llamaModelsLoad.error ? [{ label: "llama.cpp models", message: llamaModelsLoad.error }] : []), ...(npuModelsLoad.error ? [{ label: "NPU models", message: npuModelsLoad.error }] : [])] } : null, [baseData, llamaModelsLoad.data, llamaModelsLoad.error, npuModelsLoad.data, npuModelsLoad.error]);
-  const reload = async () => { await Promise.all([reloadBase(), ...(llamaRequested ? [llamaModelsLoad.reload()] : []), ...(canReadNpuModels ? [npuModelsLoad.reload()] : [])]); };
+  const llamaModelsLoad = useAsyncLoad(
+    () => (llamaRequested && !VISUAL_REGRESSION_MODE ? fetchLlamaCppModels() : Promise.resolve(null)),
+    [llamaRequested, baseData?.settings.llamaCpp?.modelsRootPath],
+  );
+  const canReadNpuModels =
+    npuRequested &&
+    !VISUAL_REGRESSION_MODE &&
+    Boolean(
+      baseData?.settings.npu?.enabled &&
+      (baseData.settings.npu.status?.healthy || baseData.settings.npu.status?.processState === "running"),
+    );
+  const npuModelsLoad = useAsyncLoad(
+    () => (canReadNpuModels ? fetchNpuModels() : Promise.resolve(null)),
+    [canReadNpuModels],
+  );
+  const data = useMemo(
+    () =>
+      baseData
+        ? {
+            ...baseData,
+            llamaModels: llamaModelsLoad.data?.items ?? [],
+            llamaModelsWarning: llamaModelsLoad.data?.degraded ? llamaModelsLoad.data.warning : undefined,
+            npuModels: npuModelsLoad.data?.items ?? [],
+            issues: [
+              ...baseData.issues,
+              ...(llamaModelsLoad.error ? [{ label: "llama.cpp models", message: llamaModelsLoad.error }] : []),
+              ...(npuModelsLoad.error ? [{ label: "NPU models", message: npuModelsLoad.error }] : []),
+            ],
+          }
+        : null,
+    [baseData, llamaModelsLoad.data, llamaModelsLoad.error, npuModelsLoad.data, npuModelsLoad.error],
+  );
+  const reload = async () => {
+    await Promise.all([
+      reloadBase(),
+      ...(llamaRequested ? [llamaModelsLoad.reload()] : []),
+      ...(canReadNpuModels ? [npuModelsLoad.reload()] : []),
+    ]);
+  };
   const [notice, setNotice] = useState<Notice | null>(null);
-  const canonicalLlama = { enabled: data?.settings.llamaCpp?.enabled ?? false, autoStart: data?.settings.llamaCpp?.autoStart ?? false, baseUrl: data?.settings.llamaCpp?.baseUrl ?? "", command: data?.settings.llamaCpp?.command ?? "", modelsRootPath: data?.settings.llamaCpp?.modelsRootPath ?? "", modelPath: data?.settings.llamaCpp?.modelPath ?? "", alias: data?.settings.llamaCpp?.alias ?? "" };
-  const llamaEditor = useSessionDraft("runtime:system:llama", canonicalLlama, data?.settings.revision, { label: "llama.cpp configuration", active: view === "llama", available: Boolean(data), onSave: () => saveLlamaSettings() });
-  const llamaChange = useSettingsChange({ key: llamaEditor.key, operation: "llama_cpp_configuration", matches: (settings, submitted: typeof llamaEditor.value) => Object.entries(submitted).every(([key, value]) => (settings.llamaCpp?.[key as keyof typeof settings.llamaCpp] ?? "") === value), acceptSaved: llamaEditor.acceptSaved, reload });
+  const canonicalLlama = {
+    enabled: data?.settings.llamaCpp?.enabled ?? false,
+    autoStart: data?.settings.llamaCpp?.autoStart ?? false,
+    baseUrl: data?.settings.llamaCpp?.baseUrl ?? "",
+    command: data?.settings.llamaCpp?.command ?? "",
+    modelsRootPath: data?.settings.llamaCpp?.modelsRootPath ?? "",
+    modelPath: data?.settings.llamaCpp?.modelPath ?? "",
+    alias: data?.settings.llamaCpp?.alias ?? "",
+  };
+  const llamaEditor = useSessionDraft("runtime:system:llama", canonicalLlama, data?.settings.revision, {
+    label: "llama.cpp configuration",
+    active: view === "llama",
+    available: Boolean(data),
+    onSave: () => saveLlamaSettings(),
+  });
+  const llamaChange = useSettingsChange({
+    key: llamaEditor.key,
+    operation: "llama_cpp_configuration",
+    matches: (settings, submitted: typeof llamaEditor.value) =>
+      Object.entries(submitted).every(
+        ([key, value]) => (settings.llamaCpp?.[key as keyof typeof settings.llamaCpp] ?? "") === value,
+      ),
+    acceptSaved: llamaEditor.acceptSaved,
+    reload,
+  });
   const llamaForm = llamaEditor.value;
   const setLlamaForm = llamaEditor.setValue;
   const npuForm = { enabled: false, autoStart: false, sidecarUrl: data?.settings.npu?.sidecarUrl ?? "" };
@@ -166,6 +222,7 @@ export function RuntimeSection(props: SettingsSectionProps) {
     () => ({
       enabled: llamaForm.enabled,
       autoStart: llamaForm.autoStart,
+      managementMode: "managed" as const,
       baseUrl: llamaForm.baseUrl,
       command: llamaForm.command,
       modelsRootPath: llamaForm.modelsRootPath || undefined,
@@ -176,24 +233,42 @@ export function RuntimeSection(props: SettingsSectionProps) {
   );
 
   const saveLlamaSettings = async (): Promise<boolean> => {
-    if (llamaChange.isPending()) { await llamaChange.refresh(); return false; }
+    if (llamaChange.isPending()) {
+      await llamaChange.refresh();
+      return false;
+    }
     if (savingLlamaRef.current || llamaEditor.hasRemoteChanges) return false;
     if (!llamaEditor.isDirty) return true;
-    if (!data) { setNotice({ tone: "warning", message: "Reload settings before saving llama.cpp changes." }); return false; }
+    if (!data) {
+      setNotice({ tone: "warning", message: "Reload settings before saving llama.cpp changes." });
+      return false;
+    }
     const submitted = llamaForm;
-    savingLlamaRef.current = true; setSavingLlama(true);
+    savingLlamaRef.current = true;
+    setSavingLlama(true);
     try {
-      const updated = await patchSettings({ expectedRevision: Number(llamaEditor.baseRevision ?? data.settings.revision), llamaCpp: buildLlamaSettingsPatch() });
+      const updated = await patchSettings({
+        expectedRevision: Number(llamaEditor.baseRevision ?? data.settings.revision),
+        llamaCpp: buildLlamaSettingsPatch(),
+      });
       const clean = llamaChange.receive(updated, submitted, Number(llamaEditor.baseRevision ?? data.settings.revision));
       if (clean) setNotice({ tone: "success", message: "llama.cpp settings saved." });
       await reload();
       return clean;
     } catch (error) {
       if (isApiRequestError(error) && error.status === 409) {
-        await reload(); setNotice({ tone: "warning", message: "Runtime settings changed elsewhere. Your llama.cpp draft is preserved; review the current settings, then retry." });
+        await reload();
+        setNotice({
+          tone: "warning",
+          message:
+            "Runtime settings changed elsewhere. Your llama.cpp draft is preserved; review the current settings, then retry.",
+        });
       } else setNotice({ tone: "error", message: getErrorMessage(error) });
       return false;
-    } finally { savingLlamaRef.current = false; setSavingLlama(false); }
+    } finally {
+      savingLlamaRef.current = false;
+      setSavingLlama(false);
+    }
   };
 
   const handleDiscoveredModelChange = useCallback(
@@ -216,8 +291,19 @@ export function RuntimeSection(props: SettingsSectionProps) {
     try {
       const result = await operation();
       if (result === false) return;
-      const receipt = result && typeof result === "object" && "changePlanReceipt" in result ? (result as { changePlanReceipt?: Awaited<ReturnType<typeof patchSettings>>["changePlanReceipt"] }).changePlanReceipt : undefined;
-      setNotice(receipt && receipt.status !== "completed" && receipt.status !== "applied" ? { tone: "warning", message: `${receipt.summary} Finish the required action in Chat or Approvals (plan ${receipt.planId}).` } : { tone: "success", message: successMessage });
+      const receipt =
+        result && typeof result === "object" && "changePlanReceipt" in result
+          ? (result as { changePlanReceipt?: Awaited<ReturnType<typeof patchSettings>>["changePlanReceipt"] })
+              .changePlanReceipt
+          : undefined;
+      setNotice(
+        receipt && receipt.status !== "completed" && receipt.status !== "applied"
+          ? {
+              tone: "warning",
+              message: `${receipt.summary} Finish the required action in Chat or Approvals (plan ${receipt.planId}).`,
+            }
+          : { tone: "success", message: successMessage },
+      );
       await reload();
     } catch (actionError) {
       if (conflictDraft && isApiRequestError(actionError) && actionError.status === 409) {
@@ -257,7 +343,12 @@ export function RuntimeSection(props: SettingsSectionProps) {
       }
     >
       {notice ? <SettingsNotice notice={notice} /> : null}
-      <SettingsChangeStatus change={llamaChange.change} onRefresh={llamaChange.refresh} navigate={props.navigate} route={props.route} />
+      <SettingsChangeStatus
+        change={llamaChange.change}
+        onRefresh={llamaChange.refresh}
+        navigate={props.navigate}
+        route={props.route}
+      />
       {data ? (
         <SettingsStack>
           <RuntimeLoadWarnings
@@ -284,7 +375,7 @@ export function RuntimeSection(props: SettingsSectionProps) {
                 {
                   label: "llama.cpp",
                   value: data.settings.llamaCpp?.status?.processState ?? "unknown",
-                  meta: llamaRequested ? `${data.llamaModels?.length ?? 0} models returned` : "Model catalog opens with configuration",
+                  meta: `${data.settings.llamaCpp?.managementMode ?? (data.settings.llamaCpp?.autoStart ? "managed" : "external")} · ${data.settings.llamaCpp?.status?.leaseDiagnostics?.ownership ?? "none"}`,
                 },
                 {
                   label: "NPU",
@@ -299,320 +390,414 @@ export function RuntimeSection(props: SettingsSectionProps) {
               ]}
             />
           </NativeCard>
-          <SettingsButtonRow><NativeButton onClick={() => openView("llama")}>Configure llama.cpp{llamaEditor.isDirty ? " · Unsaved" : ""}</NativeButton><NativeButton variant="outline" onClick={() => openView("daemon")}>Gateway controls</NativeButton><NativeButton variant="outline" onClick={() => openView("voice")}>Voice setup</NativeButton><NativeButton variant="outline" onClick={() => openView("npu")}>Legacy acceleration</NativeButton><NativeButton variant="outline" onClick={() => props.navigate({ area: "ops", section: "runtime", theme: props.route.theme })}>Open Ops Runtime</NativeButton></SettingsButtonRow>
+          <SettingsButtonRow>
+            <NativeButton
+              onClick={() =>
+                props.navigate({ area: "settings", section: "onboarding", view: "llamacpp", theme: props.route.theme })
+              }
+            >
+              Set up llama.cpp
+            </NativeButton>
+            <NativeButton variant="outline" onClick={() => openView("llama")}>
+              Configure llama.cpp{llamaEditor.isDirty ? " · Unsaved" : ""}
+            </NativeButton>
+            <NativeButton variant="outline" onClick={() => openView("daemon")}>
+              Gateway controls
+            </NativeButton>
+            <NativeButton variant="outline" onClick={() => openView("voice")}>
+              Voice setup
+            </NativeButton>
+            <NativeButton variant="outline" onClick={() => openView("npu")}>
+              Legacy acceleration
+            </NativeButton>
+            <NativeButton
+              variant="outline"
+              onClick={() => props.navigate({ area: "ops", section: "runtime", theme: props.route.theme })}
+            >
+              Open Ops Runtime
+            </NativeButton>
+          </SettingsButtonRow>
           <SettingsStack>
-            <DetailInspector open={view === "daemon"} title="Gateway controls" onClose={() => openView(null)}><NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="Gateway daemon"
-              subtitle="Control the background runtime serving Mission Control."
-            >
-              <NativeMetricGrid
-                items={[
-                  {
-                    label: "State",
-                    value: data.daemon?.state ?? "unknown",
-                    meta: data.daemon?.running ? "Running" : "Stopped",
-                  },
-                  {
-                    label: "Host",
-                    value: data.daemon?.host ?? "n/a",
-                    meta: data.daemon?.controllable ? "Controllable" : "Read-only",
-                  },
-                ]}
-              />
-              <SettingsButtonRow>
-                <NativeButton
-                  variant="default"
-                  onClick={() => void runAndReload(startDaemon, "Gateway daemon start requested.")}
-                  disabled={!data.daemon?.controllable}
-                >
-                  <Play size={16} />
-                  Start
-                </NativeButton>
-                <NativeButton
-                  variant="secondary"
-                  onClick={() => void runAndReload(stopDaemon, "Gateway daemon stop requested.")}
-                  disabled={!data.daemon?.controllable}
-                >
-                  <Square size={16} />
-                  Stop
-                </NativeButton>
-                <NativeButton
-                  variant="secondary"
-                  onClick={() => void runAndReload(restartDaemon, "Gateway daemon restart requested.")}
-                  disabled={!data.daemon?.controllable}
-                >
-                  <RotateCcw size={16} />
-                  Restart
-                </NativeButton>
-              </SettingsButtonRow>
-              {!data.daemon?.controllable && data.daemon?.controlMessage ? (
-                <p className="mc-next-settings-help">{data.daemon.controlMessage}</p>
-              ) : null}
-            </NativeCard></DetailInspector>
-            {view === "llama" ? <FocusedDetail title="Configure llama.cpp" onClose={() => openView(null)}><NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="llama.cpp runtime"
-              subtitle="Configure and control the local llama.cpp runtime."
-            >
-              {llamaEditor.hasRemoteChanges ? <div role="status"><p>The saved runtime settings changed. Your llama.cpp draft is preserved.</p><details><summary>Current saved runtime configuration</summary><pre>{JSON.stringify(canonicalLlama, null, 2)}</pre></details><NativeButton variant="outline" onClick={llamaEditor.rebaseToCurrent}>Apply draft to current runtime</NativeButton></div> : null}
-              <SettingsFieldGrid>
-                <SettingsField label="Base URL">
-                  <input
-                    className="mc-next-settings-input"
-                    value={llamaForm.baseUrl}
-                    onChange={(event) => setLlamaForm((current) => ({ ...current, baseUrl: event.target.value }))}
-                  />
-                </SettingsField>
-                <SettingsField label="Command">
-                  <input
-                    className="mc-next-settings-input"
-                    value={llamaForm.command}
-                    onChange={(event) => setLlamaForm((current) => ({ ...current, command: event.target.value }))}
-                  />
-                </SettingsField>
-                <SettingsField label="Models root">
-                  <input
-                    className="mc-next-settings-input"
-                    value={llamaForm.modelsRootPath}
-                    onChange={(event) =>
-                      setLlamaForm((current) => ({ ...current, modelsRootPath: event.target.value }))
-                    }
-                  />
-                </SettingsField>
-                <SettingsField label="Model path">
-                  <input
-                    className="mc-next-settings-input"
-                    value={llamaForm.modelPath}
-                    onChange={(event) => setLlamaForm((current) => ({ ...current, modelPath: event.target.value }))}
-                  />
-                </SettingsField>
-                <SettingsField label="Discovered models" span={2}>
-                  <>
-                    <select
-                      className="mc-next-settings-input"
-                      value={selectedDiscoveredModelPath}
-                      onChange={(event) => handleDiscoveredModelChange(event.target.value)}
-                      disabled={!discoveredLlamaModels.length}
-                    >
-                      <option value="">
-                        {discoveredLlamaModels.length
-                          ? `Choose from ${discoveredLlamaModels.length} models under ${llamaForm.modelsRootPath || "the default models root"}`
-                          : "No local .gguf models discovered under Models root yet"}
-                      </option>
-                      {discoveredLlamaModels.map((model) => (
-                        <option key={model.filePath} value={model.filePath}>
-                          {model.relativePath ?? model.modelId}
-                        </option>
-                      ))}
-                    </select>
-                    {selectedDiscoveredModel ? (
-                      <p className="mc-next-settings-field-note">
-                        {selectedDiscoveredModel.relativePath ?? selectedDiscoveredModel.modelId}
-                      </p>
-                    ) : null}
-                  </>
-                </SettingsField>
-                <SettingsField label="Alias">
-                  <input
-                    className="mc-next-settings-input"
-                    value={llamaForm.alias}
-                    onChange={(event) => setLlamaForm((current) => ({ ...current, alias: event.target.value }))}
-                  />
-                </SettingsField>
-                <SettingsField label="Enabled" group>
-                  <label className="mc-next-settings-toggle">
-                    <input
-                      type="checkbox"
-                      checked={llamaForm.enabled}
-                      onChange={(event) => setLlamaForm((current) => ({ ...current, enabled: event.target.checked }))}
-                    />
-                    <span>Enable llama.cpp runtime</span>
-                  </label>
-                </SettingsField>
-                <SettingsField label="Auto start" group>
-                  <label className="mc-next-settings-toggle">
-                    <input
-                      type="checkbox"
-                      checked={llamaForm.autoStart}
-                      onChange={(event) => setLlamaForm((current) => ({ ...current, autoStart: event.target.checked }))}
-                    />
-                    <span>Auto-start with the gateway</span>
-                  </label>
-                </SettingsField>
-              </SettingsFieldGrid>
-              <SettingsButtonRow>
-                <NativeButton
-                  variant="default"
-                  disabled={savingLlama || llamaChange.hasPending || llamaEditor.hasRemoteChanges} onClick={() => void saveLlamaSettings()}
-                >
-                  <Save size={16} />
-                  Save
-                </NativeButton>
-                <NativeButton
-                  variant="secondary"
-                  onClick={() =>
-                    void runAndReload(
-                      async () => {
-                        if (!await saveLlamaSettings()) return false;
-                        await startLlamaCppRuntime();
-                      },
-                      "llama.cpp start requested.",
-                      "llama",
-                    )
-                  }
-                >
-                  <Play size={16} />
-                  Start
-                </NativeButton>
-                <NativeButton
-                  variant="secondary"
-                  onClick={() => void runAndReload(stopLlamaCppRuntime, "llama.cpp stop requested.")}
-                >
-                  <Square size={16} />
-                  Stop
-                </NativeButton>
-                <NativeButton
-                  variant="secondary"
-                  onClick={() => void runAndReload(refreshLlamaCppRuntime, "llama.cpp refresh requested.")}
-                >
-                  <RefreshCw size={16} />
-                  Refresh
-                </NativeButton>
-              </SettingsButtonRow>
-              <NativeMetricGrid
-                items={[
-                  {
-                    label: "Process",
-                    value: data.settings.llamaCpp?.status?.processState ?? "unknown",
-                    meta: data.settings.llamaCpp?.status?.healthy ? "Healthy" : "Needs attention",
-                  },
-                  {
-                    label: "Active model",
-                    value: data.settings.llamaCpp?.status?.activeModelId ?? "n/a",
-                    meta: data.settings.llamaCpp?.status?.commandSource ?? "source unknown",
-                  },
-                ]}
-              />
-              <NativeDisclosureCard id="runtime-llama-lifecycle" title="Lifecycle diagnostics"><LlamaCppLeaseDiagnostics diagnostics={data.settings.llamaCpp?.status?.leaseDiagnostics} /></NativeDisclosureCard>
-            </NativeCard></FocusedDetail> : null}
-            <DetailInspector open={view === "npu"} title="Legacy acceleration" onClose={() => openView(null)}><NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="Local acceleration"
-              subtitle="NPU sidecar support is retired from the shipped 1.0 runtime."
-            >
-              <SettingsButtonRow>
-                <NativeButton
-                  variant="default"
-                  onClick={() =>
-                    void runAndReload(
-                      () =>
-                        patchSettings({
-                          expectedRevision: data.settings.revision,
-                          npu: {
-                            enabled: false,
-                            autoStart: false,
-                            sidecarUrl: npuForm.sidecarUrl,
-                          },
-                        }),
-                      "Retired NPU settings normalized.",
-                      "npu",
-                    )
-                  }
-                >
-                  <Save size={16} />
-                  Normalize
-                </NativeButton>
-                <NativeButton
-                  variant="secondary"
-                  onClick={() => void runAndReload(refreshNpuRuntime, "NPU refresh requested.")}
-                >
-                  <RefreshCw size={16} />
-                  Refresh
-                </NativeButton>
-              </SettingsButtonRow>
-              <NativeMetricGrid
-                items={[
-                  {
-                    label: "Process",
-                    value: data.settings.npu?.status?.processState ?? "unknown",
-                    meta: data.settings.npu?.status?.healthy ? "Healthy" : "Needs attention",
-                  },
-                  {
-                    label: "Backend",
-                    value: data.settings.npu?.status?.backend ?? "unknown",
-                    meta: data.settings.npu?.status?.lastError ?? data.settings.npu?.sidecarUrl,
-                  },
-                ]}
-              />
-            </NativeCard></DetailInspector>
-            <DetailInspector open={view === "voice"} title="Voice setup" onClose={() => openView(null)}><NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="Voice runtime"
-              subtitle="Install or activate the local voice transcription runtime."
-            >
-              <NativeMetricGrid
-                items={[
-                  {
-                    label: "Readiness",
-                    value: data.voiceRuntime?.readiness ?? "unknown",
-                    meta: data.voiceRuntime?.provider ?? "whisper.cpp",
-                  },
-                  {
-                    label: "Active model",
-                    value: data.voiceRuntime?.selectedModelId ?? "none",
-                    meta: `${data.voiceRuntime?.installedModels?.length ?? 0} installed`,
-                  },
-                ]}
-              />
-              <SettingsButtonRow>
-                <NativeButton
-                  variant="default"
-                  onClick={() => {
-                    const recommended =
-                      data.voiceRuntime?.catalog?.find((item) => item.defaultInstall)?.id ??
-                      data.voiceRuntime?.catalog?.[0]?.id;
-                    void runAndReload(
-                      () => installVoiceRuntime(recommended ? { modelId: recommended, activate: true } : {}),
-                      "Voice runtime install requested.",
-                    );
-                  }}
-                >
-                  <Plus size={16} />
-                  Install starter model
-                </NativeButton>
-                {data.voiceRuntime?.installedModels?.[0] ? (
+            <DetailInspector open={view === "daemon"} title="Gateway controls" onClose={() => openView(null)}>
+              <NativeCard
+                density="compact"
+                className="mc-next-settings-panel"
+                title="Gateway daemon"
+                subtitle="Control the background runtime serving Mission Control."
+              >
+                <NativeMetricGrid
+                  items={[
+                    {
+                      label: "State",
+                      value: data.daemon?.state ?? "unknown",
+                      meta: data.daemon?.running ? "Running" : "Stopped",
+                    },
+                    {
+                      label: "Host",
+                      value: data.daemon?.host ?? "n/a",
+                      meta: data.daemon?.controllable ? "Controllable" : "Read-only",
+                    },
+                  ]}
+                />
+                <SettingsButtonRow>
+                  <NativeButton
+                    variant="default"
+                    onClick={() => void runAndReload(startDaemon, "Gateway daemon start requested.")}
+                    disabled={!data.daemon?.controllable}
+                  >
+                    <Play size={16} />
+                    Start
+                  </NativeButton>
                   <NativeButton
                     variant="secondary"
+                    onClick={() => void runAndReload(stopDaemon, "Gateway daemon stop requested.")}
+                    disabled={!data.daemon?.controllable}
+                  >
+                    <Square size={16} />
+                    Stop
+                  </NativeButton>
+                  <NativeButton
+                    variant="secondary"
+                    onClick={() => void runAndReload(restartDaemon, "Gateway daemon restart requested.")}
+                    disabled={!data.daemon?.controllable}
+                  >
+                    <RotateCcw size={16} />
+                    Restart
+                  </NativeButton>
+                </SettingsButtonRow>
+                {!data.daemon?.controllable && data.daemon?.controlMessage ? (
+                  <p className="mc-next-settings-help">{data.daemon.controlMessage}</p>
+                ) : null}
+              </NativeCard>
+            </DetailInspector>
+            {view === "llama" ? (
+              <FocusedDetail title="Configure llama.cpp" onClose={() => openView(null)}>
+                <NativeCard
+                  density="compact"
+                  className="mc-next-settings-panel"
+                  title="llama.cpp runtime"
+                  subtitle="Configure and control the local llama.cpp runtime."
+                >
+                  {llamaEditor.hasRemoteChanges ? (
+                    <div role="status">
+                      <p>The saved runtime settings changed. Your llama.cpp draft is preserved.</p>
+                      <details>
+                        <summary>Current saved runtime configuration</summary>
+                        <pre>{JSON.stringify(canonicalLlama, null, 2)}</pre>
+                      </details>
+                      <NativeButton variant="outline" onClick={llamaEditor.rebaseToCurrent}>
+                        Apply draft to current runtime
+                      </NativeButton>
+                    </div>
+                  ) : null}
+                  <p>
+                    Mode:{" "}
+                    {data.settings.llamaCpp?.managementMode ??
+                      (data.settings.llamaCpp?.autoStart ? "managed" : "external")}{" "}
+                    · Ownership: {data.settings.llamaCpp?.status?.leaseDiagnostics?.ownership ?? "none"}
+                  </p>
+                  {(data.settings.llamaCpp?.managementMode ??
+                    (data.settings.llamaCpp?.autoStart ? "managed" : "external")) === "managed" ? (
+                    <>
+                      <SettingsFieldGrid>
+                        <SettingsField label="Base URL">
+                          <input
+                            className="mc-next-settings-input"
+                            value={llamaForm.baseUrl}
+                            onChange={(event) =>
+                              setLlamaForm((current) => ({ ...current, baseUrl: event.target.value }))
+                            }
+                          />
+                        </SettingsField>
+                        <SettingsField label="Command">
+                          <input
+                            className="mc-next-settings-input"
+                            value={llamaForm.command}
+                            onChange={(event) =>
+                              setLlamaForm((current) => ({ ...current, command: event.target.value }))
+                            }
+                          />
+                        </SettingsField>
+                        <SettingsField label="Models root">
+                          <input
+                            className="mc-next-settings-input"
+                            value={llamaForm.modelsRootPath}
+                            onChange={(event) =>
+                              setLlamaForm((current) => ({ ...current, modelsRootPath: event.target.value }))
+                            }
+                          />
+                        </SettingsField>
+                        <SettingsField label="Model path">
+                          <input
+                            className="mc-next-settings-input"
+                            value={llamaForm.modelPath}
+                            onChange={(event) =>
+                              setLlamaForm((current) => ({ ...current, modelPath: event.target.value }))
+                            }
+                          />
+                        </SettingsField>
+                        <SettingsField label="Discovered models" span={2}>
+                          <>
+                            <select
+                              className="mc-next-settings-input"
+                              value={selectedDiscoveredModelPath}
+                              onChange={(event) => handleDiscoveredModelChange(event.target.value)}
+                              disabled={!discoveredLlamaModels.length}
+                            >
+                              <option value="">
+                                {discoveredLlamaModels.length
+                                  ? `Choose from ${discoveredLlamaModels.length} models under ${llamaForm.modelsRootPath || "the default models root"}`
+                                  : "No local .gguf models discovered under Models root yet"}
+                              </option>
+                              {discoveredLlamaModels.map((model) => (
+                                <option key={model.filePath} value={model.filePath}>
+                                  {model.relativePath ?? model.modelId}
+                                </option>
+                              ))}
+                            </select>
+                            {selectedDiscoveredModel ? (
+                              <p className="mc-next-settings-field-note">
+                                {selectedDiscoveredModel.relativePath ?? selectedDiscoveredModel.modelId}
+                              </p>
+                            ) : null}
+                          </>
+                        </SettingsField>
+                        <SettingsField label="Alias">
+                          <input
+                            className="mc-next-settings-input"
+                            value={llamaForm.alias}
+                            onChange={(event) => setLlamaForm((current) => ({ ...current, alias: event.target.value }))}
+                          />
+                        </SettingsField>
+                        <SettingsField label="Enabled" group>
+                          <label className="mc-next-settings-toggle">
+                            <input
+                              type="checkbox"
+                              checked={llamaForm.enabled}
+                              onChange={(event) =>
+                                setLlamaForm((current) => ({ ...current, enabled: event.target.checked }))
+                              }
+                            />
+                            <span>Enable llama.cpp runtime</span>
+                          </label>
+                        </SettingsField>
+                        <SettingsField label="Auto start" group>
+                          <label className="mc-next-settings-toggle">
+                            <input
+                              type="checkbox"
+                              checked={llamaForm.autoStart}
+                              onChange={(event) =>
+                                setLlamaForm((current) => ({ ...current, autoStart: event.target.checked }))
+                              }
+                            />
+                            <span>Auto-start with the gateway</span>
+                          </label>
+                        </SettingsField>
+                      </SettingsFieldGrid>
+                      <SettingsButtonRow>
+                        <NativeButton
+                          variant="default"
+                          disabled={savingLlama || llamaChange.hasPending || llamaEditor.hasRemoteChanges}
+                          onClick={() => void saveLlamaSettings()}
+                        >
+                          <Save size={16} />
+                          Save
+                        </NativeButton>
+                        <NativeButton
+                          variant="secondary"
+                          onClick={() =>
+                            void runAndReload(
+                              async () => {
+                                if (!(await saveLlamaSettings())) return false;
+                                await startLlamaCppRuntime();
+                              },
+                              "llama.cpp start requested.",
+                              "llama",
+                            )
+                          }
+                        >
+                          <Play size={16} />
+                          Start
+                        </NativeButton>
+                        <NativeButton
+                          variant="secondary"
+                          onClick={() => void runAndReload(stopLlamaCppRuntime, "llama.cpp stop requested.")}
+                        >
+                          <Square size={16} />
+                          Stop
+                        </NativeButton>
+                        <NativeButton
+                          variant="secondary"
+                          onClick={() => void runAndReload(refreshLlamaCppRuntime, "llama.cpp refresh requested.")}
+                        >
+                          <RefreshCw size={16} />
+                          Refresh
+                        </NativeButton>
+                      </SettingsButtonRow>
+                    </>
+                  ) : (
+                    <p>
+                      GoatCitadel observes this external server and does not use saved launch paths or process controls.
+                      Change the URL or Chat model in{" "}
+                      <NativeButton
+                        variant="ghost"
+                        onClick={() =>
+                          props.navigate({
+                            area: "settings",
+                            section: "onboarding",
+                            view: "llamacpp",
+                            theme: props.route.theme,
+                          })
+                        }
+                      >
+                        Get started
+                      </NativeButton>
+                      .
+                    </p>
+                  )}
+                  <NativeMetricGrid
+                    items={[
+                      {
+                        label: "Process",
+                        value: data.settings.llamaCpp?.status?.processState ?? "unknown",
+                        meta: data.settings.llamaCpp?.status?.healthy ? "Healthy" : "Needs attention",
+                      },
+                      {
+                        label: "Active model",
+                        value: data.settings.llamaCpp?.status?.activeModelId ?? "n/a",
+                        meta:
+                          (data.settings.llamaCpp?.managementMode ??
+                            (data.settings.llamaCpp?.autoStart ? "managed" : "external")) === "managed"
+                            ? (data.settings.llamaCpp?.status?.commandSource ?? "source unknown")
+                            : "External endpoint",
+                      },
+                    ]}
+                  />
+                  <NativeDisclosureCard id="runtime-llama-lifecycle" title="Lifecycle diagnostics">
+                    <LlamaCppLeaseDiagnostics diagnostics={data.settings.llamaCpp?.status?.leaseDiagnostics} />
+                  </NativeDisclosureCard>
+                </NativeCard>
+              </FocusedDetail>
+            ) : null}
+            <DetailInspector open={view === "npu"} title="Legacy acceleration" onClose={() => openView(null)}>
+              <NativeCard
+                density="compact"
+                className="mc-next-settings-panel"
+                title="Local acceleration"
+                subtitle="NPU sidecar support is retired from the shipped 1.0 runtime."
+              >
+                <SettingsButtonRow>
+                  <NativeButton
+                    variant="default"
                     onClick={() =>
                       void runAndReload(
-                        () => selectVoiceRuntimeModel(data.voiceRuntime?.installedModels?.[0]?.modelId ?? ""),
-                        "Voice model activated.",
+                        () =>
+                          patchSettings({
+                            expectedRevision: data.settings.revision,
+                            npu: {
+                              enabled: false,
+                              autoStart: false,
+                              sidecarUrl: npuForm.sidecarUrl,
+                            },
+                          }),
+                        "Retired NPU settings normalized.",
+                        "npu",
                       )
                     }
                   >
-                    <CheckCircle2 size={16} />
-                    Activate first installed
+                    <Save size={16} />
+                    Normalize
                   </NativeButton>
-                ) : null}
-              </SettingsButtonRow>
-              <SettingsActionList
-                ariaLabel="Voice model catalog"
-                items={(data.voiceRuntime?.catalog ?? []).map((item) => ({
-                  label: item.label,
-                  description: `${item.languageScope} · ${item.approxSizeLabel}`,
-                  meta: item.id,
-                  onClick: () =>
-                    void runAndReload(() => selectVoiceRuntimeModel(item.id), `Voice model ${item.id} selected.`),
-                  actionLabel: data.voiceRuntime?.selectedModelId === item.id ? "Active" : "Use",
-                }))}
-                emptyLabel="No voice model catalog available."
-              />
-            </NativeCard></DetailInspector>
+                  <NativeButton
+                    variant="secondary"
+                    onClick={() => void runAndReload(refreshNpuRuntime, "NPU refresh requested.")}
+                  >
+                    <RefreshCw size={16} />
+                    Refresh
+                  </NativeButton>
+                </SettingsButtonRow>
+                <NativeMetricGrid
+                  items={[
+                    {
+                      label: "Process",
+                      value: data.settings.npu?.status?.processState ?? "unknown",
+                      meta: data.settings.npu?.status?.healthy ? "Healthy" : "Needs attention",
+                    },
+                    {
+                      label: "Backend",
+                      value: data.settings.npu?.status?.backend ?? "unknown",
+                      meta: data.settings.npu?.status?.lastError ?? data.settings.npu?.sidecarUrl,
+                    },
+                  ]}
+                />
+              </NativeCard>
+            </DetailInspector>
+            <DetailInspector open={view === "voice"} title="Voice setup" onClose={() => openView(null)}>
+              <NativeCard
+                density="compact"
+                className="mc-next-settings-panel"
+                title="Voice runtime"
+                subtitle="Install or activate the local voice transcription runtime."
+              >
+                <NativeMetricGrid
+                  items={[
+                    {
+                      label: "Readiness",
+                      value: data.voiceRuntime?.readiness ?? "unknown",
+                      meta: data.voiceRuntime?.provider ?? "whisper.cpp",
+                    },
+                    {
+                      label: "Active model",
+                      value: data.voiceRuntime?.selectedModelId ?? "none",
+                      meta: `${data.voiceRuntime?.installedModels?.length ?? 0} installed`,
+                    },
+                  ]}
+                />
+                <SettingsButtonRow>
+                  <NativeButton
+                    variant="default"
+                    onClick={() => {
+                      const recommended =
+                        data.voiceRuntime?.catalog?.find((item) => item.defaultInstall)?.id ??
+                        data.voiceRuntime?.catalog?.[0]?.id;
+                      void runAndReload(
+                        () => installVoiceRuntime(recommended ? { modelId: recommended, activate: true } : {}),
+                        "Voice runtime install requested.",
+                      );
+                    }}
+                  >
+                    <Plus size={16} />
+                    Install starter model
+                  </NativeButton>
+                  {data.voiceRuntime?.installedModels?.[0] ? (
+                    <NativeButton
+                      variant="secondary"
+                      onClick={() =>
+                        void runAndReload(
+                          () => selectVoiceRuntimeModel(data.voiceRuntime?.installedModels?.[0]?.modelId ?? ""),
+                          "Voice model activated.",
+                        )
+                      }
+                    >
+                      <CheckCircle2 size={16} />
+                      Activate first installed
+                    </NativeButton>
+                  ) : null}
+                </SettingsButtonRow>
+                <SettingsActionList
+                  ariaLabel="Voice model catalog"
+                  items={(data.voiceRuntime?.catalog ?? []).map((item) => ({
+                    label: item.label,
+                    description: `${item.languageScope} · ${item.approxSizeLabel}`,
+                    meta: item.id,
+                    onClick: () =>
+                      void runAndReload(() => selectVoiceRuntimeModel(item.id), `Voice model ${item.id} selected.`),
+                    actionLabel: data.voiceRuntime?.selectedModelId === item.id ? "Active" : "Use",
+                  }))}
+                  emptyLabel="No voice model catalog available."
+                />
+              </NativeCard>
+            </DetailInspector>
           </SettingsStack>
         </SettingsStack>
       ) : null}

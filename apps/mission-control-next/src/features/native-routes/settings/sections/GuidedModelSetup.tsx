@@ -55,6 +55,7 @@ export function GuidedModelSetup({
   navigate,
   reloadOnboarding,
   setNotice,
+  excludeLlamaCpp = false,
 }: {
   workspaceId: string;
   onboarding: OnboardingState;
@@ -62,15 +63,26 @@ export function GuidedModelSetup({
   navigate: SettingsSectionProps["navigate"];
   reloadOnboarding: () => Promise<void>;
   setNotice: (notice: Notice | null) => void;
+  excludeLlamaCpp?: boolean;
 }) {
   const catalog = useProviderModelCatalog("system");
-  const catalogProviders = catalog.providers;
+  const catalogProviders = useMemo(
+    () =>
+      excludeLlamaCpp ? catalog.providers.filter((provider) => provider.providerId !== "llamacpp") : catalog.providers,
+    [catalog.providers, excludeLlamaCpp],
+  );
   const loadModelsForProvider = catalog.loadModelsForProvider;
   // Keep first-run setup usable against an older or partially available
   // Gateway response. The typed contract requires settings.llm, but the UI is
   // also the recovery surface when that boundary cannot return a full payload.
-  const activeProviderId = onboarding.settings?.llm?.activeProviderId ?? "";
-  const activeModel = onboarding.settings?.llm?.activeModel ?? "";
+  const activeProviderId =
+    excludeLlamaCpp && onboarding.settings?.llm?.activeProviderId === "llamacpp"
+      ? ""
+      : (onboarding.settings?.llm?.activeProviderId ?? "");
+  const activeModel =
+    excludeLlamaCpp && onboarding.settings?.llm?.activeProviderId === "llamacpp"
+      ? ""
+      : (onboarding.settings?.llm?.activeModel ?? "");
   const fallbackProvider = pickDefaultGuidedProvider(catalogProviders, activeProviderId);
   const canonicalSelection = {
     providerId: activeProviderId || fallbackProvider?.providerId || "",
@@ -102,8 +114,8 @@ export function GuidedModelSetup({
   const [actionError, setActionError] = useState<string | null>(null);
 
   const selectedProvider = useMemo(
-    () => catalog.providers.find((provider) => provider.providerId === providerId) ?? null,
-    [catalog.providers, providerId],
+    () => catalogProviders.find((provider) => provider.providerId === providerId) ?? null,
+    [catalogProviders, providerId],
   );
   const supportedThinkingLevels = useMemo(
     () => supportedGuidedThinkingLevels(selectedProvider?.capabilities),
@@ -381,10 +393,10 @@ export function GuidedModelSetup({
                 Choose a provider or local runtime
               </option>
             ) : null}
-            {providerId && !catalog.providers.some((provider) => provider.providerId === providerId) ? (
+            {providerId && !catalogProviders.some((provider) => provider.providerId === providerId) ? (
               <option value={providerId}>{providerId} · unavailable</option>
             ) : null}
-            {catalog.providers.map((provider) => (
+            {catalogProviders.map((provider) => (
               <option key={provider.providerId} value={provider.providerId}>
                 {provider.label}
               </option>

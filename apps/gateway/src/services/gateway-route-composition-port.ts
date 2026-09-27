@@ -37,6 +37,8 @@ import type { HooksService } from "./hooks-service.js";
 import type { ImprovementService } from "./improvement-service.js";
 import type { AutonomyControlService } from "./autonomy-control-service.js";
 import type { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
+import type { LlamaCppSetupSelectionService } from "./llama-cpp-setup-selection-service.js";
+import type { EvolutionControlPlaneService } from "./evolution-control-plane-service.js";
 import type { LlmService } from "./llm-service.js";
 import type { McpElicitationService } from "./mcp-elicitation-service.js";
 import type { MediaVoiceService } from "./media-voice-service.js";
@@ -71,8 +73,10 @@ type RouteDependencyMethod<
 > = GatewayRouteServiceDependencies[TDomain][TMethod];
 
 export interface GatewayRouteCompositionPort {
-  createRemoteWorkerExecutionOwners(): { readonly operatorNativeFiles: import("./remote-worker-native-file-operator.js").RemoteWorkerNativeFileOperator;
-    readonly operatorNativeRuntime: import("./remote-worker-native-review-operator.js").RemoteWorkerNativeReviewOperator };
+  createRemoteWorkerExecutionOwners(): {
+    readonly operatorNativeFiles: import("./remote-worker-native-file-operator.js").RemoteWorkerNativeFileOperator;
+    readonly operatorNativeRuntime: import("./remote-worker-native-review-operator.js").RemoteWorkerNativeReviewOperator;
+  };
   resolveChatRunVariableInput(
     sessionId: string,
     input: import("@goatcitadel/contracts").ChatSendMessageRequest,
@@ -107,6 +111,8 @@ export interface GatewayRouteCompositionPort {
   readonly improvementService: ImprovementService;
   readonly autonomyControlService: AutonomyControlService;
   readonly llamaCppRuntime: LlamaCppRuntimeService;
+  readonly llamaCppSetupSelection: LlamaCppSetupSelectionService;
+  readonly evolutionControlPlaneService: EvolutionControlPlaneService;
   readonly llmService: LlmService;
   readonly mcpElicitationService: McpElicitationService;
   readonly mediaVoiceService: MediaVoiceService;
@@ -161,6 +167,11 @@ export interface GatewayRouteCompositionPort {
   createChatCompletion: RouteDependencyMethod<"llm", "createChatCompletion">;
   createChatCompletionStream: RouteDependencyMethod<"devVerification", "createChatCompletionStream">;
   createChatSession: RouteDependencyMethod<"chatSessions", "createChatSession">;
+  agentSendChatMessage: (
+    sessionId: string,
+    input: import("@goatcitadel/contracts").ChatSendMessageRequest,
+    options?: { abortSignal?: AbortSignal },
+  ) => Promise<import("@goatcitadel/contracts").ChatSendMessageResponse>;
   createChatSessionSpecialistCandidate: RouteDependencyMethod<
     "chatSupport",
     "specialists"
@@ -352,6 +363,10 @@ export function createGatewayRouteCompositionPort(
     discordRuntimeService: gateway.discordRuntimeService,
     hooksService: gateway.hooksService,
     llamaCppRuntime: gateway.llamaCppRuntime,
+    llamaCppSetupSelection: gateway.llamaCppSetupSelection,
+    get evolutionControlPlaneService() {
+      return gateway.evolutionControlPlaneService;
+    },
     llmService: gateway.llmService,
     mcpElicitationService: gateway.mcpElicitationService,
     memoryLifecycleService: gateway.memoryLifecycleService,
@@ -391,6 +406,7 @@ export function createGatewayRouteCompositionPort(
     createChatCompletion: gateway.createChatCompletion.bind(gateway),
     createChatCompletionStream: gateway.createChatCompletionStream.bind(gateway),
     createChatSession: gateway.createChatSession.bind(gateway),
+    agentSendChatMessage: gateway.agentSendChatMessage.bind(gateway),
     createChatSessionSpecialistCandidate: gateway.createChatSessionSpecialistCandidate.bind(gateway),
     createOrchestrationPlan: gateway.createOrchestrationPlan.bind(gateway),
     enqueueApprovalResolutionEffects: gateway.enqueueApprovalResolutionEffects.bind(gateway),

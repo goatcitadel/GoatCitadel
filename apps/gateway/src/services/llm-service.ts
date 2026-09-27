@@ -716,6 +716,7 @@ export class LlmService {
     }
     this.activeProviderId = nextActiveProviderId;
     this.activeModel = nextActiveModel;
+    this.defaultThinkingLevel = config.defaultThinkingLevel ?? "standard";
     this.utilityProviderId = nextUtilityProviderId;
     this.utilityModel = nextUtilityModel;
     this.secretStatusCache.clear();
@@ -1085,17 +1086,27 @@ export class LlmService {
     const fallbackCatalog = buildFallbackModelCatalog(provider.providerId, provider.defaultModel);
 
     try {
-      const result = await this.fetchModelsForResolvedProvider(resolved);
+      // An unsaved external endpoint must be checkable before the managed
+      // runtime is enabled. Never acquire its process lease or reuse a stale
+      // catalog for this preview.
+      const result =
+        provider.providerId === "llamacpp"
+          ? await this.fetchModelsForResolvedProviderUncached(resolved, { skipLocalLease: true })
+          : await this.fetchModelsForResolvedProvider(resolved);
       if (result.items.length > 0) {
         const items =
-          result.source === "live" && isOpenAICodexProvider(provider)
+          result.source === "live" && (isOpenAICodexProvider(provider) || provider.providerId === "llamacpp")
             ? result.items
             : mergeModelCatalogs(result.items, fallbackCatalog);
         return {
           items: items.map((record) => this.enrichModelRecord(provider.providerId, record)),
           source: result.source,
+          catalogStatus: result.catalogStatus,
           warning: result.warning,
         };
+      }
+      if (provider.providerId === "llamacpp" && result.source === "live") {
+        return { items: [], source: "live", warning: "The llama.cpp server reported no models." };
       }
     } catch (error) {
       if (fallbackCatalog.length > 0) {
@@ -3205,7 +3216,10 @@ export class LlmService {
     }
   }
 
-  private async fetchModelsForResolvedProviderUncached(resolved: ResolvedProvider): Promise<ModelDiscoveryResult> {
+  private async fetchModelsForResolvedProviderUncached(
+    resolved: ResolvedProvider,
+    options: { skipLocalLease?: boolean } = {},
+  ): Promise<ModelDiscoveryResult> {
     const fallback = buildFallbackModelCatalog(resolved.provider.providerId, resolved.provider.defaultModel);
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
     const discoverySignal = AbortSignal.timeout(15_000);
@@ -3224,7 +3238,9 @@ export class LlmService {
       // binary, busy port) is a discovery outcome, not a caller error: it must
       // reach the same error_fallback path as a provider HTTP failure below
       // instead of escaping to the models route as a 400.
-      lease = await this.acquireLocalServiceLease(resolved, "model_discovery", discoverySignal);
+      lease = options.skipLocalLease
+        ? undefined
+        : await this.acquireLocalServiceLease(resolved, "model_discovery", discoverySignal);
       const requestInit: FetchRequestInitWithDispatcher = {
         method: "GET",
         headers: target.headers,
@@ -3261,6 +3277,9 @@ export class LlmService {
         : normalizeModelRecords(json);
       if (items.length > 0) {
         return { items, source: "live" };
+      }
+      if (resolved.provider.providerId === "llamacpp") {
+        return { items: [], source: "live", warning: "The llama.cpp server reported no models." };
       }
       return {
         items: fallback,

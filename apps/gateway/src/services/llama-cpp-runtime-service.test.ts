@@ -32,10 +32,12 @@ async function makeTempDir(): Promise<string> {
 function createConfig(overrides?: {
   server?: Partial<LlamaCppConfig["server"]>;
   launch?: Partial<LlamaCppConfig["launch"]>;
+  managementMode?: "external" | "managed";
 }): LlamaCppConfig {
   return {
     enabled: true,
     autoStart: false,
+    ...(overrides?.managementMode ? { managementMode: overrides.managementMode } : {}),
     server: {
       baseUrl: "http://127.0.0.1:8080/v1",
       command: "llama-server",
@@ -74,6 +76,37 @@ function createProfile(overrides?: Partial<LlamaCppHardwareProfile>): LlamaCppHa
 }
 
 describe("llama.cpp runtime helpers", () => {
+  it("observes an external server without launching or stopping a saved command", async () => {
+    const tempRoot = await makeTempDir();
+    const spawnProcess = vi.fn();
+    const terminateOwnedProcess = vi.fn();
+    const service = new LlamaCppRuntimeService({
+      rootDir: tempRoot,
+      config: createConfig({
+        managementMode: "external",
+        server: { command: "C:/old/llama-server.exe" },
+        launch: { modelPath: "C:/old/missing.gguf" },
+      }),
+      runtimeHooks: {
+        probeHealth: async () => ({ healthy: true, activeModelId: "served-model" }),
+        spawnProcess,
+        terminateOwnedProcess,
+      },
+    });
+    const status = await service.start();
+    expect(status).toMatchObject({
+      healthy: true,
+      activeModelId: "served-model",
+      leaseDiagnostics: { ownership: "external" },
+    });
+    expect(status.command).toBeUndefined();
+    expect(status.modelPath).toBeUndefined();
+    expect(status.launchCommandPreview).toBeUndefined();
+    await service.stop();
+    expect(spawnProcess).not.toHaveBeenCalled();
+    expect(terminateOwnedProcess).not.toHaveBeenCalled();
+    await service.close();
+  });
   it("normalizes provider base URLs to the OpenAI-compatible /v1 path", () => {
     expect(normalizeLlamaCppProviderBaseUrl("http://127.0.0.1:8080")).toBe("http://127.0.0.1:8080/v1");
     expect(normalizeLlamaCppProviderBaseUrl("http://127.0.0.1:8080/v1/")).toBe("http://127.0.0.1:8080/v1");
@@ -624,7 +657,7 @@ describe("llama.cpp runtime helpers", () => {
     expect(["missing", "standard-windows", "path", "path-with-exe"]).toContain(detection.source);
   }, 15_000);
 
-  it("auto-starts during init when the configured remote runtime is already healthy", async () => {
+  it("does not adopt an external server when managed startup finds an occupied URL", async () => {
     const tempRoot = await makeTempDir();
     const modelPath = path.join(tempRoot, "models", "gemma.gguf");
     await fs.mkdir(path.dirname(modelPath), { recursive: true });
@@ -667,7 +700,7 @@ describe("llama.cpp runtime helpers", () => {
       autoStart: true,
     });
 
-    await service.init();
+    await expect(service.init()).rejects.toThrow("externally started llama.cpp server occupies this URL");
 
     expect(service.getStatus()).toMatchObject({
       desiredState: "running",
@@ -676,7 +709,7 @@ describe("llama.cpp runtime helpers", () => {
       activeModelId: "remote-ready",
       modelPath,
     });
-    expect(events).toEqual([]);
+    expect(events.some((item) => item.eventType === "llamacpp_started")).toBe(false);
     await expect(fs.readFile(path.join(tempRoot, "data", "llamacpp-runtime-state.json"), "utf8")).resolves.toContain(
       "remote-ready",
     );
@@ -774,6 +807,7 @@ describe("llama.cpp runtime helpers", () => {
     const service = new LlamaCppRuntimeService({
       rootDir: tempRoot,
       config: createConfig({
+        managementMode: "managed",
         server: {
           baseUrl: "http://127.0.0.1:18080/v1",
           extraArgs: ["--model-note", "ops model"],
@@ -819,11 +853,12 @@ describe("llama.cpp runtime helpers", () => {
     vi.stubGlobal("fetch", fetchMock as typeof fetch);
     const unconfigured = new LlamaCppRuntimeService({
       rootDir: tempRoot,
-      config: createConfig(),
+      config: createConfig({ managementMode: "managed" }),
     });
     const missingFile = new LlamaCppRuntimeService({
       rootDir: tempRoot,
       config: createConfig({
+        managementMode: "managed",
         launch: {
           modelPath: "models/missing.gguf",
         },

@@ -575,6 +575,7 @@ export const AssistantConfigInputSchema = z
       .object({
         enabled: z.boolean().optional(),
         autoStart: z.boolean().optional(),
+        managementMode: z.enum(["external", "managed"]).optional(),
         server: z
           .object({
             baseUrl: z.string().optional(),

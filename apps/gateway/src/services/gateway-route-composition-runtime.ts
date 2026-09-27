@@ -9,6 +9,7 @@ import { createFilesRoutePort } from "./files-route-service.js";
 import { createHooksRoutePort } from "./hooks-route-service.js";
 import { createLocalAiRouteService as createLocalAiRoutePort } from "./local-ai-route-service.js";
 import { createLlamaCppRoutePort } from "./llama-cpp-route-service.js";
+import { LlamaCppSetupService } from "./llama-cpp-setup-service.js";
 import { acquireBoundLlamaCppEmbeddingLease } from "./llama-cpp-provider-lease.js";
 import { createMeshRoutePort } from "./mesh-route-service.js";
 import { MobileApprovalKeyService } from "./mobile-approval-key-service.js";
@@ -357,6 +358,15 @@ export function composeRuntimeAdminRouteDependencies(
     }),
     llamaCpp: createLlamaCppRoutePort({
       llamaCppRuntime: gateway.llamaCppRuntime,
+      setup: new LlamaCppSetupService({
+        getSettings: () => gateway.getSettings(),
+        runtime: gateway.llamaCppRuntime,
+        selections: gateway.llamaCppSetupSelection,
+        plans: gateway.evolutionControlPlaneService,
+        previewModels: (baseUrl) => gateway.llmService.previewModels({ providerId: "llamacpp", baseUrl }),
+        createChatSession: (input) => gateway.createChatSession(input),
+        sendChatMessage: (sessionId, input, options) => gateway.agentSendChatMessage(sessionId, input, options),
+      }),
       publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
     }),
     mesh: createMeshRoutePort({

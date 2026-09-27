@@ -75,6 +75,7 @@ export interface RuntimeSettings {
   llamaCpp: {
     enabled: boolean;
     autoStart: boolean;
+    managementMode: "external" | "managed";
     baseUrl: string;
     command: string;
     extraArgs: string[];

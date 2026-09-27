@@ -4,9 +4,12 @@ import {
   type ChangePlanRecord,
   type ChangePlanRuntimeConfigurationRequest,
   type LlmModelRecord,
+  type LlmModelPreviewResponse,
 } from "@goatcitadel/contracts";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import type { UpdateSettingsInput } from "./settings-auth-service.js";
+import type { LlamaCppSetupSelection } from "./llama-cpp-setup-selection-service.js";
+import type { LlamaCppRuntimeStatus } from "@goatcitadel/contracts";
 import type {
   EvolutionControlPlaneAdapter,
   EvolutionControlPlaneAdapterContext,
@@ -18,6 +21,10 @@ export interface RuntimeConfigurationChangePlanAdapterDependencies {
   readonly getSettings: () => Promise<RuntimeSettings>;
   readonly updateSettings: (input: UpdateSettingsInput) => Promise<RuntimeSettings>;
   readonly listModels?: (providerId: string) => Promise<readonly LlmModelRecord[]>;
+  readonly previewLlamaModels?: (baseUrl: string) => Promise<LlmModelPreviewResponse>;
+  readonly resolveManagedSelection?: (selectionId: string, workspaceId: string) => Promise<LlamaCppSetupSelection>;
+  readonly discardManagedSelection?: (selectionId: string) => void;
+  readonly refreshLlamaRuntime?: () => Promise<LlamaCppRuntimeStatus>;
   readonly hasTemporaryAuthCredential: (planId: string) => boolean | Promise<boolean>;
   readonly consumeTemporaryAuthCredential: (planId: string) => string | Promise<string>;
   readonly discardTemporaryAuthCredential: (planId: string) => void | Promise<void>;
@@ -33,7 +40,7 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
 
   public async prepare(context: EvolutionControlPlaneAdapterContext, request: ChangePlanRuntimeConfigurationRequest) {
     const settings = await this.deps.getSettings();
-    await this.validateOwnerSelection(request, settings);
+    await this.validateOwnerSelection(request, settings, context.origin.workspaceId);
     if (request.change.operation === "gateway_auth_configuration") {
       const change = request.change;
       const configured =
@@ -139,6 +146,9 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
         },
       };
     }
+    if (plan.request.change.operation === "llama_cpp_setup") {
+      return await this.applyLlamaSetup(plan, current);
+    }
     const updated = await this.deps.updateSettings({
       expectedRevision: current.revision,
       ...settingsPatch(plan.request),
@@ -224,6 +234,13 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
     ) {
       await this.deps.discardTemporaryAuthCredential(plan.planId);
     }
+    if (
+      plan.request.kind === "runtime_configuration" &&
+      plan.request.change.operation === "llama_cpp_setup" &&
+      plan.request.change.selectionId
+    ) {
+      this.deps.discardManagedSelection?.(plan.request.change.selectionId);
+    }
   }
 
   private async observe(plan: ChangePlanRecord) {
@@ -240,7 +257,9 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
       applied,
       reason: applied
         ? "The runtime setting owner matches the plan."
-        : "The runtime setting owner does not match the approved plan.",
+        : plan.request.change.operation === "llama_cpp_setup"
+          ? llamaSetupMismatchReason(plan.request.change, current)
+          : "The runtime setting owner does not match the approved plan.",
       evidenceRefs: applied ? [`runtime_settings:revision:${current.revision}`] : [],
     };
   }
@@ -248,7 +267,21 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
   private async validateOwnerSelection(
     request: ChangePlanRuntimeConfigurationRequest,
     settings: RuntimeSettings,
+    workspaceId: string,
   ): Promise<void> {
+    if (request.change.operation === "llama_cpp_setup") {
+      const change = request.change;
+      if (change.managementMode === "managed") {
+        if (!change.selectionId || !this.deps.resolveManagedSelection)
+          throw new SemanticValidationError("A managed GGUF selection is required.");
+        const selected = await this.deps.resolveManagedSelection(change.selectionId, workspaceId);
+        if (selected.alias !== change.model)
+          throw new SemanticValidationError("The selected GGUF and Chat model differ.");
+      } else {
+        await this.requireLiveModel(change.baseUrl, change.model);
+      }
+      return;
+    }
     if (request.change.operation !== "utility_model") return;
     const change = request.change;
     const provider = settings.llm.providers.find((item) => item.providerId === change.providerId);
@@ -270,6 +303,82 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
       });
     }
   }
+
+  private async requireLiveModel(baseUrl: string, model: string): Promise<void> {
+    if (!this.deps.previewLlamaModels) throw new SemanticValidationError("The llama.cpp catalog owner is unavailable.");
+    const catalog = await this.deps.previewLlamaModels(baseUrl);
+    if (
+      catalog.source !== "live" ||
+      catalog.catalogStatus === "stale" ||
+      !catalog.items.some((item) => item.id === model)
+    ) {
+      throw new SemanticValidationError(
+        `The llama.cpp server did not freshly advertise ${model}. Check the URL and model, then retry.`,
+      );
+    }
+  }
+
+  private async applyLlamaSetup(
+    plan: ChangePlanRecord,
+    current: RuntimeSettings,
+  ): Promise<EvolutionControlPlaneAdapterOutcome> {
+    if (plan.request.kind !== "runtime_configuration" || plan.request.change.operation !== "llama_cpp_setup") {
+      throw new SemanticValidationError("Llama setup intent drifted.");
+    }
+    const change = plan.request.change;
+    let selection: LlamaCppSetupSelection | undefined;
+    if (change.managementMode === "managed") {
+      if (!change.selectionId || !this.deps.resolveManagedSelection)
+        throw new SemanticValidationError("The managed selection is unavailable.");
+      selection = await this.deps.resolveManagedSelection(change.selectionId, plan.origin.workspaceId);
+      if (selection.alias !== change.model)
+        throw new SemanticValidationError("The selected GGUF and Chat model differ.");
+    } else {
+      await this.requireLiveModel(change.baseUrl, change.model);
+    }
+    const runtimeSettings = await this.deps.updateSettings({
+      expectedRevision: current.revision,
+      llamaCpp: {
+        enabled: true,
+        managementMode: change.managementMode,
+        autoStart: change.managementMode === "managed" ? (change.autoStart ?? true) : false,
+        baseUrl: change.baseUrl,
+        alias: change.model,
+        ...(selection ? { command: selection.command, modelPath: selection.modelPath } : {}),
+      },
+    });
+    const status = await this.deps.refreshLlamaRuntime?.();
+    if (!status?.healthy || (change.managementMode === "managed" && status.leaseDiagnostics?.ownership !== "owned")) {
+      throw new SemanticValidationError(
+        "llama.cpp runtime verification failed. The previous Chat default was retained; check the server and retry setup.",
+      );
+    }
+    await this.requireLiveModel(change.baseUrl, change.model);
+    const routed = await this.deps.updateSettings({
+      expectedRevision: runtimeSettings.revision,
+      llm: { activeProviderId: "llamacpp", activeModel: change.model, defaultThinkingLevel: "off" },
+    });
+    if (change.selectionId) this.deps.discardManagedSelection?.(change.selectionId);
+    return {
+      status: "verifying",
+      evidenceRefs: [`runtime_settings:revision:${routed.revision}`],
+      result: { summary: `llama.cpp ${change.model} is selected for Chat.`, appliedRevision: routed.revision },
+    };
+  }
+}
+
+function llamaSetupMismatchReason(
+  change: Extract<ChangePlanRuntimeConfigurationRequest["change"], { operation: "llama_cpp_setup" }>,
+  settings: RuntimeSettings,
+): string {
+  const differences = [
+    settings.llamaCpp.managementMode !== change.managementMode ? "server ownership" : undefined,
+    settings.llamaCpp.baseUrl !== change.baseUrl ? "server URL" : undefined,
+    settings.llm.activeProviderId !== "llamacpp" ? "Chat provider" : undefined,
+    settings.llm.activeModel !== change.model ? "Chat model" : undefined,
+    settings.llm.defaultThinkingLevel !== "off" ? "thinking effort" : undefined,
+  ].filter(Boolean);
+  return `The approved llama.cpp setup differs from current settings (${differences.join(", ")}). Review the current settings and retry setup.`;
 }
 
 function settingsPatch(request: ChangePlanRuntimeConfigurationRequest): Omit<UpdateSettingsInput, "expectedRevision"> {
@@ -302,6 +411,8 @@ function settingsPatch(request: ChangePlanRuntimeConfigurationRequest): Omit<Upd
       return { npu: { ...request.change.config } };
     case "llama_cpp_configuration":
       return { llamaCpp: { ...request.change.config } };
+    case "llama_cpp_setup":
+      throw new SemanticValidationError("llama.cpp setup uses its dedicated validated owner path.");
     case "feature_flag":
       return { features: { [request.change.flag]: request.change.enabled } };
     case "feature_flags":
@@ -345,6 +456,14 @@ function matches(request: ChangePlanRuntimeConfigurationRequest, settings: Runti
       return matchesPartial(settings.npu, request.change.config);
     case "llama_cpp_configuration":
       return matchesPartial(settings.llamaCpp, request.change.config, true);
+    case "llama_cpp_setup":
+      return (
+        settings.llamaCpp.managementMode === request.change.managementMode &&
+        settings.llamaCpp.baseUrl === request.change.baseUrl &&
+        settings.llm.activeProviderId === "llamacpp" &&
+        settings.llm.activeModel === request.change.model &&
+        settings.llm.defaultThinkingLevel === "off"
+      );
     case "feature_flag":
       return settings.features[request.change.flag] === request.change.enabled;
     case "feature_flags":
@@ -464,6 +583,15 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
         "The local inference runtime uses only the reviewed non-path settings.",
         "caution",
       );
+    case "llama_cpp_setup":
+      return {
+        title: "Set up llama.cpp for Chat",
+        summary: `Use ${request.change.model} from the reviewed ${request.change.managementMode} server at ${request.change.baseUrl}.`,
+        completedSummary: `llama.cpp ${request.change.model} is selected for Chat.`,
+        impact:
+          "Gateway validates the runtime before changing the Chat default. Managed files remain in Gateway custody.",
+        risk: "caution" as const,
+      };
     case "feature_flag": {
       const protectedFlag = request.change.flag === "productSourceEvolutionV1Enabled";
       return {

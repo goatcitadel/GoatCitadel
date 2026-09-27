@@ -44,6 +44,114 @@ function settings(overrides: Record<string, unknown> = {}) {
 }
 
 describe("RuntimeConfigurationChangePlanAdapter", () => {
+  it("requires a fresh external catalog and preserves the prior Chat default if runtime verification fails", async () => {
+    let current = settings({
+      llm: { activeProviderId: "openai", activeModel: "current", defaultThinkingLevel: "standard" },
+      llamaCpp: { managementMode: "external", baseUrl: "http://127.0.0.1:8080/v1" },
+    });
+    const updateSettings = vi.fn(async (input) => {
+      current = settings({
+        ...current,
+        revision: current.revision + 1,
+        llamaCpp: { ...current.llamaCpp, ...input.llamaCpp },
+        llm: { ...current.llm, ...input.llm },
+      });
+      return current;
+    });
+    const previewLlamaModels = vi.fn(async () => ({
+      source: "error_fallback" as const,
+      items: [{ id: "template-alias" }],
+    }));
+    const adapter = new RuntimeConfigurationChangePlanAdapter({
+      ...authCredentialDeps,
+      getSettings: async () => current,
+      updateSettings,
+      previewLlamaModels,
+      refreshLlamaRuntime: async () => ({ healthy: false }) as any,
+    });
+    const request = {
+      kind: "runtime_configuration" as const,
+      change: {
+        operation: "llama_cpp_setup" as const,
+        managementMode: "external" as const,
+        baseUrl: "http://127.0.0.1:8080/v1",
+        model: "local-model",
+      },
+    };
+    await expect(adapter.prepare(context, request)).rejects.toThrow("did not freshly advertise");
+    expect(updateSettings).not.toHaveBeenCalled();
+    previewLlamaModels.mockResolvedValue({ source: "live", items: [{ id: "local-model" }] });
+    const prepared = await adapter.prepare(context, request);
+    await expect(
+      adapter.apply(context, { request, target: prepared.target, origin: context.origin } as ChangePlanRecord),
+    ).rejects.toThrow("previous Chat default was retained");
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(current.llm).toMatchObject({ activeProviderId: "openai", activeModel: "current" });
+  });
+
+  it("applies managed setup only after revalidating the opaque file selection", async () => {
+    let current = settings({
+      llm: { activeProviderId: "openai", activeModel: "current", defaultThinkingLevel: "standard" },
+      llamaCpp: { managementMode: "external", baseUrl: "http://127.0.0.1:8080/v1" },
+    });
+    const updateSettings = vi.fn(async (input) => {
+      current = settings({
+        ...current,
+        revision: current.revision + 1,
+        llamaCpp: { ...current.llamaCpp, ...input.llamaCpp },
+        llm: { ...current.llm, ...input.llm },
+      });
+      return current;
+    });
+    const resolveManagedSelection = vi.fn(
+      async () =>
+        ({
+          modelId: "file.gguf",
+          alias: "file",
+          command: "C:/llama/llama-server.exe",
+          modelPath: "C:/models/file.gguf",
+        }) as any,
+    );
+    const discardManagedSelection = vi.fn();
+    const adapter = new RuntimeConfigurationChangePlanAdapter({
+      ...authCredentialDeps,
+      getSettings: async () => current,
+      updateSettings,
+      resolveManagedSelection,
+      discardManagedSelection,
+      previewLlamaModels: async () => ({ source: "live", items: [{ id: "file" }] }),
+      refreshLlamaRuntime: async () => ({ healthy: true, leaseDiagnostics: { ownership: "owned" } }) as any,
+    });
+    const request = {
+      kind: "runtime_configuration" as const,
+      change: {
+        operation: "llama_cpp_setup" as const,
+        managementMode: "managed" as const,
+        baseUrl: "http://127.0.0.1:8080/v1",
+        model: "file",
+        selectionId: "selection-1",
+        autoStart: true,
+      },
+    };
+    const prepared = await adapter.prepare(context, request);
+    const plan = { request, target: prepared.target, origin: context.origin } as ChangePlanRecord;
+    resolveManagedSelection.mockRejectedValueOnce(new Error("GGUF missing"));
+    await expect(adapter.apply(context, plan)).rejects.toThrow("GGUF missing");
+    expect(updateSettings).not.toHaveBeenCalled();
+    const applied = await adapter.apply(context, plan);
+    expect(applied.status).toBe("verifying");
+    expect(updateSettings).toHaveBeenCalledTimes(2);
+    expect(updateSettings.mock.calls[0]?.[0]).toMatchObject({
+      llamaCpp: { managementMode: "managed", autoStart: true, modelPath: "C:/models/file.gguf" },
+    });
+    expect(current.llm).toMatchObject({
+      activeProviderId: "llamacpp",
+      activeModel: "file",
+      defaultThinkingLevel: "off",
+    });
+    expect(discardManagedSelection).toHaveBeenCalledWith("selection-1");
+    expect((await adapter.verify(context, plan)).status).toBe("completed");
+  });
   it("applies reviewed pack flags together at one revision and keeps protected flags dangerous", async () => {
     let current = settings();
     const updateSettings = vi.fn(async (input) => {

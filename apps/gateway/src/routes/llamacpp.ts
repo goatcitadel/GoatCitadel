@@ -19,8 +19,47 @@ const huggingFaceDownloadSchema = z.object({
 const downloadJobParamsSchema = z.object({
   jobId: z.string().min(1),
 });
+const workspaceQuerySchema = z.object({ workspaceId: z.string().min(1).max(128).optional() });
+const managedSelectionSchema = z
+  .object({
+    workspaceId: z.string().min(1).max(128),
+    modelId: z.string().min(1).max(512),
+    commandPath: z.string().min(1).max(4096).optional(),
+  })
+  .strict();
 
 export const llamaCppRoutes: FastifyPluginAsync = async (fastify) => {
+  fastify.get("/api/v1/llamacpp/setup", async (request, reply) => {
+    const query = workspaceQuerySchema.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: "Invalid workspace id." });
+    return reply.send(
+      projectProviderRuntimePublicValue(
+        await fastify.services.llamaCpp.getLlamaCppSetup(query.data.workspaceId ?? "default"),
+      ),
+    );
+  });
+
+  fastify.post("/api/v1/llamacpp/setup/managed-selection", async (request, reply) => {
+    const parsed = managedSelectionSchema.safeParse(request.body);
+    if (!parsed.success)
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "Invalid selection." });
+    try {
+      return reply.send(await fastify.services.llamaCpp.stageLlamaCppManagedSelection(parsed.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/llamacpp/setup/chat-test", async (request, reply) => {
+    const parsed = workspaceQuerySchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid workspace id." });
+    try {
+      return reply.send(await fastify.services.llamaCpp.testLlamaCppChat(parsed.data.workspaceId ?? "default"));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
   fastify.get("/api/v1/llamacpp/status", async (_request, reply) => {
     return reply.send(projectProviderRuntimePublicValue(await fastify.services.llamaCpp.refreshLlamaCppRuntime()));
   });

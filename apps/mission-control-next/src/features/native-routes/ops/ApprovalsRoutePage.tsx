@@ -353,62 +353,77 @@ export function ApprovalsRoutePage({
             onClose={() => setInspectedId(null)}
           >
             {selectedApproval ? (
-              <ApprovalInspectorCard
-                key={selectedApproval.approvalId}
-                approval={selectedApproval}
-                replay={approvals.replayById[selectedApproval.approvalId]}
-                lifecycle={selectedLifecycle}
-                durable={selectedDurable}
-                durableBusy={Boolean(approvals.durableBusyByApprovalId[selectedApproval.approvalId])}
-                tracePreview={approvals.tracePreviewByApprovalId[selectedApproval.approvalId]}
-                resolvePending={approvals.resolvePending}
-                onApprove={() =>
-                  setPendingConfirmation({
-                    kind: "decision",
-                    approvalId: selectedApproval.approvalId,
-                    decision: "approve",
-                  })
-                }
-                onReject={() =>
-                  setPendingConfirmation({
-                    kind: "decision",
-                    approvalId: selectedApproval.approvalId,
-                    decision: "reject",
-                  })
-                }
-                onReplay={() => void approvals.onReplay(selectedApproval.approvalId)}
-                onLoadTracePreview={(correlationId) =>
-                  void approvals.loadTracePreview(selectedApproval.approvalId, correlationId)
-                }
-                onLoadDurableStatus={() => void approvals.loadDurableStatus(selectedApproval.approvalId)}
-                onResumeCheckpoint={() =>
-                  setPendingConfirmation({ kind: "resume", approvalId: selectedApproval.approvalId })
-                }
-                onOpenLiveLane={
-                  liveLaneRoute
-                    ? (event) => {
-                        if (!shouldHandleClientNavigation(event)) {
-                          return;
+              <>
+                {selectedApproval.kind === "change_plan_effect" &&
+                ["llama_cpp_setup", "llama_cpp_configuration"].includes(
+                  String(selectedApproval.payload.targetResourceId ?? ""),
+                ) ? (
+                  <NativeButton
+                    variant="outline"
+                    onClick={() =>
+                      navigate({ area: "settings", section: "onboarding", view: "llamacpp", theme: route.theme })
+                    }
+                  >
+                    Return to llama.cpp setup
+                  </NativeButton>
+                ) : null}
+                <ApprovalInspectorCard
+                  key={selectedApproval.approvalId}
+                  approval={selectedApproval}
+                  replay={approvals.replayById[selectedApproval.approvalId]}
+                  lifecycle={selectedLifecycle}
+                  durable={selectedDurable}
+                  durableBusy={Boolean(approvals.durableBusyByApprovalId[selectedApproval.approvalId])}
+                  tracePreview={approvals.tracePreviewByApprovalId[selectedApproval.approvalId]}
+                  resolvePending={approvals.resolvePending}
+                  onApprove={() =>
+                    setPendingConfirmation({
+                      kind: "decision",
+                      approvalId: selectedApproval.approvalId,
+                      decision: "approve",
+                    })
+                  }
+                  onReject={() =>
+                    setPendingConfirmation({
+                      kind: "decision",
+                      approvalId: selectedApproval.approvalId,
+                      decision: "reject",
+                    })
+                  }
+                  onReplay={() => void approvals.onReplay(selectedApproval.approvalId)}
+                  onLoadTracePreview={(correlationId) =>
+                    void approvals.loadTracePreview(selectedApproval.approvalId, correlationId)
+                  }
+                  onLoadDurableStatus={() => void approvals.loadDurableStatus(selectedApproval.approvalId)}
+                  onResumeCheckpoint={() =>
+                    setPendingConfirmation({ kind: "resume", approvalId: selectedApproval.approvalId })
+                  }
+                  onOpenLiveLane={
+                    liveLaneRoute
+                      ? (event) => {
+                          if (!shouldHandleClientNavigation(event)) {
+                            return;
+                          }
+                          event.preventDefault();
+                          navigate(liveLaneRoute);
                         }
-                        event.preventDefault();
-                        navigate(liveLaneRoute);
-                      }
-                    : undefined
-                }
-                liveLaneRoute={liveLaneRoute}
-                runDetailRoute={runDetailRoute}
-                onOpenRunDetail={
-                  runDetailRoute
-                    ? (event) => {
-                        if (!shouldHandleClientNavigation(event)) {
-                          return;
+                      : undefined
+                  }
+                  liveLaneRoute={liveLaneRoute}
+                  runDetailRoute={runDetailRoute}
+                  onOpenRunDetail={
+                    runDetailRoute
+                      ? (event) => {
+                          if (!shouldHandleClientNavigation(event)) {
+                            return;
+                          }
+                          event.preventDefault();
+                          navigate(runDetailRoute);
                         }
-                        event.preventDefault();
-                        navigate(runDetailRoute);
-                      }
-                    : undefined
-                }
-              />
+                      : undefined
+                  }
+                />
+              </>
             ) : (
               <EmptyState
                 size="compact"

@@ -1,16 +1,20 @@
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 import type { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
+import type { LlamaCppSetupService } from "./llama-cpp-setup-service.js";
 
 export const llamaCppRouteMethods = [
   "adviseLlamaCppRuntime",
   "cancelLlamaCppHuggingFaceDownload",
   "detectLlamaCppInstall",
   "getLlamaCppHuggingFaceDownload",
+  "getLlamaCppSetup",
   "listLlamaCppModels",
   "refreshLlamaCppRuntime",
   "startLlamaCppHuggingFaceDownload",
   "startLlamaCppRuntime",
+  "stageLlamaCppManagedSelection",
   "stopLlamaCppRuntime",
+  "testLlamaCppChat",
 ] as const;
 
 export type LlamaCppRouteMethod = (typeof llamaCppRouteMethods)[number];
@@ -19,6 +23,7 @@ export type LlamaCppRouteService = RouteService<LlamaCppRouteMethod>;
 
 export interface LlamaCppRoutePortDependencies {
   llamaCppRuntime: LlamaCppRuntimeService;
+  setup: LlamaCppSetupService;
   publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
@@ -28,6 +33,7 @@ export function createLlamaCppRoutePort(deps: LlamaCppRoutePortDependencies): Ll
     cancelLlamaCppHuggingFaceDownload: (jobId) => deps.llamaCppRuntime.cancelHuggingFaceDownload(jobId),
     detectLlamaCppInstall: () => deps.llamaCppRuntime.detectLocalInstall(),
     getLlamaCppHuggingFaceDownload: (jobId) => deps.llamaCppRuntime.getHuggingFaceDownloadStatus(jobId),
+    getLlamaCppSetup: (workspaceId) => deps.setup.get(workspaceId),
     listLlamaCppModels: () => deps.llamaCppRuntime.listModels(),
     refreshLlamaCppRuntime: async () => {
       const status = await deps.llamaCppRuntime.refresh();
@@ -46,6 +52,7 @@ export function createLlamaCppRoutePort(deps: LlamaCppRoutePortDependencies): Ll
       });
       return status;
     },
+    stageLlamaCppManagedSelection: (input) => deps.setup.stageManagedSelection(input),
     stopLlamaCppRuntime: async () => {
       const status = await deps.llamaCppRuntime.stop("api");
       await deps.publishRealtime("system", "llamacpp", {
@@ -54,6 +61,7 @@ export function createLlamaCppRoutePort(deps: LlamaCppRoutePortDependencies): Ll
       });
       return status;
     },
+    testLlamaCppChat: (workspaceId) => deps.setup.chatTest(workspaceId),
   };
 }
 

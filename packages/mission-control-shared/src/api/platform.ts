@@ -29,6 +29,7 @@ import type {
   EvidenceEnvelope,
   EvidenceEnvelopeListQuery,
   LlmModelDiscoverySource,
+  LlmModelPreviewResponse,
   LlmModelRecord,
   LlmEvalProofRunRequest,
   LlmEvalProofRunResponse,
@@ -44,6 +45,8 @@ import type {
   LlamaCppAdvisorRecommendation,
   LlamaCppAdvisorRequest,
   LlamaCppModelsResponse,
+  LlamaCppSetupProjection,
+  LlamaCppSetupChatTestResult,
   LlamaCppRuntimeStatus,
   MeshReadinessDiagnostics,
   ImageGenerationRequest,
@@ -481,11 +484,7 @@ export async function previewLlmModels(
     headers?: Record<string, string>;
   },
   options?: { signal?: AbortSignal },
-): Promise<{
-  items: LlmModelRecord[];
-  source: LlmModelDiscoverySource;
-  warning?: string;
-}> {
+): Promise<LlmModelPreviewResponse> {
   return request("/api/v1/llm/models/preview", {
     method: "POST",
     body: JSON.stringify(input),
@@ -635,6 +634,29 @@ export async function refreshNpuRuntime(): Promise<NpuRuntimeStatus> {
 
 export async function fetchLlamaCppStatus(): Promise<LlamaCppRuntimeStatus> {
   return request<LlamaCppRuntimeStatus>("/api/v1/llamacpp/status");
+}
+
+export async function fetchLlamaCppSetup(workspaceId = "default"): Promise<LlamaCppSetupProjection> {
+  return request<LlamaCppSetupProjection>(`/api/v1/llamacpp/setup?workspaceId=${encodeURIComponent(workspaceId)}`);
+}
+
+export async function stageLlamaCppManagedSelection(input: {
+  workspaceId: string;
+  modelId: string;
+  commandPath?: string;
+}): Promise<{
+  selectionId: string;
+  modelId: string;
+  alias: string;
+  modelLabel: string;
+  commandLabel: string;
+  expiresAt: string;
+}> {
+  return request("/api/v1/llamacpp/setup/managed-selection", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function testLlamaCppChat(workspaceId = "default"): Promise<LlamaCppSetupChatTestResult> {
+  return request("/api/v1/llamacpp/setup/chat-test", { method: "POST", body: JSON.stringify({ workspaceId }) });
 }
 
 export async function fetchLlamaCppModels(): Promise<LlamaCppModelsResponse> {

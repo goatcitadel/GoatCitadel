@@ -338,6 +338,7 @@ export interface NpuConfig {
 export interface LlamaCppConfig {
   enabled: boolean;
   autoStart: boolean;
+  managementMode?: "external" | "managed";
   server: {
     baseUrl: string;
     command: string;
@@ -1276,6 +1277,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
     llamaCpp: {
       enabled: llamaCppInput.enabled ?? false,
       autoStart: llamaCppInput.autoStart ?? false,
+      managementMode: llamaCppInput.managementMode ?? (llamaCppInput.autoStart ? "managed" : "external"),
       server: {
         baseUrl: llamaCppServer.baseUrl ?? "http://127.0.0.1:8080/v1",
         command: llamaCppServer.command ?? "llama-server",

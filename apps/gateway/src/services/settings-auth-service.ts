@@ -246,6 +246,9 @@ export async function getSettings(deps: SettingsRuntimeDependencies): Promise<Ru
     llamaCpp: {
       enabled: deps.config.assistant.llamaCpp.enabled,
       autoStart: deps.config.assistant.llamaCpp.autoStart,
+      managementMode:
+        deps.config.assistant.llamaCpp.managementMode ??
+        (deps.config.assistant.llamaCpp.autoStart ? "managed" : "external"),
       baseUrl: deps.config.assistant.llamaCpp.server.baseUrl,
       command: deps.config.assistant.llamaCpp.server.command,
       extraArgs: deps.config.assistant.llamaCpp.server.extraArgs,
@@ -339,6 +342,7 @@ export interface UpdateSettingsInput {
   llamaCpp?: {
     enabled?: boolean;
     autoStart?: boolean;
+    managementMode?: "external" | "managed";
     baseUrl?: string;
     command?: string;
     extraArgs?: string[];
@@ -650,6 +654,17 @@ export async function updateSettings(
   if (input.llamaCpp) {
     const hasLlamaField = (field: keyof NonNullable<UpdateSettingsInput["llamaCpp"]>) =>
       Object.prototype.hasOwnProperty.call(input.llamaCpp, field);
+    const nextManagementMode =
+      input.llamaCpp.managementMode ??
+      deps.config.assistant.llamaCpp.managementMode ??
+      (deps.config.assistant.llamaCpp.autoStart ? "managed" : "external");
+    if (input.llamaCpp.autoStart && nextManagementMode === "external") {
+      throw new Error("External llama.cpp servers cannot be auto-started by GoatCitadel.");
+    }
+    if (input.llamaCpp.managementMode !== undefined) {
+      deps.config.assistant.llamaCpp.managementMode = input.llamaCpp.managementMode;
+      if (input.llamaCpp.managementMode === "external") deps.config.assistant.llamaCpp.autoStart = false;
+    }
     if (input.llamaCpp.enabled !== undefined) {
       deps.config.assistant.llamaCpp.enabled = input.llamaCpp.enabled;
     }

@@ -14,6 +14,33 @@ import { projectLlmConfigPublicValue } from "./provider-settings-public-projecti
 import { SecretStoreService, SecretStoreUnavailableError } from "./secret-store-service.js";
 
 describe("LlmService", () => {
+  it("applies thinking effort when replacing the complete routing snapshot", () => {
+    const service = new LlmService(
+      {
+        activeProviderId: "",
+        defaultThinkingLevel: "standard",
+        providers: [
+          {
+            providerId: "llamacpp",
+            label: "llama.cpp",
+            baseUrl: "http://127.0.0.1:8080/v1",
+            apiStyle: "openai-chat-completions",
+            defaultModel: "local",
+          },
+        ],
+      },
+      process.env,
+      { secretStore: createNoopSecretStore() },
+    );
+    service.replaceRuntimeConfig({
+      ...service.exportConfigFile(),
+      activeProviderId: "llamacpp",
+      activeModel: "local",
+      defaultThinkingLevel: "off",
+    });
+    expect(service.getRuntimeConfig().defaultThinkingLevel).toBe("off");
+  });
+
   it("rejects empty configs and unknown configured active providers", () => {
     expect(
       () =>
@@ -907,6 +934,43 @@ describe("LlmService", () => {
       expect(result.source).toBe("error_fallback");
       expect(result.warning).toContain("preview failed");
       expect(result.items.some((item) => item.id === "MiniMax-M2.7")).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("keeps an empty live llama.cpp catalog separate from template aliases", async () => {
+    const acquireLease = vi.fn(async () => {
+      throw new Error("The managed runtime is disabled.");
+    });
+    const service = new LlmService(
+      {
+        activeProviderId: "llamacpp",
+        providers: [
+          {
+            providerId: "llamacpp",
+            label: "llama.cpp",
+            baseUrl: "http://127.0.0.1:8080/v1",
+            apiStyle: "openai-chat-completions",
+            defaultModel: "template-alias",
+          },
+        ],
+      },
+      process.env,
+      { secretStore: createNoopSecretStore(), localServiceLeaseAcquirer: acquireLease },
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    ) as unknown as typeof fetch;
+    try {
+      const result = await service.previewModels({ providerId: "llamacpp", baseUrl: "http://127.0.0.1:8080/v1" });
+      expect(result).toMatchObject({ source: "live", items: [], warning: "The llama.cpp server reported no models." });
+      expect(acquireLease).not.toHaveBeenCalled();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -3053,13 +3117,24 @@ describe("LlmService", () => {
     globalThis.fetch = vi.fn(async (url, init) => {
       expect(String(url)).toBe("https://chatgpt.com/backend-api/codex/models?client_version=1.0.0");
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer codex-access-token");
-      return new Response(JSON.stringify({ models: [
-        { slug: "gpt-6-astra", display_name: "GPT-6 Astra", visibility: "list", supported_in_api: true,
-          context_window: 272000, supported_reasoning_levels: [{ effort: "low" }, { effort: "max" }],
-          service_tiers: [{ id: "priority" }] },
-        { slug: "gpt-6-hidden", visibility: "hide", supported_in_api: true },
-        { slug: "gpt-6-oauth-only", visibility: "list", supported_in_api: false, service_tiers: [] },
-      ] }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          models: [
+            {
+              slug: "gpt-6-astra",
+              display_name: "GPT-6 Astra",
+              visibility: "list",
+              supported_in_api: true,
+              context_window: 272000,
+              supported_reasoning_levels: [{ effort: "low" }, { effort: "max" }],
+              service_tiers: [{ id: "priority" }],
+            },
+            { slug: "gpt-6-hidden", visibility: "hide", supported_in_api: true },
+            { slug: "gpt-6-oauth-only", visibility: "list", supported_in_api: false, service_tiers: [] },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }) as unknown as typeof fetch;
     try {
       const result = await service.listModelsWithSource("openai-codex");
@@ -3074,12 +3149,14 @@ describe("LlmService", () => {
         }),
         expect.objectContaining({ id: "gpt-6-oauth-only", fastModeAvailable: false }),
       ]);
-      await expect(service.chatCompletions({
-        providerId: "openai-codex",
-        model: "gpt-6-oauth-only",
-        messages: [{ role: "user", content: "hello" }],
-        service_tier: "fast",
-      })).rejects.toThrow(/Fast mode is not available/u);
+      await expect(
+        service.chatCompletions({
+          providerId: "openai-codex",
+          model: "gpt-6-oauth-only",
+          messages: [{ role: "user", content: "hello" }],
+          service_tier: "fast",
+        }),
+      ).rejects.toThrow(/Fast mode is not available/u);
       service.deleteOpenAICodexOAuthCredential();
       expect((await service.listModelsWithSource("openai-codex")).source).toBe("error_fallback");
       expect(globalThis.fetch).toHaveBeenCalledTimes(1);

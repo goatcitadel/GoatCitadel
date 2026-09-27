@@ -178,7 +178,13 @@ const settingsMocks = vi.hoisted(() => {
     materializeStagedCapabilityPack: fn(),
     loadModelsForProvider: fn(["gpt-5.4-mini"]),
     patchSettings: vi.fn<(input: Record<string, any>) => Promise<any>>(async () => ({})),
-    patchGatewayAuthSettings: vi.fn<(input: Record<string, any>) => Promise<any>>(async (input) => ({ revision: input.expectedRevision + 1, mode: input.mode, allowLoopbackBypass: input.allowLoopbackBypass, tokenConfigured: Boolean(input.token), basicConfigured: Boolean(input.basicPassword) })),
+    patchGatewayAuthSettings: vi.fn<(input: Record<string, any>) => Promise<any>>(async (input) => ({
+      revision: input.expectedRevision + 1,
+      mode: input.mode,
+      allowLoopbackBypass: input.allowLoopbackBypass,
+      tokenConfigured: Boolean(input.token),
+      basicConfigured: Boolean(input.basicPassword),
+    })),
     pollOpenAICodexOAuthDeviceFlow: fn(),
     pollChangePlanProviderOAuth: vi.fn(async () => await settingsMocks.pollOpenAICodexOAuthDeviceFlow()),
     completeChangePlanProviderOAuth: vi.fn(async () => ({
@@ -252,7 +258,9 @@ const settingsMocks = vi.hoisted(() => {
     updateIntegrationConnection: fn(),
     updateNotificationRule: fn(),
     updateNotificationTarget: fn(),
-    updateMcpServer: vi.fn(async (_id: string, _input: Record<string, unknown>): Promise<Record<string, unknown>> => ({})),
+    updateMcpServer: vi.fn(
+      async (_id: string, _input: Record<string, unknown>): Promise<Record<string, unknown>> => ({}),
+    ),
     updatePersonality: fn(),
     updatePermissionProfile: fn(),
     updateWorkspace: fn(),
@@ -356,7 +364,16 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchMcpElicitations: settingsMocks.fetchMcpElicitations,
   fetchMcpRemotePreview: settingsMocks.fetchMcpRemotePreview,
   fetchMcpServerModeManifest: settingsMocks.fetchMcpServerModeManifest,
-  fetchMcpServers: async () => { const result = await settingsMocks.fetchMcpServers(); return { ...result, items: result.items?.map((server: Record<string, unknown>) => ({ ...server, revision: server.revision ?? "a".repeat(64) })) }; },
+  fetchMcpServers: async () => {
+    const result = await settingsMocks.fetchMcpServers();
+    return {
+      ...result,
+      items: result.items?.map((server: Record<string, unknown>) => ({
+        ...server,
+        revision: server.revision ?? "a".repeat(64),
+      })),
+    };
+  },
   fetchMcpServer: settingsMocks.fetchMcpServer,
   fetchMcpTemplates: settingsMocks.fetchMcpTemplates,
   fetchMcpTools: settingsMocks.fetchMcpTools,
@@ -540,7 +557,12 @@ const workspaces = [
 function mockSuccessfulProviderSaves() {
   settingsMocks.patchSettings.mockImplementation(async (input: any) => {
     const updated = { ...settings, revision: input.expectedRevision + 1, llm: { ...settings.llm, ...input.llm } };
-    if (input.llm?.upsertProvider) settingsMocks.fetchLlmConfig.mockResolvedValue({ ...settingsMocks.providerModelCatalog.config, revision: updated.revision, providerConfigs: [input.llm.upsertProvider] });
+    if (input.llm?.upsertProvider)
+      settingsMocks.fetchLlmConfig.mockResolvedValue({
+        ...settingsMocks.providerModelCatalog.config,
+        revision: updated.revision,
+        providerConfigs: [input.llm.upsertProvider],
+      });
     return updated;
   });
 }
@@ -617,8 +639,16 @@ function setupResponses() {
     createdAt: "2026-05-01T00:00:00.000Z",
     updatedAt: "2026-05-01T00:00:00.000Z",
   });
-  settingsMocks.archiveCitadel.mockResolvedValue({ citadelId: "company", revision: "c".repeat(64), lifecycleStatus: "archived" });
-  settingsMocks.restoreCitadel.mockResolvedValue({ citadelId: "company", revision: "d".repeat(64), lifecycleStatus: "active" });
+  settingsMocks.archiveCitadel.mockResolvedValue({
+    citadelId: "company",
+    revision: "c".repeat(64),
+    lifecycleStatus: "archived",
+  });
+  settingsMocks.restoreCitadel.mockResolvedValue({
+    citadelId: "company",
+    revision: "d".repeat(64),
+    lifecycleStatus: "active",
+  });
   settingsMocks.fetchIntegrationCatalog.mockResolvedValue({
     items: [
       {
@@ -862,8 +892,15 @@ function setupResponses() {
     ],
   });
   settingsMocks.fetchMcpTemplates.mockResolvedValue({ items: [] });
-  settingsMocks.fetchMcpServer.mockImplementation(async (id: string) => { const result = await settingsMocks.fetchMcpServers(); const server = result.items?.find((item: Record<string, unknown>) => item.serverId === id); return { ...server, revision: server?.revision ?? "a".repeat(64) }; });
-  settingsMocks.updateMcpServer.mockImplementation(async (id: string, input: Record<string, unknown>) => { const current = await settingsMocks.fetchMcpServer(id); return { ...current, ...input, revision: "b".repeat(64) }; });
+  settingsMocks.fetchMcpServer.mockImplementation(async (id: string) => {
+    const result = await settingsMocks.fetchMcpServers();
+    const server = result.items?.find((item: Record<string, unknown>) => item.serverId === id);
+    return { ...server, revision: server?.revision ?? "a".repeat(64) };
+  });
+  settingsMocks.updateMcpServer.mockImplementation(async (id: string, input: Record<string, unknown>) => {
+    const current = await settingsMocks.fetchMcpServer(id);
+    return { ...current, ...input, revision: "b".repeat(64) };
+  });
   settingsMocks.deleteMcpServer.mockResolvedValue({ deleted: true });
   settingsMocks.fetchMcpElicitations.mockResolvedValue({ items: [] });
   settingsMocks.fetchMcpRemotePreview.mockResolvedValue({
@@ -1264,8 +1301,18 @@ function setupResponses() {
     sessions: [{ sessionId: "cowork-demo", mode: "cowork" }],
   });
   settingsMocks.fetchProviderSecretStatus.mockResolvedValue({ hasSecret: false, source: "missing" });
-  settingsMocks.saveProviderSecret.mockResolvedValue({ providerId: "openai", revision: 32, hasSecret: true, source: "keychain" });
-  settingsMocks.deleteProviderSecret.mockResolvedValue({ providerId: "openai", revision: 32, hasSecret: false, source: "none" });
+  settingsMocks.saveProviderSecret.mockResolvedValue({
+    providerId: "openai",
+    revision: 32,
+    hasSecret: true,
+    source: "keychain",
+  });
+  settingsMocks.deleteProviderSecret.mockResolvedValue({
+    providerId: "openai",
+    revision: 32,
+    hasSecret: false,
+    source: "none",
+  });
   settingsMocks.fetchOpenAICodexOAuthStatus.mockResolvedValue({ connected: false, requiresReauth: false });
   settingsMocks.startOpenAICodexOAuthDeviceFlow.mockResolvedValue({
     providerId: "openai-codex",
@@ -1426,7 +1473,9 @@ describe("SettingsNativePage broad native sections", () => {
     Object.assign(notificationConstructor, { permission: "default", requestPermission });
     Object.assign(window as any, { Notification: notificationConstructor });
     const page = await mount("general", {}, true);
-    const desktopPreference = page.root.findByProps({ "aria-label": "Use system notifications when permission is granted" });
+    const desktopPreference = page.root.findByProps({
+      "aria-label": "Use system notifications when permission is granted",
+    });
 
     await change(desktopPreference, "", true);
     expect(requestPermission).not.toHaveBeenCalled();
@@ -1456,8 +1505,17 @@ describe("SettingsNativePage broad native sections", () => {
   });
 
   it("retains a Citadel draft on conflict and submits only after explicit review of the winner", async () => {
-    const initial = { citadelId: "personal", name: "Personal", slug: "personal", kind: "personal", lifecycleStatus: "active",
-      description: "Original description", revision: "a".repeat(64), createdAt: "t", updatedAt: "t" };
+    const initial = {
+      citadelId: "personal",
+      name: "Personal",
+      slug: "personal",
+      kind: "personal",
+      lifecycleStatus: "active",
+      description: "Original description",
+      revision: "a".repeat(64),
+      createdAt: "t",
+      updatedAt: "t",
+    };
     const winner = { ...initial, name: "Remote Citadel", description: "Peer description", revision: "b".repeat(64) };
     settingsMocks.listCitadels.mockResolvedValue({ items: [initial] });
     const page = await mount("workspaces");
@@ -1466,12 +1524,23 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(page.root, "Edit Citadel"));
     await change(page.root.findByProps({ value: "Personal" }), "Local Citadel draft");
     await change(page.root.findByProps({ value: "Original description" }), "");
-    settingsMocks.updateCitadel.mockRejectedValueOnce(new ApiRequestError("Citadel changed", { kind: "http", method: "PATCH",
-      path: "/api/v1/citadels/personal", status: 409, body: { code: "WRITE_CONFLICT", details: { reason: "CITADEL_RECORD_REVISION_CONFLICT" } } }));
+    settingsMocks.updateCitadel.mockRejectedValueOnce(
+      new ApiRequestError("Citadel changed", {
+        kind: "http",
+        method: "PATCH",
+        path: "/api/v1/citadels/personal",
+        status: 409,
+        body: { code: "WRITE_CONFLICT", details: { reason: "CITADEL_RECORD_REVISION_CONFLICT" } },
+      }),
+    );
     settingsMocks.listCitadels.mockResolvedValue({ items: [winner] });
     await click(findButton(page.root, "Save Citadel"));
     expect(settingsMocks.updateCitadel).toHaveBeenCalledExactlyOnceWith("personal", {
-      expectedRevision: initial.revision, name: "Local Citadel draft", description: "", slug: "personal", kind: "personal",
+      expectedRevision: initial.revision,
+      name: "Local Citadel draft",
+      description: "",
+      slug: "personal",
+      kind: "personal",
     });
     expect(page.root.findByProps({ value: "Local Citadel draft" })).toBeTruthy();
     expect(collectText(page.root)).toContain("Peer description");
@@ -1479,9 +1548,18 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(page.root, "Save Citadel"));
     expect(settingsMocks.updateCitadel).toHaveBeenCalledTimes(1);
     await click(findButton(page.root, "Apply draft to current Citadel"));
-    settingsMocks.updateCitadel.mockResolvedValueOnce({ ...winner, name: "Local Citadel draft", description: "", revision: "c".repeat(64) });
+    settingsMocks.updateCitadel.mockResolvedValueOnce({
+      ...winner,
+      name: "Local Citadel draft",
+      description: "",
+      revision: "c".repeat(64),
+    });
     await click(findButton(page.root, "Save Citadel"));
-    expect(settingsMocks.updateCitadel).toHaveBeenNthCalledWith(2, "personal", expect.objectContaining({ expectedRevision: winner.revision, description: "" }));
+    expect(settingsMocks.updateCitadel).toHaveBeenNthCalledWith(
+      2,
+      "personal",
+      expect.objectContaining({ expectedRevision: winner.revision, description: "" }),
+    );
   });
 
   it("keeps a rejected Citadel review latched when the reload still returns the rejected token", async () => {
@@ -1490,13 +1568,32 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(page.root, "Personal"));
     await click(findButton(page.root, "Edit Citadel"));
     await change(page.root.findByProps({ value: "Personal" }), "Retained local draft");
-    settingsMocks.updateCitadel.mockRejectedValueOnce(new ApiRequestError("Citadel changed", { kind: "http", method: "PATCH",
-      path: "/api/v1/citadels/personal", status: 409, body: { code: "WRITE_CONFLICT", details: { reason: "CITADEL_RECORD_REVISION_CONFLICT" } } }));
+    settingsMocks.updateCitadel.mockRejectedValueOnce(
+      new ApiRequestError("Citadel changed", {
+        kind: "http",
+        method: "PATCH",
+        path: "/api/v1/citadels/personal",
+        status: 409,
+        body: { code: "WRITE_CONFLICT", details: { reason: "CITADEL_RECORD_REVISION_CONFLICT" } },
+      }),
+    );
     await click(findButton(page.root, "Save Citadel"));
     expect(findButton(page.root, "Apply draft to current Citadel").props.disabled).toBe(true);
     expect(findButton(page.root, "Save Citadel").props.disabled).toBe(true);
-    settingsMocks.listCitadels.mockResolvedValueOnce({ items: [{ citadelId: "personal", name: "Reviewed peer", slug: "personal",
-      kind: "personal", lifecycleStatus: "active", revision: "e".repeat(64), createdAt: "t", updatedAt: "t" }] });
+    settingsMocks.listCitadels.mockResolvedValueOnce({
+      items: [
+        {
+          citadelId: "personal",
+          name: "Reviewed peer",
+          slug: "personal",
+          kind: "personal",
+          lifecycleStatus: "active",
+          revision: "e".repeat(64),
+          createdAt: "t",
+          updatedAt: "t",
+        },
+      ],
+    });
     await click(findButton(page.root, "Reload latest Citadel"));
     expect(page.root.findByProps({ value: "Retained local draft" })).toBeTruthy();
     expect(findButton(page.root, "Apply draft to current Citadel").props.disabled).toBe(false);
@@ -1504,8 +1601,16 @@ describe("SettingsNativePage broad native sections", () => {
   });
 
   it("retains typing made while a Citadel save is in flight and uses the returned revision next", async () => {
-    const initial = { citadelId: "personal", name: "Personal", slug: "personal", kind: "personal", lifecycleStatus: "active",
-      revision: "a".repeat(64), createdAt: "t", updatedAt: "t" };
+    const initial = {
+      citadelId: "personal",
+      name: "Personal",
+      slug: "personal",
+      kind: "personal",
+      lifecycleStatus: "active",
+      revision: "a".repeat(64),
+      createdAt: "t",
+      updatedAt: "t",
+    };
     settingsMocks.listCitadels.mockResolvedValue({ items: [initial] });
     const page = await mount("workspaces");
     await click(findButton(page.root, "Citadel manager"));
@@ -1513,18 +1618,33 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(page.root, "Edit Citadel"));
     await change(page.root.findByProps({ value: "Personal" }), "Submitted draft");
     let resolveSave!: (value: typeof initial) => void;
-    settingsMocks.updateCitadel.mockImplementationOnce(() => new Promise((resolve) => { resolveSave = resolve; }));
+    settingsMocks.updateCitadel.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
     await click(findButton(page.root, "Save Citadel"));
     await change(page.root.findByProps({ value: "Submitted draft" }), "Newer typing");
     const acknowledged = { ...initial, name: "Submitted draft", revision: "b".repeat(64) };
     settingsMocks.listCitadels.mockResolvedValue({ items: [acknowledged] });
-    await act(async () => { resolveSave(acknowledged); });
+    await act(async () => {
+      resolveSave(acknowledged);
+    });
     await flush();
     expect(page.root.findByProps({ value: "Newer typing" })).toBeTruthy();
     expect(findButton(page.root, "Save Citadel").props.disabled).toBe(false);
-    settingsMocks.updateCitadel.mockResolvedValueOnce({ ...acknowledged, name: "Newer typing", revision: "c".repeat(64) });
+    settingsMocks.updateCitadel.mockResolvedValueOnce({
+      ...acknowledged,
+      name: "Newer typing",
+      revision: "c".repeat(64),
+    });
     await click(findButton(page.root, "Save Citadel"));
-    expect(settingsMocks.updateCitadel).toHaveBeenNthCalledWith(2, "personal", expect.objectContaining({ expectedRevision: acknowledged.revision, name: "Newer typing" }));
+    expect(settingsMocks.updateCitadel).toHaveBeenNthCalledWith(
+      2,
+      "personal",
+      expect.objectContaining({ expectedRevision: acknowledged.revision, name: "Newer typing" }),
+    );
   });
 
   it("does not mistake a duplicate Citadel slug for a stale review", async () => {
@@ -1532,9 +1652,19 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(page.root, "Citadel manager"));
     await click(findButton(page.root, "Personal"));
     await click(findButton(page.root, "Edit Citadel"));
-    await change(page.root.findAll((node) => node.type === "input" && node.props.value === "personal")[0]!, "taken-slug");
-    settingsMocks.updateCitadel.mockRejectedValueOnce(new ApiRequestError("Slug already in use", { kind: "http", method: "PATCH",
-      path: "/api/v1/citadels/personal", status: 409, body: { code: "ALREADY_EXISTS" } }));
+    await change(
+      page.root.findAll((node) => node.type === "input" && node.props.value === "personal")[0]!,
+      "taken-slug",
+    );
+    settingsMocks.updateCitadel.mockRejectedValueOnce(
+      new ApiRequestError("Slug already in use", {
+        kind: "http",
+        method: "PATCH",
+        path: "/api/v1/citadels/personal",
+        status: 409,
+        body: { code: "ALREADY_EXISTS" },
+      }),
+    );
     await click(findButton(page.root, "Save Citadel"));
     expect(findButton(page.root, "Save Citadel").props.disabled).toBe(false);
     expect(collectText(page.root)).not.toContain("Apply draft to current Citadel");
@@ -1912,6 +2042,34 @@ describe("SettingsNativePage broad native sections", () => {
     });
   });
 
+  it("keeps llama.cpp template aliases out of new Chat routing choices", async () => {
+    settingsMocks.providerModelCatalog.providers = [
+      ...settingsMocks.providerModelCatalog.providers,
+      {
+        providerId: "llamacpp",
+        label: "llama.cpp",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        defaultModel: "template-alias",
+        apiStyle: "openai-chat-completions",
+        models: ["template-alias"],
+        hasApiKey: false,
+        apiKeySource: "none",
+        modelProbeState: "fallback",
+        modelProbeSource: "error_fallback",
+        modelRefreshStatus: "stale",
+      } as (typeof settingsMocks.providerModelCatalog.providers)[number],
+    ];
+    const providers = await mount("providers");
+    await openProviderPanel(providers, "routing");
+    const routingProvider = providers.root
+      .findAllByType("select")
+      .find((select) => collectText(select).includes("llama.cpp"))!;
+    await change(routingProvider, "llamacpp");
+    expect(collectText(providers.root)).toContain("Check llama.cpp endpoint in Get started");
+    expect(findButton(providers.root, "Save routing").props.disabled).toBe(true);
+    expect(settingsMocks.patchSettings).not.toHaveBeenCalled();
+  });
+
   it("preserves only the provider routing draft and retries with the refreshed config revision after a 409", async () => {
     settingsMocks.providerModelCatalog.config = {
       ...settingsMocks.providerModelCatalog.config,
@@ -2193,13 +2351,18 @@ describe("SettingsNativePage broad native sections", () => {
     const runtimeCheckboxes = runtime.root.findAll((node) => node.type === "input" && node.props.type === "checkbox");
     await change(runtimeCheckboxes[0]!, "", false);
     await change(runtimeCheckboxes[1]!, "", false);
-    settingsMocks.patchSettings.mockImplementationOnce(async (input) => ({ ...(await settingsMocks.fetchSettings() as object), revision: input.expectedRevision + 1, llamaCpp: input.llamaCpp }));
+    settingsMocks.patchSettings.mockImplementationOnce(async (input) => ({
+      ...((await settingsMocks.fetchSettings()) as object),
+      revision: input.expectedRevision + 1,
+      llamaCpp: input.llamaCpp,
+    }));
     await click(buttons(runtime.root, "Save")[0]!);
     expect(settingsMocks.patchSettings).toHaveBeenCalledWith({
       expectedRevision: 29,
       llamaCpp: {
         enabled: false,
         autoStart: false,
+        managementMode: "managed",
         baseUrl: "http://127.0.0.1:9090/v1",
         command: "llama-server --port 9090",
         modelsRootPath: "F:/models/custom",
@@ -2421,7 +2584,12 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(addons.root, "Stage pack"));
     await click(findButton(addons.root, "Export manifest"));
     await click(findButton(addons.root, "Back to list"));
-    await act(async () => { addons.root.findByProps({ id: "pack-staged-evidence", open: false }).props.onToggle({ currentTarget: { open: true } }); await flush(); });
+    await act(async () => {
+      addons.root
+        .findByProps({ id: "pack-staged-evidence", open: false })
+        .props.onToggle({ currentTarget: { open: true } });
+      await flush();
+    });
     await click(findButton(addons.root, "Record review"));
     await click(findButton(addons.root, "Import pack"));
     const portableManifest = {
@@ -2569,7 +2737,10 @@ describe("SettingsNativePage broad native sections", () => {
       await deleteConnectionModal?.props.onConfirm();
     });
     await flush();
-    expect(settingsMocks.deleteIntegrationConnection).toHaveBeenCalledWith("conn-1", expect.stringMatching(/^[a-f0-9]{64}$/));
+    expect(settingsMocks.deleteIntegrationConnection).toHaveBeenCalledWith(
+      "conn-1",
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+    );
 
     settingsMocks.fetchMcpServers.mockRejectedValueOnce(new Error("mcp offline"));
     const general = await mount("general");
@@ -3929,7 +4100,7 @@ describe("SettingsNativePage partial gateway responses", () => {
     expect(collectText(localAi.root)).toContain("Unknown");
     await click(findButton(localAi.root, "Jobs and endpoints"));
     expect(collectText(localAi.root)).toContain("Serve jobs");
-    expect(collectText(localAi.root)).toContain("Local AI is not configured");
+    expect(collectText(localAi.root)).toContain("No Local AI job endpoint is registered here");
 
     await click(findButton(localAi.root, "Refresh readiness"));
     expect(settingsMocks.fetchLocalAiReadiness).toHaveBeenCalledTimes(2);
@@ -3963,7 +4134,7 @@ describe("SettingsNativePage partial gateway responses", () => {
     const localAi = await mount("local-ai");
 
     expect(collectText(localAi.root)).toContain(
-      "Local AI is not configured: a runtime was detected, but no local AI endpoint is registered.",
+      "No Local AI job endpoint is registered here. Runtime detection does not prove llama.cpp Chat works; test it in Get started.",
     );
   });
 
@@ -4121,7 +4292,7 @@ describe("SettingsNativePage partial gateway responses", () => {
     const runtime = await mount("runtime");
     await click(findButton(runtime.root, "Configure llama.cpp"));
 
-    expect(collectText(runtime.root)).toContain("0 models returned");
+    expect(collectText(runtime.root)).toContain("No local .gguf models discovered");
   });
 
   it("renders the runtime section when the settings payload is empty", async () => {

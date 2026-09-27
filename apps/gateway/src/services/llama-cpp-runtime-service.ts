@@ -326,11 +326,15 @@ export class LlamaCppRuntimeService {
   }
 
   public getStatus(): LlamaCppRuntimeStatus {
-    const commandPreview = buildLaunchCommandPreview({
-      config: this.options.config,
-      rootDir: this.options.rootDir,
-      command: this.lastCommand,
-    });
+    const external =
+      (this.options.config.managementMode ?? (this.options.config.autoStart ? "managed" : "external")) === "external";
+    const commandPreview = external
+      ? undefined
+      : buildLaunchCommandPreview({
+          config: this.options.config,
+          rootDir: this.options.rootDir,
+          command: this.lastCommand,
+        });
     return {
       enabled: this.options.config.enabled,
       desiredState: this.desiredState,
@@ -339,12 +343,19 @@ export class LlamaCppRuntimeService {
       pid: this.process?.pid ?? this.ownedProcessTree?.pid,
       healthy: this.healthy,
       activeModelId: this.healthy
-        ? (this.activeModelId ?? normalizeOptionalText(this.options.config.launch.alias))
+        ? (this.activeModelId ??
+          (this.ownership === "owned" ? normalizeOptionalText(this.options.config.launch.alias) : undefined))
         : undefined,
-      command: this.lastCommand,
-      commandSource: this.lastCommandSource,
-      modelPath: resolveConfiguredPath(this.options.rootDir, this.options.config.launch.modelPath),
-      lastError: this.lastError,
+      command: external ? undefined : this.lastCommand,
+      commandSource: external ? undefined : this.lastCommandSource,
+      modelPath: external
+        ? undefined
+        : resolveConfiguredPath(this.options.rootDir, this.options.config.launch.modelPath),
+      lastError: external
+        ? this.options.config.enabled && !this.healthy
+          ? "The external llama.cpp endpoint is unreachable. Check its URL and server."
+          : undefined
+        : this.lastError,
       updatedAt: this.updatedAt,
       launchCommandPreview: commandPreview,
       leaseDiagnostics: this.buildLeaseDiagnostics(),
@@ -547,14 +558,37 @@ export class LlamaCppRuntimeService {
     );
     this.assertLifecycleGeneration(generation);
     if (observed?.healthy) {
+      if (
+        (this.options.config.managementMode ?? (this.options.config.autoStart ? "managed" : "external")) ===
+          "managed" &&
+        !this.ownedProcessTree &&
+        !this.process?.pid
+      ) {
+        this.ownership = "external";
+        this.processState = "running";
+        this.healthy = true;
+        this.activeModelId = observed.activeModelId;
+        this.lastError =
+          "An externally started llama.cpp server occupies this URL. Switch to external mode or choose another URL.";
+        this.updatedAt = new Date().toISOString();
+        await this.persistState();
+        throw new Error(this.lastError);
+      }
       this.ownership = this.ownedProcessTree || this.process?.pid ? "owned" : "external";
       this.processState = "running";
       this.healthy = true;
-      this.activeModelId = observed.activeModelId ?? this.options.config.launch.alias;
+      this.activeModelId =
+        observed.activeModelId ?? (this.ownership === "owned" ? this.options.config.launch.alias : undefined);
       this.lastError = undefined;
       this.updatedAt = new Date().toISOString();
       await this.persistState();
       return this.getStatus();
+    }
+
+    if (
+      (this.options.config.managementMode ?? (this.options.config.autoStart ? "managed" : "external")) === "external"
+    ) {
+      throw new Error("The external llama.cpp server is unreachable. Start it outside GoatCitadel and check the URL.");
     }
 
     // Count every owned-start attempt before validating launch inputs. A model or
@@ -1762,6 +1796,7 @@ function hasLlamaCppRuntimeIdentityChanged(current: LlamaCppConfig, next: LlamaC
 function llamaCppRuntimeIdentity(config: LlamaCppConfig): Record<string, unknown> {
   return {
     enabled: config.enabled,
+    managementMode: config.managementMode ?? (config.autoStart ? "managed" : "external"),
     baseUrl: config.server.baseUrl,
     command: config.server.command,
     extraArgs: config.server.extraArgs,

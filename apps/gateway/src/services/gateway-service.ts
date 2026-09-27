@@ -407,6 +407,7 @@ import type {
 import { type ChannelSetupRecentTestCacheEntry } from "./channel-setup-test-cache.js";
 import { MemoryContextService } from "./memory-context-service.js";
 import { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
+import { LlamaCppSetupSelectionService } from "./llama-cpp-setup-selection-service.js";
 import { acquireBoundLlamaCppEmbeddingLease, acquireBoundLlamaCppLease } from "./llama-cpp-provider-lease.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
@@ -985,6 +986,7 @@ export class GatewayService {
   public readonly meshService: MeshService;
   public readonly npuSidecar: NpuSidecarService;
   public readonly llamaCppRuntime: LlamaCppRuntimeService;
+  public readonly llamaCppSetupSelection: LlamaCppSetupSelectionService;
   private readonly approvalExplainer: ApprovalExplainerService;
   private readonly commitmentClassifier: CommitmentClassifierService;
   private readonly backgroundReviewService: BackgroundReviewService;
@@ -1644,6 +1646,11 @@ export class GatewayService {
       onEvent: async (eventType, payload) => {
         await this.publishRealtime(eventType, "llamacpp", payload);
       },
+    });
+    this.llamaCppSetupSelection = new LlamaCppSetupSelectionService({
+      listModels: () => this.llamaCppRuntime.listModels(),
+      detectInstall: () => this.llamaCppRuntime.detectLocalInstall(),
+      custody: this.secretStore,
     });
     const canonicalConfigPath = path.join(config.rootDir, "config", "goatcitadel.json");
     this.configGenerationBootstrapHydrationPending = !fsSync.existsSync(canonicalConfigPath);
@@ -3062,6 +3069,11 @@ export class GatewayService {
         getSettings: () => this.getSettings(),
         updateSettings: (input) => this.updateSettings(input),
         listModels: (providerId) => this.llmService.listModels(providerId),
+        previewLlamaModels: (baseUrl) => this.llmService.previewModels({ providerId: "llamacpp", baseUrl }),
+        resolveManagedSelection: (selectionId, workspaceId) =>
+          this.llamaCppSetupSelection.resolve(selectionId, workspaceId),
+        discardManagedSelection: (selectionId) => this.llamaCppSetupSelection.discard(selectionId),
+        refreshLlamaRuntime: () => this.llamaCppRuntime.refresh(),
         hasTemporaryAuthCredential: (planId) =>
           Boolean(this.secretStore.getSecret(runtimeTemporaryAuthAccount(planId))?.trim()),
         consumeTemporaryAuthCredential: (planId) => {

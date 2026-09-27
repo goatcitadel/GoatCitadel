@@ -54,7 +54,7 @@ class TestAdapter implements EvolutionControlPlaneAdapter<ChangePlanRuntimeConfi
     if (this.discardError) throw this.discardError;
   }
 
-  public async prepare(context: EvolutionControlPlaneAdapterContext) {
+  public async prepare(context: EvolutionControlPlaneAdapterContext, request: ChangePlanRuntimeConfigurationRequest) {
     if (this.mode === "secure") {
       return {
         target: { ownerId: "secure_owner", resourceId: "provider-openai", expectedRevision: 1 },
@@ -75,7 +75,12 @@ class TestAdapter implements EvolutionControlPlaneAdapter<ChangePlanRuntimeConfi
       title: "Change budget mode",
       summary: "Set the bounded runtime budget mode.",
       impact: "New turns use the selected budget posture.",
-      risk: this.mode === "review_then_approval" ? ("danger" as const) : ("safe" as const),
+      risk:
+        this.mode === "review_then_approval"
+          ? ("danger" as const)
+          : request.change.operation === "llama_cpp_setup"
+            ? ("caution" as const)
+            : ("safe" as const),
       status: "awaiting_confirmation" as const,
       requiredAction: context.actions.confirmation({
         title: "Confirm budget mode",
@@ -228,7 +233,9 @@ function fixture(mode: TestAdapter["mode"] = "confirmation") {
     approve: () => {
       approvalDisposition = "approved";
     },
-    disposition: (value: typeof approvalDisposition) => { approvalDisposition = value; },
+    disposition: (value: typeof approvalDisposition) => {
+      approvalDisposition = value;
+    },
   };
 }
 
@@ -298,19 +305,27 @@ describe("EvolutionControlPlaneService", () => {
     expect(adapter.applyCount).toBe(1);
   });
 
-  it.each(["denied", "expired"] as const)("settles a %s approval during resume without applying the effect", async (decision) => {
-    const f = fixture("approval");
-    const plan = await f.service.create({ actor, request });
-    const waiting = await f.service.confirm(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
-    f.disposition(decision);
-    const settled = await f.service.resumeApproved(actor, plan.planId, waiting.revision, "approval-1");
-    expect(settled).toMatchObject({ status: decision === "denied" ? "cancelled" : "failed",
-      result: { failureCode: `approval_${decision}` }, revision: waiting.revision + 1 });
-    expect(settled.requiredAction).toBeUndefined(); expect(settled.approvalRefs).toContain("approval-1");
-    expect(f.adapter.applyCount).toBe(0); expect(f.adapter.rollbackCount).toBe(0);
-    expect(f.adapter.discardCount).toBe(1);
-    expect(f.sync.listActive()).toEqual([]);
-  });
+  it.each(["denied", "expired"] as const)(
+    "settles a %s approval during resume without applying the effect",
+    async (decision) => {
+      const f = fixture("approval");
+      const plan = await f.service.create({ actor, request });
+      const waiting = await f.service.confirm(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
+      f.disposition(decision);
+      const settled = await f.service.resumeApproved(actor, plan.planId, waiting.revision, "approval-1");
+      expect(settled).toMatchObject({
+        status: decision === "denied" ? "cancelled" : "failed",
+        result: { failureCode: `approval_${decision}` },
+        revision: waiting.revision + 1,
+      });
+      expect(settled.requiredAction).toBeUndefined();
+      expect(settled.approvalRefs).toContain("approval-1");
+      expect(f.adapter.applyCount).toBe(0);
+      expect(f.adapter.rollbackCount).toBe(0);
+      expect(f.adapter.discardCount).toBe(1);
+      expect(f.sync.listActive()).toEqual([]);
+    },
+  );
 
   it("retains a refused wait for retry when its temporary-input cleanup owner is unavailable", async () => {
     const f = fixture("approval");
@@ -319,7 +334,10 @@ describe("EvolutionControlPlaneService", () => {
     f.disposition("denied");
     f.adapter.discardError = new Error("temporary input cleanup unavailable");
     await expect(f.service.reconcileApproval("approval-1")).rejects.toThrow("temporary input cleanup unavailable");
-    expect(await f.service.get(actor, plan.planId)).toMatchObject({ status: "awaiting_approval", revision: waiting.revision });
+    expect(await f.service.get(actor, plan.planId)).toMatchObject({
+      status: "awaiting_approval",
+      revision: waiting.revision,
+    });
     f.adapter.discardError = undefined;
     expect(await f.service.reconcileApproval("approval-1")).toBe(1);
     expect(await f.service.reconcileApproval("approval-1")).toBe(0);
@@ -327,16 +345,23 @@ describe("EvolutionControlPlaneService", () => {
     expect(f.adapter.applyCount).toBe(0);
   });
 
-  it.each(["denied", "expired"] as const)("reconciles a %s child approval on restart without replaying activation", async (decision) => {
-    const f = fixture("approval");
-    const plan = await f.service.create({ actor, request });
-    await f.service.confirm(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
-    f.disposition(decision);
-    const [settled] = await f.service.reconcileActive();
-    expect(settled).toMatchObject({ status: decision === "denied" ? "cancelled" : "failed", result: { failureCode: `approval_${decision}` } });
-    expect(f.adapter.applyCount).toBe(0); expect(f.adapter.reconcileCount).toBe(0);
-    expect(await f.service.reconcileActive()).toEqual([]);
-  });
+  it.each(["denied", "expired"] as const)(
+    "reconciles a %s child approval on restart without replaying activation",
+    async (decision) => {
+      const f = fixture("approval");
+      const plan = await f.service.create({ actor, request });
+      await f.service.confirm(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
+      f.disposition(decision);
+      const [settled] = await f.service.reconcileActive();
+      expect(settled).toMatchObject({
+        status: decision === "denied" ? "cancelled" : "failed",
+        result: { failureCode: `approval_${decision}` },
+      });
+      expect(f.adapter.applyCount).toBe(0);
+      expect(f.adapter.reconcileCount).toBe(0);
+      expect(await f.service.reconcileActive()).toEqual([]);
+    },
+  );
 
   it("settles through the durable resolution callback and converges concurrent replays on one event", async () => {
     const f = fixture("approval");
@@ -347,20 +372,82 @@ describe("EvolutionControlPlaneService", () => {
     expect((await f.service.get(actor, plan.planId)).revision).toBe(waiting.revision);
     await Promise.all([f.service.reconcileApproval("approval-1"), f.service.reconcileApproval("approval-1")]);
     const settled = await f.service.get(actor, plan.planId);
-    expect(settled.status).toBe("cancelled"); expect(settled.revision).toBe(waiting.revision + 1);
-    expect(f.sync.listEvents(plan.planId).filter(event => event.eventType === "approval_denied")).toHaveLength(1);
+    expect(settled.status).toBe("cancelled");
+    expect(settled.revision).toBe(waiting.revision + 1);
+    expect(f.sync.listEvents(plan.planId).filter((event) => event.eventType === "approval_denied")).toHaveLength(1);
     expect(await f.service.reconcileApproval("approval-1")).toBe(0);
-    expect(f.adapter.applyCount).toBe(0); expect(f.adapter.reconcileCount).toBe(0);
+    expect(f.adapter.applyCount).toBe(0);
+    expect(f.adapter.reconcileCount).toBe(0);
   });
 
-  it.each(["pending", "approved", undefined] as const)("keeps %s approval waiting without automatic apply or invented refusal", async (decision) => {
-    const f = fixture("approval");
-    const plan = await f.service.create({ actor, request });
-    const waiting = await f.service.confirm(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
+  it.each(["pending", "approved", undefined] as const)(
+    "keeps %s approval waiting without automatic apply or invented refusal",
+    async (decision) => {
+      const f = fixture("approval");
+      const plan = await f.service.create({ actor, request });
+      const waiting = await f.service.confirm(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
+      f.disposition(decision);
+      expect(await f.service.reconcileApproval("approval-1")).toBe(0);
+      expect(await f.service.reconcileActive()).toEqual([]);
+      expect(await f.service.get(actor, plan.planId)).toEqual(waiting);
+      expect(f.adapter.applyCount).toBe(0);
+    },
+  );
+
+  it("resumes an approved llama.cpp setup once from the durable signal and on startup", async () => {
+    const setupRequest: ChangePlanRuntimeConfigurationRequest = {
+      kind: "runtime_configuration",
+      change: {
+        operation: "llama_cpp_setup",
+        managementMode: "external",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        model: "local-model",
+      },
+    };
+    const signalled = fixture();
+    const first = await signalled.service.create({ actor, request: setupRequest });
+    const waiting = await signalled.service.confirm(
+      actor,
+      first.planId,
+      first.revision,
+      first.requiredAction!.actionNonce,
+    );
+    expect(waiting.status).toBe("awaiting_approval");
+    signalled.approve();
+    await Promise.all([
+      signalled.service.reconcileApproval("approval-final"),
+      signalled.service.reconcileApproval("approval-final"),
+    ]);
+    expect((await signalled.service.get(actor, first.planId)).status).toBe("completed");
+    expect(signalled.adapter.applyCount).toBe(1);
+    expect(await signalled.service.reconcileApproval("approval-final")).toBe(0);
+
+    const restarted = fixture();
+    const second = await restarted.service.create({ actor, request: setupRequest });
+    await restarted.service.confirm(actor, second.planId, second.revision, second.requiredAction!.actionNonce);
+    restarted.approve();
+    expect((await restarted.service.reconcileActive())[0]?.status).toBe("completed");
+    expect(restarted.adapter.applyCount).toBe(1);
+    expect(await restarted.service.reconcileActive()).toEqual([]);
+  });
+
+  it.each(["denied", "expired"] as const)("never applies a %s llama.cpp setup", async (decision) => {
+    const f = fixture();
+    const plan = await f.service.create({
+      actor,
+      request: {
+        kind: "runtime_configuration",
+        change: {
+          operation: "llama_cpp_setup",
+          managementMode: "external",
+          baseUrl: "http://127.0.0.1:8080/v1",
+          model: "local-model",
+        },
+      },
+    });
+    await f.service.confirm(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
     f.disposition(decision);
-    expect(await f.service.reconcileApproval("approval-1")).toBe(0);
-    expect(await f.service.reconcileActive()).toEqual([]);
-    expect(await f.service.get(actor, plan.planId)).toEqual(waiting);
+    expect((await f.service.reconcileActive())[0]?.status).toBe(decision === "denied" ? "cancelled" : "failed");
     expect(f.adapter.applyCount).toBe(0);
   });
 
@@ -370,7 +457,8 @@ describe("EvolutionControlPlaneService", () => {
     f.disposition("denied");
     expect(await f.service.reconcileApproval("approval-1")).toBe(0);
     const settled = await f.service.confirm(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
-    expect(settled.status).toBe("cancelled"); expect(settled.requiredAction).toBeUndefined();
+    expect(settled.status).toBe("cancelled");
+    expect(settled.requiredAction).toBeUndefined();
     expect(f.adapter.applyCount).toBe(0);
   });
 
@@ -379,15 +467,19 @@ describe("EvolutionControlPlaneService", () => {
     const plan = await f.service.create({ actor, request });
     const waiting = await f.service.confirm(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
     f.disposition("denied");
-    await expect(f.service.resumeApproved(actor, plan.planId, waiting.revision, "other-approval")).rejects.toThrow("binding changed");
-    await expect(f.service.resumeApproved({ ...actor, workspaceId: "elsewhere" }, plan.planId, waiting.revision, "approval-1")).rejects.toThrow("not found");
+    await expect(f.service.resumeApproved(actor, plan.planId, waiting.revision, "other-approval")).rejects.toThrow(
+      "binding changed",
+    );
+    await expect(
+      f.service.resumeApproved({ ...actor, workspaceId: "elsewhere" }, plan.planId, waiting.revision, "approval-1"),
+    ).rejects.toThrow("not found");
     f.getApprovalDisposition.mockImplementationOnce(async () => {
       await f.service.cancel(actor, plan.planId, waiting.revision);
       return "denied";
     });
     const settled = await f.service.resumeApproved(actor, plan.planId, waiting.revision, "approval-1");
     expect(settled.status).toBe("cancelled");
-    expect(f.sync.listEvents(plan.planId).filter(event => event.eventType === "approval_denied")).toEqual([]);
+    expect(f.sync.listEvents(plan.planId).filter((event) => event.eventType === "approval_denied")).toEqual([]);
     expect(f.adapter.applyCount).toBe(0);
   });
 
@@ -397,32 +489,48 @@ describe("EvolutionControlPlaneService", () => {
     const waiting = await f.service.confirm(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
     f.getApprovalDisposition.mockRejectedValueOnce(new Error("approval owner offline"));
     await expect(f.service.reconcileApproval("approval-1")).rejects.toThrow("approval owner offline");
-    expect(await f.service.get(actor, plan.planId)).toEqual(waiting); expect(f.adapter.applyCount).toBe(0);
+    expect(await f.service.get(actor, plan.planId)).toEqual(waiting);
+    expect(f.adapter.applyCount).toBe(0);
   });
 
   it("does not apply a plan whose own deadline elapsed after canonical approval", async () => {
     const f = fixture("approval");
     const plan = await f.service.create({ actor, request });
     const waiting = await f.service.confirm(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
-    f.approve(); vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(Date.parse(waiting.expiresAt!) + 1000);
+    f.approve();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse(waiting.expiresAt!) + 1000);
     const settled = await f.service.resumeApproved(actor, plan.planId, waiting.revision, "approval-1");
     expect(settled).toMatchObject({ status: "failed", result: { failureCode: "expired" } });
     expect(f.adapter.applyCount).toBe(0);
   });
 
-  it.each(["denied", "expired"] as const)("preserves the existing effect when rollback approval is %s", async (decision) => {
-    const f = fixture();
-    const plan = await f.service.create({ actor, request });
-    const completed = await f.service.confirm(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
-    const requested = await f.service.requestRollback(actor, completed.planId, completed.revision);
-    const waiting = await f.service.confirm(actor, requested.planId, requested.revision, requested.requiredAction!.actionNonce);
-    f.disposition(decision); await f.service.reconcileApproval("approval-rollback");
-    expect(await f.service.get(actor, plan.planId)).toMatchObject({ status: "manual_required", result: { failureCode: `rollback_approval_${decision}` } });
-    expect(f.adapter.applyCount).toBe(1); expect(f.adapter.rollbackCount).toBe(1);
-    expect(f.adapter.discardCount).toBe(0);
-    expect((await f.service.get(actor, plan.planId)).appliedAt).toBe(completed.appliedAt);
-    expect(waiting.status).toBe("awaiting_approval");
-  });
+  it.each(["denied", "expired"] as const)(
+    "preserves the existing effect when rollback approval is %s",
+    async (decision) => {
+      const f = fixture();
+      const plan = await f.service.create({ actor, request });
+      const completed = await f.service.confirm(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
+      const requested = await f.service.requestRollback(actor, completed.planId, completed.revision);
+      const waiting = await f.service.confirm(
+        actor,
+        requested.planId,
+        requested.revision,
+        requested.requiredAction!.actionNonce,
+      );
+      f.disposition(decision);
+      await f.service.reconcileApproval("approval-rollback");
+      expect(await f.service.get(actor, plan.planId)).toMatchObject({
+        status: "manual_required",
+        result: { failureCode: `rollback_approval_${decision}` },
+      });
+      expect(f.adapter.applyCount).toBe(1);
+      expect(f.adapter.rollbackCount).toBe(1);
+      expect(f.adapter.discardCount).toBe(0);
+      expect((await f.service.get(actor, plan.planId)).appliedAt).toBe(completed.appliedAt);
+      expect(waiting.status).toBe("awaiting_approval");
+    },
+  );
 
   it("does not replay staging when an exact artifact review is followed by final confirmation", async () => {
     const { service, adapter, createApproval } = fixture("review_then_approval");

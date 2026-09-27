@@ -1,5 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { reconcileChangePlanApproval, reconcileAwaitingChangePlanApproval, settleRefusedChangePlanApproval } from "./evolution-control-plane-approval-reconciliation.js";
+import {
+  reconcileChangePlanApproval,
+  reconcileAwaitingChangePlanApproval,
+  settleRefusedChangePlanApproval,
+} from "./evolution-control-plane-approval-reconciliation.js";
+import { validatePublicValues } from "./evolution-control-plane-public-form.js";
 import {
   ConflictError,
   NotFoundError,
@@ -460,9 +465,10 @@ export class EvolutionControlPlaneService {
     }
     const action = this.actions().confirmation({
       title: `Rollback ${current.title}`,
-      confirmationText: current.kind === "capability_pack"
-        ? "Disable only MCP changes still owned by this pack. Skills and settings receive separate reversal review plans. Preserve pre-existing installations and later operator edits."
-        : "Apply only the recovery material already bound to this Change Plan.",
+      confirmationText:
+        current.kind === "capability_pack"
+          ? "Disable only MCP changes still owned by this pack. Skills and settings receive separate reversal review plans. Preserve pre-existing installations and later operator edits."
+          : "Apply only the recovery material already bound to this Change Plan.",
       purpose: "rollback",
     });
     const pending = await this.deps.repository.transition(current.planId, {
@@ -495,15 +501,21 @@ export class EvolutionControlPlaneService {
     return this.persistOutcome(actor, adapter, current, outcome, "owner_verification_requested");
   }
 
-  /** Durable approval signal delivery; rejection never invokes a mutation adapter. */
+  /** Durable approval signal delivery; llama.cpp approval resumes its exact reviewed plan. */
   public async reconcileApproval(approvalId: string): Promise<number> {
     const id = requireIdentifier(approvalId, "approvalId");
-    return reconcileChangePlanApproval(this.deps, id, (plan, disposition, actorId) => this.settleRefusedApproval(plan, disposition, actorId));
+    return reconcileChangePlanApproval(
+      this.deps,
+      id,
+      (plan, disposition, actorId) => this.settleRefusedApproval(plan, disposition, actorId),
+      (plan, actorId, approvalId) =>
+        this.resumeApproved({ ...plan.origin, actorId }, plan.planId, plan.revision, approvalId),
+    );
   }
 
   /**
-   * Startup recovery inspects canonical owner state. It never calls apply and
-   * therefore cannot duplicate an effect after an ambiguous process death.
+   * Startup recovery resumes a still-waiting approved llama.cpp plan. Plans
+   * already past that boundary use adapter reconciliation, never blind replay.
    */
   public async reconcileActive(limit = 500): Promise<ChangePlanRecord[]> {
     const active = await this.deps.repository.listActive(limit);
@@ -511,7 +523,10 @@ export class EvolutionControlPlaneService {
     for (const plan of active) {
       if (plan.status === "awaiting_approval") {
         const settled = await this.reconcileAwaitingApproval(plan, "gateway-recovery");
-        if (settled.revision !== plan.revision) { reconciled.push(settled); continue; }
+        if (settled.revision !== plan.revision) {
+          reconciled.push(settled);
+          continue;
+        }
       }
       if (
         isExpired(plan) &&
@@ -713,13 +728,31 @@ export class EvolutionControlPlaneService {
   }
 
   private async reconcileAwaitingApproval(plan: ChangePlanRecord, actorId: string): Promise<ChangePlanRecord> {
-    return reconcileAwaitingChangePlanApproval(this.deps, plan, actorId, (waiting, disposition, actor) => this.settleRefusedApproval(waiting, disposition, actor));
+    return reconcileAwaitingChangePlanApproval(
+      this.deps,
+      plan,
+      actorId,
+      (waiting, disposition, actor) => this.settleRefusedApproval(waiting, disposition, actor),
+      (waiting, actor, approvalId) =>
+        this.resumeApproved({ ...waiting.origin, actorId: actor }, waiting.planId, waiting.revision, approvalId),
+    );
   }
 
-  private async settleRefusedApproval(plan: ChangePlanRecord, disposition: "denied" | "expired", actorId: string): Promise<ChangePlanRecord> {
-    return settleRefusedChangePlanApproval(this.deps, (event, settled) => this.signal(event, settled), plan, disposition, actorId, async () => {
-      await this.requireMatchingAdapter(plan).discard?.(this.context(plan.origin), plan);
-    });
+  private async settleRefusedApproval(
+    plan: ChangePlanRecord,
+    disposition: "denied" | "expired",
+    actorId: string,
+  ): Promise<ChangePlanRecord> {
+    return settleRefusedChangePlanApproval(
+      this.deps,
+      (event, settled) => this.signal(event, settled),
+      plan,
+      disposition,
+      actorId,
+      async () => {
+        await this.requireMatchingAdapter(plan).discard?.(this.context(plan.origin), plan);
+      },
+    );
   }
 
   private async expire(plan: ChangePlanRecord, actorId: string): Promise<ChangePlanRecord> {
@@ -1003,37 +1036,6 @@ function validateOutcome(outcome: EvolutionControlPlaneAdapterOutcome): void {
   }
   if (outcome.status === "awaiting_input" && !outcome.requiredAction) {
     throw new Error("Adapter outcome is missing its input action.");
-  }
-}
-
-function validatePublicValues(
-  action: Extract<ChangePlanRequiredAction, { kind: "public_form" }>,
-  values: Readonly<Record<string, string | number | boolean>>,
-): void {
-  const allowed = new Map(action.fields.map((field) => [field.fieldId, field]));
-  for (const [fieldId, value] of Object.entries(values)) {
-    const field = allowed.get(fieldId);
-    if (!field) throw new ValidationError({ message: `Public form field ${fieldId} is not part of this Change Plan.` });
-    if (
-      /secret|password|token|credential|api.?key|oauth/iu.test(fieldId) &&
-      field.valueSemantic !== "environment_reference"
-    ) {
-      throw new ValidationError({ message: "Secret-like fields must use the dedicated secure-input flow." });
-    }
-    if (
-      field.valueSemantic === "environment_reference" &&
-      (typeof value !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,255}$/u.test(value))
-    ) {
-      throw new ValidationError({ message: `Public form field ${fieldId} must be an environment variable name.` });
-    }
-    if (typeof value === "string" && (value.length > 4_000 || /[\0]/u.test(value))) {
-      throw new ValidationError({ message: `Public form field ${fieldId} is invalid.` });
-    }
-  }
-  for (const field of action.fields) {
-    if (field.required && values[field.fieldId] === undefined) {
-      throw new ValidationError({ message: `Public form field ${field.fieldId} is required.` });
-    }
   }
 }
 

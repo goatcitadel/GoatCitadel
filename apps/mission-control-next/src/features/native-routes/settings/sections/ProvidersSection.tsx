@@ -281,6 +281,11 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
   const editorKeys = [providerEditor.key, secretEditor.key];
   const availableModels = selectedProvider?.models ?? [];
   const routingProvider = providers.find((item) => item.providerId === routingProviderId) ?? null;
+  const routingLlamaNeedsSetup =
+    routingProviderId === "llamacpp" &&
+    (routingProvider?.modelProbeSource !== "live" ||
+      routingProvider.modelRefreshStatus !== "fresh" ||
+      routingProvider.modelProbeState !== "ready");
   const routingUsesFallbackModels =
     routingProvider?.modelProbeState === "fallback" && routingProvider.modelProbeSource !== "live";
   const routingUsesStaleCatalog =
@@ -470,7 +475,7 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
     if (transition.kind === "routing") {
       const next = providers.find((item) => item.providerId === transition.providerId);
       const suggestedModel =
-        next?.modelProbeSource === "live"
+        next?.modelProbeSource === "live" && next.modelRefreshStatus === "fresh"
           ? next.models.includes(next.defaultModel)
             ? next.defaultModel
             : ""
@@ -604,6 +609,19 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
       return false;
     }
     const nextProvider = providers.find((provider) => provider.providerId === normalizedProviderId);
+    if (
+      normalizedProviderId === "llamacpp" &&
+      (nextProvider?.modelProbeSource !== "live" ||
+        nextProvider.modelRefreshStatus !== "fresh" ||
+        nextProvider.modelProbeState !== "ready" ||
+        !nextProvider.models.includes(normalizedModel))
+    ) {
+      setNotice({
+        tone: "warning",
+        message: "Check the llama.cpp endpoint and choose a freshly discovered model in Get started.",
+      });
+      return false;
+    }
     if (isModelUnavailableInFreshCatalog(nextProvider ?? null, normalizedModel)) {
       setNotice({
         tone: "warning",
@@ -1253,10 +1271,10 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
             id="providers-directory"
             density="compact"
             className="mc-next-settings-panel mc-next-provider-directory"
-            title="Connected providers"
+            title="Provider profiles"
             subtitle="Available providers, probe posture, and current catalog coverage."
             stats={[
-              { label: "Configured", value: String(providers.length) },
+              { label: "Provider profiles", value: String(providers.length) },
               { label: "Active workspace", value: activeWorkspaceId, technical: true },
             ]}
           >
@@ -1280,6 +1298,14 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
               </NativeButton>
               <NativeButton variant="outline" onClick={() => openView("models")}>
                 Browse models
+              </NativeButton>
+              <NativeButton
+                variant="outline"
+                onClick={() =>
+                  navigate({ area: "settings", section: "onboarding", view: "llamacpp", theme: route.theme })
+                }
+              >
+                Set up llama.cpp
               </NativeButton>
             </SettingsButtonRow>
             <div id="provider-creation-options" hidden={!addProviderOpen}>
@@ -1390,7 +1416,12 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
                         {routingModel} · Needs refresh
                       </option>
                     ) : null}
-                    {(routingProvider?.models ?? []).map((modelId) => (
+                    {routingLlamaNeedsSetup && routingModel && !routingModelNeedsRefresh ? (
+                      <option value={routingModel} disabled>
+                        {routingModel} · Endpoint check required
+                      </option>
+                    ) : null}
+                    {(routingLlamaNeedsSetup ? [] : (routingProvider?.models ?? [])).map((modelId) => (
                       <option key={modelId} value={modelId}>
                         {modelId}
                       </option>
@@ -1428,6 +1459,18 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
                   }}
                 />
               ) : null}
+              {routingLlamaNeedsSetup ? (
+                <SettingsButtonRow>
+                  <NativeButton
+                    variant="outline"
+                    onClick={() =>
+                      navigate({ area: "settings", section: "onboarding", view: "llamacpp", theme: route.theme })
+                    }
+                  >
+                    Check llama.cpp endpoint in Get started
+                  </NativeButton>
+                </SettingsButtonRow>
+              ) : null}
               {routingModelUnavailable ? (
                 <SettingsNotice
                   notice={{
@@ -1451,6 +1494,7 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
                     routingChange.hasPending ||
                     !routingProviderId.trim() ||
                     !routingModel.trim() ||
+                    routingLlamaNeedsSetup ||
                     routingModelUnavailable ||
                     routingModelNeedsRefresh
                   }
@@ -1491,36 +1535,47 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
               </SettingsField>
               <SettingsActionList
                 ariaLabel="Universal model choices"
-                items={universalModelOptions.map((item) => ({
-                  id: item.id,
-                  label: item.label,
-                  description: item.availabilityReason,
-                  meta: [
-                    item.availability,
-                    item.credentialStatus,
-                    item.contextWindowTokens ? `${item.contextWindowTokens.toLocaleString()} tokens` : undefined,
-                    item.contextLimitSource,
-                    item.endpointIdentity,
-                  ]
-                    .filter(Boolean)
-                    .join(" · "),
-                  actionLabel:
-                    item.availability === "blocked"
-                      ? "Blocked"
-                      : item.providerId === config?.activeProviderId && item.model === config?.activeModel
-                        ? "Active"
-                        : "Select",
-                  onClick:
-                    item.availability === "blocked"
-                      ? undefined
-                      : () => {
-                          providerTransitionGuard.requestTransition({
-                            kind: "routing",
-                            providerId: item.providerId,
-                            model: item.model,
-                          });
-                        },
-                }))}
+                items={universalModelOptions.map((item) => {
+                  const llamaProvider = providers.find((provider) => provider.providerId === item.providerId);
+                  const llamaNeedsSetup =
+                    item.providerId === "llamacpp" &&
+                    (llamaProvider?.modelProbeSource !== "live" ||
+                      llamaProvider.modelRefreshStatus !== "fresh" ||
+                      llamaProvider.modelProbeState !== "ready");
+                  return {
+                    id: item.id,
+                    label: item.label,
+                    description: item.availabilityReason,
+                    meta: [
+                      item.availability,
+                      item.credentialStatus,
+                      item.contextWindowTokens ? `${item.contextWindowTokens.toLocaleString()} tokens` : undefined,
+                      item.contextLimitSource,
+                      item.endpointIdentity,
+                    ]
+                      .filter(Boolean)
+                      .join(" · "),
+                    actionLabel: llamaNeedsSetup
+                      ? "Check endpoint"
+                      : item.availability === "blocked"
+                        ? "Blocked"
+                        : item.providerId === config?.activeProviderId && item.model === config?.activeModel
+                          ? "Active"
+                          : "Select",
+                    onClick: llamaNeedsSetup
+                      ? () =>
+                          navigate({ area: "settings", section: "onboarding", view: "llamacpp", theme: route.theme })
+                      : item.availability === "blocked"
+                        ? undefined
+                        : () => {
+                            providerTransitionGuard.requestTransition({
+                              kind: "routing",
+                              providerId: item.providerId,
+                              model: item.model,
+                            });
+                          },
+                  };
+                })}
                 emptyLabel="No provider models match this search."
                 maxHeight="min(42vh, 24rem)"
               />

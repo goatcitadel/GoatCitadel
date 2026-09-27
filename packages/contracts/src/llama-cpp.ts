@@ -31,6 +31,8 @@ export interface LlamaCppLaunchConfig {
 export interface LlamaCppConfig {
   enabled: boolean;
   autoStart: boolean;
+  /** External endpoints are observed only; older configs default from autoStart. */
+  managementMode?: "external" | "managed";
   server: LlamaCppServerConfig;
   launch: LlamaCppLaunchConfig;
 }
@@ -128,6 +130,31 @@ export interface LlamaCppRuntimeStatus {
   launchCommandPreview?: string;
   /** Additive service-lifetime diagnostics; absent on older Gateway versions. */
   leaseDiagnostics?: LlamaCppRuntimeLeaseDiagnostics;
+}
+
+export interface LlamaCppSetupProjection {
+  settingsRevision: number;
+  managementMode: "external" | "managed";
+  baseUrl: string;
+  runtime: LlamaCppRuntimeStatus;
+  ownership: LlamaCppRuntimeOwnership;
+  binary: { found: boolean; label?: string; version?: string };
+  models: Array<{ modelId: string; label: string; source: "filesystem" | "runtime" }>;
+  catalog: { status: "fresh" | "empty" | "stale" | "unavailable"; modelIds: string[]; warning?: string };
+  chatRoute: { providerId: string; model: string; thinkingLevel: string };
+  pendingPlan?: { planId: string; revision: number; status: string; approvalId?: string; summary?: string };
+  recentPlan?: { planId: string; revision: number; status: string; approvalId?: string; summary?: string };
+}
+
+export interface LlamaCppSetupChatTestResult {
+  success: boolean;
+  responseExcerpt?: string;
+  providerId: string;
+  model: string;
+  elapsedMs: number;
+  settingsRevision: number;
+  traceRef?: string;
+  error?: string;
 }
 
 export interface LlamaCppGpuInfo {

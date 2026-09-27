@@ -226,6 +226,7 @@ export interface ChangePlanNpuConfiguration {
 export interface ChangePlanLlamaCppConfiguration {
   readonly enabled?: boolean;
   readonly autoStart?: boolean;
+  readonly managementMode?: "external" | "managed";
   readonly baseUrl?: string;
   readonly alias?: string;
   readonly ctxSize?: number | null;
@@ -257,6 +258,14 @@ export type ChangePlanRuntimeConfigurationOperation =
   | { readonly operation: "mesh_configuration"; readonly config: ChangePlanMeshConfiguration }
   | { readonly operation: "npu_configuration"; readonly config: ChangePlanNpuConfiguration }
   | { readonly operation: "llama_cpp_configuration"; readonly config: ChangePlanLlamaCppConfiguration }
+  | {
+      readonly operation: "llama_cpp_setup";
+      readonly managementMode: "external" | "managed";
+      readonly baseUrl: string;
+      readonly model: string;
+      readonly selectionId?: string;
+      readonly autoStart?: boolean;
+    }
   | {
       readonly operation: "feature_flags";
       readonly flags: Readonly<Partial<Record<ChangePlanRuntimeFeatureFlag, boolean>>>;
@@ -715,6 +724,21 @@ function isRuntimeConfigurationOperation(value: unknown): value is ChangePlanRun
       return hasOnlyKeys(value, ["operation", "config"]) && isNpuConfiguration(value.config);
     case "llama_cpp_configuration":
       return hasOnlyKeys(value, ["operation", "config"]) && isLlamaCppConfiguration(value.config);
+    case "llama_cpp_setup":
+      return (
+        hasOnlyKeys(value, ["operation", "managementMode", "baseUrl", "model", "selectionId", "autoStart"]) &&
+        (value.managementMode === "external" || value.managementMode === "managed") &&
+        isSafeProviderBaseUrl(value.baseUrl) &&
+        typeof value.model === "string" &&
+        value.model.trim().length > 0 &&
+        value.model.length <= 512 &&
+        [...value.model].every((character) => character.charCodeAt(0) >= 32) &&
+        (value.selectionId === undefined || isIdentifier(value.selectionId)) &&
+        (value.autoStart === undefined || typeof value.autoStart === "boolean") &&
+        (value.managementMode === "managed"
+          ? value.selectionId !== undefined
+          : value.selectionId === undefined && value.autoStart !== true)
+      );
     case "feature_flag":
       return (
         hasOnlyKeys(value, ["operation", "flag", "enabled"]) &&
@@ -810,6 +834,7 @@ function isLlamaCppConfiguration(value: unknown): boolean {
     !hasOnlyKeys(value, [
       "enabled",
       "autoStart",
+      "managementMode",
       "baseUrl",
       "alias",
       "ctxSize",
@@ -823,6 +848,8 @@ function isLlamaCppConfiguration(value: unknown): boolean {
   )
     return false;
   if ([value.enabled, value.autoStart].some((item) => item !== undefined && typeof item !== "boolean")) return false;
+  if (value.managementMode !== undefined && value.managementMode !== "external" && value.managementMode !== "managed")
+    return false;
   if (value.baseUrl !== undefined && !isSafeProviderBaseUrl(value.baseUrl)) return false;
   if (value.alias !== undefined && !isIdentifier(value.alias)) return false;
   if (value.flashAttention !== undefined && value.flashAttention !== null && typeof value.flashAttention !== "boolean")
