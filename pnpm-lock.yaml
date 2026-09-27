@@ -36,11 +36,7 @@ overrides:
   fflate@^0.8.0: 0.8.3
   '@humanfs/node@^0.16.0': 0.16.8
   postcss-selector-parser@^7.0.0: 7.1.6
-
-patchedDependencies:
-  image-size@1.2.1:
-    hash: a5f215f616a99a61357ff8be0fea71eb8d73cf296250c4cc01162854282f789e
-    path: patches/image-size@1.2.1.patch
+  pptxgenjs>image-size: 2.0.3
 
 importers:
 
@@ -4771,9 +4767,9 @@ packages:
     resolution: {integrity: sha512-Hs59xBNfUIunMFgWAbGX5cq6893IbWg4KnrjbYwX3tx0ztorVgTDA6B2sxf8ejHJ4wz8BqGUMYlnzNBer5NvGg==}
     engines: {node: '>= 4'}
 
-  image-size@1.2.1:
-    resolution: {integrity: sha512-rH+46sQJ2dlwfjfhCyNx5thzrv+dtmBIhPHk0zgRUukHzZ/kRueTJXoYYsclBaKcSMBWuGbOFXtioLpzTb5euw==}
-    engines: {node: '>=16.x'}
+  image-size@2.0.3:
+    resolution: {integrity: sha512-9BJAtVCBth+76NwqnEfWr3PiRnYhbquk6K/USuQ1GQajz5NgLzO7tNsnoNjHfO7LuftgkBf+CCH6j28hjMbIYQ==}
+    engines: {node: '>=18'}
     hasBin: true
 
   immediate@3.0.6:
@@ -5908,9 +5904,6 @@ packages:
 
   queue-microtask@1.2.3:
     resolution: {integrity: sha512-NuaNSa6flKT5JaSYQzJok04JzTL1CA6aGhv5rfLW3PgqA+M2ChpZQnAC8h8i4ZFkBS8X5RqkDBHA7r4hej3K9A==}
-
-  queue@6.0.2:
-    resolution: {integrity: sha512-iHZWu+q3IdFZFX36ro/lKBkSvfkztY5Y7HMiPlOUjhupPcG2JMfst2KKEpu5XndviX/3UhFbRngUPNKtgvtZiA==}
 
   quick-format-unescaped@4.0.4:
     resolution: {integrity: sha512-tYC1Q1hgyRuHgloV/YXs2w15unPVh8qfu/qCTfhTYamaw7fyhumKa2yGpdSo87vY32rIclj+4fWYQXUMs9EHvg==}
@@ -11290,9 +11283,7 @@ snapshots:
 
   ignore@7.0.5: {}
 
-  image-size@1.2.1(patch_hash=a5f215f616a99a61357ff8be0fea71eb8d73cf296250c4cc01162854282f789e):
-    dependencies:
-      queue: 6.0.2
+  image-size@2.0.3: {}
 
   immediate@3.0.6: {}
 
@@ -12593,7 +12584,7 @@ snapshots:
     dependencies:
       '@types/node': 22.19.19
       https: 1.0.0
-      image-size: 1.2.1(patch_hash=a5f215f616a99a61357ff8be0fea71eb8d73cf296250c4cc01162854282f789e)
+      image-size: 2.0.3
       jszip: 3.10.1
 
   prelude-ls@1.2.1: {}
@@ -12650,10 +12641,6 @@ snapshots:
       side-channel: 1.1.0
 
   queue-microtask@1.2.3: {}
-
-  queue@6.0.2:
-    dependencies:
-      inherits: 2.0.4
 
   quick-format-unescaped@4.0.4: {}
 
