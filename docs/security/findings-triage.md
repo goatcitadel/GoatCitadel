@@ -212,10 +212,12 @@ Do not report "no quality findings" on the strength of an empty `code-scanning/a
 | `js/useless-assignment-to-local` | Maintainability | Delete the dead write. When the right-hand side is a call with durable side effects (e.g. `summaryRepo.recordCompactionNoProgress`), keep the call and drop only the assignment, with a comment naming why the result is discarded. |
 | `js/comparison-between-incompatible-types` | Reliability | **First decide which of two cases you have.** (a) The check is *load-bearing* and the alert is a narrowing-order artifact — put the `=== null` / `!== undefined` test **before** the `typeof x === "object"` guard so the compared operand is still unnarrowed (`canonical-json.ts`). (b) The check is genuinely *unreachable* because an earlier `return`/`break` already excluded that value — delete it and comment the invariant (`mcp-requester-resolution.ts`, `remote-worker-native-tls-listener.ts`). Reordering a case-(b) site only moves the alert; the rule refires with a different message ("cannot be of type null" rather than "is of type object … compared to null"). Read the whole function before choosing. |
 | `js/superfluous-trailing-arguments` | Reliability | Do **not** delete the argument at the call site. `FastifyPluginAsync` declares two *required* parameters, so `routes(fastify as never)` fails typecheck with TS2554. Fix the plugin instead: declare the ignored second parameter as `_opts` (allowed by the `argsIgnorePattern: "^_"` rule in `eslint.config.js`). |
+| `js/missing-await` | Reliability | Inspect the use before awaiting. For an in-flight promise identity guard, awaiting either operand would compare a resolved value with the stored promise and break cleanup. Store the promise in an entry object, await its `promise`, and compare entry identity in `finally` (`chat-delegation-service.ts`). |
 
 Applied examples live in [`apps/gateway/src/services/chat-message-history-service.ts`](../../apps/gateway/src/services/chat-message-history-service.ts),
-[`packages/contracts/src/canonical-json.ts`](../../packages/contracts/src/canonical-json.ts), and
-[`apps/gateway/src/routes/runtime-authority.ts`](../../apps/gateway/src/routes/runtime-authority.ts).
+[`packages/contracts/src/canonical-json.ts`](../../packages/contracts/src/canonical-json.ts),
+[`apps/gateway/src/routes/runtime-authority.ts`](../../apps/gateway/src/routes/runtime-authority.ts), and
+[`apps/gateway/src/services/chat-delegation-service.ts`](../../apps/gateway/src/services/chat-delegation-service.ts).
 
 Each fixed site carries an inline comment naming the rule, so a later "cleanup" pass does not
 silently revert the analyzer-visible form back into the flagged one. Preserve those comments.
