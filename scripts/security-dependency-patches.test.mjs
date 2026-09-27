@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -86,7 +86,7 @@ function runParserProbe(payload) {
   });
 }
 
-test("the patched image-size dependency terminates on no-progress parser payloads", async () => {
+test("the fixed image-size dependency terminates on no-progress parser payloads", async () => {
   for (const [name, payload] of Object.entries(malformedPayloads)) {
     const result = await runParserProbe(payload);
 
@@ -102,7 +102,7 @@ test("the patched image-size dependency terminates on no-progress parser payload
   }
 });
 
-test("the patched image-size dependency preserves ordinary image detection", () => {
+test("the fixed image-size dependency preserves ordinary image detection", () => {
   const { imageSize } = pptxgenjsRequire(imageSizePath);
   const onePixelPng = Uint8Array.from([
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00,
@@ -112,12 +112,16 @@ test("the patched image-size dependency preserves ordinary image detection", () 
   assert.deepEqual(imageSize(onePixelPng), { height: 1, type: "png", width: 1 });
 });
 
-test("Trivy exceptions are limited and expire for review", () => {
-  const ignoredEntries = readFileSync(path.join(root, ".trivyignore"), "utf8")
-    .split(/\r?\n/u)
-    .filter((line) => /^CVE-/u.test(line));
+test("the resolved dependency is fixed without a Trivy exception or local patch", () => {
+  const imageSizeManifest = JSON.parse(
+    readFileSync(path.join(path.dirname(imageSizePath), "..", "..", "package.json"), "utf8"),
+  );
+  assert.equal(imageSizeManifest.name, "image-size");
+  assert.equal(imageSizeManifest.version, "2.0.3");
 
-  assert.deepEqual(ignoredEntries, ["CVE-2025-71329 exp:2026-10-06", "CVE-2025-71330 exp:2026-10-06"]);
   const packageManifest = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(packageManifest.pnpm?.patchedDependencies?.["image-size@1.2.1"], "patches/image-size@1.2.1.patch");
+  assert.equal(packageManifest.pnpm?.overrides?.["pptxgenjs>image-size"], "2.0.3");
+  assert.equal(packageManifest.pnpm?.patchedDependencies?.["image-size@1.2.1"], undefined);
+  assert.equal(existsSync(path.join(root, ".trivyignore")), false);
+  assert.equal(existsSync(path.join(root, "patches", "image-size@1.2.1.patch")), false);
 });
