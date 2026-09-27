@@ -184,7 +184,6 @@ const requestSchema = z.discriminatedUnion("kind", [
           })
           .strict(),
         z.object({ operation: z.literal("budget_mode"), mode: z.enum(["saver", "balanced", "power"]) }).strict(),
-        z.object({ operation: z.literal("default_tool_profile"), profileId: identifier }).strict(),
         z
           .object({
             operation: z.literal("deployment_profile"),

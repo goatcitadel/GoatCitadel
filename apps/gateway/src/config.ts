@@ -34,7 +34,8 @@ export interface AssistantConfig {
   environment: string;
   deploymentProfile: DeploymentProfile;
   toolApprovalMode: ToolApprovalMode;
-  defaultToolProfile: string;
+  /** Deprecated config field; ignored by runtime policy. */
+  defaultToolProfile?: string;
   dataDir: string;
   transcriptsDir: string;
   auditDir: string;
@@ -1119,8 +1120,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
   return {
     environment: input.environment ?? "local",
     deploymentProfile: input.deploymentProfile ?? "local_dev",
-    toolApprovalMode: input.toolApprovalMode ?? (input.defaultToolProfile === "danger" ? "bypass" : "approve_risky"),
-    defaultToolProfile: input.defaultToolProfile ?? "minimal",
+    toolApprovalMode: input.toolApprovalMode ?? "approve_risky",
     dataDir: input.dataDir ?? "./data",
     transcriptsDir: input.transcriptsDir ?? "./data/transcripts",
     auditDir: input.auditDir ?? "./data/audit",

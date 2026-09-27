@@ -10,7 +10,7 @@ const config: ToolPolicyConfig = {
   },
   tools: {
     profile: "coding",
-    allow: ["http.get"],
+    allow: ["http.get", "fs.read"],
     deny: ["fs.write"],
   },
   agents: {
@@ -40,7 +40,7 @@ describe("resolveEffectivePolicy", () => {
     expect(isToolAllowed(policy, "shell.exec")).toBe(true);
   });
 
-  it("applies glob denies against profile-derived tools", () => {
+  it("applies glob denies against explicit allows even when old named profiles are present", () => {
     const policy = resolveEffectivePolicy({
       ...config,
       profiles: {
@@ -48,7 +48,7 @@ describe("resolveEffectivePolicy", () => {
       },
       tools: {
         profile: "coding",
-        allow: [],
+        allow: ["session.*", "fs.read"],
         deny: ["session.*"],
       },
     });
@@ -58,39 +58,27 @@ describe("resolveEffectivePolicy", () => {
     expect(isToolAllowed(policy, "fs.read")).toBe(true);
   });
 
-  it("defaults missing profile selection to all tools and danger profile to bypass approval", () => {
-    const allToolsPolicy = resolveEffectivePolicy(
+  it("ignores retired named profiles and requires explicit access and approval mode", () => {
+    const policy = resolveEffectivePolicy(
       {
         ...config,
+        profiles: { danger: ["*"] },
         tools: {
-          allow: [],
+          profile: "danger",
+          allow: ["browser.search"],
           deny: ["shell.exec"],
         },
         agents: {},
       } as ToolPolicyConfig,
       "missing-agent",
     );
-    expect(isToolAllowed(allToolsPolicy, "fs.read")).toBe(true);
-    expect(isToolAllowed(allToolsPolicy, "shell.exec")).toBe(false);
-
-    const policy = resolveEffectivePolicy(
-      {
-        ...config,
-        profiles: {},
-        tools: {
-          profile: "danger",
-          allow: [],
-          deny: ["shell.exec"],
-        },
-        agents: {},
-      },
-      "missing-agent",
-    );
-
-    expect(policy.approvalMode).toBe("bypass");
+    expect(isToolAllowed(policy, "browser.search")).toBe(true);
+    expect(isToolAllowed(policy, "fs.read")).toBe(false);
+    expect(isToolAllowed(policy, "shell.exec")).toBe(false);
+    expect(policy.approvalMode).toBe("approve_risky");
   });
 
-  it("applies first-class permission profiles above legacy tool profiles", () => {
+  it("applies permission profiles independently of retired named profiles", () => {
     const safeProfile = createProfile({
       profileId: "safe",
       label: "Safe",
@@ -104,6 +92,7 @@ describe("resolveEffectivePolicy", () => {
     expect(safePolicy.permissionProfileId).toBe("safe");
     expect(safePolicy.permissionProfileLabel).toBe("Safe");
     expect(safePolicy.approvalMode).toBe("approve_all");
+    expect(isToolAllowed(safePolicy, "browser.search")).toBe(true);
     expect(isToolAllowed(safePolicy, "shell.exec")).toBe(true);
     expect(isToolAllowed(safePolicy, "fs.write")).toBe(false);
 
@@ -156,10 +145,10 @@ describe("resolveEffectivePolicy", () => {
 
     expect(expiredPolicy.approvalMode).toBe("approve_all");
     expect(expiredPolicy.localOperatorOverrideId).toBeUndefined();
-    expect(isToolAllowed(expiredPolicy, "fs.read")).toBe(false);
+    expect(isToolAllowed(expiredPolicy, "fs.stat")).toBe(false);
     expect(revokedPolicy.approvalMode).toBe("approve_all");
     expect(revokedPolicy.localOperatorOverrideId).toBeUndefined();
-    expect(isToolAllowed(revokedPolicy, "fs.read")).toBe(false);
+    expect(isToolAllowed(revokedPolicy, "fs.stat")).toBe(false);
   });
 
   it("rejects a malformed per-agent tools.deny at parse instead of silently dropping it", () => {

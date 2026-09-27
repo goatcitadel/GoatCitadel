@@ -974,7 +974,6 @@ async function smokeOnboarding(app: Awaited<ReturnType<typeof buildApp>>): Promi
     {
       expectedRevision: initialBody.settings.revision,
       budgetMode: "balanced",
-      defaultToolProfile: "minimal",
       networkAllowlist: ["127.0.0.1", "localhost"],
       llm: {
         activeProviderId: "openai",

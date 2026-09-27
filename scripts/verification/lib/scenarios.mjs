@@ -539,21 +539,13 @@ export async function runAgenticGovernanceLane(context) {
 }
 
 // The autonomy-grant gate (deny -> grant -> allow -> revoke -> deny) is the subject of
-// this lane. The shipped `chat-agent` default profile denies the synthetic `mcp.invoke`
-// tool outright, and deny-wins is absolute -- so under that profile a matching grant can
-// never reach an allowed invoke, masking the grant gate behind a base-policy block (and
-// making the lane pass or fail depending on whether a gitignored local
-// `config/tool-policy.json` happens to exist). Pin an explicit operator-permissive policy
-// into the runtime so `mcp.invoke` is allowed by the base policy; the autonomy grant then
-// becomes the sole gate the lane actually exercises. Deny-by-default posture for
-// `mcp.invoke` is covered separately by the policy-engine deny-wins tests.
+// this lane. Pin an explicit operator-permissive policy in the isolated runtime so
+// `mcp.invoke` can reach the grant gate. Deny-wins behavior is covered separately.
 export async function writeAutonomyGrantRuntimeToolPolicy(runtimeRoot) {
   const toolPolicy = {
-    profiles: { danger: ["*"] },
     tools: {
       approvalMode: "bypass",
-      profile: "danger",
-      allow: [],
+      allow: ["*"],
       deny: [],
       loopDetection: {
         enabled: false,

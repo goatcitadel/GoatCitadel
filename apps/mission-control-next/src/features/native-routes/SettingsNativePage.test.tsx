@@ -752,7 +752,6 @@ const mocks = vi.hoisted(() => ({
       },
     ],
     settings: {
-      defaultToolProfile: "standard",
       budgetMode: "balanced",
       networkAllowlist: ["api.openai.com"],
       auth: {
@@ -1716,7 +1715,6 @@ beforeEach(async () => {
       },
     ],
     settings: {
-      defaultToolProfile: "standard",
       budgetMode: "balanced",
       networkAllowlist: ["api.openai.com"],
       auth: {
@@ -3400,8 +3398,8 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("Provider or local runtime setup");
     expect(text).toContain("Install verification");
     expect(text).toContain("Apply first-run defaults");
-    expect(text).toContain("Tool profile");
-    expect(text).toContain("Balanced default for normal local work");
+    expect(text).toContain("Tool approvals");
+    expect(text).not.toContain("Tool profile");
     expect(text).toContain("Store a balanced budget preference");
     expect(text).not.toContain("Terminal onboarding");
     expect(text).not.toContain("Mission Control posture");
@@ -3425,7 +3423,6 @@ describe("SettingsNativePage providers", () => {
     });
     expect(mocks.bootstrapOnboarding).toHaveBeenCalledWith({
       expectedRevision: 41,
-      defaultToolProfile: "standard",
       toolApprovalMode: "approve_risky",
       budgetMode: "balanced",
       networkAllowlist: ["api.openai.com"],
@@ -3481,7 +3478,6 @@ describe("SettingsNativePage providers", () => {
       ],
       firstRunChecklist: [],
       settings: {
-        defaultToolProfile: "standard",
         budgetMode: "balanced",
         networkAllowlist: [],
         auth: {
@@ -3768,7 +3764,6 @@ describe("SettingsNativePage providers", () => {
         },
       ],
       settings: {
-        defaultToolProfile: "danger",
         toolApprovalMode: "bypass",
         budgetMode: "balanced",
         networkAllowlist: ["api.openai.com"],
@@ -3802,9 +3797,7 @@ describe("SettingsNativePage providers", () => {
     await flushAsyncUpdates();
 
     await act(async () => findButton(renderer!.root, "First-run defaults").props.onClick());
-    const dangerOption = renderer!.root.findAll((node) => node.type === "option" && node.props.value === "danger")[0];
     const bypassOption = renderer!.root.findAll((node) => node.type === "option" && node.props.value === "bypass")[0];
-    expect(dangerOption?.props.disabled).toBe(true);
     expect(bypassOption?.props.disabled).toBe(true);
     expect(collectText(renderer!.root)).toContain(
       "Remote Hardened keeps first-run defaults that skip normal prompts unavailable.",

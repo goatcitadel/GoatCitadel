@@ -386,7 +386,7 @@ export function buildSuggestedRepairPatch(input: {
   }
   switch (input.causeClass) {
     case "tool_exists_but_not_in_profile":
-      return `Review ${input.configArea} and allow ${input.requestedTool ?? "the blocked tool"} in profile ${input.toolProfile ?? "current"}.`;
+      return `Review ${input.configArea} and the effective permission profile or explicit allow/deny rules for ${input.requestedTool ?? "the blocked tool"}.`;
     case "tool_requires_approval_but_not_exposed":
       return `Review ${input.configArea} and expose an approval-required path for ${input.requestedTool ?? "the blocked tool"}.`;
     case "skill_missing":

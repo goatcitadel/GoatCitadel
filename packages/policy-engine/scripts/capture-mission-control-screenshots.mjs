@@ -233,7 +233,6 @@ async function waitForHttp(url, label) {
 async function seedDemoData() {
   const workspaceSlug = `release-demo-${randomUUID().slice(0, 6)}`;
   const onboarding = await postJson("/api/v1/onboarding/bootstrap", {
-    defaultToolProfile: "research",
     budgetMode: "balanced",
     networkAllowlist: ["api.z.ai", "discord.com", "slack.com", "api.github.com"],
     llm: {

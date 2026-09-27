@@ -20,11 +20,7 @@ export function assertDeploymentProfileStartupSafety(
     errors.push("remote_hardened requires allowLoopbackBypass=false.");
   }
   const approvalMode = config.toolPolicy.tools?.approvalMode ?? config.assistant.toolApprovalMode;
-  if (
-    approvalMode === "bypass" ||
-    config.assistant.defaultToolProfile === "danger" ||
-    config.toolPolicy.tools?.profile === "danger"
-  ) {
+  if (approvalMode === "bypass") {
     errors.push("remote_hardened disables approval bypass.");
   }
 

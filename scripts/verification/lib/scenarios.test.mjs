@@ -51,7 +51,7 @@ test("autonomy-grant verification override drops the stale unified-config genera
   const split = JSON.parse(await fs.readFile(path.join(configDir, "tool-policy.json"), "utf8"));
   assert.equal("generation" in unified, false);
   assert.deepEqual(unified.toolPolicy, split);
-  assert.equal(unified.toolPolicy.tools.profile, "danger");
+  assert.deepEqual(unified.toolPolicy.tools.allow, ["*"]);
   assert.equal(unified.toolPolicy.tools.approvalMode, "bypass");
 });
 

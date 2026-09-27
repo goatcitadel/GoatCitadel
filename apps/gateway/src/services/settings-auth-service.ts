@@ -190,9 +190,7 @@ export async function getSettings(deps: SettingsRuntimeDependencies): Promise<Ru
     revision: deps.readSettingsRevision?.() ?? 1,
     environment: deps.config.assistant.environment,
     deploymentProfile: deps.config.assistant.deploymentProfile,
-    toolApprovalMode:
-      deps.config.toolPolicy.tools.approvalMode ?? legacyProfileToApprovalMode(deps.config.toolPolicy.tools.profile),
-    defaultToolProfile: deps.config.toolPolicy.tools.profile,
+    toolApprovalMode: deps.config.toolPolicy.tools.approvalMode ?? deps.config.assistant.toolApprovalMode ?? "approve_risky",
     budgetMode: deps.config.budgets.mode,
     workspaceDir: deps.config.assistant.workspaceDir,
     writeJailRoots: deps.config.toolPolicy.sandbox.writeJailRoots,
@@ -272,7 +270,6 @@ export interface UpdateSettingsInput {
   expectedRevision?: number;
   deploymentProfile?: DeploymentProfile;
   toolApprovalMode?: ToolApprovalMode;
-  defaultToolProfile?: string;
   budgetMode?: "saver" | "balanced" | "power";
   readAccessMode?: FilesystemReadAccessMode;
   networkAllowlist?: string[];
@@ -471,6 +468,9 @@ export async function updateSettings(
   deps: SettingsRuntimeDependencies,
   rawInput: UpdateSettingsInput,
 ): Promise<RuntimeSettings> {
+  if (Object.prototype.hasOwnProperty.call(rawInput, "defaultToolProfile")) {
+    throw new Error("Named tool profiles are retired. Configure approval mode and permission profiles instead.");
+  }
   assertProviderConfigMutationIsSecretFree(rawInput);
   const reconciledInput = requiresSettingsPublicProjectionReconciliation(rawInput)
     ? preserveSettingsSecretsForPublicUpdate(await getSettings(deps), rawInput)
@@ -481,22 +481,6 @@ export async function updateSettings(
 
   if (input.deploymentProfile) {
     deps.config.assistant.deploymentProfile = input.deploymentProfile;
-  }
-
-  if (input.defaultToolProfile) {
-    const legacyProfiles = deps.config.toolPolicy.profiles ?? {};
-    const knownLegacyProfiles =
-      Object.keys(legacyProfiles).length === 0 ||
-      Object.prototype.hasOwnProperty.call(legacyProfiles, input.defaultToolProfile);
-    if (!knownLegacyProfiles) {
-      throw new Error(`Unknown legacy tool profile: ${input.defaultToolProfile}`);
-    }
-    deps.config.toolPolicy.tools.profile = input.defaultToolProfile as typeof deps.config.toolPolicy.tools.profile;
-    deps.config.toolPolicy.tools.approvalMode = legacyProfileToApprovalMode(input.defaultToolProfile);
-    deps.config.assistant.defaultToolProfile = input.defaultToolProfile;
-    deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
-      enforce: true,
-    });
   }
 
   if (input.toolApprovalMode) {
@@ -3013,8 +2997,4 @@ async function rejectInactiveCompanionRequest(
     path: input.path,
   }));
   throw new Error("Companion session is no longer active.");
-}
-
-function legacyProfileToApprovalMode(profile: string | undefined): ToolApprovalMode {
-  return profile === "danger" ? "bypass" : "approve_risky";
 }

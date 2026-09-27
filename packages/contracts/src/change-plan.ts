@@ -241,7 +241,6 @@ export interface ChangePlanLlamaCppConfiguration {
 export type ChangePlanRuntimeConfigurationOperation =
   | { readonly operation: "tool_approval_mode"; readonly mode: "approve_all" | "approve_risky" | "bypass" }
   | { readonly operation: "budget_mode"; readonly mode: "saver" | "balanced" | "power" }
-  | { readonly operation: "default_tool_profile"; readonly profileId: string }
   | { readonly operation: "deployment_profile"; readonly profile: "local_dev" | "trusted_local" | "remote_hardened" }
   | { readonly operation: "read_access_policy"; readonly mode: "roots_only" | "approval_required" | "full_disk" }
   | { readonly operation: "network_allowlist"; readonly entries: readonly string[] }
@@ -684,8 +683,6 @@ function isRuntimeConfigurationOperation(value: unknown): value is ChangePlanRun
       );
     case "budget_mode":
       return hasOnlyKeys(value, ["operation", "mode"]) && ["saver", "balanced", "power"].includes(String(value.mode));
-    case "default_tool_profile":
-      return hasOnlyKeys(value, ["operation", "profileId"]) && isIdentifier(value.profileId);
     case "deployment_profile":
       return (
         hasOnlyKeys(value, ["operation", "profile"]) &&

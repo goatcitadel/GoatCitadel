@@ -37,12 +37,12 @@ export function classifyCapabilityGapFromTrace(input: {
     };
   }
 
-  if (suggestions.some((item) => item.recommendedAction === "switch_tool_profile")) {
+  if (suggestions.some((item) => item.recommendedAction === "review_tool_access" || item.recommendedAction === "switch_tool_profile")) {
     return {
-      causeClass: "tool_exists_but_not_in_profile",
-      recoveryOptions: ["temporary_session_allow", "switch_tool_profile", "patch_config", "replay_failed_turn"],
+      causeClass: "policy_denied_by_config",
+      recoveryOptions: ["patch_config", "replay_failed_turn"],
       configArea: "config/tool-policy.json",
-      suggestedRepairClass: "tool_profile_patch",
+      suggestedRepairClass: "tool_access_review",
       confidence: 0.93,
     };
   }

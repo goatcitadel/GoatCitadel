@@ -30,9 +30,6 @@ const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set(["slack", "whatsapp", "line",
 export interface IntegrationDiagnosticsPort {
   readonly config: {
     toolPolicy: {
-      tools: {
-        profile: string;
-      };
       sandbox: {
         networkAllowlist: string[];
       };

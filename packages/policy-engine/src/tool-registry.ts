@@ -189,15 +189,6 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
                     {
                       type: "object",
                       properties: {
-                        operation: { const: "default_tool_profile" },
-                        profileId: { type: "string", minLength: 1, maxLength: 256 },
-                      },
-                      required: ["operation", "profileId"],
-                      additionalProperties: false,
-                    },
-                    {
-                      type: "object",
-                      properties: {
                         operation: { const: "deployment_profile" },
                         profile: { type: "string", enum: ["local_dev", "trusted_local", "remote_hardened"] },
                       },

@@ -18,7 +18,6 @@ export function goatComparisonConfig(profile, slots) {
         environment: "local",
         deploymentProfile: "trusted_local",
         toolApprovalMode: "approve_risky",
-        defaultToolProfile: "comparison",
         features: { autonomyV1Disabled: true },
         dataDir: "./data",
         transcriptsDir: "./data/transcripts",
@@ -33,8 +32,7 @@ export function goatComparisonConfig(profile, slots) {
         llamaCpp: { enabled: false, autoStart: false },
       },
       toolPolicy: {
-        profiles: { comparison: nativeTools },
-        tools: { profile: "comparison", approvalMode: "approve_risky", allow: [], deny: [] },
+        tools: { approvalMode: "approve_risky", allow: nativeTools, deny: [] },
         agents: {},
         sandbox: {
           writeJailRoots: [slots.workspace],

@@ -39,6 +39,7 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
   public constructor(private readonly deps: RuntimeConfigurationChangePlanAdapterDependencies) {}
 
   public async prepare(context: EvolutionControlPlaneAdapterContext, request: ChangePlanRuntimeConfigurationRequest) {
+    assertNotRetiredToolProfileChange(request);
     const settings = await this.deps.getSettings();
     await this.validateOwnerSelection(request, settings, context.origin.workspaceId);
     if (request.change.operation === "gateway_auth_configuration") {
@@ -109,6 +110,7 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
     if (plan.request.kind !== "runtime_configuration") {
       throw new SemanticValidationError("Runtime configuration Change Plan kind drifted.");
     }
+    assertNotRetiredToolProfileChange(plan.request);
     const current = await this.deps.getSettings();
     assertRevision(plan, current.revision);
     if (plan.request.change.operation === "gateway_auth_configuration") {
@@ -251,6 +253,7 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
         evidenceRefs: [] as string[],
       };
     }
+    assertNotRetiredToolProfileChange(plan.request);
     const current = await this.deps.getSettings();
     const applied = matches(plan.request, current);
     return {
@@ -381,14 +384,18 @@ function llamaSetupMismatchReason(
   return `The approved llama.cpp setup differs from current settings (${differences.join(", ")}). Review the current settings and retry setup.`;
 }
 
+function assertNotRetiredToolProfileChange(request: ChangePlanRuntimeConfigurationRequest): void {
+  if ((request.change.operation as string) === "default_tool_profile") {
+    throw new SemanticValidationError("Named tool profile changes are retired. Review permission profiles instead.");
+  }
+}
+
 function settingsPatch(request: ChangePlanRuntimeConfigurationRequest): Omit<UpdateSettingsInput, "expectedRevision"> {
   switch (request.change.operation) {
     case "tool_approval_mode":
       return { toolApprovalMode: request.change.mode };
     case "budget_mode":
       return { budgetMode: request.change.mode };
-    case "default_tool_profile":
-      return { defaultToolProfile: requireProfileId(request.change.profileId) };
     case "deployment_profile":
       return { deploymentProfile: request.change.profile };
     case "read_access_policy":
@@ -426,8 +433,6 @@ function matches(request: ChangePlanRuntimeConfigurationRequest, settings: Runti
       return settings.toolApprovalMode === request.change.mode;
     case "budget_mode":
       return settings.budgetMode === request.change.mode;
-    case "default_tool_profile":
-      return settings.defaultToolProfile === request.change.profileId;
     case "deployment_profile":
       return settings.deploymentProfile === request.change.profile;
     case "read_access_policy":
@@ -496,14 +501,6 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
         completedSummary: `Runtime budget mode is now ${request.change.mode}.`,
         impact: "Future routing and execution use the selected cost posture.",
         risk: "safe" as const,
-      };
-    case "default_tool_profile":
-      return {
-        title: "Change the default tool profile",
-        summary: `Change the default tool profile to ${requireProfileId(request.change.profileId)}.`,
-        completedSummary: `The default tool profile is now ${request.change.profileId}.`,
-        impact: "Future sessions inherit the selected tool profile; policy denies still win.",
-        risk: "caution" as const,
       };
     case "deployment_profile":
       return {
@@ -659,14 +656,6 @@ function matchesPartial(observed: object, expected: object, nullClears = false):
 
 function sameList(left: readonly unknown[], right: readonly unknown[]): boolean {
   return left.length === right.length && left.every((item, index) => item === right[index]);
-}
-
-function requireProfileId(value: string): string {
-  const profile = value.trim();
-  if (!profile || profile.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(profile)) {
-    throw new SemanticValidationError("The requested tool profile is invalid.");
-  }
-  return profile;
 }
 
 function assertRevision(plan: ChangePlanRecord, currentRevision: number): void {

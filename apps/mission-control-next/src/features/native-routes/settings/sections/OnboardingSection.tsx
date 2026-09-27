@@ -48,17 +48,13 @@ import {
   describeBudgetMode,
   describeToolApprovalMode,
   describeToolApprovalModeHelp,
-  describeToolProfile,
-  describeToolProfileLabel,
   type FirstRunEvidenceSnapshot,
   labelForBudgetMode,
   normalizeBudgetMode,
   normalizeToolApprovalMode,
-  normalizeToolProfile,
   setupMeta,
   splitCommaList,
   TOOL_APPROVAL_MODE_OPTIONS,
-  TOOL_PROFILE_OPTIONS,
 } from "../../SettingsNativePage";
 
 type OnboardingPageState = OnboardingState & {
@@ -96,7 +92,6 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId, activ
   const defaults = useSessionDraft(
     "onboarding:" + activeWorkspaceId + ":defaults",
     {
-      defaultToolProfile: normalizeToolProfile(data?.settings?.defaultToolProfile),
       toolApprovalMode: normalizeToolApprovalMode(data?.settings?.toolApprovalMode),
       budgetMode: normalizeBudgetMode(data?.settings?.budgetMode),
       networkAllowlist: data?.settings?.networkAllowlist?.join(", ") ?? "",
@@ -134,7 +129,7 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId, activ
     }
     if (
       onboardingPromptSkippingRestriction &&
-      (defaultsDraft.defaultToolProfile === "danger" || defaultsDraft.toolApprovalMode === "bypass")
+      defaultsDraft.toolApprovalMode === "bypass"
     ) {
       setNotice({ tone: "warning", message: onboardingPromptSkippingRestriction });
       return false;
@@ -145,7 +140,6 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId, activ
     try {
       await bootstrapOnboarding({
         expectedRevision: defaults.baseRevision as number,
-        defaultToolProfile: defaultsDraft.defaultToolProfile,
         toolApprovalMode: defaultsDraft.toolApprovalMode,
         budgetMode: defaultsDraft.budgetMode,
         networkAllowlist: splitCommaList(defaultsDraft.networkAllowlist),
@@ -224,8 +218,7 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId, activ
                   subtitle="Review the current settings before applying your retained draft."
                 >
                   <p>
-                    Current tool profile: {data.settings?.defaultToolProfile}. Approval mode:{" "}
-                    {data.settings?.toolApprovalMode}. Budget: {data.settings?.budgetMode}.
+                    Approval mode: {data.settings?.toolApprovalMode}. Budget: {data.settings?.budgetMode}.
                   </p>
                   <p>Network allowlist: {data.settings?.networkAllowlist?.join(", ") || "Empty"}</p>
                   <NativeButton onClick={defaults.rebaseToCurrent}>Apply draft to current defaults</NativeButton>
@@ -238,35 +231,6 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId, activ
                 subtitle="Set the minimum runtime defaults without duplicating advanced setup."
               >
                 <SettingsFieldGrid>
-                  <SettingsField label="Tool profile">
-                    <select
-                      className="mc-next-settings-input"
-                      value={defaultsDraft.defaultToolProfile}
-                      onChange={(event) => {
-                        const nextProfile = normalizeToolProfile(event.target.value);
-                        if (onboardingPromptSkippingRestriction && nextProfile === "danger") {
-                          return;
-                        }
-                        setDefaultsDraft((current) => ({
-                          ...current,
-                          defaultToolProfile: nextProfile,
-                        }));
-                      }}
-                    >
-                      {TOOL_PROFILE_OPTIONS.map((profile) => (
-                        <option
-                          key={profile}
-                          value={profile}
-                          disabled={Boolean(onboardingPromptSkippingRestriction && profile === "danger")}
-                        >
-                          {describeToolProfileLabel(profile)}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mc-next-settings-field-note">
-                      {describeToolProfile(defaultsDraft.defaultToolProfile)}
-                    </p>
-                  </SettingsField>
                   <SettingsField label="Tool approvals">
                     <select
                       className="mc-next-settings-input"

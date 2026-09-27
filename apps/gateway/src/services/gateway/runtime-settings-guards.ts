@@ -8,8 +8,6 @@ export interface DeploymentProfileUpdateGuardContext {
   currentDeploymentProfile: DeploymentProfile;
   currentAuthMode: AuthRuntimeSettings["mode"];
   currentAllowLoopbackBypass: boolean;
-  currentDefaultToolProfile?: string;
-  currentToolPolicyProfile?: string;
   currentToolPolicyApprovalMode?: ToolApprovalMode;
   currentAssistantToolApprovalMode?: ToolApprovalMode;
   currentNetworkAllowlist: string[];
@@ -27,14 +25,10 @@ export function assertDeploymentProfileUpdate(
 
   const nextAuthMode = input.auth?.mode ?? context.currentAuthMode;
   const nextAllowLoopbackBypass = input.auth?.allowLoopbackBypass ?? context.currentAllowLoopbackBypass;
-  const nextDefaultToolProfile = input.defaultToolProfile ?? context.currentDefaultToolProfile;
-  const nextToolPolicyProfile = context.currentToolPolicyProfile;
   const nextToolApprovalMode =
     input.toolApprovalMode ??
-    (input.defaultToolProfile ? legacyToolProfileToApprovalMode(input.defaultToolProfile) : undefined) ??
     context.currentToolPolicyApprovalMode ??
     context.currentAssistantToolApprovalMode ??
-    legacyToolProfileToApprovalMode(context.currentToolPolicyProfile ?? context.currentDefaultToolProfile) ??
     "approve_risky";
   const nextAllowlist = (input.networkAllowlist ?? context.currentNetworkAllowlist)
     .map((host) => host.trim())
@@ -49,9 +43,6 @@ export function assertDeploymentProfileUpdate(
   }
   if (nextToolApprovalMode === "bypass") {
     errors.push("remote_hardened disables approval bypass.");
-  }
-  if (nextDefaultToolProfile === "danger" || nextToolPolicyProfile === "danger") {
-    errors.push("remote_hardened disables danger tool profiles.");
   }
   if (!hasExplicitNonLoopbackAllowedOrigin(context.allowedOriginsEnv)) {
     errors.push("remote_hardened requires explicit non-loopback GOATCITADEL_ALLOWED_ORIGINS.");
@@ -92,13 +83,6 @@ export function assertFirecrawlRuntimeUpdate(
       `web.firecrawl.baseUrl must be present in the outbound allowlist before Firecrawl can be enabled: ${nextBaseUrl}`,
     );
   }
-}
-
-function legacyToolProfileToApprovalMode(profile: string | undefined): ToolApprovalMode | undefined {
-  if (!profile) {
-    return undefined;
-  }
-  return profile === "danger" ? "bypass" : "approve_risky";
 }
 
 function hasExplicitNonLoopbackAllowedOrigin(rawOrigins: string | undefined): boolean {

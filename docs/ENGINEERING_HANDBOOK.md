@@ -736,7 +736,7 @@ Important fields:
 
 Defines:
 
-- tool profiles and tool lists.
+- explicit tool approval mode and allow/deny lists. Named tool profile presets are retired; existing config keys are ignored.
 - global and per-agent allow/deny behavior.
 - jail roots, read-only roots, network allowlist, risky shell patterns.
 

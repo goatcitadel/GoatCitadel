@@ -14,7 +14,6 @@ export interface RuntimeSettings {
   environment: string;
   deploymentProfile: DeploymentProfile;
   toolApprovalMode: ToolApprovalMode;
-  defaultToolProfile?: string;
   budgetMode: "saver" | "balanced" | "power";
   workspaceDir: string;
   writeJailRoots: string[];

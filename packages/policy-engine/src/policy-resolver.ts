@@ -15,20 +15,14 @@ export function resolveEffectivePolicy(
   const activeLocalOperatorOverride = isActiveLocalOperatorOverride(localOperatorOverride)
     ? localOperatorOverride
     : undefined;
-  const profileName =
-    permissionProfile?.legacyToolProfile ?? config.agents[agentId]?.tools?.profile ?? config.tools.profile;
   const profileTools = activeLocalOperatorOverride
     ? new Set<string>(["*"])
     : permissionProfile
       ? new Set(permissionProfile.toolPatterns)
-      : profileName
-        ? new Set(config.profiles?.[profileName] ?? [])
-        : new Set<string>(["*"]);
+      : new Set<string>();
   const approvalMode = activeLocalOperatorOverride
     ? "bypass"
-    : (permissionProfile?.approvalMode ??
-      config.tools.approvalMode ??
-      (profileName === "danger" ? "bypass" : "approve_risky"));
+    : (permissionProfile?.approvalMode ?? config.tools.approvalMode ?? "approve_risky");
 
   const allowSet = new Set<string>([
     ...config.tools.allow,
@@ -66,7 +60,6 @@ export function resolveEffectivePolicy(
 
   return {
     approvalMode,
-    profile: profileName,
     permissionProfileId: permissionProfile?.profileId,
     permissionProfileLabel: permissionProfile?.label,
     localOperatorOverrideId: activeLocalOperatorOverride?.overrideId,

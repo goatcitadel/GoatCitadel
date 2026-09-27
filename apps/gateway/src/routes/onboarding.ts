@@ -92,7 +92,7 @@ const llmProviderRequestSchema = z.object({
 const bootstrapSchema = z.object({
   expectedRevision: z.number().int().positive(),
   toolApprovalMode: z.enum(["approve_all", "approve_risky", "bypass"]).optional(),
-  defaultToolProfile: z.enum(["minimal", "standard", "coding", "ops", "research", "chat-agent", "danger"]).optional(),
+  defaultToolProfile: z.never().optional(),
   budgetMode: z.enum(["saver", "balanced", "power"]).optional(),
   networkAllowlist: z.array(z.string().min(1)).optional(),
   auth: z

@@ -1060,7 +1060,8 @@ export class ToolPolicyEngine {
     // additive allow source. Global/agent/profile allows, scoped grants, and a
     // local operator override may change posture only for tools already inside
     // this surface; none may widen it. Global deny remains the earlier,
-    // absolute deny-wins gate and no-profile requests keep legacy semantics.
+    // absolute deny-wins gate. Requests without a permission profile rely on
+    // explicit global/agent allows rather than retired named presets.
     const activePermissionProfile =
       request.policyContext?.permissionProfile?.status === "active"
         ? request.policyContext.permissionProfile

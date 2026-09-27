@@ -13,6 +13,7 @@ import type {
   ToolAccessEvaluateRequest,
   ToolAccessEvaluateResponse,
   ToolCatalogEntry,
+  ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 
 interface CapabilityScoutDeps {
@@ -38,6 +39,7 @@ interface CapabilityScoutInput {
   assistantText: string;
   sessionId: string;
   trace?: ChatTurnTraceRecord;
+  policyContext?: ToolPolicyActorContext;
   deps: CapabilityScoutDeps;
 }
 
@@ -91,6 +93,12 @@ const ACTION_INTENT =
   /\b(add|book|browse|build|call|calendar|capture|change|check|clone|connect|create|debug|deploy|download|email|fetch|find|fix|install|invoke|list|lookup|open|read|run|schedule|search|send|set up|setup|sync|use|write)\b/i;
 const GAP_SIGNAL =
   /\b(can't|cannot|couldn't|do not have|don't have|missing|not available|not installed|not connected|unable)\b/i;
+const POLICY_ACCESS_DENIAL_REASONS = new Set([
+  "policy_deny",
+  "policy_disallow",
+  "permission_profile_upper_bound",
+  "grant_deny",
+]);
 
 export async function scoutCapabilityUpgradeSuggestions(
   input: CapabilityScoutInput,
@@ -151,7 +159,9 @@ export async function scoutCapabilityUpgradeSuggestions(
     });
   }
 
-  for (const tool of rankToolMatches(input.content, input.deps.listToolCatalog()).slice(0, 4)) {
+  // A probe without the admitted turn's permission context can falsely report
+  // that an available tool is blocked by an unrelated default policy.
+  for (const tool of input.policyContext ? rankToolMatches(input.content, input.deps.listToolCatalog()).slice(0, 4) : []) {
     let access: ToolAccessEvaluateResponse;
     try {
       access = await input.deps.evaluateToolAccess({
@@ -159,11 +169,15 @@ export async function scoutCapabilityUpgradeSuggestions(
         sessionId: input.sessionId,
         agentId: "assistant",
         args: {},
+        workspaceId: input.policyContext?.workspaceId,
+        permissionProfileId: input.policyContext?.permissionProfileId,
+        surface: input.policyContext?.surface,
+        policyContext: input.policyContext,
       });
     } catch {
       continue;
     }
-    if (access.allowed) {
+    if (access.allowed || !access.reasonCodes.some((reason) => POLICY_ACCESS_DENIAL_REASONS.has(reason))) {
       continue;
     }
     ranked.push({
@@ -174,10 +188,10 @@ export async function scoutCapabilityUpgradeSuggestions(
         summary: tool.description,
         reason:
           access.reasonCodes.length > 0
-            ? `Current tool/profile policy blocked this capability: ${access.reasonCodes.join(", ")}.`
-            : "Current tool/profile policy is blocking this capability.",
+            ? `Current tool access policy blocked this capability: ${access.reasonCodes.join(", ")}.`
+            : "Current tool access policy is blocking this capability.",
         riskLevel: tool.riskLevel === "danger" || tool.riskLevel === "nuclear" ? "high" : "medium",
-        recommendedAction: "switch_tool_profile",
+        recommendedAction: "review_tool_access",
         candidateId: tool.toolName,
         requiresUserApproval: true,
       },
@@ -377,7 +391,7 @@ function buildCodeModeCapabilityBuildSuggestion(input: CapabilityScoutInput): Ch
     summary:
       "No callable, disabled, importable, or configurable capability matched this gap. GoatCitadel can stage a self-authored SKILL.md capability candidate for review from this conversation.",
     reason:
-      "A new reusable capability is justified only after the installed skill catalog, disabled skills, hosted/importable skills, MCP templates, and tool-profile repairs did not produce a suitable match.",
+      "A new reusable capability is justified only after the installed skill catalog, disabled skills, hosted/importable skills, MCP templates, and effective tool permissions did not produce a suitable match.",
     sourceProvider: "code_mode",
     sourceRef: `code-mode://capability-gap/${encodeURIComponent(sourceTurnId ?? input.sessionId)}`,
     riskLevel: "medium",

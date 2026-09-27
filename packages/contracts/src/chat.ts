@@ -1181,6 +1181,8 @@ export interface ChatCapabilityUpgradeSuggestion {
     | "install_skill_disabled"
     | "install_skill_enable"
     | "add_mcp_template"
+    | "review_tool_access"
+    /** Historical suggestion; new turns use review_tool_access. */
     | "switch_tool_profile"
     | "connect_mcp"
     | "build_code_mode_skill_candidate";

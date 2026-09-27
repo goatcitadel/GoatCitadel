@@ -39,6 +39,39 @@ describe("tools permission profile routes", () => {
     app = null;
   });
 
+  it("rejects retired legacy tool profile metadata on create and update", async () => {
+    const tools = {
+      listToolCatalog: vi.fn(() => []),
+      listPermissionProfiles: vi.fn(() => [createProfile()]),
+      listActiveLocalOperatorOverrides: vi.fn(() => []),
+      createPermissionProfile: vi.fn(),
+      updatePermissionProfile: vi.fn(),
+    };
+
+    app = Fastify();
+    app.decorateRequest("authActorId", "operator-test");
+    app.decorateRequest("authActorSource", "loopback");
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
+    app.decorate("services", { tools } as never);
+    await app.register(toolsRoutes);
+
+    const createResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/tools/permission-profiles",
+      payload: { label: "Custom", approvalMode: "approve_all", legacyToolProfile: "danger" },
+    });
+    const updateResponse = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/tools/permission-profiles/profile-1",
+      payload: { expectedRevision: "a".repeat(64), legacyToolProfile: "danger" },
+    });
+
+    expect(createResponse.statusCode).toBe(400);
+    expect(updateResponse.statusCode).toBe(400);
+    expect(tools.createPermissionProfile).not.toHaveBeenCalled();
+    expect(tools.updatePermissionProfile).not.toHaveBeenCalled();
+  });
+
   it("returns hardened-mode errors for bypass profile create, update, and activation", async () => {
     const hardenedError = new Error(
       "Bypass permission profiles are unavailable in remote_hardened deployment profile.",

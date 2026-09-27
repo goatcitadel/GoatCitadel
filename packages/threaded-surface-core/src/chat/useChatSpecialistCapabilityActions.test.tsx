@@ -504,11 +504,11 @@ describe("useChatSpecialistCapabilityActions", () => {
 
     await act(async () => {
       latestHarness?.result.handleCapabilitySuggestionAction(
-        makeCapabilitySuggestion({ recommendedAction: "switch_tool_profile" }),
+        makeCapabilitySuggestion({ recommendedAction: "review_tool_access" }),
       );
       await flushEffects();
     });
-    expect((globalThis.window as any).location.hash).toBe("tools");
+    expect((globalThis.window as any).location.hash).toBe("permissions");
 
     await act(async () => {
       latestHarness?.result.handleCapabilitySuggestionAction(

@@ -12,7 +12,6 @@ export function PermissionSelectionReviewDetails({ review }: { review: Permissio
       { label: review.input.operation === "defaults" ? `Currently saved: ${review.profile.label}` : review.profile.label,
         description: describeToolApprovalMode(review.profile.approvalMode) },
       { label: "Filesystem reads", description: describeReadAccessMode(review.profile.readAccessMode ?? "") },
-      ...(review.profile.legacyToolProfile ? [{ label: "Legacy tool profile", description: review.profile.legacyToolProfile }] : []),
       { label: "Tool patterns", description: review.profile.toolPatterns.join(", ") || "No tool patterns" },
       { label: "Allow patterns", description: review.profile.allow.join(", ") || "No extra allow patterns" },
       { label: "Deny patterns", description: review.profile.deny.join(", ") || "No profile deny patterns" },

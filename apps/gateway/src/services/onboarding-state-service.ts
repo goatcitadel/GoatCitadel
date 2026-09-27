@@ -98,10 +98,7 @@ export function getOnboardingState(runtime: OnboardingStateHost): OnboardingStat
     requireMtls: runtime.config.assistant.mesh.security.requireMtls,
     tailnetEnabled: runtime.config.assistant.mesh.security.tailnet.enabled,
   };
-  const toolApprovalMode =
-    runtime.config.toolPolicy.tools.approvalMode ??
-    (runtime.config.toolPolicy.tools.profile === "danger" ? "bypass" : "approve_risky");
-  const defaultToolProfile = runtime.config.toolPolicy.tools.profile ?? "";
+  const toolApprovalMode = runtime.config.toolPolicy.tools.approvalMode ?? runtime.config.assistant.toolApprovalMode ?? "approve_risky";
   const budgetMode = runtime.config.budgets.mode;
   const networkAllowlist = runtime.config.toolPolicy.sandbox.networkAllowlist;
   const activeProvider = llm.providers.find((provider) => provider.providerId === llm.activeProviderId);
@@ -187,7 +184,6 @@ export function getOnboardingState(runtime: OnboardingStateHost): OnboardingStat
     settings: {
       revision: runtime.readSettingsRevision?.() ?? 1,
       toolApprovalMode,
-      defaultToolProfile,
       budgetMode,
       networkAllowlist,
       auth,
@@ -228,7 +224,6 @@ export async function bootstrapOnboarding(
   await runtime.updateSettings({
     expectedRevision: input.expectedRevision,
     toolApprovalMode: input.toolApprovalMode,
-    defaultToolProfile: input.defaultToolProfile,
     budgetMode: input.budgetMode,
     networkAllowlist: input.networkAllowlist,
     auth: input.auth,

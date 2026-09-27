@@ -168,7 +168,6 @@ export const READ_ONLY_EXPLORER_PERMISSION_PROFILE: PermissionProfileRecord = Ob
   // Requiring ordinary tool approval here would park every read and strand the
   // parent delegation after the child wake.
   approvalMode: "bypass",
-  legacyToolProfile: "minimal",
   toolPatterns: [...READ_ONLY_EXPLORER_ALLOWED_TOOLS],
   allow: [...READ_ONLY_EXPLORER_ALLOWED_TOOLS],
   deny: [...READ_ONLY_EXPLORER_DENIED_TOOLS],

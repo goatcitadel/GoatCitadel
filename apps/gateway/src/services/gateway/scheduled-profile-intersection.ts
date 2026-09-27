@@ -31,7 +31,6 @@ export function buildScheduledCreatorIntersectionProfile(
       SCHEDULED_RESTRICTED_PROFILE.approvalMode,
       input.creatorProfile.approvalMode,
     ),
-    legacyToolProfile: input.creatorProfile.legacyToolProfile ?? SCHEDULED_RESTRICTED_PROFILE.legacyToolProfile,
     toolPatterns: creatorPatterns,
     allow: intersectPatternLists(SCHEDULED_RESTRICTED_PROFILE.allow, input.creatorProfile.allow),
     deny: uniqueStrings([

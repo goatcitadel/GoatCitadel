@@ -572,45 +572,34 @@ describe("settings-auth-service durable settings", () => {
     );
   });
 
-  it("accepts legacy tool profile names when the profile map is empty", async () => {
+  it("rejects named tool profile mutations instead of reporting false success", async () => {
     const host = buildHost();
-    host.config.toolPolicy.profiles = {};
-
-    const settings = await updateSettings(host, {
+    await expect(updateSettings(host, {
       defaultToolProfile: "minimal",
-    });
-
-    expect(settings.defaultToolProfile).toBe("minimal");
+    } as never)).rejects.toThrow("Named tool profiles are retired");
     expect(host.persistToolPolicyConfig).not.toHaveBeenCalled();
     expect(host.persistAssistantConfig).not.toHaveBeenCalled();
   });
 
-  it("builds first-run tool profile and approval mode without direct mirror persistence", async () => {
+  it("updates explicit approval mode without changing a legacy profile value", async () => {
     const host = buildHost();
 
     const settings = await updateSettings(host, {
-      defaultToolProfile: "minimal",
       toolApprovalMode: "approve_all",
     });
 
-    expect(settings.defaultToolProfile).toBe("minimal");
     expect(settings.toolApprovalMode).toBe("approve_all");
     expect(host.config.toolPolicy.tools.profile).toBe("minimal");
     expect(host.config.toolPolicy.tools.approvalMode).toBe("approve_all");
-    expect(host.config.assistant.defaultToolProfile).toBe("minimal");
     expect(host.config.assistant.toolApprovalMode).toBe("approve_all");
     expect(host.persistToolPolicyConfig).not.toHaveBeenCalled();
     expect(host.persistAssistantConfig).not.toHaveBeenCalled();
   });
 
-  it("rejects unknown legacy tool profile names when profiles are explicit", async () => {
+  it("does not derive bypass approval from a retired danger profile value", async () => {
     const host = buildHost();
-
-    await expect(
-      updateSettings(host, {
-        defaultToolProfile: "unknown",
-      }),
-    ).rejects.toThrow("Unknown legacy tool profile: unknown");
+    host.config.toolPolicy.tools.profile = "danger";
+    expect((await getSettings(host)).toolApprovalMode).toBe("approve_risky");
   });
 
   it("rejects empty runtime endpoints before mutating persisted settings", async () => {
@@ -780,6 +769,7 @@ describe("settings-auth-service durable settings", () => {
         },
         llamaCpp: {
           enabled: true,
+          managementMode: "managed",
           autoStart: true,
           baseUrl: " http://127.0.0.1:18080/v1 ",
           command: " llama-server ",
@@ -1369,7 +1359,7 @@ describe("settings-auth-service durable settings", () => {
     expect(
       await updateSettings(host, {
         npu: { enabled: true, autoStart: true },
-        llamaCpp: { enabled: true, autoStart: true },
+        llamaCpp: { enabled: true, managementMode: "managed", autoStart: true },
       }),
     ).toMatchObject({
       npu: { enabled: false, autoStart: false },

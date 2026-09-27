@@ -169,7 +169,7 @@ await write(
 );
 const { config } = goatComparisonConfig(profile, { workspace, baseUrl: proxy.baseUrl });
 config.assistant.features.autonomyV1Disabled = false;
-config.toolPolicy.profiles.comparison = ["schedule.manage", "comms.send"];
+config.toolPolicy.tools.allow = ["schedule.manage", "comms.send"];
 config.toolPolicy.sandbox.networkAllowlist = ["127.0.0.1", "api.telegram.org"];
 await write(path.join(stateDirectory, "config/goatcitadel.json"), config);
 await write(path.join(stateDirectory, ".env"), "");

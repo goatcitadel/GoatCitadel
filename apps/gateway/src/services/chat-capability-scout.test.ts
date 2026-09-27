@@ -67,6 +67,59 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
     vi.restoreAllMocks();
   });
 
+  it("only diagnoses blocked web tools with the admitted turn's permission context", async () => {
+    const evaluateToolAccess = vi.fn(async () => ({
+      toolName: "browser.search",
+      allowed: false,
+      reasonCodes: ["policy_deny"],
+      requiresApproval: false,
+      riskLevel: "safe" as const,
+    }));
+    const deps: Parameters<typeof scoutCapabilityUpgradeSuggestions>[0]["deps"] = {
+      listToolCatalog: createToolCatalog,
+      evaluateToolAccess,
+      listSkills: async () => [],
+      resolveSkillActivation: async () => ({ suppressed: [] }),
+      listSkillSources: async () => ({ generatedAt: new Date().toISOString(), providers: [], items: [] }),
+      lookupSkillSources: async (query) => ({ query, generatedAt: new Date().toISOString(), providers: [], items: [] }),
+      listMcpTemplates: async () => [],
+      listMcpTemplateDiscovery: async () => [],
+    };
+    const input = {
+      content: "Search the web for the latest docs",
+      assistantText: "I can't search the web because web access is not available.",
+      sessionId: "session-1",
+      trace: createTrace(),
+      deps,
+    };
+
+    const withoutContext = await scoutCapabilityUpgradeSuggestions(input);
+    expect(evaluateToolAccess).not.toHaveBeenCalled();
+    expect(withoutContext.some((item) => item.recommendedAction === "review_tool_access")).toBe(false);
+
+    const policyContext = { workspaceId: "workspace-1", sessionId: "session-1", permissionProfileId: "safe", surface: "chat" as const };
+    const withContext = await scoutCapabilityUpgradeSuggestions({ ...input, policyContext });
+    expect(evaluateToolAccess).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: "browser.search",
+      policyContext,
+      permissionProfileId: "safe",
+    }));
+    expect(withContext).toContainEqual(expect.objectContaining({
+      recommendedAction: "review_tool_access",
+      candidateId: "browser.search",
+    }));
+
+    evaluateToolAccess.mockResolvedValueOnce({
+      toolName: "browser.search",
+      allowed: false,
+      reasonCodes: ["structural_safety_block"],
+      requiresApproval: false,
+      riskLevel: "safe",
+    });
+    const invalidProbe = await scoutCapabilityUpgradeSuggestions({ ...input, policyContext });
+    expect(invalidProbe.some((item) => item.recommendedAction === "review_tool_access")).toBe(false);
+  });
+
   it("does not propose another capability after an operator closes tool use", async () => {
     const trace = createTrace();
     trace.routing = {

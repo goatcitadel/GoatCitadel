@@ -54,7 +54,7 @@ describe("ToolPolicyConfigSchema", () => {
     expect(result.tools.approvalMode).toBe("approve_risky");
   });
 
-  it("maps the legacy danger profile to bypass approval mode", () => {
+  it("ignores the retired danger profile when choosing approval mode", () => {
     const input = {
       profiles: {},
       tools: { profile: "danger", allow: [], deny: [] },
@@ -63,7 +63,7 @@ describe("ToolPolicyConfigSchema", () => {
     };
 
     const result = ToolPolicyConfigSchema.parse(input);
-    expect(result.tools.approvalMode).toBe("bypass");
+    expect(result.tools.approvalMode).toBe("approve_risky");
   });
 
   it("allows unknown keys via passthrough", () => {

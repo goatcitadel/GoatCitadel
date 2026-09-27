@@ -2406,8 +2406,8 @@ async function handleCapabilitySuggestions(
   if (suggestion.recommendedAction === "add_mcp_template") {
     followUpChoices.push({ name: "Add MCP template now", value: "mcp" });
   }
-  if (suggestion.recommendedAction === "switch_tool_profile") {
-    followUpChoices.push({ name: "Open Tool Access next", value: "tools" });
+  if (suggestion.recommendedAction === "review_tool_access" || suggestion.recommendedAction === "switch_tool_profile") {
+    followUpChoices.push({ name: "Review effective tool permissions next", value: "tools" });
   }
   if (suggestion.recommendedAction === "build_code_mode_skill_candidate") {
     followUpChoices.push({ name: "Create Code Mode skill proposal next", value: "code-mode-skill" });
@@ -2546,8 +2546,8 @@ async function handleCapabilitySuggestions(
       renderBox(
         "Tool Access hint",
         [
-          "This capability is blocked by the current tool/profile policy.",
-          "Open the Tool Access view next and adjust the profile or grants before retrying.",
+          "This capability is blocked by the current tool access policy.",
+          "Review effective permissions, denies, and grants before retrying.",
         ],
         "warning",
       ),

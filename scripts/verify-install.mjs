@@ -90,7 +90,6 @@ async function main() {
           },
           body: {
             expectedRevision,
-            defaultToolProfile: "minimal",
             budgetMode: "balanced",
             networkAllowlist: ["127.0.0.1", "localhost"],
             llm: {

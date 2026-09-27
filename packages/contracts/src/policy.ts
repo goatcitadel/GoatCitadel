@@ -10,8 +10,6 @@ import type { WardEffect } from "./citadel-wards.js";
 
 export type ToolApprovalMode = "approve_all" | "approve_risky" | "bypass";
 
-export type ToolProfile = "minimal" | "standard" | "coding" | "ops" | "research" | "chat-agent" | "danger";
-
 export type FilesystemReadAccessMode = "roots_only" | "approval_required" | "full_disk";
 
 export type PermissionProfileBuiltinId =
@@ -34,6 +32,7 @@ export interface PermissionProfileRecord {
   scope: PermissionProfileScope;
   scopeRef?: string;
   approvalMode: ToolApprovalMode;
+  /** Deprecated persisted metadata. It has no effect on tool access. */
   legacyToolProfile?: string;
   toolPatterns: string[];
   allow: string[];
@@ -204,6 +203,7 @@ export interface PermissionProfileCreateInput {
   scope?: PermissionProfileCreateScope;
   scopeRef?: string;
   approvalMode: ToolApprovalMode;
+  /** Deprecated compatibility input; ignored by runtime policy. */
   legacyToolProfile?: string;
   toolPatterns?: string[];
   allow?: string[];
@@ -219,6 +219,7 @@ export interface PermissionProfileUpdateInput {
   label?: string;
   description?: string;
   approvalMode?: ToolApprovalMode;
+  /** Deprecated compatibility input; ignored by runtime policy. */
   legacyToolProfile?: string;
   toolPatterns?: string[];
   allow?: string[];
@@ -355,10 +356,12 @@ export interface ToolRiskyArgumentPattern {
 }
 
 export interface ToolPolicyConfig {
+  /** Deprecated config field; named profiles no longer affect tool access. */
   profiles?: Record<string, string[]>;
   tools: {
     approvalMode?: ToolApprovalMode;
-    profile?: ToolProfile;
+    /** Deprecated config field; ignored by runtime policy. */
+    profile?: string;
     allow: string[];
     deny: string[];
     loopDetection?: ToolLoopDetectionConfig;
@@ -471,7 +474,6 @@ export interface ToolInvokeResult {
 
 export interface EffectiveToolPolicy {
   approvalMode: ToolApprovalMode;
-  profile?: string;
   permissionProfileId?: string;
   permissionProfileLabel?: string;
   localOperatorOverrideId?: string;

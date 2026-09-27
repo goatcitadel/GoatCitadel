@@ -32,7 +32,6 @@ function settings(overrides: Record<string, unknown> = {}) {
     revision: 7,
     toolApprovalMode: "approve_risky",
     budgetMode: "balanced",
-    defaultToolProfile: "standard",
     features: {
       evolutionControlPlaneV1Enabled: true,
       improvementLocalObservationV1Enabled: false,
@@ -152,6 +151,26 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
     expect(discardManagedSelection).toHaveBeenCalledWith("selection-1");
     expect((await adapter.verify(context, plan)).status).toBe("completed");
   });
+
+  it("rejects a persisted named tool profile plan after retirement", async () => {
+    const updateSettings = vi.fn();
+    const adapter = new RuntimeConfigurationChangePlanAdapter({
+      ...authCredentialDeps,
+      getSettings: async () => settings(),
+      updateSettings,
+    });
+    const request = {
+      kind: "runtime_configuration",
+      change: { operation: "default_tool_profile", profileId: "danger" },
+    } as never;
+
+    await expect(adapter.prepare(context, request)).rejects.toThrow("Named tool profile changes are retired");
+    await expect(adapter.apply(context, { request } as ChangePlanRecord)).rejects.toThrow(
+      "Named tool profile changes are retired",
+    );
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
   it("applies reviewed pack flags together at one revision and keeps protected flags dangerous", async () => {
     let current = settings();
     const updateSettings = vi.fn(async (input) => {

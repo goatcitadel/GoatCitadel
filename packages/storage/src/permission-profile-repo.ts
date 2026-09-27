@@ -36,7 +36,6 @@ interface PermissionProfileRow {
   scope: PermissionProfileScope;
   scope_ref: string | null;
   approval_mode: PermissionProfileRecord["approvalMode"];
-  legacy_tool_profile: string | null;
   tool_patterns_json: string;
   allow_json: string;
   deny_json: string;
@@ -121,7 +120,6 @@ export const BUILTIN_PERMISSION_PROFILES: PermissionProfileRecord[] = [
     status: "active",
     scope: "global",
     approvalMode: "approve_all",
-    legacyToolProfile: "danger",
     toolPatterns: ["*"],
     allow: [],
     deny: [],
@@ -140,7 +138,6 @@ export const BUILTIN_PERMISSION_PROFILES: PermissionProfileRecord[] = [
     status: "active",
     scope: "global",
     approvalMode: "bypass",
-    legacyToolProfile: "danger",
     toolPatterns: ["*"],
     allow: ["*"],
     deny: [],
@@ -206,11 +203,11 @@ export class PermissionProfileRepository {
         : "strftime('%Y-%m-%dT%H:%M:%fZ', julianday('now') + (CAST(@ttlSeconds AS REAL) / 86400.0))";
     this.createProfileStmt = db.prepare(`
       INSERT INTO permission_profiles (
-        profile_id, label, description, builtin, status, scope, scope_ref, approval_mode, legacy_tool_profile,
+        profile_id, label, description, builtin, status, scope, scope_ref, approval_mode,
         tool_patterns_json, allow_json, deny_json, read_access_mode, default_for_surfaces_json,
         created_by, created_at, updated_at, archived_at
       ) VALUES (
-        @profileId, @label, @description, @builtin, @status, @scope, @scopeRef, @approvalMode, @legacyToolProfile,
+        @profileId, @label, @description, @builtin, @status, @scope, @scopeRef, @approvalMode,
         @toolPatternsJson, @allowJson, @denyJson, @readAccessMode, @defaultForSurfacesJson,
         @createdBy, @createdAt, @updatedAt, NULL
       )
@@ -220,7 +217,6 @@ export class PermissionProfileRepository {
       SET label = @label,
           description = @description,
           approval_mode = @approvalMode,
-          legacy_tool_profile = @legacyToolProfile,
           tool_patterns_json = @toolPatternsJson,
           allow_json = @allowJson,
           deny_json = @denyJson,
@@ -359,7 +355,6 @@ export class PermissionProfileRepository {
         label: input.label?.trim() || existing.label,
         description: input.description ?? existing.description,
         approvalMode: input.approvalMode ?? existing.approvalMode,
-        legacyToolProfile: input.legacyToolProfile ?? existing.legacyToolProfile,
         toolPatterns: normalizeStringList(input.toolPatterns ?? existing.toolPatterns),
         allow: normalizeStringList(input.allow ?? existing.allow),
         deny: normalizeStringList(input.deny ?? existing.deny),
@@ -755,7 +750,6 @@ function normalizeProfileInput(input: {
     scope,
     scopeRef: scopeRef ?? undefined,
     approvalMode: input.input.approvalMode,
-    legacyToolProfile: input.input.legacyToolProfile,
     toolPatterns: normalizeStringList(input.input.toolPatterns ?? ["*"]),
     allow: normalizeStringList(input.input.allow ?? []),
     deny: normalizeStringList(input.input.deny ?? []),
@@ -777,7 +771,6 @@ function toProfileParams(profile: PermissionProfileRecord): Record<string, unkno
     scope: profile.scope,
     scopeRef: profile.scopeRef ?? null,
     approvalMode: profile.approvalMode,
-    legacyToolProfile: profile.legacyToolProfile ?? null,
     toolPatternsJson: JSON.stringify(profile.toolPatterns),
     allowJson: JSON.stringify(profile.allow),
     denyJson: JSON.stringify(profile.deny),
@@ -795,7 +788,6 @@ function toProfileUpdateParams(profile: PermissionProfileRecord): Record<string,
     label: profile.label,
     description: profile.description ?? null,
     approvalMode: profile.approvalMode,
-    legacyToolProfile: profile.legacyToolProfile ?? null,
     toolPatternsJson: JSON.stringify(profile.toolPatterns),
     allowJson: JSON.stringify(profile.allow),
     denyJson: JSON.stringify(profile.deny),
@@ -815,7 +807,6 @@ function mapProfileRow(row: PermissionProfileRow): PermissionProfileSnapshotReco
     scope: row.scope,
     scopeRef: row.scope_ref ?? undefined,
     approvalMode: row.approval_mode,
-    legacyToolProfile: row.legacy_tool_profile ?? undefined,
     toolPatterns: safeJsonParse<string[]>(row.tool_patterns_json, []),
     allow: safeJsonParse<string[]>(row.allow_json, []),
     deny: safeJsonParse<string[]>(row.deny_json, []),

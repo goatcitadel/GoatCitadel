@@ -169,7 +169,7 @@ export const updateSettingsSchema = z.object({
   expectedRevision: z.number().int().positive(),
   deploymentProfile: z.enum(["local_dev", "trusted_local", "remote_hardened"]).optional(),
   toolApprovalMode: z.enum(["approve_all", "approve_risky", "bypass"]).optional(),
-  defaultToolProfile: z.string().min(1).optional(),
+  defaultToolProfile: z.never().optional(),
   budgetMode: z.enum(["saver", "balanced", "power"]).optional(),
   readAccessMode: z.enum(["roots_only", "approval_required", "full_disk"]).optional(),
   networkAllowlist: z.array(z.string().min(1)).optional(),

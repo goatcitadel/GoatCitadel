@@ -493,9 +493,6 @@ export function createIntegrationDiagnosticsServiceForGateway(
     get config() {
       return {
         toolPolicy: {
-          tools: {
-            profile: gateway.config.toolPolicy.tools.profile ?? "",
-          },
           sandbox: {
             networkAllowlist: gateway.config.toolPolicy.sandbox.networkAllowlist,
           },

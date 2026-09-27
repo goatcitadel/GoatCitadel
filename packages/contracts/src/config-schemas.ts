@@ -145,8 +145,8 @@ export const ToolPolicyConfigSchema = z
   })
   .passthrough()
   .transform((value) => {
-    const legacyProfile = value.tools.profile;
-    const approvalMode = value.tools.approvalMode ?? (legacyProfile === "danger" ? "bypass" : "approve_risky");
+    // Old profile names remain loadable, but cannot change approval behavior.
+    const approvalMode = value.tools.approvalMode ?? "approve_risky";
     return {
       ...value,
       tools: {
@@ -344,6 +344,7 @@ export const AssistantConfigInputSchema = z
     environment: z.string().optional(),
     deploymentProfile: z.enum(["local_dev", "trusted_local", "remote_hardened"]).optional(),
     toolApprovalMode: z.enum(["approve_all", "approve_risky", "bypass"]).optional(),
+    /** Deprecated config field; accepted only so existing files still parse. */
     defaultToolProfile: z.string().optional(),
     dataDir: z.string().optional(),
     transcriptsDir: z.string().optional(),

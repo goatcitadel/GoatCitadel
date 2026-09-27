@@ -13,7 +13,6 @@ export interface SettingsChangePlanInput {
   readonly expectedRevision: number;
   readonly toolApprovalMode?: RuntimeChangeFor<"tool_approval_mode">["mode"];
   readonly budgetMode?: RuntimeChangeFor<"budget_mode">["mode"];
-  readonly defaultToolProfile?: string;
   readonly deploymentProfile?: RuntimeChangeFor<"deployment_profile">["profile"];
   readonly readAccessMode?: RuntimeChangeFor<"read_access_policy">["mode"];
   readonly networkAllowlist?: readonly string[];
@@ -70,13 +69,6 @@ export function settingsChangePlanRequest(input: SettingsChangePlanInput): Chang
     case "budgetMode":
       return input.budgetMode
         ? { kind: "runtime_configuration", change: { operation: "budget_mode", mode: input.budgetMode } }
-        : null;
-    case "defaultToolProfile":
-      return input.defaultToolProfile
-        ? {
-            kind: "runtime_configuration",
-            change: { operation: "default_tool_profile", profileId: input.defaultToolProfile },
-          }
         : null;
     case "deploymentProfile":
       return input.deploymentProfile

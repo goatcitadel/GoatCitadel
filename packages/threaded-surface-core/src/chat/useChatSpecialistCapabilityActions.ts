@@ -272,8 +272,8 @@ export function useChatSpecialistCapabilityActions(input: {
           return;
         }
 
-        if (suggestion.recommendedAction === "switch_tool_profile") {
-          window.location.hash = "tools";
+        if (suggestion.recommendedAction === "review_tool_access" || suggestion.recommendedAction === "switch_tool_profile") {
+          window.location.hash = "permissions";
           dismissCapabilitySuggestion(suggestion);
           return;
         }

@@ -844,7 +844,6 @@ function setupResponses() {
       { id: "auth", label: "Auth posture", status: "optional", detail: "Local only." },
     ],
     settings: {
-      defaultToolProfile: "standard",
       toolApprovalMode: "approve_risky",
       budgetMode: "balanced",
       networkAllowlist: ["api.openai.com"],
@@ -1854,7 +1853,6 @@ describe("SettingsNativePage broad native sections", () => {
       completed: false,
       checklist: [],
       settings: {
-        defaultToolProfile: "standard",
         toolApprovalMode: "approve_risky",
         budgetMode: "balanced",
         networkAllowlist: ["api.old.example"],
@@ -1888,7 +1886,6 @@ describe("SettingsNativePage broad native sections", () => {
 
     expect(settingsMocks.bootstrapOnboarding).toHaveBeenNthCalledWith(1, {
       expectedRevision: 71,
-      defaultToolProfile: "standard",
       toolApprovalMode: "approve_risky",
       budgetMode: "saver",
       networkAllowlist: ["local.example", "api.local.example"],
@@ -1906,7 +1903,6 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(onboarding.root, "Apply defaults"));
     expect(settingsMocks.bootstrapOnboarding).toHaveBeenNthCalledWith(2, {
       expectedRevision: 72,
-      defaultToolProfile: "standard",
       toolApprovalMode: "approve_risky",
       budgetMode: "saver",
       networkAllowlist: ["local.example", "api.local.example"],
@@ -2831,7 +2827,6 @@ describe("SettingsNativePage broad native sections", () => {
     const selects = onboarding.root.findAllByType("select");
     const selectWithOption = (value: string) =>
       selects.find((select) => select.findAllByType("option").some((option) => option.props.value === value));
-    await change(selectWithOption("danger")!, "danger");
     await change(selectWithOption("bypass")!, "bypass");
     await change(selectWithOption("power")!, "power");
     await change(
@@ -2841,7 +2836,6 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(onboarding.root, "Apply defaults"));
     expect(settingsMocks.bootstrapOnboarding).toHaveBeenCalledWith({
       expectedRevision: 29,
-      defaultToolProfile: "danger",
       toolApprovalMode: "bypass",
       budgetMode: "power",
       networkAllowlist: ["api.example.com", "localhost"],

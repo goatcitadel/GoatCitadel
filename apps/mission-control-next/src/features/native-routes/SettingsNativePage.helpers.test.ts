@@ -23,7 +23,6 @@ import {
   describeProviderReadinessFailure,
   describeToolApprovalMode,
   describeToolGrantAvailability,
-  describeToolProfile,
   descriptionForSettingsSection,
   formatCapabilities,
   formatCheckedAtLabel,
@@ -201,8 +200,6 @@ describe("SettingsNativePage helpers", () => {
     expect(describeToolApprovalMode("approve_all")).toBe("Ask every time");
     expect(describeToolApprovalMode("approve_risky")).toBe("Ask for risky work");
     expect(describeToolApprovalMode("bypass")).toBe("Skip normal prompts");
-    expect(describeToolProfile("danger")).toContain("prompt behavior still comes from the approval mode");
-    expect(describeToolProfile("danger")).not.toContain("skips normal prompts");
     expect(normalizeBudgetMode("power")).toBe("power");
     expect(normalizeBudgetMode("turbo")).toBe("balanced");
     expect(labelForSettingsSection("mcp")).toBe("MCP");

@@ -26,7 +26,6 @@ import type {
   PermissionProfileRecord,
   PermissionSurface,
   ToolApprovalMode,
-  ToolProfile,
   ToolGrantRecord,
 } from "@goatcitadel/contracts";
 import {
@@ -131,15 +130,6 @@ import {
 } from "./settings/SettingsShared";
 
 export const TOOL_APPROVAL_MODE_OPTIONS: ToolApprovalMode[] = ["approve_all", "approve_risky", "bypass"];
-export const TOOL_PROFILE_OPTIONS: ToolProfile[] = [
-  "minimal",
-  "standard",
-  "coding",
-  "ops",
-  "research",
-  "chat-agent",
-  "danger",
-];
 export const BUDGET_MODE_OPTIONS: Array<OnboardingState["settings"]["budgetMode"]> = ["saver", "balanced", "power"];
 const INTERNAL_APPROVAL_INBOX_URL = "goatcitadel://approval-inbox";
 
@@ -1353,10 +1343,6 @@ export function normalizeToolApprovalMode(value: string | undefined): ToolApprov
   return TOOL_APPROVAL_MODE_OPTIONS.includes(value as ToolApprovalMode) ? (value as ToolApprovalMode) : "approve_risky";
 }
 
-export function normalizeToolProfile(value: string | undefined): ToolProfile {
-  return TOOL_PROFILE_OPTIONS.includes(value as ToolProfile) ? (value as ToolProfile) : "standard";
-}
-
 export function describeToolApprovalMode(value: ToolApprovalMode): string {
   if (value === "approve_all") {
     return "Ask every time";
@@ -1425,39 +1411,6 @@ export function resetLocalOperatorOverrideScopeRefForScope(
   activeWorkspaceId: string,
 ): string {
   return scope === "workspace" ? activeWorkspaceId : "";
-}
-
-export function describeToolProfile(value: ToolProfile): string {
-  switch (value) {
-    case "minimal":
-      return "Smallest tool set for basic chat and status checks.";
-    case "coding":
-      return "Adds repo, filesystem, terminal, and validation tools for implementation work.";
-    case "ops":
-      return "Prioritizes runtime, diagnostics, deployment, and repair tooling.";
-    case "research":
-      return "Prioritizes retrieval, browsing, citations, and synthesis tools.";
-    case "chat-agent":
-      return "Chat-friendly tools without turning the surface into a full coding workstation.";
-    case "danger":
-      return "Broadest local tool access profile for fully trusted machines; prompt behavior still comes from the approval mode and hard blocks stay enforced.";
-    default:
-      return "Balanced default for normal local work without opening the broadest tool set.";
-  }
-}
-
-export function describeToolProfileLabel(value: ToolProfile): string {
-  switch (value) {
-    case "chat-agent":
-      return "Chat Agent";
-    case "danger":
-      return "Trusted Local Power";
-    default:
-      return value
-        .split("-")
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(" ");
-  }
 }
 
 export function normalizeBudgetMode(value: string | undefined): OnboardingState["settings"]["budgetMode"] {

@@ -7975,8 +7975,31 @@ export class GatewayService {
     assistantText: string;
     trace?: ChatTurnTraceRecord;
   }): Promise<ChatCapabilityUpgradeSuggestion[]> {
+    let policyContext: ToolPolicyActorContext | undefined;
+    if (input.trace?.capabilityProfileId) {
+      try {
+        const profile = await this.storage.chatTurnCapabilityProfiles.get(input.trace.capabilityProfileId);
+        if (profile.identity.sessionId === input.sessionId && profile.identity.turnId === input.trace.turnId) {
+          policyContext = await this.resolveToolPolicyContext({
+            operatorId: profile.identity.operatorId,
+            authActorId: profile.identity.authActorId,
+            authActorSource: profile.identity.authActorSource,
+            workspaceId: profile.identity.workspaceId,
+            sessionId: profile.identity.sessionId,
+            runId: profile.identity.durableRunId,
+            surface: profile.selection.mode,
+            permissionProfileId: profile.governance.permission.profileId,
+          });
+        }
+      } catch {
+        // A diagnostic must not guess at tool access if the admitted authority
+        // has changed or is no longer available.
+        policyContext = undefined;
+      }
+    }
     return scoutCapabilityUpgradeSuggestions({
       ...input,
+      policyContext,
       deps: {
         listToolCatalog: () => this.listToolCatalog(),
         evaluateToolAccess: async (request) => await this.evaluateToolAccess(request),
@@ -8042,7 +8065,6 @@ export class GatewayService {
           promptRef: input.turnId,
           requestedTool,
           toolFamily: requestedTool?.split(".")[0],
-          toolProfile: this.config.assistant.defaultToolProfile || this.config.toolPolicy.tools.profile,
           policyReason: toolRun?.error ?? input.trace.failure?.message,
           providerId: input.trace.routing.effectiveProviderId ?? input.trace.routing.primaryProviderId,
           model: input.trace.model ?? input.trace.routing.effectiveModel,
@@ -10839,7 +10861,7 @@ export class GatewayService {
       });
       this.llmService.replaceRuntimeConfig(candidate.llm);
     }
-    if (input.defaultToolProfile || input.toolApprovalMode || input.networkAllowlist) {
+    if (input.toolApprovalMode || input.networkAllowlist) {
       const previousAllowlist = [...previousConfig.toolPolicy.sandbox.networkAllowlist];
       compensations.push(() => this.llmService.updateNetworkAllowlist(previousAllowlist, { enforce: true }));
       this.llmService.updateNetworkAllowlist(candidate.config.toolPolicy.sandbox.networkAllowlist, { enforce: true });
@@ -10878,14 +10900,11 @@ export class GatewayService {
       };
     };
     toolApprovalMode?: ToolApprovalMode;
-    defaultToolProfile?: string;
   }): void {
     assertGatewayDeploymentProfileUpdate(input, {
       currentDeploymentProfile: this.config.assistant.deploymentProfile,
       currentAuthMode: this.config.assistant.auth.mode,
       currentAllowLoopbackBypass: this.config.assistant.auth.allowLoopbackBypass,
-      currentDefaultToolProfile: this.config.assistant.defaultToolProfile,
-      currentToolPolicyProfile: this.config.toolPolicy.tools?.profile,
       currentToolPolicyApprovalMode: this.config.toolPolicy.tools?.approvalMode,
       currentAssistantToolApprovalMode: this.config.assistant.toolApprovalMode,
       currentNetworkAllowlist: this.config.toolPolicy.sandbox.networkAllowlist,
@@ -13075,7 +13094,6 @@ export class GatewayService {
     const assistantPayload = {
       environment: runtimeConfig.assistant.environment,
       deploymentProfile: runtimeConfig.assistant.deploymentProfile,
-      defaultToolProfile: runtimeConfig.assistant.defaultToolProfile,
       dataDir: runtimeConfig.assistant.dataDir,
       transcriptsDir: runtimeConfig.assistant.transcriptsDir,
       auditDir: runtimeConfig.assistant.auditDir,

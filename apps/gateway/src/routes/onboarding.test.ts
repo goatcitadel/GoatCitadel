@@ -30,7 +30,6 @@ describe("onboarding routes", () => {
           requireMtls: false,
           tailnetEnabled: false,
         },
-        defaultToolProfile: "standard",
         budgetMode: "balanced",
         networkAllowlist: [],
       },
@@ -149,7 +148,7 @@ describe("onboarding routes", () => {
     expect(bootstrapOnboarding).not.toHaveBeenCalled();
   });
 
-  it("accepts the shipped chat-agent tool profile in bootstrap payloads", async () => {
+  it("rejects retired tool profile settings in bootstrap payloads", async () => {
     const bootstrapOnboarding = vi.fn((input) => input);
     app = Fastify();
     app.decorate("services", { onboarding: { bootstrapOnboarding } } as never);
@@ -164,11 +163,8 @@ describe("onboarding routes", () => {
       },
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(bootstrapOnboarding).toHaveBeenCalledWith({
-      expectedRevision: 6,
-      defaultToolProfile: "chat-agent",
-    });
+    expect(response.statusCode).toBe(400);
+    expect(bootstrapOnboarding).not.toHaveBeenCalled();
   });
 
   it("rejects invalid TLS combinations in bootstrap payloads", async () => {

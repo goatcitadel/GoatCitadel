@@ -161,27 +161,16 @@ describe("GatewayService loop32 runtime facade behavior", () => {
         toolApprovalMode: "bypass",
       }),
     ).toThrow("remote_hardened disables approval bypass.");
-    expect(() =>
-      GatewayService.prototype.assertDeploymentProfileUpdate.call(gateway, {
-        deploymentProfile: "remote_hardened",
-        defaultToolProfile: "danger",
-      }),
-    ).toThrow("remote_hardened disables danger tool profiles.");
     gateway.config.toolPolicy.tools.profile = "danger";
-    expect(() =>
-      GatewayService.prototype.assertDeploymentProfileUpdate.call(gateway, {
-        deploymentProfile: "remote_hardened",
-        toolApprovalMode: "approve_risky",
-        defaultToolProfile: "minimal",
-      }),
-    ).toThrow("remote_hardened disables danger tool profiles.");
-    gateway.config.toolPolicy.tools.profile = "balanced";
+    expect(() => GatewayService.prototype.assertDeploymentProfileUpdate.call(gateway, {
+      deploymentProfile: "remote_hardened",
+      toolApprovalMode: "approve_risky",
+    })).not.toThrow();
     process.env.GOATCITADEL_ALLOWED_ORIGINS = "http://localhost:5173";
     expect(() =>
       GatewayService.prototype.assertDeploymentProfileUpdate.call(gateway, {
         deploymentProfile: "remote_hardened",
         toolApprovalMode: "approve_risky",
-        defaultToolProfile: "minimal",
       }),
     ).toThrow("remote_hardened requires explicit non-loopback GOATCITADEL_ALLOWED_ORIGINS.");
     expect(() =>
