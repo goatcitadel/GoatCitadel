@@ -720,7 +720,10 @@ export interface ChatDelegationServiceHost {
 }
 
 export class ChatDelegationService {
-  private readonly explorerReconciliations = new Map<string, Promise<{ repaired: boolean; reentered: boolean }>>();
+  private readonly explorerReconciliations = new Map<
+    string,
+    { promise: Promise<{ repaired: boolean; reentered: boolean }> }
+  >();
 
   public constructor(private readonly deps: ChatDelegationServiceHost) {}
 
@@ -738,12 +741,13 @@ export class ChatDelegationService {
   ): Promise<{ repaired: boolean; reentered: boolean }> {
     const key = `${input.sessionId}\u0000${input.delegationRunId}`;
     const active = this.explorerReconciliations.get(key);
-    if (active) return await active;
-    const reconciliation = this.reconcilePersistedWorkspaceExplorerInternal(input, options);
+    if (active) return await active.promise;
+    const reconciliation = { promise: this.reconcilePersistedWorkspaceExplorerInternal(input, options) };
     this.explorerReconciliations.set(key, reconciliation);
     try {
-      return await reconciliation;
+      return await reconciliation.promise;
     } finally {
+      // js/missing-await: compare entry identity, so an old completion cannot remove a newer in-flight entry.
       if (this.explorerReconciliations.get(key) === reconciliation) this.explorerReconciliations.delete(key);
     }
   }

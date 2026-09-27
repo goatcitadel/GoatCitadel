@@ -1055,6 +1055,52 @@ function createAcceptHarness(argsJson: string | undefined) {
 }
 
 describe("ChatDelegationService loop 20 coverage", () => {
+  it("coalesces same-instance Explorer reconciliation and releases the entry after completion", async () => {
+    const { deps, runs, service } = createHarness();
+    const delegationRunId = "persisted-explorer-coalesced";
+    runs.set(delegationRunId, {
+      runId: delegationRunId,
+      parentRunId: "durable-parent-explorer",
+      sessionId: "sess-1",
+      taskId: "task-explorer-coalesced",
+      objective: "Recover the same Explorer once",
+      roles: ["workspace-explorer"],
+      mode: "sequential",
+      status: "running",
+      workflowTemplate: READ_ONLY_EXPLORER_WORKFLOW_TEMPLATE,
+      citations: [],
+      startedAt: "2026-08-12T00:00:00.000Z",
+    });
+    let releaseValidation!: () => void;
+    const validationHeld = new Promise<void>((resolve) => {
+      releaseValidation = resolve;
+    });
+    deps.validateReadOnlyExplorerParent.mockImplementation(async () => {
+      await validationHeld;
+      return {
+        workspaceId: "default",
+        requestActor: { actorKind: "operator" as const, actorId: "operator-1" },
+      };
+    });
+    const input = { sessionId: "sess-1", delegationRunId };
+    const first = service.reconcilePersistedWorkspaceExplorer(input);
+    await vi.waitFor(() => expect(deps.validateReadOnlyExplorerParent).toHaveBeenCalledTimes(1));
+    const second = service.reconcilePersistedWorkspaceExplorer(input);
+    expect(deps.storage.chatDelegationRuns.get).toHaveBeenCalledTimes(1);
+    releaseValidation();
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { repaired: false, reentered: false },
+      { repaired: false, reentered: false },
+    ]);
+    expect(deps.validateReadOnlyExplorerParent).toHaveBeenCalledTimes(1);
+
+    await expect(service.reconcilePersistedWorkspaceExplorer(input)).resolves.toEqual({
+      repaired: false,
+      reentered: false,
+    });
+    expect(deps.storage.chatDelegationRuns.get).toHaveBeenCalledTimes(2);
+  });
+
   it("recovers a persisted pre-launch Explorer exactly once across two fresh Gateway services", async () => {
     const { deps, durableRuns, runs, service, stableChildSessions, steps } = createHarness();
     durableRuns.set("durable-parent-explorer", buildExplorerParentDurableRun());
