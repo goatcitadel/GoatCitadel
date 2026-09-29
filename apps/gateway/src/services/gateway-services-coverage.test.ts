@@ -187,12 +187,12 @@ describe("gateway service coverage helpers", () => {
     expect(buildSuggestedRepairPatch({ causeClass: "skill_missing" })).toBeUndefined();
     expect(
       buildSuggestedRepairPatch({
-        causeClass: "tool_exists_but_not_in_profile",
+        causeClass: "policy_denied_by_config",
         requestedTool: "browser.search",
         toolProfile: "chat",
         configArea: "config/tool-policy.json",
       }),
-    ).toContain("allow browser.search");
+    ).toContain("explicit allow/deny rules");
     expect(
       buildSuggestedRepairPatch({
         causeClass: "tool_requires_approval_but_not_exposed",
@@ -232,10 +232,10 @@ describe("gateway service coverage helpers", () => {
       classifyCapabilityGapFromTrace({
         trace: {
           ...baseTrace,
-          capabilityUpgradeSuggestions: [{ recommendedAction: "switch_tool_profile" }],
+          capabilityUpgradeSuggestions: [{ recommendedAction: "review_tool_access" }],
         } as never,
       }),
-    ).toMatchObject({ causeClass: "tool_exists_but_not_in_profile", confidence: 0.93 });
+    ).toMatchObject({ causeClass: "policy_denied_by_config", confidence: 0.93 });
     expect(
       classifyCapabilityGapFromTrace({
         trace: baseTrace as never,

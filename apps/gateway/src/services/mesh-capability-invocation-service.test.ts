@@ -338,8 +338,7 @@ describe("MeshCapabilityInvocationService dispatch + settlement", () => {
         return schema ? { schema, executionProfileSha256: EXECUTION_PROFILE_SHA256 } : undefined;
       };
       const binding = (await resolveBinding())!;
-      const config: ToolPolicyConfig = { profiles: { danger: ["mesh.invoke"] },
-        tools: { profile: "danger", approvalMode: "approve_all", allow: [], deny: [] }, agents: {},
+      const config: ToolPolicyConfig = { tools: { approvalMode: "approve_all", allow: ["mesh.invoke"], deny: [] }, agents: {},
         sandbox: { writeJailRoots: [], readOnlyRoots: [], networkAllowlist: [], riskyShellPatterns: [], requireApprovalForRiskyShell: true } };
       const policy = new ToolPolicyEngine(config, runtimeStorage);
       const request: ToolInvokeRequest = { toolName: activation.capabilityId, agentId: "assistant", sessionId: "session-a",

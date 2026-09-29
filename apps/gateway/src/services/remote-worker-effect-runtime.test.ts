@@ -410,8 +410,7 @@ describe("worker effects over canonical SQLite ledgers with controlled authority
   it.each(["direct", "approved"] as const)("uses the real Gateway/coordinator mesh owners for a %s worker effect", async (mode) => {
     const f = await fixture("complete", "mesh:node-a:tool:project.status");
     const catalog = f.meshCatalog!;
-    const config: ToolPolicyConfig = { profiles: { danger: ["mesh.invoke"] },
-      tools: { profile: "danger", approvalMode: mode === "approved" ? "approve_all" : "bypass", allow: [], deny: [] }, agents: {},
+    const config: ToolPolicyConfig = { tools: { approvalMode: mode === "approved" ? "approve_all" : "bypass", allow: ["mesh.invoke"], deny: [] }, agents: {},
       sandbox: { writeJailRoots: [], readOnlyRoots: [], networkAllowlist: [], riskyShellPatterns: [], requireApprovalForRiskyShell: true } };
     const storage = { ...f.dependencies.storage, approvalEvents: f.storage.approvalEvents,
       meshCapabilityPublications: catalog.deps.storage.meshCapabilityPublications };

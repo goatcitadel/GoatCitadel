@@ -379,8 +379,7 @@ describe("ToolInvocationCoordinatorService", () => {
       auditDir: path.join(root, "audit"),
     });
     const config: ToolPolicyConfig = {
-      profiles: { danger: ["*"] },
-      tools: { profile: "danger", approvalMode: "bypass", allow: [], deny: [] },
+      tools: { approvalMode: "bypass", allow: ["*"], deny: [] },
       agents: {},
       sandbox: {
         writeJailRoots: [root],
@@ -445,8 +444,7 @@ describe("ToolInvocationCoordinatorService", () => {
       auditDir: path.join(root, "audit"),
     });
     const config: ToolPolicyConfig = {
-      profiles: { danger: ["*"] },
-      tools: { profile: "danger", approvalMode: "bypass", allow: [], deny: [] },
+      tools: { approvalMode: "bypass", allow: ["*"], deny: [] },
       agents: {},
       sandbox: {
         writeJailRoots: [root],
@@ -1492,11 +1490,9 @@ describe("ToolInvocationCoordinatorService", () => {
         auditDir: path.join(root, "audit"),
       });
       const config: ToolPolicyConfig = {
-        profiles: { danger: ["*"] },
         tools: {
-          profile: "danger",
           approvalMode: scenario === "approval" ? "approve_all" : "bypass",
-          allow: [],
+          allow: ["*"],
           deny: scenario === "denied" ? ["mcp.invoke"] : scenario === "native-denied" ? ["mcp.srv-1.tool.echo"] : [],
         },
         agents: {},
@@ -1628,11 +1624,9 @@ describe("ToolInvocationCoordinatorService", () => {
         auditDir: path.join(root, "audit"),
       });
       const config: ToolPolicyConfig = {
-        profiles: { danger: ["*"] },
         tools: {
-          profile: "danger",
           approvalMode: scenario === "approval" ? "approve_all" : "bypass",
-          allow: [],
+          allow: ["*"],
           deny: scenario === "denied" ? ["mcp.srv-1.tool.echo"] : [],
         },
         agents: {},

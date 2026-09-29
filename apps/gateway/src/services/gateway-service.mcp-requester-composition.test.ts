@@ -360,8 +360,7 @@ describe("composeMcpRequesterScopedRuntime (HX-415 slice 7d composed E2E)", () =
         });
       try {
         const config: ToolPolicyConfig = {
-          profiles: { danger: ["*"] },
-          tools: { profile: "danger", approvalMode: "bypass", allow: [], deny: [] },
+          tools: { approvalMode: "bypass", allow: ["*"], deny: [] },
           agents: {},
           sandbox: {
             writeJailRoots: [root],

@@ -5,11 +5,9 @@ import type { ApprovalCreateCommitPort, ApprovalCreateCommitResult } from "./app
 import { ToolPolicyEngine } from "./engine.js";
 
 const policyConfig: ToolPolicyConfig = {
-  profiles: { danger: ["*"] },
   tools: {
-    profile: "danger",
     approvalMode: "approve_risky",
-    allow: [],
+    allow: ["*"],
     deny: [],
   },
   agents: {},

@@ -28,8 +28,7 @@ function createConfig(
   approvalMode: ToolPolicyConfig["tools"]["approvalMode"] = "approve_risky",
 ): ToolPolicyConfig {
   return {
-    profiles: { danger: ["*"] },
-    tools: { profile: "danger", approvalMode, allow: [], deny: [] },
+    tools: { approvalMode, allow: ["*"], deny: [] },
     agents: {},
     sandbox: {
       writeJailRoots: [root],

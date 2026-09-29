@@ -46,8 +46,7 @@ function createStorageStub(): Storage & AsyncStorage {
 
 function createConfig(overrides: Partial<ToolPolicyConfig> = {}): ToolPolicyConfig {
   return {
-    profiles: { danger: ["*"] },
-    tools: { profile: "danger", allow: [], deny: [] },
+    tools: { allow: ["*"], deny: [] },
     agents: {},
     sandbox: {
       writeJailRoots: ["./workspace"],
@@ -64,7 +63,7 @@ describe("ToolPolicyEngine package tail coverage", () => {
   it("evaluates sparse structural targets without manufacturing blocked paths or hosts", async () => {
     const engine = new ToolPolicyEngine(
       createConfig({
-        tools: { profile: "danger", approvalMode: "bypass", allow: [], deny: [] },
+        tools: { approvalMode: "bypass", allow: ["*"], deny: [] },
       }),
       createStorageStub(),
     );
@@ -108,7 +107,7 @@ describe("ToolPolicyEngine package tail coverage", () => {
       const storage = createStorageStub();
       const engine = new ToolPolicyEngine(
         createConfig({
-          tools: { profile: "danger", approvalMode: "bypass", allow: [], deny: [] },
+          tools: { approvalMode: "bypass", allow: ["*"], deny: [] },
         }),
         storage,
       );
