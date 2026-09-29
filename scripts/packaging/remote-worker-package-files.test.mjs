@@ -86,7 +86,8 @@ test("worker package rejects schema dependency, version and peer drift", () => {
   }
 });
 
-test("worker schema URI parser rejects malformed bracketed hosts", () => {
+/** Guard the packaged parser against ambiguous hosts while preserving valid IPv6 URLs. */
+function assertWorkerSchemaUriParserRejectsMalformedHosts() {
   const require = createRequire(new URL("../../packages/contracts/package.json", import.meta.url));
   const ajvRequire = createRequire(require.resolve("ajv/package.json"));
   const uri = ajvRequire("fast-uri");
@@ -101,7 +102,9 @@ test("worker schema URI parser rejects malformed bracketed hosts", () => {
   assert.equal(valid.error, undefined);
   assert.equal(valid.host, "::1");
   assert.equal(valid.port, 8080);
-});
+}
+
+test("worker schema URI parser rejects malformed bracketed hosts", assertWorkerSchemaUriParserRejectsMalformedHosts);
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "goat-worker-package-files-"));
