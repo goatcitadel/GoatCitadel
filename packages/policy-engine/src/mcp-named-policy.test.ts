@@ -10,8 +10,7 @@ import { ToolRegistry } from "./tool-registry.js";
 
 function config(approvalMode: "bypass" | "approve_risky" = "bypass"): ToolPolicyConfig {
   return {
-    profiles: { danger: ["mcp.invoke"] },
-    tools: { profile: "danger", approvalMode, allow: [], deny: [] },
+    tools: { approvalMode, allow: ["mcp.invoke"], deny: [] },
     agents: {},
     sandbox: {
       writeJailRoots: [],

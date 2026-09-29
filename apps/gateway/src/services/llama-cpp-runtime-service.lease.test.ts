@@ -426,6 +426,7 @@ describe("LlamaCppRuntimeService leases", () => {
   it("never terminates an externally healthy process when lease-only demand ends", async () => {
     useLeaseFakeTimers();
     const harness = await createHarness({
+      managementMode: "external",
       idleTimeoutMs: 100,
       probeHealth: vi.fn(async () => ({ healthy: true, activeModelId: "external-model" })),
     });
@@ -448,6 +449,7 @@ describe("LlamaCppRuntimeService leases", () => {
 
   it("uses an externally healthy endpoint without requiring a local model path", async () => {
     const harness = await createHarness({
+      managementMode: "external",
       withoutModelPath: true,
       probeHealth: vi.fn(async () => ({ healthy: true, activeModelId: "external-model" })),
     });
@@ -466,7 +468,7 @@ describe("LlamaCppRuntimeService leases", () => {
       probeCount += 1;
       return probeCount <= 2 ? { healthy: true, activeModelId: "old-external-model" } : { healthy: false };
     });
-    const harness = await createHarness({ probeHealth });
+    const harness = await createHarness({ managementMode: "external", probeHealth });
     const lease = await harness.service.acquireLease({ purpose: "chat_completion" });
     await lease.release();
     const lifecycle = harness.service.getLifecycleSnapshot();
@@ -500,7 +502,10 @@ describe("LlamaCppRuntimeService leases", () => {
     await owned.service.stop("api");
     expect(owned.terminateOwnedProcess).toHaveBeenCalledTimes(1);
 
-    const external = await createHarness({ probeHealth: vi.fn(async () => ({ healthy: true })) });
+    const external = await createHarness({
+      managementMode: "external",
+      probeHealth: vi.fn(async () => ({ healthy: true })),
+    });
     await external.service.start("manual");
     await external.service.start("api");
     await external.service.start("config_autostart");
@@ -513,7 +518,10 @@ describe("LlamaCppRuntimeService leases", () => {
   });
 
   it("does not restore manual or API demand into a disabled runtime", async () => {
-    const harness = await createHarness({ probeHealth: vi.fn(async () => ({ healthy: true })) });
+    const harness = await createHarness({
+      managementMode: "external",
+      probeHealth: vi.fn(async () => ({ healthy: true })),
+    });
     await harness.service.start("manual");
     await harness.service.start("api");
     const lifecycle = harness.service.getLifecycleSnapshot();
@@ -947,7 +955,10 @@ describe("LlamaCppRuntimeService leases", () => {
   });
 
   it("bounds and sanitizes purpose diagnostics without exposing commands", async () => {
-    const harness = await createHarness({ probeHealth: vi.fn(async () => ({ healthy: true })) });
+    const harness = await createHarness({
+      managementMode: "external",
+      probeHealth: vi.fn(async () => ({ healthy: true })),
+    });
     await expect(harness.service.acquireLease({ purpose: "--api-key super-secret" })).rejects.toThrow(
       "diagnostic label",
     );
@@ -965,7 +976,10 @@ describe("LlamaCppRuntimeService leases", () => {
   });
 
   it("snapshots and restores exact persistent demand while preserving leases", async () => {
-    const harness = await createHarness({ probeHealth: vi.fn(async () => ({ healthy: true })) });
+    const harness = await createHarness({
+      managementMode: "external",
+      probeHealth: vi.fn(async () => ({ healthy: true })),
+    });
     await harness.service.start("manual");
     await harness.service.start("api");
     await harness.service.start("config_autostart");
@@ -1013,6 +1027,7 @@ async function createHarness(
     restartBackoffMs?: number;
     maxRestarts?: number;
     withoutModelPath?: boolean;
+    managementMode?: "external" | "managed";
     spawnProcess?: NonNullable<LlamaCppRuntimeServiceHooks["spawnProcess"]>;
     probeHealth?: NonNullable<LlamaCppRuntimeServiceHooks["probeHealth"]>;
     terminateOwnedProcess?: NonNullable<LlamaCppRuntimeServiceHooks["terminateOwnedProcess"]>;
@@ -1029,6 +1044,7 @@ async function createHarness(
     input.withoutModelPath ? undefined : modelPath,
     input.restartBackoffMs,
     input.maxRestarts,
+    input.managementMode,
   );
   let defaultProbeCount = 0;
   const probeHealth =
@@ -1064,10 +1080,16 @@ async function createHarness(
   return { service, config, rootDir, spawnProcess, terminateOwnedProcess, children };
 }
 
-function createConfig(modelPath: string | undefined, restartBackoffMs = 100, maxRestarts = 4): LlamaCppConfig {
+function createConfig(
+  modelPath: string | undefined,
+  restartBackoffMs = 100,
+  maxRestarts = 4,
+  managementMode: "external" | "managed" = "managed",
+): LlamaCppConfig {
   return {
     enabled: true,
     autoStart: false,
+    managementMode,
     server: {
       baseUrl: "http://127.0.0.1:8080/v1",
       command: process.execPath,

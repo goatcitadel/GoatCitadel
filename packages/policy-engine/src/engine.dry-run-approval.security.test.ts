@@ -11,8 +11,7 @@ import { ToolPolicyEngine } from "./engine.js";
 
 function buildConfig(): ToolPolicyConfig {
   return {
-    profiles: { danger: ["*"] },
-    tools: { profile: "danger", approvalMode: "approve_risky", allow: [], deny: [] },
+    tools: { approvalMode: "approve_risky", allow: ["*"], deny: [] },
     agents: {},
     sandbox: {
       writeJailRoots: ["./workspace"],

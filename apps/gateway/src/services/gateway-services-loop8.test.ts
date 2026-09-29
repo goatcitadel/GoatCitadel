@@ -93,6 +93,7 @@ describe("Loop 8 gateway service coverage", () => {
       },
       llamaCpp: {
         enabled: true,
+        managementMode: "managed",
         autoStart: true,
         baseUrl: " http://127.0.0.1:8088/v1 ",
         command: " llama-server ",

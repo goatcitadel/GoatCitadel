@@ -94,7 +94,7 @@ describe("LlmService local-service leases", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("holds a lease for an exact-endpoint model preview transport", async () => {
+  it("checks an exact-endpoint model preview without acquiring a managed lease", async () => {
     server = await startFakeOpenAiCompatibleServer();
     const release = vi.fn();
     const acquire = vi.fn<LlmLocalServiceLeaseAcquirer>(async () => ({ release }));
@@ -104,10 +104,8 @@ describe("LlmService local-service leases", () => {
       source: "live",
     });
 
-    expect(acquire).toHaveBeenCalledWith(
-      expect.objectContaining({ purpose: "model_discovery", baseUrl: server.baseUrl }),
-    );
-    expect(release).toHaveBeenCalledOnce();
+    expect(acquire).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
   });
 
   it("keeps a stale-cache background revalidation leased until its transport settles", async () => {

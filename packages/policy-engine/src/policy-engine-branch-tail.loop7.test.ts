@@ -8,8 +8,7 @@ import { executeTool, resolveExecutableCommand } from "./tool-executor.js";
 
 function createConfig(): ToolPolicyConfig {
   return {
-    profiles: { danger: ["*"] },
-    tools: { profile: "danger", approvalMode: "bypass", allow: [], deny: [] },
+    tools: { approvalMode: "bypass", allow: ["*"], deny: [] },
     agents: {},
     sandbox: {
       writeJailRoots: ["."],

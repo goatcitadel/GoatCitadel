@@ -373,7 +373,9 @@ describe("gateway service host guard", () => {
       expect(portSource).not.toContain(`${member}: gateway.${member}.bind(gateway),`);
       expect(source).toContain(`"${member}"`);
     }
-    expect(portMemberCount).toBeLessThanOrEqual(190);
+    // The llama.cpp setup selection, evolution control plane, and Chat send
+    // dependencies now make 191 explicit route-composition members.
+    expect(portMemberCount).toBeLessThanOrEqual(191);
     const portFactory = portSource.slice(
       portSource.indexOf("export function createGatewayRouteCompositionPort"),
       portSource.indexOf("export type RouteDependencyDomain"),
