@@ -10,6 +10,7 @@ import {
   type NotificationTargetInput,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
+import { settleNotificationFromChannel } from "./notification-channel-settlement.js";
 
 export class NotificationRoutingRepository {
   public constructor(private readonly db: DatabaseClient) {}
@@ -238,11 +239,13 @@ export class NotificationRoutingRepository {
   }
 
   public listDeliveries(workspaceId: string, limit = 100): NotificationDeliveryRecord[] {
-    return (
-      this.db
+    return this.db.transaction("immediate", () => {
+      const rows = this.db
         .prepare("SELECT * FROM notification_deliveries WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ?")
-        .all(workspaceId, Math.max(1, Math.min(500, limit))) as DeliveryRow[]
-    ).map(mapDelivery);
+        .all<DeliveryRow>(workspaceId, Math.max(1, Math.min(500, limit)));
+      for (const row of rows) settleNotificationFromChannel(this.db, mapDelivery(row));
+      return rows.map((row) => this.getDelivery(row.delivery_id));
+    });
   }
 }
 

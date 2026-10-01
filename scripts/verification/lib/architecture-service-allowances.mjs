@@ -46,13 +46,26 @@ export function applyArchitectureServiceAllowances(baseline, document) {
     dependencyMemberAccessesByFile: { ...baseline.dependencyMemberAccessesByFile },
   };
   const seen = new Set();
+  const setupOwnerPaths = new Set([
+    "apps/gateway/src/services/llama-cpp-setup-selection-service.ts",
+    "apps/gateway/src/services/llama-cpp-setup-service.ts",
+  ]);
+  const cockpitExtractionPaths = new Set([
+    "apps/gateway/src/services/orchestration-phase-child-service.ts",
+    "apps/gateway/src/services/orchestration-phase-harvest-service.ts",
+    "apps/gateway/src/services/runtime-llama-setup-change.ts",
+  ]);
   for (const entry of document.entries) {
     if (
       !entry ||
       !servicePath(entry.path) ||
       existing.has(entry.path) ||
       seen.has(entry.path) ||
-      !/^C[0-6]$/u.test(entry.planStep ?? "") ||
+      !(setupOwnerPaths.has(entry.path)
+        ? entry.planStep === "llama-cpp-setup:settings-owner"
+        : cockpitExtractionPaths.has(entry.path)
+          ? entry.planStep === "mission-control-cockpit:phase-0d"
+          : /^C[0-6]$/u.test(entry.planStep ?? "") || entry.planStep === "mission-control-cockpit:phase-3") ||
       typeof entry.reason !== "string" ||
       entry.reason.trim().length < 20 ||
       typeof entry.evidence !== "string" ||

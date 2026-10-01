@@ -17,7 +17,7 @@ export function MemoryEnumerationControls(props: MemoryEnumerationControlsProps)
   return <>
     <p role="status" aria-live="polite">
       {props.searching ? "Searching memory…" : props.unavailable ? "Memory results unavailable."
-        : `${props.visible} matching results loaded · ${props.loaded} of ${props.total ?? "unknown"} total. ${props.hasMore ? "Namespace and lifecycle counts cover loaded items." : ""}`}
+        : `${props.visible} matching ${props.visible === 1 ? "result" : "results"} loaded · ${props.loaded} of ${props.total ?? "unknown"} total. ${props.hasMore ? "Namespace and lifecycle counts cover loaded items." : ""}`}
     </p>
     {props.error ? <>
       <NoticeBanner tone="warning" message={`${props.error} Loaded results may be out of date.`} />

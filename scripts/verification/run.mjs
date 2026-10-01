@@ -23,6 +23,7 @@ import {
   runAgenticSelfImprovementTrustLane,
   runAgenticWorkbenchLoopLane,
   runAccessibilitySmokeLane,
+  runUxBudgetsLane,
   runA2AFullLane,
   runAuthMatrixLane,
   runApiCompatibilityLane,
@@ -107,6 +108,7 @@ const VALID_LANES = new Set([
   "usability",
   "usability-core",
   "accessibility-smoke",
+  "ux-budgets",
   "surface-regression",
   "visual-regression",
   "visual-rebaseline",
@@ -144,6 +146,7 @@ const VALID_LANES = new Set([
 
 const DIRECT_BROWSER_SECRET_SCRUB_LANES = new Set([
   "accessibility-smoke",
+  "ux-budgets",
   "surface-regression",
   "visual-regression",
   "visual-rebaseline",
@@ -186,6 +189,7 @@ const REVIEW_LANES = new Set([
   "usability",
   "usability-core",
   "accessibility-smoke",
+  "ux-budgets",
   "surface-regression",
   "visual-regression",
   "visual-rebaseline",
@@ -371,6 +375,8 @@ async function runLockedVerification(lane, options) {
       await runUsabilityCoreLane(context, { profile });
     } else if (lane === "accessibility-smoke") {
       await runAccessibilitySmokeLane(context, { profile, secretEnvKeys: directBrowserSecretEnvKeys });
+    } else if (lane === "ux-budgets") {
+      await runUxBudgetsLane(context, { profile, secretEnvKeys: directBrowserSecretEnvKeys });
     } else if (lane === "surface-regression") {
       await runSurfaceRegressionLane(context, { profile, secretEnvKeys: directBrowserSecretEnvKeys });
     } else if (lane === "visual-regression") {

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { CAPABILITY_RESOURCE_TYPES } from "@goatcitadel/contracts";
 import { withRouteAccess } from "./route-access.js";
 import { sendRouteError } from "./_error-handler.js";
+import { markMutationCommitted } from "../plugins/idempotency.js";
 
 const resourceTypeSchema = z.enum(CAPABILITY_RESOURCE_TYPES);
 const citadelParams = z.object({ citadelId: z.string().min(1) });
@@ -12,10 +13,54 @@ const updateBody = z.object({
   resourceType: resourceTypeSchema,
   assignments: z.array(z.object({ resourceRef: z.string().min(1), enabled: z.boolean() })),
 });
+const reviewedBody = z
+  .object({
+    resourceType: resourceTypeSchema,
+    expectedRevision: z.string().regex(/^[a-f0-9]{64}$/),
+    assignments: z
+      .array(z.object({ resourceRef: z.string().min(1).max(512), enabled: z.boolean() }).strict())
+      .max(1000),
+  })
+  .strict();
+const reviewedResetBody = reviewedBody
+  .omit({ assignments: true })
+  .transform((body): z.infer<typeof reviewedBody> => ({ ...body, assignments: [] }));
 
 export const capabilityScopeRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const svc = fastify.services.capabilityScope;
+
+  // Separate paths deliberately fail closed against an older Gateway. Legacy
+  // replacement/reset routes keep their original contracts for existing clients.
+  for (const scopeKind of ["citadel", "workspace"] as const) {
+    const prefix = scopeKind === "citadel" ? "citadels" : "workspaces";
+    for (const method of ["PATCH", "DELETE"] as const) {
+      fastify.route({
+        method,
+        url: `/api/v1/${prefix}/:scopeId/capabilities/reviewed`,
+        ...operatorOnly,
+        handler: async (request, reply) => {
+          const params = z.object({ scopeId: z.string().min(1).max(200) }).safeParse(request.params);
+          const body = (method === "PATCH" ? reviewedBody : reviewedResetBody).safeParse(request.body ?? {});
+          if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+          if (!body.success) return reply.code(400).send({ error: body.error.flatten() });
+          let committed = false;
+          try {
+            const receipt = await svc.applyReviewedSelection(scopeKind, params.data.scopeId, body.data);
+            committed = true;
+            await markMutationCommitted(request);
+            return reply.send(receipt);
+          } catch (error) {
+            if (!committed && !request.mutationCommitted) return sendRouteError(reply, error, request.log);
+            return reply.code(500).send({
+              error: "The capability selection was committed, but its response could not be completed.",
+              mutationCommitted: true,
+            });
+          }
+        },
+      });
+    }
+  }
 
   // ---- Citadel ----
 

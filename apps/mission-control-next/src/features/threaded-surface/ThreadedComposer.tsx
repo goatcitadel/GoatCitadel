@@ -1,17 +1,10 @@
-/* eslint-disable max-lines -- The C3 closure-packet owner list pins the composer to this single file; the HX-407 external-source strip pushes it past the soft cap and the packet forbids splitting it. */
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { ChatAttachmentActions } from "@goatcitadel/mission-control-shared/components/chat/ChatAttachmentActions";
 import { ChatComposerPlusMenu } from "@goatcitadel/mission-control-shared/components/ChatComposerPlusMenu";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ChatQueueBar } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
-import {
-  ChatPendingApprovalPanel,
-  type ChatPendingApprovalState,
-} from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
-import { ChatPendingUserInputPanel } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingUserInputPanel";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { ContextStrip, type ContextStripMode, StatusChip } from "../native-routes/primitives";
-import { describeThreadedUiError } from "./threaded-error-copy";
+import { ContextStrip } from "../native-routes/primitives";
 import { useAutoGrowTextarea } from "./useAutoGrowTextarea";
 import { OPEN_CHAT_COMPOSER_PALETTE_EVENT } from "../../app/composer-palette-events";
 import { ChatOptionsPopover } from "./ChatOptionsPopover";
@@ -20,750 +13,36 @@ import { resolveChatRouteReadiness } from "./chat-route-readiness";
 import { ThreadedModeControl } from "./ThreadedModeControl";
 import { isImageAttachment, PendingImagePreview } from "./ThreadedComposerAttachmentPreview";
 import { getComposerPersonality, PersonalityPresenceChip } from "./ThreadedComposerPersonality";
-import { ChatCapabilityProfilePreflight } from "./ChatCapabilityProfilePanel";
 import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
 import { WorkflowSkillCaptureEvidence } from "@goatcitadel/mission-control-shared/components/chat/WorkflowSkillCaptureEvidence";
-import { humanizeEnum } from "@goatcitadel/mission-control-shared/components/chat/chat-display-helpers";
+import { ExternalSourceStrip } from "./ThreadedExternalSourceStrip";
+import { computeUsageTotals, formatCostLabel, formatTokenLabel, formatUsageLabel } from "./threaded-composer-usage";
+
+import {
+  formatPaletteItemMeta,
+  getPlaceholder,
+  getSendLabel,
+  toContextStripMode,
+  formatHistoricalMemoryLabel,
+  getComposerCapabilityUseChips,
+} from "./threaded-composer-labels";
+import { useComposerV2Enabled } from "./useComposerV2Enabled";
+import { ThreadedComposerBanners } from "./ThreadedComposerBanners";
+import { ThreadedComposerSendOptions } from "./ThreadedComposerSendOptions";
+import { ThreadedComposerContextInputs } from "./ThreadedComposerContextInputs";
+
+export { computeUsageTotals, formatCostLabel, formatTokenLabel, formatUsageLabel } from "./threaded-composer-usage";
 
 /* C7: soft character ceiling for the draft. Not enforced (sending isn't
    blocked); the counter only surfaces once a message gets long. */
 const COMPOSER_SOFT_LIMIT = 8000;
 const COMPOSER_COUNT_VISIBLE_AT = Math.round(COMPOSER_SOFT_LIMIT * 0.7);
 
-function formatRecoveryStatus(status?: string): string {
-  const label = humanizeEnum(status) || "recovery";
-  return label.charAt(0).toUpperCase() + label.slice(1);
-}
-
-/** Drops the default "Command" source and generic "Available" state, which every row would repeat. */
-function formatPaletteItemMeta(item: { sourceLabel?: string; availabilityLabel?: string }): string | null {
-  const source = item.sourceLabel && item.sourceLabel !== "Command" ? item.sourceLabel : null;
-  const availability = item.availabilityLabel && item.availabilityLabel !== "Available" ? item.availabilityLabel : null;
-  return [source, availability].filter(Boolean).join(" · ") || null;
-}
-
-function getPlaceholder(mode: MissionThreadedActiveSessionSurfaceProps["mode"]): string {
-  if (mode === "code") {
-    return "Describe the implementation task, constraints, or review goal…";
-  }
-  if (mode === "cowork") {
-    return "Describe the work to coordinate, research, or move forward…";
-  }
-  return "Ask GoatCitadel anything…";
-}
-
-function getSendLabel(props: MissionThreadedActiveSessionSurfaceProps): string {
-  if (props.mode === "cowork") {
-    if (
-      props.selectedTurn?.trace.status === "waiting_for_approval" ||
-      props.selectedTurn?.trace.status === "waiting_for_user_input"
-    ) {
-      return "Resolve blocker";
-    }
-    if (props.editingTurnId) {
-      return "Delegate branch";
-    }
-    return props.sending ? "Delegating..." : "Delegate";
-  }
-
-  if (props.mode === "code") {
-    if (props.editingTurnId) {
-      return "Implement branch";
-    }
-    return props.sending ? "Implementing..." : "Implement";
-  }
-
-  if (props.editingTurnId) {
-    return "Send branch";
-  }
-  return props.sending ? "Sending..." : "Send";
-}
-
-export function computeUsageTotals(thread: MissionThreadedActiveSessionSurfaceProps["thread"]) {
-  let tokens = 0,
-    costUsd = 0,
-    tokenFields = 0,
-    costFields = 0,
-    messages = 0;
-  for (const turn of thread?.turns ?? [])
-    for (const message of [turn.userMessage, turn.assistantMessage]) {
-      if (!message) continue;
-      messages += 1;
-      for (const value of [message.tokenInput, message.tokenOutput])
-        if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-          tokens += value;
-          tokenFields += 1;
-        }
-      if (typeof message.costUsd === "number" && Number.isFinite(message.costUsd) && message.costUsd >= 0) {
-        costUsd += message.costUsd;
-        costFields += 1;
-      }
-    }
-  return {
-    tokens: tokenFields ? tokens : null,
-    costUsd: costFields ? costUsd : null,
-    partialTokens: tokenFields < messages * 2,
-    partialCost: costFields < messages,
-  };
-}
-
-export function formatTokenLabel(tokens: number | null): string {
-  if (tokens === null) return "Tokens unavailable";
-  return `${new Intl.NumberFormat("en-US").format(tokens)} tokens`;
-}
-
-export function formatCostLabel(costUsd: number | null): string {
-  if (costUsd === null) return "Cost unavailable";
-  if (costUsd <= 0) {
-    return "$0.00";
-  }
-  if (costUsd >= 10) {
-    return `$${costUsd.toFixed(1)}`;
-  }
-  if (costUsd >= 0.01) {
-    return `$${costUsd.toFixed(2)}`;
-  }
-  // Sub-cent costs are kept truthful: report three significant figures so a
-  // long delegation that has crossed $0.005 reads as $0.005 rather than the
-  // misleading flat "<$0.01" placeholder it used to show.
-  return "$" + Number(costUsd.toPrecision(3));
-}
-
-export function formatUsageLabel(thread: MissionThreadedActiveSessionSurfaceProps["thread"]): string {
-  const totals = computeUsageTotals(thread);
-  return `${formatTokenLabel(totals.tokens)}${totals.partialTokens && totals.tokens !== null ? " recorded" : ""} / ${formatCostLabel(totals.costUsd)}${totals.partialCost && totals.costUsd !== null ? " recorded" : ""}`;
-}
-
-function formatDelegationConfidence(confidence?: number): string | null {
-  if (typeof confidence !== "number" || !Number.isFinite(confidence)) {
-    return null;
-  }
-  return `${Math.round(Math.max(0, Math.min(1, confidence)) * 100)}% confidence`;
-}
-
-const COMPOSER_KILL_SWITCH_KEY = "mc-next:composer-v2";
-const COMPOSER_KILL_SWITCH_FALSE_VALUES = new Set(["off", "false", "0", "no", "disabled"]);
-const IN_PROGRESS_MEMORY_TRACE_STATUSES = new Set([
-  "pending",
-  "queued",
-  "running",
-  "streaming",
-  "in_progress",
-  "waiting_for_approval",
-  "waiting_for_user_input",
-]);
-
-function readComposerV2(): boolean {
-  if (typeof window === "undefined") {
-    return true;
-  }
-  try {
-    const value = window.localStorage.getItem(COMPOSER_KILL_SWITCH_KEY)?.trim().toLowerCase();
-    return !value || !COMPOSER_KILL_SWITCH_FALSE_VALUES.has(value);
-  } catch {
-    return true;
-  }
-}
-
-function useComposerV2Enabled(): boolean {
-  const [enabled, setEnabled] = useState<boolean>(() => readComposerV2());
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.addEventListener !== "function") {
-      return;
-    }
-    const eventTarget = window;
-    const handle = () => setEnabled(readComposerV2());
-    eventTarget.addEventListener("storage", handle);
-    return () => eventTarget.removeEventListener("storage", handle);
-  }, []);
-  return enabled;
-}
-
-function toContextStripMode(mode: MissionThreadedActiveSessionSurfaceProps["mode"]): ContextStripMode {
-  return mode === "code" || mode === "cowork" ? mode : "chat";
-}
-
-function formatHistoricalMemoryLabel(thread: MissionThreadedActiveSessionSurfaceProps["thread"]): string | undefined {
-  const lastTurn = thread?.turns?.at(-1);
-  const memoryMode = lastTurn?.trace?.memoryMode?.trim();
-  if (!memoryMode || memoryMode === "off") {
-    return undefined;
-  }
-  const status = lastTurn?.trace?.status;
-  if (status && IN_PROGRESS_MEMORY_TRACE_STATUSES.has(status)) {
-    return undefined;
-  }
-  return `Last turn: ${memoryMode}`;
-}
-
-function readStringField(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function formatCompactList(values: Set<string>, fallbackLabel: string): string {
-  const items = Array.from(values).filter(Boolean);
-  if (items.length === 0) {
-    return "";
-  }
-  if (items.length === 1) {
-    return `${fallbackLabel}: ${items[0]}`;
-  }
-  return `${fallbackLabel}: ${items.length}`;
-}
-
-function getComposerCapabilityUseChips(props: MissionThreadedActiveSessionSurfaceProps) {
-  const selectedIds = new Set(props.selectedContextTurnIds ?? []);
-  const turns = props.thread?.turns.filter((turn) => selectedIds.size > 0 && selectedIds.has(turn.turnId)) ?? [];
-  const scopedTurns =
-    turns.length > 0
-      ? turns
-      : props.selectedTurn
-        ? [props.selectedTurn]
-        : props.thread?.turns.at(-1)
-          ? [props.thread.turns.at(-1)!]
-          : [];
-  const skills = new Set<string>();
-  const connectors = new Set<string>();
-  const mcpServers = new Set<string>();
-
-  for (const turn of scopedTurns) {
-    for (const toolRun of turn.toolRuns ?? []) {
-      const args = toolRun.args ?? {};
-      const skillId = readStringField(args.skillId) ?? readStringField(args.skill);
-      if (skillId || /^skills?\./i.test(toolRun.toolName)) {
-        skills.add(skillId ?? toolRun.toolName);
-      }
-
-      const connectorId =
-        readStringField(args.connectorId) ??
-        readStringField(args.connectionId) ??
-        readStringField(args.integrationConnectionId);
-      if (connectorId || /\b(connector|integration)\b/i.test(toolRun.toolName)) {
-        connectors.add(connectorId ?? toolRun.toolName);
-      }
-
-      const serverId =
-        readStringField(args.serverId) ?? readStringField(args.mcpServerId) ?? readStringField(args.server);
-      if (serverId || /\bmcp\b/i.test(toolRun.toolName)) {
-        mcpServers.add(serverId ?? toolRun.toolName);
-      }
-    }
-  }
-
-  return [
-    formatCompactList(skills, "Skills"),
-    formatCompactList(connectors, "Connectors"),
-    formatCompactList(mcpServers, "MCP"),
-  ].filter(Boolean);
-}
-
-function ComposerDelegationApproval({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
-  const suggestion = props.delegationSuggestion;
-  if (!suggestion) {
-    return null;
-  }
-
-  const confidenceLabel = formatDelegationConfidence(suggestion.confidence);
-  const reason = suggestion.reason?.trim();
-
-  return (
-    <section className="mc-next-composer-delegation-approval" role="alert" aria-live="assertive">
-      <div className="mc-next-composer-delegation-head">
-        <StatusChip tone="warning">Subagent approval</StatusChip>
-        <strong>Subagents unavailable</strong>
-        {confidenceLabel ? <span>{confidenceLabel}</span> : null}
-      </div>
-      <p>Subagent delegation is temporarily unavailable. This saved suggestion can be dismissed.</p>
-      <p className="mc-next-composer-delegation-objective">{suggestion.objective}</p>
-      {reason ? <p className="mc-next-composer-delegation-reason">{reason}</p> : null}
-      {suggestion.roles.length > 0 ? (
-        <div className="mc-next-composer-delegation-roles" aria-label="Suggested subagent roles">
-          {suggestion.roles.map((role) => (
-            <StatusChip key={role} tone="muted">
-              {role}
-            </StatusChip>
-          ))}
-        </div>
-      ) : null}
-      <div className="mc-next-composer-delegation-actions">
-        <button
-          type="button"
-          className="mc-next-composer-inline-button primary"
-          disabled
-          onClick={() => void props.onAcceptDelegation()}
-        >
-          Subagents unavailable
-        </button>
-        <button
-          type="button"
-          className="mc-next-composer-inline-button"
-          disabled={props.sending}
-          onClick={props.onDismissDelegationSuggestion}
-        >
-          Keep single run
-        </button>
-      </div>
-    </section>
-  );
-}
-
-function ComposerBlockingPrompt({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
-  const pendingApproval = props.pendingApproval as ChatPendingApprovalState | null;
-  if (pendingApproval) {
-    return (
-      <div className="mc-next-composer-blocking-prompt" data-blocker-kind="approval">
-        <ChatPendingApprovalPanel
-          pendingApproval={pendingApproval}
-          workspaceId={props.workspaceId}
-          approvalsHref={`/ops/approvals?approvalId=${encodeURIComponent(pendingApproval.approvalId)}`}
-          pending={props.approvalPending}
-          variant="compact"
-          onApprove={props.onApprovePending}
-          onDeny={props.onDenyPending}
-        />
-      </div>
-    );
-  }
-
-  if (props.pendingUserInput) {
-    return (
-      <div className="mc-next-composer-blocking-prompt" data-blocker-kind="user-input">
-        <ChatPendingUserInputPanel
-          pendingUserInput={props.pendingUserInput}
-          pending={props.userInputPending}
-          variant="compact"
-          onSubmit={props.onSubmitUserInput}
-        />
-      </div>
-    );
-  }
-
-  return null;
-}
-
-const COWORK_STOP_STATE_ONLY_NOTE =
-  "State-only: records operator stop intent in GoatCitadel state. It does not terminate the worker by itself — a live executor must honor the recorded stop before the run is treated as stopped.";
-
-function ComposerCoworkStop({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const control = props.coworkStopRunControl;
-  if (props.mode !== "cowork" || !control) {
-    return null;
-  }
-  const pending = Boolean(props.coworkStopRunPending);
-  const stateOnly = control.runtimeEffect === "state_only";
-  const reason = control.note?.trim() || undefined;
-  const disabled = !control.enabled || pending;
-  const confirmMessage = stateOnly
-    ? "This records operator stop intent for the active run. For a cowork run with no attached durable run, it only records intent and does not terminate the worker — the run keeps going until a live executor honors the recorded stop."
-    : "This cancels the active delegation run. Completed evidence stays available, and any live executor must honor the cancel before the run is treated as stopped.";
-
-  return (
-    <section className="mc-next-composer-banner mc-next-composer-cowork-stop" role="status">
-      <StatusChip tone="warning">Delegation running</StatusChip>
-      <div className="mc-next-composer-cowork-stop-body">
-        <p>{reason ?? "Stop the active delegation run."}</p>
-        {stateOnly ? <p className="mc-next-composer-cowork-stop-note">{COWORK_STOP_STATE_ONLY_NOTE}</p> : null}
-      </div>
-      <button
-        type="button"
-        className="mc-next-panel-button danger"
-        disabled={disabled}
-        title={reason}
-        onClick={() => {
-          if (!disabled) {
-            setConfirmOpen(true);
-          }
-        }}
-      >
-        {pending ? "Stopping..." : "Stop run"}
-      </button>
-      <ConfirmModal
-        open={confirmOpen}
-        title="Stop this delegation run?"
-        message={confirmMessage}
-        confirmLabel="Stop run"
-        danger
-        pending={pending}
-        onCancel={() => setConfirmOpen(false)}
-        onConfirm={() => {
-          setConfirmOpen(false);
-          props.onCoworkStopRun?.(control);
-        }}
-      />
-    </section>
-  );
-}
-
-type ThreadedExternalSourceControls = NonNullable<MissionThreadedActiveSessionSurfaceProps["externalSourceControls"]>;
-
-/**
- * HX-407 C3/C4b read-only external-source picker. Selection is per-turn; source
- * evidence remains immutable, and attach/detach/knowledge-copy mutations stay
- * behind the Gateway's live session-incarnation check.
- */
-function ExternalSourceStrip({
-  controls,
-  disabled,
-  openAttachFormToken = 0,
-  onOpenLibrary,
-  onRestoreFocus,
-}: {
-  controls: ThreadedExternalSourceControls;
-  disabled: boolean;
-  openAttachFormToken?: number;
-  onOpenLibrary?: () => void;
-  onRestoreFocus?: () => void;
-}) {
-  const stripInstanceId = useId();
-  const attachFormId = `${stripInstanceId}-attach-form`;
-  const stripRef = useRef<HTMLElement | null>(null);
-  const pickerRef = useRef<HTMLDivElement | null>(null);
-  const pickerTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const pickerCloseRef = useRef<HTMLButtonElement | null>(null);
-  const wasPickerOpenRef = useRef(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [attachFormOpen, setAttachFormOpen] = useState(false);
-  const [recentImportMetadata, setRecentImportMetadata] = useState<
-    Map<string, { sourceLabel: string; importedAt: string }>
-  >(() => new Map());
-  const selectedCount = controls.selectedAttachmentIds.length;
-  const mutationHint = controls.canMutate
-    ? null
-    : "Chat is still preparing this session. You can review attached sources now; source changes will be available when Chat is ready.";
-
-  useEffect(() => {
-    if (openAttachFormToken <= 0) return;
-    setPickerOpen(true);
-    setAttachFormOpen(true);
-    stripRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [openAttachFormToken]);
-
-  useEffect(() => {
-    if (pickerOpen) pickerCloseRef.current?.focus();
-    else if (wasPickerOpenRef.current) {
-      if (pickerTriggerRef.current) pickerTriggerRef.current.focus();
-      else onRestoreFocus?.();
-    }
-    wasPickerOpenRef.current = pickerOpen;
-  }, [onRestoreFocus, pickerOpen]);
-
-  const closePicker = () => {
-    setPickerOpen(false);
-    setAttachFormOpen(false);
-  };
-  const handlePickerKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      closePicker();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const focusable = Array.from(
-      event.currentTarget.querySelectorAll<HTMLElement>(
-        'input:not([disabled]), button:not([disabled]), summary, [href], [tabindex]:not([tabindex="-1"])',
-      ),
-    ).filter((element) => !element.closest("details:not([open])"));
-    if (focusable.length === 0) {
-      event.preventDefault();
-      return;
-    }
-    const first = focusable[0]!;
-    const last = focusable[focusable.length - 1]!;
-    if (event.shiftKey && (document.activeElement === first || !event.currentTarget.contains(document.activeElement))) {
-      event.preventDefault();
-      last.focus();
-    } else if (
-      !event.shiftKey &&
-      (document.activeElement === last || !event.currentTarget.contains(document.activeElement))
-    ) {
-      event.preventDefault();
-      first.focus();
-    }
-  };
-
-  if (
-    !pickerOpen &&
-    !attachFormOpen &&
-    controls.attachments.length === 0 &&
-    controls.candidates.length === 0 &&
-    !controls.loading &&
-    !controls.error &&
-    controls.candidatesSupported !== false
-  ) {
-    return null;
-  }
-
-  return (
-    <section
-      ref={stripRef}
-      className="mc-next-composer-external-strip"
-      aria-label="Read-only external source attachments"
-    >
-      <div className="mc-next-composer-external-head">
-        <strong>Sources for this turn</strong>
-        <span aria-live="polite">
-          {selectedCount > 0
-            ? `${selectedCount} selected; clear the selection before sending.`
-            : "Adding external sources to a turn is temporarily unavailable."}
-        </span>
-        {selectedCount > 0 ? (
-          <button
-            type="button"
-            className="mc-next-composer-inline-button"
-            onClick={controls.onClearSelection}
-            aria-label="Clear the external source selection"
-          >
-            Clear selection
-          </button>
-        ) : null}
-        <button
-          ref={pickerTriggerRef}
-          type="button"
-          className="mc-next-composer-inline-button"
-          aria-haspopup="dialog"
-          aria-expanded={pickerOpen}
-          onClick={() => setPickerOpen(true)}
-        >
-          Choose sources
-        </button>
-      </div>
-      {pickerOpen ? (
-        <div className="mc-next-source-picker-backdrop">
-          <div
-            ref={pickerRef}
-            className="mc-next-source-picker-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={`${stripInstanceId}-picker-title`}
-            onKeyDown={handlePickerKeyDown}
-          >
-            <header className="mc-next-source-picker-header">
-              <div>
-                <h2 id={`${stripInstanceId}-picker-title`}>Attached sources</h2>
-                <p>You can manage attached sources here. Including one in a turn is temporarily unavailable.</p>
-              </div>
-              <button
-                ref={pickerCloseRef}
-                type="button"
-                className="mc-next-composer-inline-button"
-                onClick={closePicker}
-              >
-                Close
-              </button>
-            </header>
-            {controls.error ? (
-              <p className="mc-next-composer-external-error" role="alert">
-                {controls.error}
-              </p>
-            ) : null}
-            {mutationHint ? <p className="mc-next-composer-external-hint">{mutationHint}</p> : null}
-            {controls.loading && controls.attachments.length === 0 ? (
-              <p className="mc-next-composer-external-hint" role="status">
-                Checking attached sources…
-              </p>
-            ) : controls.attachments.length === 0 ? (
-              <p className="mc-next-composer-external-hint">No read-only sources are attached to this chat yet.</p>
-            ) : (
-              <ul role="list" className="mc-next-composer-external-list" aria-label="Attached read-only sources">
-                {controls.attachments.map((attachment) => {
-                  const busy = controls.busyAttachmentId !== null;
-                  const selected = controls.selectedAttachmentIds.includes(attachment.attachmentId);
-                  const checkboxId = `${stripInstanceId}-select-${attachment.attachmentId}`;
-                  const candidate = controls.candidates.find(
-                    (item) =>
-                      item.sourceId === attachment.sourceId &&
-                      item.importId === attachment.importId &&
-                      item.itemId === attachment.itemId,
-                  );
-                  const bindingKey = `${attachment.sourceId}\u001f${attachment.importId}\u001f${attachment.itemId}`;
-                  const recentImport = recentImportMetadata.get(bindingKey);
-                  const sourceName = candidate?.sourceLabel ?? recentImport?.sourceLabel ?? "Read-only source";
-                  const importedAt = candidate?.importedAt ?? recentImport?.importedAt;
-                  const date = importedAt ?? attachment.attachedAt;
-                  const formattedDate = Number.isFinite(Date.parse(date))
-                    ? new Date(date).toLocaleDateString(undefined, { dateStyle: "medium" })
-                    : "date unavailable";
-                  return (
-                    <li key={attachment.attachmentId} className="mc-next-composer-external-chip">
-                      <div className="mc-next-composer-external-chip-body">
-                        <label className="mc-next-composer-external-select" htmlFor={checkboxId}>
-                          <input
-                            id={checkboxId}
-                            type="checkbox"
-                            checked={selected}
-                            disabled={disabled || !selected}
-                            onChange={() => controls.onToggleSelect(attachment.attachmentId)}
-                            aria-label={`Remove ${sourceName} from the next turn`}
-                          />
-                          <strong>{sourceName}</strong>
-                        </label>
-                        <p className="mc-next-composer-external-meta">
-                          Read-only · {importedAt ? "Imported" : "Attached"} {formattedDate}
-                        </p>
-                        <details>
-                          <summary>Source details and actions</summary>
-                          <p className="mc-next-composer-external-meta">
-                            Item {attachment.itemId} · source {attachment.sourceId} · import {attachment.importId} ·
-                            revision {attachment.revision} · sha {attachment.normalizedArtifactSha256.slice(0, 12)}…
-                          </p>
-                          <div className="mc-next-composer-external-chip-actions">
-                            <StatusChip tone="muted">Read-only</StatusChip>
-                            <button
-                              type="button"
-                              className="mc-next-composer-inline-button"
-                              disabled={disabled || busy || !controls.canMutate}
-                              onClick={() => controls.onRequestKnowledgeSnapshot(attachment.attachmentId)}
-                              aria-label="Request a governed knowledge copy of this source"
-                            >
-                              Request knowledge copy
-                            </button>
-                            <button
-                              type="button"
-                              className="mc-next-composer-inline-button"
-                              disabled={disabled || busy || !controls.canMutate}
-                              onClick={() => controls.onDetach(attachment.attachmentId)}
-                              aria-label="Detach this read-only source"
-                            >
-                              Detach
-                            </button>
-                          </div>
-                        </details>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-            <details
-              className="mc-next-source-picker-attach"
-              open={attachFormOpen}
-              onToggle={(event) => setAttachFormOpen(event.currentTarget.open)}
-            >
-              <summary>Attach a verified import</summary>
-              <div id={attachFormId} className="mc-next-composer-external-attach-form">
-                <p className="mc-next-composer-external-hint">
-                  First attach a verified import. After the Gateway confirms it, it will appear above for selection.
-                </p>
-                {controls.loading ? (
-                  <p className="mc-next-composer-external-hint" role="status">
-                    Refreshing eligible imports…
-                  </p>
-                ) : controls.candidatesSupported === false ? (
-                  <p className="mc-next-composer-external-hint">
-                    Verified import selection is unavailable here. Manage imports in Library.
-                  </p>
-                ) : controls.candidates.length === 0 ? (
-                  <p className="mc-next-composer-external-hint">
-                    No verified imports are ready to attach. Import and verify an item in Library first.
-                  </p>
-                ) : (
-                  <ul
-                    role="list"
-                    className="mc-next-composer-external-list"
-                    aria-label="Verified imports ready to attach"
-                  >
-                    {controls.candidates.map((candidate) => {
-                      const busy = controls.busyAttachmentId === `attach:${candidate.itemId}`;
-                      const formattedDate = Number.isFinite(Date.parse(candidate.importedAt))
-                        ? new Date(candidate.importedAt).toLocaleDateString(undefined, { dateStyle: "medium" })
-                        : "date unavailable";
-                      return (
-                        <li
-                          key={`${candidate.sourceId}:${candidate.importId}:${candidate.itemId}`}
-                          className="mc-next-composer-external-chip"
-                        >
-                          <div className="mc-next-composer-external-chip-body">
-                            <strong>{candidate.sourceLabel}</strong>
-                            <p className="mc-next-composer-external-meta">
-                              Imported {formattedDate} · verified {candidate.artifactsVerifiedAt.slice(0, 10)}
-                            </p>
-                            <details>
-                              <summary>Import details</summary>
-                              <p className="mc-next-composer-external-meta">
-                                Item {candidate.itemId} · source revision {candidate.sourceRevision}
-                              </p>
-                            </details>
-                          </div>
-                          <div className="mc-next-composer-external-chip-actions">
-                            <StatusChip tone="muted">Read-only</StatusChip>
-                            <button
-                              type="button"
-                              className="mc-next-composer-inline-button"
-                              disabled={disabled || controls.busyAttachmentId !== null || !controls.canMutate}
-                              onClick={() => {
-                                const bindingKey = `${candidate.sourceId}\u001f${candidate.importId}\u001f${candidate.itemId}`;
-                                setRecentImportMetadata((current) =>
-                                  new Map(current).set(bindingKey, {
-                                    sourceLabel: candidate.sourceLabel,
-                                    importedAt: candidate.importedAt,
-                                  }),
-                                );
-                                controls.onAttach({
-                                  sourceId: candidate.sourceId,
-                                  importId: candidate.importId,
-                                  itemId: candidate.itemId,
-                                });
-                              }}
-                              aria-label={`Attach verified import from ${candidate.sourceLabel} read-only`}
-                            >
-                              {busy ? "Attaching…" : "Attach read-only"}
-                            </button>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-                <div className="mc-next-composer-external-chip-actions">
-                  <button
-                    type="button"
-                    className="mc-next-composer-inline-button"
-                    disabled={disabled || controls.loading}
-                    onClick={controls.onReload}
-                  >
-                    Refresh imports
-                  </button>
-                  {onOpenLibrary ? (
-                    <button
-                      type="button"
-                      className="mc-next-composer-inline-button"
-                      disabled={disabled}
-                      onClick={onOpenLibrary}
-                    >
-                      Manage Library imports
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            </details>
-            <footer className="mc-next-source-picker-footer">
-              <span aria-live="polite">
-                {selectedCount > 0
-                  ? `${selectedCount} source${selectedCount === 1 ? "" : "s"} selected for the next message`
-                  : "No sources selected"}
-              </span>
-              <button type="button" className="mc-next-composer-inline-button" onClick={closePicker}>
-                Add to chat
-              </button>
-            </footer>
-          </div>
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
 export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
   const threadKnowledgeAttachments = props.threadKnowledgeAttachments ?? [];
-  const presetOptions = props.presetOptions ?? [];
-  const knowledgeUrlDraft = props.knowledgeUrlDraft ?? "";
-  const knowledgeUrlMode = props.knowledgeUrlMode ?? "retrieval";
-  const mappedError = describeThreadedUiError(props.streamError, props.streamErrorSource ?? "other");
   const currentRouteLabel = props.routePreflight
     ? [props.routePreflight.effectiveProviderId, props.routePreflight.effectiveModel].filter(Boolean).join(" / ")
     : null;
-  const capabilityProfile = props.routePreflight?.capabilityProfile;
   const sessionStateLabel = props.selectedSessionId ? "Chat ready" : "New chat";
   const webModeLabel =
     props.currentWebMode === "off"
@@ -796,7 +75,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const usageLabel = formatUsageLabel(props.thread);
   const usageTotals = computeUsageTotals(props.thread);
   const composerV2Enabled = useComposerV2Enabled();
-  useAutoGrowTextarea(props.composerRef, props.draft, { minLines: 2, maxLines: 8 });
+  useAutoGrowTextarea(props.composerRef, props.draft, { minLines: 1, maxLines: 8 });
   const composerInstanceId = useId();
   const sendBlockReasonId = `${composerInstanceId}-send-block-reason`;
   const commandSuggestionsListboxId = `${composerInstanceId}-command-suggestions`;
@@ -1092,362 +371,13 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         onRemove={props.onRemoveQueuedItem}
       />
 
-      {props.editingTurnId ? (
-        <div className="mc-next-composer-banner">
-          Branching from turn {props.editingTurnId.slice(-6)}.
-          <button type="button" className="mc-next-composer-inline-button" onClick={props.onCancelEdit}>
-            Cancel branch
-          </button>
-        </div>
-      ) : null}
-
-      {props.planningMode === "advisory" ? (
-        <div className="mc-next-composer-banner planning">
-          Planning mode is on. GoatCitadel will respond with a plan/spec instead of executing tool work automatically.
-          <button type="button" className="mc-next-composer-inline-button" onClick={props.onTogglePlanningMode}>
-            Turn planning off
-          </button>
-        </div>
-      ) : null}
-
-      {props.streamError ? (
-        <div className="mc-next-composer-banner error" role="alert">
-          <div>
-            <strong>{mappedError?.summary ?? props.streamError}</strong>
-            {mappedError?.raw ? <p>{mappedError.raw}</p> : null}
-          </div>
-          <div className="mc-next-composer-action-row">
-            {props.onSendRetainedPromptAsChat ? (
-              <button
-                type="button"
-                className="mc-next-composer-inline-button primary"
-                disabled={props.sending || !props.canSend}
-                onClick={props.onSendRetainedPromptAsChat}
-              >
-                Send as chat
-              </button>
-            ) : null}
-            <button type="button" className="mc-next-composer-inline-button" onClick={props.onDismissError}>
-              Dismiss
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {props.presetApplyWarning ? (
-        <div className="mc-next-composer-banner warning">
-          <StatusChip tone="warning">Preset</StatusChip>
-          <p>{props.presetApplyWarning}</p>
-          <button type="button" className="mc-next-composer-inline-button" onClick={props.onDismissPresetWarning}>
-            Dismiss
-          </button>
-        </div>
-      ) : null}
-
-      {props.routePreflightLoading && !props.routePreflight ? (
-        <div className="mc-next-composer-banner info mc-next-technical-detail">
-          <StatusChip tone="muted">Route</StatusChip>
-          <p>Checking the selected provider/model route before send.</p>
-        </div>
-      ) : null}
-
-      {capabilityProfile ? (
-        <ChatCapabilityProfilePreflight
-          profile={capabilityProfile}
-          workspaceId={props.workspaceId}
-          onBaselineUpdated={props.onWorkPassportBaselineChanged}
-        />
-      ) : null}
-
-      {props.routeBoundaryAckRequired && !props.routeBoundaryAcknowledged ? (
-        <div className="mc-next-composer-banner warning">
-          <StatusChip tone="warning">Confirm</StatusChip>
-          <p>If the primary route fails, this run may continue on another runtime boundary.</p>
-          <button type="button" className="mc-next-composer-inline-button" onClick={props.onAcknowledgeRouteBoundary}>
-            Acknowledge fallback
-          </button>
-        </div>
-      ) : null}
-
-      {props.workspaceSnapshotRequest ? (
-        <div className="mc-next-composer-banner info" aria-label="Workspace snapshot unavailable">
-          <StatusChip tone="warning">Unavailable</StatusChip>
-          <p>
-            <strong>Workspace snapshot is temporarily unavailable.</strong> Remove this saved request before sending.
-          </p>
-          <div className="mc-next-composer-action-row">
-            <button
-              type="button"
-              className="mc-next-composer-inline-button"
-              disabled={composerActionDisabled}
-              onClick={props.onToggleWorkspaceSnapshot}
-            >
-              Remove snapshot
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {props.delegatedScopeControls ? (
-        <section className="mc-next-composer-banner info" aria-label="Request additional delegated scope">
-          <StatusChip tone={props.delegatedScopeControls.pendingApprovalId ? "warning" : "muted"}>
-            Governed scope
-          </StatusChip>
-          <div>
-            <strong>Request additional scope for {props.delegatedScopeControls.stepLabel}.</strong>
-            <p>
-              Choose an eligible server-owned workspace path. Approval expands only this delegated run&apos;s frozen
-              scope; Chat cannot grant arbitrary host-folder access.
-            </p>
-            {props.delegatedScopeControls.pendingApprovalId ? (
-              <p role="status">Waiting for the canonical scope-expansion approval decision.</p>
-            ) : props.delegatedScopeControls.loading ? (
-              <p role="status">Loading eligible workspace paths…</p>
-            ) : props.delegatedScopeControls.candidates.length > 0 ? (
-              <div className="mc-next-composer-action-row">
-                <label>
-                  Eligible workspace path
-                  <select
-                    aria-label="Eligible workspace path"
-                    value={scopeCandidateId}
-                    disabled={props.delegatedScopeControls.requesting || delegatedScopeActionDisabled}
-                    onChange={(event) => setScopeCandidateId(event.target.value)}
-                  >
-                    {props.delegatedScopeControls.candidates.map((candidate) => (
-                      <option key={candidate.candidateId} value={candidate.candidateId}>
-                        {candidate.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  className="mc-next-composer-inline-button primary"
-                  disabled={
-                    !scopeCandidateId || props.delegatedScopeControls.requesting || delegatedScopeActionDisabled
-                  }
-                  onClick={() => props.delegatedScopeControls?.onRequest(scopeCandidateId)}
-                >
-                  {props.delegatedScopeControls.requesting ? "Requesting…" : "Request additional scope"}
-                </button>
-              </div>
-            ) : (
-              <p role="status">No additional eligible workspace paths are available.</p>
-            )}
-            {props.delegatedScopeControls.error ? <p role="alert">{props.delegatedScopeControls.error}</p> : null}
-            {!props.delegatedScopeControls.pendingApprovalId ? (
-              <button
-                type="button"
-                className="mc-next-composer-inline-button"
-                disabled={props.delegatedScopeControls.loading || props.delegatedScopeControls.requesting}
-                onClick={props.delegatedScopeControls.onReload}
-              >
-                Refresh eligible paths
-              </button>
-            ) : null}
-          </div>
-        </section>
-      ) : null}
-
-      <ComposerBlockingPrompt props={props} />
-
-      <ChatOptionsPopover activeSettings={activeChatOptionSettings}>
-        {composerV2Enabled ? (
-          <div className="mc-next-composer-context-strip">
-            <ContextStrip
-              model={contextStripModel}
-              mode={contextStripMode}
-              memory={memoryLabel}
-              tokens={
-                formatTokenLabel(usageTotals.tokens) +
-                (usageTotals.partialTokens && usageTotals.tokens !== null ? " recorded" : "")
-              }
-              cost={
-                formatCostLabel(usageTotals.costUsd) +
-                (usageTotals.partialCost && usageTotals.costUsd !== null ? " recorded" : "")
-              }
-            />
-          </div>
-        ) : null}
-
-        <div className="mc-next-composer-head">
-          <div className="mc-next-composer-title">
-            {/*
-             * The kicker carries the visible surface label. The legacy h3
-             * ("Send the next instruction" / recovery label) was hidden by the
-             * unified-shell CSS and the recovery state surfaces via its dedicated
-             * banner below, so the heading was dead text.
-             */}
-            <ThreadedModeControl
-              mode={props.modeOverridePending ?? (props.autoRouteActive ? undefined : props.mode)}
-              preview={props.surfaceRoutePreview}
-              variant="compact"
-              interactive={false}
-            />
-          </div>
-          <div className="mc-next-composer-chip-row">
-            {capabilityUseChips.map((chip) => (
-              <span key={chip} className="mc-next-composer-chip subtle">
-                {chip}
-              </span>
-            ))}
-            <span className="mc-next-composer-chip">{sessionStateLabel}</span>
-            {webModeLabel ? <span className="mc-next-composer-chip subtle">{webModeLabel}</span> : null}
-            {props.fullWebAccess ? <span className="mc-next-composer-chip emphasis">Full web</span> : null}
-            <span className="mc-next-composer-chip subtle">{thinkingLabel}</span>
-            <span className="mc-next-composer-chip subtle">{speedLabel}</span>
-            <span className="mc-next-composer-chip subtle">{routeLabel}</span>
-            <span className="mc-next-composer-chip subtle">{usageLabel}</span>
-            {props.pinnedGoal ? <span className="mc-next-composer-chip emphasis">Goal: {props.pinnedGoal}</span> : null}
-            {props.hasActiveStream && props.midTurnDisposition === "steer" ? (
-              <span className="mc-next-composer-chip emphasis">Steering</span>
-            ) : null}
-            {props.hasActiveStream && props.midTurnDisposition === "queue" ? (
-              <span className="mc-next-composer-chip subtle">Queued</span>
-            ) : null}
-          </div>
-        </div>
-
-        {!runtimeBlockerActive ? (
-          <div className="mc-next-composer-suggestion-row" aria-label="Composer send options">
-            <button
-              type="button"
-              className="mc-next-composer-suggestion"
-              aria-pressed={props.planningMode === "advisory"}
-              disabled={composerActionDisabled}
-              onClick={props.onTogglePlanningMode}
-              title={props.planningMode === "advisory" ? "Planning is armed for Send" : "Plan before sending"}
-            >
-              Plan
-            </button>
-            <button
-              type="button"
-              className="mc-next-composer-suggestion"
-              aria-pressed={researchArmed}
-              disabled={composerActionDisabled}
-              onClick={props.onToggleResearchMode}
-              title={researchArmed ? "Research is armed for Send" : "Use research with the next send"}
-            >
-              Research
-            </button>
-            <button
-              type="button"
-              className="mc-next-composer-suggestion"
-              aria-pressed={reviewArmed}
-              disabled={composerActionDisabled}
-              onClick={props.onToggleReviewMode}
-              title={reviewArmed ? "Review is armed for Send" : "Request review posture with the next send"}
-            >
-              Review
-            </button>
-            <button
-              type="button"
-              className="mc-next-composer-suggestion"
-              aria-pressed={Boolean(props.modelCouncilEnabled)}
-              disabled={composerActionDisabled || !props.onToggleModelCouncil || !props.modelCouncilEnabled}
-              onClick={props.onToggleModelCouncil}
-              title={
-                props.modelCouncilEnabled
-                  ? "Model council is temporarily unavailable; click to turn it off"
-                  : "Model council is temporarily unavailable"
-              }
-            >
-              Council
-            </button>
-            <button
-              type="button"
-              className="mc-next-composer-suggestion"
-              aria-pressed={contextArmed}
-              disabled={composerActionDisabled}
-              onClick={props.onAttachFiles}
-              title={contextArmed ? "Context is attached for Send" : "Attach files or context before sending"}
-            >
-              Attach context
-            </button>
-          </div>
-        ) : null}
-      </ChatOptionsPopover>
-      {contextArmed || props.fullWebAccess || props.pinnedGoal ? (
-        <div className="mc-next-composer-active-context" aria-label="Active context and overrides">
-          {props.contextSelection ? (
-            <button type="button" className="mc-next-composer-chip action" onClick={props.onClearContextSelection}>
-              Context: {props.contextSelection.label} ×
-            </button>
-          ) : null}
-          {props.fullWebAccess ? <span className="mc-next-composer-chip emphasis">Full web access</span> : null}
-          {props.pinnedGoal ? <span className="mc-next-composer-chip emphasis">Goal: {props.pinnedGoal}</span> : null}
-        </div>
-      ) : null}
-      {props.selectedTurnRecovery &&
-      // The approval panel above already explains and resolves a turn waiting on approval.
-      !(props.pendingApproval && props.selectedTurn?.trace.status === "waiting_for_approval") ? (
-        <div className="mc-next-composer-banner warning">
-          <StatusChip tone={props.selectedTurn?.trace.status === "failed" ? "critical" : "warning"}>
-            {formatRecoveryStatus(props.selectedTurn?.trace.status)}
-          </StatusChip>
-          <p>{props.selectedTurnRecovery.summary}</p>
-          <div className="mc-next-composer-action-row">
-            {props.selectedTurn &&
-            (props.selectedTurnRecovery.action === "retry" ||
-              props.selectedTurnRecovery.action === "retry_narrower") ? (
-              <button
-                type="button"
-                className="mc-next-composer-inline-button"
-                onClick={() => props.onRetryTurn(props.selectedTurn!.turnId)}
-              >
-                {props.mode === "cowork" ? "Retry run step" : "Retry turn"}
-              </button>
-            ) : null}
-            {props.selectedTurnRecovery.action === "switch_to_deep_mode" && props.currentWebMode !== "deep" ? (
-              <button type="button" className="mc-next-composer-inline-button" onClick={props.onSetDeepMode}>
-                Set Deep mode
-              </button>
-            ) : null}
-            {props.onReviewRunDetails ? (
-              <button type="button" className="mc-next-composer-inline-button" onClick={props.onReviewRunDetails}>
-                Review run details
-              </button>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
-      <ComposerDelegationApproval props={props} />
-
-      <ComposerCoworkStop props={props} />
-
-      {props.liveVoiceActive || props.liveVoiceState === "error" ? (
-        <section
-          className="mc-next-composer-live-voice"
-          data-state={props.liveVoiceState ?? "idle"}
-          role="status"
-          aria-live="polite"
-        >
-          <StatusChip tone={props.liveVoiceState === "error" ? "critical" : "success"}>OpenAI Realtime</StatusChip>
-          <p>{props.liveVoiceStatusLabel ?? "OpenAI Realtime voice"}</p>
-          <div className="mc-next-composer-action-row">
-            {props.liveVoiceActive ? (
-              <button
-                type="button"
-                className="mc-next-composer-inline-button"
-                disabled={props.historicalReadOnly}
-                onClick={props.onToggleLiveVoiceMute}
-              >
-                {props.liveVoiceMuted ? "Unmute mic" : "Mute mic"}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="mc-next-composer-inline-button primary"
-              disabled={props.historicalReadOnly || (!props.liveVoiceActive && !props.liveVoiceAvailable)}
-              title={!props.liveVoiceActive ? (props.liveVoiceUnavailableReason ?? undefined) : undefined}
-              onClick={props.onToggleLiveVoice}
-            >
-              {props.liveVoiceActive ? "Stop live voice" : "Start live voice"}
-            </button>
-          </div>
-        </section>
-      ) : null}
+      <ThreadedComposerBanners
+        props={props}
+        composerActionDisabled={composerActionDisabled}
+        delegatedScopeActionDisabled={delegatedScopeActionDisabled}
+        scopeCandidateId={scopeCandidateId}
+        onScopeCandidateChange={setScopeCandidateId}
+      />
 
       <div className="mc-next-composer-input-shell">
         <textarea
@@ -1459,7 +389,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           onKeyDown={props.onComposerKeyDown}
           onPaste={props.onComposerPaste}
           placeholder={getPlaceholder(props.mode)}
-          rows={2}
+          rows={1}
           role="combobox"
           aria-label="Message composer"
           aria-autocomplete="list"
@@ -1648,84 +578,101 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             onAttachFiles={props.onAttachFiles}
             actions={plusActions}
           >
-            {presetOptions.length > 0 ? (
-              <div className="mc-next-composer-plus-section">
-                <label htmlFor="threaded-composer-preset">Preset</label>
-                <div className="mc-next-composer-preset-row">
-                  <select
-                    id="threaded-composer-preset"
-                    value={props.selectedPresetId}
-                    disabled={composerActionDisabled}
-                    onChange={(event) => {
-                      if (!composerActionDisabled) {
-                        props.onPresetChange?.(event.target.value);
-                      }
-                    }}
-                  >
-                    <option value="">Choose preset</option>
-                    {presetOptions.map((preset) => (
-                      <option key={preset.value} value={preset.value}>
-                        {preset.label}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    className="mc-next-composer-inline-button"
-                    disabled={composerActionDisabled || !props.selectedPresetId}
-                    onClick={() => {
-                      if (!composerActionDisabled) {
-                        props.onApplyPreset?.();
-                      }
-                    }}
-                  >
-                    Apply
-                  </button>
-                </div>
+            <ThreadedComposerContextInputs props={props} composerActionDisabled={composerActionDisabled} />
+          </ChatComposerPlusMenu>
+          <ChatOptionsPopover activeSettings={activeChatOptionSettings}>
+            {composerV2Enabled ? (
+              <div className="mc-next-composer-context-strip">
+                <ContextStrip
+                  model={contextStripModel}
+                  mode={contextStripMode}
+                  memory={memoryLabel}
+                  tokens={
+                    formatTokenLabel(usageTotals.tokens) +
+                    (usageTotals.partialTokens && usageTotals.tokens !== null ? " recorded" : "")
+                  }
+                  cost={
+                    formatCostLabel(usageTotals.costUsd) +
+                    (usageTotals.partialCost && usageTotals.costUsd !== null ? " recorded" : "")
+                  }
+                />
               </div>
             ) : null}
-            <div className="mc-next-composer-plus-section">
-              <label htmlFor="threaded-composer-knowledge-url">Knowledge URL</label>
-              <div className="mc-next-composer-knowledge-url-row">
-                <input
-                  id="threaded-composer-knowledge-url"
-                  value={knowledgeUrlDraft}
-                  disabled={composerActionDisabled}
-                  onChange={(event) => {
-                    if (!composerActionDisabled) {
-                      props.onKnowledgeUrlDraftChange?.(event.target.value);
-                    }
-                  }}
-                  placeholder="Attach a URL"
+
+            <div className="mc-next-composer-head">
+              <div className="mc-next-composer-title">
+                {/* The compact mode label keeps the current surface inspectable. */}
+                <ThreadedModeControl
+                  mode={props.modeOverridePending ?? (props.autoRouteActive ? undefined : props.mode)}
+                  preview={props.surfaceRoutePreview}
+                  variant="compact"
+                  interactive={false}
                 />
-                <select
-                  value={knowledgeUrlMode}
-                  disabled={composerActionDisabled}
-                  aria-label="Knowledge URL mode"
-                  onChange={(event) => {
-                    if (!composerActionDisabled) {
-                      props.onKnowledgeUrlModeChange?.(event.target.value as typeof knowledgeUrlMode);
-                    }
-                  }}
-                >
-                  <option value="retrieval">Use retrieval</option>
-                  <option value="full_text">Read in full</option>
-                </select>
-                <button
-                  type="button"
-                  className="mc-next-composer-inline-button"
-                  disabled={composerActionDisabled || !knowledgeUrlDraft.trim()}
-                  onClick={() => {
-                    if (!composerActionDisabled) {
-                      props.onAttachKnowledgeUrl?.();
-                    }
-                  }}
-                >
-                  Attach source
-                </button>
+              </div>
+              <div className="mc-next-composer-chip-row">
+                {capabilityUseChips.map((chip) => (
+                  <span key={chip} className="mc-next-composer-chip subtle">
+                    {chip}
+                  </span>
+                ))}
+                <span className="mc-next-composer-chip">{sessionStateLabel}</span>
+                {webModeLabel ? <span className="mc-next-composer-chip subtle">{webModeLabel}</span> : null}
+                {props.fullWebAccess ? <span className="mc-next-composer-chip emphasis">Full web</span> : null}
+                <span className="mc-next-composer-chip subtle">{thinkingLabel}</span>
+                <span className="mc-next-composer-chip subtle">{speedLabel}</span>
+                <span className="mc-next-composer-chip subtle">{routeLabel}</span>
+                <span className="mc-next-composer-chip subtle">{usageLabel}</span>
+                {props.pinnedGoal ? (
+                  <span className="mc-next-composer-chip emphasis">Goal: {props.pinnedGoal}</span>
+                ) : null}
+                {props.hasActiveStream && props.midTurnDisposition === "steer" ? (
+                  <span className="mc-next-composer-chip emphasis">Steering</span>
+                ) : null}
+                {props.hasActiveStream && props.midTurnDisposition === "queue" ? (
+                  <span className="mc-next-composer-chip subtle">Queued</span>
+                ) : null}
               </div>
             </div>
-          </ChatComposerPlusMenu>
+
+            {!runtimeBlockerActive ? (
+              <ThreadedComposerSendOptions
+                props={props}
+                composerActionDisabled={composerActionDisabled}
+                researchArmed={researchArmed}
+                reviewArmed={reviewArmed}
+                contextArmed={contextArmed}
+              />
+            ) : null}
+          </ChatOptionsPopover>
+          {contextArmed || props.fullWebAccess || props.pinnedGoal ? (
+            <div className="mc-next-composer-active-context is-inline" aria-label="Active context and overrides">
+              {props.contextSelection ? (
+                <button type="button" className="mc-next-composer-chip action" onClick={props.onClearContextSelection}>
+                  Context: {props.contextSelection.label} ×
+                </button>
+              ) : null}
+              {props.fullWebAccess ? <span className="mc-next-composer-chip emphasis">Full web access</span> : null}
+              {props.pinnedGoal ? (
+                <span className="mc-next-composer-chip emphasis">Goal: {props.pinnedGoal}</span>
+              ) : null}
+            </div>
+          ) : null}
+          {props.selectedTurnRecovery?.action === "switch_to_deep_mode" && props.currentWebMode !== "deep" ? (
+            <button type="button" className="mc-next-composer-inline-button" onClick={props.onSetDeepMode}>
+              Set Deep mode
+            </button>
+          ) : null}
+          {props.selectedTurn &&
+          (props.selectedTurnRecovery?.action === "retry" ||
+            props.selectedTurnRecovery?.action === "retry_narrower") ? (
+            <button
+              type="button"
+              className="mc-next-composer-inline-button"
+              onClick={() => props.onRetryTurn(props.selectedTurn!.turnId)}
+            >
+              {props.mode === "cowork" ? "Retry run step" : "Retry turn"}
+            </button>
+          ) : null}
           <input
             ref={props.audioInputRef}
             type="file"
@@ -1775,7 +722,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         </div>
         {!props.canSend && routeSendBlockReason ? (
           <p id={sendBlockReasonId} className="mc-next-composer-helper mc-next-composer-send-block" role="status">
-            {`Sending is unavailable: ${routeSendBlockReason}`}
+            {routeSendBlockReason}
           </p>
         ) : null}
       </div>

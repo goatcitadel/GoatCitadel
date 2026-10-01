@@ -37,6 +37,32 @@ export interface CapabilityScopeView {
   mode: CapabilityScopeMode;
   items: CapabilityScopeItem[];
   effectiveRefs: string[];
+  /** Persisted selection and hierarchy review. Live registry/policy eligibility is not frozen. */
+  selectionReview?: CapabilityScopeSelectionReview;
+}
+
+export interface CapabilityScopeSelectionReview {
+  version: "capability_scope_selection.v1";
+  revision: string;
+  scopeKind: CapabilityScopeKind;
+  scopeId: string;
+  resourceType: CapabilityResourceType;
+  citadelId: string;
+  scopeLifecycleStatus: "active" | "archived";
+  citadelLifecycleStatus: "active" | "archived";
+  assignments: Array<{ resourceRef: string; enabled: boolean }>;
+  /** Present only for a Workspace; an empty parent selection means inheritance. */
+  parentAssignments?: Array<{ resourceRef: string; enabled: boolean }>;
+}
+
+export interface CapabilityScopeReviewedUpdateInput extends CapabilityScopeUpdateInput {
+  expectedRevision: string;
+}
+
+export interface CapabilityScopeSelectionReceipt {
+  version: "capability_scope_receipt.v1";
+  previousRevision: string;
+  selectionReview: CapabilityScopeSelectionReview;
 }
 
 /** PATCH body: replace the scope's curated set for one resource type. */

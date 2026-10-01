@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /*
- * Mission Control Next does not compile Tailwind utility classes. Numeric
- * `h-*` / `w-*` tokens on Lucide icons therefore leave the SVG at its default
- * 24px size. Require explicit icon dimensions (`size={16}`) instead.
+ * The classic shell does not compile Tailwind utility classes. Numeric
+ * `h-*` / `w-*` tokens there leave icons at the default size. The cockpit
+ * compiles Tailwind separately and is exempt from this classic-only check.
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -52,11 +52,12 @@ export async function collectIconSizingViolations({ scanRoot = SCAN_ROOT } = {})
   const files = [];
   await walk(scanRoot, files);
   const violations = [];
-  for (const filePath of files) {
+  const classicFiles = files.filter((filePath) => !path.relative(scanRoot, filePath).split(path.sep).includes("cockpit"));
+  for (const filePath of classicFiles) {
     const contents = await fs.readFile(filePath, "utf8");
     violations.push(...findIconSizingViolations(filePath, contents));
   }
-  return { files, violations };
+  return { files: classicFiles, violations };
 }
 
 async function main() {
@@ -67,7 +68,7 @@ async function main() {
   }
 
   console.error(`icon sizing: ${violations.length} ineffective numeric utility class usage(s) found.`);
-  console.error("Mission Control Next does not compile Tailwind sizing utilities; use an explicit Lucide size prop.");
+  console.error("The classic shell does not compile Tailwind sizing utilities; use an explicit Lucide size prop.");
   for (const violation of violations) {
     const relativePath = path.relative(repoRoot, violation.file).split(path.sep).join("/");
     console.error(`  ${relativePath}:${violation.line} (${violation.tokens.join(", ")})`);

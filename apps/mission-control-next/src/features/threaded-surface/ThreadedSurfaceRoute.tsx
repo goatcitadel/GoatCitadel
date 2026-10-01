@@ -144,7 +144,8 @@ function ThreadedSurfacePermissionBridge({
     };
   }, [permissionQuery]);
 
-  return (
+  return <>
+    <p className="sr-only" role="status">Chat view loaded.</p>
     <ThreadedSurfacePage
       surface={surface}
       input={input}
@@ -152,7 +153,7 @@ function ThreadedSurfacePermissionBridge({
       onCopyTrustReport={onCopyTrustReport}
       onOpenUniversalRunDetail={onOpenUniversalRunDetail}
     />
-  );
+  </>;
 }
 
 export function resolveThreadedPermissionQuery({

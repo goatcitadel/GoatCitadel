@@ -59,6 +59,14 @@ async function executeCommsToolWithBoundaryTracking(
   assertNoRawRemoteApprovalBearer(args);
   const connectionId = required(args.connectionId, "connectionId");
   const connection = await storage.integrationConnections.get(connectionId);
+  if (
+    toolName === "channel.send" &&
+    connection.key === "ntfy" &&
+    (connection.kind !== "channel" ||
+      (connection.workspaceId !== undefined && connection.workspaceId !== request.workspaceId))
+  ) {
+    throw new Error("The canonical ntfy connection scope changed before dispatch.");
+  }
   const connectionConfig = record(connection.config);
   const target =
     asString(args.target) ?? resolveDefaultChannelTarget(connection.key, connectionConfig) ?? connection.key;

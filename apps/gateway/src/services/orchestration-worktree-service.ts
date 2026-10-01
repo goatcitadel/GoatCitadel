@@ -203,6 +203,7 @@ export class OrchestrationWorktreeService {
       return { outcome: "missing" };
     }
     const cleanupLease = await this.acquireCleanupLease(input.run, resolvedPath);
+    const leases = this.deps.worktreeLeases;
     this.stopLeaseHeartbeat(resolvedPath, cleanupLease);
     const manager = this.createManager(worktreesRoot);
     const changes = await manager.listChanges(resolvedPath);
@@ -216,7 +217,7 @@ export class OrchestrationWorktreeService {
       // Removing the worktree would destroy uncommitted work, or might when git
       // cannot tell. Keep it and give up ownership; the orphan reaper also
       // leaves such worktrees in place.
-      if (!(await this.deps.worktreeLeases.release({ ...cleanupLease, releasedAt: this.now() }))) {
+      if (!(await leases.release({ ...cleanupLease, releasedAt: this.now() }))) {
         throw new Error(`Orchestration worktree lease changed before retention completed: ${resolvedPath}`);
       }
       return changes.status === "read"
@@ -242,7 +243,7 @@ export class OrchestrationWorktreeService {
         await fs.rmdir(resolvedPath);
       } catch (error) {
         if (await pathMayExist(resolvedPath)) {
-          if (!(await this.deps.worktreeLeases.release({ ...cleanupLease, releasedAt: this.now() }))) {
+          if (!(await leases.release({ ...cleanupLease, releasedAt: this.now() }))) {
             throw new Error(`Orchestration worktree lease changed before retention completed: ${resolvedPath}`, {
               cause: error,
             });
@@ -265,7 +266,7 @@ export class OrchestrationWorktreeService {
             worktreePath: resolvedPath,
             error: error instanceof Error ? error.message : String(error),
           });
-          if (!(await this.deps.worktreeLeases.release({ ...cleanupLease, releasedAt: this.now() }))) {
+          if (!(await leases.release({ ...cleanupLease, releasedAt: this.now() }))) {
             throw new Error(`Orchestration worktree lease changed before retention completed: ${resolvedPath}`, {
               cause: error,
             });
@@ -283,7 +284,7 @@ export class OrchestrationWorktreeService {
     const pruned = await this.pruneWorktreeMetadata(manager, input.run.runId, input.reason, resolvedPath);
     if (
       pruned &&
-      !(await this.deps.worktreeLeases.release({
+      !(await leases.release({
         ...cleanupLease,
         releasedAt: this.now(),
       }))
@@ -526,6 +527,7 @@ export class OrchestrationWorktreeService {
       return { dryRun, scanned: 0, removed: [], skippedActive: [], skippedDirty: [], skippedUnverified: [] };
     }
     const manager = this.createManager(worktreesRoot);
+    const leases = this.deps.worktreeLeases;
 
     const activeStatuses = new Set<OrchestrationRun["status"]>(["queued", "running", "paused"]);
     const activeWorktreePaths = new Set(
@@ -561,7 +563,7 @@ export class OrchestrationWorktreeService {
         continue;
       }
       assertWritePathInJail(candidatePath, this.deps.config.toolPolicy.sandbox.writeJailRoots);
-      const currentLease = await this.deps.worktreeLeases.get(candidatePath);
+      const currentLease = await leases.get(candidatePath);
       if (currentLease && isLeaseActive(currentLease, now)) {
         skippedActive.push(candidatePath);
         continue;
@@ -575,7 +577,7 @@ export class OrchestrationWorktreeService {
         }
         continue;
       }
-      const claimed = await this.deps.worktreeLeases.claim({
+      const claimed = await leases.claim({
         worktreePath: candidatePath,
         runId: currentLease?.runId ?? entry.name,
         ownerId: this.ownerId,
@@ -588,7 +590,7 @@ export class OrchestrationWorktreeService {
       }
       const retention = await readRetentionNeed(manager, candidatePath);
       if (retention === "dirty" || retention === "unverified") {
-        if (!(await this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
+        if (!(await leases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
           throw new Error(`Orchestration worktree lease changed before orphan scan completed: ${candidatePath}`);
         }
         skippedFor[retention].push(candidatePath);
@@ -598,7 +600,7 @@ export class OrchestrationWorktreeService {
         try {
           await fs.rmdir(candidatePath);
         } catch {
-          if (!(await this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
+          if (!(await leases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
             throw new Error(`Orchestration worktree lease changed before orphan scan completed: ${candidatePath}`);
           }
           ((await pathMayExist(candidatePath)) ? skippedUnverified : removed).push(candidatePath);
@@ -608,14 +610,14 @@ export class OrchestrationWorktreeService {
         try {
           await manager.remove(candidatePath);
         } catch {
-          if (!(await this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
+          if (!(await leases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
             throw new Error(`Orchestration worktree lease changed before orphan scan completed: ${candidatePath}`);
           }
           ((await pathMayExist(candidatePath)) ? skippedUnverified : removed).push(candidatePath);
           continue;
         }
       }
-      if (!(await this.deps.worktreeLeases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
+      if (!(await leases.release({ ...toLeaseToken(claimed.lease), releasedAt: this.now() }))) {
         throw new Error(`Orchestration worktree lease changed before orphan cleanup completed: ${candidatePath}`);
       }
       removed.push(candidatePath);

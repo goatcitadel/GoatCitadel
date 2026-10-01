@@ -14,6 +14,7 @@ import {
 import { GatewayAccessGate } from "@goatcitadel/mission-control-shared/components/GatewayAccessGate";
 import { DraftLeaveDialog, useDraftLeave } from "../features/native-routes/library/DraftLeaveDialog";
 import { useShellHistory } from "./use-shell-history";
+import { RailGroupTabs } from "./RailGroupTabs";
 import { UnifiedSidebarProvider, UnifiedSidebarFrame } from "./UnifiedSidebar";
 import { NotificationStack } from "@goatcitadel/mission-control-shared/components/NotificationStack";
 import { CommandPalette, type CommandPaletteItem } from "@goatcitadel/mission-control-shared/components/CommandPalette";
@@ -217,7 +218,7 @@ export function MissionControlNextApp() {
   const { inspectorOpen, setInspectorOpen, detailEntry, setDetailEntry } = useShellInspector(detailPanelPinned);
   const shellInspectorAvailable = route.area !== "chat";
   const { notifications, pushNotification, dismissNotification, deliverRealtimeNotification, lastEnabledSoundModeRef } =
-    useShellNotifications({ notificationPreferences });
+    useShellNotifications({ notificationPreferences, visibleSessionId: route.area === "chat" ? route.sessionId : undefined });
   const { streamState, streamTruthMode } = useEventStream({
     gatewayReady,
     onRealtimeNotification: deliverRealtimeNotification,
@@ -401,15 +402,15 @@ export function MissionControlNextApp() {
   );
   // F1 (topbar density): below the compact desktop breakpoint the lower-priority topbar
   // controls collapse into an overflow menu so the right cluster never clips
-  // behind `overflow: clip`. Mirrors the `@media (max-width: 1439px)` CSS tier so
+  // behind `overflow: clip`. Mirrors the `@media (max-width: 1279px)` CSS tier so
   // JS placement and the responsive stylesheet stay in lockstep. Falls back to
   // the roomy inline layout when matchMedia is unavailable (SSR / test renderer).
-  const isCompactTopbar = useMediaQuery("(max-width: 1439px)");
+  const isCompactTopbar = useMediaQuery("(max-width: 1279px)");
   // WS-E: below the rail breakpoint the `.mc-next-rail` becomes the hamburger
   // drawer (areas live in the topbar on desktop, which is hidden here). Mirror
   // the `@media (max-width: 1023px)` CSS tier so the in-drawer area switcher
   // only renders on mobile and never duplicates the desktop topbar nav.
-  const isMobileNav = useMediaQuery("(max-width: 1179px)");
+  const isMobileNav = useMediaQuery("(max-width: 1279px)");
   const isWorkArea = route.area === "chat";
   const immersiveRoute = isImmersiveRoute(route);
   const usesFullStageLayout = isWorkArea || immersiveRoute;
@@ -717,6 +718,7 @@ export function MissionControlNextApp() {
     if (route.theme) {
       const unpinned = normalizeAppRoute({ ...route, theme: undefined });
       window.history.replaceState(window.history.state, "", buildAppHref(unpinned));
+      window.dispatchEvent(new Event("goatcitadel:classic-location"));
       startTransition(() => {
         setRoute(unpinned);
       });
@@ -728,6 +730,7 @@ export function MissionControlNextApp() {
     const nextHref = coerceCompatibilityHrefToNext(window.location.href);
     if (nextHref && nextHref !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
       window.history.replaceState(window.history.state, "", nextHref);
+      window.dispatchEvent(new Event("goatcitadel:classic-location"));
       setRoute(resolveRouteFromLocation(window.location.href));
       return;
     }
@@ -916,6 +919,25 @@ export function MissionControlNextApp() {
           </a>
           <UnifiedSidebarFrame>
             <ShellTopbar
+              statusSlot={
+                <ShellStatusStrip
+                  approvalsPill={approvalsPill}
+                  buildIdentity={status.runtimeIdentity}
+                  buildIdentityError={status.runtimeIdentityError}
+                  currentReleaseScope={currentReleaseScope}
+                  currentReleaseStatusLabel={currentReleaseStatusLabel}
+                  daemonDegraded={daemonStatusUnavailable || daemonNeedsIntervention}
+                  daemonStatusValue={daemonStatusValue}
+                  gatewayReady={gatewayReady}
+                  gatewayMessage={gatewayAccess.message}
+                  navigateApprovals={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
+                  navigateBuildProof={() => navigate({ area: "ops", section: "diagnostics", theme: route.theme })}
+                  realtimeDegraded={realtimeStatusCopy.degraded}
+                  realtimeValue={realtimeStatusCopy.strip}
+                  sessionsPill={sessionsPill}
+                  spendPill={spendPill}
+                />
+              }
               activeCitadelId={activeCitadelId}
               activeCitadelName={activeCitadelName}
               activeWorkspaceId={activeWorkspaceId}
@@ -979,6 +1001,7 @@ export function MissionControlNextApp() {
               />
 
               <ShellRouteStage
+                sectionTabs={route.area === "chat" ? null : <RailGroupTabs route={route} sections={groupedRailItems} navigate={navigate} />}
                 currentRouteDescription={currentRouteDescription}
                 currentRouteLabel={currentRouteLabel}
                 fallback={<RouteSurfaceFallback label={currentRouteLabel} description={currentRouteDescription} />}
@@ -998,23 +1021,6 @@ export function MissionControlNextApp() {
               onTogglePinned={() => setDetailPanelPinned(!detailPanelPinned)}
             />
 
-            <ShellStatusStrip
-              approvalsPill={approvalsPill}
-              buildIdentity={status.runtimeIdentity}
-              buildIdentityError={status.runtimeIdentityError}
-              currentReleaseScope={currentReleaseScope}
-              currentReleaseStatusLabel={currentReleaseStatusLabel}
-              daemonDegraded={daemonStatusUnavailable || daemonNeedsIntervention}
-              daemonStatusValue={daemonStatusValue}
-              gatewayReady={gatewayReady}
-              gatewayMessage={gatewayAccess.message}
-              navigateApprovals={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
-              navigateBuildProof={() => navigate({ area: "ops", section: "diagnostics", theme: route.theme })}
-              realtimeDegraded={realtimeStatusCopy.degraded}
-              realtimeValue={realtimeStatusCopy.strip}
-              sessionsPill={sessionsPill}
-              spendPill={spendPill}
-            />
           </UnifiedSidebarFrame>
 
           <NotificationStack items={notifications} onDismiss={dismissNotification} />

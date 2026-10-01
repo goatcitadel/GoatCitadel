@@ -51,7 +51,7 @@
   text-align: left;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 639px) {
   .mc-next-quality-dashboard-page .mc-next-directory-head-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr);

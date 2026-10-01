@@ -56,6 +56,8 @@ export interface ChatSessionStatusDurableRun {
 
 export interface ChatSessionStatusWork {
   latestTurnId?: string;
+  /** Canonical latest trace; absent on older Gateways, null when no turn is recorded. */
+  latestTurn?: { turnId: string; status: ChatTurnLifecycleStatus; startedAt: string; finishedAt?: string } | null;
   turnCounts: Record<
     Extract<
       ChatTurnLifecycleStatus,

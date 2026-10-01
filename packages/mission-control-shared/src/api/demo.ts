@@ -2,8 +2,8 @@ import type { DemoBootstrapResponse, DemoBootstrapStateResponse } from "@goatcit
 
 import { request } from "./client-core.js";
 
-export async function fetchDemoState(): Promise<DemoBootstrapStateResponse> {
-  return request<DemoBootstrapStateResponse>("/api/v1/demo/state");
+export async function fetchDemoState(options: { signal?: AbortSignal } = {}): Promise<DemoBootstrapStateResponse> {
+  return request<DemoBootstrapStateResponse>("/api/v1/demo/state", options.signal ? { signal: options.signal, cache: "no-store" } : undefined);
 }
 
 export async function bootstrapDemo(): Promise<DemoBootstrapResponse> {

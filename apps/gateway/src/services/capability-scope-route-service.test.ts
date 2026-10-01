@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
-import { createDatabase, CapabilityScopeRepository } from "@goatcitadel/storage";
+import { createDatabase } from "@goatcitadel/storage";
+import { CapabilityScopeRepository } from "../../../../packages/storage/src/capability-scope-repo.js";
 import type { CapabilityScopeAssignment } from "@goatcitadel/contracts";
 import { CapabilityScopeResolver } from "./capability-scope-resolver.js";
 import { CapabilityScopeRouteService, type CapabilityRegistryEntry } from "./capability-scope-route-service.js";
@@ -67,6 +68,8 @@ function makeSvc(repo: CapabilityScopeRepository, extraRows: CapabilityScopeAssi
       list: async (...args) => repo.list(...args),
       replaceSet: async (...args) => repo.replaceSet(...args),
       clear: async (...args) => repo.clear(...args),
+      getSelectionReview: async (...args) => repo.getSelectionReview(...args),
+      replaceReviewed: async (...args) => repo.replaceReviewed(...args),
     },
     resolver,
     listRegistry: async (type) => REGISTRY[type] ?? [],

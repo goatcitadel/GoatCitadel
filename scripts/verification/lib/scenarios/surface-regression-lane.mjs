@@ -386,11 +386,14 @@ export async function assertExperimentalSurfaceDegradedState(page, input) {
       .locator('[role="alert"]:not(.mc-next-blocks-loader), [role="status"]:not(.mc-next-blocks-loader)')
       .first();
     await degradedStatus.waitFor({ state: "visible", timeout: 15_000 });
+    const retry = main.getByRole("button", { name: /^retry$/iu });
+    await retry.waitFor({ state: "visible", timeout: 15_000 });
+    const retryDeadline = Date.now() + 15_000;
+    while (!(await retry.isEnabled()) && Date.now() < retryDeadline) await page.waitForTimeout(50);
     const degradedMessage = (await degradedStatus.innerText()).trim();
     if (!degradedMessage) {
       throw new Error(`experimental route ${input.routeSlug} exposed no operator-readable outage message`);
     }
-    const retry = main.getByRole("button", { name: /^retry$/iu });
     if ((await retry.count()) !== 1 || !(await retry.isVisible()) || !(await retry.isEnabled())) {
       throw new Error(`experimental route ${input.routeSlug} exposed no truthful enabled Retry action`);
     }

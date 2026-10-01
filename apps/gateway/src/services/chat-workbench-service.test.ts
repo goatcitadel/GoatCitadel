@@ -48,6 +48,42 @@ afterEach(async () => {
 });
 
 describe("chat workbench helpers", () => {
+  it("previews existing workbench state, tree, and files without synchronizing or selecting", async () => {
+    const { deps, projectRoot } = await createGitWorkbenchFixture();
+    await fs.writeFile(path.join(projectRoot, "other.txt"), "Preview text\n");
+    await getChatSessionWorkbenchFile(deps, "sess-1", "index.ts");
+    const before = structuredClone(await deps.storage.chatSessionWorkbench.get("sess-1"));
+    const ensure = vi.spyOn(deps.storage.chatSessionWorkbench, "ensure");
+    const patch = vi.spyOn(deps.storage.chatSessionWorkbench, "patch");
+    expect((await getChatSessionWorkbench(deps, "sess-1", { preview: true })).activeFilePath).toBe("index.ts");
+    expect((await getChatSessionWorkbenchTree(deps, "sess-1", { preview: true })).items.some((item) => item.path === "other.txt")).toBe(true);
+    const preview = await getChatSessionWorkbenchFile(deps, "sess-1", "other.txt", { preview: true });
+    expect(preview.content).toBe("Preview text\n");
+    expect(preview.state.activeFilePath).toBe("index.ts");
+    await expect(getChatSessionWorkbenchFile(deps, "sess-1", "../outside.txt", { preview: true })).rejects.toThrow(/Invalid relative path/);
+    expect(ensure).not.toHaveBeenCalled();
+    expect(patch).not.toHaveBeenCalled();
+    expect(await deps.storage.chatSessionWorkbench.get("sess-1")).toEqual(before);
+    await getChatSessionWorkbenchFile(deps, "sess-1", "other.txt");
+    expect(ensure).toHaveBeenCalled();
+    expect(patch).toHaveBeenCalled();
+    expect((await deps.storage.chatSessionWorkbench.get("sess-1"))?.activeFilePath).toBe("other.txt");
+  });
+
+  it("does not initialize absent preview records or reconcile conflicting project ownership", async () => {
+    const { deps } = await createGitWorkbenchFixture();
+    const ensure = vi.spyOn(deps.storage.chatSessionWorkbench, "ensure");
+    const patch = vi.spyOn(deps.storage.chatSessionWorkbench, "patch");
+    const get = vi.spyOn(deps.storage.chatSessionWorkbench, "get").mockResolvedValueOnce(undefined);
+    await expect(getChatSessionWorkbench(deps, "sess-1", { preview: true })).rejects.toMatchObject({ code: "ENTITY_NOT_FOUND" });
+    get.mockRestore();
+    vi.spyOn(deps.storage.chatSessionProjects, "get").mockResolvedValue({ sessionId: "sess-1", projectId: "other",
+      createdAt: "2026-09-30T00:00:00.000Z", updatedAt: "2026-09-30T00:00:00.000Z" });
+    await expect(getChatSessionWorkbenchTree(deps, "sess-1", { preview: true })).rejects.toThrow(/conversation project changed/);
+    expect(ensure).not.toHaveBeenCalled();
+    expect(patch).not.toHaveBeenCalled();
+  });
+
   it("rejects Windows aliases and protected descendants before offering a path review", async () => {
     const { deps, projectRoot } = await createGitWorkbenchFixture();
     for (const filePath of [
@@ -1060,6 +1096,7 @@ async function createWorkbenchFixture(
         }),
       },
       chatSessionWorkbench: {
+        get: () => state,
         ensure: () => state,
         patch: (_sessionId: string, input: Partial<ChatSessionWorkbenchRecord>) => {
           state = {
@@ -1144,6 +1181,7 @@ async function createGitWorkbenchFixture(
         }),
       },
       chatSessionWorkbench: {
+        get: () => state,
         ensure: () => state,
         patch: (_sessionId: string, input: Partial<ChatSessionWorkbenchRecord>) => {
           state = {

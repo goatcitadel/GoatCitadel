@@ -726,12 +726,10 @@ describe("NativeRoutePages library coverage", () => {
       { refType: "run", refId: "eval-2", hash: undefined, metadata: undefined },
     ]);
     expect(getErrorMessage(new Error("Gateway offline"))).toBe("Gateway offline");
-    expect(getErrorMessage(new Error(""))).toBe("Something went wrong.");
+    expect(getErrorMessage(new Error(""))).toBe("Something went wrong. Try again.");
     expect(getErrorMessage("plain failure")).toBe("plain failure");
-    expect(getErrorMessage({ message: "Provider rejected", code: "AUTH_FAILED" })).toBe(
-      "Provider rejected (AUTH_FAILED)",
-    );
-    expect(getErrorMessage({ code: "RATE_LIMITED" })).toBe("Request failed (RATE_LIMITED)");
+    expect(getErrorMessage({ message: "Provider rejected", code: "AUTH_FAILED" })).toBe("Provider rejected");
+    expect(getErrorMessage({ code: "RATE_LIMITED" })).toBe("The request couldn't be completed.");
     expect(getErrorMessage({ reason: "hidden" })).toBe("Something went wrong.");
   });
 
@@ -1163,7 +1161,7 @@ describe("NativeRoutePages library coverage", () => {
     await click(findButton(skillsWithFailures.root, "Safe improvement"));
     expect(collectText(skillsWithFailures.root)).toContain("runs offline");
     await click(findButton(skillsWithFailures.root, "Reload skills"));
-    expect(collectText(skillsWithFailures.root)).toContain("reload failed");
+    expect(collectText(skillsWithFailures.root)).toContain("Can't reach the GoatCitadel gateway");
     await click(exactButton(skillsWithFailures.root, "Enable"));
     expect(collectText(skillsWithFailures.root)).toContain("state failed");
 

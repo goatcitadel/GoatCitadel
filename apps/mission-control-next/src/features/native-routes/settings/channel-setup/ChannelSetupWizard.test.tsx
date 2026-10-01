@@ -1,5 +1,5 @@
 import { __resetSessionViewStateForTests } from "../../../../hooks/use-session-view-state";
-import { __resetSessionDraftsForTests } from "../../library/session-drafts";
+import { __resetSessionDraftsForTests, hasSessionDraft } from "../../library/session-drafts";
 import { DraftLeaveDialog } from "../../library/DraftLeaveDialog";
 // @vitest-environment happy-dom
 import { useState, type ComponentProps } from "react";
@@ -9,6 +9,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelSetupWizard, type ChannelSetupWizardFeedback } from "./ChannelSetupWizard";
 import { ChannelsSection } from "../sections/ChannelsSection";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
+import { __resetChannelMutationStateForTests } from "../sections/channel-setup-state";
+import { ChannelsSettings } from "../../../../cockpit/areas/settings/ChannelsSettings";
+import { ChannelDraftEditor } from "../../../../cockpit/areas/settings/ChannelDraftEditor";
 
 const channelApiMocks = vi.hoisted(() => ({
   createChannelSetupDraft: vi.fn(),
@@ -30,6 +33,8 @@ const channelApiMocks = vi.hoisted(() => ({
 }));
 
 const settingsNavigate = vi.fn();
+vi.mock("../../../../cockpit/app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: settingsNavigate }) }));
+vi.mock("../../../../cockpit/ui/Dialog", () => ({ Dialog: ({ open, children, title, description }: { open: boolean; children: import("react").ReactNode; title: string; description?: string }) => open ? <div role="dialog" aria-label={title}><p>{description}</p>{children}</div> : null }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => channelApiMocks);
 
@@ -365,12 +370,19 @@ function configureChannelApiMocks(): void {
   channelApiMocks.fetchChannelSetupDrafts.mockImplementation(async () => ({ items: [currentApiDraft] }));
   channelApiMocks.fetchIntegrationConnections.mockImplementation(async () => ({ items: [] }));
   channelApiMocks.fetchSlackOAuthStatus.mockImplementation(async () => ({ configured: false }));
-  channelApiMocks.validateChannelSetupDraft.mockImplementation(async () => validationResponse);
-  channelApiMocks.testChannelSetupDraft.mockImplementation(async () => testResponse);
+  channelApiMocks.validateChannelSetupDraft.mockImplementation(async () => {
+    currentApiDraft = { ...currentApiDraft, revision: currentApiDraft.revision + 1 };
+    return { ...validationResponse, draftRevision: currentApiDraft.revision };
+  });
+  channelApiMocks.testChannelSetupDraft.mockImplementation(async () => {
+    currentApiDraft = { ...currentApiDraft, revision: currentApiDraft.revision + 2 };
+    return { ...testResponse, draftRevision: currentApiDraft.revision };
+  });
   channelApiMocks.updateChannelSetupDraft.mockImplementation(
     async (_draftId: string, input: { label?: string; enabled?: boolean; draft?: Record<string, unknown> }) => {
       currentApiDraft = {
         ...currentApiDraft,
+        revision: currentApiDraft.revision + 1,
         label: input.label ?? currentApiDraft.label,
         enabled: input.enabled ?? currentApiDraft.enabled,
         draft: input.draft ?? currentApiDraft.draft,
@@ -383,6 +395,9 @@ function configureChannelApiMocks(): void {
     planId: "plan-channel-1",
     status: "awaiting_confirmation",
     revision: 1,
+    origin: { workspaceId: "default", surface: "settings" },
+    request: { kind: "channel_connection", channelKind: currentApiDraft.catalogId, draftId: currentApiDraft.draftId },
+    target: { expectedRevision: currentApiDraft.revision },
   }));
 }
 
@@ -484,7 +499,7 @@ async function flushWork(rounds = 5): Promise<void> {
   }
 }
 
-async function renderChannelsSection(): Promise<ReactTestRenderer> {
+async function renderChannelsSection(label = "Discord sandbox"): Promise<ReactTestRenderer> {
   let renderer!: ReactTestRenderer;
   await act(async () => {
     renderer = create(
@@ -502,19 +517,22 @@ async function renderChannelsSection(): Promise<ReactTestRenderer> {
     await Promise.resolve();
   });
   await flushWork();
-  await click(findDraftButton(renderer.root, "Discord sandbox"));
+  await click(findDraftButton(renderer.root, label));
   return renderer;
 }
 
 beforeEach(() => {
+  __resetChannelMutationStateForTests();
   __resetSessionViewStateForTests();
   __resetSessionDraftsForTests();
   vi.clearAllMocks();
   configureChannelApiMocks();
+  vi.stubGlobal("fetch", vi.fn(() => { throw new Error("Channel fixture must never reach a live Gateway."); }));
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("ChannelSetupWizard", () => {
@@ -750,7 +768,8 @@ describe("ChannelsSection Discord setup lifecycle", () => {
     channelApiMocks.fetchIntegrationConnections.mockResolvedValue({ items: [connection] });
     channelApiMocks.fetchIntegrationConnection.mockRejectedValueOnce(new Error("Read unavailable")).mockResolvedValue({ ...connection, revision: "b".repeat(64), label: "Peer connection", enabled: false });
     channelApiMocks.isApiRequestError.mockReturnValue(true);
-    channelApiMocks.updateChannelSetupDraft.mockRejectedValueOnce(new ApiRequestError("Changed", { kind: "http", method: "PATCH", path: "/fixture", status: 409 }));
+    channelApiMocks.updateChannelSetupDraft.mockRejectedValueOnce(new ApiRequestError("Changed", { kind: "http", method: "PATCH", path: "/fixture", status: 409,
+      body: { code: "WRITE_CONFLICT", details: { reason: "CHANNEL_DRAFT_REVISION_CONFLICT", draftId: discordDraft.draftId } } }));
     channelApiMocks.reviewChannelSetupConnection.mockImplementation(async (_id, input) => {
       currentApiDraft = { ...currentApiDraft, revision: 2, connectionRevision: input.expectedConnectionRevision };
       return currentApiDraft;
@@ -833,8 +852,9 @@ describe("ChannelsSection Discord setup lifecycle", () => {
 
   it("requires a new live test when a refresh returns a newer revision", async () => {
     channelApiMocks.testChannelSetupDraft.mockImplementation(async () => {
-      currentApiDraft = { ...currentApiDraft, revision: 2, label: "Changed elsewhere" };
-      return testResponse;
+      const draftRevision = currentApiDraft.revision + 2;
+      currentApiDraft = { ...currentApiDraft, revision: draftRevision + 1, label: "Changed elsewhere" };
+      return { ...testResponse, draftRevision };
     });
     const renderer = await renderChannelsSection();
     await click(findStepButton(renderer.root, "Validate and test the connection"));
@@ -910,7 +930,7 @@ describe("ChannelsSection Discord setup lifecycle", () => {
     await click(findButton(renderer.root, "Run live test"));
     await flushWork();
     expect(channelApiMocks.validateChannelSetupDraft).toHaveBeenCalledTimes(2);
-    expect(channelApiMocks.testChannelSetupDraft).toHaveBeenCalledWith("discord-draft-1", discordDraft.revision);
+    expect(channelApiMocks.testChannelSetupDraft).toHaveBeenCalledWith("discord-draft-1", 4);
     expect(channelApiMocks.validateChannelSetupDraft.mock.invocationCallOrder[1]).toBeLessThan(
       channelApiMocks.testChannelSetupDraft.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
@@ -999,6 +1019,138 @@ describe("ChannelsSection Discord setup lifecycle", () => {
       "987654321098765432",
     );
 
+    renderer.unmount();
+  });
+});
+
+describe("shared channel setup safety and native controls", () => {
+  it("keeps an unconfirmed save locked across remount and admits only one dispatch", async () => {
+    let reject!: (error: Error) => void;
+    channelApiMocks.updateChannelSetupDraft.mockReturnValueOnce(new Promise((_yes, no) => { reject = no; }));
+    const renderer = await renderChannelsSection();
+    const label = renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")!;
+    await changeValue(label, "Reviewed replacement");
+    const save = findButton(renderer.root, "Save draft");
+    await act(async () => { save.props.onClick(); save.props.onClick(); });
+    await flushWork();
+    expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+    renderer.unmount();
+    await act(async () => reject(new Error("Response lost after dispatch")));
+    await flushWork();
+    const remounted = await renderChannelsSection();
+    expect(textOf(remounted.root)).toContain("Outcome uncertain");
+    expect(findButton(remounted.root, "Saving…").props.disabled).toBe(true);
+    expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+    remounted.unmount();
+  });
+
+  it("cancels a delayed preflight when the workspace changes away and back", async () => {
+    const renderer = await renderChannelsSection();
+    await changeValue(renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")!, "Never dispatch");
+    let resolve!: (draft: ChannelSetupDraft) => void;
+    channelApiMocks.fetchChannelSetupDraft.mockReturnValueOnce(new Promise<ChannelSetupDraft>((yes) => { resolve = yes; }));
+    await click(findButton(renderer.root, "Save draft"));
+    const props = renderer.root.findByType(ChannelsSection).props as ComponentProps<typeof ChannelsSection>;
+    await act(async () => renderer.update(<ChannelsSection {...props} activeWorkspaceId="other" />));
+    await act(async () => renderer.update(<ChannelsSection {...props} />));
+    await act(async () => resolve(discordDraft));
+    await flushWork();
+    expect(channelApiMocks.updateChannelSetupDraft).not.toHaveBeenCalled();
+    renderer.unmount();
+  });
+
+  it("never classifies a committed conflict marker as permission to retry", async () => {
+    channelApiMocks.isApiRequestError.mockReturnValue(true);
+    channelApiMocks.updateChannelSetupDraft.mockRejectedValueOnce(new ApiRequestError("Audit failed after commit", {
+      kind: "http", method: "PATCH", path: "/fixture", status: 409,
+      body: { code: "WRITE_CONFLICT", mutationCommitted: true, details: { reason: "CHANNEL_DRAFT_REVISION_CONFLICT", draftId: discordDraft.draftId } },
+    }));
+    const renderer = await renderChannelsSection();
+    await changeValue(renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")!, "Commit receipt missing");
+    await click(findButton(renderer.root, "Save draft"));
+    expect(textOf(renderer.root)).toContain("Outcome uncertain");
+    expect(channelApiMocks.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
+    renderer.unmount();
+  });
+
+  it("uses the native editor to cancel a live test without any validation or test mutation", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<ChannelsSettings workspaceId="default" />); });
+    await flushWork();
+    await click(findButton(renderer.root, "Edit Discord sandbox"));
+    expect(textOf(renderer.root)).toContain("belong to this installation");
+    expect(renderer.root.findByType(ChannelDraftEditor)).toBeDefined();
+    await click(findButton(renderer.root, "Review live test"));
+    expect(textOf(renderer.root)).toContain("may send a sandbox message");
+    await click(findButton(renderer.root, "Cancel test"));
+    expect(channelApiMocks.validateChannelSetupDraft).not.toHaveBeenCalled();
+    expect(channelApiMocks.testChannelSetupDraft).not.toHaveBeenCalled();
+    renderer.unmount();
+  });
+
+  it("withholds a live test if input changes while its native review is open", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<ChannelsSettings workspaceId="default" />); });
+    await flushWork();
+    await click(findButton(renderer.root, "Edit Discord sandbox"));
+    await click(findButton(renderer.root, "Review live test"));
+    await changeValue(renderer.root.findByProps({ "aria-label": "Connection label" }), "Newer input");
+    expect(findButton(renderer.root, "Run reviewed live test").props.disabled).toBe(true);
+    expect(channelApiMocks.testChannelSetupDraft).not.toHaveBeenCalled();
+    renderer.unmount();
+  });
+});
+
+describe("channel confirmed receipts and OAuth scope", () => {
+  it("acknowledges a confirmed late public save in the originating retained draft", async () => {
+    let resolve!: (draft: ChannelSetupDraft) => void;
+    channelApiMocks.updateChannelSetupDraft.mockReturnValueOnce(new Promise<ChannelSetupDraft>((yes) => { resolve = yes; }));
+    const renderer = await renderChannelsSection();
+    await changeValue(renderer.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")!, "Saved after leave");
+    await click(findButton(renderer.root, "Save draft"));
+    renderer.unmount();
+    currentApiDraft = { ...discordDraft, label: "Saved after leave", revision: 2 };
+    await act(async () => resolve(currentApiDraft));
+    await flushWork();
+    expect(hasSessionDraft("channel:default:discord-draft-1:setup")).toBe(false);
+    const next = await renderChannelsSection("Saved after leave");
+    expect(next.root.findAllByType("input").find((input) => input.props.placeholder === "Discord")?.props.value).toBe("Saved after leave");
+    next.unmount();
+  });
+  it("acknowledges public fields but retains an unsent secret when navigation interrupts its second write", async () => {
+    let resolve!: (draft: ChannelSetupDraft) => void;
+    channelApiMocks.updateChannelSetupDraft.mockReturnValueOnce(new Promise<ChannelSetupDraft>((yes) => { resolve = yes; }));
+    const renderer = await renderChannelsSection();
+    await click(findStepButton(renderer.root, "Paste your connection values"));
+    await changeValue(findHostControl(renderer.root, "input", "channel-discord-draft-1-botToken"), "synthetic-unsent-token");
+    await click(findButton(renderer.root, "Save draft"));
+    expect(channelApiMocks.updateChannelSetupDraft.mock.lastCall?.[1].draft).not.toHaveProperty("botToken");
+    renderer.unmount();
+    currentApiDraft = { ...discordDraft, revision: 2 };
+    await act(async () => resolve(currentApiDraft));
+    await flushWork();
+    expect(channelApiMocks.submitChannelSetupDraftSecrets).not.toHaveBeenCalled();
+    expect(hasSessionDraft("channel:default:discord-draft-1:setup")).toBe(true);
+    const next = await renderChannelsSection();
+    await click(findStepButton(next.root, "Paste your connection values"));
+    expect(findHostControl(next.root, "input", "channel-discord-draft-1-botToken").props.value).toBe("synthetic-unsent-token");
+    next.unmount();
+  });
+  it("withholds Slack OAuth start when its selected channel definition changes during preflight", async () => {
+    const slack = { ...discordDefinition, catalog: { ...discordDefinition.catalog, catalogId: "channel.slack", label: "Slack" } };
+    channelApiMocks.fetchChannelSetupDefinitions.mockResolvedValue({ items: [discordDefinition, slack] });
+    const renderer = await renderChannelsSection();
+    await click(findButton(renderer.root, "Back to list"));
+    await click(findButton(renderer.root, "Connect channel"));
+    const select = renderer.root.findByType("select");
+    await changeValue(select, "channel.slack");
+    let resolve!: (value: unknown) => void;
+    channelApiMocks.fetchSlackOAuthStatus.mockReturnValueOnce(new Promise((yes) => { resolve = yes; }));
+    await click(findButton(renderer.root, "Connect Slack"));
+    await changeValue(select, "channel.discord");
+    await act(async () => resolve({ configured: true, connections: [], scopes: [], missing: [] }));
+    await flushWork();
+    expect(channelApiMocks.startSlackOAuth).not.toHaveBeenCalled();
     renderer.unmount();
   });
 });

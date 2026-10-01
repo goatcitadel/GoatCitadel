@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { collectTypographyViolations, findTypographyViolations } from "./check-mission-control-next-typography.mjs";
 
-test("findTypographyViolations flags hardcoded font sizes but allows tokens, zero, and clamp", () => {
+test("findTypographyViolations flags hardcoded font sizes and fallbacks but allows tokens and zero", () => {
   const css = [
     ".a { font-size: 12px; }",
     ".b { font-size: 0.6rem; }",
@@ -20,8 +20,19 @@ test("findTypographyViolations flags hardcoded font sizes but allows tokens, zer
   const violations = findTypographyViolations("fixture.css", css);
   assert.deepEqual(
     violations.map((violation) => violation.line),
-    [1, 2, 7],
+    [1, 2, 4, 6, 7],
   );
+});
+
+test("allows clamp only in the token definitions", () => {
+  const css = "h1 { font-size: clamp(1rem, 2vw, 2rem); }";
+  assert.equal(findTypographyViolations("src/styles/mission-control-next-tokens.css", css).length, 0);
+  assert.equal(findTypographyViolations("src/features/page.css", css).length, 1);
+});
+
+test("rejects text token fallbacks and accepts plain text tokens", () => {
+  assert.equal(findTypographyViolations("page.css", "p { font-size: var(--text-xs, 0.75rem); }").length, 1);
+  assert.equal(findTypographyViolations("page.css", "p { font-size: var(--text-xs); }").length, 0);
 });
 
 test("collectTypographyViolations walks a scan root and reports zero on a clean tree", async () => {
@@ -31,7 +42,7 @@ test("collectTypographyViolations walks a scan root and reports zero on a clean 
     await fs.mkdir(path.join(scanRoot, "styles"), { recursive: true });
     await fs.writeFile(
       path.join(scanRoot, "styles", "ok.css"),
-      ".ok { font-size: var(--text-sm); }\n.hero { font-size: clamp(1.5rem, 3vw, 2rem); }\n",
+      ".ok { font-size: var(--text-sm); }\n",
       "utf8",
     );
     const clean = await collectTypographyViolations({ scanRoot });

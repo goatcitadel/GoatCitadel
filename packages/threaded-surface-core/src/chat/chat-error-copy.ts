@@ -129,6 +129,8 @@ export function describeChatUiError(
     summary = "Run state refresh failed.";
   } else if (normalized.includes("checkpoint")) {
     summary = "Checkpoint refresh failed.";
+  } else if (/^network error\b/i.test(value) || normalized.includes("failed to fetch")) {
+    summary = `Can't reach the GoatCitadel gateway. Check that it's running, then try again.${retryNote}`;
   } else if (
     normalized.includes("econnrefused") ||
     normalized.includes("runtime could not be reached") ||
@@ -145,4 +147,15 @@ export function describeChatUiError(
 
 export function formatChatUiError(value?: string | null, source: ChatErrorSource | null = "other"): string | null {
   return describeChatUiError(value, source)?.summary ?? null;
+}
+
+/** A terminal answer can already explain the same stream failure in the thread. */
+export function isChatErrorAlreadyShownByTurn(input: {
+  error: string | null;
+  turnStatus?: string;
+  assistantContent?: string;
+}): boolean {
+  const answer = input.assistantContent?.trim();
+  return input.turnStatus === "failed" && Boolean(input.error && answer && answer.length >= 40
+    && input.error.startsWith(answer));
 }

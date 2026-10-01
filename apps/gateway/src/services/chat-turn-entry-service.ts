@@ -106,6 +106,8 @@ export interface AgentChatTurnRequestOptions {
   abortSignal?: AbortSignal;
   /** Internal delegation only; the parent resumes through its durable watcher. */
   returnAfterDurableAdmission?: boolean;
+  /** Canonical local child linkage only; runs inside the admission transaction. */
+  onChildDurableRunAdmitted?: (runId: string) => Promise<void>;
   onChildDurableRunLaunched?: (runId: string) => Promise<void>;
   turnIdentity?: AgentChatTurnIdentity;
   /** Pre-admitted authority used only by deterministic internal callers/recovery. */
@@ -486,6 +488,7 @@ export async function agentSendChatMessage(
           modeOrchestration,
           {
             abortSignal: options?.abortSignal,
+            onChildDurableRunAdmitted: options?.onChildDurableRunAdmitted,
             onChildDurableRunLaunched: options?.onChildDurableRunLaunched,
             returnAfterDurableAdmission: options?.returnAfterDurableAdmission,
             assertDispatchOwnership: options?.assertDispatchOwnership,
@@ -510,6 +513,7 @@ export async function agentSendChatMessage(
           undefined,
           {
             abortSignal: options?.abortSignal,
+            onChildDurableRunAdmitted: options?.onChildDurableRunAdmitted,
             onChildDurableRunLaunched: options?.onChildDurableRunLaunched,
             returnAfterDurableAdmission: options?.returnAfterDurableAdmission,
             assertDispatchOwnership: options?.assertDispatchOwnership,

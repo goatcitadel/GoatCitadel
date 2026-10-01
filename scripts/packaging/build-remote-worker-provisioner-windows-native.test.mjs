@@ -80,7 +80,7 @@ after(() => {
   fs.rmSync(temporaryRoot, { recursive: true, force: true });
 });
 
-test("W1B1A freezes the exact 55-file fence and canonical current-byte source manifest", () => {
+test("W1B1A freezes the exact 56-file fence and canonical current-byte source manifest", () => {
   const expected = [
     "apps/remote-worker-provisioner-windows-native/GoatCitadel.RemoteWorker.Provisioner.Availability.vcxproj",
     "apps/remote-worker-provisioner-windows-native/GoatCitadel.RemoteWorker.Provisioner.Client.vcxproj",
@@ -108,6 +108,7 @@ test("W1B1A freezes the exact 55-file fence and canonical current-byte source ma
     "apps/remote-worker-provisioner-windows-native/src/protected_filesystem.cpp",
     "apps/remote-worker-provisioner-windows-native/src/protected_filesystem.hpp",
     "apps/remote-worker-provisioner-windows-native/src/protected_filesystem.test.cpp",
+    "apps/remote-worker-provisioner-windows-native/src/protected_handle_diagnostics.test.hpp",
     "apps/remote-worker-provisioner-windows-native/src/protected_operations.cpp",
     "apps/remote-worker-provisioner-windows-native/src/protected_operations.hpp",
     "apps/remote-worker-provisioner-windows-native/src/protected_operations.test.cpp",
@@ -140,14 +141,14 @@ test("W1B1A freezes the exact 55-file fence and canonical current-byte source ma
   ];
   assert.deepEqual(REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS, expected);
   assert.deepEqual(expected, [...expected].sort(asciiCompare));
-  assert.equal(new Set(expected).size, 55);
+  assert.equal(new Set(expected).size, 56);
   const manifest = computeW1B1aCanonicalSourceManifest();
   assert.equal(manifest.schema, "goatcitadel.remote-worker.provisioner.w1b1a-source-manifest.v2");
-  assert.equal(manifest.fileCount, 55);
-  assert.equal(manifest.entries.length, 55);
+  assert.equal(manifest.fileCount, 56);
+  assert.equal(manifest.entries.length, 56);
   assert.equal(manifest.bytes.toString("utf8").endsWith("\n"), false);
   const lines = manifest.bytes.toString("utf8").split("\n");
-  assert.equal(lines.length, 55);
+  assert.equal(lines.length, 56);
   for (let index = 0; index < lines.length; index += 1) {
     assert.match(lines[index], /^[a-f0-9]{64}  [a-zA-Z0-9_./-]+$/u);
     assert.equal(lines[index], `${manifest.entries[index].sha256}  ${expected[index]}`);
@@ -3393,8 +3394,8 @@ for (const [target, machine] of [
       assert.equal(result.availability.targetServiceSha256, result.service.sha256);
       const expectedClient =
         target === "windows-x64"
-          ? { bytes: 81_408, sha256: "6d0c6d53272c1564b70906193be452358af0f30a81788d469599b125735c9469" }
-          : { bytes: 72_192, sha256: "030d82606b3f3a5ab97b67d7f2e4cfd717bff3cf6ebb8429887e0f64384512fd" };
+          ? { bytes: 80_896, sha256: "9fb70095d3c4c473d0be1d3ec67eb17e892ae4870911e7773e11df26d6ac46d0" }
+          : { bytes: 72_192, sha256: "b353f9b0f25dca0f91aa6c6c190905c4fbf8f687b5e7529a2f62c719457d45c7" };
       assert.equal(result.client.byteLength, expectedClient.bytes);
       assert.equal(result.client.sha256, expectedClient.sha256);
       const serviceInspection = inspectRemoteWorkerProvisionerPe(serviceBytes, {

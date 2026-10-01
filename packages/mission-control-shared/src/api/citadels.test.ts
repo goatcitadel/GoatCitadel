@@ -23,6 +23,14 @@ function body(init: RequestInit | undefined): unknown {
 }
 
 describe("citadel api client", () => {
+  it("stages a reviewed Mason Blueprint using its exact Citadel and opaque revision", async () => {
+    const blueprint = { schemaVersion: "goatcitadel.blueprint.v1" as const, metadata: { name: "Review" }, charter: { purpose: "Review", kind: "team" as const, goals: [], boundaries: [], successDefinition: [], riskPosture: "balanced" as const, modelPolicyDefault: "hybrid_guarded" as const }, chambers: [] };
+    const revision = "a".repeat(64);
+    await citadels.stageMasonBlueprint("one/two", blueprint, revision);
+    expect(lastCall()[0]).toBe("/api/v1/citadels/one%2Ftwo/mason/stage");
+    expect(lastCall()[1]?.method).toBe("POST");
+    expect(body(lastCall()[1])).toEqual({ blueprint, expectedRevision: revision });
+  });
   it("listCitadels reads the Citadel identity directory with clamped limits", async () => {
     await citadels.listCitadels("all", 999);
     expect(lastCall()[0]).toBe("/api/v1/citadels?view=all&limit=500");

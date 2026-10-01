@@ -4,7 +4,7 @@
    with a sticky composer. Laptop widths (>=1180px) keep the contained
    layout: the banded blocks below adapt panel columns instead of giving up
    containment. */
-@media (max-width: 1680px) and (max-height: 699px), (width < 1180px) {
+@media (max-width: 1599px) and (max-height: 699px), (width < 1280px) {
   .mc-next-app-frame,
   .mc-next-body.is-work-area,
   .mc-next-stage-work,
@@ -75,7 +75,7 @@
   }
 }
 
-@media (min-width: 1180px) and (max-width: 1680px) {
+@media (min-width: 1280px) and (max-width: 1599px) {
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench.has-context,
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel.has-context {
     grid-template-columns: minmax(0, 1fr) minmax(18rem, min(var(--mc-workbench-panel-width, 35rem), 38vw));
@@ -132,7 +132,7 @@
 /* Contained two-column band. Single-column stacking needs document scroll,
    which the contained layout does not have, so panels stay beside the
    conversation at laptop widths with their columns capped to always fit. */
-@media (min-width: 1180px) and (max-width: 1360px) {
+@media (min-width: 1024px) and (max-width: 1279px) {
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench,
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel {
     grid-template-columns: minmax(0, 1fr) minmax(18rem, min(var(--mc-workbench-panel-width, 35rem), 38vw));
@@ -147,7 +147,7 @@
   }
 }
 
-@media (width < 1180px) {
+@media (width < 1280px) {
   .mc-next-threaded-resize-handle {
     display: none;
   }
@@ -327,7 +327,7 @@
   }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 639px) {
   .mc-next-threaded-surface.unified {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -339,15 +339,18 @@
   }
 
   .mc-next-threaded-surface.unified .mc-next-threaded-header {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0.45rem;
-    padding: 0.55rem 0 0.65rem;
+    flex-wrap: nowrap;
+    min-height: 48px;
+    gap: 0.4rem;
+    padding: 0.35rem 0;
   }
 
   .mc-next-threaded-surface.unified .mc-next-threaded-header-copy h1 {
     font-size: var(--text-lg);
     line-height: 1.15;
-    overflow-wrap: anywhere;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .mc-next-threaded-surface.unified .mc-next-threaded-header-copy span {
@@ -357,18 +360,26 @@
     overflow-wrap: anywhere;
   }
 
-  .mc-next-threaded-surface.unified .mc-next-threaded-header-meta,
   .mc-next-threaded-surface.unified .mc-next-threaded-header-actions {
-    grid-column: 1;
-    grid-row: auto;
-    width: 100%;
-    justify-items: stretch;
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    gap: 0.25rem;
+    width: auto;
   }
 
-  .mc-next-threaded-surface.unified .mc-next-threaded-header-actions {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    justify-content: stretch;
+  .mc-next-threaded-surface.unified .mc-next-threaded-model-control > summary strong,
+  .mc-next-threaded-surface.unified .mc-next-threaded-header-copy > span {
+    display: none;
+  }
+
+  .mc-next-header-button-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
   .mc-next-threaded-surface.unified .mc-next-threaded-model-picker .chat-model-picker {
@@ -378,8 +389,9 @@
 
   .mc-next-threaded-surface.unified .mc-next-threaded-action-row {
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    gap: 4px;
     width: auto;
   }
 
@@ -607,7 +619,7 @@
   background: var(--mc-surface-3);
 }
 
-@media (max-width: 720px) {
+@media (max-width: 639px) {
   .mc-next-threaded-history-banner {
     align-items: stretch;
     flex-direction: column;

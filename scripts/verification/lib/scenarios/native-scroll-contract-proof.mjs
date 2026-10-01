@@ -1,6 +1,5 @@
 const STANDARD_STAGE_SELECTOR = ".mc-next-stage:not(.mc-next-stage-work) .mc-next-stage-scroll";
 const NESTED_SCROLL_SELECTOR = "[data-native-scroll='true']";
-const STATUS_STRIP_SELECTOR = ".mc-next-status-strip";
 const NATIVE_STAGE_PROOF_TIMEOUT_MS = 5_000;
 const STABLE_BOTTOM_TIMEOUT_MS = 5_000;
 const STABLE_BOTTOM_MINIMUM_OBSERVATION_MS = 1_000;
@@ -225,33 +224,29 @@ export async function assertProviderAnchorAndAdviceContract(page) {
   await page.getByRole("button", { name: "Load advice", exact: true }).waitFor();
   // Live shell updates must not dismiss this explicit view or obscure its scroll body.
   await page.waitForTimeout(750);
-  const snapshot = await advice.evaluate((panel, statusSelector) => {
+  const snapshot = await advice.evaluate((panel) => {
     const body = panel.querySelector(".mc-next-detail-body");
-    const footer = document.querySelector(statusSelector);
-    const bottom = footer instanceof HTMLElement ? footer.getBoundingClientRect().top : window.innerHeight;
     return {
       visible: getComputedStyle(panel).visibility === "visible",
       bodyBottom: body instanceof HTMLElement ? body.getBoundingClientRect().bottom : Number.POSITIVE_INFINITY,
-      visibleBottom: bottom,
+      visibleBottom: Math.min(panel.getBoundingClientRect().bottom, window.innerHeight),
     };
-  }, STATUS_STRIP_SELECTOR);
+  });
   if (!snapshot.visible) throw new Error("settings-providers: Provider advice closed after live shell updates");
   if (snapshot.bodyBottom > snapshot.visibleBottom + 2) {
-    throw new Error("settings-providers: Provider advice body was obscured by the status strip");
+    throw new Error("settings-providers: Provider advice body was obscured by the visible panel boundary");
   }
   await advice.getByRole("button", { name: "Close details", exact: true }).click();
 }
 
 async function readStageSnapshot(page, atBottom) {
   return await page.evaluate(
-    ({ stageSelector, statusSelector, atBottom: expectedAtBottom }) => {
+    ({ stageSelector, atBottom: expectedAtBottom }) => {
       const stage = document.querySelector(stageSelector);
       if (!(stage instanceof HTMLElement)) {
         return { found: false };
       }
       const stageRect = stage.getBoundingClientRect();
-      const footer = document.querySelector(statusSelector);
-      const footerTop = footer instanceof HTMLElement ? footer.getBoundingClientRect().top : stageRect.bottom;
       const content = stage.lastElementChild;
       const maxScrollTop = Math.max(0, stage.scrollHeight - stage.clientHeight);
       return {
@@ -264,10 +259,10 @@ async function readStageSnapshot(page, atBottom) {
         documentScrollTop: document.scrollingElement?.scrollTop ?? 0,
         atBottom: expectedAtBottom && Math.abs(stage.scrollTop - maxScrollTop) <= 2,
         contentBottom: content instanceof HTMLElement ? content.getBoundingClientRect().bottom : stageRect.bottom,
-        visibleBottom: Math.min(stageRect.bottom, footerTop),
+        visibleBottom: Math.min(stageRect.bottom, window.innerHeight),
       };
     },
-    { stageSelector: STANDARD_STAGE_SELECTOR, statusSelector: STATUS_STRIP_SELECTOR, atBottom },
+    { stageSelector: STANDARD_STAGE_SELECTOR, atBottom },
   );
 }
 

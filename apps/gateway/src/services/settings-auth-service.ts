@@ -133,6 +133,7 @@ export interface SettingsRuntimeDependencies {
     | "deleteProviderApiKey"
     | "getRuntimeConfig"
     | "exportConfigFile"
+    | "snapshotRuntimeConfigForPersistence"
     | "getProviderSecretStatus"
     | "setProviderApiKey"
     | "updateNetworkAllowlist"
@@ -360,7 +361,7 @@ export interface UpdateSettingsInput {
 export interface SettingsConfigCandidate {
   config: GatewayRuntimeConfig;
   features: RuntimeSettings["features"];
-  llm: ReturnType<LlmService["exportConfigFile"]>;
+  llm: ReturnType<LlmService["snapshotRuntimeConfigForPersistence"]>;
   settings: RuntimeSettings;
   input: UpdateSettingsInput;
 }
@@ -402,7 +403,8 @@ export async function buildSettingsCandidate(
   assertProviderConfigMutationIsSecretFree(rawInput);
 
   const candidateConfig = structuredClone(deps.config);
-  const currentLlm = deps.llmService.exportConfigFile();
+  // Candidate construction is an internal persistence path, not a public DTO.
+  const currentLlm = deps.llmService.snapshotRuntimeConfigForPersistence();
   const candidateLlmService = new LlmService(currentLlm, process.env, {
     networkAllowlist: candidateConfig.toolPolicy.sandbox.networkAllowlist,
     enforceNetworkAllowlist: true,
@@ -452,7 +454,7 @@ export async function buildSettingsCandidate(
       message: error instanceof Error ? error.message : "Invalid settings update.",
     });
   }
-  const llm = candidateLlmService.exportConfigFile();
+  const llm = candidateLlmService.snapshotRuntimeConfigForPersistence();
   candidateConfig.llm = structuredClone(llm);
   candidateConfig.assistant.features = structuredClone(candidateFeatures);
   return {

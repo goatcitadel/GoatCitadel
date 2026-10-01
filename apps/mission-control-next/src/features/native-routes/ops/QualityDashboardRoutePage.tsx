@@ -1,5 +1,4 @@
 import {
-  createUnavailableQualitySnapshot,
   formatScore,
   formatPromptPackExport,
   formatSecurityEvalStatus,
@@ -9,37 +8,26 @@ import {
   formatDesignQualityStatus,
   formatSecurityModeCounts,
   formatSecurityToolTierCounts,
-  qualitySnapshotIssues,
 } from "./QualityDashboardRoutePage.helpers";
 import { RecordEvidence as QualityRecordEvidence } from "../shared/RecordEvidence";
 import { DetailInspector } from "../../../components/DetailInspector";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { BarChart3, ClipboardCopy } from "lucide-react";
-import type {
-  PromptPackExportRecord,
-  PromptPackReportRecord,
-} from "@goatcitadel/contracts";
-import {
-  exportLlmEvalProofRuns,
-  exportOpsQualityEvidence,
-  fetchOpsQualitySnapshot,
-  fetchPromptPackExport,
-  fetchPromptPackReport,
-  importBuiltinPromptPack,
-} from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, ErrorState, NativeButton, NoticeBanner, StatusChip } from "../primitives";
-import {
-  formatDateTime,
-  nativeLoad,
-  nativeLoadIssues,
-  useAsyncLoad,
-} from "../shared/native-helpers";
+import { formatDateTime } from "../shared/native-helpers";
 import { LibraryLoadWarnings, LibraryMetricGrid } from "../shared/library-primitives";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 
-export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route }: NativeRoutePagesProps) {
+import { useQualityDashboardSnapshot } from "./use-quality-dashboard-snapshot";
+import { useQualityPromptPackEvidence } from "./use-quality-prompt-pack-evidence";
+import { useQualityEvidenceClipboard } from "./use-quality-evidence-clipboard";
+import { supportsBuiltinFirstImport, useBuiltinPromptPackImport } from "./use-builtin-prompt-pack-import";
+import { QualityEvidenceExportsPanel } from "./QualityEvidenceExportsPanel";
+import { BuiltinPromptPackImportConfirmation } from "./BuiltinPromptPackImportConfirmation";
+
+export function QualityDashboardRoutePage({ navigate, route }: NativeRoutePagesProps) {
   const [qualityView, setQualityView] = useState<"gates" | "evaluations" | "design">("gates");
   const [panel, setPanel] = useState<
     "pack" | "gate" | "design" | "eval" | "security" | "execution" | "pareto" | "exports" | null
@@ -47,35 +35,13 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
   const [selectedGateId, setSelectedGateId] = useState<string | null>(null);
   const [selectedEvalId, setSelectedEvalId] = useState<string | null>(null);
   const [designCheckId, setDesignCheckId] = useState<string | null>(null);
-  const importBusy = useRef(false);
-  const [exporting, setExporting] = useState(false);
-  const [otelExporting, setOtelExporting] = useState(false);
-  const [exportNotice, setExportNotice] = useState<string | null>(null);
-  const [exportError, setExportError] = useState<string | null>(null);
-  const [importingPackKey, setImportingPackKey] = useState<string | null>(null);
   const [selectedPackId, setSelectedPackId] = useState<string | null>(null);
-  const { loading, error, data, reload } = useAsyncLoad(async () => {
-    const snapshot = await nativeLoad(
-      "Ops quality snapshot",
-      fetchOpsQualitySnapshot({ packLimit: 200, evalLimit: 25 }),
-      createUnavailableQualitySnapshot(),
-    );
-    const quality = snapshot.data;
-    return {
-      available: !snapshot.issue,
-      issues: [...nativeLoadIssues([snapshot]), ...qualitySnapshotIssues(quality)],
-      quality,
-      packs: quality.promptPacks.items,
-      evalRuns: quality.evalProof.items,
-      securityEvalPacks: quality.securityEvalPacks.items,
-      securityEvalWarnings: quality.securityEvalPacks.warnings,
-      securityGates: quality.securityQualityGates.items,
-      securityGateWarnings: quality.securityQualityGates.warnings,
-      securityExecution: quality.securityExecution.items,
-      securityExecutionWarnings: quality.securityExecution.warnings,
-      designQuality: quality.designQuality,
-    };
-  }, []);
+  const { loading, error, data, reload } = useQualityDashboardSnapshot();
+  const importAction = useBuiltinPromptPackImport({ reload });
+  const clipboard = useQualityEvidenceClipboard({
+    includeFilename: true,
+    scopeKey: `${panel}:${selectedPackId}:${data?.quality.generatedAt}`,
+  });
 
   const packs = useMemo(() => data?.packs ?? [], [data?.packs]);
   const evalRuns = data?.evalRuns ?? [];
@@ -93,99 +59,14 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
   const selectedGate = securityGates.find((gate) => gate.gateId === selectedGateId);
   const selectedDesignCheck = designQuality?.checks.find((check) => check.label === designCheckId);
   const paretoModels = evalRuns.flatMap((run) => run.results.filter((result) => result.paretoOptimal));
-  const selectedPackEvidence = useAsyncLoad(async () => {
-    if (panel !== "pack" || !selectedPack?.packId) {
-      return {
-        issues: [],
-        report: null as PromptPackReportRecord | null,
-        exportInfo: null as PromptPackExportRecord | null,
-      };
-    }
-    const [report, exportInfo] = await Promise.all([
-      nativeLoad(
-        "Prompt-pack report",
-        fetchPromptPackReport(selectedPack.packId),
-        null as PromptPackReportRecord | null,
-      ),
-      nativeLoad(
-        "Prompt-pack export",
-        fetchPromptPackExport(selectedPack.packId),
-        null as PromptPackExportRecord | null,
-      ),
-    ]);
-    return {
-      issues: nativeLoadIssues([report, exportInfo]),
-      packId: selectedPack.packId,
-      report: report.data,
-      exportInfo: exportInfo.data,
-    };
-  }, [panel, selectedPack?.packId, quality?.generatedAt]);
-  const selectedReport =
-    selectedPackEvidence.data?.packId === selectedPack?.packId ? selectedPackEvidence.data?.report : null;
-  const selectedExport =
-    selectedPackEvidence.data?.packId === selectedPack?.packId ? selectedPackEvidence.data?.exportInfo : null;
-
-  const copyEvalProofExport = async () => {
-    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
-      setExportError("Clipboard export is not available in this environment.");
-      setExportNotice(null);
-      return;
-    }
-    setExporting(true);
-    setExportError(null);
-    setExportNotice(null);
-    try {
-      const exported = await exportLlmEvalProofRuns(50);
-      await navigator.clipboard.writeText(exported.content);
-      setExportNotice(`Copied eval proof export ${exported.filename}.`);
-    } catch (err) {
-      setExportError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  const copyOtelQualityExport = async () => {
-    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
-      setExportError("Clipboard export is not available in this environment.");
-      setExportNotice(null);
-      return;
-    }
-    setOtelExporting(true);
-    setExportError(null);
-    setExportNotice(null);
-    try {
-      const exported = await exportOpsQualityEvidence({ packLimit: 200, evalLimit: 25, format: "otel_json" });
-      await navigator.clipboard.writeText(exported.content);
-      setExportNotice(`Copied Ops Quality OTel export ${exported.filename}.`);
-    } catch (err) {
-      setExportError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setOtelExporting(false);
-    }
-  };
-
-  const copyPromptPackExportPath = async () => {
-    const exportPath = selectedExport?.latestSnapshotPath ?? selectedExport?.latestPath ?? selectedExport?.path;
-    if (!exportPath) {
-      setExportError("No prompt-pack export path is recorded for the selected pack.");
-      setExportNotice(null);
-      return;
-    }
-    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
-      setExportError("Clipboard export is not available in this environment.");
-      setExportNotice(null);
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(exportPath);
-      setExportNotice(`Copied prompt-pack export path for ${selectedPack?.name ?? "selected pack"}.`);
-      setExportError(null);
-    } catch (err) {
-      setExportError(err instanceof Error ? err.message : String(err));
-      setExportNotice(null);
-    }
-  };
+  const selectedPackEvidence = useQualityPromptPackEvidence(panel === "pack", selectedPack, quality?.generatedAt);
+  const selectedReport = selectedPackEvidence.report;
+  const selectedExport = selectedPackEvidence.exportInfo;
+  const copyPromptPackExportPath = () =>
+    clipboard.copyPath(
+      selectedExport?.latestSnapshotPath ?? selectedExport?.latestPath ?? selectedExport?.path,
+      selectedPack?.name ?? "selected pack",
+    );
 
   const openPromptPackWorkbench = (packId?: string) => {
     navigate({
@@ -196,25 +77,6 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
     });
   };
 
-  const importSecurityEvalPack = async (packKey: string) => {
-    if (importBusy.current) return;
-    importBusy.current = true;
-    setImportingPackKey(packKey);
-    setExportError(null);
-    setExportNotice(null);
-    try {
-      const imported = await importBuiltinPromptPack(packKey);
-      setExportNotice(`Imported ${imported.pack.name} with ${imported.tests.length} tests.`);
-      await reload();
-      openPromptPackWorkbench(imported.pack.packId);
-    } catch (err) {
-      setExportError(err instanceof Error ? err.message : String(err));
-    } finally {
-      importBusy.current = false;
-      setImportingPackKey(null);
-    }
-  };
-
   return (
     <NativePageFrame
       area="ops"
@@ -222,7 +84,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
       kicker={routeKicker(route)}
       title="Quality Dashboard"
       className="mc-next-quality-dashboard-page"
-      description={`Evaluation proof, prompt-pack gates, and export posture for ${activeWorkspaceName}.`}
+      description="Installation-wide evaluation proof, prompt-pack gates, and stored export posture."
       loading={loading && !data}
       error={error}
       metrics={
@@ -274,8 +136,15 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
       }
     >
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
-      {exportNotice ? <NoticeBanner tone="success" message={exportNotice} /> : null}
-      {exportError ? <ErrorState size="inline" description={exportError} /> : null}
+      {clipboard.notice ? (
+        clipboard.notice.error ? (
+          <ErrorState size="inline" description={clipboard.notice.text} />
+        ) : (
+          <NoticeBanner tone="success" message={clipboard.notice.text} />
+        )
+      ) : null}
+      {importAction.notice ? <NoticeBanner tone="info" message={importAction.notice} /> : null}
+      <BuiltinPromptPackImportConfirmation action={importAction} />
 
       <div className="mc-next-settings-filter-bar" role="group" aria-label="Quality views">
         {(["gates", "evaluations", "design"] as const).map((view) => (
@@ -320,10 +189,19 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
                   title="Security quality gates"
                   subtitle="Named defensive-security gates summarize stored prompt-pack run and score evidence."
                   stats={[
-                    { label: "Gates", value: quality?.securityQualityGates.state === "available" ? String(securityGates.length) : "Unavailable" },
+                    {
+                      label: "Gates",
+                      value:
+                        quality?.securityQualityGates.state === "available"
+                          ? String(securityGates.length)
+                          : "Unavailable",
+                    },
                     {
                       label: "Passing",
-                      value: quality?.securityQualityGates.state === "available" ? String(securityGates.filter((gate) => gate.status === "passed").length) : "Unavailable",
+                      value:
+                        quality?.securityQualityGates.state === "available"
+                          ? String(securityGates.filter((gate) => gate.status === "passed").length)
+                          : "Unavailable",
                     },
                   ]}
                 >
@@ -668,8 +546,15 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
             title="Security eval packs"
             subtitle="Red-team packs are visible as governed definitions; running them remains an explicit operator action."
             stats={[
-              { label: "Packs", value: quality?.securityEvalPacks.state === "available" ? String(securityEvalPacks.length) : "Unavailable" },
-              { label: "Tests", value: quality?.securityEvalPacks.state === "available" ? String(securityEvalTests) : "Unavailable" },
+              {
+                label: "Packs",
+                value:
+                  quality?.securityEvalPacks.state === "available" ? String(securityEvalPacks.length) : "Unavailable",
+              },
+              {
+                label: "Tests",
+                value: quality?.securityEvalPacks.state === "available" ? String(securityEvalTests) : "Unavailable",
+              },
             ]}
           >
             {data?.securityEvalWarnings?.[0] ? (
@@ -694,30 +579,33 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
               emptyLabel="No security eval pack definitions are visible."
               maxHeight="min(38vh, 24rem)"
             />
-            {securityEvalPacks.some((pack) => pack.status === "available" || pack.importedPackId) ? (
-              <div className="mc-next-approvals-inline-actions">
-                {securityEvalPacks
-                  .filter((pack) => pack.status === "available" || pack.importedPackId)
-                  .map((pack) => (
-                    <NativeButton
-                      key={pack.packKey}
-                      variant="secondary"
-                      onClick={() =>
-                        pack.importedPackId
-                          ? openPromptPackWorkbench(pack.importedPackId)
-                          : void importSecurityEvalPack(pack.packKey)
-                      }
-                      disabled={pack.status === "available" && importingPackKey === pack.packKey}
-                    >
-                      {pack.importedPackId
-                        ? "Open defensive security pack"
-                        : importingPackKey === pack.packKey
-                          ? "Importing..."
-                          : "Import and open defensive security pack"}
+            <div className="mc-next-approvals-inline-actions">
+              {securityEvalPacks.map((pack) => (
+                <div key={pack.packKey}>
+                  {pack.importedPackId ? (
+                    <NativeButton variant="secondary" onClick={() => openPromptPackWorkbench(pack.importedPackId)}>
+                      Open defensive security pack
                     </NativeButton>
-                  ))}
-              </div>
-            ) : null}
+                  ) : supportsBuiltinFirstImport(pack) ? (
+                    <NativeButton
+                      variant="secondary"
+                      disabled={importAction.locked(pack.packKey)}
+                      onClick={() => void importAction.requestReview(pack)}
+                    >
+                      Review defensive definition import
+                    </NativeButton>
+                  ) : (
+                    <p className="mc-next-help-text">
+                      Safe first import is unavailable for this definition on the connected Gateway. Existing
+                      definitions are preserved.
+                    </p>
+                  )}
+                  {importAction.stateFor(pack.packKey)?.message ? (
+                    <p role="status">{importAction.stateFor(pack.packKey)?.message}</p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
             <button
               type="button"
               className="mc-next-directory-action"
@@ -733,9 +621,25 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
             title="Security execution depth"
             subtitle="Stored defensive-security run coverage, scoring coverage, and pass posture by pack."
             stats={[
-              { label: "Rows", value: quality?.securityExecution.state === "available" ? String(securityExecution.length) : "Unavailable" },
-              { label: "Ready", value: quality?.securityExecution.state === "available" ? String(quality.metrics.securityExecutionReadyCount) : "Unavailable" },
-              { label: "Blocked", value: quality?.securityExecution.state === "available" ? String(quality.metrics.securityExecutionBlockedCount) : "Unavailable" },
+              {
+                label: "Rows",
+                value:
+                  quality?.securityExecution.state === "available" ? String(securityExecution.length) : "Unavailable",
+              },
+              {
+                label: "Ready",
+                value:
+                  quality?.securityExecution.state === "available"
+                    ? String(quality.metrics.securityExecutionReadyCount)
+                    : "Unavailable",
+              },
+              {
+                label: "Blocked",
+                value:
+                  quality?.securityExecution.state === "available"
+                    ? String(quality.metrics.securityExecutionBlockedCount)
+                    : "Unavailable",
+              },
             ]}
           >
             {data?.securityExecutionWarnings?.[0] ? (
@@ -799,110 +703,12 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
             />
           </NativeCard>
         ) : panel === "exports" ? (
-          <>
-            <NativeButton variant="outline" onClick={() => void copyEvalProofExport()} disabled={exporting}>
-              <ClipboardCopy size={16} />
-              {exporting ? "Exporting..." : "Copy eval proof export"}
-            </NativeButton>
-            <NativeCard
-              title="Export posture"
-              subtitle="Exports are read-only evidence snapshots; they do not rerun, approve, or replay work."
-            >
-              <div className="mc-next-approvals-chip-row">
-                <StatusChip tone="success">Prompt-pack report export</StatusChip>
-                <StatusChip tone="success">Run trace JSON export</StatusChip>
-                <StatusChip tone="success">Eval proof JSON export</StatusChip>
-                <StatusChip tone="success">OTel JSON evidence export</StatusChip>
-                <StatusChip tone="muted">Audit-only</StatusChip>
-              </div>
-              <NativeList
-                density="compact"
-                items={[
-                  {
-                    title: "Prompt-pack report",
-                    meta: "Library · Prompt Packs",
-                    body: "Exports the stored report and snapshot path from the prompt-pack workbench.",
-                  },
-                  {
-                    title: "Eval proof JSON",
-                    meta: "Ops · Quality",
-                    body: "Copies stored runtime measurement and operator quality-score evidence without calling providers.",
-                  },
-                  {
-                    title: "Run trace JSON",
-                    meta: "Ops · Run Detail",
-                    body: "Copies the observe trace export payload from the selected durable run.",
-                  },
-                  {
-                    title: "OTel JSON evidence",
-                    meta: "Ops · Quality",
-                    body: "Copies stored quality evidence as an OpenTelemetry-style transport payload without changing runtime truth.",
-                  },
-                ]}
-                emptyLabel="No export surfaces are registered."
-              />
-              <div className="mc-next-approvals-inline-actions">
-                <NativeButton variant="secondary" onClick={() => void copyOtelQualityExport()} disabled={otelExporting}>
-                  <ClipboardCopy size={16} />
-                  {otelExporting ? "Exporting..." : "Copy OTel evidence"}
-                </NativeButton>
-              </div>
-              <button
-                type="button"
-                className="mc-next-directory-action"
-                onClick={() => navigate({ area: "ops", section: "runtime", theme: route.theme })}
-              >
-                <span>Open runtime evidence</span>
-              </button>
-            </NativeCard>
-            <details>
-              <summary>Governance reminders</summary>
-              <NativeCard
-                title="Governance reminders"
-                subtitle="Quality evidence is advisory unless it is tied to durable runs, approvals, and release gates."
-              >
-                <NativeList
-                  density="compact"
-                  items={[
-                    {
-                      title: "No hidden pass claim",
-                      meta: "Truth posture",
-                      body: "A green eval row is not a release claim unless the relevant verification lane also passed.",
-                    },
-                    {
-                      title: "No autonomous promotion",
-                      meta: "Human-in-the-loop",
-                      body: "Skill, model, and prompt-pack changes still route through visible operator review.",
-                    },
-                    {
-                      title: "Exports are snapshots",
-                      meta: "Audit-only",
-                      body: "Exported traces and eval reports preserve evidence; they do not mutate runtime state.",
-                    },
-                  ]}
-                  emptyLabel="No governance reminders are configured."
-                />
-              </NativeCard>
-            </details>
-            <NativeCard
-              title="Next checks"
-              subtitle="Use existing release lanes instead of inventing dashboard-only proof."
-            >
-              <NativeList
-                density="compact"
-                items={(quality?.nextChecks ?? []).map((check) => ({
-                  title: check.label,
-                  meta: check.command.replace(/^pnpm\s+/, ""),
-                  body: check.reason,
-                }))}
-                emptyLabel="No checks are configured."
-              />
-            </NativeCard>
-            <p>
-              No provider calls. No source writes. Evidence projections are read-only; explicit import actions remain
-              operator-initiated.
-            </p>
-          </>
+          <QualityEvidenceExportsPanel
+            pending={clipboard.pending}
+            copy={clipboard.copy}
+            checks={quality?.nextChecks ?? []}
+            openRuntime={() => navigate({ area: "ops", section: "runtime", theme: route.theme })}
+          />
         ) : panel === "gate" ? (
           selectedGate ? (
             <>
@@ -920,7 +726,17 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
         ) : panel === "eval" ? (
           selectedEval ? (
             <>
-              <LibraryMetricGrid items={[{label:"Warnings",value:String(selectedEval.warnings.length)},{label:"Candidates",value:String(selectedEval.candidates.length)},{label:"Results",value:String(selectedEval.results.length)},{label:"Pareto",value:String(selectedEval.results.filter(result=>result.paretoOptimal).length)}]} />
+              <LibraryMetricGrid
+                items={[
+                  { label: "Warnings", value: String(selectedEval.warnings.length) },
+                  { label: "Candidates", value: String(selectedEval.candidates.length) },
+                  { label: "Results", value: String(selectedEval.results.length) },
+                  {
+                    label: "Pareto",
+                    value: String(selectedEval.results.filter((result) => result.paretoOptimal).length),
+                  },
+                ]}
+              />
               <QualityRecordEvidence value={selectedEval} />
             </>
           ) : (

@@ -1,11 +1,11 @@
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { Storage } from "@goatcitadel/storage";
-import type { ChatThreadResponse, DurableRunRecord } from "@goatcitadel/contracts";
+import type { ChatThreadResponse, DurableRunRecord, PermissionProfileSnapshotRecord, ToolPolicyActorContext } from "@goatcitadel/contracts";
 import { redactSecretText } from "@goatcitadel/contracts";
 import {
   ensureGatewayWorkspaceBuild, prepareVerificationRuntime, requestJson, resolveAvailablePort,
@@ -14,6 +14,9 @@ import {
 import {
   DETERMINISTIC_LLM_KEY_ENV, startDeterministicLlmStub, writeDeterministicLlmProviderConfig,
 } from "../../../../scripts/verification/lib/scenarios/deterministic-llm-stub.mjs";
+import {
+  CELL_PROVISIONING_EXE, CELL_PROVISIONING_HOST_SOURCES, CELL_PROVISIONING_SOURCES,
+} from "../../../../scripts/packaging/build-remote-worker-windows-tls.mjs";
 import { runWorkerProcess, seedBootstrap, tlsConfig } from "../../test/fixtures/remote-worker-native.js";
 import { startWorkerRequesterMcpProbe } from "../../test/fixtures/remote-worker-requester-probe.js";
 import { prepareWorkerMeshChatProbe } from "../../test/fixtures/remote-worker-mesh-chat-probe.js";
@@ -49,7 +52,9 @@ async function requestApi(gatewayUrl: string, route: string, body?: object, meth
 
 /** Real built Gateway and native worker processes, isolated SQLite and loopback
  * provider. The synthetic signer/TLS fixture is not installed-service custody
- * or proof of a second physical host. */
+ * or proof of a second physical host. Historical cases generate retained
+ * compatibility admissions through real owners in an explicit test entry
+ * point; stock-main cases independently prove current profile-free behavior. */
 describe.skipIf(process.platform !== "win32")("native worker across a full Gateway restart", () => {
   it.each<RestartCase>([
     { restartAfter: "inference", genericChat: false, mcpCase: false }, { restartAfter: "approval", genericChat: false, mcpCase: false },
@@ -60,7 +65,15 @@ describe.skipIf(process.platform !== "win32")("native worker across a full Gatew
     { restartAfter: "approval", genericChat: true, mcpCase: false, meshCase: "write" },
     { restartAfter: "approval", genericChat: true, mcpCase: false, meshCase: "mcp" },
     { restartAfter: "approval", genericChat: true, mcpCase: false, meshCase: "mcp_bearer" },
-  ])("recovers Chat after $restartAfter with generic admission=$genericChat MCP=$mcpCase mesh=$meshCase without repeating work", async ({ restartAfter, genericChat, mcpCase, meshCase = false }) => {
+  ])("recovers retained historical Chat after $restartAfter with generic admission=$genericChat MCP=$mcpCase mesh=$meshCase without repeating work", async (scenario) => {
+    await runCase({ ...scenario, historical: true });
+  }, 420_000);
+
+  it.each([false, true])("keeps new stock-main profile-free Chat local with generic admission=%s despite an eligible native worker", async (genericChat) => {
+    await runCase({ restartAfter: "inference", genericChat, mcpCase: false, historical: false });
+  }, 420_000);
+
+  async function runCase({ restartAfter, genericChat, mcpCase, meshCase = false, historical }: RestartCase & { historical: boolean }) {
     const destinationMcp = meshCase === "mcp" || meshCase === "mcp_bearer";
     const approvalCase = restartAfter === "approval";
     const toolCase = approvalCase || mcpCase;
@@ -74,7 +87,15 @@ describe.skipIf(process.platform !== "win32")("native worker across a full Gatew
     const runId = `worker-gateway-restart-${randomUUID()}`;
     const context = { runId, artifactRoot: fileURLToPath(new URL(`../../../../.tmp/${runId}/`, import.meta.url)) };
     await mkdir(context.artifactRoot, { recursive: true });
-    const runtimeRoot = await prepareVerificationRuntime(runId);
+    // Keep the full evidence ID above; mkdtemp still uniquely owns this shorter
+    // runtime path when Fast supplies an already nested per-shard TEMP root.
+    const runtimeRoot = await prepareVerificationRuntime("worker-restart");
+    // Verification checkouts need an explicit unified config fixture. Never
+    // depend on a developer's ignored config/goatcitadel.json being present.
+    await copyFile(
+      join(runtimeRoot, "config", "goatcitadel.example.json"),
+      join(runtimeRoot, "config", "goatcitadel.json"),
+    );
     const fixtureRoot = join(runtimeRoot, "native-worker-fixture");
     await mkdir(fixtureRoot);
     const notePath = join(runtimeRoot, "workspace", "worker-approval-note.txt");
@@ -91,6 +112,20 @@ describe.skipIf(process.platform !== "win32")("native worker across a full Gatew
     let streamOutcome: unknown;
     let stage = "setup";
     try {
+      if (meshCase === "write") {
+        stage = "native fixture path budget";
+        const nativeRoot = join(fixtureRoot, "stock-worker", "native");
+        const relativeNativePaths = [
+          ...[...CELL_PROVISIONING_SOURCES, ...CELL_PROVISIONING_HOST_SOURCES].map((name: string) => join("source", name)),
+          CELL_PROVISIONING_EXE,
+          `${CELL_PROVISIONING_EXE}.build.log`,
+        ];
+        for (const relativePath of relativeNativePaths) {
+          expect(join(nativeRoot, relativePath).length, `MSVC MAX_PATH exceeded by native fixture ${relativePath}`)
+            .toBeLessThan(260);
+        }
+      }
+      stage = "setup";
       await writeDeterministicLlmProviderConfig(runtimeRoot, stub.baseUrl, { providerId, model, apiStyle: "openai-responses" });
       const configPath = join(runtimeRoot, "config", "goatcitadel.json");
       const config = JSON.parse(await readFile(configPath, "utf8"));
@@ -147,7 +182,10 @@ describe.skipIf(process.platform !== "win32")("native worker across a full Gatew
         ...(mcpCase === "requester" ? { builtGatewayEntryFile: fileURLToPath(new URL("../../test/fixtures/remote-worker-requester-gateway.mjs", import.meta.url)) } : {}),
       };
       stage = "start Gateway";
-      stack = await startVerificationStack(context, { ...stackOptions, processLogPrefix: "before" });
+      const firstStackOptions = historical ? { ...stackOptions, builtGatewayEntryFile: fileURLToPath(new URL(
+        mcpCase === "requester" ? "../../test/fixtures/remote-worker-historical-requester-gateway.mjs"
+          : "../../test/fixtures/remote-worker-historical-gateway.mjs", import.meta.url)) } : stackOptions;
+      stack = await startVerificationStack(context, { ...firstStackOptions, processLogPrefix: "before" });
       storage = new Storage({ dbPath: join(runtimeRoot, "data", "index.db"),
         transcriptsDir: join(runtimeRoot, "data", "transcripts"), auditDir: join(runtimeRoot, "data", "audit") });
       const store = storage;
@@ -212,15 +250,48 @@ describe.skipIf(process.platform !== "win32")("native worker across a full Gatew
         await eventually("activated mesh capability", () => store.meshCapabilityPublications.listCallableActivations("default"),
           (items) => items.some((item) => item.capabilityId === canonicalToolName));
       }
+      const session = await api(stack.gatewayUrl, "/api/v1/chat/sessions", {
+        title: historical ? "Retained native Gateway restart fixture" : "Profile-free native placement fixture",
+      });
       const task = genericChat ? undefined
-        : store.tasks.create({ workspaceId: "default", title: "Gateway restart worker fixture", createdBy: actorId });
-      const session = await api(stack.gatewayUrl, "/api/v1/chat/sessions", { title: "Native Gateway restart fixture" });
+        : store.tasks.create({ workspaceId: "default", title: "Gateway restart worker fixture", createdBy: actorId,
+          agenticContext: { parentSessionId: session.sessionId } });
+      let retainedPermission: PermissionProfileSnapshotRecord | undefined;
+      if (historical && toolCase) {
+        stage = "scope retained fixture permission through its operator owner";
+        const effectivePermissionRoute = `/api/v1/tools/permission-profiles/effective?workspaceId=default&sessionId=${encodeURIComponent(session.sessionId)}&surface=chat`;
+        const basePolicy = await api(stack.gatewayUrl, effectivePermissionRoute) as ToolPolicyActorContext;
+        expect(basePolicy.permissionProfile).toBeDefined();
+        expect(basePolicy.localOperatorOverride).toBeUndefined();
+        const basePermission = basePolicy.permissionProfile!;
+        expect(basePermission.approvalMode).toBe(approvalCase ? "approve_all" : "bypass");
+        // The current catalog is larger than the retained-profile bound. Use
+        // a real explicit operator selection for this one required callable;
+        // retain the owner's denials/read ceiling and every global Ward.
+        retainedPermission = await api(stack.gatewayUrl, "/api/v1/tools/permission-profiles", {
+          label: "Retained native restart callable", scope: "workspace", scopeRef: "default",
+          approvalMode: basePermission.approvalMode,
+          toolPatterns: [canonicalToolName], allow: basePermission.allow, deny: basePermission.deny,
+          ...(basePermission.readAccessMode ? { readAccessMode: basePermission.readAccessMode } : {}),
+          defaultForSurfaces: [],
+        }) as PermissionProfileSnapshotRecord;
+        expect(retainedPermission).toMatchObject({ scope: "workspace", scopeRef: "default",
+          toolPatterns: [canonicalToolName], approvalMode: basePermission.approvalMode,
+          allow: basePermission.allow, deny: basePermission.deny });
+        expect(retainedPermission.readAccessMode).toBe(basePermission.readAccessMode);
+        expect(retainedPermission.revision).toMatch(/^[a-f0-9]{64}$/u);
+        expect(retainedPermission.defaultForSurfaces ?? []).toEqual([]);
+        const unchangedDefaultPolicy = await api(stack.gatewayUrl, effectivePermissionRoute) as ToolPolicyActorContext;
+        expect(unchangedDefaultPolicy.permissionProfile).toEqual(basePermission);
+        expect(unchangedDefaultPolicy.localOperatorOverride).toBeUndefined();
+      }
       const route = `/api/v1/chat/sessions/${encodeURIComponent(session.sessionId)}`;
       const prefs = await api(stack.gatewayUrl, `${route}/prefs`);
       const turnRequest = { action: "send", content: meshCase
         ? `Use ${canonicalToolName} on note.txt with these arguments: ${JSON.stringify(meshProbe!.args)}.` : toolCase
         ? `Use ${canonicalToolName} to read ${mcpCase ? "note.txt" : notePath} and report its contents.` : "Reply with the recovery verification text.",
         ...(task ? { policyTaskId: task.taskId } : {}),
+        ...(retainedPermission ? { permissionProfileId: retainedPermission.profileId } : {}),
         providerId, model, webMode: "off", memoryMode: "off", thinkingLevel: "off", subagentPolicy: "off",
         prefsOverride: { providerId, model, webMode: "off", memoryMode: "off", thinkingLevel: "off",
           subagentPolicy: "off", toolAutonomy: toolCase ? "safe_auto" : "manual", orchestrationEnabled: false } };
@@ -236,6 +307,45 @@ describe.skipIf(process.platform !== "win32")("native worker across a full Gatew
       const run = await eventually("admitted Chat", () => store.durableRuns.listRuns(100).find(
         (candidate) => candidate.workflowKey === "chat.turn.execute" && candidate.payload.sessionId === session.sessionId),
       (value) => value !== undefined) as DurableRunRecord;
+      if (!historical) {
+        stage = "current stock-main local Chat completion";
+        const terminal = await eventually("local Chat completion", () => store.durableRuns.getRun(run.runId),
+          (value) => ["completed", "failed", "dead_lettered", "cancelled"].includes(value.status));
+        expect(terminal.status, terminal.lastError).toBe("completed");
+        await stream;
+        expect(streamOutcome).toMatchObject({ status: 200 });
+        expect(store.chatExecutionPlacements.get(run.runId)).toMatchObject({ executionKind: "local" });
+        expect(store.chatTurnCapabilityProfiles.findByRun(run.runId)).toBeUndefined();
+        expect(store.chatTurnCapabilityProfiles.findByTurn(String(run.payload.turnId))).toBeUndefined();
+        expect(store.remoteWorkerChatContexts.findForRun(run.runId)).toBeUndefined();
+        expect(terminal.payload).not.toHaveProperty("capabilityProfileId");
+        expect(terminal.payload).not.toHaveProperty("capabilityProfileHash");
+        expect(terminal.metadata).not.toHaveProperty("remoteWorkerChatContextSha256");
+        expect(store.remoteWorkerAssignments.findTaskBoundChatAssignment({ executionWorkspaceId: "default",
+          sessionId: session.sessionId, turnId: String(run.payload.turnId), durableRunId: run.runId })).toBeUndefined();
+        expect(store.remoteWorkerBudgets.listGrants("default", "default")[0])
+          .toMatchObject({ heldRequests: 0, settledRequests: 0 });
+        expect(store.remoteWorkerBudgets.listExecutionGrants("default", actorId)[0])
+          .toMatchObject({ availableRequests: 2 });
+        const thread = await api(stack.gatewayUrl, `${route}/thread?includeDecisionTrace=true`) as ChatThreadResponse;
+        expect(thread.turns).toHaveLength(1);
+        expect(thread.turns[0]).toMatchObject({ turnId: run.payload.turnId,
+          assistantMessage: { messageId: run.payload.assistantMessageId, content: reply }, trace: { status: "completed" } });
+        const usage = store.modelUsageEvents.list({ durableRunId: run.runId, limit: 100 }).items;
+        expect(usage).toHaveLength(1);
+        expect(usage[0]).toMatchObject({ terminalOutcome: "succeeded", transportStatus: "accepted" });
+        expect(usage[0]!.workerId).toBeUndefined();
+        expect(stub.completionDispatches()).toBeGreaterThanOrEqual(1);
+        expect(store.tasks.list({ limit: 100 }).filter((entry) => entry.proactiveContext?.durableRunId === run.runId))
+          .toHaveLength(0);
+        if (task) expect(terminal.payload.request).toMatchObject({ policyTaskId: task.taskId });
+        else expect(terminal.payload.request).not.toHaveProperty("policyTaskId");
+        await writeFile(join(context.artifactRoot, "result.json"), JSON.stringify({ passed: true, stage,
+          runId: terminal.runId, genericChat, placement: "local", retainedProfile: false,
+          retainedWorkerContext: false, workerBudgetSpent: false,
+          boundary: "stock-built-gateway-profile-free-public-chat-with-eligible-synthetic-native-worker" }, null, 2));
+        return;
+      }
       const assignment = await eventually("worker placement", () => ({
         aggregate: store.remoteWorkerAssignments.findTaskBoundChatAssignment({ executionWorkspaceId: "default",
           sessionId: session.sessionId, turnId: String(run.payload.turnId), durableRunId: run.runId }),
@@ -251,6 +361,9 @@ describe.skipIf(process.platform !== "win32")("native worker across a full Gatew
       expect(stub.completionDispatches()).toBe(0);
       if (toolCase) {
         const profile = store.chatTurnCapabilityProfiles.findByRun(run.runId)!;
+        expect(profile.governance.permission).toMatchObject({ profileId: retainedPermission!.profileId,
+          approvalMode: retainedPermission!.approvalMode });
+        expect(profile.selection.tools.map((tool) => tool.canonicalName)).toEqual([canonicalToolName]);
         const read = profile.selection.tools.find((tool) => tool.canonicalName === canonicalToolName);
         expect(read, JSON.stringify(profile.governance.policyDecisions.filter((item) => item.toolName.startsWith("mcp.")))).toBeDefined();
         if (mcpCase) {
@@ -430,6 +543,7 @@ describe.skipIf(process.platform !== "win32")("native worker across a full Gatew
             settlementSha256: meshReceipts[0]!.settlementSha256, requestSha256: meshReceipts[0]!.requestSha256 });
       }
       await writeFile(join(context.artifactRoot, "result.json"), JSON.stringify({ passed: true, stage,
+        admissionBoundary: "test-only-owner-generated-retained-frozen-profile-compatibility",
         runId: terminal.runId, assignmentId, beforePid: oldPid, afterPid: stack.gateway.child.pid,
         restartAfter, genericChat, mcpCase, meshCase, meshReceipts, artifactCommitDelayMs: mcpCase === "requester" && approvalCase ? 6_000 : 0,
         terminalSettlementDelayMs: mcpCase === "requester" && !approvalCase ? 6_000 : 0,
@@ -489,5 +603,5 @@ describe.skipIf(process.platform !== "win32")("native worker across a full Gatew
       const cleanupErrors = await stopVerificationStack(stack ?? { runtimeRoot });
       expect(cleanupErrors).toEqual([]);
     }
-  }, 420_000);
+  }
 });

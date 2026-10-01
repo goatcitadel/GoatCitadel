@@ -37,6 +37,23 @@ function createSession(storage: Storage, input: { sessionId: string; timestamp: 
 }
 
 describe("ChatSessionListRepository", () => {
+  it("looks up one exact session before pagination while retaining workspace and visibility boundaries", () => {
+    const storage = createStorage();
+    try {
+      for (let index = 0; index < 105; index++) {
+        const sessionId = "paged-" + index;
+        createSession(storage, { sessionId, timestamp: new Date(Date.UTC(2026, 8, 1, 0, 0, index)).toISOString() });
+        storage.chatSessionMeta.ensure(sessionId, undefined, "default");
+      }
+      assert.equal(storage.chatSessionLists.listCandidates({ workspaceId: "default", limit: 100 }).length, 100);
+      assert.deepEqual(storage.chatSessionLists.listCandidates({ workspaceId: "default", sessionId: "paged-0", limit: 1 }).map(item => item.sessionId), ["paged-0"]);
+      for (const sessionId of ["paged-", "missing", "' OR 1=1 --", ""]) assert.deepEqual(storage.chatSessionLists.listCandidates({ workspaceId: "default", sessionId, limit: 1 }), []);
+      assert.deepEqual(storage.chatSessionLists.listCandidates({ workspaceId: "foreign", sessionId: "paged-0", limit: 1 }), []);
+      storage.chatSessionMeta.patch("paged-0", { includeInHistory: false });
+      assert.deepEqual(storage.chatSessionLists.listCandidates({ workspaceId: "default", sessionId: "paged-0", limit: 1 }), []);
+    } finally { storage.close(); }
+  });
+
   it("applies cheap session filters before gateway hydration", () => {
     const storage = createStorage();
     try {

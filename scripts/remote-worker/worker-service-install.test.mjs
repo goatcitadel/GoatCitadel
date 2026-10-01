@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
+import { encodeWindowsTlsKeyIdentifier } from "../../apps/remote-worker-provisioner/dist/windows-tls-key-identifier.js";
 import { remoteWorkerRuntimeBundleManifestSha256 } from "../../packages/contracts/dist/remote-worker-runtime-bundle.js";
 import { compileTlsNative } from "../packaging/build-remote-worker-windows-tls.mjs";
 import { snapshotCellControllerSources, buildWindowsCellController } from "../packaging/build-remote-worker-windows-cell-controller.mjs";
@@ -28,6 +29,8 @@ const names = [
   "app/install/configure-worker-mesh-registry.ps1",
   "app/install/worker-mesh-registry-common.ps1",
   "app/install/broker-coordinator-common.ps1",
+  "app/install/broker-state-common.ps1",
+  "app/install/broker-state-native.cs",
   "app/install/install-broker-coordinator.ps1",
   "app/install/uninstall-broker-coordinator.ps1",
   "app/pnpm-lock.yaml",
@@ -41,13 +44,28 @@ const names = [
   "app/provisioner/GoatCitadelRemoteWorkerProvisionerClient.exe",
   "app/provisioner/GoatCitadelRemoteWorkerProvisionerAvailability.exe",
 ];
-function packageFixture(directory, omit) {
+function packageFixture(directory, omit, { executableNode = false } = {}) {
   fs.mkdirSync(directory);
   const root = path.join(directory, "payload");
   for (const name of names) {
     if (name === omit) continue;
     fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
-    fs.writeFileSync(path.join(root, name), `fixture:${name}`, { flag: "wx" });
+    const destination = path.join(root, name);
+    if (name === "app/runtime/node.exe" && executableNode) {
+      fs.copyFileSync(process.execPath, destination, fs.constants.COPYFILE_EXCL);
+    } else {
+      fs.writeFileSync(destination, `fixture:${name}`, { flag: "wx" });
+    }
+  }
+  if (executableNode) {
+    const decoder = path.join(root, "app/worker/node_modules/@goatcitadel/remote-worker-provisioner");
+    fs.mkdirSync(path.join(decoder, "dist"), { recursive: true });
+    fs.copyFileSync(
+      path.join(repository, "apps/remote-worker-provisioner/dist/windows-tls-key-identifier.js"),
+      path.join(decoder, "dist/windows-tls-key-identifier.js"),
+      fs.constants.COPYFILE_EXCL,
+    );
+    fs.writeFileSync(path.join(decoder, "package.json"), '{"type":"module"}', { flag: "wx" });
   }
   const hash = (name) => workerPackageSha256(fs.readFileSync(path.join(root, name)));
   const receipt = {
@@ -177,19 +195,27 @@ test(
         return JSON.parse(run.stdout);
       });
       const preflightFixture = path.join(output, `preflight-package-${index}`);
-      const candidate = packageFixture(preflightFixture);
+      const candidate = packageFixture(preflightFixture, undefined, { executableNode: true });
       const certificate = path.join(preflightFixture, "fixture-certificate.pem");
       const ticket = path.join(preflightFixture, "fixture-ticket.json");
-      const reference = path.join(preflightFixture, "fixture-reference.json");
+      const reference = path.join(preflightFixture, "fixture-reference.txt");
+      const publicKey = Buffer.from("302a300506032b6570032100" + "44".repeat(32), "hex").toString("base64url");
       fs.writeFileSync(
         certificate,
         "-----BEGIN CERTIFICATE-----\nfixture-no-network-use\n-----END CERTIFICATE-----\n",
         { flag: "wx" },
       );
-      fs.writeFileSync(ticket, JSON.stringify({ protectedSignerPublicKeySpkiBase64Url: "synthetic-fixture" }), {
+      fs.writeFileSync(ticket, JSON.stringify({ protectedSignerPublicKeySpkiBase64Url: publicKey }), {
         flag: "wx",
       });
-      fs.writeFileSync(reference, JSON.stringify({ syntheticFixture: true }), { flag: "wx" });
+      fs.writeFileSync(reference, encodeWindowsTlsKeyIdentifier({
+        keysetGeneration: 1,
+        stateSha256: "1".repeat(64),
+        keysetReceiptSha256: "2".repeat(64),
+        helperExecutableSha256: "3".repeat(64),
+        helperExecutablePath: "C:\\fixture\\client.exe",
+        workerPublicKeySpkiBase64Url: publicKey,
+      }), { flag: "wx" });
       const evidence = path.join(output, `preflight-evidence-${index}`);
       const preflight = spawnSync(
         engine,

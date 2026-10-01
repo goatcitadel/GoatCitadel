@@ -124,28 +124,28 @@ describe("buildModeRail", () => {
 });
 
 describe("trusted saved Ops boards route", () => {
-  it("round-trips /ops/boards as a shipped Observe route", () => {
+  it("round-trips /ops/boards as a shipped Work board route", () => {
     const route = parseAppRoute("http://x/ops/boards");
 
     expect(route).toMatchObject({ area: "ops", section: "boards" });
     expect(buildAppHref(route)).toBe("/ops/boards");
     expect(getRouteLabel(route)).toBe("Saved boards");
-    expect(routeKicker(route)).toBe("Ops · Overview · Saved boards");
+    expect(routeKicker(route)).toBe("Ops · Work board · Saved boards");
     expect(getRouteReleaseScope(route)).toMatchObject({ status: "ship" });
     expect(RAIL_ITEMS.ops.some((item) => item.id === "ops-boards" && item.section === "boards")).toBe(true);
-    expect(RAIL_GROUPS.ops?.find((group) => group.id === "ops-overview")?.sections).toContain("boards");
+    expect(RAIL_GROUPS.ops?.find((group) => group.id === "ops-work-board")?.sections).toContain("boards");
   });
 });
 
 describe("remote-worker Ops route (HX-507B)", () => {
-  it("round-trips /ops/workers under the Observe group", () => {
+  it("round-trips /ops/workers under Health", () => {
     const route = parseAppRoute("http://x/ops/workers");
 
     expect(route).toMatchObject({ area: "ops", section: "workers" });
     expect(buildAppHref(route)).toBe("/ops/workers");
     expect(getRouteLabel(route)).toBe("Remote workers");
-    expect(routeKicker(route)).toBe("Ops · Monitor · Remote workers");
+    expect(routeKicker(route)).toBe("Ops · Health · Remote workers");
     expect(RAIL_ITEMS.ops.some((item) => item.id === "ops-workers" && item.section === "workers")).toBe(true);
-    expect(RAIL_GROUPS.ops?.find((group) => group.id === "ops-monitor")?.sections).toContain("workers");
+    expect(RAIL_GROUPS.ops?.find((group) => group.id === "ops-health")?.sections).toContain("workers");
   });
 });

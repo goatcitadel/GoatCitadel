@@ -85,11 +85,12 @@ describe("shell build identity chip", () => {
 
   it("keeps unloaded dashboard approvals non-blocking while System is still checking", () => {
     const renderer = renderStatusStrip({ approvalsPill: { value: "—" } });
-    const footer = renderer.root.findByProps({ "aria-label": "Mission Control status strip" });
+    const footer = renderer.root.findByProps({ "aria-label": "Mission Control status" });
     const summary = renderer.root.findByType("summary");
 
     expect(footer.props["data-status"]).toBe("checking");
     expect(summary.findByType("strong").children).toEqual(["Checking"]);
+    expect(summary.props["aria-label"]).toBe("System status: Checking");
     expect(summary.children.join("")).not.toContain("Approval needed");
   });
 
@@ -111,11 +112,12 @@ describe("shell build identity chip", () => {
 
     for (const { props, detailLabel } of cases) {
       const renderer = renderStatusStrip(props);
-      const footer = renderer.root.findByProps({ "aria-label": "Mission Control status strip" });
+      const footer = renderer.root.findByProps({ "aria-label": "Mission Control status" });
       const summary = renderer.root.findByType("summary");
 
       expect(footer.props["data-status"]).toBe("attention");
       expect(summary.findByType("strong").children).toEqual(["Needs attention"]);
+      expect(summary.props["aria-label"]).toBe("System status: Needs attention");
       expect(renderer.root.findByProps({ "aria-label": detailLabel }).props["data-status"]).toBe("degraded");
       renderer.unmount();
     }
@@ -125,7 +127,7 @@ describe("shell build identity chip", () => {
     "uses ready state independently of the Gateway message: %s",
     (gatewayMessage) => {
       const renderer = renderStatusStrip({ gatewayReady: true, gatewayMessage });
-      expect(renderer.root.findByProps({ "aria-label": "Mission Control status strip" }).props["data-status"]).toBe(
+      expect(renderer.root.findByProps({ "aria-label": "Mission Control status" }).props["data-status"]).toBe(
         "healthy",
       );
       expect(renderer.root.findByProps({ "aria-label": `Gateway: ${gatewayMessage}` }).props["data-status"]).not.toBe(
@@ -137,7 +139,7 @@ describe("shell build identity chip", () => {
 
   it("does not let stale ready wording override unavailable state", () => {
     const renderer = renderStatusStrip({ gatewayReady: false, gatewayMessage: "Gateway ready" });
-    expect(renderer.root.findByProps({ "aria-label": "Mission Control status strip" }).props["data-status"]).toBe(
+    expect(renderer.root.findByProps({ "aria-label": "Mission Control status" }).props["data-status"]).toBe(
       "attention",
     );
     renderer.unmount();

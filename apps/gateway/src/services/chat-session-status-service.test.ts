@@ -52,6 +52,26 @@ function harness() {
 }
 
 describe("ChatSessionStatusService", () => {
+  it("projects only the latest canonical turn while preserving current active counts", async () => {
+    const { storage, service } = harness();
+    expect((await service.getOperatorStatus("session-1")).work).toMatchObject({ availability: "available", value: { latestTurn: null } });
+    const base = { sessionId: "session-1", mode: "chat" as const, webMode: "off" as const,
+      memoryMode: "auto" as const, thinkingLevel: "standard" as const, routing: {} };
+    storage.chatTurnTraces.create({ ...base, turnId: "old-failed", userMessageId: "old-message", status: "failed", startedAt: "2026-07-27T00:20:00.000Z" });
+    storage.chatTurnTraces.create({ ...base, turnId: "new-completed", userMessageId: "new-message", status: "completed", startedAt: "2026-07-27T00:30:00.000Z" });
+    const before = storage.chatTurnTraces.get("new-completed");
+    const status = await service.getOperatorStatus("session-1");
+    expect(status.work).toMatchObject({ availability: "available", value: {
+      latestTurnId: "new-completed", latestTurn: { turnId: "new-completed", status: "completed", startedAt: before.startedAt },
+      turnCounts: { queued: 0, running: 0, waiting_for_tool: 0, waiting_for_approval: 0, waiting_for_user_input: 0 },
+    } });
+    expect(storage.chatTurnTraces.get("new-completed")).toEqual(before);
+    expect(JSON.stringify(await service.getModelProjection("session-1"))).not.toContain("new-completed");
+    storage.chatTurnTraces.create({ ...base, turnId: "waiting", userMessageId: "waiting-message", status: "waiting_for_approval", startedAt: "2026-07-27T00:40:00.000Z" });
+    expect((await service.getOperatorStatus("session-1")).work).toMatchObject({ availability: "available", value: {
+      latestTurnId: "waiting", latestTurn: { turnId: "waiting", status: "waiting_for_approval" }, turnCounts: { waiting_for_approval: 1 },
+    } });
+  });
   it("aggregates trace, attention, context, usage, and unavailable evidence without inventing health", async () => {
     const { storage, service } = harness();
     storage.chatTurnTraces.create({

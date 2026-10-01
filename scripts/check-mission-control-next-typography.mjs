@@ -6,8 +6,8 @@
  * apps/mission-control-next/src/styles/mission-control-next-tokens.css.
  * Every operator-facing font size must resolve through a --text-* token so it
  * tracks the density multiplier and user font-size preferences. Hardcoded rem,
- * px, em, and pt font sizes are rejected. `font-size: 0` and clamp() remain
- * allowed for icon hides and bounded large headings.
+ * px, em, and pt font sizes are rejected. `font-size: 0` is allowed for icon
+ * hides; clamp() is allowed only in the token definitions.
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -29,16 +29,19 @@ function stripVars(value) {
   return output;
 }
 
-function valueIsHardcoded(rawValue) {
+function valueIsHardcoded(rawValue, filePath) {
   const value = rawValue.trim().replace(/!important\s*$/i, "").trim();
   if (value === "0" || value === "inherit" || value === "initial" || value === "unset") {
     return false;
+  }
+  if (/var\(--text-[a-z0-9-]+\s*,/i.test(value)) {
+    return true;
   }
   if (/var\(--text-/.test(value)) {
     return false;
   }
   if (/\bclamp\(/.test(value)) {
-    return false;
+    return !filePath.replace(/\\/g, "/").endsWith("mission-control-next-tokens.css");
   }
   return LENGTH_RE.test(stripVars(value));
 }
@@ -52,7 +55,7 @@ export function findTypographyViolations(filePath, contents) {
     if (!valueMatch) {
       return;
     }
-    if (valueIsHardcoded(valueMatch[1])) {
+    if (valueIsHardcoded(valueMatch[1], filePath)) {
       violations.push({
         file: filePath,
         line: index + 1,

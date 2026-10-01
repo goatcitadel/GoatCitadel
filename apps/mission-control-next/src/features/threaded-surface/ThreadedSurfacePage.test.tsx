@@ -468,7 +468,7 @@ describe("ThreadedSurfacePage", () => {
   });
 
   it("keeps desktop Threads closed until requested, then exposes a visible close control", async () => {
-    setMediaQuery("(width < 1180px)", false);
+    setMediaQuery("(width < 1280px)", false);
     const input = buildInput() as any;
     input.sessionRailOpen = false;
     input.sessionRail.onCreateSession = vi.fn();
@@ -508,7 +508,7 @@ describe("ThreadedSurfacePage", () => {
   });
 
   it("only marks the mobile drawer rail inert while it is closed", async () => {
-    setMediaQuery("(width < 1180px)", true);
+    setMediaQuery("(width < 1280px)", true);
     const input = buildInput() as any;
     input.sessionRailOpen = false;
 
@@ -534,7 +534,7 @@ describe("ThreadedSurfacePage", () => {
   });
 
   it("keeps the old composer covered until new Chat creation settles", async () => {
-    setMediaQuery("(width < 1180px)", true);
+    setMediaQuery("(width < 1280px)", true);
     const input = buildInput() as any;
     input.sessionRailOpen = true;
     input.onSessionRailOpenChange = vi.fn();
@@ -561,7 +561,7 @@ describe("ThreadedSurfacePage", () => {
   });
 
   it("closes the mobile session drawer after starting a new chat", async () => {
-    setMediaQuery("(width < 1180px)", true);
+    setMediaQuery("(width < 1280px)", true);
     const input = buildInput() as any;
     input.sessionRailOpen = true;
     input.onSessionRailOpenChange = vi.fn();
@@ -581,7 +581,7 @@ describe("ThreadedSurfacePage", () => {
   });
 
   it("opens Activity as a modal mobile sheet and keeps it exclusive with Threads", async () => {
-    setMediaQuery("(width < 1180px)", true);
+    setMediaQuery("(width < 1280px)", true);
     const input = {
       ...buildInput(),
       sessionRailOpen: false,
@@ -616,7 +616,7 @@ describe("ThreadedSurfacePage", () => {
   });
 
   it("closes the mobile drawer with Escape or scrim and restores focus to the opener", async () => {
-    setMediaQuery("(width < 1180px)", true);
+    setMediaQuery("(width < 1280px)", true);
     const addEventListener = vi.fn();
     const removeEventListener = vi.fn();
     const openerFocus = vi.fn();
@@ -691,7 +691,7 @@ describe("ThreadedSurfacePage", () => {
       ".mc-next-threaded-stage.has-code-panel.has-context",
     ];
 
-    for (const blockHeader of ["@media (width < 1180px)", "@media (max-width: 1023px)"]) {
+    for (const blockHeader of ["@media (width < 1280px)", "@media (max-width: 1023px)"]) {
       const start = css.indexOf(blockHeader);
       const next = css.indexOf("@media", start + 1);
       const block = css.slice(start, next === -1 ? undefined : next);
@@ -704,7 +704,7 @@ describe("ThreadedSurfacePage", () => {
 
   it("keeps the mobile drawer and chat status chips visible at the active breakpoint", () => {
     const css = readFileSync(new URL("./styles/mobile.css", import.meta.url), "utf8");
-    const breakpointStart = css.indexOf("@media (width < 1180px)");
+    const breakpointStart = css.indexOf("@media (width < 1280px)");
     const breakpointEnd = css.indexOf("@media", breakpointStart + 1);
     const block = css.slice(breakpointStart, breakpointEnd === -1 ? undefined : breakpointEnd);
 
@@ -788,7 +788,7 @@ describe("ThreadedSurfacePage", () => {
     expect(css).toMatch(
       /\.mc-next-threaded-thread-card\s*> \.mc-next-thread-shell\s*\{[\s\S]*?flex: 1 1 auto;[\s\S]*?min-height: 0;[\s\S]*?height: auto;/u,
     );
-    expect(css).toContain("@media (max-width: 1680px) and (max-height: 699px), (width < 1180px)");
+    expect(css).toContain("@media (max-width: 1599px) and (max-height: 699px), (width < 1280px)");
   });
 
   it("keeps Activity and current-plan disclosure bodies out of layout until opened", () => {
@@ -1012,7 +1012,7 @@ describe("ThreadedSurfacePage", () => {
   });
 
   it("wires session rail filters, project creation, file upload, and archive confirmation", async () => {
-    setMediaQuery("(width < 1180px)", true);
+    setMediaQuery("(width < 1280px)", true);
     const input = buildInput() as any;
     input.onSessionRailOpenChange = vi.fn();
     input.dropTargetProps.onUploadFiles = vi.fn();
@@ -1353,7 +1353,7 @@ describe("ThreadedSurfacePage", () => {
   });
 
   it("opens the session rail from mobile while keeping legacy routes in Chat", async () => {
-    setMediaQuery("(width < 1180px)", true);
+    setMediaQuery("(width < 1280px)", true);
     vi.stubGlobal("HTMLElement", class HTMLElement {});
     const activeProps = buildActiveSessionProps({
       mode: "chat",
@@ -1388,9 +1388,13 @@ describe("ThreadedSurfacePage", () => {
 
   it("keeps Activity and the build editor mutually exclusive from either entry point", async () => {
     vi.stubGlobal("HTMLElement", class HTMLElement {});
+    const windowEvents = new EventTarget();
     vi.stubGlobal("window", {
+      addEventListener: windowEvents.addEventListener.bind(windowEvents),
+      removeEventListener: windowEvents.removeEventListener.bind(windowEvents),
+      dispatchEvent: windowEvents.dispatchEvent.bind(windowEvents),
       matchMedia: vi.fn((query: string) => ({
-        matches: query.includes("1180px"),
+        matches: query.includes("1280px"),
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
       })),
@@ -2192,11 +2196,15 @@ describe("ThreadedSurfacePage", () => {
   });
 
   it("wires cowork active-session actions, project drafts, tag filters, and compact artifact dismissal", async () => {
-    setMediaQuery("(max-width: 840px)", true);
+    setMediaQuery("(max-width: 1023px)", true);
     vi.stubGlobal("HTMLElement", class HTMLElement {});
+    const windowEvents = new EventTarget();
     vi.stubGlobal("window", {
+      addEventListener: windowEvents.addEventListener.bind(windowEvents),
+      removeEventListener: windowEvents.removeEventListener.bind(windowEvents),
+      dispatchEvent: windowEvents.dispatchEvent.bind(windowEvents),
       matchMedia: vi.fn((query: string) => ({
-        matches: query.includes("840px"),
+        matches: query.includes("1023px"),
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
       })),

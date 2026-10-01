@@ -1,6 +1,24 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
 
+export function normalizeRelativePath(inputPath: string): string {
+  const normalized = path.normalize(inputPath).replaceAll("\\", "/");
+  if (
+    !normalized ||
+    normalized === "." ||
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    normalized.endsWith("/..") ||
+    normalized.includes("/../")
+  ) {
+    throw new Error(`Invalid relative path: ${inputPath}`);
+  }
+  if (path.isAbsolute(normalized)) {
+    throw new Error(`Absolute paths are not allowed: ${inputPath}`);
+  }
+  return normalized;
+}
+
 export interface MemoryForgetCriteriaInput {
   itemIds?: string[];
   namespace?: string;

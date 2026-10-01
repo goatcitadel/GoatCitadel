@@ -4,6 +4,7 @@ import type {
   ChatProjectRecord,
   ChatSessionRecord,
 } from "@goatcitadel/contracts";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export type ProjectCounts = Record<ChatMode, number>;
 type ProjectReadinessStatus = "ready" | "attention";
@@ -296,8 +297,5 @@ export function formatDateTime(value?: string | null) {
 }
 
 export function getErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-  return "Something went wrong.";
+  return describeApiError(error).summary;
 }

@@ -4,6 +4,7 @@ import type {
   McpInvokeResponse,
   McpOAuthStartResponse,
   McpServerCreateInput,
+  McpServerConnectionReview,
   McpServerPolicyUpdateRequest,
   McpServerRecord,
   McpServerTemplateRecord,
@@ -19,18 +20,18 @@ import { assertMcpServerReview } from "./mcp-server-revision.js";
 export interface McpRoutePort {
   /** Shared MCP elicitation store, also consumed by the approval-inbox respond/list tools. */
   readonly elicitations: McpElicitationService;
-  completeMcpOAuth(serverId: string, code: string, state?: string): Promise<McpServerRecord>;
-  connectMcpServer(serverId: string): Promise<McpServerRecord>;
+  completeMcpOAuth(serverId: string, code: string, state?: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>): Promise<McpServerRecord>;
+  connectMcpServer(serverId: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>): Promise<McpServerRecord>;
   createMcpServer(input: McpServerCreateInput, onCommitted?: () => void | Promise<void>): Promise<McpServerRecord>;
   deleteMcpServer(serverId: string, expectedRevision: string, onCommitted?: () => void | Promise<void>): Promise<{ deleted: boolean }>;
-  disconnectMcpServer(serverId: string): Promise<McpServerRecord>;
+  disconnectMcpServer(serverId: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>): Promise<McpServerRecord>;
   invokeMcpTool(input: McpInvokeRequest): Promise<McpInvokeResponse>;
   listMcpServers(): Promise<McpServerRecord[]>;
   listMcpTemplateDiscovery(): Promise<McpTemplateDiscoveryResult[]>;
   listMcpTemplates(): Promise<Array<McpServerTemplateRecord & { installed: boolean }>>;
   listMcpTools(serverId: string): Promise<McpToolRecord[]>;
   runMcpServerHealthCheck(serverId: string): Promise<ConnectorDiagnosticReport>;
-  startMcpOAuth(serverId: string): Promise<McpOAuthStartResponse>;
+  startMcpOAuth(serverId: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>): Promise<McpOAuthStartResponse>;
   updateMcpServer(serverId: string, input: McpServerUpdateRequest, onCommitted?: () => void | Promise<void>): Promise<McpServerRecord>;
   updateMcpServerPolicy(serverId: string, policy: McpServerPolicyUpdateRequest, onCommitted?: () => void | Promise<void>): Promise<McpServerRecord>;
 }
@@ -82,20 +83,23 @@ export class McpRouteService {
     return await this.mcp.deleteMcpServer(serverId, expectedRevision, onCommitted);
   }
 
-  public connectMcpServer(serverId: string) {
-    return this.mcp.connectMcpServer(serverId).then(projectMcpPublicValue);
+  public connectMcpServer(serverId: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>) {
+    return this.mcp.connectMcpServer(serverId, review, onCommitted).then(projectMcpPublicValue);
   }
 
-  public async disconnectMcpServer(serverId: string) {
-    return projectMcpPublicValue(await this.mcp.disconnectMcpServer(serverId));
+  public async disconnectMcpServer(serverId: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>) {
+    return projectMcpPublicValue(await this.mcp.disconnectMcpServer(serverId, review, onCommitted));
   }
 
-  public async startMcpOAuth(serverId: string) {
-    return await this.mcp.startMcpOAuth(serverId);
+  public async startMcpOAuth(serverId: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>) {
+    const args: Parameters<McpRoutePort["startMcpOAuth"]> = review ? [serverId, review, onCommitted] : [serverId];
+    return await this.mcp.startMcpOAuth(...args);
   }
 
-  public completeMcpOAuth(serverId: string, code: string, state?: string) {
-    return this.mcp.completeMcpOAuth(serverId, code, state).then(projectMcpPublicValue);
+  public completeMcpOAuth(serverId: string, code: string, state?: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>) {
+    const args: Parameters<McpRoutePort["completeMcpOAuth"]> = review
+      ? [serverId, code, state, review, onCommitted] : [serverId, code, state];
+    return this.mcp.completeMcpOAuth(...args).then(projectMcpPublicValue);
   }
 
   public async listMcpTools(serverId: string) {

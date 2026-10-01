@@ -219,7 +219,7 @@
   white-space: nowrap;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .mc-next-chip-3-state,
   .mc-next-chip-3-mid,
   .mc-next-chip-3-age {
@@ -426,7 +426,7 @@
   background: var(--bg-surface-2, var(--mc-surface-2));
 }
 
-@media (max-width: 880px) {
+@media (max-width: 1023px) {
   .mc-next-stage-head {
     padding: 0.85rem 0.85rem 0.7rem;
   }
@@ -893,7 +893,7 @@
   gap: 0.5rem;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .mc-next-filter-pill-scroller {
     padding-bottom: 1.05rem;
   }

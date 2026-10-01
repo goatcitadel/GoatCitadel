@@ -1,27 +1,15 @@
-import { useState } from "react";
-import type { DesktopUpdateChannel, DesktopUpdateRequest } from "@goatcitadel/contracts";
+import type { DesktopUpdateChannel } from "@goatcitadel/contracts";
 import { NativeCard } from "../native-routes/NativeRoutePageLayout";
 import { NativeButton } from "../native-routes/primitives";
 import { SettingsButtonRow, SettingsField } from "../native-routes/settings/SettingsShared";
-import { requestDesktopUpdate, useDesktopUpdates } from "./desktop-update-bridge";
+import { useDesktopUpdates } from "./desktop-update-bridge";
+import { useDesktopUpdateActions } from "./use-desktop-update-actions";
 
 export function DesktopUpdatesPanel() {
   const status = useDesktopUpdates();
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-  const busy = pending || status?.phase === "checking" || status?.phase === "downloading";
+  const { act, busy, error, uncertain } = useDesktopUpdateActions(status);
+  const actionBusy = busy || uncertain;
   const offered = status?.availableRelease;
-  async function act(action: DesktopUpdateRequest["action"], channel?: DesktopUpdateChannel) {
-    setError(null);
-    setPending(true);
-    try {
-      await requestDesktopUpdate(action, { channel, releaseTag: offered?.tag });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "The update action failed.");
-    } finally {
-      setPending(false);
-    }
-  }
   return (
     <section id="updates" aria-label="Application updates">
       <NativeCard title="Updates" subtitle="Choose when to download and install a new version.">
@@ -41,7 +29,7 @@ export function DesktopUpdatesPanel() {
                 className="mc-next-settings-input"
                 aria-label="Update channel"
                 value={status.channel}
-                disabled={busy}
+                disabled={actionBusy}
                 onChange={(event) => void act("channel", event.target.value as DesktopUpdateChannel)}
               >
                 <option value="stable">Stable releases</option>
@@ -86,19 +74,19 @@ export function DesktopUpdatesPanel() {
               </NativeButton>
               {offered ? (
                 <>
-                  <NativeButton type="button" disabled={busy} onClick={() => void act("download")}>
+                  <NativeButton type="button" disabled={actionBusy} onClick={() => void act("download")}>
                     Download
                   </NativeButton>
-                  <NativeButton type="button" disabled={busy} onClick={() => void act("notes")}>
+                  <NativeButton type="button" disabled={actionBusy} onClick={() => void act("notes")}>
                     View release notes
                   </NativeButton>
-                  <NativeButton type="button" disabled={busy} onClick={() => void act("snooze")}>
+                  <NativeButton type="button" disabled={actionBusy} onClick={() => void act("snooze")}>
                     Remind me tomorrow
                   </NativeButton>
                 </>
               ) : null}
               {status.downloadedPath ? (
-                <NativeButton type="button" disabled={busy} onClick={() => void act("reveal")}>
+                <NativeButton type="button" disabled={actionBusy} onClick={() => void act("reveal")}>
                   Show installer
                 </NativeButton>
               ) : null}

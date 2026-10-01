@@ -32,6 +32,7 @@
 .mc-next-ops-attention-copy {
   display: grid;
   gap: 0.28rem;
+  justify-items: start;
   flex: 1 1 14rem;
   min-width: 0;
 }
@@ -193,7 +194,7 @@
   }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 639px) {
   .mc-next-directory-page {
     padding-inline: 0.45rem;
   }
@@ -461,13 +462,13 @@
   text-align: center;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1023px) {
   .mc-next-kanban-board {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .mc-next-kanban-toolbar {
     flex-wrap: wrap;
   }
@@ -520,7 +521,7 @@
   font-size: var(--text-xs);
 }
 
-@media (max-width: 840px) {
+@media (max-width: 1023px) {
   .mc-next-runtime-spend-chart-scroll-hint {
     display: block;
   }

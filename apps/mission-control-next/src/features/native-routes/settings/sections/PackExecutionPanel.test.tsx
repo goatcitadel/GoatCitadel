@@ -1,106 +1,201 @@
 // @vitest-environment happy-dom
-import React, { act } from "react";
+import React, { act, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CapabilityPackManifest } from "@goatcitadel/contracts";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PackExecutionPanel } from "./PackExecutionPanel";
-
-const mocks = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn(), verify: vi.fn(), create: vi.fn() }));
+import { PortablePackSetup } from "../../../../cockpit/areas/settings/PortablePackSetup";
+import { packManifest, packPreview, packPlan } from "./pack-execution.test-support";
+import { __resetPackAttemptsForTests } from "./pack-mutation-state";
+import { __resetSessionDraftsForTests } from "../../library/session-drafts";
+const api = vi.hoisted(() => ({
+  list: vi.fn(),
+  get: vi.fn(),
+  preview: vi.fn(),
+  verify: vi.fn(),
+  create: vi.fn(),
+  confirm: vi.fn(),
+  cancel: vi.fn(),
+  respond: vi.fn(),
+  rollback: vi.fn(),
+  approval: vi.fn(),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
-  createChangePlan: mocks.create,
-  fetchChangePlans: mocks.list,
-  fetchChangePlan: mocks.get,
-  verifyChangePlan: mocks.verify,
+  fetchChangePlans: api.list,
+  fetchChangePlan: api.get,
+  fetchCapabilityPackPreview: api.preview,
+  verifyChangePlan: api.verify,
+  createChangePlan: api.create,
+  confirmChangePlan: api.confirm,
+  cancelChangePlan: api.cancel,
+  respondToChangePlan: api.respond,
+  requestChangePlanRollback: api.rollback,
+  fetchApprovalReplay: api.approval,
 }));
-vi.mock("@goatcitadel/mission-control-shared/components/chat/OwnedChangePlanList", () => ({
-  OwnedChangePlanList: ({ plans }: { plans: { planId: string; status: string }[] }) => (
-    <div>
-      {plans.map((plan) => (
-        <p key={plan.planId}>
-          {plan.planId}: {plan.status}
-        </p>
-      ))}
-    </div>
-  ),
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({
+  getGatewayApiBaseUrl: () => "http://fixture",
 }));
-const manifest = {
-  packId: "browser-qa-operator",
-  assets: [],
-  provenance: { contentHash: "a".repeat(64) },
-} as unknown as CapabilityPackManifest;
-const parent = {
-  planId: "pack-plan",
-  status: "monitoring",
-  revision: 5,
-  request: { kind: "capability_pack", packId: manifest.packId },
-  evidenceRefs: ["change_plan:child-plan"],
-};
-let root: ReturnType<typeof createRoot>;
+vi.mock("../../../../cockpit/ui/Dialog", () => ({
+  Dialog: ({
+    open,
+    title,
+    description,
+    children,
+  }: {
+    open: boolean;
+    title: string;
+    description?: string;
+    children: React.ReactNode;
+  }) =>
+    open ? (
+      <div role="dialog" aria-label={title}>
+        <p>{description}</p>
+        {children}
+      </div>
+    ) : null,
+}));
+vi.mock("@goatcitadel/mission-control-shared/components/ConfirmModal", () => ({
+  ConfirmModal: ({
+    open,
+    title,
+    message,
+    confirmLabel,
+    cancelLabel,
+    onConfirm,
+    onCancel,
+    confirmDisabled,
+  }: {
+    open: boolean;
+    title: string;
+    message: string;
+    confirmLabel: string;
+    cancelLabel: string;
+    onConfirm: () => void;
+    onCancel: () => void;
+    confirmDisabled?: boolean;
+  }) =>
+    open ? (
+      <div role="dialog" aria-label={title}>
+        <p>{message}</p>
+        <button type="button" disabled={confirmDisabled} onClick={onConfirm}>
+          {confirmLabel}
+        </button>
+        <button type="button" onClick={onCancel}>
+          {cancelLabel}
+        </button>
+      </div>
+    ) : null,
+}));
+let root: ReturnType<typeof createRoot>,
+  host: HTMLDivElement,
+  saved = packPlan();
+const inspect = vi.fn();
 beforeEach(() => {
   vi.resetAllMocks();
-  mocks.list.mockResolvedValue({ items: [parent] });
-  mocks.get.mockResolvedValue({ planId: "child-plan", status: "completed" });
-  mocks.verify.mockResolvedValue({ ...parent, status: "completed", revision: 6 });
-});
-afterEach(async () => {
-  await act(async () => root?.unmount());
-  document.body.replaceChildren();
-});
-async function render() {
-  const host = document.createElement("div");
+  __resetPackAttemptsForTests();
+  __resetSessionDraftsForTests();
+  saved = packPlan();
+  api.list.mockResolvedValue({ items: [] });
+  api.get.mockImplementation(async () => saved);
+  api.preview.mockResolvedValue(packPreview);
+  api.create.mockImplementation(async () => saved);
+  api.verify.mockImplementation(
+    async () =>
+      (saved = {
+        ...saved,
+        status: "completed",
+        revision: saved.revision + 1,
+        phase: "terminal",
+        requiredAction: undefined,
+      }),
+  );
+  host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
+});
+afterEach(async () => {
+  await act(async () => root.unmount());
+  document.body.replaceChildren();
+});
+async function render(native: boolean) {
   await act(async () =>
     root.render(
-      <PackExecutionPanel
-        manifest={manifest}
-        workspaceId="default"
-        navigate={vi.fn()}
-        route={{ area: "settings", section: "addons", theme: "dark" } as never}
-      />,
+      <StrictMode>
+        {native ? (
+          <PortablePackSetup manifest={packManifest} workspaceId="a" onInspect={inspect} />
+        ) : (
+          <PackExecutionPanel
+            manifest={packManifest}
+            workspaceId="a"
+            navigate={vi.fn()}
+            route={{ area: "settings", section: "addons", theme: "dark" }}
+          />
+        )}
+      </StrictMode>,
     ),
   );
-  return host;
 }
-describe("PackExecutionPanel owner verification", () => {
-  it("loads without a mutation and verifies the exact monitoring revision on explicit refresh", async () => {
-    const host = await render();
-    expect(mocks.verify).not.toHaveBeenCalled();
-    const refresh = [...host.querySelectorAll("button")].find(
-      (button) => button.textContent === "Refresh execution status",
-    )!;
-    await act(async () => refresh.click());
-    expect(mocks.verify).toHaveBeenCalledWith("pack-plan", { workspaceId: "default" }, 5);
-    expect(host.textContent).toContain("pack-plan: completed");
-    expect(host.textContent).toContain("child-plan: completed");
-  });
-  it("keeps the prior state and exposes a rejected verification without inventing readiness", async () => {
-    mocks.verify.mockRejectedValue(new Error("The plan changed elsewhere; refresh its current revision."));
-    const host = await render();
-    const refresh = [...host.querySelectorAll("button")].find(
-      (button) => button.textContent === "Refresh execution status",
-    )!;
-    await act(async () => refresh.click());
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain("changed elsewhere");
-    expect(host.textContent).toContain("pack-plan: monitoring");
-    expect(host.textContent).not.toContain("pack-plan: completed");
-  });
+async function click(label: string) {
+  const button = [...host.querySelectorAll("button")].find((item) => item.textContent === label);
+  expect(button, label).toBeDefined();
+  await act(async () => button!.click());
+}
+it.each([false, true])("%s shell separates read refresh from reviewed owner verification", async (native) => {
+  saved = packPlan({ status: "monitoring", requiredAction: undefined, revision: 5 });
+  api.list.mockImplementation(async () => ({ items: [saved] }));
+  await render(native);
+  expect(api.verify).not.toHaveBeenCalled();
+  await click("Refresh setup records");
+  expect(api.verify).not.toHaveBeenCalled();
+  await click("Verify current owner evidence");
+  expect(host.textContent).toContain("not a read-only refresh");
+  await click("Cancel plan review");
+  expect(api.verify).not.toHaveBeenCalled();
+  await click("Verify current owner evidence");
+  await click("Submit reviewed plan action");
+  expect(api.verify).toHaveBeenCalledWith("plan", { workspaceId: "a" }, 5);
+  expect(host.textContent).toContain("completed");
+  if (native) expect(host.querySelector('[class*="mc-next"]')).toBeNull();
 });
-
-it("ignores a late setup receipt after changing the owning pack", async () => {
-  mocks.list.mockResolvedValue({ items: [] });
-  let finish!: (value: unknown) => void;
-  mocks.create.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
-  const first = {...manifest, assets: [{id: "asset-1", label: "Asset one", binding: {owner: "mcp"}}]} as CapabilityPackManifest;
-  const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
-  const view = (value: CapabilityPackManifest) => <PackExecutionPanel manifest={value} workspaceId="default" navigate={vi.fn()} route={{area:"settings",section:"addons",theme:"dark"} as never} />;
-  await act(async () => root.render(view(first)));
-  const review = () => [...host.querySelectorAll("button")].find(button => button.textContent === "Review setup")!;
-  await act(async () => review().click());
-  expect(mocks.create).toHaveBeenCalledOnce();
-  await act(async () => root.render(view({...first,packId:"second-pack"})));
-  expect(review().disabled).toBe(false);
-  await act(async () => finish({...parent,planId:"old-pack-receipt",status:"awaiting_confirmation",requiredAction:{kind:"confirmation"}}));
-  expect(host.textContent).not.toContain("old-pack-receipt");
-  expect(review().disabled).toBe(false);
+it.each([false, true])(
+  "%s shell cancels setup review without writes and creates only the reviewed plan",
+  async (native) => {
+    await render(native);
+    await click("Review setup plan");
+    expect(host.textContent).toContain("pinned server package");
+    expect(api.create).not.toHaveBeenCalled();
+    await click("Cancel setup review");
+    expect(api.create).not.toHaveBeenCalled();
+    await click("Review setup plan");
+    await click("Create reviewed setup plan");
+    expect(api.create).toHaveBeenCalledWith({ workspaceId: "a", surface: "settings", request: saved.request });
+    expect(api.confirm).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("awaiting confirmation");
+  },
+);
+it("native child inspection hands off only the canonical linked proposal and current workspace", async () => {
+  saved = packPlan({ status: "monitoring", requiredAction: undefined, evidenceRefs: ["change_plan:child"] });
+  const child = packPlan({
+    planId: "child",
+    kind: "capability_candidate",
+    request: { kind: "capability_candidate", proposalId: "proposal" },
+    evidenceRefs: ["capability_proposal:proposal"],
+  });
+  api.list.mockResolvedValue({ items: [saved] });
+  api.get.mockResolvedValue(child);
+  await render(true);
+  await click("Inspect linked owner");
+  expect(inspect).toHaveBeenCalledWith("/inbox?item=capability_proposal%3Aproposal&workspaceId=a");
+  expect(api.respond).not.toHaveBeenCalled();
+  expect(api.confirm).not.toHaveBeenCalled();
+});
+it("unknown outcome remains explicit and disables repeat setup action", async () => {
+  api.create.mockRejectedValue(new Error("Lost response"));
+  await render(true);
+  await click("Review setup plan");
+  await click("Create reviewed setup plan");
+  expect(host.textContent).toContain("Pack action outcome is unconfirmed");
+  expect(
+    [...host.querySelectorAll("button")].find((button) => button.textContent === "Review setup plan")?.disabled,
+  ).toBe(true);
+  expect(api.create).toHaveBeenCalledTimes(1);
 });

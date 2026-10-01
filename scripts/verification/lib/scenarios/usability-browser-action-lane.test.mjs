@@ -12,6 +12,12 @@ import {
   validateBrowserActionTerminalEvidenceContract,
 } from "./usability-browser-action-registry.mjs";
 import {
+  adaptCodeModeStepForCockpit,
+  adaptInlineDecisionsStepForCockpit,
+  adaptStopStepForCockpit,
+  cockpitChatPersistenceStep,
+  cockpitChatStreamReloadStep,
+  cockpitChatDocumentsStep,
   buildDelegationPromptReplyRules,
   buildPromptPackBenchmarkReplyRules,
   decodeBrowserFixtureFile,
@@ -20,6 +26,8 @@ import {
   filterExpectedBrowserConsoleMessages,
   pollSseConnectionRecoveryEvidence,
   pollResolvedBlockerEvidence,
+  pollCockpitDocumentNote,
+  validateResolvedApprovalEvidence,
   prepareCodeModeVerificationProject,
   resolveNotificationArchiveFixture,
   resolveSelectOption,
@@ -29,6 +37,7 @@ import {
   USABILITY_BROWSER_ACTION_GATEWAY_ENV,
   USABILITY_LOCAL_MCP_POLICY,
   validatePersistedAgentDefaultTools,
+  validateSelectedUserInputResponse,
   validatePromptPackBenchmarkDispatchRecords,
   validatePromptPackBenchmarkStatus,
   validatePromptPackRunAllStatus,
@@ -933,6 +942,135 @@ test("Chat-native Build editor journey proves governed launch, approval, artifac
   ]);
 });
 
+test("cockpit Code Mode journey keeps owner probes while using cockpit controls", () => {
+  const source = BROWSER_ACTION_BUNDLES["chat-agentic-durable-code"].find(
+    (step) => step.stepId === "route.chat.code-mode-artifacts",
+  );
+  const cockpit = adaptCodeModeStepForCockpit(source);
+  assert.equal(cockpit.stepId, "cockpit.chat.code-mode-artifacts");
+  assert.deepEqual(
+    cockpit.operations.filter((operation) => operation.kind === "api").map((operation) => operation.probe),
+    source.operations.filter((operation) => operation.kind === "api").map((operation) => operation.probe),
+  );
+  assert.ok(cockpit.operations.some((operation) => operation.kind === "fill" && operation.label === "Message"));
+  assert.ok(cockpit.operations.some((operation) => operation.kind === "click" && operation.name === "Back to conversation"));
+  assert.ok(cockpit.operations.some((operation) => operation.kind === "return-to-cockpit-chat"));
+  assert.ok(cockpit.operations.some((operation) => operation.kind === "click" && operation.name === "Open durable evidence"));
+  assert.ok(!cockpit.operations.some((operation) => operation.kind === "click" && operation.name.startsWith("Open turn:")));
+  assert.deepEqual(cockpit.operations.slice(-5), [
+    { kind: "assert-text", value: "Signed evidence receipt" },
+    { kind: "click", name: "Inspect signed receipt", exact: true },
+    { kind: "assert-text", value: "OS keychain is unavailable" },
+    { kind: "assert-text", value: "Run completed" },
+    { kind: "api", probe: "code-mode-helper-run-detail" },
+  ]);
+});
+
+test("cockpit Chat stop journey proves cancellation and a distinct completed retry", () => {
+  const source = BROWSER_ACTION_BUNDLES["chat-lifecycle"].find(
+    (step) => step.stepId === "route.chat.stop-and-retry",
+  );
+  const cockpit = adaptStopStepForCockpit(source);
+  assert.equal(cockpit.stepId, "cockpit.chat.stop-and-retry");
+  assert.deepEqual(cockpit.operations, [
+    { kind: "api", probe: "arm-stop-provider" },
+    { kind: "fill", label: "Message", value: "Stop this deterministic usability turn." },
+    { kind: "click", name: "Send", exact: true },
+    { kind: "click", name: "Stop response", exact: true },
+    { kind: "api", probe: "chat-stop-cancelled" },
+    { kind: "click", name: "Retry", exact: true },
+    { kind: "assert-text", value: "Verification stub reply." },
+    { kind: "api", probe: "chat-stop-retry-completed" },
+    { kind: "assert-text", value: "Send" },
+  ]);
+});
+
+test("cockpit Chat persistence journey reloads, exports, archives, and restores on desktop and phone", () => {
+  const operations = cockpitChatPersistenceStep().operations;
+  assert.deepEqual(operations.slice(0, 9).map((operation) => operation.kind), [
+    "fill", "click", "api", "reload", "assert-text", "assert-text", "api", "click", "download",
+  ]);
+  assert.equal(operations[8].contentContract, "chat-conversation-v1");
+  assert.equal(operations[8].name, "Export conversation");
+  assert.deepEqual(operations.slice(-6).map((operation) => operation.kind), [
+    "click", "confirm", "api", "assert-text", "click", "assert-control",
+  ]);
+  const phone = cockpitChatPersistenceStep({ phone: true }).operations;
+  assert.deepEqual(phone.slice(13, 15), [
+    { kind: "select", label: "Choose conversation", value: "history:archived" },
+    { kind: "select-action-session" },
+  ]);
+});
+
+test("cockpit inline decisions keep the exact durable approval and user-input readback", () => {
+  const source = BROWSER_ACTION_BUNDLES["chat-agentic-durable-code"].find(
+    (step) => step.stepId === "route.chat.approval-and-user-input-resume",
+  );
+  const cockpit = adaptInlineDecisionsStepForCockpit(source);
+  assert.equal(cockpit.stepId, "cockpit.chat.inline-approval-and-user-input");
+  assert.deepEqual(cockpit.operations.filter((operation) => operation.kind === "fixture-session").map((operation) => operation.sessionKey), [
+    "approval", "userInput",
+  ]);
+  assert.ok(cockpit.operations.some((operation) => operation.kind === "confirm" && operation.name === "Approve once"));
+  assert.deepEqual(cockpit.operations.at(-1), { kind: "api", probe: "cockpit-inline-decisions" });
+  const leave = cockpit.operations.findIndex(operation => operation.kind === "fixture-session" && operation.sessionKey === "userInput");
+  assert.deepEqual(cockpit.operations[leave - 1], { kind: "api", probe: "cockpit-inline-approval-settled" });
+});
+
+test("cockpit inline readback requires the exact durable choice and timestamp", () => {
+  const answer = [{ kind: "single_select", response: { optionId: "option-a" },
+    selectedOption: { optionId: "option-a", label: "Continue with the current plan" },
+    answeredAt: "2026-09-30T00:00:00.000Z" }];
+  assert.equal(validateSelectedUserInputResponse(answer), true);
+  assert.throws(() => validateSelectedUserInputResponse([{ ...answer[0], selectedOption: { optionId: "option-b" } }]),
+    /durably recorded/u);
+});
+
+test("cockpit streaming reload checks one exact running turn before stopping it", () => {
+  const operations = cockpitChatStreamReloadStep().operations;
+  assert.deepEqual(operations.map((operation) => operation.kind), [
+    "api", "fill", "click", "assert-text", "api", "api", "reload", "assert-text", "api", "click", "api",
+  ]);
+  assert.deepEqual(operations.filter((operation) => operation.kind === "api").map((operation) => operation.probe), [
+    "arm-reload-provider", "chat-stream-running", "chat-stream-persisted-prefix", "chat-stream-reloaded",
+    "chat-stream-cancelled",
+  ]);
+});
+
+test("cockpit document journey preserves a stale draft and saves only after rebase on desktop and phone", () => {
+  for (const phone of [false, true]) {
+    const operations = cockpitChatDocumentsStep({ phone }).operations;
+    assert.deepEqual(operations.filter((operation) => operation.kind === "api").map((operation) => operation.probe), [
+      "cockpit-document-saved", "cockpit-document-concurrent-edit", "cockpit-document-stale-rejected",
+      "cockpit-document-rebased-saved", "cockpit-document-rebased-saved",
+    ]);
+    assert.ok(operations.some((operation) => operation.kind === "click-inspector" && operation.name === "Use this revision and keep my draft"));
+    assert.ok(operations.some((operation) => operation.kind === "reload"));
+    assert.equal(operations.filter((operation) => operation.kind === "click" && operation.name === "Files").length, 2);
+    assert.equal(operations.some((operation) => operation.name === "Inspect conversation"), phone);
+  }
+});
+
+test("Chat snapshot download binds the exact canonical session, turn, and durable run", () => {
+  const operation = { expectedFileName: "Cockpit-snapshot.json", contentContract: "chat-conversation-v1" };
+  const context = { sessionId: "session-1", persistenceCorrelation: {
+    sessionId: "session-1", turnId: "turn-1", runId: "run-1",
+  } };
+  const snapshot = { exportedAt: "2026-09-30T00:00:00.000Z", session: { sessionId: "session-1" },
+    thread: { sessionId: "session-1", turns: [{ turnId: "turn-1",
+      trace: { sessionId: "session-1", status: "completed", durable: { runId: "run-1" } },
+      userMessage: { content: "Persist this deterministic cockpit conversation." },
+      assistantMessage: { content: "Verification stub reply." },
+    }] } };
+  const downloaded = (value) => validateBrowserDownloadEvidence(operation, "Cockpit-snapshot.json",
+    Buffer.from(JSON.stringify(value), "utf8"), context);
+  assert.equal(downloaded(snapshot).contentContract, "chat-conversation-v1");
+  assert.throws(() => downloaded({ ...snapshot, session: { sessionId: "session-2" } }), /exact session/u);
+  assert.throws(() => downloaded({ ...snapshot, thread: { ...snapshot.thread,
+    turns: [{ ...snapshot.thread.turns[0], trace: { ...snapshot.thread.turns[0].trace,
+      durable: { runId: "run-2" } } }] } }), /exact completed durable turn/u);
+});
+
 test("browser fixture files decode strict UTF-8 and canonical base64 without MIME loss", () => {
   assert.equal(
     decodeBrowserFixtureFile({
@@ -1318,6 +1456,50 @@ test("exact revision-conflict probes acknowledge only their expected Chromium 40
     ]).snapshot.consoleMessages,
     [expectedConflict],
   );
+});
+
+test("cockpit document conflict acknowledges only the exact browser PATCH rejection", () => {
+  const conflict = { type: "error", text: "Failed to load resource: the server responded with a status of 409 (Conflict)" };
+  const action = { kind: "browser-mutation-rejection", probe: "cockpit-document-stale-save",
+    status: 409, method: "PATCH", requestPath: "/api/v1/notes/note-1" };
+  const step = { operatorActions: [action] };
+  const snapshot = { consoleMessages: [conflict], pageErrors: [] };
+  assert.equal(filterExpectedBrowserConsoleMessages(snapshot, [step]).acknowledgedRevisionConflictCount, 1);
+  assert.deepEqual(filterExpectedBrowserConsoleMessages(snapshot, [
+    { operatorActions: [{ ...action, requestPath: "/api/v1/sessions/session-1" }] },
+  ]).snapshot.consoleMessages, [conflict]);
+  assert.deepEqual(filterExpectedBrowserConsoleMessages(snapshot, [
+    { operatorActions: [{ ...action, probe: "unrelated" }] },
+  ]).snapshot.consoleMessages, [conflict]);
+});
+
+test("cockpit receipt signing unavailability acknowledges only its exact 503 after UI readback", () => {
+  const expectedError = {
+    type: "error",
+    text: "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  };
+  const receiptResponse = {
+    kind: "response", method: "POST", status: 503,
+    path: "/api/v1/runs/run-1/evidence-receipt",
+  };
+  const step = {
+    stepId: "cockpit.chat.code-mode-artifacts",
+    operatorActions: [{ kind: "terminal-ui-readback", value: "OS keychain is unavailable" }],
+  };
+  const snapshot = { consoleMessages: [expectedError], networkRecords: [receiptResponse] };
+  const accepted = filterExpectedBrowserConsoleMessages(snapshot, [step]);
+  assert.equal(accepted.acknowledgedReceiptUnavailableCount, 1);
+  assert.deepEqual(accepted.snapshot.consoleMessages, []);
+  for (const input of [
+    { snapshot, steps: [] },
+    { snapshot: { ...snapshot, networkRecords: [{ ...receiptResponse, status: 502 }] }, steps: [step] },
+    { snapshot: { ...snapshot, networkRecords: [{ ...receiptResponse, path: "/api/v1/health" }] }, steps: [step] },
+    { snapshot: { ...snapshot, consoleMessages: [expectedError, expectedError] }, steps: [step] },
+  ]) {
+    const result = filterExpectedBrowserConsoleMessages(input.snapshot, input.steps);
+    assert.equal(result.acknowledgedReceiptUnavailableCount, 0);
+    assert.ok(result.snapshot.consoleMessages.length > 0);
+  }
 });
 
 test("one exact event-stream connection failure is acknowledged only with bounded 200 and client-open proof", () => {
@@ -2577,3 +2759,26 @@ function delegationStep(stepId, index, role, output, parallelizable, dependsOnSt
 function sha256(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
+
+
+test("document readback waits for the submitted exact revision and rejects a substituted or superseded value", async () => {
+  let reads = 0;
+  const note = await pollCockpitDocumentNote(async () => ++reads === 1
+    ? { noteId: "note-1", revision: 1, body: "Original" } : { noteId: "note-1", revision: 2, body: "Reviewed" },
+  2, "Reviewed", { timeoutMs: 100, wait: async () => undefined });
+  assert.equal(reads, 2);
+  assert.equal(note.revision, 2);
+  for (const changed of [{ revision: 2, body: "Substituted" }, { revision: 3, body: "Reviewed" }]) {
+    await assert.rejects(() => pollCockpitDocumentNote(async () => changed, 2, "Reviewed", { timeoutMs: 100 }), /expected revision 2/);
+  }
+  await assert.rejects(() => pollCockpitDocumentNote(async () => ({ revision: 1, body: "Original" }), 2, "Reviewed", { timeoutMs: 0 }), /expected revision 2/);
+});
+
+test("the pre-navigation approval barrier requires the exact approved decision and settled linked turn", () => {
+  const snapshot = { approvalSessionId: "approval-session", approvals: [{ approvalId: "approval-1", status: "approved", linkage: { sessionId: "approval-session", turnId: "turn-1" } }],
+    approvalTurns: [resolvedTurn("approval-session", "turn-1", "run-1")] };
+  assert.deepEqual(validateResolvedApprovalEvidence(snapshot), { approvalId: "approval-1", approvalTurnId: "turn-1" });
+  assert.throws(() => validateResolvedApprovalEvidence({ ...snapshot, approvalSessionId: "foreign" }), /approved decision not found/);
+  assert.throws(() => validateResolvedApprovalEvidence({ ...snapshot, approvals: [{ ...snapshot.approvals[0], status: "pending" }] }), /approved decision not found/);
+  assert.throws(() => validateResolvedApprovalEvidence({ ...snapshot, approvalTurns: [resolvedTurn("foreign", "turn-1", "run-1")] }), /cross-session/);
+});

@@ -1,7 +1,10 @@
 import { lazy, Suspense, useRef, type ReactNode } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
+import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 const WindowedSelectableRows = lazy(() => import("./WindowedSelectableRows").then((module) => ({ default: module.WindowedSelectableRows })));
 import { EmptyState } from "./EmptyState";
+import { StatusChip } from "./StatusChip";
+import { statusChipTone } from "./status-chip-tone";
 
 /**
  * Canonical selectable-list primitive — the single home for the scrollable
@@ -24,6 +27,17 @@ export interface NativeSelectableListItem {
   title: string;
   meta?: ReactNode;
   body?: ReactNode;
+  status?: StatusPresentation;
+  icon?: ReactNode;
+}
+
+export function shouldWindowRows(input: {
+  itemCount: number;
+  maxHeight?: string;
+  virtualized: boolean;
+  hasChildren: boolean;
+}): boolean {
+  return !input.hasChildren && Boolean(input.maxHeight) && input.itemCount > (input.virtualized ? 50 : 100);
 }
 
 export interface NativeSelectableListProps {
@@ -62,7 +76,12 @@ export function NativeSelectableList({
   const virtualList = useRef<VirtuosoHandle>(null);
   const rowButtons = useRef(new Map<number, HTMLButtonElement>());
   const focusTarget = useRef<number | null>(null);
-  const windowed = virtualized && !children && Boolean(maxHeight) && (items?.length ?? 0) > 50;
+  const windowed = shouldWindowRows({
+    itemCount: items?.length ?? 0,
+    maxHeight,
+    virtualized,
+    hasChildren: Boolean(children),
+  });
   const renderRow = (item: NativeSelectableListItem, index: number) => <button key={item.id} type="button"
     ref={(node) => { if (node) { rowButtons.current.set(index, node); if (focusTarget.current === index) { focusTarget.current = null; node.focus(); } } else rowButtons.current.delete(index); }}
     className={`mc-next-settings-selectable${selectedId === item.id ? " active" : ""}`} aria-pressed={selectedId === undefined ? undefined : selectedId === item.id}
@@ -77,7 +96,14 @@ export function NativeSelectableList({
       const button = rowButtons.current.get(target);
       if (button) { focusTarget.current = null; button.focus(); }
       else virtualList.current?.scrollToIndex({ index: target, align: "center" });
-    }}><div className="mc-next-settings-selectable-head"><strong>{item.title}</strong>{item.meta ? <span>{item.meta}</span> : null}</div>{item.body ? <p>{item.body}</p> : null}</button>;
+    }}><div className="mc-next-settings-selectable-head">
+      <span className="mc-next-settings-selectable-name">
+        {item.icon ? <span className="mc-next-settings-selectable-icon" aria-hidden="true">{item.icon}</span> : null}
+        <strong>{item.title}</strong>
+      </span>
+      {item.meta ? <span className="mc-next-settings-selectable-meta">{item.meta}</span> : null}
+      {item.status ? <StatusChip tone={statusChipTone(item.status.tone)}>{item.status.label}</StatusChip> : null}
+    </div>{item.body ? <p>{item.body}</p> : null}</button>;
   if (!children && (!items || items.length === 0)) {
     return emptyContent ?? <EmptyState size="compact" title={emptyLabel} />;
   }

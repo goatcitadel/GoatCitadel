@@ -56,7 +56,8 @@ export type ChatHistoryView = "active" | "archived";
 
 const INITIAL_ACTIVE_SESSION_LIMIT = 100;
 const INITIAL_ARCHIVED_SESSION_LIMIT = 150;
-const SEARCH_SESSION_LIMIT = 250;
+// The Gateway discovery search owner accepts at most 200 results.
+const SEARCH_SESSION_LIMIT = 200;
 const DEV_BOOTSTRAP_CACHE_TTL_MS = 5000;
 const SHOULD_REUSE_DEV_BOOTSTRAP_FETCHES = process.env.NODE_ENV !== "production";
 
@@ -73,6 +74,8 @@ type SidebarBootstrapResult = {
 export type ChatSidebarLoadOptions = {
   bypassCache?: boolean;
   preferredSessionId?: string | null;
+  /** Refresh records without reselecting after an owner has already adopted a canonical session. */
+  preserveSelection?: boolean;
   append?: boolean;
 };
 
@@ -144,8 +147,10 @@ function getDevBootstrapPromise<T>(
 
 export function useChatSessionData(input: {
   workspaceId: string;
+  viewIdentity?: string;
   historyView: ChatHistoryView;
   searchQuery: string;
+  routeSessionId?: string | null;
   selectedSessionId: string | null;
   setSelectedSessionId: React.Dispatch<React.SetStateAction<string | null>>;
   runtimeLlmConfig: RuntimeSettingsResponse["llm"] | null;
@@ -203,10 +208,28 @@ export function useChatSessionData(input: {
   const [historicalContinuationError, setHistoricalContinuationError] = useState<string | null>(null);
 
   const initializedRef = useRef(false);
+  const initializedScopeRef = useRef<string | null>(null);
   const sidebarNextCursorRef = useRef<string | null>(null);
   const loadCoreGenerationRef = useRef(0);
   const loadSecondaryGenerationRef = useRef(0);
   const loadSidebarGenerationRef = useRef(0);
+  const sidebarScopeKey = JSON.stringify([workspaceId, input.viewIdentity, surfaceMode, historyView, searchQuery, input.routeSessionId]);
+  const sidebarScope = useRef({ key: sidebarScopeKey });
+  if (sidebarScope.current.key !== sidebarScopeKey) sidebarScope.current = { key: sidebarScopeKey };
+  const renderedSidebarScope = sidebarScope.current;
+  const routeSelectionKey = JSON.stringify([workspaceId, input.viewIdentity, surfaceMode, input.routeSessionId]);
+  const routeSelection = useRef({ key: routeSelectionKey, applied: false });
+  if (routeSelection.current.key !== routeSelectionKey) routeSelection.current = { key: routeSelectionKey, applied: false };
+  const renderedRouteSelection = routeSelection.current;
+  const sidebarMounted = useRef(true);
+  const sidebarExactRead = useRef<{ scope: typeof renderedSidebarScope; controller: AbortController } | null>(null);
+  useEffect(() => () => {
+    if (sidebarExactRead.current?.scope === renderedSidebarScope) sidebarExactRead.current.controller.abort();
+  }, [renderedSidebarScope]);
+  useEffect(() => {
+    sidebarMounted.current = true;
+    return () => { sidebarMounted.current = false; };
+  }, []);
   const historicalWindowGenerationRef = useRef(0);
   const historicalContinuationGenerationRef = useRef(0);
   const lastLoadedSessionIdRef = useRef<string | null>(null);
@@ -231,10 +254,16 @@ export function useChatSessionData(input: {
 
   const loadSidebar = useCallback(
     async (nextHistoryView: ChatHistoryView = historyView, options: ChatSidebarLoadOptions = {}) => {
+      if (!sidebarMounted.current || sidebarScope.current !== renderedSidebarScope) return;
       const generation = ++loadSidebarGenerationRef.current;
+      sidebarExactRead.current?.controller.abort();
+      const controller = new AbortController();
+      sidebarExactRead.current = { scope: renderedSidebarScope, controller };
+      const isCurrent = () => sidebarMounted.current && sidebarScope.current === renderedSidebarScope &&
+        generation === loadSidebarGenerationRef.current;
       const trimmedSearchQuery = searchQuery.trim();
       const sessionLimit = resolveSidebarSessionLimit(nextHistoryView, trimmedSearchQuery);
-      const append = Boolean(options.append && !trimmedSearchQuery);
+      const append = Boolean(options.append);
       const cursor = append ? (sidebarNextCursorRef.current ?? undefined) : undefined;
       if (append && !cursor) {
         return;
@@ -258,16 +287,15 @@ export function useChatSessionData(input: {
       if (append) {
         setSidebarLoadingMore(true);
         try {
-          const nextSessions = await fetchChatSessions({
-            scope: "all",
-            view: nextHistoryView,
-            limit: sessionLimit,
-            workspaceId,
-            cursor,
-            mode: surfaceMode,
-          });
-          if (generation !== loadSidebarGenerationRef.current) return;
+          const nextSessions = trimmedSearchQuery
+            ? await fetchChatSessionSearch({ query: trimmedSearchQuery, mode: "discovery", view: nextHistoryView,
+              limit: sessionLimit, workspaceId, cursor, surface: surfaceMode }).then<ChatSessionsResponse>(response => ({
+              items: response.items.map(item => ({ ...item.session, searchHits: item.hits })), nextCursor: response.nextCursor,
+            }))
+            : await fetchChatSessions({ scope: "all", view: nextHistoryView, limit: sessionLimit, workspaceId, cursor, mode: surfaceMode });
+          if (!isCurrent()) return;
           setSessions((current) => {
+            if (!isCurrent()) return current;
             if (!current) {
               return nextSessions;
             }
@@ -288,9 +316,9 @@ export function useChatSessionData(input: {
           });
           updateSidebarNextCursor(nextSessions.nextCursor ?? null);
         } catch (error) {
-          if (generation === loadSidebarGenerationRef.current) throw error;
+          if (isCurrent()) throw error;
         } finally {
-          if (generation === loadSidebarGenerationRef.current) {
+          if (isCurrent()) {
             setSidebarLoadingMore(false);
           }
         }
@@ -334,15 +362,35 @@ export function useChatSessionData(input: {
           { bypassCache: options.bypassCache },
         ));
       } catch (error) {
-        if (generation === loadSidebarGenerationRef.current) throw error;
+        if (isCurrent()) throw error;
         return;
       }
-      if (generation !== loadSidebarGenerationRef.current) return;
+      if (!isCurrent()) return;
+      const requestedSessionId = !trimmedSearchQuery ? input.routeSessionId?.trim() : undefined;
+      if (requestedSessionId && !nextSessions.items.some(item => item.sessionId === requestedSessionId)) {
+        // A deep link may be older than the first page. Read only that exact,
+        // visible, scoped owner; a missing/foreign response must never select a recent Chat.
+        const exact = await fetchChatSessions({ sessionId: requestedSessionId, workspaceId, scope: "mission",
+          view: nextHistoryView, mode: surfaceMode, limit: 1 }, { signal: controller.signal });
+        if (!isCurrent()) return;
+        const record = exact.items[0];
+        if (exact.items.length !== 1 || record?.sessionId !== requestedSessionId || record.workspaceId !== workspaceId
+          || record.scope !== "mission" || record.lifecycleStatus !== nextHistoryView || record.includeInHistory === false) {
+          throw new Error("The requested conversation is unavailable in this workspace and history view.");
+        }
+        nextSessions = { ...nextSessions, items: [...nextSessions.items, record] };
+      }
       setProjects(nextProjects);
       setSessions(nextSessions);
       updateSidebarNextCursor(nextSessions.nextCursor ?? null);
+      if (options.preserveSelection) return;
+      // The URL admits the initial selection; it must not undo a later user
+      // choice or fork when realtime/sidebar refreshes observe the same URL.
+      const initialRouteSelection = renderedRouteSelection.applied ? undefined : requestedSessionId;
+      if (requestedSessionId) renderedRouteSelection.applied = true;
       setSelectedSessionId((current) => {
-        const preferredSessionId = options.preferredSessionId?.trim();
+        if (!isCurrent()) return current;
+        const preferredSessionId = options.preferredSessionId?.trim() || initialRouteSelection;
         if (preferredSessionId && nextSessions.items.some((item) => item.sessionId === preferredSessionId)) {
           return preferredSessionId;
         }
@@ -354,7 +402,7 @@ export function useChatSessionData(input: {
           : (nextSessions.items[0]?.sessionId ?? null);
       });
     },
-    [historyView, searchQuery, setSelectedSessionId, surfaceMode, updateSidebarNextCursor, workspaceId],
+    [historyView, input.routeSessionId, renderedRouteSelection, renderedSidebarScope, searchQuery, setSelectedSessionId, surfaceMode, updateSidebarNextCursor, workspaceId],
   );
 
   const openHistoricalWindow = useCallback(
@@ -732,7 +780,12 @@ export function useChatSessionData(input: {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    const scope = JSON.stringify([workspaceId, surfaceMode]);
+    // A sidebar search/history change must retain the mounted conversation,
+    // composer and filter dialog. A new workspace still requires bootstrap.
+    const needsBootstrap = initializedScopeRef.current !== scope;
+    setLoading(needsBootstrap);
+    if (needsBootstrap) initializedRef.current = false;
     void Promise.all([loadSidebar(), loadRuntimeCatalog()])
       .then(() => !cancelled && setError(null))
       .catch((err: Error) => !cancelled && setError(err.message))
@@ -740,12 +793,13 @@ export function useChatSessionData(input: {
         if (!cancelled) {
           setLoading(false);
           initializedRef.current = true;
+          initializedScopeRef.current = scope;
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [loadRuntimeCatalog, loadSidebar, setError]);
+  }, [loadRuntimeCatalog, loadSidebar, setError, surfaceMode, workspaceId]);
 
   useEffect(() => {
     if (!loading) {

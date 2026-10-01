@@ -167,6 +167,89 @@ describe("chat-durable-run-service", () => {
     expect(requestedRunIds).toEqual(["run-1"]);
   });
 
+  it.each([false, true])(
+    "binds local child authority before scheduling and rolls failed linkage back (failure=%s)",
+    async (fail) => {
+      const prepared = createPreparedTurn();
+      const events: string[] = [];
+      let committed = false;
+      let row: DurableRunRecord | undefined;
+      const run = createRun("local-child", "queued");
+      const begin = beginDurableChatRun(
+        {
+          shouldUseDurableExecution: true,
+          runImmediateTransaction: async (work) => {
+            events.push("begin");
+            try {
+              const result = await work();
+              committed = true;
+              events.push("commit");
+              return result;
+            } catch (error) {
+              row = undefined;
+              events.push("rollback");
+              throw error;
+            }
+          },
+          createDurableRun: async () => {
+            row = run;
+            events.push("run");
+            return run;
+          },
+          buildDurablePayloadRecord: () => ({}),
+          assertTurnAdmissionWrite: async () => {
+            events.push("admission-check");
+          },
+          bindTurnAdmissionToDurableRun: async () => {
+            events.push("admission-bind");
+          },
+          persistChatStreamChunk: async () => {
+            events.push("stream");
+          },
+          onDurableRunCommitted: async () => {
+            expect(committed).toBe(true);
+            events.push("publish");
+          },
+          requestDurableRunProcessing: () => {
+            expect(committed).toBe(true);
+            expect(row).toBe(run);
+            events.push("process");
+          },
+        },
+        prepared,
+        createSendRequest({ parentDelegationStepId: "local-step" }),
+        "chat_thread_turn_appended",
+        {
+          runId: "local-child",
+          onChildDurableRunAdmitted: async (runId) => {
+            expect(committed).toBe(false);
+            expect(row?.runId).toBe(runId);
+            events.push("step-and-watcher-bind");
+            if (fail) throw new Error("stale delegation owner");
+          },
+        },
+      );
+      if (fail) {
+        await expect(begin).rejects.toThrow("stale delegation owner");
+        expect(row).toBeUndefined();
+        expect(events).toEqual(["begin", "admission-check", "run", "step-and-watcher-bind", "rollback"]);
+      } else {
+        await expect(begin).resolves.toEqual(run);
+        expect(events).toEqual([
+          "begin",
+          "admission-check",
+          "run",
+          "step-and-watcher-bind",
+          "admission-bind",
+          "stream",
+          "commit",
+          "publish",
+          "process",
+        ]);
+      }
+    },
+  );
+
   it("keeps task-linked profile-free Chat admissible without a remote worker context", async () => {
     const createInputs: DurableRunCreateRequest[] = [];
     const prepared = createPreparedTurn({
@@ -979,7 +1062,9 @@ describe("chat-durable-run-service", () => {
     await finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
     expect(state.runs.get("run-complete")?.status).toBe("failed");
     expect(state.checkpoints.at(-1)?.checkpointKind).toBe("run_failed");
-    expect(state.tracePatches.at(-1)?.patch).toMatchObject({ durable: { status: "failed", checkpointKind: "run_failed" } });
+    expect(state.tracePatches.at(-1)?.patch).toMatchObject({
+      durable: { status: "failed", checkpointKind: "run_failed" },
+    });
     expect(state.tracePatches.at(-1)?.patch.status).toBeUndefined();
   });
 

@@ -20,9 +20,9 @@ const item = (section: string) => ({ section }) as any;
 describe("MissionControlNextApp shell helpers", () => {
   it("groups rail sections by product area", () => {
     expect(buildRailSections("settings", [item("general"), item("channels"), item("tools")])).toEqual([
-      { id: "settings-preferences", label: "Preferences", items: [item("general")] },
+      { id: "settings-general", label: "General", items: [item("general")] },
       { id: "settings-connections", label: "Connections", items: [item("channels")] },
-      { id: "settings-security", label: "Security", items: [item("tools")] },
+      { id: "settings-safety", label: "Safety", items: [item("tools")] },
     ]);
     expect(
       buildRailSections("settings", [
@@ -40,17 +40,17 @@ describe("MissionControlNextApp shell helpers", () => {
       ]).map((group) => group.items.map((entry) => entry.section)),
     ).toEqual([
       ["personalities"],
-      ["onboarding", "providers", "integrations", "mcp", "addons"],
-      ["permissions", "trust-policy", "access"],
+      ["onboarding", "providers"],
+      ["integrations", "mcp", "addons"],
+      ["permissions", "trust-policy"],
       ["workspaces"],
+      ["access"],
       ["runtime"],
     ]);
-    expect(
-      buildRailSections("library", [item("memory"), item("prompt-packs"), item("curator")]).map((group) => group.id),
-    ).toEqual(["library-agents", "library-knowledge"]);
+    expect(buildRailSections("library", [item("memory"), item("prompt-packs"), item("curator"), item("communications")]).map((group) => group.id)).toEqual(["library-skills", "library-knowledge", "library-mail"]);
     expect(buildRailSections("ops", [item("activity"), item("approvals")]).map((group) => group.id)).toEqual([
-      "ops-monitor",
-      "ops-decisions",
+      "ops-approvals",
+      "ops-activity",
     ]);
     expect(
       buildRailSections("ops", [
@@ -65,11 +65,19 @@ describe("MissionControlNextApp shell helpers", () => {
         item("kanban"),
       ]).map((group) => group.items.map((entry) => entry.section)),
     ).toEqual([
-      ["sessions", "notifications", "costs", "runtime", "diagnostics"],
+      ["sessions", "notifications"],
       ["schedules", "kanban"],
+      ["costs"],
+      ["runtime", "diagnostics"],
       ["improvement", "quality"],
     ]);
     expect(buildRailSections("chat", [item("thread")])).toEqual([{ id: "chat-primary", items: [item("thread")] }]);
+  });
+
+  it("keeps each grouped area at seven pages or fewer", () => {
+    for (const area of ["settings", "library", "ops"] as const) {
+      expect(buildRailSections(area, navigationRailItems(area)).length).toBeLessThanOrEqual(7);
+    }
   });
 
   it("renders every declared grouped rail item exactly once", () => {

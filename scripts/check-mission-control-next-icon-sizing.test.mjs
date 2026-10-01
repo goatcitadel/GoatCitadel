@@ -51,3 +51,13 @@ test("icon sizing guard scans nested TSX sources", async (t) => {
   assert.equal(result.violations.length, 1);
   assert.equal(result.violations[0].line, 1);
 });
+
+test("icon sizing guard leaves Tailwind cockpit files to the cockpit design guards", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "gc-icon-sizing-cockpit-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, "cockpit"));
+  await fs.writeFile(path.join(root, "cockpit", "Button.tsx"), '<Icon className="h-3 w-3" />\n', "utf8");
+  const result = await collectIconSizingViolations({ scanRoot: root });
+  assert.deepEqual(result.files, []);
+  assert.deepEqual(result.violations, []);
+});

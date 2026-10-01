@@ -8,12 +8,17 @@ const apiMocks = vi.hoisted(() => ({
   fetchWorkspaceCapabilities: vi.fn(),
   updateWorkspaceCapabilities: vi.fn(),
   resetWorkspaceCapabilities: vi.fn(),
+  updateReviewedCapabilities: vi.fn(),
+  resetReviewedCapabilities: vi.fn(),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchWorkspaceCapabilities: apiMocks.fetchWorkspaceCapabilities,
   updateWorkspaceCapabilities: apiMocks.updateWorkspaceCapabilities,
   resetWorkspaceCapabilities: apiMocks.resetWorkspaceCapabilities,
+  updateReviewedCapabilities: apiMocks.updateReviewedCapabilities,
+  resetReviewedCapabilities: apiMocks.resetReviewedCapabilities,
+  isApiRequestError: () => false,
 }));
 
 function makeInheritView(): CapabilityScopeView {
@@ -62,8 +67,6 @@ async function renderPanel(view: CapabilityScopeView): Promise<ReactTestRenderer
         resourceType="skill"
         title="Skills"
         fetchScope={() => Promise.resolve(view)}
-        updateScope={apiMocks.updateWorkspaceCapabilities}
-        resetScope={() => Promise.resolve(view)}
       />,
     );
   });

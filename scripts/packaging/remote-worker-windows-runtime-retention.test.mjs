@@ -37,11 +37,11 @@ test("native callback and JavaScript parent require a separate exact retention r
   fs.writeFileSync(expectedPath, material, { flag: "wx" }); fs.writeFileSync(resultPath, f.bytes, { flag: "wx" });
   const outcomes = [];
   for (const asan of [false, true]) {
-    const executable = buildWindowsCellController({ outputDirectory: output, snapshot, asan, fixture });
+    const executable = buildWindowsCellController({ outputDirectory: output, snapshot, sourceBatchSize: 8, asan, fixture });
     const component = spawnSync(executable, [], { windowsHide: true, encoding: "utf8", timeout: 40000, env });
     fs.writeFileSync(path.join(output, `${asan ? "asan" : "normal"}-components.log`), (component.stdout ?? "") + (component.stderr ?? ""), { flag: "wx" });
     assert.equal(component.error, undefined); assert.equal(component.status, 0, component.stderr);
-    const report = JSON.parse(component.stdout); assert.equal(report.passed, true); assert.equal(report.pipeFixtures, 31);
+    const report = JSON.parse(component.stdout); assert.equal(report.passed, true); assert.equal(report.pipeFixtures, 54);
     const cases = [];
     for (const mode of ["retained", "retained_delayed_final_check", "peer_closed_after_receipt", "refused", "wrong_digest", "cancelled_after_commit", "session_complete", "session_input_denied",
       "session_runtime_denied", "session_output_denied", "session_retention_denied", "session_cancel_commit", "session_finish_denied"]) {

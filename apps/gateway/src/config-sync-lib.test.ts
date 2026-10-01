@@ -3,9 +3,57 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildUnifiedConfigPayload, syncUnifiedConfig } from "./config-sync-lib.js";
+import { applyDurableExecutionBaselineToConfig, buildUnifiedConfigPayload, replaceMutableConfigValue, syncUnifiedConfig } from "./config-sync-lib.js";
+import type { GatewayRuntimeConfig } from "./config.js";
 
 const TEMP_ROOTS: string[] = [];
+
+describe("durable runtime configuration baseline", () => {
+  it("enables only canonical durable baseline fields without mutating the candidate or unrelated policy", () => {
+    const candidate = {
+      rootDir: "workspace",
+      toolPolicy: { tools: { deny: ["shell.exec"] } },
+      assistant: {
+        memory: { enabled: false },
+        durable: { enabled: false, executionEnabled: false, chatAutoPromoteEnabled: false, maxAttempts: 3 },
+        features: { durableKernelV1Enabled: false, codeModeV1Enabled: false },
+      },
+    } as unknown as GatewayRuntimeConfig;
+    const before = structuredClone(candidate);
+    const normalized = applyDurableExecutionBaselineToConfig(candidate);
+    expect(normalized.assistant.durable).toEqual({
+      ...before.assistant.durable,
+      enabled: true,
+      executionEnabled: true,
+      chatAutoPromoteEnabled: true,
+    });
+    expect(normalized.assistant.features).toEqual({ ...before.assistant.features, durableKernelV1Enabled: true });
+    expect(normalized.toolPolicy).toBe(candidate.toolPolicy);
+    expect(normalized.assistant.memory).toBe(candidate.assistant.memory);
+    expect(candidate).toEqual(before);
+  });
+});
+
+describe("in-place runtime config replacement", () => {
+  it("preserves live owner references across apply and rollback without sharing candidate objects", () => {
+    const target = { model: { name: "before", retired: true }, routes: [{ id: "old" }] };
+    const before = structuredClone(target);
+    const modelOwner = target.model;
+    const routesOwner = target.routes;
+    const candidate = { model: { name: "after" }, routes: [{ id: "new" }] };
+    replaceMutableConfigValue(target, candidate);
+    expect(target).toEqual(candidate);
+    expect(target.model).toBe(modelOwner);
+    expect(target.routes).toBe(routesOwner);
+    expect(target.routes[0]).not.toBe(candidate.routes[0]);
+    target.routes[0]!.id = "changed live";
+    expect(candidate.routes[0]!.id).toBe("new");
+    replaceMutableConfigValue(target, before);
+    expect(target).toEqual(before);
+    expect(target.model).toBe(modelOwner);
+    expect(target.routes).toBe(routesOwner);
+  });
+});
 
 afterEach(async () => {
   vi.restoreAllMocks();

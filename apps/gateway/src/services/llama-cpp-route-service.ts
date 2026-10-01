@@ -28,40 +28,42 @@ export interface LlamaCppRoutePortDependencies {
 }
 
 export function createLlamaCppRoutePort(deps: LlamaCppRoutePortDependencies): LlamaCppRoutePort {
+  const runtime = deps.llamaCppRuntime;
+  const setup = deps.setup;
   return {
-    adviseLlamaCppRuntime: (input) => deps.llamaCppRuntime.advise(input),
-    cancelLlamaCppHuggingFaceDownload: (jobId) => deps.llamaCppRuntime.cancelHuggingFaceDownload(jobId),
-    detectLlamaCppInstall: () => deps.llamaCppRuntime.detectLocalInstall(),
-    getLlamaCppHuggingFaceDownload: (jobId) => deps.llamaCppRuntime.getHuggingFaceDownloadStatus(jobId),
-    getLlamaCppSetup: (workspaceId) => deps.setup.get(workspaceId),
-    listLlamaCppModels: () => deps.llamaCppRuntime.listModels(),
+    adviseLlamaCppRuntime: (input) => runtime.advise(input),
+    cancelLlamaCppHuggingFaceDownload: (jobId) => runtime.cancelHuggingFaceDownload(jobId),
+    detectLlamaCppInstall: () => runtime.detectLocalInstall(),
+    getLlamaCppHuggingFaceDownload: (jobId) => runtime.getHuggingFaceDownloadStatus(jobId),
+    getLlamaCppSetup: (workspaceId) => setup.get(workspaceId),
+    listLlamaCppModels: () => runtime.listModels(),
     refreshLlamaCppRuntime: async () => {
-      const status = await deps.llamaCppRuntime.refresh();
+      const status = await runtime.refresh();
       await deps.publishRealtime("system", "llamacpp", {
         type: "llamacpp_refreshed",
         status,
       });
       return status;
     },
-    startLlamaCppHuggingFaceDownload: (input) => deps.llamaCppRuntime.startHuggingFaceDownload(input),
+    startLlamaCppHuggingFaceDownload: (input) => runtime.startHuggingFaceDownload(input),
     startLlamaCppRuntime: async () => {
-      const status = await deps.llamaCppRuntime.start("api");
+      const status = await runtime.start("api");
       await deps.publishRealtime("system", "llamacpp", {
         type: "llamacpp_started",
         status,
       });
       return status;
     },
-    stageLlamaCppManagedSelection: (input) => deps.setup.stageManagedSelection(input),
+    stageLlamaCppManagedSelection: (input) => setup.stageManagedSelection(input),
     stopLlamaCppRuntime: async () => {
-      const status = await deps.llamaCppRuntime.stop("api");
+      const status = await runtime.stop("api");
       await deps.publishRealtime("system", "llamacpp", {
         type: "llamacpp_stopped",
         status,
       });
       return status;
     },
-    testLlamaCppChat: (workspaceId) => deps.setup.chatTest(workspaceId),
+    testLlamaCppChat: (workspaceId) => setup.chatTest(workspaceId),
   };
 }
 

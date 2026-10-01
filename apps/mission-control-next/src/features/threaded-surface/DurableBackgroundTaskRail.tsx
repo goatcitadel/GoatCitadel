@@ -6,11 +6,12 @@ import type {
   DurableBackgroundTaskRailResponse,
   DurableBackgroundTaskSemanticLink,
 } from "@goatcitadel/contracts";
-import { isTerminalStatus, useDurableBackgroundTaskRail } from "./useDurableBackgroundTaskRail";
+import { useDurableBackgroundTaskRail, type BackgroundTaskControlReview } from "./useDurableBackgroundTaskRail";
 import { RemoteWorkerInlineActivity } from "./RemoteWorkerInlineActivity";
 
-const BACKGROUND_REPORT_REFRESH_RETRY_MS = 1_000;
-const BACKGROUND_REPORT_REFRESH_MAX_ATTEMPTS = 3;
+import { useBackgroundTaskSettledRefresh, type BackgroundTaskSettledCallback } from "./useBackgroundTaskSettledRefresh";
+
+export { useBackgroundTaskSettledRefresh } from "./useBackgroundTaskSettledRefresh";
 
 export interface DurableBackgroundTaskRailProps {
   parentRunId?: string;
@@ -23,7 +24,7 @@ export interface DurableBackgroundTaskRailProps {
   onOpenApprovals?: () => void;
   onOpenTasks?: () => void;
   onContinueInBackground?: (task: DurableBackgroundTaskItem) => void;
-  onBackgroundTaskSettled?: (task: DurableBackgroundTaskItem) => boolean | Promise<boolean>;
+  onBackgroundTaskSettled?: BackgroundTaskSettledCallback;
   onOpenSemanticLink?: (
     link: DurableBackgroundTaskSemanticLink,
     relatedLinks: DurableBackgroundTaskSemanticLink[],
@@ -32,7 +33,7 @@ export interface DurableBackgroundTaskRailProps {
 
 export function DurableBackgroundTaskRail(props: DurableBackgroundTaskRailProps) {
   const rail = useDurableBackgroundTaskRail(props);
-  const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
+  const [cancelReview, setCancelReview] = useState<BackgroundTaskControlReview | null>(null);
   const [runtimeUnknownsOpen, setRuntimeUnknownsOpen] = useState(false);
   const runtimeUnknownsId = useId();
   const attentionAnnouncement = useAttentionAnnouncement(
@@ -105,17 +106,23 @@ export function DurableBackgroundTaskRail(props: DurableBackgroundTaskRailProps)
             key={task.watcherId}
             task={task}
             pending={rail.pendingWatcherId === task.watcherId}
-            confirmCancel={confirmCancelId === task.watcherId}
-            onRequestCancel={() => setConfirmCancelId(task.watcherId)}
-            onDismissCancel={() => setConfirmCancelId(null)}
+            cancelBlocked={rail.controlFailure?.review === cancelReview}
+            confirmCancel={cancelReview?.watcherId === task.watcherId && rail.isReviewCurrent(cancelReview)}
+            onRequestCancel={() => setCancelReview(rail.review(task.watcherId))}
+            onDismissCancel={() => {
+              if (cancelReview) rail.dismissReview(cancelReview);
+              setCancelReview((current) => current === cancelReview ? null : current);
+            }}
             onControl={async (action) => {
+              if (action === "cancel" && (!cancelReview || !rail.isReviewCurrent(cancelReview))) return;
               const applied = await rail.control(
                 task.watcherId,
                 action,
                 action === "cancel" ? "Operator cancelled from Chat" : undefined,
+                action === "cancel" ? cancelReview ?? undefined : undefined,
               );
               if (applied) {
-                setConfirmCancelId(null);
+                setCancelReview((current) => current === cancelReview ? null : current);
                 if (action === "detach") props.onContinueInBackground?.(task);
               }
             }}
@@ -155,89 +162,11 @@ export function DurableBackgroundTaskRail(props: DurableBackgroundTaskRailProps)
   );
 }
 
-function useBackgroundTaskSettledRefresh(
-  snapshot: DurableBackgroundTaskRailResponse | null,
-  scopeKey: string,
-  onBackgroundTaskSettled: DurableBackgroundTaskRailProps["onBackgroundTaskSettled"],
-): void {
-  type RefreshAttempt = {
-    count: number;
-    task: DurableBackgroundTaskItem;
-    timer?: ReturnType<typeof setTimeout>;
-  };
-  const callbackRef = useRef(onBackgroundTaskSettled);
-  callbackRef.current = onBackgroundTaskSettled;
-  const attempts = useRef<{ scopeKey: string; entries: Map<string, RefreshAttempt> }>({
-    scopeKey,
-    entries: new Map(),
-  });
-
-  useEffect(() => {
-    if (attempts.current.scopeKey !== scopeKey) {
-      for (const entry of attempts.current.entries.values()) {
-        if (entry.timer) clearTimeout(entry.timer);
-      }
-      attempts.current = { scopeKey, entries: new Map() };
-    }
-    return () => {
-      if (attempts.current.scopeKey !== scopeKey) return;
-      for (const entry of attempts.current.entries.values()) {
-        if (entry.timer) clearTimeout(entry.timer);
-      }
-      attempts.current = { scopeKey: "", entries: new Map() };
-    };
-  }, [scopeKey]);
-
-  useEffect(() => {
-    if (!snapshot || !callbackRef.current) return;
-    for (const task of snapshot.tasks) {
-      if (task.attention.state !== "background" || !isTerminalStatus(task.canonicalStatus)) continue;
-      const attemptKey = [task.watcherId, task.childRunId, task.childVersion ?? "", task.canonicalStatus].join(
-        "\u0000",
-      );
-      const existing = attempts.current.entries.get(attemptKey);
-      if (existing) {
-        existing.task = task;
-        continue;
-      }
-      const entry: RefreshAttempt = { count: 0, task };
-      attempts.current.entries.set(attemptKey, entry);
-      const refreshReport = (): void => {
-        const activeEntry = attempts.current.entries.get(attemptKey);
-        if (attempts.current.scopeKey !== scopeKey || activeEntry !== entry) return;
-        entry.timer = undefined;
-        entry.count += 1;
-        const callback = callbackRef.current;
-        if (!callback) return;
-        void Promise.resolve(callback(entry.task))
-          .then((accepted) => {
-            if (
-              !accepted &&
-              entry.count < BACKGROUND_REPORT_REFRESH_MAX_ATTEMPTS &&
-              attempts.current.scopeKey === scopeKey &&
-              attempts.current.entries.get(attemptKey) === entry
-            ) {
-              entry.timer = setTimeout(refreshReport, BACKGROUND_REPORT_REFRESH_RETRY_MS);
-            }
-          })
-          .catch(() => {
-            if (
-              entry.count < BACKGROUND_REPORT_REFRESH_MAX_ATTEMPTS &&
-              attempts.current.scopeKey === scopeKey &&
-              attempts.current.entries.get(attemptKey) === entry
-            ) {
-              entry.timer = setTimeout(refreshReport, BACKGROUND_REPORT_REFRESH_RETRY_MS);
-            }
-          });
-      };
-      refreshReport();
-    }
-  }, [scopeKey, snapshot]);
-}
 
 function BackgroundTaskCard({
   task,
   pending,
+  cancelBlocked,
   confirmCancel,
   onRequestCancel,
   onDismissCancel,
@@ -247,6 +176,7 @@ function BackgroundTaskCard({
 }: {
   task: DurableBackgroundTaskItem;
   pending: boolean;
+  cancelBlocked: boolean;
   confirmCancel: boolean;
   onRequestCancel: () => void;
   onDismissCancel: () => void;
@@ -414,10 +344,10 @@ function BackgroundTaskCard({
             Cancel this durable child run? Completed work stays in its evidence record.
           </p>
           <div>
-            <button ref={keepRunningButtonRef} type="button" onClick={onDismissCancel} disabled={pending}>
+            <button ref={keepRunningButtonRef} type="button" onClick={onDismissCancel}>
               Keep running
             </button>
-            <button type="button" className="danger" onClick={() => void onControl("cancel")} disabled={pending}>
+            <button type="button" className="danger" onClick={() => void onControl("cancel")} disabled={pending || cancelBlocked}>
               {pending ? "Cancelling…" : "Confirm cancel"}
             </button>
           </div>

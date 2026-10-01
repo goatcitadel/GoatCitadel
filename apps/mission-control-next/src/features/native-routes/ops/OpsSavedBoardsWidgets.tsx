@@ -5,9 +5,12 @@ import { fetchAgenticRuns } from "@goatcitadel/mission-control-shared/api/agenti
 import { fetchApprovals } from "@goatcitadel/mission-control-shared/api/approvals";
 import { fetchCostSummary, fetchHealthSummary } from "@goatcitadel/mission-control-shared/api/system";
 import { fetchTasksByView } from "@goatcitadel/mission-control-shared/api/tasks";
+import { projectUsageCostSummary } from "@goatcitadel/mission-control-shared/content/cost-summary";
 import type { AppRoute } from "@next/app/route-model";
 import { NativeButton } from "../primitives";
 import type { NativeRoutePagesProps } from "../types";
+
+export { projectUsageCostSummary } from "@goatcitadel/mission-control-shared/content/cost-summary";
 
 interface OpsSavedBoardsWidgetProps {
   placement: OpsSavedBoardPlacement;
@@ -247,56 +250,6 @@ function UsageCostSummaryWidget(props: OpsSavedBoardsWidgetProps) {
   );
 }
 
-export function projectUsageCostSummary(summary: Awaited<ReturnType<typeof fetchCostSummary>>): {
-  tokens: number;
-  costLabel: string;
-  coverageDescription: string;
-} {
-  const totals = summary.items.reduce(
-    (result, item) => ({
-      tokens: result.tokens + (Number.isFinite(item.tokenTotal) && item.tokenTotal >= 0 ? item.tokenTotal : 0),
-      costUsd: result.costUsd + (Number.isFinite(item.costUsd) && item.costUsd >= 0 ? item.costUsd : 0),
-    }),
-    { tokens: 0, costUsd: 0 },
-  );
-  const canonicalCoverage = summary.usageAvailability?.metricAvailability?.costUsd;
-  const itemCoverage = summary.items.map((item) => item.metricAvailability?.costUsdComplete);
-  const complete =
-    canonicalCoverage?.complete ??
-    (itemCoverage.some((value) => value === false)
-      ? false
-      : itemCoverage.length > 0 && itemCoverage.every((value) => value === true)
-        ? true
-        : undefined);
-
-  if (complete === true) {
-    return {
-      tokens: totals.tokens,
-      costLabel: formatCurrency(totals.costUsd),
-      coverageDescription: "Gateway day scope with complete cost coverage; open Costs for provider attribution.",
-    };
-  }
-
-  const knownCostLabel = totals.costUsd > 0 ? `${formatCurrency(totals.costUsd)}+` : "Unknown";
-  if (complete === false) {
-    const unknownAttempts = canonicalCoverage?.unknownAttemptCount;
-    return {
-      tokens: totals.tokens,
-      costLabel: knownCostLabel,
-      coverageDescription:
-        unknownAttempts && unknownAttempts > 0
-          ? `Known spend is a lower bound because ${unknownAttempts} provider ${unknownAttempts === 1 ? "attempt has" : "attempts have"} unknown cost.`
-          : "Known spend is a lower bound because cost coverage is incomplete; open Costs for evidence.",
-    };
-  }
-
-  return {
-    tokens: totals.tokens,
-    costLabel: knownCostLabel,
-    coverageDescription: "Cost coverage was not reported, so this widget does not claim an exact total.",
-  };
-}
-
 function WidgetChrome({
   label,
   sourceLabel,
@@ -447,12 +400,4 @@ function useWidgetData<T>(workspaceId: string, boardGeneration: number, loader: 
 
 function formatCompactNumber(value: number): string {
   return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
-}
-
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: value < 1 ? 6 : 2,
-  }).format(value);
 }

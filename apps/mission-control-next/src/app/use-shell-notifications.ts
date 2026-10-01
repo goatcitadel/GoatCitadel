@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
+import { showBrowserNotification } from "./browser-notification";
 import {
   upsertNotificationItem,
   type NotificationItem,
@@ -6,6 +7,10 @@ import {
 import type { UiNotificationPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import type { deriveRealtimeNotification } from "@goatcitadel/mission-control-shared/state/realtime-derived";
 import { playOperatorAttentionSound } from "@goatcitadel/mission-control-shared/state/operator-attention";
+import {
+  decideNotificationDelivery,
+  type RealtimeNotificationOrigin,
+} from "@goatcitadel/mission-control-shared/state/notification-policy";
 
 /*
  * W4.4 (ship punchlist): shell notification stack extracted from the
@@ -30,13 +35,14 @@ const MIN_REMAINING_TOAST_MS = 800;
 
 export interface UseShellNotificationsOptions {
   notificationPreferences: UiNotificationPreferences;
+  visibleSessionId?: string;
 }
 
 export interface UseShellNotificationsResult {
   notifications: NotificationItem[];
   pushNotification: (tone: NotificationItem["tone"], message: string, groupKey?: string) => void;
   dismissNotification: (id: string) => void;
-  deliverRealtimeNotification: (notification: RealtimeNotificationDescriptor) => void;
+  deliverRealtimeNotification: (notification: RealtimeNotificationDescriptor, origin?: RealtimeNotificationOrigin) => void;
   /**
    * Live ref to the operator's last enabled sound preset. Read at click time
    * so toggling notifications back on restores whichever preset was active
@@ -46,7 +52,7 @@ export interface UseShellNotificationsResult {
 }
 
 export function useShellNotifications(options: UseShellNotificationsOptions): UseShellNotificationsResult {
-  const { notificationPreferences } = options;
+  const { notificationPreferences, visibleSessionId } = options;
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const lastEnabledSoundModeRef = useRef<"subtle" | "normal">(
     notificationPreferences.soundMode === "off" ? "normal" : notificationPreferences.soundMode,
@@ -58,6 +64,7 @@ export function useShellNotifications(options: UseShellNotificationsOptions): Us
   // stream on unrelated UI changes (MCNEXT-002). Delivery still uses the latest
   // preferences because it reads them from the ref at event time.
   const preferencesRef = useRef(notificationPreferences);
+  const visibleSessionIdRef = useRef(visibleSessionId);
 
   useEffect(() => {
     preferencesRef.current = notificationPreferences;
@@ -65,6 +72,10 @@ export function useShellNotifications(options: UseShellNotificationsOptions): Us
       lastEnabledSoundModeRef.current = notificationPreferences.soundMode;
     }
   }, [notificationPreferences]);
+
+  useEffect(() => {
+    visibleSessionIdRef.current = visibleSessionId;
+  }, [visibleSessionId]);
 
   const pushNotification = useCallback((tone: NotificationItem["tone"], message: string, groupKey?: string) => {
     setNotifications((current) =>
@@ -105,7 +116,7 @@ export function useShellNotifications(options: UseShellNotificationsOptions): Us
   }, [dismissNotification, notifications]);
 
   const deliverRealtimeNotification = useCallback(
-    (notification: RealtimeNotificationDescriptor) => {
+    (notification: RealtimeNotificationDescriptor, origin: RealtimeNotificationOrigin = { replayed: false }) => {
       if (!notification) {
         return;
       }
@@ -113,16 +124,22 @@ export function useShellNotifications(options: UseShellNotificationsOptions): Us
       // (see `preferencesRef` above): the event-stream subscription must not
       // reconnect when the operator only toggles a notification preference.
       const preferences = preferencesRef.current;
-      const shouldDeliver =
-        !preferences.onlyWhenUnfocused || (typeof document !== "undefined" && document.visibilityState !== "visible");
-      if (!shouldDeliver) {
+      const pageFocused = isPageFocused();
+      const delivery = decideNotificationDelivery(notification, {
+        ...origin,
+        visibleSessionId: visibleSessionIdRef.current,
+        pageFocused,
+      });
+      if (preferences.onlyWhenUnfocused && pageFocused) {
         return;
       }
-      if (preferences.toastsEnabled) {
+      if (delivery.toast && preferences.toastsEnabled) {
         pushNotification(notification.tone, notification.message, notification.groupKey);
       }
-      void playOperatorAttentionSound(notification.soundCue, preferences.soundMode);
-      if (preferences.desktopEnabled) {
+      if (delivery.sound) {
+        void playOperatorAttentionSound(notification.soundCue, preferences.soundMode);
+      }
+      if (delivery.desktop && preferences.desktopEnabled && document.visibilityState === "hidden") {
         showBrowserNotification(notification.message, notification.tone);
       }
     },
@@ -138,19 +155,8 @@ export function useShellNotifications(options: UseShellNotificationsOptions): Us
   };
 }
 
-function showBrowserNotification(message: string, tone: NotificationItem["tone"]): void {
-  if (typeof window === "undefined" || !("Notification" in window)) {
-    return;
-  }
-  const NotificationCtor = window.Notification;
-  if (NotificationCtor.permission !== "granted") {
-    return;
-  }
-  const title = tone === "error" ? "GoatCitadel needs attention" : "GoatCitadel";
-  try {
-    new NotificationCtor(title, { body: message });
-  } catch (error) {
-    void error;
-    // Browser or host notification permissions can change after settings are saved.
-  }
+function isPageFocused(): boolean {
+  return typeof document !== "undefined" &&
+    document.visibilityState === "visible" &&
+    (typeof document.hasFocus !== "function" || document.hasFocus());
 }

@@ -58,6 +58,7 @@ export const REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS = Object.freez
   "apps/remote-worker-provisioner-windows-native/src/protected_filesystem.cpp",
   "apps/remote-worker-provisioner-windows-native/src/protected_filesystem.hpp",
   "apps/remote-worker-provisioner-windows-native/src/protected_filesystem.test.cpp",
+  "apps/remote-worker-provisioner-windows-native/src/protected_handle_diagnostics.test.hpp",
   "apps/remote-worker-provisioner-windows-native/src/protected_operations.cpp",
   "apps/remote-worker-provisioner-windows-native/src/protected_operations.hpp",
   "apps/remote-worker-provisioner-windows-native/src/protected_operations.test.cpp",
@@ -937,8 +938,8 @@ function sameFileIdentity(left, right) {
 }
 
 export function computeW1B1aCanonicalSourceManifest(sourceRoot = repoRoot) {
-  if (REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS.length !== 55) {
-    throw new Error("The W1B1A canonical source fence must contain exactly 55 paths.");
+  if (REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS.length !== 56) {
+    throw new Error("The W1B1A canonical source fence must contain exactly 56 paths.");
   }
   const sortedPaths = [...REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS].sort();
   if (!sortedPaths.every((value, index) => value === REMOTE_WORKER_WINDOWS_PROVISIONER_W1B1A_SOURCE_PATHS[index])) {
@@ -1940,6 +1941,10 @@ function runPinnedNativeTests({ toolchain, firstBuildRoot, secondBuildRoot, mono
 
   assertAddressSanitizedNativeTest(firstBytes);
   const environment = buildSanitizedEnvironment(toolchain, firstBuildRoot);
+  // Explicit test-only diagnostics; never inherit the caller's general environment.
+  if (process.env.GOATCITADEL_PROVISIONER_HANDLE_DIAGNOSTICS === "1") {
+    environment.GOATCITADEL_PROVISIONER_HANDLE_DIAGNOSTICS = "1";
+  }
   const interopFrame = createFixedEd25519InteropFrame();
   const result = spawnSync(firstBinaryPath, [], {
     cwd: path.dirname(firstBinaryPath),

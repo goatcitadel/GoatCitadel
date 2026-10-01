@@ -7,7 +7,7 @@ import {
   type PermissionProfileEditorDraft,
   togglePermissionProfileSurface,
   TOOL_APPROVAL_MODE_OPTIONS,
-} from "../../SettingsNativePage";
+} from "../helpers/permission-helpers";
 
 export const PERMISSION_CONTEXT_PRESENTATION = {
   chat: {

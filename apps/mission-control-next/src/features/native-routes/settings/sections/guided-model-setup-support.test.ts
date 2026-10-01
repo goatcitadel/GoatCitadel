@@ -146,4 +146,17 @@ describe("guided model setup support", () => {
     expect(localRuntimeSetupGuide({ providerId: "openai", baseUrl: "https://api.openai.com/v1" })).toBeNull();
     expect(localRuntimeSetupGuide(null)).toBeNull();
   });
+
+  it("uses the chosen model and local endpoint in the llama.cpp command", () => {
+    expect(localRuntimeSetupGuide({ providerId: "llamacpp", baseUrl: "http://127.0.0.1:8181/v1" }, "Ornith-35B-Q4_K_M")?.command).toBe(
+      "llama-server -m path/to/model.gguf --alias Ornith-35B-Q4_K_M --host 127.0.0.1 --port 8181 --jinja",
+    );
+    expect(localRuntimeSetupGuide({ providerId: "llamacpp", baseUrl: "not a url" })?.command).toBe(
+      "llama-server -m path/to/model.gguf --alias my-local-model --host 127.0.0.1 --port 8080 --jinja",
+    );
+  });
+
+  it("does not offer a copyable command when the model alias could execute shell text", () => {
+    expect(localRuntimeSetupGuide({ providerId: "llamacpp", baseUrl: "http://127.0.0.1:8080/v1" }, "model;echo unsafe")?.command).toBeUndefined();
+  });
 });

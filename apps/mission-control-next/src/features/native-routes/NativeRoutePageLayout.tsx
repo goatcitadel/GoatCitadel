@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowRight, ChevronDown, FlaskConical, Info, Minus, RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
+import { ArrowRight, ChevronDown, FlaskConical, Minus, RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
 import { Virtuoso } from "react-virtuoso";
 import "./calm-surfaces.css";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
@@ -36,14 +36,14 @@ export type NativePageMetric = {
   value: string;
   delta?: { value: string; tone: "up" | "down" | "neutral" };
   flash?: boolean;
-  /** Opaque identifiers (IDs, hashes, revisions) stay in the collapsible page details. */
+  /** Opaque identifiers (IDs, hashes, revisions) follow the technical-details preference. */
   technical?: boolean;
 };
 
 export type NativeCardStat = {
   label: string;
   value: string;
-  /** Opaque identifiers (IDs, hashes, revisions) stay in the card's Details disclosure. */
+  /** Opaque identifiers (IDs, hashes, revisions) follow the technical-details preference. */
   technical?: boolean;
 };
 
@@ -129,8 +129,7 @@ export function NativePageFrame({
     return () => window.cancelAnimationFrame(handle);
   }, [kicker, loading, title]);
 
-  // Orientation stays visible: the description and status metrics render inline,
-  // and only opaque technical metrics move behind "Page details".
+  // Orientation stays visible; opaque technical metrics follow the shell preference.
   const headMetrics = metrics?.filter((metric) => !metric.technical);
   const technicalMetrics = metrics?.filter((metric) => metric.technical);
   const hasHeadRow = Boolean(headMetrics?.length) || Boolean(actions);
@@ -152,20 +151,14 @@ export function NativePageFrame({
           </div>
           {description ? <span className="mc-next-directory-description">{description}</span> : null}
           {technicalMetrics?.length ? (
-            <details className="mc-next-page-explanation">
-              <summary>
-                <Info size={14} aria-hidden="true" />
-                Page details
-              </summary>
-              <dl>
-                {technicalMetrics.map((metric) => (
-                  <div key={metric.label}>
-                    <dt>{metric.label}</dt>
-                    <dd>{metric.value}</dd>
-                  </div>
-                ))}
-              </dl>
-            </details>
+            <dl className="mc-next-page-technical mc-next-technical-detail">
+              {technicalMetrics.map((metric) => (
+                <div key={metric.label}>
+                  <dt>{metric.label}</dt>
+                  <dd>{metric.value}</dd>
+                </div>
+              ))}
+            </dl>
           ) : null}
         </div>
         {hasHeadRow ? (
@@ -266,8 +259,7 @@ export function NativeCard({
   bodyMaxHeight?: string;
   className?: string;
 }) {
-  // Status stats are orientation, so they stay visible; the explanatory
-  // subtitle and any opaque technical stats remain behind Details.
+  // Status stats and the subtitle stay visible; opaque stats follow the shell preference.
   const statusStats = stats?.filter((item) => !item.technical) ?? [];
   const technicalStats = stats?.filter((item) => item.technical) ?? [];
   return (
@@ -288,24 +280,16 @@ export function NativeCard({
           ) : (
             <h2>{title}</h2>
           )}
-          {subtitle || technicalStats.length ? (
-            <details className="mc-next-card-explanation">
-              <summary aria-label={`About ${title}`}>
-                <Info size={14} aria-hidden="true" />
-                <span>Details</span>
-              </summary>
-              {subtitle ? <p>{subtitle}</p> : null}
-              {technicalStats.length ? (
-                <dl>
-                  {technicalStats.map((item) => (
-                    <div key={item.label}>
-                      <dt>{item.label}</dt>
-                      <dd>{item.value}</dd>
-                    </div>
-                  ))}
-                </dl>
-              ) : null}
-            </details>
+          {subtitle ? <p className="mc-next-card-subtitle">{subtitle}</p> : null}
+          {technicalStats.length ? (
+            <dl className="mc-next-card-technical mc-next-technical-detail">
+              {technicalStats.map((item) => (
+                <div key={item.label}>
+                  <dt>{item.label}</dt>
+                  <dd>{item.value}</dd>
+                </div>
+              ))}
+            </dl>
           ) : null}
         </div>
         {statusStats.length ? (

@@ -18,6 +18,7 @@ export async function fetchWorkspaces(
   view: "active" | "archived" | "all" = "active",
   limit = 200,
   citadelId?: string,
+  options: { signal?: AbortSignal } = {},
 ): Promise<WorkspacesResponse> {
   const query = new URLSearchParams({
     view,
@@ -26,7 +27,7 @@ export async function fetchWorkspaces(
   if (citadelId?.trim()) {
     query.set("citadelId", citadelId.trim());
   }
-  return request<WorkspacesResponse>(`/api/v1/workspaces?${query.toString()}`);
+  return request<WorkspacesResponse>(`/api/v1/workspaces?${query.toString()}`, options.signal ? { signal: options.signal, cache: "no-store" } : undefined);
 }
 
 export async function createWorkspace(input: WorkspaceCreateInput): Promise<WorkspaceRecord> {

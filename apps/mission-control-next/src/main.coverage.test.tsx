@@ -1,25 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const renderMock = vi.fn();
-const createRootMock = vi.fn(() => ({ render: renderMock }));
-
-vi.mock("react-dom/client", () => ({
-  createRoot: createRootMock,
+const entryMocks = vi.hoisted(() => ({
+  mountClassic: vi.fn(),
+  mountCockpit: vi.fn(),
 }));
 
-vi.mock("@next/app/MissionControlNextApp", () => ({
-  MissionControlNextApp: () => null,
-}));
-
-vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
-  UiPreferencesProvider: ({ children }: { children: unknown }) => children,
-}));
+vi.mock("./classic-entry", () => ({ mountClassic: entryMocks.mountClassic }));
+vi.mock("./cockpit-entry", () => ({ mountCockpit: entryMocks.mountCockpit }));
 
 describe("Mission Control Next main entrypoint", () => {
   beforeEach(() => {
     vi.resetModules();
-    createRootMock.mockClear();
-    renderMock.mockClear();
+    entryMocks.mountClassic.mockClear();
+    entryMocks.mountCockpit.mockClear();
     vi.stubGlobal("document", {
       documentElement: {
         dataset: {},
@@ -31,7 +24,8 @@ describe("Mission Control Next main entrypoint", () => {
         getRegistrations: vi.fn().mockResolvedValue([]),
       },
     } as unknown as Navigator);
-    vi.stubGlobal("location", { origin: "http://127.0.0.1:5173" });
+    vi.stubGlobal("location", { origin: "http://127.0.0.1:5173", search: "" });
+    vi.stubGlobal("window", { localStorage: { getItem: vi.fn(() => null), setItem: vi.fn() } });
     vi.stubGlobal("caches", {
       keys: vi.fn().mockResolvedValue([]),
       delete: vi.fn(),
@@ -44,12 +38,22 @@ describe("Mission Control Next main entrypoint", () => {
     vi.unstubAllGlobals();
   });
 
-  it("mounts the app and retires stale service workers", async () => {
+  it("mounts classic by default and retires stale service workers", async () => {
     await import("./main");
 
-    expect(createRootMock).toHaveBeenCalledTimes(1);
-    expect(renderMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(entryMocks.mountClassic).toHaveBeenCalledWith(expect.objectContaining({ id: "root" })));
+    expect(entryMocks.mountCockpit).not.toHaveBeenCalled();
+    expect(document.documentElement.dataset.shell).toBe("classic");
     expect(navigator.serviceWorker.getRegistrations).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads only the cockpit entry for a shell override", async () => {
+    vi.stubGlobal("location", { origin: "http://127.0.0.1:5173", search: "?shell=cockpit" });
+    await import("./main");
+
+    await vi.waitFor(() => expect(entryMocks.mountCockpit).toHaveBeenCalledWith(expect.objectContaining({ id: "root" })));
+    expect(entryMocks.mountClassic).not.toHaveBeenCalled();
+    expect(document.documentElement.dataset.shell).toBe("cockpit");
   });
 
   it("marks visual-regression mode when requested", async () => {

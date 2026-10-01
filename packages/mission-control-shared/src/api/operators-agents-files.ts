@@ -22,8 +22,12 @@ export async function fetchOperators(): Promise<OperatorsResponse> {
 export async function fetchAgents(
   view: "active" | "archived" | "all" = "active",
   limit = 300,
+  options: { signal?: AbortSignal } = {},
 ): Promise<AgentsResponse> {
-  return request<AgentsResponse>(`/api/v1/agents?view=${encodeURIComponent(view)}&limit=${limit}`);
+  return request<AgentsResponse>(
+    `/api/v1/agents?view=${encodeURIComponent(view)}&limit=${limit}`,
+    options.signal ? { cache: "no-store", signal: options.signal } : undefined,
+  );
 }
 
 export async function fetchAgent(agentId: string): Promise<AgentProfileRecord> {

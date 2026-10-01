@@ -15,6 +15,7 @@ export * from "./runtime-lifecycle.js";
 export * from "./runtime-decision-trace.js";
 export * from "./policy.js";
 export * from "./approvals.js";
+export * from "./operator-inbox.js";
 export * from "./skills.js";
 export * from "./skill-governance.js";
 export * from "./skill-hub-lifecycle.js";

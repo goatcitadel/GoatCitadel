@@ -43,8 +43,13 @@ export class PromptPacksRouteService {
     return this.promptPacks.previewPromptPackImport(input);
   }
 
-  public importBuiltinPromptPack(packKey: string) {
-    return this.promptPacks.importBuiltinPromptPack(packKey);
+  public importBuiltinPromptPack(
+    packKey: string,
+    guarded?: Parameters<PromptPacksRoutePort["importBuiltinPromptPack"]>[1],
+  ) {
+    return guarded
+      ? this.promptPacks.importBuiltinPromptPack(packKey, guarded)
+      : this.promptPacks.importBuiltinPromptPack(packKey);
   }
 
   public listSecurityEvalPacks() {

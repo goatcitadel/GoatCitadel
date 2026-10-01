@@ -10,7 +10,7 @@ import { createMeshToolPolicyBinding, readMeshToolPolicyBinding, type MeshToolPo
 import { ToolRegistry } from "./tool-registry.js";
 
 function config(approvalMode: "bypass" | "approve_risky" = "bypass"): ToolPolicyConfig {
-  return { profiles: { danger: ["mesh.invoke"] }, tools: { profile: "danger", approvalMode, allow: [], deny: [] },
+  return { tools: { approvalMode, allow: ["mesh.invoke"], deny: [] },
     agents: {}, sandbox: { writeJailRoots: [], readOnlyRoots: [], networkAllowlist: [], riskyShellPatterns: [],
       requireApprovalForRiskyShell: true } };
 }
@@ -85,7 +85,7 @@ describe("mesh tool policy execution", () => {
 
   it("keeps mesh authority separate from MCP allowances and the active permission ceiling", async () => {
     const policy = config();
-    policy.profiles = { danger: ["mcp.invoke"] };
+    policy.tools.allow = ["mcp.invoke"];
     expect((await new ToolPolicyEngine(policy, storage).inspectAccess(request(), options())).allowed).toBe(false);
     const engine = new ToolPolicyEngine(config(), storage);
     const permissionProfile = { ...HEARTBEAT_RESTRICTED_PROFILE, profileId: "mesh-test", deny: [],

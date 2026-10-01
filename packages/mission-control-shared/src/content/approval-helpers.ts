@@ -1,4 +1,5 @@
 import type { ApprovalRequest, RuntimeLifecycleResponse } from "@goatcitadel/contracts";
+import { presentApprovalOutcome, presentApprovalStatus } from "./status-vocabulary.js";
 
 export interface ApprovalEvidenceBlock {
   label: string;
@@ -7,22 +8,10 @@ export interface ApprovalEvidenceBlock {
 
 /** Display canonical reasons without treating legacy notes as operator intent. */
 export function approvalResolutionLabel(approval: ApprovalRequest): string {
-  if (isExpiredApproval(approval)) return "expired";
+  if (isExpiredApproval(approval)) return presentApprovalOutcome("expired").label.toLowerCase();
   if (approval.status === "pending") return "pending";
-  switch (approval.resolutionOutcome) {
-    case "denied":
-      return "denied";
-    case "withdrawn":
-      return "withdrawn";
-    case "expired":
-      return "expired";
-    case "policy_blocked":
-      return "blocked by policy";
-    case "delivery_failed":
-      return "delivery failed";
-    default:
-      return approval.status;
-  }
+  if (approval.resolutionOutcome) return presentApprovalOutcome(approval.resolutionOutcome).label.toLowerCase();
+  return presentApprovalStatus(approval.status).label.toLowerCase();
 }
 
 export interface ApprovalEvidenceModel {

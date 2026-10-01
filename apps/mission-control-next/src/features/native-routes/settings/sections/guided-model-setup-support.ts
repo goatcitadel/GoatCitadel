@@ -171,18 +171,36 @@ export interface LocalRuntimeSetupGuide {
   command?: string;
 }
 
-const LOCAL_RUNTIME_GUIDES: Readonly<Record<string, (baseUrl: string) => LocalRuntimeSetupGuide>> = {
-  llamacpp: (baseUrl) => ({
+type GuideContext = { baseUrl: string; model?: string };
+
+function localHostAndPort(baseUrl: string): { host: string; port: string } | null {
+  try {
+    const url = new URL(baseUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    if (!new Set(["localhost", "127.0.0.1", "[::1]"]).has(url.hostname)) return null;
+    return { host: url.hostname, port: url.port || "8080" };
+  } catch {
+    return { host: "127.0.0.1", port: "8080" };
+  }
+}
+
+const LOCAL_RUNTIME_GUIDES: Readonly<Record<string, (context: GuideContext) => LocalRuntimeSetupGuide>> = {
+  llamacpp: ({ baseUrl, model }) => ({
     title: "Start llama.cpp before connecting",
     steps: [
       "Download a GGUF model, or let GoatCitadel manage llama-server from Settings → Runtime.",
       `Run llama-server so it answers at ${baseUrl} (the /v1 OpenAI-compatible API).`,
       "Pass --alias so the model name you pick here matches what the server reports from /v1/models.",
-      "Select Check connection — the Gateway probes the endpoint and lists the served models.",
+      "Select Check connection. GoatCitadel checks the server and lists the models it serves.",
     ],
-    command: "llama-server -m path/to/model.gguf --alias gemma-4-local --host 127.0.0.1 --port 8080 --jinja",
+    command: (() => {
+      const endpoint = localHostAndPort(baseUrl);
+      const alias = model?.trim() || "my-local-model";
+      if (!endpoint || !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(alias)) return undefined;
+      return `llama-server -m path/to/model.gguf --alias ${alias} --host ${endpoint.host} --port ${endpoint.port} --jinja`;
+    })(),
   }),
-  localai: (baseUrl) => ({
+  localai: ({ baseUrl }) => ({
     title: "Start LocalAI before connecting",
     steps: [
       `Run LocalAI so it answers at ${baseUrl}. LocalAI and llama.cpp both default to port 8080 — run only one there, or move one and edit its base URL in Providers.`,
@@ -196,8 +214,9 @@ const LOCAL_RUNTIME_GUIDES: Readonly<Record<string, (baseUrl: string) => LocalRu
 
 export function localRuntimeSetupGuide(
   provider: Pick<ProviderModelCatalogOption, "providerId" | "baseUrl"> | null,
+  model?: string,
 ): LocalRuntimeSetupGuide | null {
   if (!provider) return null;
   const build = LOCAL_RUNTIME_GUIDES[provider.providerId.trim().toLowerCase()];
-  return build ? build(provider.baseUrl) : null;
+  return build ? build({ baseUrl: provider.baseUrl, model }) : null;
 }

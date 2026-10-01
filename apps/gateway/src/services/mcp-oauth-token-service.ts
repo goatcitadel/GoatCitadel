@@ -5,12 +5,13 @@ import { fetchAllowlisted, normalizeSafeEnvKeyNames } from "@goatcitadel/policy-
 import { readBoundedResponseJson } from "./bounded-response-reader.js";
 import type { SecretStoreService } from "./secret-store-service.js";
 import type { McpAuthStateRecord } from "./mcp-server-admin-service.js";
+import type { McpConnectionFence } from "./mcp-static-environment-service.js";
 
 export interface McpOAuthTokenServiceOptions {
   secretStore: Pick<SecretStoreService, "setSecret" | "getSecret" | "deleteSecret"> & Partial<Pick<SecretStoreService, "setSecretForCustody" | "supportsCredentialWriteReceipts">>;
   networkAllowlist: string[];
   env?: NodeJS.ProcessEnv;
-  environmentResolver?: (server: McpServerRecord) => Promise<NodeJS.ProcessEnv>;
+  environmentResolver?: (server: McpServerRecord, fence?: McpConnectionFence) => Promise<NodeJS.ProcessEnv>;
   stageCredentials?: (serverId: string, refs: readonly string[], write: (custodyId?: string, writeId?: string) => undefined) => Promise<void>;
 }
 
@@ -26,6 +27,7 @@ export class McpOAuthTokenService {
     code: string,
     stateRecord: McpAuthStateRecord,
     beforeRequest?: () => Promise<void>,
+    fence?: McpConnectionFence,
   ): Promise<McpAuthStateRecord> {
     if (server.authType !== "oauth2") throw new Error("MCP OAuth exchange requires oauth2 configuration.");
     const oauth = requireOAuthConfig(server);
@@ -38,6 +40,7 @@ export class McpOAuthTokenService {
         redirect_uri: oauth.redirectUri?.trim() || "http://127.0.0.1:8787/api/v1/mcp/oauth/callback",
       },
       beforeRequest,
+      fence,
     );
     return this.persistTokenResponse(server.serverId, response, {
       ...stateRecord,
@@ -166,11 +169,12 @@ export class McpOAuthTokenService {
     oauth: Required<Pick<McpOAuthConfig, "tokenUrl">> & McpOAuthConfig,
     params: Record<string, string>,
     beforeRequest?: () => Promise<void>,
+    fence?: McpConnectionFence,
   ): Promise<TokenResponse> {
     if (!beforeRequest) throw new Error("MCP OAuth token requests require a durable boundary owner.");
     const tokenUrl = oauth.tokenUrl.trim();
     const body = new URLSearchParams(params);
-    const environment = this.options.environmentResolver ? await this.options.environmentResolver(server) : this.env;
+    const environment = this.options.environmentResolver ? await this.options.environmentResolver(server, fence) : this.env;
     const clientId = readEnv(environment, oauth.clientIdEnv);
     const clientSecret = readEnv(environment, oauth.clientSecretEnv);
     if (clientId) {

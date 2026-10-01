@@ -7,6 +7,8 @@ vi.mock("./desktop-update-bridge", () => ({
   requestDesktopUpdate: bridge.requestDesktopUpdate,
 }));
 import { DesktopUpdatesPanel } from "./DesktopUpdatesPanel";
+import { DesktopUpdateSettings } from "../../cockpit/areas/settings/DesktopUpdateSettings";
+import { __resetDesktopUpdateActionsForTests } from "./use-desktop-update-actions";
 
 const available: DesktopUpdateStatus = {
   channel: "preview",
@@ -31,15 +33,16 @@ const available: DesktopUpdateStatus = {
     installer: { name: "setup.exe", url: "https://example.test/setup.exe", sizeBytes: 100, sha256: "c".repeat(64) },
   },
 };
-describe("DesktopUpdatesPanel", () => {
+describe.each([["classic", DesktopUpdatesPanel], ["cockpit", DesktopUpdateSettings]] as const)("%s desktop update controls", (_name, Panel) => {
   beforeEach(() => {
+    __resetDesktopUpdateActionsForTests();
     bridge.status = structuredClone(available);
     bridge.requestDesktopUpdate.mockReset().mockResolvedValue(undefined);
   });
   it("shows versions and unsigned truth and waits for an explicit download click", async () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<DesktopUpdatesPanel />);
+      renderer = create(<Panel />);
     });
     const text = JSON.stringify(renderer.toJSON());
     expect(text).toContain("Unsigned preview");
@@ -60,7 +63,7 @@ describe("DesktopUpdatesPanel", () => {
   it("offers channel selection and persisted snoozing through the native owner", async () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<DesktopUpdatesPanel />);
+      renderer = create(<Panel />);
     });
     await act(async () => {
       renderer.root.findByType("select").props.onChange({ target: { value: "stable" } });
@@ -81,18 +84,43 @@ describe("DesktopUpdatesPanel", () => {
     bridge.status = null;
     let renderer!: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<DesktopUpdatesPanel />);
+      renderer = create(<Panel />);
     });
     expect(JSON.stringify(renderer.toJSON())).toContain("installed Windows app");
     expect(renderer.root.findAllByType("button")).toHaveLength(0);
     bridge.status = { ...available, phase: "downloading", downloadedBytes: 50 };
     await act(async () => {
-      renderer.update(<DesktopUpdatesPanel />);
+      renderer.update(<Panel />);
     });
     expect(renderer.root.findByType("progress").props.value).toBe(50);
     expect(renderer.root.findAllByType("button").every((button) => button.props.disabled)).toBe(true);
     await act(async () => {
       renderer.unmount();
     });
+  });
+  it("keeps one dispatch pending across a settings remount and rereads the host after an uncertain reply", async () => {
+    let reject!: (reason: Error) => void;
+    bridge.requestDesktopUpdate.mockImplementationOnce(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<Panel />); });
+    const button = (name: string) => renderer.root.findAllByType("button").find((item) => item.children.includes(name))!;
+    const send = button("Download").props.onClick;
+    await act(async () => { send(); send(); });
+    expect(bridge.requestDesktopUpdate).toHaveBeenCalledTimes(1);
+    await act(async () => { renderer.unmount(); });
+    await act(async () => { renderer = create(<Panel />); });
+    expect(button("Download").props.disabled).toBe(true);
+    await act(async () => { reject(new Error("The host did not respond.")); });
+    expect(JSON.stringify(renderer.toJSON())).toContain("refresh host status");
+    expect(button("Download").props.disabled).toBe(true);
+    await act(async () => { button("Download").props.onClick(); });
+    expect(bridge.requestDesktopUpdate).toHaveBeenCalledTimes(1);
+    expect(button("Check for updates").props.disabled).toBe(false);
+    await act(async () => { await button("Check for updates").props.onClick(); });
+    expect(bridge.requestDesktopUpdate).toHaveBeenNthCalledWith(2, "check", expect.objectContaining({ releaseTag: available.availableRelease!.tag }));
+    expect(button("Download").props.disabled).toBe(false);
+    await act(async () => { await button("Download").props.onClick(); });
+    expect(bridge.requestDesktopUpdate).toHaveBeenCalledTimes(3);
+    await act(async () => { renderer.unmount(); });
   });
 });

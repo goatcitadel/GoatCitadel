@@ -626,3 +626,61 @@ async function flushPromises(): Promise<void> {
     await Promise.resolve();
   }
 }
+
+describe("NextCodeWorkbenchPanel clipboard lifecycle", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  async function openRunLog(output: string) {
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<NextCodeWorkbenchPanel panel={buildCodePanel({ output: { output, helperRuns: [] } })} />);
+      await flushPromises();
+    });
+    await act(async () => {
+      renderer.root.findAllByProps({ role: "tab" }).find((tab) => renderedText(tab) === "Run log")!.props.onClick();
+    });
+    return renderer;
+  }
+
+  it.each(["success", "failure"] as const)("reports a mounted clipboard %s after its actual promise settles", async (outcome) => {
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    const writeText = vi.fn(() => new Promise<void>((done, fail) => { resolve = done; reject = fail; }));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const renderer = await openRunLog("Exact run log A");
+    await act(async () => {
+      renderer.root.findAllByType("button").find((button) => renderedText(button) === "Copy")!.props.onClick();
+    });
+    expect(writeText).toHaveBeenCalledExactlyOnceWith("Exact run log A");
+    expect(renderedText(renderer.root)).not.toContain("Run log copied.");
+    await act(async () => {
+      if (outcome === "success") resolve();
+      else reject(new Error("Clipboard unavailable"));
+      await flushPromises();
+    });
+    expect(renderedText(renderer.root)).toContain(outcome === "success" ? "Run log copied." : "Run log copy failed.");
+    await act(async () => renderer.unmount());
+  });
+
+  it.each(["success", "failure"] as const)("settles a late clipboard %s after unmount without changing the new panel", async (outcome) => {
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    const writeText = vi.fn(() => new Promise<void>((done, fail) => { resolve = done; reject = fail; }));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const first = await openRunLog("Exact run log A");
+    await act(async () => {
+      first.root.findAllByType("button").find((button) => renderedText(button) === "Copy")!.props.onClick();
+    });
+    await act(async () => first.unmount());
+    const current = await openRunLog("Different run log B");
+    await act(async () => {
+      if (outcome === "success") resolve();
+      else reject(new Error("Clipboard unavailable"));
+      await flushPromises();
+    });
+    expect(writeText).toHaveBeenCalledExactlyOnceWith("Exact run log A");
+    expect(renderedText(current.root)).not.toContain("Run log copied.");
+    expect(renderedText(current.root)).not.toContain("Run log copy failed.");
+    await act(async () => current.unmount());
+  });
+});

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { connectEventStream, runUiAction } from "./client";
+import { STREAM_READY_FALLBACK_MS, connectEventStream, runUiAction } from "./client";
 
 class MemoryStorage implements Storage {
   private readonly items = new Map<string, string>();
@@ -437,6 +437,50 @@ describe("client event stream", () => {
 
     expect(FakeEventSource.instances).toHaveLength(0);
 
+    cleanup();
+  });
+
+  it("marks catch-up frames replayed until stream-ready", async () => {
+    const received: Array<[number, boolean]> = [];
+    const cleanup = connectEventStream((event, delivery) => {
+      received.push([event.sequence ?? 0, delivery.replayed]);
+    });
+    await waitForEventSourceCount(1);
+    const source = FakeEventSource.instances[0]!;
+    source.onopen?.();
+    const frame = (sequence: number) => ({
+      eventId: `event-${sequence}`,
+      sequence,
+      eventType: "chat_thread_updated",
+      source: "chat",
+      timestamp: "2026-01-01T12:00:00.000Z",
+      payload: {},
+    });
+    source.onmessage?.({ data: JSON.stringify(frame(1)) });
+    source.emit("stream-ready", { leaseId: "lease-1" });
+    source.onmessage?.({ data: JSON.stringify(frame(2)) });
+    expect(received).toEqual([[1, true], [2, false]]);
+    cleanup();
+  });
+
+  it("treats an older stream without stream-ready as live after the fallback", async () => {
+    const deliveries: boolean[] = [];
+    const cleanup = connectEventStream((_event, delivery) => deliveries.push(delivery.replayed));
+    await waitForEventSourceCount(1);
+    const source = FakeEventSource.instances[0]!;
+    source.onopen?.();
+    await vi.advanceTimersByTimeAsync(STREAM_READY_FALLBACK_MS);
+    source.onmessage?.({
+      data: JSON.stringify({
+        eventId: "event-live",
+        sequence: 3,
+        eventType: "chat_thread_updated",
+        source: "chat",
+        timestamp: "2026-01-01T12:00:00.000Z",
+        payload: {},
+      }),
+    });
+    expect(deliveries).toEqual([false]);
     cleanup();
   });
 });

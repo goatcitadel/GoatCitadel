@@ -56,6 +56,32 @@ describe("ops saved boards API", { timeout: 15_000 }, () => {
     expect(new URL(String(fetchMock.mock.calls[1]?.[0])).pathname).toBe("/api/v1/ops/boards/board-1");
   });
 
+  it("keeps reviewed and readback GETs distinct from an older in-flight view read", async () => {
+    let finishOld!: (response: Response) => void;
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            finishOld = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify(ACTIVE_BOARD)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(ACTIVE_BOARD)));
+    vi.stubGlobal("fetch", fetchMock);
+    const { fetchOpsSavedBoard } = await import("./ops-saved-boards.js");
+    const old = fetchOpsSavedBoard("workspace/one", "board-1");
+    const preflight = new AbortController(),
+      readback = new AbortController();
+    await expect(fetchOpsSavedBoard("workspace/one", "board-1", preflight.signal)).resolves.toEqual(ACTIVE_BOARD);
+    await expect(fetchOpsSavedBoard("workspace/one", "board-1", readback.signal)).resolves.toEqual(ACTIVE_BOARD);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ cache: "no-store", signal: preflight.signal });
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ cache: "no-store", signal: readback.signal });
+    finishOld(new Response(JSON.stringify(ACTIVE_BOARD)));
+    await old;
+  });
+
   it("sends only normalized create, update, archive, and restore contracts", async () => {
     const updated = {
       ...ACTIVE_BOARD,

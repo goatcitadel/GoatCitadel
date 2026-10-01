@@ -3,6 +3,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { withNativeCompilerScratch } from "./lib/native-compiler-scratch.mjs";
 import {
   resolveExactWindowsToolchain,
   assertNoRemoteWorkerBuildPathLeak,
@@ -144,25 +145,27 @@ export function compileTlsNative({
     commands.push([...compileArgs, ...objects, ...linkArgs]);
   } else commands.push([...compileArgs, ...sources, ...linkArgs]);
   const output = [];
-  for (const [index, args] of commands.entries()) {
-    const result = spawnSync(toolchain.compilerPath, args, {
-      cwd: outputDirectory,
-      encoding: "utf8",
-      windowsHide: true,
-      timeout: compilerTimeoutMs,
-      env: {
-        SystemRoot: process.env.SystemRoot,
-        PATH: path.dirname(toolchain.compilerPath),
-        TEMP: outputDirectory,
-        TMP: outputDirectory,
-      },
-    });
-    output.push(`${commands.length > 1 ? `Native build step ${index + 1}/${commands.length}\n` : ""}${result.stdout ?? ""}${result.stderr ?? ""}`);
-    if (result.error || result.status !== 0) {
-      fs.writeFileSync(path.join(outputDirectory, `${outputName}.build.log`), output.join(""), { flag: "wx" });
-      throw new Error(`Native TLS build failed (${result.status ?? result.error?.code}): ${output.join("")}`);
+  withNativeCompilerScratch((scratch) => {
+    for (const [index, args] of commands.entries()) {
+      const result = spawnSync(toolchain.compilerPath, args, {
+        cwd: outputDirectory,
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: compilerTimeoutMs,
+        env: {
+          SystemRoot: process.env.SystemRoot,
+          PATH: path.dirname(toolchain.compilerPath),
+          TEMP: scratch,
+          TMP: scratch,
+        },
+      });
+      output.push(`${commands.length > 1 ? `Native build step ${index + 1}/${commands.length}\n` : ""}${result.stdout ?? ""}${result.stderr ?? ""}`);
+      if (result.error || result.status !== 0) {
+        fs.writeFileSync(path.join(outputDirectory, `${outputName}.build.log`), output.join(""), { flag: "wx" });
+        throw new Error(`Native TLS build failed (${result.status ?? result.error?.code}): ${output.join("")}`);
+      }
     }
-  }
+  });
   fs.writeFileSync(path.join(outputDirectory, `${outputName}.build.log`), output.join(""), { flag: "wx" });
   return path.join(outputDirectory, outputName);
 }

@@ -205,8 +205,7 @@ export async function createRequesterMcpWorkerFixture(storage: AsyncStorage, roo
   }
   const policyEngine = new ToolPolicyEngine(
     {
-      profiles: { danger: ["*"] },
-      tools: { profile: "danger", approvalMode: approvalRequired ? "approve_all" : "bypass", allow: [], deny: [] },
+      tools: { approvalMode: approvalRequired ? "approve_all" : "bypass", allow: ["*"], deny: [] },
       agents: {},
       sandbox: {
         writeJailRoots: [root],

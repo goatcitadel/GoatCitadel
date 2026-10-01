@@ -117,6 +117,7 @@ import {
   type IntegrationWebhookRoutePort,
   type IntegrationWebhookRouteService,
 } from "./integration-webhook-route-service.js";
+import { InboxProjectionService, type InboxProjectionDependencies } from "./inbox-projection-service.js";
 import {
   createKnowledgeRouteService,
   type KnowledgeRoutePort,
@@ -313,6 +314,7 @@ export interface GatewayRouteServices {
   health: HealthRouteService;
   hooks: HooksRouteService;
   improvement: ImprovementRouteService;
+  inbox: InboxProjectionService;
   integrations: IntegrationRouteService;
   integrationWebhooks: IntegrationWebhookRouteService;
   knowledge: KnowledgeRouteService;
@@ -409,6 +411,7 @@ export interface GatewayRouteServiceDependencies {
   health: HealthRoutePort;
   hooks: HooksRoutePort;
   improvement: ImprovementRouteDependencies;
+  inbox: InboxProjectionDependencies;
   integrations: IntegrationRoutePort;
   integrationWebhooks: IntegrationWebhookRoutePort;
   knowledge: KnowledgeRoutePort;
@@ -491,6 +494,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     health: createHealthRouteService(deps.health),
     hooks: createHooksRouteService(deps.hooks),
     improvement: new ImprovementRouteService(deps.improvement),
+    inbox: new InboxProjectionService(deps.inbox),
     integrations: createIntegrationRouteService(deps.integrations),
     integrationWebhooks: createIntegrationWebhookRouteService(deps.integrationWebhooks),
     knowledge: createKnowledgeRouteService(deps.knowledge),

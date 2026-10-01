@@ -102,6 +102,52 @@ function createHost(input?: {
 }
 
 describe("chat-route-resolution", () => {
+  it("preserves LLM and optional preflight owner receivers", async () => {
+    const base = createHost();
+    const refresh = vi.fn();
+    const host = { ...base, llmService: { ...base.llmService, refreshModelCatalogInBackground: refresh } };
+    await preflightChatRoute(host as never, "session-1", { action: "retry", turnId: "turn-1" });
+    expect(host.requireChatTurnContext.mock.contexts).toEqual([host]);
+    expect(host.requireChatTurnContext).toHaveBeenCalledWith("session-1", "turn-1");
+    expect(host.llmService.getRuntimeConfig.mock.contexts).toEqual([host.llmService]);
+    expect(host.llmService.getCachedModelAvailability.mock.contexts).toEqual([host.llmService]);
+    expect(refresh.mock.contexts).toEqual([host.llmService]);
+    expect(refresh).toHaveBeenCalledWith("openai");
+
+    const local = createHost({ runtime: { activeProviderId: "ollama", activeModel: "llama3.2" } });
+    await expect(preflightChatRoute(local as never, "session-1", { action: "send" })).resolves.toMatchObject({
+      runtimeReachability: "reachable",
+    });
+    expect(local.listLlmModels.mock.contexts).toEqual([local]);
+  });
+
+  it("leaves reachability unverified when optional model and turn readers are absent", async () => {
+    const base = createHost({ runtime: { activeProviderId: "ollama", activeModel: "llama3.2" } });
+    const host = {
+      storage: base.storage,
+      llmService: base.llmService,
+      resolveFallbackTargets: base.resolveFallbackTargets,
+    };
+    await expect(
+      preflightChatRoute(host as never, "session-1", { action: "edit", turnId: "turn-1" }),
+    ).resolves.toMatchObject({
+      runtimeClass: "local",
+      runtimeReachability: "not_checked",
+      blockedReason: undefined,
+    });
+  });
+
+  it("rejects a foreign turn before resolving a route or probing a runtime", async () => {
+    const host = createHost();
+    const error = new Error("turn belongs to another session");
+    host.requireChatTurnContext.mockRejectedValueOnce(error);
+    await expect(preflightChatRoute(host as never, "session-1", { action: "edit", turnId: "foreign" })).rejects.toBe(
+      error,
+    );
+    expect(host.llmService.getRuntimeConfig).not.toHaveBeenCalled();
+    expect(host.listLlmModels).not.toHaveBeenCalled();
+  });
+
   it("normalizes a foreign model onto the selected provider default", async () => {
     const host = createHost({
       sessionPrefs: {

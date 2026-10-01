@@ -3,12 +3,12 @@ import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ShellRail } from "./MissionControlShellChrome";
+import { ShellRail, type RailSection } from "./MissionControlShellChrome";
 import { AREA_META, type AppRoute } from "./route-model";
 
 const route: AppRoute = { area: "settings", section: "providers" };
 
-function MobileRailHarness() {
+function MobileRailHarness({ groupedRailItems }: { groupedRailItems?: RailSection[] } = {}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -24,7 +24,7 @@ function MobileRailHarness() {
         buildPrimaryAreaRoute={(area) => ({ area })}
         citadelOptions={[{ citadelId: "personal", name: "Personal" }]}
         currentAreaMeta={AREA_META.settings}
-        groupedRailItems={[
+        groupedRailItems={groupedRailItems ?? [
           {
             id: "settings",
             items: [
@@ -108,6 +108,44 @@ describe("ShellRail mobile drawer focus behavior", () => {
     expect(drawer.hasAttribute("inert")).toBe(false);
     expect(document.activeElement).toBe(requiredElement('button[aria-label="Close navigation"]'));
     expect(document.body.style.overflow).toBe("hidden");
+  });
+
+  it("marks the active area and section for assistive technology", async () => {
+    await openNavigation();
+    const current = [...container.querySelectorAll('[aria-current="page"]')].map((node) => node.textContent?.trim());
+    expect(current).toEqual(expect.arrayContaining(["Settings", expect.stringContaining("Providers")]));
+    expect(container.querySelector(".mc-next-rail-count")).toBeNull();
+  });
+
+  it("shows one sidebar entry for a page and keeps every section accessible in its tabs", async () => {
+    const groupedRailItems: RailSection[] = [{
+      id: "settings-models",
+      label: "Models",
+      items: [
+        { id: "providers", label: "Providers", description: "Configure model providers.", area: "settings", section: "providers" },
+        { id: "local-ai", label: "Local AI", description: "Configure local runtimes.", area: "settings", section: "local-ai" },
+      ],
+    }];
+    await act(async () => root.render(<MobileRailHarness groupedRailItems={groupedRailItems} />));
+    await openNavigation();
+    const links = [...container.querySelectorAll(".mc-next-rail-link")];
+    expect(links).toHaveLength(1);
+    expect(links[0]?.textContent).toContain("Models");
+    expect(links[0]?.getAttribute("aria-current")).toBe("page");
+    expect(container.querySelector(".mc-next-rail-separator")).toBeNull();
+  });
+
+  it("keeps separate entries for an area without named pages", async () => {
+    const groupedRailItems: RailSection[] = [{
+      id: "settings",
+      items: [
+        { id: "providers", label: "Providers", description: "Configure model providers.", area: "settings", section: "providers" },
+        { id: "local-ai", label: "Local AI", description: "Configure local runtimes.", area: "settings", section: "local-ai" },
+      ],
+    }];
+    await act(async () => root.render(<MobileRailHarness groupedRailItems={groupedRailItems} />));
+    await openNavigation();
+    expect(container.querySelectorAll(".mc-next-rail-link")).toHaveLength(2);
   });
 
   it("contains forward and reverse Tab focus within the open drawer", async () => {

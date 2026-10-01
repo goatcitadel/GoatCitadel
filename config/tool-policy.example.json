@@ -1,5 +1,6 @@
 {
   "tools": {
+    "profile": "chat-agent",
     "approvalMode": "approve_risky",
     "allow": [
       "session.*",

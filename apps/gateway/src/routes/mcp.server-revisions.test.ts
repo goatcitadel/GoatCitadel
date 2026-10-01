@@ -4,7 +4,9 @@ import path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSqliteAsyncStorage, Storage, type AsyncStorage } from "@goatcitadel/storage";
-import type { McpServerCreateInput, McpServerUpdateRequest, McpServerPolicyUpdateRequest } from "@goatcitadel/contracts";
+import type { McpServerConnectionReview, McpServerCreateInput, McpServerUpdateRequest, McpServerPolicyUpdateRequest } from "@goatcitadel/contracts";
+import { ConflictError, PolicyViolationError, ValidationError } from "@goatcitadel/contracts";
+import { runMcpServerHealthCheck } from "../services/mcp-diagnostics-service.js";
 import { McpServerStore } from "../services/mcp-server-store.js";
 import * as admin from "../services/mcp-server-admin-service.js";
 import { McpRouteService } from "../services/mcp-route-service.js";
@@ -16,6 +18,15 @@ import { installRouteAccessTracking } from "./route-access.js";
 
 let storage: AsyncStorage, localStorage: Storage, serial = 0;
 const apps: FastifyInstance[] = [];
+const committedFailureBody = {
+  error: "The MCP configuration change was committed, but follow-up failed. Inspect the saved owner before another change.",
+  mutationCommitted: true,
+};
+const followUpFailures = [
+  () => new Error("Fixture session cleanup failed"),
+  () => new ValidationError({ message: "Private follow-up validation details" }),
+  () => new PolicyViolationError({ message: "Private follow-up policy details" }),
+];
 beforeAll(() => {
   const root = mkdtempSync(path.join(os.tmpdir(), "gc-mcp-reviewed-routes-"));
   localStorage = new Storage({ dbPath: ":memory:", transcriptsDir: path.join(root, "transcripts"), auditDir: path.join(root, "audit") });
@@ -43,7 +54,7 @@ async function fixture() {
       const { expectedRevision, ...policy } = input;
       return admin.updateMcpServerPolicy(host, id, policy, { expectedRevision, onCommitted: committed });
     },
-    connectMcpServer: (id: string) => admin.connectMcpServer(host, id), disconnectMcpServer: (id: string) => admin.disconnectMcpServer(host, id),
+    connectMcpServer: (id: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>) => admin.connectMcpServer(host, id, review ? { ...review, onCommitted } : undefined), disconnectMcpServer: (id: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>) => admin.disconnectMcpServer(host, id, review ? { ...review, onCommitted } : undefined),
   };
   const app = Fastify(); apps.push(app);
   app.decorate("gatewayConfig", { assistant: { auth: { mode: "token", allowLoopbackBypass: false, token: { value: "synthetic-operator", queryParam: "access_token" }, basic: { username: "", password: "" } } } } as never);
@@ -58,6 +69,18 @@ async function fixture() {
   const headers = () => ({ authorization: "Bearer synthetic-operator", "Idempotency-Key": `mcp-review-${++serial}` });
   return { app, store, host, port, closeOwned, created, headers, committed, url: `/api/v1/mcp/servers/${created.serverId}` };
 }
+
+it("preserves the metadata diagnostic feature gate wire identity before report writes", async () => {
+  const f = await fixture(), record = vi.fn(async () => undefined), read = vi.fn(async () => f.created);
+  Object.assign(f.port, { runMcpServerHealthCheck: (id: string) => runMcpServerHealthCheck({
+    requireFeatureEnabled: flag => { throw new ConflictError({ message: `Feature flag ${flag} is disabled.`, details: { flag } }); },
+    requireMcpServer: read, recordConnectorHealthRun: record, listMcpTemplates: async () => [], pickConnectorDiagnosticAction: () => undefined,
+  }, id) });
+  const result = await f.app.inject({ method: "POST", url: `${f.url}/health-check`, headers: f.headers(), payload: {} });
+  expect(result.statusCode).toBe(409);
+  expect(result.json()).toEqual({ code: "STATE_CONFLICT", error: "Feature flag connectorDiagnosticsV1Enabled is disabled.", details: { flag: "connectorDiagnosticsV1Enabled" } });
+  expect(read).not.toHaveBeenCalled(); expect(record).not.toHaveBeenCalled(); expect(f.committed).toEqual([false]);
+});
 
 describe.each(["edit", "delete", "policy"] as const)("MCP %s reviews", action => {
   const method = action === "delete" ? "DELETE" : "PATCH";
@@ -86,14 +109,26 @@ describe.each(["edit", "delete", "policy"] as const)("MCP %s reviews", action =>
     if (action !== "delete") expect((await f.store.requireServer(f.created.serverId)).args).toEqual(["--password", "synthetic-peer"]);
     else expect(saved.json()).toEqual({ deleted: true });
   });
-  it("keeps committed failures completed for idempotency", async () => {
+  it.each(followUpFailures)("projects a committed failure with an explicit wire marker and retains idempotency (%#)", async makeError => {
     const f = await fixture();
-    f.closeOwned.mockImplementationOnce(() => { throw new Error("Fixture session cleanup failed"); });
+    f.closeOwned.mockImplementationOnce(() => { throw makeError(); });
     const request = { method, url: f.url + (action === "policy" ? "/policy" : ""), headers: f.headers(), payload: body(f.created.revision) };
-    expect((await f.app.inject(request)).statusCode).toBe(500);
+    const response = await f.app.inject(request);
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual(committedFailureBody);
     expect(f.committed).toEqual([true]);
     expect((await f.app.inject(request)).statusCode).toBe(409);
     expect(f.closeOwned).toHaveBeenCalledOnce();
+    const readback = await f.app.inject({ method: "GET", url: f.url, headers: f.headers() });
+    if (action === "delete") {
+      expect(readback.statusCode).toBe(404);
+      expect(readback.json().code).toBe("ENTITY_NOT_FOUND");
+    } else {
+      expect(readback.statusCode).toBe(200);
+      expect(readback.json().revision).not.toBe(f.created.revision);
+      if (action === "edit") expect(readback.json().label).toBe("Local edit");
+      else expect(readback.json().policy.redactionMode).toBe("strict");
+    }
   });
 });
 
@@ -124,16 +159,38 @@ it("awaits the durable marker and returns its own acknowledgement before a later
   expect((await f.store.requireServer(f.created.serverId)).label).toBe("Later peer");
 });
 
-it("requires authentication for current reads and edits and blocks duplicate committed creation", async () => {
+it.each(followUpFailures)("requires auth and retains created owner truth after a plain or typed follow-up failure (%#)", async makeError => {
   const f = await fixture();
   expect((await f.app.inject({ method: "GET", url: f.url })).statusCode).toBe(401);
   expect((await f.app.inject({ method: "PATCH", url: f.url, payload: { expectedRevision: f.created.revision } })).statusCode).toBe(401);
-  vi.mocked(f.host.publishRealtime).mockRejectedValueOnce(new Error("Fixture realtime failed"));
+  vi.mocked(f.host.publishRealtime).mockRejectedValueOnce(makeError());
   const request = { method: "POST" as const, url: "/api/v1/mcp/servers", headers: f.headers(), payload: { label: "Committed creation", transport: "stdio", command: "node", enabled: false } };
   const before = (await f.store.readServers()).length;
-  expect((await f.app.inject(request)).statusCode).toBe(500);
+  const response = await f.app.inject(request);
+  expect(response.statusCode).toBe(500);
+  expect(response.json()).toEqual(committedFailureBody);
   expect((await f.app.inject(request)).statusCode).toBe(409);
   expect((await f.store.readServers()).length).toBe(before + 1);
+  const created = (await f.store.readServers()).filter(item => item.label === "Committed creation").at(-1)!;
+  const readback = await f.app.inject({ method: "GET", url: `/api/v1/mcp/servers/${created.serverId}`, headers: f.headers() });
+  expect(readback.statusCode).toBe(200);
+  expect(readback.json()).toMatchObject({ serverId: created.serverId, label: "Committed creation", enabled: false, status: "disconnected" });
+});
+
+it("retains the public committed marker when persistent HTTP completion also fails", async () => {
+  const f = await fixture();
+  vi.spyOn(localStorage.mutationIdempotency, "markCompleted").mockImplementation(() => {
+    throw new ValidationError({ message: "Private marker storage failure" });
+  });
+  const before = (await f.store.readServers()).map(item => item.serverId);
+  const request = { method: "POST" as const, url: "/api/v1/mcp/servers", headers: f.headers(), payload: { label: "Marker failure", transport: "stdio", command: "node", enabled: false } };
+  const response = await f.app.inject(request);
+  expect(response.statusCode).toBe(500);
+  expect(response.json()).toEqual(committedFailureBody);
+  const created = (await f.store.readServers()).filter(item => !before.includes(item.serverId));
+  expect(created).toHaveLength(1);
+  expect(created[0]).toMatchObject({ label: "Marker failure", enabled: false, status: "disconnected" });
+  expect((await f.app.inject(request)).statusCode).toBe(409);
 });
 
 it.each(["edit", "disconnect", "delete"])("fences discovery that completes after %s", async action => {
@@ -148,4 +205,35 @@ it.each(["edit", "disconnect", "delete"])("fences discovery that completes after
   expect([404, 409]).toContain(response.statusCode);
   expect((await f.store.readTools()).some(tool => tool.serverId === f.created.serverId)).toBe(false);
   if (action !== "delete") expect((await f.store.requireServer(f.created.serverId)).status).toBe("disconnected");
+});
+
+describe.each(["connect", "disconnect"] as const)("reviewed MCP %s", action => {
+  it("requires both opaque reviews and auth, then binds the exact admitted response", async () => {
+    const f = await fixture(), url = `${f.url}/${action}-reviewed`;
+    const payload = { expectedRevision: f.created.revision!, expectedConnectionRevision: f.created.connectionRevision ?? null };
+    expect((await f.app.inject({ method: "POST", url, payload })).statusCode).toBe(401);
+    for (const invalid of [{}, { expectedRevision: f.created.revision }, { ...payload, expectedConnectionRevision: "invalid" }, { ...payload, ignored: true }]) {
+      expect((await f.app.inject({ method: "POST", url, headers: f.headers(), payload: invalid })).statusCode).toBe(400);
+    }
+    expect(f.closeOwned).not.toHaveBeenCalled(); expect(f.host.resolveConnectedMcpTools).not.toHaveBeenCalled();
+    const request = { method: "POST" as const, url, headers: f.headers(), payload };
+    const result = await f.app.inject(request);
+    expect(result.statusCode).toBe(200);
+    expect(result.json()).toMatchObject({ version: 1, action, reviewed: payload, server: { serverId: f.created.serverId, status: action === "connect" ? "connected" : "disconnected" } });
+    expect(result.body).not.toContain("synthetic-original");
+    expect(result.json().server.connectionRevision).not.toBe(f.created.connectionRevision);
+    expect((await f.app.inject(request)).statusCode).toBe(409);
+    const stale = await f.app.inject({ method: "POST", url, headers: f.headers(), payload });
+    expect(stale.statusCode).toBe(409); expect(stale.json().details.reason).toBe("MCP_CONNECTION_REVIEW_REQUIRED");
+  });
+  it("preserves committed truth for typed transport or session-close failure", async () => {
+    const f = await fixture();
+    if (action === "connect") vi.mocked(f.host.resolveConnectedMcpTools).mockRejectedValueOnce(new ValidationError({ message: "Private transport details" }));
+    else f.closeOwned.mockImplementationOnce(() => { throw new ValidationError({ message: "Private close details" }); });
+    const request = { method: "POST" as const, url: `${f.url}/${action}-reviewed`, headers: f.headers(), payload: { expectedRevision: f.created.revision!, expectedConnectionRevision: f.created.connectionRevision ?? null } };
+    const result = await f.app.inject(request);
+    expect(result.statusCode).toBe(500); expect(result.json().mutationCommitted).toBe(true); expect(result.body).not.toContain("Private");
+    expect((await f.app.inject(request)).statusCode).toBe(409);
+    expect((await f.store.requireServer(f.created.serverId)).connectionRevision).not.toBe(f.created.connectionRevision);
+  });
 });

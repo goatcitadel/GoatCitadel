@@ -1127,7 +1127,7 @@
   min-height: 0;
 }
 
-@media (min-width: 1180px) {
+@media (min-width: 1280px) {
   .mc-next-shell.has-shell-inspector .mc-next-body:not(.is-work-area) .mc-next-stage {
     padding-right: var(--shell-inspector-gutter);
   }
@@ -1493,7 +1493,7 @@
 .mc-next-status-details-popover {
   position: absolute;
   right: 0;
-  bottom: calc(100% + 0.42rem);
+  top: calc(100% + 0.42rem);
   z-index: 80;
   display: grid;
   gap: 0.36rem;
@@ -1503,6 +1503,20 @@
   border-radius: var(--r-sm);
   background: var(--mc-surface-1);
   box-shadow: var(--mc-shadow-strong);
+}
+
+.mc-next-status-strip[data-placement="topbar"] {
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.mc-next-app-frame[data-unified-sidebar] .mc-next-topbar:has(.mc-next-status-details[open]) {
+  overflow: visible;
+  z-index: var(--z-dropdown);
 }
 
 .mc-next-status-details:not([open]) > .mc-next-status-details-popover {
@@ -1591,6 +1605,7 @@
 }
 
 .mc-next-stage:not(.mc-next-stage-work) .mc-next-stage-scroll {
+  display: block;
   height: 100%;
   padding: 0.85rem 0.85rem 2.75rem;
   overflow: auto;
@@ -1718,15 +1733,15 @@
 
 .notification-stack {
   position: fixed;
+  top: 4rem;
   right: 1rem;
-  /* Clear the 32px status strip so toasts never cover its Details/Approvals
-     controls. */
-  bottom: 2.75rem;
   z-index: var(--z-toast);
   display: grid;
   gap: 0.65rem;
-  width: min(16rem, calc(100vw - 2rem));
-  pointer-events: none;
+  width: min(20rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 5rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .notification-dismiss {
@@ -1929,7 +1944,7 @@
 }
 
 .gateway-access-title {
-  font-size: clamp(1.55rem, 3vw, 2rem);
+  font-size: var(--text-2xl);
   font-family: var(--font-display, var(--font-sans));
   letter-spacing: -0.03em;
 }
@@ -1991,7 +2006,7 @@
   white-space: nowrap;
 }
 
-@media (max-width: 680px) {
+@media (max-width: 639px) {
   .gateway-access-progress {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2244,7 +2259,7 @@
   color: color-mix(in oklab, var(--gc-risk-danger) 72%, var(--foreground));
 }
 
-@media (max-width: 1439px) {
+@media (max-width: 1279px) {
   .mc-next-shell {
     --shell-inspector-width: min(25rem, calc(100vw - 1.5rem));
     --shell-inspector-gutter: calc(var(--shell-inspector-width) + 1rem);
@@ -2267,7 +2282,7 @@
   }
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1279px) {
   /* F1: collapse the workspace switcher to a compact trigger before the ≤1023
      tier folds it (and command search) into the nav drawer entirely. */
 
@@ -2461,7 +2476,7 @@
   }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 639px) {
   .mc-next-topbar,
   .mc-next-body,
   .mc-next-status-strip {
@@ -2486,28 +2501,6 @@
     overflow: hidden;
     -webkit-mask-image: none;
     mask-image: none;
-  }
-
-  /* Threaded mobile surfaces intentionally fall back to document flow so the
-     composer and context panels remain usable. Keep shell identity out of that
-     scroll: it is runtime trust chrome and must remain visible at the viewport
-     edge even when the work area becomes taller than 100dvh. The qualified
-     selectors also outrank the later threaded-surface responsive rules. */
-  .mc-next-shell .mc-next-status-strip {
-    position: fixed;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    z-index: var(--z-topbar);
-    flex-wrap: nowrap;
-  }
-
-  .mc-next-app-frame {
-    padding-bottom: calc(1.75rem + env(safe-area-inset-bottom));
-  }
-
-  .mc-next-shell .mc-next-surface-host-work .mc-next-threaded-surface.unified .mc-next-threaded-composer-card {
-    bottom: calc(1.75rem + env(safe-area-inset-bottom));
   }
 
   .mc-next-shell .mc-next-status-details,
@@ -2552,7 +2545,7 @@
   }
 
   .mc-next-status-details summary > span {
-    display: inline;
+    display: none;
     font-size: var(--text-2xs);
   }
 
@@ -2567,7 +2560,8 @@
   .mc-next-shell .mc-next-status-details-popover {
     position: fixed;
     right: 0.5rem;
-    bottom: calc(1.75rem + env(safe-area-inset-bottom));
+    top: calc(3.75rem + env(safe-area-inset-top));
+    bottom: auto;
     left: 0.5rem;
     width: auto;
     max-width: none;
@@ -2586,6 +2580,7 @@
   }
 
   .notification-stack {
+    top: calc(env(safe-area-inset-top, 0px) + 3.75rem);
     right: 0.9rem;
     left: 0.9rem;
     width: auto;
@@ -2778,4 +2773,35 @@
   .mc-next-nav-toggle {
     display: inline-flex;
   }
+}
+
+.mc-next-section-tabs {
+  display: flex;
+  gap: 0.25rem;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0 0 0.9rem;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.mc-next-section-tab {
+  flex: none;
+  padding: 0.45rem 0.75rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.mc-next-section-tab.active {
+  border-bottom-color: var(--brand);
+  color: var(--fg-primary);
+}
+
+.mc-next-section-tab:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -3px;
 }

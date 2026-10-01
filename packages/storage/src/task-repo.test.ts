@@ -400,6 +400,30 @@ describe("TaskRepository — kanban fields", () => {
   });
 });
 
+describe("recent task deliverables", () => {
+  it("reads a bounded workspace window without deleted tasks or private paths", () => {
+    const repos = createRepos();
+    const scoped = repos.tasks.create({ workspaceId: "workspace-a", title: "Scoped task" });
+    const foreign = repos.tasks.create({ workspaceId: "workspace-b", title: "Foreign task" });
+    const deleted = repos.tasks.create({ workspaceId: "workspace-a", title: "Deleted task" });
+    repos.deliverables.append(scoped.taskId, { deliverableType: "file", title: "Old", path: "private/old" }, "2026-09-01T00:00:00.000Z");
+    repos.deliverables.append(scoped.taskId, { deliverableType: "file", title: "First", path: "private/first" }, "2026-09-26T00:00:00.000Z");
+    repos.deliverables.append(scoped.taskId, { deliverableType: "artifact", title: "Second", path: "private/second" }, "2026-09-27T00:00:00.000Z");
+    repos.deliverables.append(foreign.taskId, { deliverableType: "file", title: "Foreign", path: "private/foreign" }, "2026-09-28T00:00:00.000Z");
+    repos.deliverables.append(deleted.taskId, { deliverableType: "file", title: "Deleted", path: "private/deleted" }, "2026-09-28T00:00:00.000Z");
+    repos.tasks.softDelete(deleted.taskId);
+
+    const records = repos.deliverables.listRecentByWorkspace("workspace-a", "2026-09-20T00:00:00.000Z", 2);
+    assert.deepEqual(records.map((record) => record.title), ["Second", "First"]);
+    assert.deepEqual(records.map((record) => record.workspaceId), ["workspace-a", "workspace-a"]);
+    assert.deepEqual(records.map((record) => record.taskTitle), ["Scoped task", "Scoped task"]);
+    assert.ok(records[0]);
+    assert.equal("path" in records[0], false);
+    assert.equal("description" in records[0], false);
+    assert.deepEqual(repos.deliverables.listRecentByWorkspace("workspace-a", "2026-09-20T00:00:00.000Z", 1).map((record) => record.title), ["Second"]);
+  });
+});
+
 describe("TaskRepository sanitization", () => {
   it("quarantines a task whose metadata_json is malformed and falls back to empty metadata", () => {
     const dbPath = path.join(os.tmpdir(), `gc-task-sanitize-${randomUUID()}.db`);

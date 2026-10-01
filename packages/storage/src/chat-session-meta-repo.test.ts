@@ -162,6 +162,22 @@ describe("ChatSessionMetaRepository", () => {
     assert.equal(reloaded?.includeInHistory, false);
   });
 
+  it("clears archivedAt only when a patch explicitly requests null", () => {
+    const repo = createRepo();
+    repo.ensure("sess-1", "2026-03-26T00:00:00.000Z", "workspace-a");
+    const archived = repo.patch("sess-1", {
+      lifecycleStatus: "archived", archivedAt: "2026-03-26T00:00:00.000Z",
+    });
+    const omitted = repo.patchWithRevision("sess-1", { title: "Later title" }, archived.revision);
+    assert.equal(omitted.archivedAt, "2026-03-26T00:00:00.000Z");
+    const restored = repo.patchWithRevision("sess-1", {
+      lifecycleStatus: "active", archivedAt: null,
+    }, omitted.revision);
+    assert.equal(restored.lifecycleStatus, "active");
+    assert.equal(restored.archivedAt, undefined);
+    assert.equal(repo.get("sess-1")?.archivedAt, undefined);
+  });
+
   it("sanitizes patch fields and preserves omitted values", () => {
     const repo = createRepo();
     repo.ensure("sess-1", "2026-03-26T00:00:00.000Z", " workspace-a ");

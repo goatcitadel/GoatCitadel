@@ -4,10 +4,25 @@ import { describe, expect, it, vi } from "vitest";
 import {
   assertSafeGitPositionalArg,
   normalizeMemoryForgetCriteria,
+  normalizeRelativePath,
   serializePathWithinRoot,
 } from "./security-utils.js";
 
 describe("security utils", () => {
+  it("preserves relative-path normalization and rejects traversal, empty and absolute paths", () => {
+    expect(normalizeRelativePath("notes/./chapter.md")).toBe("notes/chapter.md");
+    expect(normalizeRelativePath("notes/chapter/../index.md")).toBe("notes/index.md");
+    expect(normalizeRelativePath("notes\\chapter.md")).toBe("notes/chapter.md");
+    for (const value of ["", ".", "..", "../secrets", "notes/../..", "..\\secrets"])
+      expect(() => normalizeRelativePath(value)).toThrow(`Invalid relative path: ${value}`);
+    expect(() => normalizeRelativePath(path.resolve(os.tmpdir(), "absolute.md")))
+      .toThrow("Absolute paths are not allowed");
+    if (process.platform === "win32") {
+      for (const value of ["C:\\absolute.md", "\\\\host\\share\\file.md", "/absolute.md"])
+        expect(() => normalizeRelativePath(value)).toThrow("Absolute paths are not allowed");
+    }
+  });
+
   it("normalizes forget criteria and enforces at least one filter", () => {
     const empty = normalizeMemoryForgetCriteria({});
     expect(empty.hasCriteria).toBe(false);

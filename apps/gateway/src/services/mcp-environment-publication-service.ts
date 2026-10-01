@@ -4,8 +4,8 @@ import { ConflictError, resolveMcpServerConnectionMode, type McpServerRecord } f
 import type { McpServerStoreCtx } from "./mcp-server-store.js";
 import type { McpCredentialRetirementStore } from "./mcp-credential-retirement-store.js";
 import type { McpCredentialStagingStore } from "./mcp-credential-staging-store.js";
-import { isMcpEnvironmentRefForServer, type McpEnvironmentBindingRecord } from "./mcp-static-environment-service.js";
-import { newMcpServerRevision, mcpServerRevision } from "./mcp-server-revision.js";
+import { isMcpEnvironmentRefForServer, type McpEnvironmentBindingRecord, type McpConnectionFence } from "./mcp-static-environment-service.js";
+import { newMcpServerRevision, mcpServerRevision, assertMcpConnectionReview } from "./mcp-server-revision.js";
 import { callerOwnedServers, assertUniqueServers, assertConfigurationSnapshot, jsonMaterial } from "./mcp-server-state-helpers.js";
 const MCP_SERVERS_SETTING_KEY = "mcp_servers_v1";
 const MCP_ENVIRONMENT_SETTING_KEY = "mcp_environment_bindings_v1";
@@ -18,8 +18,9 @@ interface McpEnvironmentPublicationPort {
 export async function publishMcpEnvironmentBinding(
   ctx: McpServerStoreCtx, port: McpEnvironmentPublicationPort, server: McpServerRecord,
   expected: McpEnvironmentBindingRecord | undefined, next: McpEnvironmentBindingRecord | undefined,
+  fence?: McpConnectionFence,
 ): Promise<McpServerRecord> {
-    const input = structuredClone({ server, expected, next });
+    const input = structuredClone({ server, expected, next, fence });
     if (
       input.next &&
       (Object.keys(input.next).length !== 1 || !isMcpEnvironmentRefForServer(input.next.credentialRef, server.serverId))
@@ -36,6 +37,7 @@ export async function publishMcpEnvironmentBinding(
           if (!current || resolveMcpServerConnectionMode(current) !== "static")
             throw new ConflictError({ message: "MCP environment requires current static configuration." });
           assertConfigurationSnapshot([current], [input.server]);
+          if (input.fence) assertMcpConnectionReview(current, { expectedRevision: mcpServerRevision(input.server), expectedConnectionRevision: input.fence.expectedConnectionRevision });
           const environmentBefore =
             await ctx.systemSettings.get<Record<string, McpEnvironmentBindingRecord>>(MCP_ENVIRONMENT_SETTING_KEY);
           const bindings = environmentBefore?.value ?? {};

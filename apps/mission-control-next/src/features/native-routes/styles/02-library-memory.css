@@ -20,7 +20,7 @@
   min-height: 0;
 }
 
-@media (max-width: 880px) {
+@media (max-width: 1023px) {
   .mc-next-directory-grid-native.mc-next-memory-shell {
     grid-template-columns: 1fr;
   }
@@ -79,7 +79,7 @@
   line-height: 1.45;
 }
 
-@media (max-width: 576px) {
+@media (max-width: 639px) {
   .mc-next-memory-disabled-guide {
     gap: 0.28rem;
     margin-top: 0.36rem;

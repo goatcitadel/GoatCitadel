@@ -41,7 +41,7 @@ interface ChatImageRoute {
   supportsEdit: boolean;
 }
 
-interface ImageGenerationOptions {
+export interface ImageGenerationOptions {
   clearDraftOnSuccess?: boolean;
   trigger?: "button" | "auto_send";
 }

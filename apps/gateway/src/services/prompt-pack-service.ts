@@ -5,13 +5,13 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
 import {
-  SECURITY_RED_TEAM_PACK_FILE,
   buildSecurityQualityGateRecord,
   buildSecurityRedTeamEvalPack,
-  resolveEvalAssetsPackPath,
 } from "./prompt-pack/security-eval.js";
 
 import type {
+  PromptPackBuiltinImportInput,
+  PromptPackBuiltinImportReceipt,
   CapabilityTrendSeries,
   ChatMemoryMode,
   ChatMode,
@@ -80,10 +80,11 @@ import type {
   RunVariableEvidence,
 } from "@goatcitadel/contracts";
 import {
+  ConflictError,
+  NotFoundError,
   buildRunVariableEvidence,
   DEFAULT_PROMPT_PACK_POLICY_V2,
   DEFAULT_PROMPT_PACK_POLICY_V3,
-  legacyPlaceholderSchema,
   resolveRunVariableTemplate,
   resolveLegacyRunVariableTemplate,
   validateRunVariableBindings,
@@ -197,17 +198,8 @@ import {
 import { resolvePromptPackJudgeTarget, shouldUsePromptPackJudgeJsonMode } from "./prompt-pack/judge-target.js";
 import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
-import {
-  applyPromptPlaceholderValues,
-  extractPromptPlaceholders,
-  extractPromptPackVersionLabel,
-  parsePromptPackTests,
-  validatePromptPackStructure,
-} from "./prompt-pack/parser.js";
-import {
-  parsePromptPackRunVariableSchema,
-  renderPromptPackRunVariableSchema,
-} from "./prompt-pack/run-variable-markdown.js";
+import { applyPromptPlaceholderValues } from "./prompt-pack/parser.js";
+import { renderPromptPackRunVariableSchema } from "./prompt-pack/run-variable-markdown.js";
 import {
   buildPromptPackCapabilitySeriesV2,
   buildPromptPackReviewRateSeries,
@@ -218,21 +210,13 @@ import {
   pickReplayBaselineScore,
 } from "./prompt-pack/report-trends.js";
 
+import { preparePromptPackImport } from "./prompt-pack/prepare-import.js";
+import { builtinDefinitionRevision, readBuiltinPromptPackSource } from "./prompt-pack/builtin-definition.js";
+import { BuiltinPromptPackPostCommitError } from "./prompt-pack/builtin-import-errors.js";
+
 const log = logger.child("prompt-pack-service");
 const DEFAULT_WORKSPACE_ID = "default";
-const OVERALL_V7_PACK_FILE = "goatcitadel_prompt_pack_v7_overall.md";
 
-// Built-in packs import with a fixed packId so re-imports update in place
-// instead of accumulating duplicate packs. Entries without a name defer to
-// the pack file's Pack-Version label for name/sourceLabel provenance.
-const BUILTIN_PROMPT_PACKS: Record<string, { file: string; name?: string; sourceLabelFromBasename?: boolean }> = {
-  "security-red-team-v6": {
-    file: SECURITY_RED_TEAM_PACK_FILE,
-    name: "Defensive Security Evaluation",
-    sourceLabelFromBasename: true,
-  },
-  "overall-v7": { file: OVERALL_V7_PACK_FILE },
-};
 import {
   PROMPT_PACK_BENCHMARK_CLAIM_HEARTBEAT_MS,
   PROMPT_PACK_BENCHMARK_CLAIM_TTL_MS,
@@ -511,56 +495,62 @@ export class PromptPackService {
 
   // ── public API ─────────────────────────────────────────────────────
 
-  async importPromptPack(input: { content: string; name?: string; sourceLabel?: string; packId?: string }): Promise<{
+  async importPromptPack(
+    input: { content: string; name?: string; sourceLabel?: string; packId?: string },
+    guarded?: PromptPackBuiltinImportInput & { packKey: string },
+  ): Promise<{
     pack: PromptPackRecord;
     tests: PromptPackTestRecord[];
+    importReceipt?: PromptPackBuiltinImportReceipt;
   }> {
-    const tests = parsePromptPackTests(input.content);
-    if (tests.length === 0) {
-      throw new Error("No tests found in prompt-pack markdown.");
+    const prepared = preparePromptPackImport(input);
+    let importReceipt: PromptPackBuiltinImportReceipt | undefined;
+    if (guarded) {
+      const revision = builtinDefinitionRevision(guarded.packKey, prepared.write);
+      if (
+        input.packId !== guarded.packKey ||
+        prepared.write.tests.length > 5000 ||
+        !/^[a-f0-9]{64}$/u.test(guarded.expectedDefinitionRevision) ||
+        guarded.expectedDefinitionRevision !== revision
+      ) {
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "The bundled definition changed. Review it again before importing.",
+          details: { reason: "PROMPT_PACK_DEFINITION_CONFLICT", packId: guarded.packKey, mutationCommitted: false },
+        });
+      }
+      importReceipt = {
+        version: "prompt_pack.builtin_import_receipt.v1",
+        operation: "created",
+        packKey: guarded.packKey,
+        definitionRevision: revision,
+        contentSha256: prepared.write.contentSha256,
+      };
     }
-    const structureIssues = validatePromptPackStructure(input.content, tests);
-    if (structureIssues.length > 0) {
-      throw new Error(`Prompt pack structure validation failed: ${structureIssues.join("; ")}`);
+    if (prepared.hasDeclaredSchema) await this.ctx.requireFeatureEnabled("typedRunVariablesV1Enabled");
+    const repository = this.ctx.storage.promptPacks;
+    const imported = guarded
+      ? await repository.createPackWithTestsIfAbsent({ ...prepared.write, packId: guarded.packKey })
+      : await repository.replacePackTests(prepared.write);
+    try {
+      await this.refreshPromptPackExportFileBestEffort(imported.pack.packId, "import_prompt_pack");
+    } catch (error) {
+      if (guarded) throw new BuiltinPromptPackPostCommitError(imported.pack.packId);
+      throw error;
     }
-    const packVersionLabel = extractPromptPackVersionLabel(input.content);
-    const declaredRunVariableSchema = parsePromptPackRunVariableSchema(input.content);
-    if (declaredRunVariableSchema) await this.ctx.requireFeatureEnabled("typedRunVariablesV1Enabled");
-    const legacyPlaceholders = [...new Set(tests.flatMap((test) => extractPromptPlaceholders(test.prompt)))];
-    const runVariableSchema =
-      declaredRunVariableSchema ??
-      (legacyPlaceholders.length > 0 ? legacyPlaceholderSchema(legacyPlaceholders) : undefined);
-    const name = input.name?.trim() || packVersionLabel || inferPromptPackName(input.sourceLabel);
-    const imported = await this.ctx.storage.promptPacks.replacePackTests({
-      packId: input.packId,
-      name,
-      sourceLabel: input.sourceLabel?.trim() || packVersionLabel,
-      contentSha256: createHash("sha256").update(input.content, "utf8").digest("hex"),
-      tests,
-      runVariableSchema,
-    });
-    await this.refreshPromptPackExportFileBestEffort(imported.pack.packId, "import_prompt_pack");
-    return imported;
+    return importReceipt ? { ...imported, importReceipt } : imported;
   }
 
-  async importBuiltinPromptPack(packKey: string): Promise<{
+  async importBuiltinPromptPack(
+    packKey: string,
+    guarded?: PromptPackBuiltinImportInput,
+  ): Promise<{
     pack: PromptPackRecord;
     tests: PromptPackTestRecord[];
+    importReceipt?: PromptPackBuiltinImportReceipt;
   }> {
-    const builtin = BUILTIN_PROMPT_PACKS[packKey];
-    if (!builtin) {
-      throw new Error(`Unknown built-in prompt pack: ${packKey}`);
-    }
-    const filePath = resolveEvalAssetsPackPath(this.ctx.config.rootDir, builtin.file);
-    if (!filePath) {
-      throw new Error(`${builtin.file} was not found in this checkout.`);
-    }
-    return await this.importPromptPack({
-      packId: packKey,
-      name: builtin.name,
-      sourceLabel: builtin.sourceLabelFromBasename ? path.basename(filePath) : undefined,
-      content: fsSync.readFileSync(filePath, "utf8"),
-    });
+    const input = readBuiltinPromptPackSource(this.ctx.config.rootDir, packKey);
+    return await this.importPromptPack(input, guarded ? { ...guarded, packKey } : undefined);
   }
 
   async listPromptPacks(limit = 100): Promise<PromptPackRecord[]> {
@@ -569,14 +559,21 @@ export class PromptPackService {
 
   async listSecurityEvalPacks(): Promise<PromptPackSecurityEvalPacksResponse> {
     const generatedAt = new Date().toISOString();
-    const importedPacks = await this.ctx.storage.promptPacks.listPacks(2000);
+    const repository = this.ctx.storage.promptPacks;
+    const importedPacks = await repository.listPacks(2000);
+    let imported: PromptPackRecord | null = null;
+    try {
+      imported = await repository.getPack("security-red-team-v6");
+    } catch (error) {
+      if (!(error instanceof NotFoundError)) throw error;
+    }
     const warnings: string[] = [
       "Security eval packs are definitions and stored evidence only; this projection does not call providers or run tests.",
       "A listed pack is not release proof until its tests have been run and scored through the prompt-pack workflow.",
     ];
     return {
       generatedAt,
-      items: [buildSecurityRedTeamEvalPack(this.ctx.config.rootDir, importedPacks, warnings)],
+      items: [buildSecurityRedTeamEvalPack(this.ctx.config.rootDir, importedPacks, warnings, imported)],
       warnings,
     };
   }
@@ -3585,23 +3582,6 @@ export class PromptPackService {
 
 function derivePromptPackReportProviderModelSlug(report: PromptPackReportRecord): string {
   return derivePromptPackReportProviderModelSlugWithSanitizer(report, sanitizePromptPackExportFileName);
-}
-
-function toTitleCase(value: string): string {
-  return value
-    .split(/[-_.]/g)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function inferPromptPackName(sourceLabel?: string): string {
-  if (!sourceLabel) {
-    return "GoatCitadel Prompt Pack";
-  }
-  const base = path.basename(sourceLabel).replace(/\.[^.]+$/, "");
-  const cleaned = base.replace(/[_-]+/g, " ").trim();
-  return cleaned ? toTitleCase(cleaned) : "GoatCitadel Prompt Pack";
 }
 
 export function collectPromptPackPlatformSignals(

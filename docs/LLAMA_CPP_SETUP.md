@@ -1,6 +1,6 @@
 # Set up llama.cpp for Chat
 
-Open **Settings → Get started → Set up llama.cpp**.
+Open **Settings → Models → Get started → Set up llama.cpp**.
 
 1. Choose **Use a running server** to connect to a server you operate. Enter its OpenAI-compatible `/v1` URL, check the endpoint, and choose a model freshly returned by `/v1/models`. GoatCitadel does not start or stop an external server. A saved launch command or GGUF path from an older configuration does not change that ownership rule.
 2. Choose **Let GoatCitadel start one** to use an already installed `llama-server` and a GGUF discovered under the configured models root. The Gateway holds the selected executable and GGUF paths behind a short-lived selection ID. It revalidates both files before applying the setup. Managed setup starts the process now and enables start with the Gateway. A server already occupying that URL is reported as a conflict and is not touched.

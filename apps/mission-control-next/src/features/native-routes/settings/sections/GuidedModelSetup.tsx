@@ -1,11 +1,10 @@
 import { useSessionDraft } from "../../library/session-drafts";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Play, Save } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Play, PlugZap } from "lucide-react";
 import type { ChatThinkingLevel, ChangePlanRecord, OnboardingState } from "@goatcitadel/contracts";
 import {
   cancelChangePlan,
   completeChangePlanProviderOAuth,
-  completeOnboarding,
   confirmChangePlan,
   createChangePlan,
   fetchChangePlans,
@@ -16,6 +15,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import { ChatChangePlanActionDialog } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog";
 import { ChatChangePlanCard } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard";
+import { deriveSetupProgress } from "@goatcitadel/mission-control-shared/content/setup-progress";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import type { AppRoute } from "@next/app/route-model";
 import {
@@ -29,6 +29,7 @@ import {
 } from "../SettingsShared";
 import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
 import { NativeButton } from "../../primitives";
+import { useOnboardingCompletion } from "../use-onboarding-completion";
 import {
   clampGuidedThinkingLevel,
   GUIDED_THINKING_LEVELS,
@@ -56,6 +57,8 @@ export function GuidedModelSetup({
   reloadOnboarding,
   setNotice,
   excludeLlamaCpp = false,
+  onEnterChat,
+  renderApprovalAction,
 }: {
   workspaceId: string;
   onboarding: OnboardingState;
@@ -64,8 +67,12 @@ export function GuidedModelSetup({
   reloadOnboarding: () => Promise<void>;
   setNotice: (notice: Notice | null) => void;
   excludeLlamaCpp?: boolean;
+  /** Guided hosts can keep their own completion gate before entering Chat. */
+  onEnterChat?: () => void;
+  renderApprovalAction?: (plan: ChangePlanRecord, pending: boolean, selection: { providerId: string; model: string; thinkingLevel: ChatThinkingLevel }) => ReactNode;
 }) {
   const catalog = useProviderModelCatalog("system");
+  const completion = useOnboardingCompletion({ state: onboarding, scope: workspaceId, requireModel: true });
   const catalogProviders = useMemo(
     () =>
       excludeLlamaCpp ? catalog.providers.filter((provider) => provider.providerId !== "llamacpp") : catalog.providers,
@@ -129,7 +136,7 @@ export function GuidedModelSetup({
     supportedThinkingLevels,
   );
   const effortLimited = supportedThinkingLevels.length < GUIDED_THINKING_LEVELS.length;
-  const localGuide = localRuntimeSetupGuide(selectedProvider);
+  const localGuide = localRuntimeSetupGuide(selectedProvider, model);
   const [recheckingEndpoint, setRecheckingEndpoint] = useState(false);
   const providerReadiness = resolveGuidedProviderReadiness(
     selectedProvider && recheckingEndpoint ? { ...selectedProvider, modelProbeState: "not_checked" } : selectedProvider,
@@ -151,6 +158,11 @@ export function GuidedModelSetup({
         latestPlan.request.providerId === providerId &&
         latestPlan.request.model === model &&
         latestPlan.request.thinkingLevel === thinkingLevel));
+  const progress = deriveSetupProgress({
+    providerReady,
+    defaultPlanCompleted,
+    firstResponseVerified: onboarding.firstTask?.status === "verified",
+  });
 
   useEffect(() => {
     if (!providerId) return;
@@ -305,12 +317,16 @@ export function GuidedModelSetup({
       setNotice({ tone: "warning", message: "Confirm and verify the future-Chat model default before entering Chat." });
       return;
     }
+    if (onEnterChat) {
+      onEnterChat();
+      return;
+    }
     if (busyRef.current) return;
     busyRef.current = true;
     const generation = ++planLoadGeneration.current;
     setBusy(true);
     try {
-      await completeOnboarding("operator");
+      if (!(await completion.complete())) return;
       if (generation !== planLoadGeneration.current) return;
       await reloadOnboarding();
       if (generation !== planLoadGeneration.current) return;
@@ -342,10 +358,7 @@ export function GuidedModelSetup({
         { label: "Connection", value: providerReadiness.label },
         // A template default is only a suggestion until the provider is ready.
         { label: "Model", value: !model ? "Choose one" : providerReady ? model : `Suggested: ${model}` },
-        {
-          label: "First response",
-          value: onboarding.firstTask?.status === "verified" ? "Verified" : "Not yet verified",
-        },
+        { label: "First response", value: progress.firstResponseLabel },
       ]}
     >
       {modelDraft.hasRemoteChanges ? (
@@ -358,23 +371,23 @@ export function GuidedModelSetup({
           {
             label: "Connect a provider",
             description: providerReadiness.description,
-            state: providerReady ? "complete" : "active",
+            state: progress.steps[0],
           },
           {
             label: "Confirm your model",
             description: defaultPlanCompleted
               ? "Your default is saved. A real Chat response verifies that the model works."
               : "This default applies only to Chats created after confirmation.",
-            state: defaultPlanCompleted ? "complete" : providerReady ? "active" : "pending",
+            state: progress.steps[1],
           },
           {
             label: "Start the first Chat",
-            description:
-              onboarding.firstTask?.status === "verified"
+            description: progress.needsRecheck
+              ? "Your first response was verified earlier. Check the connection to continue."
+              : progress.steps[2] === "complete"
                 ? "A completed model response is recorded in Chat."
                 : "Ask your own question or choose a starter prompt in Chat.",
-            state:
-              onboarding.firstTask?.status === "verified" ? "complete" : defaultPlanCompleted ? "active" : "pending",
+            state: progress.steps[2],
           },
         ]}
       />
@@ -427,7 +440,7 @@ export function GuidedModelSetup({
             ))}
           </select>
           <p className="mc-next-settings-field-note">
-            Model availability is checked live when the Change Plan is created.
+            GoatCitadel checks that the model is available when you confirm it.
           </p>
         </SettingsField>
       </SettingsFieldGrid>
@@ -489,6 +502,7 @@ export function GuidedModelSetup({
           variant="default"
           disabled={
             busy ||
+            (defaultPlanCompleted && !onEnterChat && (completion.locked || !completion.ready)) ||
             !providerId ||
             (providerReady && !model) ||
             (!providerReady && verifiesLocalEndpoint && providerReadiness.state === "checking")
@@ -503,7 +517,7 @@ export function GuidedModelSetup({
                   : createProviderPlan())
           }
         >
-          {defaultPlanCompleted ? <Play size={16} /> : <Save size={16} />}
+          {defaultPlanCompleted ? <Play size={16} /> : <PlugZap size={16} />}
           {defaultPlanCompleted
             ? "Enter Chat"
             : providerReady
@@ -518,6 +532,7 @@ export function GuidedModelSetup({
         </NativeButton>
       </SettingsButtonRow>
       {actionError && !dialogPlan ? <p role="alert">{actionError}</p> : null}
+      {completion.notice || completion.attempt ? <p role="status">{completion.attempt?.message ?? completion.notice}</p> : null}
       {latestPlan ? (
         <ChatChangePlanCard
           plan={latestPlan}
@@ -542,6 +557,9 @@ export function GuidedModelSetup({
         plan={dialogPlan}
         pending={busy}
         error={actionError}
+        renderApprovalAction={renderApprovalAction
+          ? (plan, pending) => renderApprovalAction(plan, pending, { providerId, model, thinkingLevel })
+          : undefined}
         onClose={() => {
           if (!busy) {
             setDialogPlan(null);
@@ -551,7 +569,7 @@ export function GuidedModelSetup({
         onConfirm={(plan) => {
           const action = plan.requiredAction;
           if (action?.kind !== "confirmation") {
-            setActionError("This Change Plan changed. Reopen it before confirming.");
+            setActionError("The setup request changed. Reopen it before confirming.");
             return;
           }
           return runAction(() =>
@@ -564,7 +582,7 @@ export function GuidedModelSetup({
         onSubmitPublicForm={(plan, values) => {
           const action = plan.requiredAction;
           if (action?.kind !== "public_form") {
-            setActionError("This form changed. Reopen the Change Plan.");
+            setActionError("This form changed. Reopen the setup request.");
             return;
           }
           return runAction(() =>
@@ -579,7 +597,7 @@ export function GuidedModelSetup({
         onSubmitSecureInput={(plan, values) => {
           const action = plan.requiredAction;
           if (action?.kind !== "secure_input" || plan.request.kind !== "provider_connection") {
-            setActionError("This secure owner action changed. Reopen the Change Plan.");
+            setActionError("This secure action changed. Reopen the setup request.");
             return;
           }
           return runAction(() =>
@@ -594,7 +612,7 @@ export function GuidedModelSetup({
         onContinueOAuth={async (plan) => {
           const action = plan.requiredAction;
           if (action?.kind !== "oauth" || plan.request.kind !== "provider_connection") {
-            setActionError("This OAuth action changed. Reopen the Change Plan.");
+            setActionError("This sign-in action changed. Reopen the setup request.");
             return;
           }
           await runAction(async () => {
@@ -636,7 +654,7 @@ export function GuidedModelSetup({
         onReviewArtifacts={(plan) => {
           const action = plan.requiredAction;
           if (action?.kind !== "artifact_review") {
-            setActionError("The artifact review changed. Reopen the Change Plan.");
+            setActionError("The artifact review changed. Reopen the setup request.");
             return;
           }
           return runAction(() =>

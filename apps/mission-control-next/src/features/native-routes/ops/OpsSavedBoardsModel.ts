@@ -116,15 +116,18 @@ function createPlacement(
   existing: readonly OpsSavedBoardPlacement[],
 ): OpsSavedBoardPlacement {
   const widgetId = createWidgetId(kind, existing);
-  const nextRow = existing.reduce((max, placement) => Math.max(max, placement.y + placement.height), 0);
-  return {
-    widgetId,
-    kind,
-    x: 0,
-    y: Math.min(nextRow, OPS_SAVED_BOARD_LIMITS.maxGridRow),
-    width: 6,
-    height: 4,
-  };
+  const width = OPS_SAVED_BOARD_LIMITS.gridColumns / 2;
+  const height = 4;
+  for (let y = 0; y <= OPS_SAVED_BOARD_LIMITS.maxGridRow; y += height) {
+    for (const x of [0, width]) {
+      const overlaps = existing.some((placement) =>
+        x < placement.x + placement.width && x + width > placement.x
+        && y < placement.y + placement.height && y + height > placement.y,
+      );
+      if (!overlaps) return { widgetId, kind, x, y, width, height };
+    }
+  }
+  throw new Error("No free saved-board placement remains.");
 }
 
 function createWidgetId(kind: OpsSavedBoardWidgetKind, existing: readonly OpsSavedBoardPlacement[]): string {

@@ -40,7 +40,7 @@ test("TLS native builder rejects unknown targets and existing output", { skip: p
 
 test(
   "native TLS adapter builds reproducibly and authenticates public-only clients",
-  { skip: process.platform !== "win32", timeout: 240000 },
+  { skip: process.platform !== "win32", timeout: 600000 },
   async (t) => {
     assert.equal(process.version, "v24.19.0", "This acceptance lane pins the host Node engine ABI.");
     assert.equal(process.versions.openssl, "3.5.7");

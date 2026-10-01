@@ -1,6 +1,7 @@
 import type {
   McpInvokeRequest,
   McpServerCreateInput,
+  McpServerConnectionReview,
   McpServerPolicyUpdateRequest,
   McpServerUpdateRequest,
 } from "@goatcitadel/contracts";
@@ -13,6 +14,7 @@ import * as mcpServerAdminService from "./mcp-server-admin-service.js";
 import type { McpServerStore } from "./mcp-server-store.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import { DEFAULT_WORKSPACE_ID, getLlmConfigForGateway } from "./gateway-route-composition-shared.js";
+import { updateLlmConfigWithTransportReceipt } from "./provider-transport-receipt.js";
 
 export function composeMcpAdministration(
   store: Pick<McpServerStore, "readServers" | "writeServers" | "patchServerState" | "completeConnection" | "readTools" |
@@ -40,7 +42,7 @@ export function composeToolsMcpRouteDependencies(
   const mcpDiagnosticsDeps: mcpDiagnosticsService.McpDiagnosticsHost = {
     requireFeatureEnabled: (flag) => gateway.requireFeatureEnabled(flag as keyof RuntimeSettings["features"]),
     listMcpTemplates: async () => await gateway.listMcpTemplates(),
-    requireMcpServer: async (serverId) => await gateway.requireMcpServer(serverId),
+    requireMcpServer: async (serverId) => await mcpAdminDeps.requireMcpServer(serverId),
     pickConnectorDiagnosticAction: (checks) => connectorDiagnosticsHelpers.pickConnectorDiagnosticAction(checks),
     recordConnectorHealthRun: async (report) =>
       await connectorDiagnosticsHelpers.recordConnectorHealthRun({ gatewaySql: gateway.storage.gatewaySql }, report),
@@ -89,24 +91,20 @@ export function composeToolsMcpRouteDependencies(
       runLlmEvalProof: (input) => llmRuntimeTruth.runEvalProof(input),
       startOpenAICodexOAuthDeviceFlow: () => gateway.llmService.startOpenAICodexOAuthDeviceFlow(),
       deleteOpenAICodexOAuthCredential: () => gateway.llmService.deleteOpenAICodexOAuthCredential(),
-      updateLlmConfig: async (input) => {
-        const { expectedRevision, ...llm } = input;
-        const updated = await gateway.updateSettings({ expectedRevision, llm });
-        return { revision: updated.revision, ...updated.llm };
-      },
+      updateLlmConfig: (input) => updateLlmConfigWithTransportReceipt(gateway, input),
     },
     mcp: {
       elicitations: gateway.mcpElicitationService,
-      completeMcpOAuth: async (serverId: string, code: string, state?: string) =>
-        await mcpServerAdminService.completeMcpOAuth(mcpAdminDeps, serverId, code, state),
-      connectMcpServer: async (serverId: string) =>
-        await mcpServerAdminService.connectMcpServer(mcpAdminDeps, serverId),
+      completeMcpOAuth: async (serverId: string, code: string, state?: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>) =>
+        await mcpServerAdminService.completeMcpOAuth.apply(undefined, review ? [mcpAdminDeps, serverId, code, state, { ...review, onCommitted }] : [mcpAdminDeps, serverId, code, state]),
+      connectMcpServer: async (serverId: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>) =>
+        await mcpServerAdminService.connectMcpServer(mcpAdminDeps, serverId, review ? { ...review, onCommitted } : undefined),
       createMcpServer: async (input: McpServerCreateInput, onCommitted?: () => void | Promise<void>) =>
         await mcpServerAdminService.createMcpServer(mcpAdminDeps, input, undefined, undefined, onCommitted),
       deleteMcpServer: async (serverId: string, expectedRevision: string, onCommitted?: () => void | Promise<void>) =>
         await mcpServerAdminService.deleteMcpServer(mcpAdminDeps, serverId, { expectedRevision, onCommitted }),
-      disconnectMcpServer: async (serverId: string) =>
-        await mcpServerAdminService.disconnectMcpServer(mcpAdminDeps, serverId),
+      disconnectMcpServer: async (serverId: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>) =>
+        await mcpServerAdminService.disconnectMcpServer(mcpAdminDeps, serverId, review ? { ...review, onCommitted } : undefined),
       // Route through the guarded public method (enrich → capability-scope assert → coordinator)
       // so the REST /mcp/invoke surface is subject to the same workspace/citadel scope as the
       // autonomous-model path (spec §7a: "covers every caller (model and REST)").
@@ -117,7 +115,8 @@ export function composeToolsMcpRouteDependencies(
       listMcpTools: async (serverId: string) => await gateway.listMcpTools(serverId),
       runMcpServerHealthCheck: async (serverId: string) =>
         await mcpDiagnosticsService.runMcpServerHealthCheck(mcpDiagnosticsDeps, serverId),
-      startMcpOAuth: async (serverId: string) => await mcpServerAdminService.startMcpOAuth(mcpAdminDeps, serverId),
+      startMcpOAuth: async (serverId: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>) =>
+        await mcpServerAdminService.startMcpOAuth.apply(undefined, review ? [mcpAdminDeps, serverId, { ...review, onCommitted }] : [mcpAdminDeps, serverId]),
       updateMcpServer: async (serverId: string, input: McpServerUpdateRequest, onCommitted?: () => void | Promise<void>) =>
         await mcpServerAdminService.updateMcpServer(mcpAdminDeps, serverId, input, undefined, { expectedRevision: input.expectedRevision, onCommitted }),
       updateMcpServerPolicy: async (serverId: string, input: McpServerPolicyUpdateRequest, onCommitted?: () => void | Promise<void>) => {

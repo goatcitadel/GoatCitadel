@@ -45,6 +45,7 @@ import {
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 import { scanPromptwareContent, type PromptwareRuleId } from "./assembled-prompt-injection-guard.js";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
+import { buildStableDelegationId, buildStableDelegationTurnIdentity, type DelegationTurnIdentity } from "./chat-delegation-identity.js";
 import { CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE } from "./chat-durable-fanout-service.js";
 import { buildDeterministicAgentDurableRunId } from "./chat-turn-entry-service.js";
 import type { ChildTimeoutLateSettleEvent } from "./subagent-budget-enforcer.js";
@@ -307,12 +308,6 @@ interface DelegationStepExecutionResult {
   citations: ChatCitationRecord[];
   trace?: ChatTurnTraceRecord["routing"];
   completed: boolean;
-}
-
-interface DelegationTurnIdentity {
-  turnId: string;
-  userMessageId: string;
-  assistantMessageId: string;
 }
 
 class DelegationDispatchOwnershipError extends Error {
@@ -674,6 +669,7 @@ export interface ChatDelegationServiceHost {
       abortSignal?: AbortSignal;
       turnIdentity?: DelegationTurnIdentity;
       assertDispatchOwnership?: () => Promise<void>;
+      onChildDurableRunAdmitted?: (runId: string) => Promise<void>;
       onChildDurableRunLaunched?: (runId: string) => Promise<void>;
       returnAfterDurableAdmission?: boolean;
     },
@@ -1242,7 +1238,8 @@ export class ChatDelegationService {
           ? buildStableDelegationId("delegation-run", sessionId, stablePolicyRunId, stableRunKey)
           : buildStableDelegationId("delegation-run", sessionId, stablePolicyRunId)
         : randomUUID());
-    let existingSteps = stableParentRun ? await deps.storage.chatDelegationSteps.listByRun(runId) : [];
+    const stepRepository = deps.storage.chatDelegationSteps;
+    let existingSteps = stableParentRun ? await stepRepository.listByRun(runId) : [];
     const normalizedRequestedSteps = stablePolicyRunId
       ? stabilizeDelegationPlan(runId, requestedDelegationSteps)
       : requestedDelegationSteps;
@@ -1321,7 +1318,7 @@ export class ChatDelegationService {
         };
       }
       repairStableParentBeforeDispatch = true;
-      existingSteps = await deps.storage.chatDelegationSteps.listByRun(runId);
+      existingSteps = await stepRepository.listByRun(runId);
       existingSteps = await recoverLegacyFanoutInstructions(
         deps,
         stableParentRun,
@@ -1409,7 +1406,7 @@ export class ChatDelegationService {
         if (existingStepIds.has(step.stepId)) {
           continue;
         }
-        await deps.storage.chatDelegationSteps.create({
+        await stepRepository.create({
           stepId: step.stepId,
           runId,
           role: step.role,
@@ -1444,7 +1441,7 @@ export class ChatDelegationService {
         throw error;
       }
       stableParentRun = concurrentRun;
-      existingSteps = await deps.storage.chatDelegationSteps.listByRun(runId);
+      existingSteps = await stepRepository.listByRun(runId);
       existingSteps = await recoverLegacyFanoutInstructions(
         deps,
         stableParentRun,
@@ -1480,7 +1477,7 @@ export class ChatDelegationService {
     let trace: ChatTurnTraceRecord["routing"] | undefined = stableParentRun?.trace;
     const completedOutputs = new Map<string, { role: string; output: string }>();
     const stepResults = new Map<string, DelegationStepExecutionResult>();
-    for (const persistedStep of await deps.storage.chatDelegationSteps.listByRun(runId)) {
+    for (const persistedStep of await stepRepository.listByRun(runId)) {
       stepResults.set(persistedStep.stepId, {
         step: persistedStep,
         output: persistedStep.output,
@@ -1573,7 +1570,7 @@ export class ChatDelegationService {
       throw error;
     }
     const executeDelegationStep = async (step: NormalizedDelegationStep): Promise<DelegationStepExecutionResult> => {
-      const startedAt = await deps.storage.chatDelegationSteps.readDatabaseNow();
+      const startedAt = await stepRepository.readDatabaseNow();
       const childRunId = `${runId}:${step.stepId}`;
       const turnIdentity = buildStableDelegationTurnIdentity(runId, step.stepId);
       const childMetadataBase: AgenticSubagentMetadata = {
@@ -1616,7 +1613,7 @@ export class ChatDelegationService {
         const dispatchLease = options.persistedResume
           ? await deps.storage.runImmediateTransaction(async () => {
               const resume = options.persistedResume!;
-              const lockedSteps = await deps.storage.chatDelegationSteps.listByRunForUpdate(resume.runId);
+              const lockedSteps = await stepRepository.listByRunForUpdate(resume.runId);
               const current = lockedSteps.find((candidate) => candidate.stepId === resume.stepId);
               if (
                 !current || current.runId !== resume.runId ||
@@ -1638,7 +1635,7 @@ export class ChatDelegationService {
             })
           : await acquireDelegationDispatchLease(deps, dispatchInput);
         if (!dispatchLease) {
-          const current = await deps.storage.chatDelegationSteps.get(step.stepId);
+          const current = await stepRepository.get(step.stepId);
           return {
             step: current,
             output: current.output,
@@ -1665,7 +1662,7 @@ export class ChatDelegationService {
           };
           const childSession = await deps.createChatSession(childSessionInput);
           agentSessionId = childSession.sessionId;
-          const linkedStep = await deps.storage.chatDelegationSteps.linkClaimedDispatch(
+          const linkedStep = await stepRepository.linkClaimedDispatch(
             step.stepId,
             dispatchLease.claimMarker!,
             agentSessionId,
@@ -1673,7 +1670,7 @@ export class ChatDelegationService {
             dispatchLease.dispatchExpiresAt,
           );
           if (!linkedStep) {
-            const current = await deps.storage.chatDelegationSteps.get(step.stepId);
+            const current = await stepRepository.get(step.stepId);
             return {
               step: current,
               output: current.output,
@@ -1752,7 +1749,7 @@ export class ChatDelegationService {
         }
         if (delegatedScope && !persistedResumeStep) {
           // The durable patch is the authority; its returned projection is intentionally unused after scope setup.
-          await deps.storage.chatDelegationSteps.patch(step.stepId, { scopeControl: delegatedScope });
+          await stepRepository.patch(step.stepId, { scopeControl: delegatedScope });
           await deps.ensureSessionInternalToolGrant?.(
             agentSessionId,
             "submit_work_result",
@@ -1877,6 +1874,62 @@ export class ChatDelegationService {
               // The canonical timeout outcome is already committed; diagnostics stay best-effort.
             });
         };
+        const localManualChild = !explorerProfile && !workflowTemplate && !options.admittedProfile;
+        let locallyAdmittedStep: ChatDelegationStepRecord | undefined;
+        const bindChildDurableRun = async (durableRunId: string, atomic = false): Promise<ChatDelegationStepRecord> => {
+          let bound: ChatDelegationStepRecord;
+          try {
+            bound = await deps.storage.runImmediateTransaction(async () => {
+              const owned = await stepRepository.bindOwnedDurableRun({
+                stepId: step.stepId,
+                expectedDispatchToken: dispatchLease.dispatchMarker,
+                childSessionId: agentSessionId,
+                durableRunId,
+              });
+              if (!owned) {
+                throw new DelegationDispatchOwnershipError(step.stepId);
+              }
+              // The CAS above holds this row in the admission transaction. Publish
+              // exact turn lineage before any child control/replay reader can run.
+              const linked = atomic
+                ? await stepRepository.patch(step.stepId, { childTurnId: turnIdentity.turnId })
+                : owned;
+              if (explorerProfile) {
+                const extended = await stepRepository.extendOwnedDispatchLease({
+                  stepId: step.stepId,
+                  expectedDispatchToken: dispatchLease.dispatchMarker,
+                  childSessionId: agentSessionId,
+                  leaseExpiresAt: new Date(
+                    Date.parse(await stepRepository.readDatabaseNow()) +
+                      Math.max(60_000, (childTimeoutSeconds + 60) * 1000),
+                  ).toISOString(),
+                });
+                if (!extended) {
+                  throw new DelegationDispatchOwnershipError(step.stepId);
+                }
+              }
+              await attachDelegationChildWatcher(deps, {
+                parentRunId: input.policyRunId,
+                childRunId: durableRunId,
+                ...(atomic || explorerProfile || options.requireChildWatchers ? { required: true } : {}),
+                watcherId: `delegation-child:${step.stepId}`,
+                delegationRunId: runId,
+                stepId: step.stepId,
+                childSessionId: agentSessionId,
+                childTurnId: turnIdentity.turnId,
+              });
+              return linked;
+            });
+          } catch (error) {
+            if (error instanceof DelegationDispatchOwnershipError || !explorerProfile) throw error;
+            // The child admission is already canonical. Keep the step
+            // recoverable instead of terminally failing an active,
+            // deterministic durable child whose watcher write rolled
+            // back with the binding transaction.
+            throw new DelegationDurableLaunchRecoveryRequiredError(step.stepId, error);
+          }
+          return bound;
+        };
         const delegatedRequest = persistedResumeStep
           ? persistedResumeStep.request
           : buildDelegatedChatSendRequest({
@@ -1936,54 +1989,20 @@ export class ChatDelegationService {
                   agentSessionId,
                   dispatchLease.dispatchMarker,
                 ),
+              onChildDurableRunAdmitted: localManualChild
+                ? async (durableRunId) => {
+                    locallyAdmittedStep = await bindChildDurableRun(durableRunId, true);
+                  }
+                : undefined,
               onChildDurableRunLaunched: async (durableRunId) => {
-                let bound: ChatDelegationStepRecord;
-                try {
-                  bound = await deps.storage.runImmediateTransaction(async () => {
-                    const owned = await deps.storage.chatDelegationSteps.bindOwnedDurableRun({
-                      stepId: step.stepId,
-                      expectedDispatchToken: dispatchLease.dispatchMarker,
-                      childSessionId: agentSessionId,
-                      durableRunId,
-                    });
-                    if (!owned) {
-                      throw new DelegationDispatchOwnershipError(step.stepId);
-                    }
-                    if (explorerProfile) {
-                      const extended = await deps.storage.chatDelegationSteps.extendOwnedDispatchLease({
-                        stepId: step.stepId,
-                        expectedDispatchToken: dispatchLease.dispatchMarker,
-                        childSessionId: agentSessionId,
-                        leaseExpiresAt: new Date(
-                          Date.parse(await deps.storage.chatDelegationSteps.readDatabaseNow()) +
-                            Math.max(60_000, (childTimeoutSeconds + 60) * 1000),
-                        ).toISOString(),
-                      });
-                      if (!extended) {
-                        throw new DelegationDispatchOwnershipError(step.stepId);
-                      }
-                    }
-                    await attachDelegationChildWatcher(deps, {
-                      parentRunId: input.policyRunId,
-                      childRunId: durableRunId,
-                      ...(explorerProfile || options.requireChildWatchers ? { required: true } : {}),
-                      watcherId: `delegation-child:${step.stepId}`,
-                      delegationRunId: runId,
-                      stepId: step.stepId,
-                      childSessionId: agentSessionId,
-                      childTurnId: turnIdentity.turnId,
-                    });
-                    return owned;
+                const bound = locallyAdmittedStep ?? (await bindChildDurableRun(durableRunId));
+                if (locallyAdmittedStep) {
+                  await publishDelegationPostCommitSafely("local child admission", async () => {
+                    await callbacks?.onStep?.(bound);
                   });
-                } catch (error) {
-                  if (error instanceof DelegationDispatchOwnershipError || !explorerProfile) throw error;
-                  // The child admission is already canonical. Keep the step
-                  // recoverable instead of terminally failing an active,
-                  // deterministic durable child whose watcher write rolled
-                  // back with the binding transaction.
-                  throw new DelegationDurableLaunchRecoveryRequiredError(step.stepId, error);
+                } else {
+                  await callbacks?.onStep?.(bound);
                 }
-                await callbacks?.onStep?.(bound);
               },
             }),
         });
@@ -1992,7 +2011,7 @@ export class ChatDelegationService {
           throw new Error(`Delegated child ${agentSessionId} returned without a canonical turn identity.`);
         }
         const traceStatus = response.trace?.status;
-        const latestStep = await deps.storage.chatDelegationSteps.get(step.stepId);
+        const latestStep = await stepRepository.get(step.stepId);
         const responseDurableRunId = response.trace?.durable?.runId?.trim();
         if (latestStep.durableRunId && responseDurableRunId && latestStep.durableRunId !== responseDurableRunId) {
           throw new Error(`Delegation step ${step.stepId} returned a different durable child binding.`);
@@ -2147,7 +2166,7 @@ export class ChatDelegationService {
           const committedOutcome = await deps.storage.runImmediateTransaction(async () => {
             const locks = await lockDelegationAggregateTruth(deps, runId, task.taskId, agentSessionId);
             const waitingStep =
-              await deps.storage.chatDelegationSteps.finishOwnedDispatchWithResponse(responseCommitInput);
+              await stepRepository.finishOwnedDispatchWithResponse(responseCommitInput);
             if (!waitingStep) {
               return undefined;
             }
@@ -2163,7 +2182,7 @@ export class ChatDelegationService {
                 childTurnId: responseTurnId,
               });
             }
-            const releasedStep = await deps.storage.chatDelegationSteps.releaseOwnedWaitingDispatch({
+            const releasedStep = await stepRepository.releaseOwnedWaitingDispatch({
               stepId: step.stepId,
               expectedDispatchToken: dispatchLease.dispatchMarker,
               childSessionId: agentSessionId,
@@ -2184,7 +2203,7 @@ export class ChatDelegationService {
             return { step: releasedStep, subagentProjection, aggregate };
           });
           if (!committedOutcome) {
-            const current = await deps.storage.chatDelegationSteps.get(step.stepId);
+            const current = await stepRepository.get(step.stepId);
             return {
               step: current,
               output: current.output,
@@ -2226,7 +2245,7 @@ export class ChatDelegationService {
           const committedOutcome = await deps.storage.runImmediateTransaction(async () => {
             const locks = await lockDelegationAggregateTruth(deps, runId, task.taskId, agentSessionId);
             const terminalStep =
-              await deps.storage.chatDelegationSteps.finishOwnedDispatchWithResponse(responseCommitInput);
+              await stepRepository.finishOwnedDispatchWithResponse(responseCommitInput);
             if (!terminalStep) {
               return undefined;
             }
@@ -2262,7 +2281,7 @@ export class ChatDelegationService {
             return { step: terminalStep, subagentProjection, activity, deliverable, aggregate };
           });
           if (!committedOutcome) {
-            const current = await deps.storage.chatDelegationSteps.get(step.stepId);
+            const current = await stepRepository.get(step.stepId);
             return {
               step: current,
               output: current.output,
@@ -2335,7 +2354,7 @@ export class ChatDelegationService {
           error instanceof DelegationDispatchOwnershipError ||
           error instanceof DelegationDurableLaunchRecoveryRequiredError
         ) {
-          const current = await deps.storage.chatDelegationSteps.get(step.stepId);
+          const current = await stepRepository.get(step.stepId);
           return {
             step: current,
             output: current.output,
@@ -2404,7 +2423,7 @@ export class ChatDelegationService {
           committedFailure = await deps.storage.runImmediateTransaction(async () => {
             const locks = await lockDelegationAggregateTruth(deps, runId, task.taskId, registeredAgentSessionId);
             const failedStep = dispatchOwnership
-              ? await deps.storage.chatDelegationSteps.finishOwnedDispatchWithError({
+              ? await stepRepository.finishOwnedDispatchWithError({
                   stepId: step.stepId,
                   expectedDispatchToken: dispatchOwnership.token,
                   expectedChildSessionId: dispatchOwnership.childSessionId,
@@ -2416,7 +2435,7 @@ export class ChatDelegationService {
                   finishedAt,
                   durationMs,
                 })
-              : await deps.storage.chatDelegationSteps.finishUnclaimedPendingWithError({
+              : await stepRepository.finishUnclaimedPendingWithError({
                   stepId: step.stepId,
                   status,
                   label: step.role,
@@ -2469,7 +2488,7 @@ export class ChatDelegationService {
         if (!committedFailure) {
           timeoutFailureFenceState = "lost";
           bufferedLateSettle = undefined;
-          const current = await deps.storage.chatDelegationSteps.get(step.stepId);
+          const current = await stepRepository.get(step.stepId);
           return {
             step: current,
             output: current.output,
@@ -2526,9 +2545,9 @@ export class ChatDelegationService {
           continue;
         }
         const expectedTurnId = buildStableDelegationTurnIdentity(runId, step.stepId).turnId;
-        const databaseNowMs = Date.parse(await deps.storage.chatDelegationSteps.readDatabaseNow());
+        const databaseNowMs = Date.parse(await stepRepository.readDatabaseNow());
         const dispatchClaim = persistedStep
-          ? await deps.storage.chatDelegationSteps.getDispatchClaim(persistedStep.stepId)
+          ? await stepRepository.getDispatchClaim(persistedStep.stepId)
           : undefined;
         if (
           persistedStep &&
@@ -2546,7 +2565,7 @@ export class ChatDelegationService {
           runnableSteps.push(step);
           continue;
         }
-        const observedAt = await deps.storage.chatDelegationSteps.readDatabaseNow();
+        const observedAt = await stepRepository.readDatabaseNow();
         const dependencyResolution = await deps.storage.runImmediateTransaction(async () => {
           const locks = await lockDelegationAggregateTruth(deps, runId, task.taskId);
           const lockedStepById = new Map(locks.persistedSteps.map((lockedStep) => [lockedStep.stepId, lockedStep]));
@@ -2567,7 +2586,7 @@ export class ChatDelegationService {
             return { kind: "runnable" as const, dependencies: lockedDependencies };
           }
           const failedDependencyRoles = lockedFailedDependencies.map((dependency) => dependency.role);
-          const skippedStep = await deps.storage.chatDelegationSteps.finishUnclaimedPendingWithError({
+          const skippedStep = await stepRepository.finishUnclaimedPendingWithError({
             stepId: step.stepId,
             status: "skipped",
             error: `Skipped because dependency did not complete: ${failedDependencyRoles.join(", ")}`,
@@ -2630,7 +2649,7 @@ export class ChatDelegationService {
           continue;
         }
         if (dependencyResolution.kind === "stale") {
-          const current = await deps.storage.chatDelegationSteps.get(step.stepId);
+          const current = await stepRepository.get(step.stepId);
           stepResults.set(step.stepId, {
             step: current,
             output: current.output,
@@ -2675,7 +2694,7 @@ export class ChatDelegationService {
           runId,
           taskId: task.taskId,
           trace: locks.parent.trace,
-          observedAt: await deps.storage.chatDelegationSteps.readDatabaseNow(),
+          observedAt: await stepRepository.readDatabaseNow(),
         },
         locks,
       );
@@ -2687,7 +2706,7 @@ export class ChatDelegationService {
     }
 
     const parent = await deps.storage.chatDelegationRuns.get(runId);
-    const persistedSteps = await deps.storage.chatDelegationSteps.listByRun(runId);
+    const persistedSteps = await stepRepository.listByRun(runId);
     const projection = deriveDelegationAggregate(persistedSteps);
     const stitchedOutput = parent.stitchedOutput ?? projection.stitchedOutput;
     const citations = parent.citations.length > 0 ? parent.citations : projection.citations;
@@ -3650,14 +3669,6 @@ function normalizeDelegationSteps(input: {
   return normalized;
 }
 
-function buildStableDelegationId(prefix: string, ...parts: string[]): string {
-  const digest = createHash("sha256")
-    .update(parts.map((part) => `${part.length}:${part}`).join("|"))
-    .digest("hex")
-    .slice(0, 32);
-  return `${prefix}-${digest}`;
-}
-
 function stabilizeDelegationPlan(
   runId: string,
   requestedSteps: readonly NormalizedDelegationStep[],
@@ -3731,14 +3742,6 @@ interface DelegationDispatchLease {
   childSessionId?: string;
   dispatchMarker: string;
   dispatchExpiresAt: string;
-}
-
-function buildStableDelegationTurnIdentity(runId: string, stepId: string): DelegationTurnIdentity {
-  return {
-    turnId: buildStableDelegationId("delegation-turn", runId, stepId),
-    userMessageId: buildStableDelegationId("delegation-user", runId, stepId),
-    assistantMessageId: buildStableDelegationId("delegation-assistant", runId, stepId),
-  };
 }
 
 function buildDelegationDispatchMarker(

@@ -52,7 +52,7 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-@media (max-width: 1439px) {
+@media (max-width: 1279px) {
   .mc-next-settings-grid,
   .mc-next-settings-grid.is-detail-wide,
   .mc-next-settings-grid.is-three-column {
@@ -401,7 +401,7 @@
   }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 639px) {
   .mc-next-directory-page {
     gap: 0.68rem;
     padding: 0.68rem 0.58rem 1rem;
@@ -416,7 +416,7 @@
   }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 639px) {
   .mc-next-quality-dashboard-page {
     overflow-x: clip;
     max-width: 100%;

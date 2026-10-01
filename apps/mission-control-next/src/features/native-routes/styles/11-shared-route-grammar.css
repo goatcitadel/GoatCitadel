@@ -387,7 +387,7 @@
   border-top: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
 }
 
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .mc-next-section-index {
     align-items: flex-start;
     flex-direction: column;
@@ -538,14 +538,14 @@
   justify-self: start;
 }
 
-@media (min-width: 1181px) {
+@media (min-width: 1280px) {
   .mc-next-shell.has-shell-inspector[data-area="projects"] .mc-next-native-projects-grid {
     grid-template-columns: minmax(14rem, 0.7fr) minmax(27rem, 1.3fr);
     gap: 0.48rem;
   }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 639px) {
   .mc-next-directory-page {
     gap: 0.52rem;
     padding-inline: 0.44rem;

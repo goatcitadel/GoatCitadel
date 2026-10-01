@@ -1,5 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { sendRouteError } from "./_error-handler.js";
+import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 
 const promptPackImportSchema = z.object({
   content: z.string().min(1),
@@ -24,6 +26,12 @@ const promptPackParamsSchema = z.object({
 const promptPackBuiltinParamsSchema = z.object({
   packKey: z.string().min(1),
 });
+
+const promptPackBuiltinCreateSchema = z
+  .object({
+    expectedDefinitionRevision: z.string().regex(/^[a-f0-9]{64}$/u),
+  })
+  .strict();
 
 const promptPackTestParamsSchema = z.object({
   packId: z.string().min(1),
@@ -225,6 +233,22 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send(await promptPacks.importBuiltinPromptPack(params.data.packKey));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  // A separate path prevents older Gateways from silently ignoring create-only preconditions.
+  fastify.post("/api/v1/prompt-packs/builtins/:packKey/import-if-absent", async (request, reply) => {
+    const params = promptPackBuiltinParamsSchema.safeParse(request.params);
+    const body = promptPackBuiltinCreateSchema.safeParse(request.body);
+    if (!params.success || !body.success)
+      return reply.code(400).send({ error: "A built-in key and exact definition revision are required." });
+    try {
+      const result = await promptPacks.importBuiltinPromptPack(params.data.packKey, body.data);
+      await markMutationCommitted(request);
+      return reply.send(result);
+    } catch (error) {
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 

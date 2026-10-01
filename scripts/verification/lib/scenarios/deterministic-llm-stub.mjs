@@ -7,6 +7,10 @@ export const DETERMINISTIC_LLM_PROVIDER_ID = "verification-stub";
 export const DETERMINISTIC_LLM_MODEL = "verification-stub-chat";
 export const DETERMINISTIC_LLM_KEY_ENV = "GOATCITADEL_VERIFY_STUB_LLM_KEY";
 export const DETERMINISTIC_LLM_DEFAULT_REPLY = "Verification stub reply.";
+export const DETERMINISTIC_LLM_CAPABILITIES = Object.freeze({
+  reasoning: true,
+  reasoningEfforts: Object.freeze(["none", "low", "medium", "high"]),
+});
 
 // A valid 1x1 opaque teal PNG. The deterministic provider uses it to exercise
 // the real image-generation and PPTX embedding path without network credentials.
@@ -32,6 +36,7 @@ export async function writeDeterministicLlmProviderConfig(runtimeRoot, baseUrl, 
         apiStyle: options.apiStyle ?? "openai-chat-completions",
         defaultModel: model,
         apiKeyEnv,
+        capabilities: DETERMINISTIC_LLM_CAPABILITIES,
       },
     ],
   };
@@ -88,7 +93,7 @@ export async function startDeterministicLlmStub(options = {}) {
     options.dispatchPlanRequiredTool === undefined
       ? undefined
       : normalizeToolName(options.dispatchPlanRequiredTool, "dispatchPlanRequiredTool");
-  const expectedAuthorization = normalizeOptionalBoundedText(options.expectedAuthorization, "expectedAuthorization");
+  let expectedAuthorization = normalizeOptionalBoundedText(options.expectedAuthorization, "expectedAuthorization");
   const requestSummaries = [];
   const sockets = new Set();
   const dispatchWaiters = new Set();
@@ -282,6 +287,9 @@ export async function startDeterministicLlmStub(options = {}) {
     },
     replacePromptReplyRules: (nextRules) => {
       promptReplyRules = normalizePromptReplyRules(nextRules);
+    },
+    replaceExpectedAuthorization: (value) => {
+      expectedAuthorization = normalizeBoundedText(value, "expectedAuthorization");
     },
     waitForCompletionDispatchCount: (expectedCount, timeoutMs = 10_000) =>
       waitForCompletionDispatchCount(dispatchWaiters, () => completionDispatches, expectedCount, timeoutMs),

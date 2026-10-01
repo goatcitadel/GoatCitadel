@@ -78,6 +78,9 @@ function MermaidArtifactRenderer({ source }: { source: string }) {
           startOnLoad: false,
           securityLevel: "strict",
           theme: "neutral",
+          // The SVG hardener removes HTML foreignObject content. Use SVG text
+          // labels so normal diagram labels survive that security boundary.
+          htmlLabels: false,
         });
         const rendered = await mermaid.render(`generated-artifact-${renderId}`, source);
         if (!cancelled) {

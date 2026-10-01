@@ -65,7 +65,7 @@
   justify-content: center;
 }
 
-@media (max-width: 880px) {
+@media (max-width: 1023px) {
   .mc-next-approvals-decision-shell {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -136,7 +136,7 @@
   font-style: italic;
 }
 
-@media (max-width: 540px) {
+@media (max-width: 639px) {
   .mc-next-approvals-decision-context-row {
     grid-template-columns: minmax(0, 1fr);
     gap: 0.2rem;
@@ -599,7 +599,7 @@
   gap: 0.42rem;
 }
 
-@media (max-width: 880px) {
+@media (max-width: 1023px) {
   .mc-next-ops-diagnostics-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -828,7 +828,7 @@
   color: var(--text-secondary);
 }
 
-@media (max-width: 720px) {
+@media (max-width: 639px) {
   .mc-next-inline-card {
     align-items: stretch;
     flex-direction: column;
@@ -919,7 +919,7 @@
   font-weight: 700;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 639px) {
   .mc-next-run-receipt-inspector dl {
     grid-template-columns: minmax(0, 1fr);
   }

@@ -5,6 +5,7 @@ import {
   type RealtimeEvent,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
+import { deriveInboxChangeSignal } from "./inbox-change-signal.js";
 
 export interface RealtimePublisher {
   publishRealtime(
@@ -61,7 +62,36 @@ export class RealtimeEventService implements RealtimePublisher {
     if (APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY in payload && !deliveryEnvelope) {
       throw new Error("Invalid approval observability realtime envelope; refusing non-idempotent persistence.");
     }
-    const publicPayload = stripApprovalObservabilityRealtimeEnvelope(payload);
+    const event = await this.persistAndEmit(eventType, source, stripApprovalObservabilityRealtimeEnvelope(payload), options, deliveryEnvelope);
+    try {
+      const invalidation = deriveInboxChangeSignal(event);
+      if (invalidation) {
+        // Repeated owner delivery can repair a failed derivative append. The
+        // deterministic delivery ID prevents duplicate retention/live emission.
+        await this.persistAndEmit(invalidation.eventType, invalidation.source, invalidation.payload,
+          invalidation.options, invalidation.delivery);
+      }
+    } catch {
+      // The original is already committed. Never revive its mutation/outbox
+      // effect because this secondary refresh signal could not be retained.
+      try {
+        // eslint-disable-next-line no-console -- bounded diagnostic without recursive realtime publication.
+        console.warn("[goatcitadel] Inbox invalidation failed after retained owner event", { eventId: event.eventId });
+      } catch {
+        // Preserve the committed owner result if this best-effort diagnostic
+        // sink also fails. Repeated owner delivery can still repair the signal.
+      }
+    }
+    return event;
+  }
+
+  private async persistAndEmit(
+    eventType: string,
+    source: string,
+    publicPayload: Record<string, unknown>,
+    options: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId"> | undefined,
+    deliveryEnvelope: ApprovalObservabilityRealtimeEnvelope | undefined,
+  ): Promise<RealtimeEvent> {
     const projectedPayload = redactStructuredSecrets(publicPayload).value;
     const persisted = deliveryEnvelope
       ? await this.deps.storage.realtimeEvents.appendIdempotent(

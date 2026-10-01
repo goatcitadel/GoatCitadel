@@ -177,8 +177,8 @@ describe("SkillHubOperatorPanel", () => {
   it("keeps snapshot detail and facts single-column at narrow and mobile widths", () => {
     const cssPath = fileURLToPath(new URL("../styles/07-settings-library.css", import.meta.url));
     const css = fs.readFileSync(cssPath, "utf8");
-    expect(css).toMatch(/@media \(max-width: 960px\)[\s\S]*\.mc-next-skill-hub-layout[\s\S]*minmax\(0, 1fr\)/);
-    expect(css).toMatch(/@media \(max-width: 620px\)[\s\S]*\.mc-next-skill-hub-facts[\s\S]*minmax\(0, 1fr\)/);
+    expect(css).toMatch(/@media \(max-width: 1023px\)[\s\S]*\.mc-next-skill-hub-layout[\s\S]*minmax\(0, 1fr\)/);
+    expect(css).toMatch(/@media \(max-width: 639px\)[\s\S]*\.mc-next-skill-hub-facts[\s\S]*minmax\(0, 1fr\)/);
     expect(css).toMatch(/\.mc-next-skill-hub-facts dd[\s\S]*overflow-wrap: anywhere/);
   });
 });

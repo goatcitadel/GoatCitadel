@@ -999,7 +999,9 @@ function formatDecisionContextActor(approval: ApprovalRequest): ReactNode {
     <>
       <strong className="mc-next-approvals-decision-context-mono">{actor}</strong>
       {gatewayHint && gatewayHint !== actor ? (
-        <span className="mc-next-approvals-decision-context-aside"> (via gateway {gatewayHint})</span>
+        <span className="mc-next-approvals-decision-context-aside">
+          {" (via Gateway"}<span className="mc-next-technical-detail"> · {gatewayHint}</span>{")"}
+        </span>
       ) : null}
     </>
   );

@@ -1,6 +1,7 @@
 import { access, readFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   buildVisualBaselineFileName,
   NEXT_RELEASE_SURFACE_MANIFEST,
@@ -10,6 +11,7 @@ import {
   resolveVisualBaselineNamespace,
 } from "./verification/lib/release-surface-manifest.mjs";
 import { collectVisualBaselineCoverage } from "./verification/lib/visual-baseline-coverage.mjs";
+import { COCKPIT_VISUAL_MANIFEST } from "./verification/lib/cockpit-visual-manifest.mjs";
 
 const root = process.cwd();
 const VALID_RELEASE_SURFACE_STATUSES = new Set(["ship", "hide", "experimental", "needs_release_polish"]);
@@ -622,18 +624,28 @@ for (const route of NEXT_RELEASE_SURFACE_MANIFEST) {
   }
 }
 
-if (
-  NEXT_VISUAL_REGRESSION_MANIFEST.length !==
-  NEXT_RELEASE_SURFACE_MANIFEST.length + NEXT_VISUAL_SCENARIO_MANIFEST.length
-) {
+const expectedVisualRoutes = [
+  ...[...NEXT_RELEASE_SURFACE_MANIFEST, ...NEXT_VISUAL_SCENARIO_MANIFEST].map((route) => ({
+    ...route,
+    shell: "classic",
+  })),
+  ...COCKPIT_VISUAL_MANIFEST,
+];
+if (NEXT_VISUAL_REGRESSION_MANIFEST.length !== expectedVisualRoutes.length) {
   errors.push(
-    "scripts/verification/lib/release-surface-manifest.mjs must visually cover every release-surface route plus its scenario variants.",
+    "scripts/verification/lib/release-surface-manifest.mjs must visually cover every release-surface route, scenario variant, and additive cockpit route.",
   );
 }
-const visualManifestSlugs = new Set(NEXT_VISUAL_REGRESSION_MANIFEST.map((route) => route.slug));
-for (const route of NEXT_RELEASE_SURFACE_MANIFEST) {
-  if (!visualManifestSlugs.has(route.slug)) {
-    errors.push(`Mission Control Next visual-regression manifest is missing canonical route ${route.slug}.`);
+const visualManifestBySlug = new Map(NEXT_VISUAL_REGRESSION_MANIFEST.map((route) => [route.slug, route]));
+if (visualManifestBySlug.size !== NEXT_VISUAL_REGRESSION_MANIFEST.length) {
+  errors.push("Mission Control Next visual-regression manifest must use a unique baseline slug for each route.");
+}
+for (const route of expectedVisualRoutes) {
+  const visualRoute = visualManifestBySlug.get(route.slug);
+  if (!visualRoute) {
+    errors.push(`Mission Control Next visual-regression manifest is missing required route ${route.slug}.`);
+  } else if (!isDeepStrictEqual(visualRoute, route)) {
+    errors.push(`Mission Control Next visual-regression route ${route.slug} differs from its owning manifest.`);
   }
 }
 for (const route of NEXT_VISUAL_SCENARIO_MANIFEST) {

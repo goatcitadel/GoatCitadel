@@ -1,8 +1,10 @@
+import { resetMasonAttemptsForTests } from "./mason-session-state";
+import { masonSession, masonBlueprint, masonSummary } from "./mason.test-support";
 import { __resetSessionDraftsForTests } from "./session-drafts";
 import { __resetSessionViewStateForTests } from "../../../hooks/use-session-view-state";
-import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
+import { act, create as createRenderer, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CitadelMasonRoutePage } from "./CitadelMasonRoutePage";
 import type { NativeRoutePagesProps } from "../types";
@@ -13,7 +15,7 @@ const apiMocks = vi.hoisted(() => ({
   createMasonSession: vi.fn(),
   sendMasonMessage: vi.fn(),
   draftBlueprintFromMasonSession: vi.fn(),
-  reviewMasonBlueprint: vi.fn(),
+  reviewMasonBlueprint: vi.fn(), draftMasonBlueprint: vi.fn(), updateMasonSessionAnswers: vi.fn(), getCitadelStructureSnapshot: vi.fn(), stageMasonBlueprint: vi.fn(),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
@@ -22,9 +24,12 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   createMasonSession: apiMocks.createMasonSession,
   sendMasonMessage: apiMocks.sendMasonMessage,
   draftBlueprintFromMasonSession: apiMocks.draftBlueprintFromMasonSession,
-  reviewMasonBlueprint: apiMocks.reviewMasonBlueprint,
+  reviewMasonBlueprint: apiMocks.reviewMasonBlueprint, draftMasonBlueprint: apiMocks.draftMasonBlueprint, updateMasonSessionAnswers: apiMocks.updateMasonSessionAnswers, getCitadelStructureSnapshot: apiMocks.getCitadelStructureSnapshot, stageMasonBlueprint: apiMocks.stageMasonBlueprint,
 }));
 
+const renderers: ReactTestRenderer[] = [];
+function create(element: Parameters<typeof createRenderer>[0]) { const renderer = createRenderer(element); renderers.push(renderer); return renderer; }
+afterEach(async () => { await act(async () => { for (const renderer of renderers.splice(0)) renderer.unmount(); }); });
 const baseProps: NativeRoutePagesProps = {
   route: { area: "library", section: "citadel", theme: "library" },
   activeWorkspaceId: "default",
@@ -60,30 +65,14 @@ describe("CitadelMasonRoutePage", () => {
     vi.clearAllMocks();
     __resetSessionDraftsForTests(); __resetSessionViewStateForTests();
     apiMocks.getMasonSetupQuestions.mockResolvedValue(["What is this Citadel for?", "What must stay sealed?"]);
-    apiMocks.createMasonSession.mockResolvedValue({
-      sessionId: "s1",
-      answers: {},
-      status: "collecting",
-      createdAt: "t",
-      updatedAt: "t",
-    });
-    apiMocks.sendMasonMessage.mockResolvedValue({
-      sessionId: "s1",
-      answers: { kind: "company", purpose: "Run the company" },
-      status: "collecting",
-      createdAt: "t",
-      updatedAt: "t",
-    });
-    apiMocks.draftBlueprintFromMasonSession.mockResolvedValue({ schemaVersion: "goatcitadel.blueprint.v1" });
-    apiMocks.reviewMasonBlueprint.mockResolvedValue({
-      name: "Acme",
-      kind: "company",
-      chamberCount: 3,
-      sealedChamberCount: 1,
-      boundaries: [],
-      riskNotes: [],
-      lines: ["Staging only — nothing is connected or activated until you confirm."],
-    });
+    resetMasonAttemptsForTests();
+    let owner = masonSession();
+    apiMocks.createMasonSession.mockImplementation(async () => structuredClone(owner));
+    apiMocks.getMasonSession.mockImplementation(async () => structuredClone(owner));
+    apiMocks.sendMasonMessage.mockImplementation(async () => { owner = { ...owner, answers: { kind: "company", purpose: "Run the company" } }; return structuredClone(owner); });
+    apiMocks.draftMasonBlueprint.mockResolvedValue(masonBlueprint);
+    apiMocks.draftBlueprintFromMasonSession.mockResolvedValue(masonBlueprint);
+    apiMocks.reviewMasonBlueprint.mockResolvedValue(masonSummary);
   });
 
   it("renders the Mason header even while questions load", () => {
@@ -115,7 +104,7 @@ describe("CitadelMasonRoutePage", () => {
     });
 
     expect(apiMocks.createMasonSession).toHaveBeenCalledOnce();
-    expect(renderer!.root.findAllByType("textarea")).toHaveLength(1);
+    expect(renderer!.root.findAllByType("textarea").some(node => node.props.placeholder?.startsWith("e.g."))).toBe(true);
   });
 
   it("interprets a freeform message through the Mason and shows the captured answers", async () => {
@@ -128,13 +117,13 @@ describe("CitadelMasonRoutePage", () => {
     });
 
     await act(async () => {
-      renderer!.root.findByType("textarea").props.onChange({ target: { value: "I run a small company" } });
+      renderer!.root.findAllByType("textarea").find(node => node.props.placeholder?.startsWith("e.g."))!.props.onChange({ target: { value: "I run a small company" } });
     });
     await act(async () => {
       findButtonByLabel(renderer!, "Send to the Mason").props.onClick();
     });
 
-    expect(apiMocks.sendMasonMessage).toHaveBeenCalledWith("s1", "I run a small company");
+    expect(apiMocks.sendMasonMessage).toHaveBeenCalledWith("session-one", "I run a small company");
     expect(treeString(renderer!)).toContain("Run the company");
   });
 });

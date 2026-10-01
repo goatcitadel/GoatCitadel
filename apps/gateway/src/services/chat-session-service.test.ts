@@ -92,6 +92,23 @@ function createDeps(storage: Storage): ChatSessionDependencies {
 }
 
 describe("chat session service", () => {
+  it("binds exact session hydration to one visible workspace record even when a large limit is requested", async () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+      const requested = await createChatSession(deps, { workspaceId: "default", title: "Exact older record" });
+      await createChatSession(deps, { workspaceId: "default", title: "Another record" });
+      const candidates = vi.spyOn(storage.chatSessionLists, "listCandidates");
+      const items = await listChatSessions(deps, { workspaceId: "default", sessionId: requested.sessionId, limit: 1000 });
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({ sessionId: requested.sessionId, workspaceId: "default", title: "Exact older record" });
+      expect(candidates).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: requested.sessionId, workspaceId: "default", limit: 2 }));
+      expect(await listChatSessions(deps, { workspaceId: "foreign", sessionId: requested.sessionId })).toEqual([]);
+      storage.chatSessionMeta.patch(requested.sessionId, { includeInHistory: false });
+      expect(await listChatSessions(deps, { workspaceId: "default", sessionId: requested.sessionId })).toEqual([]);
+    } finally { cleanup(); }
+  });
+
   it("emits metadata-only durable lifecycle observers when a session starts and ends", async () => {
     const { storage, cleanup } = createStorage();
     try {
@@ -756,8 +773,12 @@ describe("chat session service", () => {
 
       expect((await pinChatSession(deps, created.sessionId)).pinned).toBe(true);
       expect((await unpinChatSession(deps, created.sessionId)).pinned).toBe(false);
-      expect((await archiveChatSession(deps, created.sessionId)).lifecycleStatus).toBe("archived");
-      expect((await restoreChatSession(deps, created.sessionId)).lifecycleStatus).toBe("active");
+      const archived = await archiveChatSession(deps, created.sessionId);
+      expect(archived.lifecycleStatus).toBe("archived");
+      expect(archived.archivedAt).toBeTruthy();
+      const restored = await restoreChatSession(deps, created.sessionId);
+      expect(restored.lifecycleStatus).toBe("active");
+      expect(restored.archivedAt).toBeUndefined();
 
       const prefsRevisionBefore = storage.chatSessionRevisions.get(created.sessionId)?.revision;
       const prefs = await updateChatSessionPrefs(deps, created.sessionId, {

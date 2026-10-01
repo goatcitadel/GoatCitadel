@@ -392,9 +392,9 @@ export function ChatTraceCard({
                       {run.failureGuidance ? <p>Next move: {run.failureGuidance}</p> : null}
                       {effectTruth ? (
                         <div className={`chat-tool-effect-truth is-${effectTruth.tone}`}>
-                          <strong>Effect truth: {effectTruth.tone}</strong>
-                          <p>{effectTruth.facts}</p>
-                          {effectTruth.guidance ? <p>{effectTruth.guidance}</p> : null}
+                          <strong>Tool effect</strong>
+                          <p>{effectTruth.plainSummary}</p>
+                          <p className="mc-next-technical-detail">{effectTruth.facts}</p>
                           {effectTruth.tone === "concrete" ? (
                             <p>
                               A concrete receipt is recorded; verify it against the canonical owner ledger before

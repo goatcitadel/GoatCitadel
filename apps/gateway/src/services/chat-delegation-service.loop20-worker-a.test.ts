@@ -3541,6 +3541,12 @@ describe("ChatDelegationService loop 20 coverage", () => {
     expect(step.childTurnId).toBeUndefined();
     expect(dispatchClaims.get(step.stepId)?.token).toBe("replacement-response-owner");
     expect(result.steps[0]).toEqual(expect.objectContaining({ status: "running" }));
+    const repository = deps.storage.chatDelegationSteps;
+    for (const method of [repository.create, repository.listByRun, repository.get,
+      repository.readDatabaseNow, repository.linkClaimedDispatch, repository.finishOwnedDispatchWithResponse]) {
+      expect(method).toHaveBeenCalled();
+      expect(method.mock.contexts.every((receiver) => receiver === repository)).toBe(true);
+    }
     expect(deps.taskLifecycleService.appendTaskDeliverable).not.toHaveBeenCalled();
     expect(deps.taskLifecycleService.publishDelegationAggregateTask).not.toHaveBeenCalled();
     expect(deps.extractAndPersistLearnedMemory).not.toHaveBeenCalled();

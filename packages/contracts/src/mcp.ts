@@ -383,6 +383,18 @@ export interface McpServerRevisionPrecondition {
   expectedRevision: string;
 }
 
+/** Explicit null reviews a legacy record without a connection generation. */
+export interface McpServerConnectionReview extends McpServerRevisionPrecondition {
+  expectedConnectionRevision: string | null;
+}
+
+export interface McpServerConnectionReceipt {
+  version: 1;
+  action: "connect" | "disconnect";
+  reviewed: McpServerConnectionReview;
+  server: McpServerRecord;
+}
+
 export type McpServerUpdateRequest = McpServerUpdateInput & McpServerRevisionPrecondition;
 export type McpServerPolicyUpdateRequest = Partial<McpServerPolicy> & McpServerRevisionPrecondition;
 
@@ -1092,6 +1104,19 @@ function compareExactMcpStrings(left: string, right: string): number {
 export interface McpOAuthStartResponse {
   authorizeUrl: string;
   state: string;
+  /** Present only on the explicitly reviewed OAuth-start path. */
+  review?: { version: 1; reviewed: McpServerConnectionReview; server: McpServerRecord };
+}
+
+export interface McpReviewedOAuthStartResponse extends McpOAuthStartResponse {
+  review: { version: 1; reviewed: McpServerConnectionReview; server: McpServerRecord };
+}
+
+export interface McpOAuthCompletionReceipt {
+  version: 1;
+  reviewed: McpServerConnectionReview;
+  state: string;
+  server: McpServerRecord;
 }
 
 export interface McpInvokeRequest {

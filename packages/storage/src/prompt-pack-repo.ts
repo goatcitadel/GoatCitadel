@@ -13,7 +13,7 @@ import {
   hashRunVariableSchema,
   normalizeRunVariableSchema,
 } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import { hashPromptPackPolicyV2, parsePromptPackPolicyV2, stringifyPromptPackPolicyV2 } from "./prompt-pack-policy.js";
 
 interface PromptPackRow {
@@ -44,10 +44,30 @@ interface PromptPackTestRow {
   created_at: string;
 }
 
+export interface PromptPackWriteInput {
+  packId?: string;
+  name: string;
+  sourceLabel?: string;
+  contentSha256?: string;
+  tests: Array<{
+    code: string;
+    title: string;
+    prompt: string;
+    orderIndex: number;
+    mode?: string;
+    toolTier?: string;
+    diagnosticMetadata?: PromptPackDiagnosticMetadata;
+  }>;
+  policyV2?: PromptPackPolicyV2;
+  policySource?: PromptPackPolicySource;
+  runVariableSchema?: RunVariableSchema;
+}
+
 export class PromptPackRepository {
   private readonly getPackStmt;
   private readonly listPacksStmt;
   private readonly upsertPackStmt;
+  private readonly createPackStmt;
   private readonly deleteTestsByPackStmt;
   private readonly insertTestStmt;
   private readonly listTestsStmt;
@@ -59,6 +79,21 @@ export class PromptPackRepository {
       SELECT * FROM prompt_packs
       ORDER BY updated_at DESC
       LIMIT @limit
+    `);
+    this.createPackStmt = db.prepare(`
+      INSERT INTO prompt_packs (
+        pack_id, name, source_label, test_count,
+        policy_v2_json, policy_v2_hash, policy_v2_source,
+        content_sha256, run_variable_schema_json, run_variable_schema_hash,
+        created_at, updated_at
+      )
+      VALUES (
+        @packId, @name, @sourceLabel, @testCount,
+        @policyV2Json, @policyV2Hash, @policyV2Source,
+        @contentSha256, @runVariableSchemaJson, @runVariableSchemaHash,
+        @createdAt, @updatedAt
+      )
+      ON CONFLICT(pack_id) DO NOTHING
     `);
     this.upsertPackStmt = db.prepare(`
       INSERT INTO prompt_packs (
@@ -138,24 +173,42 @@ export class PromptPackRepository {
     return mapTestRow(row);
   }
 
-  public replacePackTests(input: {
-    packId?: string;
-    name: string;
-    sourceLabel?: string;
-    contentSha256?: string;
-    tests: Array<{
-      code: string;
-      title: string;
-      prompt: string;
-      orderIndex: number;
-      mode?: string;
-      toolTier?: string;
-      diagnosticMetadata?: PromptPackDiagnosticMetadata;
-    }>;
-    policyV2?: PromptPackPolicyV2;
-    policySource?: PromptPackPolicySource;
-    runVariableSchema?: RunVariableSchema;
-  }): {
+  /** Atomically admits a new fixed key; an occupied key is never replaced. */
+  public createPackWithTestsIfAbsent(input: PromptPackWriteInput & { packId: string }) {
+    if (input.tests.length < 1 || input.tests.length > 5000) {
+      throw new RangeError("A create-only prompt pack must contain between 1 and 5000 tests.");
+    }
+    return this.db.transaction("immediate", () => {
+      const now = new Date().toISOString();
+      const schema = input.runVariableSchema ? normalizeRunVariableSchema(input.runVariableSchema) : undefined;
+      const policy = input.policyV2 ?? DEFAULT_PROMPT_PACK_POLICY_V2;
+      const inserted = this.createPackStmt.run({
+        packId: input.packId,
+        name: input.name,
+        sourceLabel: input.sourceLabel ?? null,
+        testCount: input.tests.length,
+        policyV2Json: stringifyPromptPackPolicyV2(policy),
+        policyV2Hash: hashPromptPackPolicyV2(policy),
+        policyV2Source: input.policySource ?? "inherited_default",
+        contentSha256: input.contentSha256 ?? null,
+        runVariableSchemaJson: schema ? JSON.stringify(schema) : null,
+        runVariableSchemaHash: schema ? hashRunVariableSchema(schema) : null,
+        createdAt: now,
+        updatedAt: now,
+      });
+      if (inserted.changes !== 1)
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "This prompt-pack key already exists. Its definition and evidence were preserved.",
+          details: { reason: "PROMPT_PACK_ALREADY_EXISTS", packId: input.packId, mutationCommitted: false },
+        });
+      this.insertTests(input.packId, input.tests, now);
+      // Build the receipt before commit, so a failed projection rolls back the write.
+      return { pack: this.getPack(input.packId), tests: this.listTests(input.packId, input.tests.length) };
+    });
+  }
+
+  public replacePackTests(input: PromptPackWriteInput): {
     pack: PromptPackRecord;
     tests: PromptPackTestRecord[];
   } {
@@ -187,26 +240,30 @@ export class PromptPackRepository {
       });
 
       this.deleteTestsByPackStmt.run(packId);
-      for (const test of input.tests) {
-        this.insertTestStmt.run({
-          testId: `ppt-${randomUUID()}`,
-          packId,
-          code: test.code,
-          title: test.title,
-          prompt: test.prompt,
-          orderIndex: test.orderIndex,
-          mode: test.mode ?? null,
-          toolTier: test.toolTier ?? null,
-          diagnosticMetadataJson: test.diagnosticMetadata ? JSON.stringify(test.diagnosticMetadata) : null,
-          createdAt: now,
-        });
-      }
+      this.insertTests(packId, input.tests, now);
     });
 
     return {
       pack: this.getPack(packId),
       tests: this.listTests(packId, Math.max(1000, input.tests.length + 10)),
     };
+  }
+
+  private insertTests(packId: string, tests: PromptPackWriteInput["tests"], now: string): void {
+    for (const test of tests) {
+      this.insertTestStmt.run({
+        testId: `ppt-${randomUUID()}`,
+        packId,
+        code: test.code,
+        title: test.title,
+        prompt: test.prompt,
+        orderIndex: test.orderIndex,
+        mode: test.mode ?? null,
+        toolTier: test.toolTier ?? null,
+        diagnosticMetadataJson: test.diagnosticMetadata ? JSON.stringify(test.diagnosticMetadata) : null,
+        createdAt: now,
+      });
+    }
   }
 }
 

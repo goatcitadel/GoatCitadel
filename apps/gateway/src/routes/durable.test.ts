@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { durableRoutes } from "./durable.js";
+import { ValidationError } from "@goatcitadel/contracts";
 
 describe("durable routes", () => {
   let app: FastifyInstance | null = null;
@@ -149,6 +150,35 @@ describe("durable routes", () => {
     expect(deadLetters.json()).toEqual({ items: [{ entryId: "dead-1" }] });
     expect(listRuns).toHaveBeenCalledWith(3);
     expect(listDeadLetters).toHaveBeenCalledWith(2);
+  });
+
+  it("delegates scoped history and rejects cursor or scope errors without falling back to global runs", async () => {
+    const listRunHistory = vi.fn().mockResolvedValueOnce({ items: [{ runId: "scoped" }], nextCursor: "next" })
+      .mockRejectedValue(new ValidationError({ field: "cursor" }));
+    const listRuns = vi.fn();
+    app = buildDurableApp({ listRunHistory, listRuns });
+    await app.register(durableRoutes);
+    const page = await app.inject({ method: "GET", url: "/api/v1/durable/runs?workspaceId=alpha&limit=2&cursor=page" });
+    expect(page.statusCode).toBe(200);
+    expect(page.json()).toEqual({ items: [{ runId: "scoped" }], nextCursor: "next" });
+    expect(listRunHistory).toHaveBeenCalledWith({ workspaceId: "alpha", limit: 2, cursor: "page" });
+    const invalidCursor = await app.inject({ method: "GET", url: "/api/v1/durable/runs?workspaceId=beta&cursor=page" });
+    expect(invalidCursor.statusCode).toBe(400);
+    expect(invalidCursor.json()).toMatchObject({ code: "FIELD_INVALID" });
+    for (const query of ["cursor=page", "workspaceId=", "workspaceId=a%00b", "workspaceId=alpha&cursor=", "workspaceId=alpha&limit=501", `workspaceId=${encodeURIComponent("é".repeat(101))}`]) {
+      expect((await app.inject({ method: "GET", url: `/api/v1/durable/runs?${query}` })).statusCode).toBe(400);
+    }
+    expect(listRuns).not.toHaveBeenCalled();
+    expect(listRunHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps scoped history operator-only", async () => {
+    const listRunHistory = vi.fn();
+    app = buildDurableApp({ listRunHistory });
+    app.requireOperatorAuth = async (_request, reply) => { await reply.code(401).send({ error: "Unauthorized" }); };
+    await app.register(durableRoutes);
+    expect((await app.inject({ method: "GET", url: "/api/v1/durable/runs?workspaceId=alpha" })).statusCode).toBe(401);
+    expect(listRunHistory).not.toHaveBeenCalled();
   });
 
   it("creates runs with validated retry and wait-event payloads and reports conflicts", async () => {
@@ -315,6 +345,7 @@ describe("durable routes", () => {
     app = buildDurableApp({
       getDiagnostics: vi.fn(() => diagnostics),
       listRuns: vi.fn(() => [rawRecord]),
+      listRunHistory: vi.fn(() => ({ items: [rawRecord], nextCursor: "safe-cursor" })),
       listDeadLetters: vi.fn(() => [rawRecord]),
       listRunCheckpoints: vi.fn(() => [rawRecord]),
       createRun: vi.fn(() => rawRecord),
@@ -347,6 +378,7 @@ describe("durable routes", () => {
         payload: { eventKey: "provider.ready" },
       }),
       app.inject({ method: "POST", url: "/api/v1/durable/dead-letters/dead-secret/recover", payload: {} }),
+      app.inject({ method: "GET", url: "/api/v1/durable/runs?workspaceId=alpha" }),
     ]);
 
     for (const response of responses) {
@@ -362,6 +394,7 @@ describe("durable routes", () => {
     }
 
     const run = responses[5]!.json();
+    expect(responses.at(-1)!.json().nextCursor).toBe("safe-cursor");
     expect(run).toMatchObject({
       runId: "run-secret",
       status: "queued",

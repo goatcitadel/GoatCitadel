@@ -26,6 +26,7 @@ import {
   type ChatSessionWorkbenchPatchApplyResponse,
   type ChatSessionWorkbenchPatchExportResponse,
   type ChatSessionWorkbenchRecord,
+  type ChatSessionWorkbenchReadOptions,
   type ChatSessionWorkbenchRevertFileRequest,
   type ChatSessionWorkbenchRevertResponse,
   type ChatSessionWorkbenchSaveFileRequest,
@@ -87,9 +88,10 @@ export interface ChatWorkbenchDependencies {
 export async function getChatSessionWorkbench(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
+  options: ChatSessionWorkbenchReadOptions = {},
 ): Promise<ChatSessionWorkbenchRecord> {
   await deps.requireChatSession(sessionId);
-  return await syncWorkbenchState(deps, sessionId);
+  return options.preview ? readWorkbenchState(deps, sessionId) : syncWorkbenchState(deps, sessionId);
 }
 
 export async function createChatSessionWorkbenchWorktree(
@@ -139,10 +141,12 @@ export async function createChatSessionWorkbenchWorktree(
 export async function getChatSessionWorkbenchTree(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
+  options: ChatSessionWorkbenchReadOptions = {},
 ): Promise<ChatSessionWorkbenchTreeResponse> {
   await deps.requireChatSession(sessionId);
-  const state = await syncWorkbenchState(deps, sessionId);
+  const state = await (options.preview ? readWorkbenchState(deps, sessionId) : syncWorkbenchState(deps, sessionId));
   const context = await resolveWorkbenchContext(deps, sessionId, state, true);
+  if (options.preview) assertPreviewProject(state, context.project.projectId);
   const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
   const entries: ChatSessionWorkbenchTreeEntry[] = [];
   await walkWorkbenchTree(context.projectRoot, context.projectRoot, entries, changedFiles, MAX_TREE_ITEMS);
@@ -158,11 +162,13 @@ export async function getChatSessionWorkbenchFile(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
   relativePath: string,
+  options: ChatSessionWorkbenchReadOptions = {},
 ): Promise<ChatSessionWorkbenchFileResponse> {
   await deps.requireChatSession(sessionId);
-  const state = await syncWorkbenchState(deps, sessionId);
+  const state = await (options.preview ? readWorkbenchState(deps, sessionId) : syncWorkbenchState(deps, sessionId));
   const context = await resolveWorkbenchContext(deps, sessionId, state, true);
-  return await buildWorkbenchFileResponse(deps, sessionId, context, relativePath);
+  if (options.preview) assertPreviewProject(state, context.project.projectId);
+  return await buildWorkbenchFileResponse(deps, sessionId, context, relativePath, undefined, options.preview ? state : undefined);
 }
 
 export async function saveChatSessionWorkbenchFile(
@@ -881,6 +887,21 @@ export async function getChatSessionWorkbenchOutput(
   };
 }
 
+async function readWorkbenchState(deps: ChatWorkbenchDependencies, sessionId: string): Promise<ChatSessionWorkbenchRecord> {
+  const storage = deps.storage;
+  const current = await storage.chatSessionWorkbench.get(sessionId);
+  if (!current || current.sessionId !== sessionId) throw new NotFoundError({ entity: "Existing session workbench", id: sessionId });
+  const projectId = (await storage.chatSessionProjects.get(sessionId))?.projectId;
+  assertPreviewProject(current, projectId);
+  return hydrateWorkbenchRecord(deps, { ...current, worktreeStatus: resolveWorkbenchPathStatus(current.worktreePath) });
+}
+
+function assertPreviewProject(state: ChatSessionWorkbenchRecord, projectId: string | undefined): void {
+  if (state.projectId !== projectId) {
+    throw new ValidationError({ message: "The conversation project changed since this worktree was recorded. Open its workbench to review the current context." });
+  }
+}
+
 async function syncWorkbenchState(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
@@ -954,6 +975,7 @@ async function buildWorkbenchFileResponse(
   },
   relativePath: string,
   savedSnapshot?: WorkbenchFileSnapshot,
+  previewState?: ChatSessionWorkbenchRecord,
 ): Promise<ChatSessionWorkbenchFileResponse> {
   const normalized = normalizeWorkbenchRelativePath(relativePath);
   const targetPath = path.resolve(context.projectRoot, normalized);
@@ -964,12 +986,12 @@ async function buildWorkbenchFileResponse(
   } = savedSnapshot ?? (await readWorkbenchFilePayload(deps, sessionId, context, relativePath));
   const content = contentBuffer.toString("utf8");
   const changedFiles = new Set(listChangedFiles(context.worktreePath, context.repoScopePath));
-  const nextState = await deps.storage.chatSessionWorkbench.patch(sessionId, {
+  const nextState = previewState ?? await deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId: context.project.projectId,
     activeFilePath: normalized,
   });
   return {
-    state: hydrateWorkbenchRecord(deps, nextState, context.project.projectId),
+    state: previewState ?? hydrateWorkbenchRecord(deps, nextState, context.project.projectId),
     path: normalized,
     revision,
     sizeBytes: Number(stat.size),

@@ -17,6 +17,7 @@ import { gatewayEventsRoute } from "./routes/gateway-events.js";
 import { sessionsListRoute } from "./routes/sessions-list.js";
 import { toolsInvokeRoute } from "./routes/tools-invoke.js";
 import { approvalsRoutes } from "./routes/approvals.js";
+import { inboxRoutes } from "./routes/inbox.js";
 import { capabilityScopeRoutes } from "./routes/capability-scope-routes.js";
 import { citadelsRoutes } from "./routes/citadels.js";
 import { complianceRoutes } from "./routes/compliance.js";
@@ -392,6 +393,7 @@ export async function buildApp(options: GatewayPluginOptions = {}) {
     await app.register(sessionsListRoute);
     await app.register(toolsInvokeRoute);
     await app.register(approvalsRoutes);
+    await app.register(inboxRoutes);
     await app.register(capabilityScopeRoutes);
     await app.register(citadelsRoutes);
     await app.register(complianceRoutes);

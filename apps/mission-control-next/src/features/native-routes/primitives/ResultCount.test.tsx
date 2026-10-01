@@ -17,6 +17,11 @@ describe("ResultCount", () => {
     expect(markup).not.toContain("Showing");
   });
 
+  it("uses singular copy for one item and allows irregular nouns", () => {
+    expect(renderToStaticMarkup(<ResultCount shown={1} total={1} noun="items" />)).toContain("1 item");
+    expect(renderToStaticMarkup(<ResultCount shown={1} total={1} noun="categories" nounSingular="category" />)).toContain("1 category");
+  });
+
   it("formats large numbers with separators", () => {
     const markup = renderToStaticMarkup(<ResultCount shown={10} total={12000} />);
     expect(markup).toContain("12,000");

@@ -7,6 +7,7 @@ import type {
   NotificationTarget,
 } from "@goatcitadel/contracts";
 import { createChannelSetupRoutePort } from "./channel-setup-route-service.js";
+import { resolveChannelConfigTarget } from "./channel-config.js";
 import { createCommsRoutePort } from "./comms-route-service.js";
 import { createIntegrationRoutePort } from "./integration-route-service.js";
 import { createIntegrationWebhookRoutePort } from "./integration-webhook-route-service.js";
@@ -341,8 +342,12 @@ async function deliverNotificationForGateway(
   return deliverNotificationToWebhook(gateway, target, event, idempotencyKey);
 }
 
-async function deliverNotificationToChannel(
-  gateway: GatewayRouteCompositionPort,
+export async function deliverNotificationToChannel(
+  gateway: Pick<GatewayRouteCompositionPort, "commsSend"> & {
+    storage: {
+      integrationConnections: Pick<GatewayRouteCompositionPort["storage"]["integrationConnections"], "get">;
+    };
+  },
   target: NotificationTarget,
   event: NotificationEventRecord,
   idempotencyKey: string,
@@ -353,7 +358,8 @@ async function deliverNotificationToChannel(
   if (connection.workspaceId && connection.workspaceId !== event.workspaceId) {
     return { status: "failed", lastError: "Channel connection belongs to another workspace." };
   }
-  const channelTarget = readConfiguredChannelTarget(connection.config);
+  const channelTarget =
+    resolveChannelConfigTarget(connection.key, connection.config) ?? readConfiguredChannelTarget(connection.config);
   if (!channelTarget) return { status: "failed", lastError: "Channel connection has no configured destination." };
   const result = await gateway.commsSend({
     connectionId,
@@ -364,7 +370,7 @@ async function deliverNotificationToChannel(
     taskId: event.turnId,
     operatorId: "notification-routing",
     effectId: idempotencyKey,
-    surface: "settings",
+    surface: "tools",
   });
   const status = readResultStatus(result);
   if (status === "failed" || status === "blocked") {

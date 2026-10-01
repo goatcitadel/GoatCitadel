@@ -1,12 +1,14 @@
 import type { ChatMode, ChatSessionBindingRecord, ChatSessionRecord, ChatThreadResponse } from "@goatcitadel/contracts";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiRequestError,
+  type ChatSessionsResponse,
   archiveChatSession,
   archiveWorkspaceChatSessions,
   assignChatSessionProject,
   createChatProject,
   createChatSession,
+  fetchChatSessionStatus,
   deleteChatSession,
   importChatProject,
   pinChatSession,
@@ -15,6 +17,9 @@ import {
   unpinChatSession,
   updateChatSession,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { assertChatSessionCreated, beginChatSessionCreation, chatSessionCreationKey, publishChatSessionCreation, readChatSessionCreation, type ChatSessionCreation } from "@goatcitadel/mission-control-shared/state/chat-session-creation";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { useManualChatSessionCreation } from "./useManualChatSessionCreation";
 import type { ChatHistoryView, ChatSidebarLoadOptions } from "./useChatSessionData";
 import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
 
@@ -60,12 +65,19 @@ export type SessionMetadataConflictDraft =
   | { sessionId: string; kind: "rename"; renameTitle: string }
   | { sessionId: string; kind: "organization"; folderName: string; tagsValue: string };
 
+/** Ephemeral provenance for the automatic session created by the first outbound send. */
+export interface InitialOutboundSessionCreation {
+  workspaceId: string;
+  sessionId: string;
+}
+
 function isSessionRevisionConflict(error: unknown): error is ApiRequestError {
   return error instanceof ApiRequestError && error.status === 409;
 }
 
 export function useChatSessionControls(input: {
   workspaceId: string;
+  viewIdentity?: string;
   historyView: ChatHistoryView;
   sessionMode: ChatMode;
   selectedProjectId: string;
@@ -80,9 +92,11 @@ export function useChatSessionControls(input: {
   setError: (value: string | null) => void;
   setSending: (value: boolean) => void;
   setQueuedOutbound: React.Dispatch<React.SetStateAction<OutboundQueueItem[]>>;
+  setSessions: React.Dispatch<React.SetStateAction<ChatSessionsResponse | null>>;
   setThread: React.Dispatch<React.SetStateAction<ChatThreadResponse | null>>;
   loadSidebar: (nextHistoryView?: ChatHistoryView, options?: ChatSidebarLoadOptions) => Promise<void>;
   onSessionCreated?: (session: ChatSessionRecord) => void;
+  initialOutboundSessionCreationRef?: React.MutableRefObject<InitialOutboundSessionCreation | null>;
   refreshSessionAggregate?: (sessionId: string) => Promise<void>;
   setSessionMetadataConflictDraft?: (draft: SessionMetadataConflictDraft | null) => void;
   setBinding: React.Dispatch<React.SetStateAction<ChatSessionBindingRecord | null>>;
@@ -104,14 +118,30 @@ export function useChatSessionControls(input: {
     setSending,
     setQueuedOutbound,
     setThread,
+    setSessions,
     loadSidebar,
     onSessionCreated,
+    initialOutboundSessionCreationRef,
     refreshSessionAggregate,
     setSessionMetadataConflictDraft,
     setBinding,
   } = input;
 
-  const [creatingSessionMode, setCreatingSessionMode] = useState<ChatMode | null>(null);
+  const selectionScopeRef = useRef({ workspaceId, selectedSessionId });
+  if (
+    selectionScopeRef.current.workspaceId !== workspaceId ||
+    selectionScopeRef.current.selectedSessionId !== selectedSessionId
+  ) {
+    selectionScopeRef.current = { workspaceId, selectedSessionId };
+  }
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const [projectName, setProjectName] = useState("");
   const [projectPath, setProjectPath] = useState("chat/default");
   const [showProjectCreate, setShowProjectCreate] = useState(false);
@@ -126,41 +156,10 @@ export function useChatSessionControls(input: {
   const [integrationConnectionId, setIntegrationConnectionId] = useState("");
   const [integrationTarget, setIntegrationTarget] = useState("");
 
-  const handleCreateSession = useCallback(
-    async (mode: ChatMode) => {
-      const nextHistoryView: ChatHistoryView = historyView === "archived" ? "active" : historyView;
-      setCreatingSessionMode(mode);
-      setError(null);
-      try {
-        const created = await createChatSession(
-          selectedProjectId !== "all" && selectedProjectId !== "none"
-            ? { workspaceId, projectId: selectedProjectId, mode }
-            : { workspaceId, mode },
-          { originSurface: mode },
-        );
-        if (nextHistoryView !== historyView) {
-          setHistoryView(nextHistoryView);
-        }
-        setSelectedSessionId(created.sessionId);
-        onSessionCreated?.(created);
-        await loadSidebar(nextHistoryView, { bypassCache: true, preferredSessionId: created.sessionId });
-      } catch (err) {
-        setError((err as Error).message);
-      } finally {
-        setCreatingSessionMode(null);
-      }
-    },
-    [
-      historyView,
-      loadSidebar,
-      onSessionCreated,
-      selectedProjectId,
-      setError,
-      setHistoryView,
-      setSelectedSessionId,
-      workspaceId,
-    ],
-  );
+  const { create: handleCreateSession, creatingSessionMode, isCurrent: isCreationViewCurrent } = useManualChatSessionCreation({
+    workspaceId, viewIdentity: input.viewIdentity, selectedProjectId, selectedSessionId, historyView,
+    setSessions, setHistoryView, setSelectedSessionId, setError, onSessionCreated,
+  });
 
   const ensureSession = useCallback(async (): Promise<ChatSessionRecord> => {
     if (selectedSession) return selectedSession;
@@ -172,22 +171,53 @@ export function useChatSessionControls(input: {
         projectId: selectedProjectId !== "all" && selectedProjectId !== "none" ? selectedProjectId : undefined,
       });
     }
+    if (!isCreationViewCurrent()) throw new DOMException("The first-send conversation view changed before creation.", "AbortError");
+    const creationScope = selectionScopeRef.current;
     const nextHistoryView: ChatHistoryView = historyView === "archived" ? "active" : historyView;
-    const created = await createChatSession(
-      selectedProjectId !== "all" && selectedProjectId !== "none"
-        ? { workspaceId, projectId: selectedProjectId, mode: sessionMode }
-        : { workspaceId, mode: sessionMode },
-      { originSurface: sessionMode },
-    );
+    const installation = getGatewayApiBaseUrl();
+    const creationKey = chatSessionCreationKey(installation, workspaceId);
+    const attempt: ChatSessionCreation = { state: "pending", mode: sessionMode, message: "Creating the conversation for this first send…" };
+    if (!beginChatSessionCreation(creationKey, attempt)) throw new Error(readChatSessionCreation(creationKey)!.message);
+    let created: ChatSessionRecord;
+    try {
+      const projectId = selectedProjectId !== "all" && selectedProjectId !== "none" ? selectedProjectId : undefined;
+      created = await createChatSession(
+        projectId ? { workspaceId, projectId, mode: sessionMode } : { workspaceId, mode: sessionMode },
+        { originSurface: sessionMode },
+      );
+      assertChatSessionCreated(created, workspaceId, projectId);
+      attempt.sessionId = created.sessionId;
+      const saved = await fetchChatSessionStatus(created.sessionId, new AbortController().signal);
+      if (getGatewayApiBaseUrl() !== installation || saved.sessionId !== created.sessionId || saved.workspaceId !== workspaceId) {
+        throw new Error("The independent conversation read does not match the first-send creation owner.");
+      }
+      attempt.state = "confirmed";
+      attempt.message = "Conversation created and independently verified.";
+      publishChatSessionCreation(creationKey, attempt);
+    } catch (cause) {
+      attempt.state = "unknown";
+      attempt.message = "Creation outcome is unconfirmed. Check conversation history before creating another; this app will not retry.";
+      publishChatSessionCreation(creationKey, attempt);
+      throw cause;
+    }
+    if (!mountedRef.current || selectionScopeRef.current !== creationScope || !isCreationViewCurrent()) {
+      // A navigation abort must not restore the old draft into the newly selected scope.
+      throw new DOMException("Session selection changed while the new conversation was being created.", "AbortError");
+    }
+    if (initialOutboundSessionCreationRef) {
+      initialOutboundSessionCreationRef.current = { workspaceId, sessionId: created.sessionId };
+    }
     if (nextHistoryView !== historyView) {
       setHistoryView(nextHistoryView);
     }
     setSelectedSessionId(created.sessionId);
     onSessionCreated?.(created);
-    await loadSidebar(nextHistoryView, { bypassCache: true, preferredSessionId: created.sessionId });
+    await loadSidebar(nextHistoryView, { bypassCache: true, preserveSelection: true });
     return created;
   }, [
     historyView,
+    initialOutboundSessionCreationRef,
+    isCreationViewCurrent,
     loadSidebar,
     onSessionCreated,
     selectedProjectId,
@@ -338,13 +368,18 @@ export function useChatSessionControls(input: {
       const restoring = selectedSession.lifecycleStatus === "archived";
       if (restoring) await restoreChatSession(selectedSession.sessionId, selectedSession.revision);
       else await archiveChatSession(selectedSession.sessionId, selectedSession.revision);
-      const sessionLeavesView = (!restoring && historyView === "active") || (restoring && historyView === "archived");
-      if (sessionLeavesView) {
+      if (!restoring && historyView === "active") {
         setQueuedOutbound((current) => current.filter((item) => item.sessionId !== selectedSession.sessionId));
         setThread(null);
         setSelectedSessionId((current) => (current === selectedSession.sessionId ? null : current));
       }
-      await loadSidebar(historyView, { bypassCache: true });
+      if (restoring && historyView === "archived") {
+        setHistoryView("active");
+        setSelectedSessionId(selectedSession.sessionId);
+        await loadSidebar("active", { bypassCache: true, preferredSessionId: selectedSession.sessionId });
+      } else {
+        await loadSidebar(historyView, { bypassCache: true });
+      }
     } catch (err) {
       if (isSessionRevisionConflict(err)) {
         await (refreshSessionAggregate?.(selectedSession.sessionId) ??
@@ -363,6 +398,7 @@ export function useChatSessionControls(input: {
     selectedSession,
     setError,
     setQueuedOutbound,
+    setHistoryView,
     setSelectedSessionId,
     setThread,
   ]);

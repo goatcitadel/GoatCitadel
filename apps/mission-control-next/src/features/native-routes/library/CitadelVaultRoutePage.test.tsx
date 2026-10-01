@@ -1,4 +1,5 @@
 import { __resetSessionDraftsForTests } from "./session-drafts";
+import { __resetCitadelVaultAttemptsForTests } from "./citadel-vault-state";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,18 +36,42 @@ function makeProps(): NativeRoutePagesProps {
 }
 
 function vaultSnapshot(revision = "a", citadelId = "default") {
-  return { citadelId, revision: revision.repeat(64), items: [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: revision }] };
+  return {
+    citadelId,
+    revision: revision.repeat(64),
+    items: [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: revision }],
+  };
+}
+function rejected(status: number, method = "POST") {
+  return Object.assign(new Error("Rejected before write"), {
+    status,
+    kind: "http",
+    method,
+    path: `/api/v1/citadels/default/vault-secrets${method === "DELETE" ? "/s1" : ""}`,
+    body:
+      status === 409
+        ? { code: "WRITE_CONFLICT", details: { reason: "CITADEL_VAULT_REVISION_CONFLICT" } }
+        : { error: "Vault is unavailable — the secret store could not provide a key." },
+  });
 }
 
 async function openDraft(renderer: ReactTestRenderer, name = "new-secret", value = "synthetic-draft") {
-  await act(async () => { buttonByLabel(renderer, "Store secret").props.onClick(); });
-  await act(async () => { inputByPlaceholder(renderer, "stripe-secret-key").props.onChange({ target: { value: name } }); });
-  await act(async () => { inputByPlaceholder(renderer, "sk-live-…").props.onChange({ target: { value } }); });
+  await act(async () => {
+    buttonByLabel(renderer, "Store secret").props.onClick();
+  });
+  await act(async () => {
+    inputByPlaceholder(renderer, "stripe-secret-key").props.onChange({ target: { value: name } });
+  });
+  await act(async () => {
+    inputByPlaceholder(renderer, "sk-live-…").props.onChange({ target: { value } });
+  });
 }
 
 async function mountVault(props = makeProps()) {
   let renderer!: ReactTestRenderer;
-  await act(async () => { renderer = create(<CitadelVaultRoutePage {...props} />); });
+  await act(async () => {
+    renderer = create(<CitadelVaultRoutePage {...props} />);
+  });
   return renderer;
 }
 
@@ -105,10 +130,31 @@ describe("CitadelVaultRoutePage", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     __resetSessionDraftsForTests();
-    apiMocks.getCitadelVaultSnapshot.mockResolvedValue(vaultSnapshot());
-    apiMocks.storeCitadelVaultSecret.mockResolvedValue(vaultSnapshot("b"));
+    __resetCitadelVaultAttemptsForTests();
+    let owner = vaultSnapshot();
+    apiMocks.getCitadelVaultSnapshot.mockImplementation(async () => owner);
+    apiMocks.storeCitadelVaultSecret.mockImplementation(async (_id: string, name: string) => {
+      const prior = owner.items.find((item) => item.secretName === name);
+      owner = {
+        ...owner,
+        revision: "b".repeat(64),
+        items: [
+          ...owner.items.filter((item) => item.secretName !== name),
+          {
+            secretId: prior?.secretId ?? "new-secret",
+            secretName: name,
+            createdAt: prior?.createdAt ?? "t",
+            updatedAt: "b",
+          },
+        ].sort((a, b) => a.secretName.localeCompare(b.secretName)),
+      };
+      return owner;
+    });
     apiMocks.revealCitadelVaultSecret.mockResolvedValue("sk-live-REVEALED");
-    apiMocks.deleteCitadelVaultSecret.mockResolvedValue({ ...vaultSnapshot("b"), items: [] });
+    apiMocks.deleteCitadelVaultSecret.mockImplementation(async () => {
+      owner = { ...owner, revision: "b".repeat(64), items: [] };
+      return owner;
+    });
     apiMocks.isApiRequestError.mockImplementation((error) => typeof error?.status === "number");
   });
 
@@ -121,52 +167,93 @@ describe("CitadelVaultRoutePage", () => {
   it("retains a conflicted draft and requires explicit metadata review before retry", async () => {
     const renderer = await mountVault();
     await openDraft(renderer);
-    apiMocks.storeCitadelVaultSecret.mockRejectedValueOnce(Object.assign(new Error("Changed"), { status: 409 }));
-    apiMocks.getCitadelVaultSnapshot.mockResolvedValue(vaultSnapshot("b"));
-    await act(async () => { buttonByLabel(renderer, "Seal & store").props.onClick(); });
+    apiMocks.storeCitadelVaultSecret.mockRejectedValueOnce(rejected(409));
+    apiMocks.getCitadelVaultSnapshot.mockResolvedValueOnce(vaultSnapshot()).mockResolvedValue(vaultSnapshot("b"));
+    await act(async () => {
+      buttonByLabel(renderer, "Seal & store").props.onClick();
+    });
     expect(inputByPlaceholder(renderer, "sk-live-…").props.value).toBe("synthetic-draft");
     expect(buttonByLabel(renderer, "Seal & store").props.disabled).toBe(true);
     expect(apiMocks.storeCitadelVaultSecret).toHaveBeenCalledTimes(1);
     const review = renderer.root.findByProps({ "aria-label": "Current Vault review" });
     expect(instanceText(review)).toContain("stripe");
     expect(instanceText(review)).not.toContain("synthetic-draft");
-    await act(async () => { buttonByLabel(renderer, "Use current Vault review").props.onClick(); });
+    await act(async () => {
+      buttonByLabel(renderer, "Use current Vault review").props.onClick();
+    });
     expect(apiMocks.storeCitadelVaultSecret).toHaveBeenCalledTimes(1);
-    await act(async () => { buttonByLabel(renderer, "Seal & store").props.onClick(); });
-    expect(apiMocks.storeCitadelVaultSecret).toHaveBeenLastCalledWith("default", "new-secret", "synthetic-draft", "b".repeat(64));
+    await act(async () => {
+      buttonByLabel(renderer, "Seal & store").props.onClick();
+    });
+    expect(apiMocks.storeCitadelVaultSecret).toHaveBeenLastCalledWith(
+      "default",
+      "new-secret",
+      "synthetic-draft",
+      "b".repeat(64),
+    );
     expect(apiMocks.revealCitadelVaultSecret).not.toHaveBeenCalled();
     await act(async () => renderer.unmount());
   });
 
-  it("requires replacement confirmation and acknowledges only the submitted input", async () => {
+  it("invalidates a replacement confirmation when its secret input changes", async () => {
     const renderer = await mountVault();
     await openDraft(renderer, " stripe ");
-    await act(async () => { buttonByLabel(renderer, "Seal & store").props.onClick(); });
+    await act(async () => {
+      buttonByLabel(renderer, "Seal & store").props.onClick();
+    });
     expect(apiMocks.storeCitadelVaultSecret).not.toHaveBeenCalled();
     expect(replaceSecretModal(renderer).props.open).toBe(true);
     expect(replaceSecretModal(renderer).props.message).not.toContain("synthetic-draft");
-    await act(async () => { inputByPlaceholder(renderer, "sk-live-…").props.onChange({ target: { value: "synthetic-newer" } }); });
-    await act(async () => { replaceSecretModal(renderer).props.onConfirm(); });
-    expect(apiMocks.storeCitadelVaultSecret).toHaveBeenCalledExactlyOnceWith("default", "stripe", "synthetic-draft", "a".repeat(64));
-    expect(inputByPlaceholder(renderer, "sk-live-…").props.value).toBe("synthetic-newer");
-    expect(apiMocks.getCitadelVaultSnapshot).toHaveBeenCalledTimes(1);
+    const staleConfirm = replaceSecretModal(renderer).props.onConfirm;
+    await act(async () => {
+      inputByPlaceholder(renderer, "sk-live-…").props.onChange({ target: { value: "synthetic-newer" } });
+    });
+    await act(async () => {
+      staleConfirm();
+    });
+    expect(apiMocks.storeCitadelVaultSecret).not.toHaveBeenCalled();
+    expect(replaceSecretModal(renderer).props.open).toBe(false);
+    await act(async () => buttonByLabel(renderer, "Seal & store").props.onClick());
+    await act(async () => replaceSecretModal(renderer).props.onConfirm());
+    expect(apiMocks.storeCitadelVaultSecret).toHaveBeenCalledExactlyOnceWith(
+      "default",
+      "stripe",
+      "synthetic-newer",
+      "a".repeat(64),
+    );
+    expect(buttonByLabel(renderer, "Store secret")).toBeDefined();
+    expect(apiMocks.getCitadelVaultSnapshot).toHaveBeenCalledTimes(3);
     await act(async () => renderer.unmount());
   });
 
   it("requires a new deletion confirmation after a peer replacement", async () => {
     const renderer = await mountVault();
-    await act(async () => { buttonByLabel(renderer, "stripe").props.onClick(); });
-    await act(async () => { deleteButtonFor(renderer, "stripe").props.onClick(); });
-    apiMocks.deleteCitadelVaultSecret.mockRejectedValueOnce(Object.assign(new Error("Replaced"), { status: 409 }));
-    apiMocks.getCitadelVaultSnapshot.mockResolvedValue(vaultSnapshot("b"));
-    await act(async () => { deleteSecretModal(renderer).props.onConfirm(); });
+    await act(async () => {
+      buttonByLabel(renderer, "stripe").props.onClick();
+    });
+    await act(async () => {
+      deleteButtonFor(renderer, "stripe").props.onClick();
+    });
+    apiMocks.deleteCitadelVaultSecret.mockRejectedValueOnce(rejected(409, "DELETE"));
+    apiMocks.getCitadelVaultSnapshot.mockResolvedValueOnce(vaultSnapshot()).mockResolvedValue(vaultSnapshot("b"));
+    await act(async () => {
+      deleteSecretModal(renderer).props.onConfirm();
+    });
     expect(deleteSecretModal(renderer).props.open).toBe(false);
     expect(apiMocks.deleteCitadelVaultSecret).toHaveBeenCalledTimes(1);
-    await act(async () => { buttonByLabel(renderer, "Use current Vault review").props.onClick(); });
-    await act(async () => { buttonByLabel(renderer, "stripe").props.onClick(); });
-    await act(async () => { deleteButtonFor(renderer, "stripe").props.onClick(); });
+    await act(async () => {
+      buttonByLabel(renderer, "Use current Vault review").props.onClick();
+    });
+    await act(async () => {
+      buttonByLabel(renderer, "stripe").props.onClick();
+    });
+    await act(async () => {
+      deleteButtonFor(renderer, "stripe").props.onClick();
+    });
     expect(apiMocks.deleteCitadelVaultSecret).toHaveBeenCalledTimes(1);
-    await act(async () => { deleteSecretModal(renderer).props.onConfirm(); });
+    await act(async () => {
+      deleteSecretModal(renderer).props.onConfirm();
+    });
     expect(apiMocks.deleteCitadelVaultSecret).toHaveBeenLastCalledWith("default", "s1", "b".repeat(64));
     await act(async () => renderer.unmount());
   });
@@ -174,9 +261,11 @@ describe("CitadelVaultRoutePage", () => {
   it.each([409, 503])("retains the form after error %s even if the review refresh fails", async (status) => {
     const renderer = await mountVault();
     await openDraft(renderer);
-    apiMocks.storeCitadelVaultSecret.mockRejectedValueOnce(Object.assign(new Error("Unavailable"), { status }));
-    apiMocks.getCitadelVaultSnapshot.mockRejectedValueOnce(new Error("Offline"));
-    await act(async () => { buttonByLabel(renderer, "Seal & store").props.onClick(); });
+    apiMocks.storeCitadelVaultSecret.mockRejectedValueOnce(rejected(status));
+    apiMocks.getCitadelVaultSnapshot.mockResolvedValueOnce(vaultSnapshot()).mockRejectedValueOnce(new Error("Offline"));
+    await act(async () => {
+      buttonByLabel(renderer, "Seal & store").props.onClick();
+    });
     expect(inputByPlaceholder(renderer, "sk-live-…").props.value).toBe("synthetic-draft");
     expect(apiMocks.storeCitadelVaultSecret).toHaveBeenCalledTimes(1);
     if (status === 409) expect(buttonByLabel(renderer, "Seal & store").props.disabled).toBe(true);
@@ -188,12 +277,27 @@ describe("CitadelVaultRoutePage", () => {
     const renderer = await mountVault();
     await openDraft(renderer);
     let finish!: (value: ReturnType<typeof vaultSnapshot>) => void;
-    apiMocks.storeCitadelVaultSecret.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
-    await act(async () => { const click = buttonByLabel(renderer, "Seal & store").props.onClick; click(); click(); });
+    apiMocks.storeCitadelVaultSecret.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    await act(async () => {
+      const click = buttonByLabel(renderer, "Seal & store").props.onClick;
+      click();
+      click();
+    });
     expect(apiMocks.storeCitadelVaultSecret).toHaveBeenCalledTimes(1);
     apiMocks.getCitadelVaultSnapshot.mockResolvedValue(vaultSnapshot("c", "other"));
-    await act(async () => { renderer.update(<CitadelVaultRoutePage {...makeProps()} activeCitadelId="other" />); });
-    await act(async () => { finish({ ...vaultSnapshot("b"), items: [{ secretId: "late", secretName: "Late acknowledgement", createdAt: "t", updatedAt: "t" }] }); });
+    await act(async () => {
+      renderer.update(<CitadelVaultRoutePage {...makeProps()} activeCitadelId="other" />);
+    });
+    await act(async () => {
+      finish({
+        ...vaultSnapshot("b"),
+        items: [{ secretId: "late", secretName: "Late acknowledgement", createdAt: "t", updatedAt: "t" }],
+      });
+    });
     expect(treeString(renderer)).not.toContain("Late acknowledgement");
     await openDraft(renderer, "other-name", "other-synthetic");
     expect(inputByPlaceholder(renderer, "sk-live-…").props.value).toBe("other-synthetic");
@@ -203,31 +307,50 @@ describe("CitadelVaultRoutePage", () => {
   it("reloads failed conflict metadata without losing the draft or approving a write", async () => {
     const renderer = await mountVault();
     await openDraft(renderer);
-    apiMocks.storeCitadelVaultSecret.mockRejectedValueOnce(Object.assign(new Error("Changed"), { status: 409 }));
-    apiMocks.getCitadelVaultSnapshot.mockRejectedValueOnce(new Error("Offline"));
-    await act(async () => { buttonByLabel(renderer, "Seal & store").props.onClick(); });
-    apiMocks.getCitadelVaultSnapshot.mockResolvedValue(vaultSnapshot("b"));
-    await act(async () => { buttonByLabel(renderer, "Reload Vault review").props.onClick(); });
+    apiMocks.storeCitadelVaultSecret.mockRejectedValueOnce(rejected(409));
+    apiMocks.getCitadelVaultSnapshot.mockResolvedValueOnce(vaultSnapshot()).mockRejectedValueOnce(new Error("Offline"));
+    await act(async () => {
+      buttonByLabel(renderer, "Seal & store").props.onClick();
+    });
+    apiMocks.getCitadelVaultSnapshot.mockResolvedValueOnce(vaultSnapshot()).mockResolvedValue(vaultSnapshot("b"));
+    await act(async () => {
+      buttonByLabel(renderer, "Reload Vault review").props.onClick();
+    });
     expect(inputByPlaceholder(renderer, "sk-live-…").props.value).toBe("synthetic-draft");
     expect(buttonByLabel(renderer, "Seal & store").props.disabled).toBe(true);
     expect(apiMocks.storeCitadelVaultSecret).toHaveBeenCalledTimes(1);
-    await act(async () => { buttonByLabel(renderer, "Use current Vault review").props.onClick(); });
+    await act(async () => {
+      buttonByLabel(renderer, "Use current Vault review").props.onClick();
+    });
     expect(buttonByLabel(renderer, "Seal & store").props.disabled).toBe(false);
     await act(async () => renderer.unmount());
   });
 
   it.each(["resolve", "reject"])("ignores a late reveal %s after switching Citadels", async (outcome) => {
     const renderer = await mountVault();
-    await act(async () => { buttonByLabel(renderer, "stripe").props.onClick(); });
+    await act(async () => {
+      buttonByLabel(renderer, "stripe").props.onClick();
+    });
     let finish!: () => void;
-    apiMocks.revealCitadelVaultSecret.mockReturnValueOnce(new Promise((resolve, reject) => {
-      finish = () => outcome === "resolve" ? resolve("late-synthetic-value") : reject(new Error("late-reveal-error"));
-    }));
-    await act(async () => { buttonByLabel(renderer, "Reveal").props.onClick(); });
+    apiMocks.revealCitadelVaultSecret.mockReturnValueOnce(
+      new Promise((resolve, reject) => {
+        finish = () =>
+          outcome === "resolve" ? resolve("late-synthetic-value") : reject(new Error("late-reveal-error"));
+      }),
+    );
+    await act(async () => {
+      buttonByLabel(renderer, "Reveal").props.onClick();
+    });
     apiMocks.getCitadelVaultSnapshot.mockResolvedValue(vaultSnapshot("b", "other"));
-    await act(async () => { renderer.update(<CitadelVaultRoutePage {...makeProps()} activeCitadelId="other" />); });
-    await act(async () => { finish(); });
-    await act(async () => { buttonByLabel(renderer, "stripe").props.onClick(); });
+    await act(async () => {
+      renderer.update(<CitadelVaultRoutePage {...makeProps()} activeCitadelId="other" />);
+    });
+    await act(async () => {
+      finish();
+    });
+    await act(async () => {
+      buttonByLabel(renderer, "stripe").props.onClick();
+    });
     expect(treeString(renderer)).not.toMatch(/late-synthetic-value|late-reveal-error/);
     await act(async () => renderer.unmount());
   });
@@ -246,7 +369,9 @@ describe("CitadelVaultRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelVaultRoutePage {...makeProps()} />);
     });
-    await act(async () => { buttonByLabel(renderer!, "stripe").props.onClick(); });
+    await act(async () => {
+      buttonByLabel(renderer!, "stripe").props.onClick();
+    });
     expect(treeString(renderer!)).not.toContain("sk-live-REVEALED");
 
     await act(async () => {
@@ -261,7 +386,9 @@ describe("CitadelVaultRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelVaultRoutePage {...makeProps()} />);
     });
-    await act(async () => { buttonByLabel(renderer!, "Store secret").props.onClick(); });
+    await act(async () => {
+      buttonByLabel(renderer!, "Store secret").props.onClick();
+    });
     await act(async () => {
       inputByPlaceholder(renderer!, "stripe-secret-key").props.onChange({ target: { value: "openai" } });
     });
@@ -281,7 +408,9 @@ describe("CitadelVaultRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelVaultRoutePage {...makeProps()} />);
     });
-    await act(async () => { buttonByLabel(renderer!, "stripe").props.onClick(); });
+    await act(async () => {
+      buttonByLabel(renderer!, "stripe").props.onClick();
+    });
 
     expect(deleteSecretModal(renderer!).props.open).toBe(false);
 
@@ -299,7 +428,9 @@ describe("CitadelVaultRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelVaultRoutePage {...makeProps()} />);
     });
-    await act(async () => { buttonByLabel(renderer!, "stripe").props.onClick(); });
+    await act(async () => {
+      buttonByLabel(renderer!, "stripe").props.onClick();
+    });
 
     await act(async () => {
       deleteButtonFor(renderer!, "stripe").props.onClick();
@@ -321,7 +452,9 @@ describe("CitadelVaultRoutePage", () => {
     await act(async () => {
       renderer = create(<CitadelVaultRoutePage {...makeProps()} />);
     });
-    await act(async () => { buttonByLabel(renderer!, "stripe").props.onClick(); });
+    await act(async () => {
+      buttonByLabel(renderer!, "stripe").props.onClick();
+    });
 
     await act(async () => {
       deleteButtonFor(renderer!, "stripe").props.onClick();

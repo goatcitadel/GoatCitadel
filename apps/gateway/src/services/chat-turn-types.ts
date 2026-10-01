@@ -118,6 +118,8 @@ export interface PreparedAgentChatTurnDispatchOptions {
   abortSignal?: AbortSignal;
   /** Internal durable parent yields its worker after binding a child watcher. */
   returnAfterDurableAdmission?: boolean;
+  /** Canonical local child linkage only; runs inside the admission transaction. */
+  onChildDurableRunAdmitted?: (runId: string) => Promise<void>;
   onChildDurableRunLaunched?: (runId: string) => Promise<void>;
   assertDispatchOwnership?: () => Promise<void>;
   durableRunId?: string;

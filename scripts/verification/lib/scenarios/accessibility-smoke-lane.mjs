@@ -88,7 +88,7 @@ const ACCESSIBILITY_SMOKE_SCENARIOS = [
       await page.getByRole("button", { name: "Threads", exact: true }).click();
       await page.getByRole("button", { name: "New chat", exact: true }).click();
       await page.getByLabel("Threads", { exact: true }).waitFor({ state: "hidden" });
-      await page.locator(".mc-next-composer-blocking-prompt").waitFor({ state: "hidden" });
+      await page.locator(".mc-next-thread-blocking-prompt").waitFor({ state: "hidden" });
       const composer = page.getByLabel("Message composer", { exact: true });
       await composer.waitFor({ state: "visible" });
       await composer.fill("Reply with exactly: KEYBOARD_OK");

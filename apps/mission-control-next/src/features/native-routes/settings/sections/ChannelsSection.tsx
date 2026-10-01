@@ -1,30 +1,5 @@
-// Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
-// per-section settings decomposition.
-import { useCallback, useEffect, useRef, useState } from "react";
 import { ExternalLink, Plus, RefreshCw } from "lucide-react";
-import type { ChannelSetupDraft } from "@goatcitadel/contracts";
 import {
-  createChannelSetupDraft,
-  isApiRequestError,
-  createChangePlan,
-  discoverTelegramTargets,
-  fetchChannelSetupDefinitions,
-  fetchChannelSetupDrafts,
-  fetchChannelSetupDraft,
-  reviewChannelSetupConnection,
-  fetchIntegrationConnections,
-  fetchSlackOAuthStatus,
-  startSlackOAuth,
-  submitChannelSetupDraftSecrets,
-  testChannelSetupDraft,
-  updateChannelSetupDraft,
-  validateChannelSetupDraft,
-} from "@goatcitadel/mission-control-shared/api/client";
-import {
-  getErrorMessage,
-  nativeLoad,
-  nativeLoadIssues,
-  type Notice,
   SettingsActionList,
   SettingsButtonRow,
   SettingsEmptyState,
@@ -34,576 +9,66 @@ import {
   type SettingsSectionProps,
   SettingsSectionShell,
   SettingsStack,
-  useAsyncLoad,
 } from "../SettingsShared";
 import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeSelectableList } from "../../primitives";
-import { ChannelSetupWizard, type ChannelSetupWizardFeedback } from "../channel-setup/ChannelSetupWizard";
+import { ChannelSetupWizard } from "../channel-setup/ChannelSetupWizard";
 import { DiscordConnectionOperationsPanel } from "../channel-setup/DiscordConnectionOperationsPanel";
 import { ChannelJourneyPanel } from "../channel-setup/ChannelJourneyPanel";
-import {
-  delay,
-  formatDateTime,
-  formatJson,
-  parseJsonObject,
-  preferredChannelDefinition,
-  readConnectionConfigString,
-  readDraftString,
-} from "../../SettingsNativePage";
-import { hasSessionDraft, useSessionDraft } from "../../library/session-drafts";
-import { useDraftLeave } from "../../library/DraftLeaveDialog";
-import { useSessionViewState } from "../../../../hooks/use-session-view-state";
+import { formatDateTime } from "../helpers/input-format";
+import { hasSessionDraft } from "../../library/session-drafts";
 import { FocusedDetail } from "../../shared/FocusedDetail";
 import { DetailInspector } from "../../../../components/DetailInspector";
 import { IntegrationConnectionReview } from "./IntegrationConnectionReview";
-import { describeIntegrationConnectionError, useIntegrationConnectionReview } from "./useIntegrationConnectionReview";
+import { useChannelSettings } from "./use-channel-settings";
 
 export function ChannelsSection({ activeWorkspaceId, navigate, route }: SettingsSectionProps) {
-  const load = useCallback(async () => {
-    const [definitions, drafts, connections] = await Promise.all([
-      nativeLoad("Channel definitions", fetchChannelSetupDefinitions(), { items: [] }),
-      nativeLoad("Channel drafts", fetchChannelSetupDrafts({ limit: 100 }), { items: [] }),
-      nativeLoad("Channel connections", fetchIntegrationConnections("channel"), { items: [] }),
-    ]);
-    return {
-      issues: nativeLoadIssues([definitions, drafts, connections]),
-      definitions: definitions.data.items,
-      drafts: drafts.data.items,
-      connections: connections.data.items,
-    };
-  }, []);
-  const { loading, error, data, reload, updateData } = useAsyncLoad(load, [load]);
-  const [notice, setNotice] = useState<Notice | null>(null);
-  const [panel, setPanel] = useState<"create" | "editor" | "connection" | null>(null);
-  const panelRef = useRef(panel);
-  panelRef.current = panel;
-  const [selectedConnectionId, setSelectedConnectionId] = useSessionViewState(
-    "channels:" + activeWorkspaceId + ":connection",
-    "",
-  );
-  const [selectedDraftId, setSelectedDraftId] = useSessionViewState("channels:" + activeWorkspaceId + ":draft", "");
-  const selectionRef = useRef(selectedDraftId);
-  selectionRef.current = selectedDraftId;
-  const busyRef = useRef(false);
-  const oauthGeneration = useRef(0);
-  const oauthBusy = useRef(false);
-  const leave = useDraftLeave();
-  const [createCatalogId, setCreateCatalogId] = useState("");
-  const [validationResult, setValidationResult] = useState<ChannelSetupWizardFeedback | null>(null);
-  const [validationRevision, setValidationRevision] = useState<number | null>(null);
-  const [busyAction, setBusyAction] = useState<"save" | "validate" | "test" | "finalize" | null>(null);
-  const selectedDraft = data?.drafts?.find((item) => item.draftId === selectedDraftId) ?? null;
-  const draftScope = useRef({ activeWorkspaceId, selectedDraftId });
-  if (draftScope.current.activeWorkspaceId !== activeWorkspaceId || draftScope.current.selectedDraftId !== selectedDraftId) {
-    draftScope.current = { activeWorkspaceId, selectedDraftId };
-  }
-  const currentScope = draftScope.current;
-  const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const isCurrentDraft = () => mounted.current && draftScope.current === currentScope;
-  const applyConnection = useCallback((connectionId: string, connection: (NonNullable<typeof data>)["connections"][number] | null) => {
-    updateData((current) => ({ ...current, connections: connection
-      ? [...current.connections.filter((item) => item.connectionId !== connectionId), connection]
-      : current.connections.filter((item) => item.connectionId !== connectionId) }));
-  }, [updateData]);
-  const connectionReview = useIntegrationConnectionReview(JSON.stringify([activeWorkspaceId, selectedDraftId]), selectedDraft?.connectionId ?? "", applyConnection);
-  const draftConnection = data?.connections.find((item) => item.connectionId === selectedDraft?.connectionId) ?? null;
-  const needsConnectionReview = Boolean(selectedDraft?.connectionId && (connectionReview.required || selectedDraft.connectionRevision !== draftConnection?.revision));
-  const attemptedReview = useRef<{ scope: typeof currentScope; key: string } | null>(null);
-  const { required: connectionReviewRequired, refresh: refreshConnectionReview } = connectionReview;
-  useEffect(() => {
-    if (panel !== "editor" || !needsConnectionReview || connectionReviewRequired) return;
-    const key = JSON.stringify([activeWorkspaceId, selectedDraftId, selectedDraft?.connectionRevision, draftConnection?.revision]);
-    if (attemptedReview.current?.scope === currentScope && attemptedReview.current.key === key) return;
-    attemptedReview.current = { scope: currentScope, key };
-    void refreshConnectionReview();
-  }, [panel, needsConnectionReview, connectionReviewRequired, refreshConnectionReview, currentScope, activeWorkspaceId, selectedDraftId, selectedDraft?.connectionRevision, draftConnection?.revision]);
-  const mergeDraft = (draft: ChannelSetupDraft) => updateData((current) => ({ ...current,
-    drafts: [...current.drafts.filter((item) => item.draftId !== draft.draftId), draft],
-  }));
-  const createDefinition = data?.definitions?.find((item) => item.catalog.catalogId === createCatalogId) ?? null;
-  const selectedDefinition = selectedDraft
-    ? (data?.definitions?.find((item) => item.catalog.catalogId === selectedDraft.catalogId) ?? null)
-    : createDefinition;
-
-  const selectedConnection = data?.connections?.find((item) => item.connectionId === selectedConnectionId) ?? null;
-  const channelDraft = useSessionDraft(
-    "channel:" + activeWorkspaceId + ":" + selectedDraftId + ":setup",
-    {
-      label: selectedDraft?.label ?? "",
-      enabled: selectedDraft?.enabled ?? true,
-      values: selectedDraft?.draft ?? ({} as Record<string, unknown>),
-      advancedText: formatJson(selectedDraft?.draft ?? {}),
-    },
-    selectedDraft?.revision,
-    {
-      label: selectedDraft?.label ?? "Channel setup",
-      active: panel === "editor",
-      available: Boolean(selectedDraft),
-      onSave: () => handleSave(),
-    },
-  );
-  const { label: draftLabel, enabled: draftEnabled, values: draftValues } = channelDraft.value;
-  const draftDirty = channelDraft.isDirty;
-  const [advancedMode] = useSessionViewState(
-    "channel:" + activeWorkspaceId + ":" + selectedDraftId + ":advanced-mode",
-    false,
-  );
-  const setDraftLabel = (label: string) => channelDraft.setValue((current) => ({ ...current, label }));
-  const setDraftEnabled = (enabled: boolean) => channelDraft.setValue((current) => ({ ...current, enabled }));
-  const setDraftValues = (values: Record<string, unknown>) =>
-    channelDraft.setValue((current) => ({ ...current, values, advancedText: formatJson(values) }));
-  const draftHasChanges = (valuesOverride?: Record<string, unknown>): boolean =>
-    Boolean(
-      selectedDraft &&
-      (channelDraft.isDirty || JSON.stringify(valuesOverride ?? draftValues) !== JSON.stringify(selectedDraft.draft)),
-    );
-  const draftSelectionGuard = {
-    requestTransition: (id: string) =>
-      leave.request(() => {
-        setSelectedDraftId(id);
-        setPanel("editor");
-        setValidationResult(null);
-      }),
-  };
-  const closePanel = () => leave.request(() => setPanel(null));
-  const handleDraftFailure = async (cause: unknown) => {
-    if (!isCurrentDraft()) return;
-    setValidationResult(null);
-    setNotice({ tone: "error", message: describeIntegrationConnectionError(cause) });
-    if (isApiRequestError(cause) && (cause.status === 404 || cause.status === 409 || (cause.status ?? 0) >= 500 || !cause.status)) {
-      await Promise.allSettled([
-        selectedDraft?.connectionId ? connectionReview.refresh() : Promise.resolve(),
-        selectedDraft ? fetchChannelSetupDraft(selectedDraft.draftId).then((draft) => { if (isCurrentDraft()) mergeDraft(draft); }) : Promise.resolve(),
-      ]);
-    }
-  };
-  const handleAcceptConnectionReview = async () => {
-    if (!selectedDraft || !draftConnection || connectionReview.loading || connectionReview.error || busyRef.current) return;
-    busyRef.current = true;
-    setBusyAction("save");
-    const canonical = { label: selectedDraft.label ?? "", enabled: selectedDraft.enabled, values: selectedDraft.draft, advancedText: formatJson(selectedDraft.draft) };
-    try {
-      const reviewed = await reviewChannelSetupConnection(selectedDraft.draftId, {
-        expectedRevision: selectedDraft.revision, expectedConnectionRevision: draftConnection.revision,
-      });
-      if (!isCurrentDraft()) return;
-      channelDraft.acceptSaved({ label: reviewed.label ?? "", enabled: reviewed.enabled, values: reviewed.draft, advancedText: formatJson(reviewed.draft) }, reviewed.revision, canonical);
-      mergeDraft(reviewed);
-      connectionReview.accept();
-      setValidationResult(null);
-      setValidationRevision(null);
-      setNotice({ tone: "success", message: "Connection review saved. Your edits are retained. Save any changes and run the live test again." });
-    } catch (cause) { await handleDraftFailure(cause); }
-    finally { if (isCurrentDraft()) { busyRef.current = false; setBusyAction(null); } }
-  };
-  useEffect(() => { busyRef.current = false; setBusyAction(null); }, [activeWorkspaceId, selectedDraftId]);
-  useEffect(() => {
-    setPanel(null);
-    setValidationResult(null);
-    oauthGeneration.current += 1;
-    oauthBusy.current = false;
-    return () => {
-      oauthGeneration.current += 1;
-    };
-  }, [activeWorkspaceId]);
-  useEffect(() => {
-    if (!data?.definitions?.length) {
-      setCreateCatalogId("");
-      return;
-    }
-    setCreateCatalogId((current) => {
-      if (current && data.definitions.some((item) => item.catalog.catalogId === current)) {
-        return current;
-      }
-      return preferredChannelDefinition(data.definitions)?.catalog?.catalogId || "";
-    });
-  }, [data?.definitions]);
-
-  useEffect(() => {
-    setValidationResult(null);
-  }, [selectedDraft?.draftId]);
-
-  const handleCreate = async () => {
-    if (!createCatalogId) {
-      setNotice({ tone: "warning", message: "Choose a channel definition first." });
-      return;
-    }
-    try {
-      const created = await createChannelSetupDraft({ catalogId: createCatalogId });
-      setNotice({ tone: "success", message: "Channel setup draft created." });
-      await reload();
-      setSelectedDraftId(created.draftId);
-      if (panelRef.current === "create") setPanel("editor");
-    } catch (createError) {
-      setNotice({ tone: "error", message: getErrorMessage(createError) });
-    }
-  };
-
-  const handleStartSlackOAuth = async () => {
-    if (oauthBusy.current) return;
-    oauthBusy.current = true;
-    const generation = ++oauthGeneration.current;
-    try {
-      const status = await fetchSlackOAuthStatus();
-      if (!status.configured) {
-        setNotice({
-          tone: "warning",
-          message: `Slack OAuth needs configuration first: ${status.missing.join(", ") || "missing OAuth settings"}.`,
-        });
-        return;
-      }
-      const previousConnections = new Map(
-        status.connections.map((item) => [
-          item.connection.connectionId,
-          readConnectionConfigString(item.connection.config, "oauthConnectedAt") ?? "",
-        ]),
-      );
-      const result = await startSlackOAuth();
-      window.open(result.authorizationUrl, "_blank", "noopener,noreferrer");
-      setNotice({
-        tone: "success",
-        message: "Slack authorization opened. Approve the workspace, then target setup will open here.",
-      });
-      void waitForSlackOAuthInstall(previousConnections, generation);
-    } catch (oauthError) {
-      setNotice({ tone: "error", message: getErrorMessage(oauthError) });
-    } finally {
-      oauthBusy.current = false;
-    }
-  };
-
-  const waitForSlackOAuthInstall = async (previousConnections: Map<string, string>, generation: number) => {
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      await delay(2000);
-      if (generation !== oauthGeneration.current) return;
-      try {
-        const status = await fetchSlackOAuthStatus();
-        if (generation !== oauthGeneration.current) return;
-        const installed = status.connections.find((item) => {
-          const previousConnectedAt = previousConnections.get(item.connection.connectionId);
-          const nextConnectedAt = readConnectionConfigString(item.connection.config, "oauthConnectedAt") ?? "";
-          return previousConnectedAt === undefined || previousConnectedAt !== nextConnectedAt;
-        });
-        if (!installed) {
-          continue;
-        }
-        const created = await createChannelSetupDraft({
-          catalogId: "channel.slack",
-          connectionId: installed.connection.connectionId,
-          lifecycleMode: "edit",
-        });
-        setCreateCatalogId("channel.slack");
-        setNotice({
-          tone: "success",
-          message: "Slack workspace connected. Add channel targets, then validate and test.",
-        });
-        await reload();
-        if (generation !== oauthGeneration.current) return;
-        setSelectedDraftId(created.draftId);
-        if (panelRef.current === "create") setPanel("editor");
-        return;
-      } catch {
-        // Keep polling so callback timing or a short gateway blip does not interrupt setup.
-      }
-    }
-    setNotice({
-      tone: "warning",
-      message: "Slack authorization may still be finishing. Refresh channel connections if the workspace was approved.",
-    });
-  };
-
-  const handleDiscoverTelegramTargets = async () => {
-    if (!selectedDraft) {
-      return;
-    }
-    try {
-      const draftObject = draftValues;
-      const result = await discoverTelegramTargets({
-        botToken: readDraftString(draftObject, "botToken"),
-        botTokenEnv: readDraftString(draftObject, "botTokenEnv") ?? readDraftString(draftObject, "tokenEnv"),
-        setupCode: readDraftString(draftObject, "setupCode"),
-      });
-      if (selectedDraft.draftId !== selectionRef.current) return;
-      if (result.items.length === 0) {
-        setNotice({
-          tone: "warning",
-          message:
-            "Telegram did not return recent chats yet. Send /start or the setup code in the target chat and try again.",
-        });
-        return;
-      }
-      const targets = result.items.map((item, index) => ({
-        id: item.id,
-        label: item.label,
-        chatId: item.chatId,
-        kind: item.kind,
-        default: index === 0,
-      }));
-      setDraftValues({
-        ...draftObject,
-        targets,
-        defaultChatId: targets[0]?.chatId ?? readDraftString(draftObject, "defaultChatId"),
-      });
-      setValidationResult(null);
-      setNotice({
-        tone: "success",
-        message: `Detected ${targets.length} Telegram target${targets.length === 1 ? "" : "s"}.`,
-      });
-    } catch (discoverError) {
-      setNotice({ tone: "error", message: getErrorMessage(discoverError) });
-    }
-  };
-
-  const persistDraft = async (valuesOverride?: Record<string, unknown>): Promise<ChannelSetupDraft | undefined> => {
-    if (!selectedDraft) {
-      return undefined;
-    }
-    let nextValues: Record<string, unknown>;
-    try {
-      nextValues = valuesOverride ?? (advancedMode ? parseJsonObject(channelDraft.value.advancedText) : draftValues);
-    } catch (cause) {
-      setNotice({ tone: "error", message: getErrorMessage(cause) });
-      return undefined;
-    }
-    if (channelDraft.hasRemoteChanges) {
-      setNotice({
-        tone: "warning",
-        message: "This channel draft changed elsewhere. Review its current revision before applying your changes.",
-      });
-      return undefined;
-    }
-    const submitted = {
-      label: draftLabel,
-      enabled: draftEnabled,
-      values: nextValues,
-      advancedText: formatJson(nextValues),
-    };
-    if (!draftHasChanges(nextValues)) {
-      return selectedDraft;
-    }
-    channelDraft.setValue(submitted);
-    try {
-      const secretFieldKeys = new Set(selectedDefinition?.adapter?.secretFieldKeys ?? []);
-      const publicValues = Object.fromEntries(
-        Object.entries(nextValues).filter(([fieldKey]) => !secretFieldKeys.has(fieldKey)),
-      );
-      const secureValues = Object.fromEntries(
-        Object.entries(nextValues).flatMap(([fieldKey, value]) =>
-          secretFieldKeys.has(fieldKey) &&
-          typeof value === "string" &&
-          value.trim().length > 0 &&
-          value !== "[REDACTED]"
-            ? [[fieldKey, value]]
-            : [],
-        ),
-      );
-      let savedDraft = await updateChannelSetupDraft(selectedDraft.draftId, {
-        expectedRevision: channelDraft.baseRevision as number,
-        label: draftLabel.trim() || undefined,
-        enabled: draftEnabled,
-        draft: publicValues,
-      });
-      if (!isCurrentDraft()) return undefined;
-      if (Object.keys(secureValues).length > 0) {
-        savedDraft = await submitChannelSetupDraftSecrets(savedDraft.draftId, {
-          expectedRevision: savedDraft.revision,
-          values: secureValues,
-        });
-      }
-      if (!isCurrentDraft()) return undefined;
-      mergeDraft(savedDraft);
-      const clean = channelDraft.acceptSaved(
-        {
-          label: savedDraft.label ?? draftLabel.trim(),
-          enabled: savedDraft.enabled ?? draftEnabled,
-          values: savedDraft.draft ?? nextValues,
-          advancedText: formatJson(savedDraft.draft ?? nextValues),
-        },
-        savedDraft.revision,
-        submitted,
-      );
-      if (!clean) {
-        setNotice({
-          tone: "warning",
-          message: "The submitted channel draft was saved. Newer edits remain; save them before continuing.",
-        });
-        return undefined;
-      }
-      return savedDraft;
-    } catch (saveError) {
-      await handleDraftFailure(saveError);
-      return undefined;
-    }
-  };
-
-  const handleSave = async (valuesOverride?: Record<string, unknown>): Promise<boolean> => {
-    if (busyRef.current) return false;
-    busyRef.current = true;
-    setBusyAction("save");
-    try {
-      const savedDraft = await persistDraft(valuesOverride);
-      if (savedDraft) {
-        setNotice({ tone: "success", message: "Channel draft saved." });
-      }
-      return Boolean(savedDraft);
-    } finally {
-      if (isCurrentDraft()) { busyRef.current = false; setBusyAction(null); }
-    }
-  };
-
-  const handleValidate = async (valuesOverride?: Record<string, unknown>) => {
-    if (needsConnectionReview) return;
-    if (!selectedDraft) {
-      return;
-    }
-    if (busyRef.current) return;
-    busyRef.current = true;
-    setBusyAction("validate");
-    try {
-      const currentDraft = await persistDraft(valuesOverride);
-      if (!currentDraft) {
-        return;
-      }
-      const result = await validateChannelSetupDraft(currentDraft.draftId, currentDraft.revision);
-      if (!isCurrentDraft()) return;
-      setValidationRevision(result.draftRevision);
-      setValidationResult({
-        kind: "validate",
-        status: result.status,
-        issues: result.issues,
-      });
-      setNotice({
-        tone: result.status === "error" ? "error" : result.status === "warn" ? "warning" : "success",
-        message: "Channel draft validated.",
-      });
-      await reload();
-    } catch (validateError) {
-      await handleDraftFailure(validateError);
-    } finally {
-      if (isCurrentDraft()) { busyRef.current = false; setBusyAction(null); }
-    }
-  };
-
-  const handleTest = async (valuesOverride?: Record<string, unknown>) => {
-    if (needsConnectionReview) return;
-    if (!selectedDraft) {
-      return;
-    }
-    if (busyRef.current) return;
-    busyRef.current = true;
-    setBusyAction("test");
-    try {
-      const currentDraft = await persistDraft(valuesOverride);
-      if (!currentDraft) {
-        return;
-      }
-      const validation = await validateChannelSetupDraft(currentDraft.draftId, currentDraft.revision);
-      if (!isCurrentDraft()) return;
-      if (validation.status === "error") {
-        setValidationRevision(validation.draftRevision);
-        setValidationResult({
-          kind: "validate",
-          status: validation.status,
-          issues: validation.issues,
-        });
-        setNotice({ tone: "error", message: "Resolve the validation errors before running a live test." });
-        await reload();
-        return;
-      }
-      const result = await testChannelSetupDraft(currentDraft.draftId, validation.draftRevision);
-      if (!isCurrentDraft()) return;
-      setValidationRevision(result.draftRevision);
-      setValidationResult({
-        kind: "test",
-        status: result.status,
-        issues: result.issues,
-        recommendedNextAction: result.recommendedNextAction,
-        probe: result.probe,
-      });
-      setNotice({
-        tone: result.status === "error" ? "error" : result.status === "warn" ? "warning" : "success",
-        message: result.recommendedNextAction || "Channel draft tested.",
-      });
-      await reload();
-    } catch (testError) {
-      await handleDraftFailure(testError);
-    } finally {
-      if (isCurrentDraft()) { busyRef.current = false; setBusyAction(null); }
-    }
-  };
-
-  const handleFinalize = async (valuesOverride?: Record<string, unknown>) => {
-    if (needsConnectionReview) return;
-    if (!selectedDraft) {
-      return;
-    }
-    if (draftHasChanges(valuesOverride)) {
-      setNotice({ tone: "warning", message: "Save these changes and run the live test again before finalizing." });
-      return;
-    }
-    if (
-      validationResult?.kind !== "test" ||
-      validationResult.status !== "ok" ||
-      validationRevision !== selectedDraft.revision
-    ) {
-      setNotice({ tone: "warning", message: "A passing live test is required before finalizing this connection." });
-      return;
-    }
-    if (busyRef.current) return;
-    busyRef.current = true;
-    setBusyAction("finalize");
-    try {
-      const plan = await createChangePlan({
-        workspaceId: activeWorkspaceId,
-        surface: "settings",
-        request: {
-          kind: "channel_connection",
-          channelKind: selectedDraft.catalogId,
-          draftId: selectedDraft.draftId,
-        },
-        idempotencyKey: `settings-channel-finalize:${selectedDraft.draftId}:${selectedDraft.revision}`,
-      });
-      if (!isCurrentDraft()) return;
-      setNotice({
-        tone: "success",
-        message: `Change Plan ${plan.planId} is ready for exact confirmation in Chat. The draft has not been finalized yet.`,
-      });
-      navigate({ area: "chat", theme: route.theme });
-    } catch (finalizeError) {
-      await handleDraftFailure(finalizeError);
-    } finally {
-      if (isCurrentDraft()) { busyRef.current = false; setBusyAction(null); }
-    }
-  };
-
-  const editConnection = async () => {
-    if (!selectedConnection || busyRef.current) return;
-    const existing = data?.drafts?.find((item) => item.connectionId === selectedConnection.connectionId);
-    if (existing) {
-      setSelectedDraftId(existing.draftId);
-      setPanel("editor");
-      return;
-    }
-    busyRef.current = true;
-    try {
-      const created = await createChannelSetupDraft({
-        catalogId: selectedConnection.catalogId,
-        connectionId: selectedConnection.connectionId,
-        lifecycleMode: "edit",
-      });
-      await reload();
-      if (panelRef.current === "connection") {
-        setSelectedDraftId(created.draftId);
-        setPanel("editor");
-      }
-    } catch (cause) {
-      setNotice({ tone: "error", message: getErrorMessage(cause) });
-    } finally {
-      busyRef.current = false;
-    }
-  };
-
+  const owner = useChannelSettings(activeWorkspaceId, () => navigate({ area: "chat", theme: route.theme }));
+  const {
+    loading,
+    error,
+    data,
+    reload,
+    notice,
+    panel,
+    setPanel,
+    createCatalogId,
+    setCreateCatalogId,
+    createDefinition,
+    selectedDraft,
+    selectedDefinition,
+    closePanel,
+    needsConnectionReview,
+    draftConnection,
+    connectionReview,
+    busyAction,
+    handleAcceptConnectionReview,
+    validationResult,
+    validationRevision,
+    channelDraft,
+    draftValues,
+    draftLabel,
+    draftEnabled,
+    draftDirty,
+    setDraftValues,
+    setDraftLabel,
+    setDraftEnabled,
+    setValidationResult,
+    handleSave,
+    handleValidate,
+    handleTest,
+    handleFinalize,
+    handleStartSlackOAuth,
+    handleDiscoverTelegramTargets,
+    handleCreate,
+    leave,
+    selectedConnectionId,
+    setSelectedConnectionId,
+    selectedDraftId,
+    draftSelectionGuard,
+    selectedConnection,
+    editConnection,
+  } = owner;
   return (
     // Block-render the loader only while there is nothing to show yet. Reloads
     // after save/validate/test keep `data` (useAsyncLoad retains it), and the
@@ -611,6 +76,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
     // step state and resets the operator to step 1.
     <SettingsSectionShell loading={loading && !data} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
+      {owner.mutation.uncertain ? <p role="alert">{owner.mutation.uncertain}</p> : null}
       {data ? (
         <SettingsStack>
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
@@ -650,7 +116,11 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                       Connect Slack
                     </NativeButton>
                   ) : null}
-                  <NativeButton variant="default" disabled={!createCatalogId} onClick={() => void handleCreate()}>
+                  <NativeButton
+                    variant="default"
+                    disabled={!createCatalogId || owner.mutation.pending || Boolean(owner.mutation.uncertain)}
+                    onClick={() => void handleCreate()}
+                  >
                     <Plus size={16} />
                     {createDefinition ? `Start ${createDefinition.catalog.label} setup` : "Start guided setup"}
                   </NativeButton>
@@ -675,12 +145,22 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
               onClose={closePanel}
             >
               <SettingsStack>
-                {needsConnectionReview ? <>
-                  <IntegrationConnectionReview connection={draftConnection} loading={connectionReview.loading || busyAction !== null}
-                    error={connectionReview.error} missing={connectionReview.missing}
-                    onAccept={() => void handleAcceptConnectionReview()} onReload={() => void connectionReview.refresh()} />
-                  <p>Reviewing keeps your setup fields and refreshes inherited credentials. Credentials you explicitly replaced stay in the draft. A new live test is required.</p>
-                </> : null}
+                {needsConnectionReview ? (
+                  <>
+                    <IntegrationConnectionReview
+                      connection={draftConnection}
+                      loading={connectionReview.loading || busyAction !== null}
+                      error={connectionReview.error}
+                      missing={connectionReview.missing}
+                      onAccept={() => void handleAcceptConnectionReview()}
+                      onReload={() => void connectionReview.refresh()}
+                    />
+                    <p>
+                      Reviewing keeps your setup fields and refreshes inherited credentials. Credentials you explicitly
+                      replaced stay in the draft. A new live test is required.
+                    </p>
+                  </>
+                ) : null}
                 {validationResult && validationRevision !== selectedDraft?.revision ? (
                   <p role="status">
                     The previous check belongs to a different draft revision. Run the live test again.
@@ -713,7 +193,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                     enabled={draftEnabled}
                     dirty={draftDirty}
                     feedback={validationRevision === selectedDraft.revision ? validationResult : null}
-                    busyAction={busyAction}
+                    busyAction={owner.mutation.pending || owner.mutation.uncertain ? (busyAction ?? "save") : null}
                     reviewRequired={needsConnectionReview}
                     onValuesChange={(next) => {
                       setDraftValues(next);
@@ -769,7 +249,28 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                   Refresh
                 </NativeButton>
               </SettingsButtonRow>
-              <NativeCard title="Channel connections" subtitle="Saved connections and their observed status." stats={[{label:"Definitions",value:data.issues.some(issue=>issue.label === "Channel definitions") ? "Unavailable" : (Array.isArray(data.definitions) ? String(data.definitions.length) : "Unavailable")},{label:"Existing channels",value:data.issues.some(issue=>issue.label === "Channel connections") ? "Unavailable" : (Array.isArray(data.connections) ? String(data.connections.length) : "Unavailable")}]}>
+              <NativeCard
+                title="Channel connections"
+                subtitle="Saved connections and their observed status."
+                stats={[
+                  {
+                    label: "Definitions",
+                    value: data.issues.some((issue) => issue.label === "Channel definitions")
+                      ? "Unavailable"
+                      : Array.isArray(data.definitions)
+                        ? String(data.definitions.length)
+                        : "Unavailable",
+                  },
+                  {
+                    label: "Existing channels",
+                    value: data.issues.some((issue) => issue.label === "Channel connections")
+                      ? "Unavailable"
+                      : Array.isArray(data.connections)
+                        ? String(data.connections.length)
+                        : "Unavailable",
+                  },
+                ]}
+              >
                 <NativeSelectableList
                   items={(data.connections ?? []).map((item) => ({
                     id: item.connectionId,

@@ -921,7 +921,10 @@ describe("OrchestrationPhaseExecutionService child parking", () => {
   });
 
   it("harvests a completed child from its canonical trace, message and model usage", async () => {
-    const service = buildService();
+    const readChatTurnTrace = vi.fn(async () => buildTrace());
+    const readChatMessageContent = vi.fn(async () => "Phase output from the child.");
+    const readChatTurnUsage = vi.fn(async () => ({ costUsd: 0.42, costComplete: true, inputTokens: 100, outputTokens: 40 }));
+    const service = buildService({ readChatTurnTrace, readChatMessageContent, readChatTurnUsage });
 
     const result = await service.harvest(harvestInput);
 
@@ -941,6 +944,13 @@ describe("OrchestrationPhaseExecutionService child parking", () => {
     });
     expect(result?.costUnreported).toBeUndefined();
     expect(result?.error).toBeUndefined();
+    expect(readChatTurnTrace).toHaveBeenCalledExactlyOnceWith("turn-1");
+    expect(readChatMessageContent).toHaveBeenCalledExactlyOnceWith("assistant-1");
+    expect(readChatTurnUsage).toHaveBeenCalledExactlyOnceWith({ sessionId: "child-session-1", turnId: "turn-1" });
+    const receiver = readChatTurnTrace.mock.contexts[0];
+    expect(receiver).toMatchObject({ readChatTurnTrace, readChatMessageContent, readChatTurnUsage });
+    expect(readChatMessageContent.mock.contexts).toEqual([receiver]);
+    expect(readChatTurnUsage.mock.contexts).toEqual([receiver]);
   });
 
   it("flags harvested cost as unreported when a model call reported none", async () => {

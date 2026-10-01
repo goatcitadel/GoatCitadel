@@ -95,6 +95,48 @@ function buildRun(input: Partial<OrchestrationRun>): OrchestrationRun {
 }
 
 describe("OrchestrationWorktreeService loop31 tails", () => {
+  it.each(["release", "reap"] as const)(
+    "fails closed when the lease changes before %s can retain dirty work",
+    async (operation) => {
+      const rootDir = await makeTempDir();
+      const worktreePath = path.join(rootDir, ".worktrees", "orchestration", "run-cas");
+      await fs.mkdir(worktreePath, { recursive: true });
+      const note = path.join(worktreePath, "notes.md");
+      await fs.writeFile(note, "keep operator work", "utf8");
+      worktreeManagerMocks.listChanges.mockResolvedValueOnce({ status: "read", changedPaths: ["notes.md"] });
+      const leaseDeps = buildLeaseDeps();
+      const leases = leaseDeps.worktreeLeases;
+      const get = vi.spyOn(leases, "get");
+      const claim = vi.spyOn(leases, "claim");
+      const release = vi.spyOn(leases, "release").mockReturnValueOnce(false);
+      const service = new OrchestrationWorktreeService({
+        config: buildConfig(rootDir),
+        orchestrationRuns: { listRuns: vi.fn(() => []) },
+        ...leaseDeps,
+      });
+      const result =
+        operation === "release"
+          ? service.release({ run: buildRun({ runId: "run-cas", worktreePath }), reason: "completed" })
+          : service.reapOrphaned({ dryRun: false, minAgeMs: 0 });
+
+      await expect(result).rejects.toThrow(/lease changed before/);
+      expect(get).toHaveBeenCalled();
+      for (const receiver of get.mock.contexts) expect(receiver).toBe(leases);
+      expect(claim.mock.contexts).toEqual([leases]);
+      expect(release.mock.contexts).toEqual([leases]);
+      expect(release).toHaveBeenCalledWith({
+        worktreePath,
+        runId: "run-cas",
+        ownerId: "test-worktree-owner",
+        generation: 1,
+        releasedAt: leaseNow,
+      });
+      expect(worktreeManagerMocks.remove).not.toHaveBeenCalled();
+      expect(worktreeManagerMocks.prune).not.toHaveBeenCalled();
+      await expect(fs.readFile(note, "utf8")).resolves.toBe("keep operator work");
+    },
+  );
+
   it("creates a missing git worktree through the orchestration manager", async () => {
     const rootDir = await makeTempDir();
     const service = new OrchestrationWorktreeService({

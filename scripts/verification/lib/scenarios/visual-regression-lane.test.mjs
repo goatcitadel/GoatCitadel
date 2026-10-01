@@ -229,7 +229,7 @@ test("mobile pending-input geometry checks overflow and every operator control",
   );
 
   assert.deepEqual(selectors, [
-    '.mc-next-composer-blocking-prompt[data-blocker-kind="user-input"] .chat-user-input-card',
+    '.mc-next-thread-blocking-prompt[data-blocker-kind="user-input"] .chat-user-input-card',
     ".mc-next-composer-primary",
   ]);
 });
@@ -270,6 +270,21 @@ test("mobile visual geometry rejects horizontal document overflow and clipped pe
       { slug: "mobile-light", viewport: { width: 390, height: 844 } },
     ),
     /clipped \.mc-next-composer-primary horizontally/u,
+  );
+});
+
+test("mobile visual geometry rejects section tabs stretched away from the topbar", async () => {
+  await assert.rejects(
+    assertMobileVisualGeometry(
+      {
+        async evaluate() {
+          return { viewportWidth: 390, documentOverflow: 0, bodyOverflow: 0, sectionTabsGap: 130, targets: [] };
+        },
+      },
+      { slug: "settings-hooks" },
+      { slug: "mobile-dark", viewport: { width: 390, height: 844 } },
+    ),
+    /placed section tabs away from the topbar.*gap=130/u,
   );
 });
 

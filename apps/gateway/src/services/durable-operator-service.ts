@@ -10,6 +10,8 @@ import type {
   DurableDiagnosticsResponse,
   DurableRunCreateRequest,
   DurableRunRecord,
+  DurableRunHistoryPage,
+  DurableRunHistoryQuery,
   DurableRunTimelineEvent,
   DurableWakeResult,
 } from "@goatcitadel/contracts";
@@ -22,6 +24,7 @@ export interface DurableOperatorServiceDeps {
     DurableRunService,
     | "getDurableDiagnostics"
     | "listDurableRuns"
+    | "listDurableRunHistory"
     | "listDurableDeadLetters"
     | "listDurableRunCheckpoints"
     | "createDurableRun"
@@ -74,6 +77,10 @@ export class DurableOperatorService {
 
   public async listRuns(limit = 50): Promise<DurableRunRecord[]> {
     return this.deps.durableRunService.listDurableRuns(limit);
+  }
+
+  public async listRunHistory(query: DurableRunHistoryQuery): Promise<DurableRunHistoryPage> {
+    return this.deps.durableRunService.listDurableRunHistory(query);
   }
 
   public async listDeadLetters(limit = 50): Promise<DurableDeadLetterRecord[]> {
@@ -163,21 +170,13 @@ export class DurableOperatorService {
       async () => {
         if (run.status === "queued") await this.deps.durableRunService.requestRunProcessing(runId);
       },
-      async () => {
-        await this.deps.hooksService.enqueueAfterHooks({
-          workspaceId: await this.deps.resolveDurableRunHookWorkspaceId(run),
-          trigger: "orchestration.retry.scheduled",
-          entityType: "durable_run",
-          entityId: runId,
-          payload: {
-            runId,
-            reason,
-            actorId,
-            status: run.status,
-            attemptCount: run.attemptCount,
-          },
-        });
-      },
+      () => this.enqueueRunHook(run, "orchestration.retry.scheduled", runId, {
+        runId,
+        reason,
+        actorId,
+        status: run.status,
+        attemptCount: run.attemptCount,
+      }),
     ]);
   }
 
@@ -194,22 +193,30 @@ export class DurableOperatorService {
     if (result.outcome === "woke" && result.run) {
       return this.afterWakeCommit("Durable run wake", result, [
         ...(options.deferProcessing ? [] : [() => this.deps.durableRunService.requestRunProcessing(runId)]),
-        async () =>
-          await this.deps.hooksService.enqueueAfterHooks({
-            workspaceId: await this.deps.resolveDurableRunHookWorkspaceId(result.run!),
-            trigger: "orchestration.run.woken",
-            entityType: "durable_run",
-            entityId: runId,
-            payload: {
-              runId,
-              eventKey: event.eventKey,
-              correlationId: event.correlationId,
-              payload: event.payload ?? {},
-            },
-          }),
+        () => this.enqueueRunHook(result.run!, "orchestration.run.woken", runId, {
+          runId,
+          eventKey: event.eventKey,
+          correlationId: event.correlationId,
+          payload: event.payload ?? {},
+        }),
       ]);
     }
     return result;
+  }
+
+  private async enqueueRunHook(
+    run: DurableRunRecord,
+    trigger: "orchestration.retry.scheduled" | "orchestration.run.woken",
+    runId: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    await this.deps.hooksService.enqueueAfterHooks({
+      workspaceId: await this.deps.resolveDurableRunHookWorkspaceId(run),
+      trigger,
+      entityType: "durable_run",
+      entityId: runId,
+      payload,
+    });
   }
 
   private async afterRunCommit(

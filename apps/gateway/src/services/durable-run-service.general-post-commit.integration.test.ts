@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DurableRunRecord } from "@goatcitadel/contracts";
+import type { DurableRunRecord, RealtimeEvent } from "@goatcitadel/contracts";
 import {
   applyPostgresMigrationsSync,
   createLocalAsyncStorage,
@@ -489,7 +489,7 @@ describe("DurableRunService general Chat post-commit integration", () => {
       storage: getAsyncStorage(harness.storage),
       getGatewayNodeId: () => "node-test",
     });
-    const listener = vi.fn();
+    const listener = vi.fn<(event: RealtimeEvent) => void>();
     realtime.subscribeRealtime(listener);
     const onGeneral = vi.fn(async (_run: DurableRunRecord, progress: GeneralChatPostCommitProgress) => {
       await progress.publishEffect("realtime", () =>
@@ -521,11 +521,37 @@ describe("DurableRunService general Chat post-commit integration", () => {
 
     expect(await service.reconcileGeneralChatPostCommit(parent.runId)).toBe(false);
     expect(listener).not.toHaveBeenCalled();
+    expect(await realtime.listRealtimeEvents()).toEqual([]);
 
     updateSpy.mockRestore();
     expect(await service.reconcileGeneralChatPostCommit(parent.runId)).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(2);
+    const deliveries = listener.mock.calls.map(([event]) => event);
+    const originals = deliveries.filter((event) => event.eventType === "chat_thread_updated" && event.source === "chat");
+    const invalidations = deliveries.filter((event) => event.eventType === "inbox.changed" && event.source === "operator_inbox");
+    expect(originals).toHaveLength(1);
+    expect(invalidations).toHaveLength(1);
+    const original = originals[0]!;
+    const invalidation = invalidations[0]!;
+    expect(original).toMatchObject({
+      eventClass: "domain_fact",
+      eventAuthority: "retained_stream",
+      payload: { sessionId: "session-post-commit" },
+    });
+    expect(invalidation).toMatchObject({
+      eventClass: "operational_signal",
+      eventAuthority: "retained_stream",
+      payload: { sourceEventId: original.eventId, family: "chat", scope: "all_workspaces" },
+    });
+    expect(invalidation.eventId).not.toBe(original.eventId);
+    const retained = await realtime.listRealtimeEvents();
+    expect(retained).toHaveLength(2);
+    expect(retained).toEqual(expect.arrayContaining(deliveries));
+
     expect(await service.reconcileGeneralChatPostCommit(parent.runId)).toBe(true);
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener.mock.calls.map(([event]) => event)).toEqual(deliveries);
+    expect(await realtime.listRealtimeEvents()).toEqual(retained);
   });
 
   it("preserves a replacement generation and resumes after a partial synchronous effect failure", async () => {

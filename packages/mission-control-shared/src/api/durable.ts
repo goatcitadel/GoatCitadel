@@ -8,9 +8,12 @@ import type {
   DurableBackgroundTaskControlResponse,
   DurableBackgroundTaskRailResponse,
   DurableCheckpointRecord,
+  DurableDeadLetterRecord,
   ExternalSideEffectReplayWorkflowPayload,
   DurableRunCreateRequest,
   DurableRunRecord,
+  DurableRunHistoryPage,
+  DurableRunHistoryQuery,
   DurableRunTimelineEvent,
   DurableWakeResult,
   MemoryContextPack,
@@ -195,6 +198,21 @@ export async function fetchDurableRun(runId: string): Promise<DurableRunRecord> 
   return request<DurableRunRecord>(`/api/v1/durable/runs/${encodeURIComponent(runId)}`);
 }
 
+export async function fetchDurableRuns(limit = 100): Promise<{ items: DurableRunRecord[] }> {
+  return request<{ items: DurableRunRecord[] }>(`/api/v1/durable/runs?limit=${Math.max(1, Math.min(limit, 500))}`);
+}
+
+export async function fetchDurableRunHistory(query: DurableRunHistoryQuery, options?: { signal?: AbortSignal }): Promise<DurableRunHistoryPage> {
+  const params = new URLSearchParams({ workspaceId: query.workspaceId });
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  if (query.cursor !== undefined) params.set("cursor", query.cursor);
+  return request<DurableRunHistoryPage>(`/api/v1/durable/runs?${params.toString()}`, options?.signal ? { signal: options.signal, cache: "no-store" } : undefined);
+}
+
+export async function fetchDurableDeadLetters(limit = 100): Promise<{ items: DurableDeadLetterRecord[] }> {
+  return request<{ items: DurableDeadLetterRecord[] }>(`/api/v1/durable/dead-letters?limit=${Math.max(1, Math.min(limit, 500))}`);
+}
+
 export async function fetchObserveRunTrace(runId: string): Promise<ObserveRunTraceResponse> {
   return request<ObserveRunTraceResponse>(`/api/v1/observe/runs/${encodeURIComponent(runId)}/trace`);
 }
@@ -238,11 +256,12 @@ export async function fetchDurableChildWatchers(
 export async function fetchDurableBackgroundTaskRail(
   parentRunId: string,
   input: { workspaceId: string; sessionId: string },
+  options?: { signal?: AbortSignal },
 ): Promise<DurableBackgroundTaskRailResponse> {
   const query = new URLSearchParams({ workspaceId: input.workspaceId, sessionId: input.sessionId });
   const payload = await request<unknown>(
     `/api/v1/durable/runs/${encodeURIComponent(parentRunId)}/background-tasks?${query.toString()}`,
-    { cache: "no-store" },
+    { cache: "no-store", ...(options?.signal ? { signal: options.signal } : {}) },
   );
   return parseDurableBackgroundTaskRail(payload, { parentRunId, ...input });
 }

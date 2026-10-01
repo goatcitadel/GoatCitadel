@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
-  CapabilityCatalogEntry,
   ChatGeneratedArtifactRecord,
   SkillEvaluationCriterionDraft,
   SkillEvaluationRunRecord,
@@ -8,6 +7,7 @@ import type {
 } from "@goatcitadel/contracts";
 import type { AppRoute } from "@next/app/route-model";
 import type { TaskDeliverableRecord, TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export type LoadState<T> = {
   loading: boolean;
@@ -30,7 +30,12 @@ export type NativeLoadResult<T> = {
   issue: NativeLoadIssue | null;
 };
 
-export type CapabilityStatusFilter = "all" | "available" | "configured" | "inspect-only" | "degraded" | "unavailable";
+export {
+  deriveCapabilityStatus,
+  mergeCapabilities,
+  summarizeCapabilityCounts,
+} from "@goatcitadel/mission-control-shared/content/capability-rows";
+export type { CapabilityStatusFilter } from "@goatcitadel/mission-control-shared/content/capability-rows";
 
 export type CoworkTaskContinuationSummary = {
   nextActionLabel: string;
@@ -147,62 +152,6 @@ export function dedupeAgentProfiles<T extends { agentId: string; roleId?: string
 
 export function routeSectionWithDefault(route: AppRoute, fallback: NonNullable<AppRoute["section"]>) {
   return (route.section ?? fallback) as NonNullable<AppRoute["section"]>;
-}
-
-export function mergeCapabilities(
-  inspectable: CapabilityCatalogEntry[],
-  callable: CapabilityCatalogEntry[],
-): CapabilityCatalogEntry[] {
-  const merged = new Map<string, CapabilityCatalogEntry>();
-  for (const item of inspectable) {
-    merged.set(item.capabilityId, item);
-  }
-  for (const item of callable) {
-    merged.set(item.capabilityId, { ...(merged.get(item.capabilityId) ?? item), ...item, callable: true });
-  }
-  return Array.from(merged.values()).sort((left, right) => left.title.localeCompare(right.title));
-}
-
-export function deriveCapabilityStatus(item: CapabilityCatalogEntry): {
-  status: CapabilityStatusFilter;
-  label: string;
-  reason: string;
-} {
-  if (item.lifecycleState === "revoked") {
-    return { status: "unavailable", label: "Unavailable", reason: "The catalog marks this capability as revoked." };
-  }
-  if (item.reviewWarning || item.lifecycleState === "deprecated") {
-    return {
-      status: "degraded",
-      label: "Degraded",
-      reason: item.reviewWarning ?? "The catalog marks this capability as deprecated.",
-    };
-  }
-  if (item.callable) {
-    return { status: "available", label: "Available", reason: "Ready for the runtime to call." };
-  }
-  if (item.kind === "proposal" || item.kind === "candidate_skill") {
-    return { status: "inspect-only", label: "Inspect-only", reason: "Visible for review, not enabled for direct use." };
-  }
-  if (item.sourceRef || item.sourceProvider || item.toolName || item.skillId) {
-    return { status: "configured", label: "Configured", reason: "Known to the catalog but not currently callable." };
-  }
-  return { status: "unavailable", label: "Unavailable", reason: "No callable runtime path is available." };
-}
-
-export function summarizeCapabilityCounts(items: CapabilityCatalogEntry[]): Record<CapabilityStatusFilter, number> {
-  const counts: Record<CapabilityStatusFilter, number> = {
-    all: items.length,
-    available: 0,
-    configured: 0,
-    "inspect-only": 0,
-    degraded: 0,
-    unavailable: 0,
-  };
-  for (const item of items) {
-    counts[deriveCapabilityStatus(item).status] += 1;
-  }
-  return counts;
 }
 
 export function splitCommaList(value: string) {
@@ -402,25 +351,17 @@ export function humanizeEnumToken(value: string | null | undefined): string {
 }
 
 export function getErrorMessage(error: unknown): string {
-  const errorMessage = error instanceof Error ? readErrorString(error.message) : null;
-  if (errorMessage) {
-    return errorMessage;
-  }
-  const stringMessage = readErrorString(error);
-  if (stringMessage) {
-    return stringMessage;
+  if (error instanceof Error || typeof error === "string") {
+    return describeApiError(error).summary;
   }
   if (isErrorRecord(error)) {
     const message = readErrorString(error.message) ?? readErrorString(error.error) ?? readErrorString(error.detail);
     const code = readErrorString(error.code);
-    if (message && code) {
-      return `${message} (${code})`;
-    }
     if (message) {
-      return message;
+      return describeApiError(message).summary;
     }
     if (code) {
-      return `Request failed (${code})`;
+      return "The request couldn't be completed.";
     }
   }
   return "Something went wrong.";

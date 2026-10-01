@@ -796,7 +796,7 @@ describe("ThreadedTimeline", () => {
     expect(renderer.root.findByProps({ className: "mc-next-thread-bubble assistant streaming" })).toBeTruthy();
   });
 
-  it("leaves pending approvals out of the transcript so the composer can own the decision", () => {
+  it("renders pending approvals in the transcript with their decisions", () => {
     const markup = renderToStaticMarkup(
       <ThreadedTimeline
         props={
@@ -812,12 +812,14 @@ describe("ThreadedTimeline", () => {
       />,
     );
 
-    expect(markup).not.toContain("mc-next-thread-blocking-prompt");
-    expect(markup).not.toContain("Approval required");
-    expect(markup).not.toContain("Open persisted approval record");
+    expect(markup).toContain("mc-next-thread-blocking-prompt");
+    expect(markup).toContain("Approval required");
+    expect(markup).toContain("Allow once");
+    expect(markup).toContain("Deny");
+    expect(markup).toContain("Open persisted approval record");
   });
 
-  it("leaves pending user input out of the transcript so the composer can own the answer", () => {
+  it("renders durable user input in the transcript", () => {
     const markup = renderToStaticMarkup(
       <ThreadedTimeline
         props={
@@ -836,9 +838,10 @@ describe("ThreadedTimeline", () => {
       />,
     );
 
-    expect(markup).not.toContain("mc-next-thread-blocking-prompt");
-    expect(markup).not.toContain("Need a constraint");
-    expect(markup).not.toContain("Answer required");
+    expect(markup).toContain("mc-next-thread-blocking-prompt");
+    expect(markup).toContain("Need a constraint");
+    expect(markup).toContain("Answer required");
+    expect(markup).toContain("Submit");
     expect(markup).not.toContain("Dismiss");
   });
 

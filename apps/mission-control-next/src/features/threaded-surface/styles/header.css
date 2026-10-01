@@ -164,7 +164,7 @@
 
 .mc-next-threaded-surface.unified .mc-next-threaded-header-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: flex-start;
   justify-content: flex-end;
   grid-column: 2;

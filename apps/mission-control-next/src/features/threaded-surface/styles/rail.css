@@ -186,7 +186,7 @@
 .mc-next-threaded-rail-head h2,
 .mc-next-threaded-empty h2 {
   margin: 0.18rem 0 0;
-  font-size: clamp(1.2rem, 1.8vw, 1.55rem);
+  font-size: var(--text-xl);
   line-height: 1.08;
   letter-spacing: -0.03em;
 }

@@ -4,6 +4,7 @@ import { cleanupPublishedMcpOAuthCredentials } from "./mcp-oauth-publication-cle
 import type { McpOAuthTokenService } from "./mcp-oauth-token-service.js";
 import type { McpAuthStateRecord, McpOAuthTokenRequest } from "./mcp-server-admin-service.js";
 import type { McpServerStore } from "./mcp-server-store.js";
+import type { McpOAuthExchangeReview } from "./mcp-reviewed-connection.js";
 import {
   markIdempotentExternalSideEffectCompleted,
   runIdempotentExternalSideEffect,
@@ -30,10 +31,12 @@ export class GatewayMcpOAuthService {
     server: McpServerRecord,
     code: string,
     stateRecord: McpAuthStateRecord,
+    review?: McpOAuthExchangeReview,
   ): Promise<McpAuthStateRecord> {
+    const captured = review ? { fence: Object.freeze({ ...review.fence }), onCommitted: review.onCommitted } : undefined;
     return this.runTokenRequest(server, stateRecord, "authorization_code", (configuration, expected, beforeRequest) =>
-      this.options.tokenService.exchangeAuthorizationCode(configuration, code, expected, beforeRequest),
-    );
+      this.options.tokenService.exchangeAuthorizationCode(configuration, code, expected, beforeRequest, captured?.fence),
+    captured);
   }
 
   public async resolveAccessToken(server: McpServerRecord): Promise<string | undefined> {
@@ -68,9 +71,14 @@ export class GatewayMcpOAuthService {
       auth: McpAuthStateRecord,
       beforeRequest: () => Promise<void>,
     ) => Promise<McpAuthStateRecord>,
+    review?: McpOAuthExchangeReview,
   ): Promise<McpAuthStateRecord> {
     const { registry, storage } = this.options;
-    const reservation = await registry.reserveAuthRequest(server, expected, kind);
+    const fence = review ? Object.freeze({ ...review.fence }) : undefined;
+    const reservation = await registry.reserveAuthRequest(server, expected, kind, fence);
+    // The exact auth attempt is now durably reserved. Even later pre-network failure needs inspection.
+    try { await review?.onCommitted?.(); }
+    catch (cause) { const error = cause instanceof Error ? cause : new Error("OAuth admission requires inspection."); Object.assign(error, { mutationCommitted: true }); throw error; }
     const request = reservation.auth.tokenRequest;
     let published: McpAuthStateRecord | undefined;
     const run = await runIdempotentExternalSideEffect({
@@ -97,6 +105,7 @@ export class GatewayMcpOAuthService {
                 server: reservation.server,
                 expected: reservation.auth,
                 next: reservation.auth,
+                ...(fence ? { fence } : {}),
               });
               await claim.markExternalCallStarted();
             }),
@@ -111,7 +120,7 @@ export class GatewayMcpOAuthService {
       commitCompleted: async (claim, state) => {
         const next = { ...state, tokenRequest: undefined };
         await storage.runImmediateTransaction(async () => {
-          await registry.writeAuthState({ server: reservation.server, expected: reservation.auth, next });
+          await registry.writeAuthState({ server: reservation.server, expected: reservation.auth, next, ...(fence ? { fence } : {}) });
           await markIdempotentExternalSideEffectCompleted(storage.mutationIdempotency, claim, new Date().toISOString());
           if (!claim.sideEffectRunId) throw new Error("MCP OAuth completion requires its durable request ledger.");
           await storage.externalSideEffectRuns.markCompleted(claim.sideEffectRunId, {
@@ -120,6 +129,10 @@ export class GatewayMcpOAuthService {
         });
         published = next;
       },
+    }).catch((cause: unknown) => {
+      if (!review) throw cause;
+      const error = cause instanceof Error ? cause : new Error("Reviewed OAuth token request requires inspection.");
+      Object.assign(error, { mutationCommitted: true }); throw error;
     });
     if (run.status !== "executed" || !published) {
       // Keep the reservation. The shared ledger alone decides whether a retry is safe.
@@ -130,9 +143,11 @@ export class GatewayMcpOAuthService {
           : run.status === "blocked"
             ? run.message
             : "Canonical publication was not acknowledged.";
-      throw new Error(
+      const error = new Error(
         `MCP OAuth token request did not finish: ${detail} Reconnect this server from Settings if recovery is required.`,
       );
+      if (review) Object.assign(error, { mutationCommitted: true });
+      throw error;
     }
     await cleanupPublishedMcpOAuthCredentials(this.options, reservation.server.serverId, expected, published);
     return published;

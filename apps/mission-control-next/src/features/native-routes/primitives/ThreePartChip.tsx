@@ -17,8 +17,8 @@ export function ThreePartChip({ tone, state, mid, age, dot = true }: ThreePartCh
         {dot ? <span className="mc-next-chip-3-dot" aria-hidden="true" /> : null}
         <span>{state}</span>
       </span>
-      {mid !== undefined ? <span className="mc-next-chip-3-mid">{mid}</span> : null}
-      {age !== undefined ? <span className="mc-next-chip-3-age">{age}</span> : null}
+      {mid !== undefined && mid !== "" ? <span className="mc-next-chip-3-mid">{mid}</span> : null}
+      {age !== undefined && age !== "" ? <span className="mc-next-chip-3-age">{age}</span> : null}
     </span>
   );
 }

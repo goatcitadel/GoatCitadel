@@ -91,6 +91,9 @@ export async function runWorkerChatWorkflow(input: {
             inference,
             signal,
           ),
+        // exchangeWorkerChatTool verifies the exact owner receipt before this
+        // predicate can park approval work without authorizing publication.
+        (result) => result.status === "waiting_approval",
       );
       lease = execution.lease;
       input.observed["toolStatus"] = execution.value.status;

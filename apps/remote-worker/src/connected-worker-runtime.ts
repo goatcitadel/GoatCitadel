@@ -201,11 +201,13 @@ async function runConnectedAssignment(
     context,
     state,
     lease,
+    leaseOwner,
     outbox,
     observed,
     config.stopAfter === "events",
     transcript,
   );
+  lease = chain.lease;
   stages.push("events");
   if (config.stopAfter === "events") return "stopped";
   let completedArtifact: { resultSha256: string; outputManifestSha256: string } | undefined;
@@ -320,6 +322,7 @@ async function isMeshAdmitted(state: WorkerDurableStatePort): Promise<boolean> {
 }
 
 interface ShippedChain {
+  readonly lease: LeaseBinding;
   readonly finalSequence: number;
   readonly finalEventSha256: string;
 }
@@ -329,10 +332,11 @@ interface ShippedChain {
  * an unacknowledged tail; the next run resends byte-identical frames, which the
  * Gateway replay-acknowledges without re-materializing.
  */
-async function shipTranscript(
+export async function shipTranscript(
   context: RouteContext,
   state: WorkerDurableStatePort,
   lease: LeaseBinding,
+  owner: Pick<WorkerAssignmentLeaseOwner, "renew" | "workerSentThrough">,
   outbox: WorkerTranscriptOutbox,
   observed: Record<string, unknown>,
   firstBatchOnly: boolean,
@@ -358,6 +362,13 @@ async function shipTranscript(
   const batches = firstBatchOnly ? [chain.slice(0, 2)] : [chain.slice(0, 2), chain.slice(2)];
   for (const batch of batches) {
     if (batch.length === 0) continue;
+    // Outbox persistence can outlive the previous parent heartbeat fence.
+    // Re-enter exact authority after those writes and before every batch.
+    const refreshed = await renewWorkerLeaseControl({ context, owner, lease, observed,
+      workerSentThrough: Math.max(owner.workerSentThrough(), outbox.ackWatermark()) });
+    if (refreshed.control.body.disposition !== "active")
+      throw new Error("Worker transcript publication was cancelled or is no longer active.");
+    lease = refreshed.lease;
     const response = await appendEvents(context, lease, {
       events: batch,
       idempotencyKey: `events:${lease.assignmentId}:${String(batch[0]?.sequence ?? 0)}`,
@@ -372,7 +383,7 @@ async function shipTranscript(
   observed["eventDispositions"] = dispositions;
   const last = chain.at(-1);
   if (last === undefined) throw new Error("Transcript chain was empty.");
-  return { finalSequence: last.sequence, finalEventSha256: last.eventSha256 };
+  return { lease, finalSequence: last.sequence, finalEventSha256: last.eventSha256 };
 }
 
 function report(

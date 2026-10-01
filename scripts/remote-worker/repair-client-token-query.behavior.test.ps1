@@ -30,8 +30,8 @@ try {
   $source=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'repair-client-token-query.ps1'))
   $source=$source.Replace("if ([Environment]::MachineName -cne 'GOATBOX' -or `$env:COMPUTERNAME -cne 'GOATBOX') { throw 'Run this repair on GOATBOX only.' }",'')
   $source=$source.Replace("if (-not (Test-BrokerCoordinatorElevation)) { throw 'Use Administrator PowerShell.' }",'')
-  $source=$source.Replace('$PSScriptRoot',("'"+$PSScriptRoot+"'"))
   $source=$source.Replace('C:\',($root+'\'))
+  $source=$source.Replace('$PSScriptRoot',("'"+$PSScriptRoot+"'"))
   $pins=@('be670dfd61f42bcf01b182ccdac4e3c3551c3fe3cd08290d08210a9e60c08846','069241c7653b5f314a16f9c6105bd615698ffd458853762dedb2d116a5cf14d8','6f7309533bf1034c537e9e4c50a19c31d07354490092e8b97d9a29ba3af05948')
   for ($i=0;$i -lt 3;$i++) { $source=$source.Replace($pins[$i],$original[$names[$i]]) }
   $shim=@'
@@ -89,9 +89,15 @@ function Get-BrokerCoordinatorPaths { param($SystemDrive); return [pscustomobjec
   $command=@('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$copy,'-PackageRoot',$package,'-ManifestSha256',$hash,'-OutputRoot',$output)
   if ($Case -ne 'preflight') { $command+='-Apply' }
   $engine=(Get-Process -Id $PID).Path
+  # Rollback and running cases fail intentionally. Preserve the child error
+  # and exit code so a missing receipt reports the actual fixture failure.
+  $ErrorActionPreference='Continue'
   $text=& $engine @command 2>&1
   $code=$LASTEXITCODE
-  $report=Get-Content -Raw -LiteralPath (Join-Path $output 'client-token-query-update-evidence.json') | ConvertFrom-Json
+  $ErrorActionPreference='Stop'
+  $reportPath=Join-Path $output 'client-token-query-update-evidence.json'
+  if (-not (Test-Path -LiteralPath $reportPath)) { throw ($text | Out-String) }
+  $report=Get-Content -Raw -LiteralPath $reportPath | ConvertFrom-Json
   $success=$Case -in @('preflight','apply')
   if (($success -and $code -ne 0) -or (-not $success -and $code -eq 0)) { throw ($text|Out-String) }
   if (@($report.rollbackFailures).Count -ne 0) { throw 'Rollback failed.' }

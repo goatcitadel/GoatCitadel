@@ -38,7 +38,7 @@ describe("approval helpers", () => {
       status: "rejected",
       resolutionNote: "Stopped by the user",
     });
-    expect(approvalResolutionLabel(old)).toBe("rejected");
+    expect(approvalResolutionLabel(old)).toBe("denied");
     expect(approvalResolutionLabel({ ...old, resolutionOutcome: "denied" })).toBe("denied");
     expect(approvalResolutionLabel({ ...old, resolutionOutcome: "withdrawn" })).toBe("withdrawn");
     expect(approvalResolutionLabel({ ...old, resolutionOutcome: "policy_blocked" })).toBe("blocked by policy");

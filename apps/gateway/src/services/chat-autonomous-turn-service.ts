@@ -900,10 +900,10 @@ export async function enqueueAutonomousChatTurn(
     });
     assertPreparedAutonomousChatAdmission(prepared, childIdentity);
     requestLease.assertHealthy();
-    const capabilityStoresPresent = Boolean(
-      deps.storage.capabilityCatalogSnapshots && deps.storage.chatTurnCapabilityProfiles,
-    );
-    if (Boolean(deps.storage.capabilityCatalogSnapshots) !== Boolean(deps.storage.chatTurnCapabilityProfiles)) {
+    const capabilityCatalogSnapshots = deps.storage.capabilityCatalogSnapshots;
+    const chatTurnCapabilityProfiles = deps.storage.chatTurnCapabilityProfiles;
+    const capabilityStoresPresent = Boolean(capabilityCatalogSnapshots && chatTurnCapabilityProfiles);
+    if (Boolean(capabilityCatalogSnapshots) !== Boolean(chatTurnCapabilityProfiles)) {
       throw new Error("Autonomous Chat capability admission stores are incompletely configured.");
     }
     if (capabilityStoresPresent && (!prepared.capabilityProfile || !prepared.capabilityCatalogSnapshot)) {
@@ -985,8 +985,8 @@ export async function enqueueAutonomousChatTurn(
       if (prepared.capabilityProfile && prepared.capabilityCatalogSnapshot && capabilityStoresPresent) {
         await chatDurableRunService.persistPreparedChatCapabilityAdmission(
           {
-            capabilityCatalogSnapshots: deps.storage.capabilityCatalogSnapshots,
-            chatTurnCapabilityProfiles: deps.storage.chatTurnCapabilityProfiles,
+            capabilityCatalogSnapshots,
+            chatTurnCapabilityProfiles,
             sessionMutationAdmissions: deps.storage.sessionMutationAdmissions,
             skillLifecycle: deps.storage.skillLifecycle,
           },

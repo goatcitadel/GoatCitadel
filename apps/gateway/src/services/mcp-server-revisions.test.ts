@@ -53,6 +53,10 @@ async function verify(storage: AsyncStorage, other: AsyncStorage) {
 
   const firstAttempt = await a.patchServerState(base.serverId, { status: "connecting" }, noOp);
   const secondAttempt = await b.patchServerState(base.serverId, { status: "connecting" }, firstAttempt);
+  // Reviewed environment preparation cannot adopt a peer's newer generation, even without credential changes.
+  await expect(a.writeEnvironmentBinding(firstAttempt, undefined, undefined, { expectedConnectionRevision: firstAttempt.connectionRevision! })).rejects.toMatchObject({ httpStatus: 409 });
+  expect(await a.requireServer(base.serverId)).toMatchObject(JSON.parse(JSON.stringify(secondAttempt)));
+  await expect(a.writeEnvironmentBinding(secondAttempt, undefined, undefined, { expectedConnectionRevision: secondAttempt.connectionRevision! })).resolves.toMatchObject(JSON.parse(JSON.stringify(secondAttempt)));
   await expect(a.completeConnection(firstAttempt, [tool(base.serverId, "late.first")])).rejects.toMatchObject({ code: "WRITE_CONFLICT" });
   const connected = await b.completeConnection(secondAttempt, [tool(base.serverId, "current.tool")]);
   expect(connected.revision).toBe(noOp.revision);

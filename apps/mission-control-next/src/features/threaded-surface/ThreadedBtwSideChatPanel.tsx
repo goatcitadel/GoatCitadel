@@ -44,7 +44,7 @@ const DESKTOP_RIGHT_OFFSET = 28;
 const DESKTOP_BOTTOM_OFFSET = 104;
 
 export function ThreadedBtwSideChatPanel({ sideChat }: { sideChat: ThreadedBtwSideChatProps }) {
-  const compact = useMediaQuery("(max-width: 840px)");
+  const compact = useMediaQuery("(max-width: 1023px)");
   const panelRef = useRef<HTMLDivElement | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);

@@ -12,6 +12,7 @@ import {
 import { DURABLE_CHILD_WATCHER_LIMITS, type DurableChildStateChangedPayload } from "@goatcitadel/contracts";
 import { DurableRunEventRepository } from "./durable-run-event-repo.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
+import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import { createDatabase, __sqliteInternals } from "./sqlite.js";
 
 const createdFiles: string[] = [];
@@ -46,11 +47,12 @@ function createDbPath(): string {
   return dbPath;
 }
 
-function seedRun(runs: DurableRunRepository, runId: string): void {
+function seedRun(runs: DurableRunRepository, runId: string, scope?: { workspaceId: string; sessionId: string }): void {
   runs.createRun({
     runId,
     workflowKey: "chat.turn.execute",
     now: "2026-07-13T00:00:00.000Z",
+    ...(scope ? { payload: scope } : {}),
   });
 }
 
@@ -72,6 +74,37 @@ function appendChildEvent(
 }
 
 describe("DurableChildWatcherRepository", () => {
+  it("scopes recent completed Chat delegation watcher candidates before the cap", () => {
+    const { db, runs, watchers } = createRepos();
+    const sessions = new ChatSessionMetaRepository(db);
+    sessions.ensure("session-a", "2026-07-13T00:00:00.000Z", "workspace-a");
+    sessions.ensure("session-b", "2026-07-13T00:00:00.000Z", "workspace-b");
+    seedRun(runs, "parent-run");
+    for (const [suffix, source, finishedAt, workspaceId, sessionId] of [
+      ["old", "chat_delegation", "2026-07-12T00:00:00.000Z", "workspace-a", "session-a"],
+      ["other", "manual", "2026-07-14T00:00:00.000Z", "workspace-a", "session-a"],
+      ["first", "chat_delegation", "2026-07-14T00:00:01.000Z", "workspace-a", "session-a"],
+      ["latest", "chat_delegation", "2026-07-14T00:00:02.000Z", "workspace-a", "session-a"],
+      ["foreign-first", "chat_delegation", "2026-07-14T00:00:03.000Z", "workspace-b", "session-b"],
+      ["foreign-latest", "chat_delegation", "2026-07-14T00:00:04.000Z", "workspace-b", "session-b"],
+    ] as const) {
+      const childRunId = `child-${suffix}`;
+      seedRun(runs, childRunId, { workspaceId, sessionId });
+      watchers.create({ watcherId: `watcher-${suffix}`, parentRunId: "parent-run", childRunId, source });
+      runs.updateRun({ runId: childRunId, status: "completed", finishedAt, updatedAt: finishedAt });
+    }
+    seedRun(runs, "child-running");
+    watchers.create({ watcherId: "watcher-running", parentRunId: "parent-run", childRunId: "child-running", source: "chat_delegation" });
+
+    const recent = watchers.listRecentCompletedDelegations("workspace-a", "2026-07-13T00:00:00.000Z", 2);
+    assert.deepEqual(recent.map((entry) => [entry.watcher.watcherId, entry.finishedAt]), [
+      ["watcher-latest", "2026-07-14T00:00:02.000Z"],
+      ["watcher-first", "2026-07-14T00:00:01.000Z"],
+    ]);
+    assert.deepEqual(watchers.listRecentCompletedDelegations("workspace-a", "2026-07-13T00:00:00.000Z", 1).map((entry) => entry.watcher.watcherId), ["watcher-latest"]);
+    assert.deepEqual(watchers.listRecentCompletedDelegations("workspace-b", "2026-07-13T00:00:00.000Z", 1).map((entry) => entry.watcher.watcherId), ["watcher-foreign-latest"]);
+  });
+
   it("projects historical child transitions exactly once in sequence order", () => {
     const { runs, events, watchers } = createRepos();
     seedRun(runs, "parent-run");

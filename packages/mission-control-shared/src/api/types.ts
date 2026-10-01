@@ -115,42 +115,8 @@ export interface CostMetricCoverage {
   complete: boolean;
 }
 
-export interface TaskRecord {
-  taskId: string;
-  revision: number;
-  workspaceId?: string;
-  title: string;
-  description?: string;
-  status: "planning" | "inbox" | "assigned" | "in_progress" | "testing" | "review" | "done" | "blocked";
-  priority: "low" | "normal" | "high" | "urgent";
-  assignedAgentId?: string;
-  createdBy?: string;
-  dueAt?: string;
-  deletedAt?: string;
-  deletedBy?: string;
-  deleteReason?: string;
-  createdAt: string;
-  updatedAt: string;
-  proactiveContext?: {
-    sessionId: string;
-    originSurface: "chat" | "cowork" | "code";
-    proactiveRunId?: string;
-    durableRunId?: string;
-    approvalId?: string;
-    nextWakeAt?: string;
-    stopReason?: string;
-    externalReferenceRoots?: Array<{
-      label: string;
-      rootPath: string;
-      access: "read_only";
-    }>;
-  };
-  agenticContext?: {
-    runId?: string;
-    durableRunId?: string;
-    status?: string;
-  };
-}
+/** The Gateway task owner returns the canonical contract, including retry and runtime evidence. */
+export type TaskRecord = import("@goatcitadel/contracts").TaskRecord;
 
 export interface TaskActivityRecord {
   activityId: string;

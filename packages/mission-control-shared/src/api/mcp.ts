@@ -5,11 +5,15 @@ import type {
   McpElicitationResponseAction,
   McpElicitationStatus,
   McpOAuthStartResponse,
+  McpReviewedOAuthStartResponse,
+  McpOAuthCompletionReceipt,
   McpRemotePreviewResponse,
   McpServerModeCallRequest,
   McpServerModeCallResponse,
   McpServerModeManifestResponse,
   McpServerRecord,
+  McpServerConnectionReview,
+  McpServerConnectionReceipt,
   McpServerUpdateRequest,
   McpServerPolicyUpdateRequest,
   McpServerTemplateRecord,
@@ -34,12 +38,12 @@ export async function fetchMcpTemplateDiscovery(): Promise<{ items: McpTemplateD
   return request<{ items: McpTemplateDiscoveryResult[] }>("/api/v1/mcp/templates/discovery");
 }
 
-export async function fetchMcpRemotePreview(): Promise<McpRemotePreviewResponse> {
-  return request<McpRemotePreviewResponse>("/api/v1/mcp/remote-preview");
+export async function fetchMcpRemotePreview(signal?: AbortSignal): Promise<McpRemotePreviewResponse> {
+  return request<McpRemotePreviewResponse>("/api/v1/mcp/remote-preview", { cache: "no-store", signal });
 }
 
-export async function fetchMcpServerModeManifest(): Promise<McpServerModeManifestResponse> {
-  return request<McpServerModeManifestResponse>("/api/v1/mcp/server-mode/manifest");
+export async function fetchMcpServerModeManifest(signal?: AbortSignal): Promise<McpServerModeManifestResponse> {
+  return request<McpServerModeManifestResponse>("/api/v1/mcp/server-mode/manifest", { cache: "no-store", signal });
 }
 
 export async function fetchMcpElicitations(input: {
@@ -154,10 +158,30 @@ export async function disconnectMcpServer(serverId: string): Promise<McpServerRe
   });
 }
 
+export async function connectReviewedMcpServer(serverId: string, review: McpServerConnectionReview): Promise<McpServerConnectionReceipt> {
+  return request<McpServerConnectionReceipt>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/connect-reviewed`, { method: "POST", body: JSON.stringify(review) });
+}
+
+export async function disconnectReviewedMcpServer(serverId: string, review: McpServerConnectionReview): Promise<McpServerConnectionReceipt> {
+  return request<McpServerConnectionReceipt>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/disconnect-reviewed`, { method: "POST", body: JSON.stringify(review) });
+}
+
 export async function startMcpOAuth(serverId: string): Promise<McpOAuthStartResponse> {
   return request<McpOAuthStartResponse>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/oauth/start`, {
     method: "POST",
     body: JSON.stringify({}),
+  });
+}
+
+export async function startReviewedMcpOAuth(serverId: string, review: McpServerConnectionReview): Promise<McpReviewedOAuthStartResponse> {
+  return request<McpReviewedOAuthStartResponse>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/oauth/start-reviewed`, {
+    method: "POST", body: JSON.stringify(review),
+  });
+}
+
+export async function completeReviewedMcpOAuth(serverId: string, input: McpServerConnectionReview & { code: string; state: string }): Promise<McpOAuthCompletionReceipt> {
+  return request<McpOAuthCompletionReceipt>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/oauth/complete-reviewed`, {
+    method: "POST", body: JSON.stringify(input),
   });
 }
 

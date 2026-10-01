@@ -103,6 +103,8 @@ const mocks = vi.hoisted(() => ({
       items: [
         {
           packId: "pack-1",
+          createdAt: "2026-05-02T18:00:00.000Z",
+          updatedAt: "2026-05-02T20:00:00.000Z",
           name: "Security Red Team",
           testCount: 18,
           sourceLabel: "goatcitadel_prompt_pack_v6_security_red_team.md",
@@ -667,6 +669,11 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
+vi.mock("@goatcitadel/mission-control-shared/api/platform", async () => ({
+  ...await vi.importActual<typeof import("@goatcitadel/mission-control-shared/api/platform")>("@goatcitadel/mission-control-shared/api/platform"),
+  exportLlmEvalProofRuns: mocks.exportLlmEvalProofRuns,
+}));
+
 vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
   const actual = await vi.importActual<typeof import("@goatcitadel/mission-control-shared/api/client")>(
     "@goatcitadel/mission-control-shared/api/client",
@@ -940,7 +947,8 @@ describe("NativeRoutePages Ops quality dashboard", () => {
     );
     expect(text).toContain("Red-team packs are visible as governed definitions");
     expect(text).toContain("Available · 18 tests · Chat 6 · Legacy plan 6 · Legacy code 6");
-    expect(text).toContain("Import and open defensive security pack");
+    expect(text).toContain("Safe first import is unavailable");
+    expect(text).not.toContain("Review defensive definition import");
     expect(text).toContain("Review security pack scoring");
     expect(text).toContain("Security execution depth");
     expect(text).toContain("Scoring required · 67% run coverage · 50% scored · 67% pass");
@@ -973,18 +981,8 @@ describe("NativeRoutePages Ops quality dashboard", () => {
 
     await act(async () => findButton(renderer!.root, "Gates").props.onClick());
     await act(async () => findButton(renderer!.root, "Security packs").props.onClick());
-    await act(async () => {
-      findButton(renderer!.root, "Import and open defensive security pack").props.onClick();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(mocks.importBuiltinPromptPack).toHaveBeenCalledWith("security-red-team-v6");
-    expect(navigate).toHaveBeenCalledWith({
-      area: "library",
-      section: "prompt-packs",
-      view: "pack:security-red-team-v6",
-      theme: "ops",
-    });
+    expect(mocks.importBuiltinPromptPack).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
 
     await act(async () => findButton(renderer!.root, "Inspect Security Red Team").props.onClick());
     await act(async () => {

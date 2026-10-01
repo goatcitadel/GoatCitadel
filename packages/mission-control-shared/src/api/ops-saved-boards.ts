@@ -16,20 +16,27 @@ export interface OpsSavedBoardListResponse {
   items: OpsSavedBoardRecord[];
 }
 
-export async function fetchOpsSavedBoards(input: {
-  workspaceId: string;
-  includeArchived?: boolean;
-}): Promise<OpsSavedBoardListResponse> {
+export async function fetchOpsSavedBoards(
+  input: {
+    workspaceId: string;
+    includeArchived?: boolean;
+  },
+  signal?: AbortSignal,
+): Promise<OpsSavedBoardListResponse> {
   const params = new URLSearchParams({ workspaceId: input.workspaceId });
   if (input.includeArchived) params.set("includeArchived", "true");
-  const value = await request<unknown>(`/api/v1/ops/boards?${params.toString()}`, { cache: "no-store" });
+  const value = await request<unknown>(`/api/v1/ops/boards?${params.toString()}`, { cache: "no-store", signal });
   return parseListResponse(value, input.workspaceId);
 }
 
-export async function fetchOpsSavedBoard(workspaceId: string, boardId: string): Promise<OpsSavedBoardRecord> {
+export async function fetchOpsSavedBoard(
+  workspaceId: string,
+  boardId: string,
+  signal?: AbortSignal,
+): Promise<OpsSavedBoardRecord> {
   const value = await request<unknown>(
     `/api/v1/ops/boards/${encodeURIComponent(boardId)}?workspaceId=${encodeURIComponent(workspaceId)}`,
-    { cache: "no-store" },
+    { cache: "no-store", signal },
   );
   return parseBoard(value, workspaceId, boardId);
 }

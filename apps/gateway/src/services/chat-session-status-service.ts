@@ -192,6 +192,8 @@ export class ChatSessionStatusService {
       context,
       work: available({
         ...(latestTrace ? { latestTurnId: latestTrace.turnId } : {}),
+        latestTurn: latestTrace ? { turnId: latestTrace.turnId, status: latestTrace.status, startedAt: latestTrace.startedAt,
+          ...(latestTrace.finishedAt ? { finishedAt: latestTrace.finishedAt } : {}) } : null,
         turnCounts: Object.fromEntries(
           ACTIVE_TURN_STATUSES.map((status) => [status, traces.filter((trace) => trace.status === status).length]),
         ) as Record<(typeof ACTIVE_TURN_STATUSES)[number], number>,

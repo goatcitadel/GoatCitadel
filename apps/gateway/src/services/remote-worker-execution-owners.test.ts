@@ -1,7 +1,23 @@
 import path from "node:path";
+import { normalizeRemoteWorkerInferenceOperationIdentifier, redactSecretText } from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
-import { createRemoteWorkerExecutionOwners, type RemoteWorkerExecutionOwnersDependencies } from "./remote-worker-execution-owners.js";
+import { createRemoteWorkerDispatchOwnerId, createRemoteWorkerExecutionOwners, type RemoteWorkerExecutionOwnersDependencies } from "./remote-worker-execution-owners.js";
 import { REMOTE_WORKER_NATIVE_CELL_POLICY } from "./remote-worker-native-cell-policy.js";
+
+describe("remote worker dispatch instance identity", () => {
+  it.each([6, 7, 8, 9, 10, 11, 12])("preserves a node with a %s-digit process suffix and distinct instances", (digits) => {
+    const nodeId = `gateway-${"1".repeat(digits)}`;
+    const first = createRemoteWorkerDispatchOwnerId(nodeId), second = createRemoteWorkerDispatchOwnerId(nodeId);
+    expect(first).toMatch(new RegExp(`^remote-worker:${nodeId}\\.[a-f0-9-]{36}$`, "u"));
+    expect(second).not.toBe(first);
+    expect(normalizeRemoteWorkerInferenceOperationIdentifier(first, "dispatch owner id")).toBe(first);
+    expect(redactSecretText(first).redactionCount).toBe(0);
+  });
+  it("keeps real credential-shaped node identities rejected", () => {
+    expect(() => createRemoteWorkerDispatchOwnerId("sk-proj-synthetic-secret-canary")).toThrow(/secret-like/u);
+    expect(() => createRemoteWorkerDispatchOwnerId("123456:synthetic_telegram_secret_canary_1234567890")).toThrow(/secret-like/u);
+  });
+});
 
 describe("native cell owner production composition", () => {
   it.each((["cell.native_pool.page", "cell.native_pool.cleanup.page"] as const).flatMap(kind =>

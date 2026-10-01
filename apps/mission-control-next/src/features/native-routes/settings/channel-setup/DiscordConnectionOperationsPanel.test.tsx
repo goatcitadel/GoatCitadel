@@ -3,6 +3,7 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "rea
 import type { DiscordPairingRecord, DiscordRuntimeStatus, IntegrationConnection } from "@goatcitadel/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordConnectionOperationsPanel } from "./DiscordConnectionOperationsPanel";
+import { __resetChannelMutationStateForTests } from "../sections/channel-setup-state";
 
 const discordApiMocks = vi.hoisted(() => ({
   approveDiscordPairing: vi.fn(),
@@ -110,6 +111,7 @@ async function click(node: ReactTestInstance): Promise<void> {
 }
 
 beforeEach(() => {
+  __resetChannelMutationStateForTests();
   vi.clearAllMocks();
   discordApiMocks.fetchDiscordPairings.mockResolvedValue({
     runtime,
@@ -182,5 +184,46 @@ describe("DiscordConnectionOperationsPanel", () => {
     expect(discordApiMocks.fetchDiscordPairings).toHaveBeenLastCalledWith("discord-2");
     expect(textOf(renderer.root)).toContain("SecondBot#2222");
     expect(textOf(renderer.root)).toContain("No pending Discord pairings.");
+  });
+});
+
+describe("Discord owner lifecycle boundaries", () => {
+  it("withholds pairing mutation after navigating away and back during its fresh owner read", async () => {
+    const first = connection("discord-1", "One"), second = connection("discord-2", "Two");
+    const renderer = await renderPanel([first, second]);
+    let resolve!: (value: { runtime: DiscordRuntimeStatus; items: DiscordPairingRecord[] }) => void;
+    discordApiMocks.fetchDiscordPairings.mockReturnValueOnce(new Promise((yes) => { resolve = yes; }));
+    await click(findButton(renderer.root, "Approve"));
+    await act(async () => renderer.root.findByType("select").props.onChange({ target: { value: "discord-2" } }));
+    await act(async () => renderer.root.findByType("select").props.onChange({ target: { value: "discord-1" } }));
+    await act(async () => resolve({ runtime, items: [pendingPairing] }));
+    await flushWork();
+    expect(discordApiMocks.approveDiscordPairing).not.toHaveBeenCalled();
+    renderer.unmount();
+  });
+  it("retains unknown pairing outcomes after remount and refuses duplicate dispatch", async () => {
+    let reject!: (cause: Error) => void;
+    discordApiMocks.approveDiscordPairing.mockReturnValueOnce(new Promise((_yes, no) => { reject = no; }));
+    const renderer = await renderPanel([connection("discord-1", "One")]);
+    const approve = findButton(renderer.root, "Approve");
+    await act(async () => { approve.props.onClick(); approve.props.onClick(); });
+    await flushWork();
+    expect(discordApiMocks.approveDiscordPairing).toHaveBeenCalledTimes(1);
+    renderer.unmount();
+    await act(async () => reject(new Error("Response lost")));
+    await flushWork();
+    const next = await renderPanel([connection("discord-1", "One")]);
+    expect(textOf(next.root)).toContain("Outcome uncertain");
+    expect(findButton(next.root, "Reconnect").props.disabled).toBe(true);
+    expect(discordApiMocks.approveDiscordPairing).toHaveBeenCalledTimes(1);
+    next.unmount();
+  });
+  it("refuses a pairing whose fresh owner identity changed after review", async () => {
+    const renderer = await renderPanel([connection("discord-1", "One")]);
+    discordApiMocks.fetchDiscordPairings.mockResolvedValueOnce({ runtime, items: [{ ...pendingPairing, userId: "other-user" }] });
+    await click(findButton(renderer.root, "Approve"));
+    expect(discordApiMocks.approveDiscordPairing).not.toHaveBeenCalled();
+    expect(textOf(renderer.root)).toContain("pairing changed since review");
+    renderer.unmount();
   });
 });

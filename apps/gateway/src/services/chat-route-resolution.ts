@@ -223,7 +223,8 @@ export async function resolveChatRouteDescriptor(
 ): Promise<ResolvedChatRouteDescriptor> {
   const sessionPrefs = await deps.storage.chatSessionPrefs.ensure(sessionId);
   const previewPrefs = buildPreviewPrefs(sessionPrefs, input);
-  const runtime = deps.llmService.getRuntimeConfig({
+  const llmService = deps.llmService;
+  const runtime = llmService.getRuntimeConfig({
     includeKeychainForActiveProvider: true,
     useCache: true,
   });
@@ -281,10 +282,10 @@ export async function resolveChatRouteDescriptor(
     runtime,
     provider: requestedProvider,
     requestedModel,
-    getModelAvailability: deps.llmService.getCachedModelAvailability?.bind(deps.llmService),
+    getModelAvailability: llmService.getCachedModelAvailability?.bind(llmService),
   });
   if (runtimeClass === "cloud") {
-    deps.llmService.refreshModelCatalogInBackground?.(requestedProvider.providerId);
+    llmService.refreshModelCatalogInBackground?.(requestedProvider.providerId);
   }
   const effectiveProviderId = requestedProvider.providerId;
   const effectiveModel = effectiveModelResolution.model;
@@ -311,8 +312,8 @@ export async function preflightChatRoute(
   sessionId: string,
   input: RoutingPreflightRequest,
 ): Promise<RoutingPreflightResult> {
-  if ((input.action === "retry" || input.action === "edit") && input.turnId && deps.requireChatTurnContext) {
-    await deps.requireChatTurnContext(sessionId, input.turnId);
+  if ((input.action === "retry" || input.action === "edit") && input.turnId) {
+    await deps.requireChatTurnContext?.(sessionId, input.turnId);
   }
 
   const descriptor = await resolveChatRouteDescriptor(deps, sessionId, input);
@@ -322,14 +323,15 @@ export async function preflightChatRoute(
   if (
     !blockedReason &&
     descriptor.runtimeClass === "local" &&
-    descriptor.runtimeProvider?.providerId &&
-    deps.listLlmModels
+    descriptor.runtimeProvider?.providerId
   ) {
     try {
-      const models = await deps.listLlmModels(descriptor.runtimeProvider.providerId);
-      runtimeReachability = models.length > 0 ? "reachable" : "models_unavailable";
-      if (models.length === 0) {
-        blockedReason = `No models are currently available for ${descriptor.runtimeProvider.label}.`;
+      const models = await deps.listLlmModels?.(descriptor.runtimeProvider.providerId);
+      if (models) {
+        runtimeReachability = models.length > 0 ? "reachable" : "models_unavailable";
+        if (models.length === 0) {
+          blockedReason = `No models are currently available for ${descriptor.runtimeProvider.label}.`;
+        }
       }
     } catch {
       runtimeReachability = "unreachable";

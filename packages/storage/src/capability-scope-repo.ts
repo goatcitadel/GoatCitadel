@@ -4,8 +4,12 @@ import type {
   CapabilityResourceType,
   CapabilityScopeAssignment,
   CapabilityScopeKind,
+  CapabilityScopeSelectionReview,
+  CapabilityScopeSelectionReceipt,
+  CapabilityScopeReviewedUpdateInput,
 } from "@goatcitadel/contracts";
 import { ValidationError } from "@goatcitadel/contracts";
+import { CapabilityScopeReviewStore } from "./capability-scope-review.js";
 
 interface CapabilityScopeRow {
   assignment_id: string;
@@ -28,6 +32,7 @@ function newAssignmentId(): string {
 }
 
 export class CapabilityScopeRepository {
+  private readonly review;
   private readonly listScopeStmt;
   private readonly listScopeTypeStmt;
   private readonly getStmt;
@@ -37,7 +42,8 @@ export class CapabilityScopeRepository {
   private readonly deleteStmt;
   private readonly deleteScopeTypeStmt;
 
-  public constructor(private readonly db: DatabaseClient) {
+  public constructor(db: DatabaseClient) {
+    this.review = new CapabilityScopeReviewStore(db, (kind, id, type) => this.list(kind, id, type));
     this.listScopeStmt = db.prepare(`
       SELECT * FROM capability_scope_assignments
       WHERE scope_kind = @scopeKind AND scope_id = @scopeId
@@ -102,31 +108,35 @@ export class CapabilityScopeRepository {
     enabled: boolean,
     now = new Date().toISOString(),
   ): CapabilityScopeAssignment {
-    const existing = toRow(this.findByKeyStmt.get({ scopeKind, scopeId, resourceType, resourceRef }));
-    if (existing) {
-      this.updateEnabledStmt.run({ assignmentId: existing.assignment_id, enabled: enabled ? 1 : 0, updatedAt: now });
-      return mapRow({ ...existing, enabled: enabled ? 1 : 0, updated_at: now });
-    }
-    const assignmentId = newAssignmentId();
-    this.insertStmt.run({
-      assignmentId,
-      scopeKind,
-      scopeId,
-      resourceType,
-      resourceRef,
-      enabled: enabled ? 1 : 0,
-      createdAt: now,
-      updatedAt: now,
-    });
-    return mapRow({
-      assignment_id: assignmentId,
-      scope_kind: scopeKind,
-      scope_id: scopeId,
-      resource_type: resourceType,
-      resource_ref: resourceRef,
-      enabled: enabled ? 1 : 0,
-      created_at: now,
-      updated_at: now,
+    return this.review.withLock(scopeKind, scopeId, () => {
+      const existing = toRow(this.findByKeyStmt.get({ scopeKind, scopeId, resourceType, resourceRef }));
+      if (existing) {
+        this.updateEnabledStmt.run({ assignmentId: existing.assignment_id, enabled: enabled ? 1 : 0, updatedAt: now });
+        this.review.advance(scopeKind, scopeId, resourceType);
+        return mapRow({ ...existing, enabled: enabled ? 1 : 0, updated_at: now });
+      }
+      const assignmentId = newAssignmentId();
+      this.insertStmt.run({
+        assignmentId,
+        scopeKind,
+        scopeId,
+        resourceType,
+        resourceRef,
+        enabled: enabled ? 1 : 0,
+        createdAt: now,
+        updatedAt: now,
+      });
+      this.review.advance(scopeKind, scopeId, resourceType);
+      return mapRow({
+        assignment_id: assignmentId,
+        scope_kind: scopeKind,
+        scope_id: scopeId,
+        resource_type: resourceType,
+        resource_ref: resourceRef,
+        enabled: enabled ? 1 : 0,
+        created_at: now,
+        updated_at: now,
+      });
     });
   }
 
@@ -137,7 +147,7 @@ export class CapabilityScopeRepository {
     items: readonly CapabilityScopeItemInput[],
     now = new Date().toISOString(),
   ): CapabilityScopeAssignment[] {
-    return this.db.transaction("immediate", () => {
+    return this.review.withLock(scopeKind, scopeId, () => {
       this.deleteScopeTypeStmt.run({ scopeKind, scopeId, resourceType });
       for (const item of items) {
         if (!item.resourceRef.trim()) {
@@ -154,16 +164,63 @@ export class CapabilityScopeRepository {
           updatedAt: now,
         });
       }
+      this.review.advance(scopeKind, scopeId, resourceType);
       return this.list(scopeKind, scopeId, resourceType);
     });
   }
 
   public clear(scopeKind: CapabilityScopeKind, scopeId: string, resourceType: CapabilityResourceType): number {
-    return Number(this.deleteScopeTypeStmt.run({ scopeKind, scopeId, resourceType }).changes ?? 0);
+    return this.review.withLock(scopeKind, scopeId, () => {
+      const count = Number(this.deleteScopeTypeStmt.run({ scopeKind, scopeId, resourceType }).changes ?? 0);
+      this.review.advance(scopeKind, scopeId, resourceType);
+      return count;
+    });
   }
 
   public delete(assignmentId: string): boolean {
-    return Number(this.deleteStmt.run({ assignmentId }).changes ?? 0) > 0;
+    const row = this.find(assignmentId);
+    if (!row) return false;
+    return this.review.withLock(row.scopeKind, row.scopeId, () => {
+      const removed = Number(this.deleteStmt.run({ assignmentId }).changes ?? 0) > 0;
+      if (removed) this.review.advance(row.scopeKind, row.scopeId, row.resourceType);
+      return removed;
+    });
+  }
+
+  public getSelectionReview(
+    scopeKind: CapabilityScopeKind,
+    scopeId: string,
+    resourceType: CapabilityResourceType,
+  ): CapabilityScopeSelectionReview | undefined {
+    return this.review.withLock(scopeKind, scopeId, () => this.review.read(scopeKind, scopeId, resourceType));
+  }
+
+  public replaceReviewed(
+    scopeKind: CapabilityScopeKind,
+    scopeId: string,
+    input: CapabilityScopeReviewedUpdateInput,
+  ): CapabilityScopeSelectionReceipt {
+    if (
+      !Array.isArray(input.assignments) ||
+      input.assignments.length > 1000 ||
+      input.assignments.some(
+        (item) =>
+          !item ||
+          typeof item.resourceRef !== "string" ||
+          !item.resourceRef.trim() ||
+          item.resourceRef.length > 512 ||
+          typeof item.enabled !== "boolean",
+      ) ||
+      new Set(input.assignments.map((item) => item.resourceRef)).size !== input.assignments.length
+    )
+      throw new ValidationError({ field: "assignments" });
+    return this.review.withLock(scopeKind, scopeId, () => {
+      this.review.assertCurrent(scopeKind, scopeId, input.resourceType, input.expectedRevision);
+      this.replaceSet(scopeKind, scopeId, input.resourceType, input.assignments);
+      const selectionReview = this.review.read(scopeKind, scopeId, input.resourceType);
+      if (!selectionReview) throw new Error("The capability scope owner disappeared during its transaction.");
+      return { version: "capability_scope_receipt.v1", previousRevision: input.expectedRevision, selectionReview };
+    });
   }
 }
 

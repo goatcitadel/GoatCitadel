@@ -129,13 +129,13 @@
   min-height: 7rem;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 1023px) {
   .mc-next-runtime-authority-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }
 
-@media (max-width: 560px) {
+@media (max-width: 639px) {
   .mc-next-runtime-authority-item-head {
     flex-direction: column;
   }

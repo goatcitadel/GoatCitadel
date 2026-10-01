@@ -1911,6 +1911,10 @@ describe("orchestration lifecycle keeps runs in step with their durable runs", (
 
     await reconcileTerminalOrchestrationRuns(harness.host, harness.runtime);
     expect(listUnstarted).toHaveBeenNthCalledWith(2, 200, olderIds[olderIds.length - 1]);
+    expect(listUnstarted.mock.contexts.every((receiver) => receiver === harness.host.storage.durableRuns)).toBe(true);
+    expect(vi.mocked(harness.host.storage.orchestration.listUnlinkedCreatedRuns!).mock.contexts).toEqual([
+      harness.host.storage.orchestration,
+    ]);
     expect(harness.getDurableRun().status).toBe("cancelled");
   });
 

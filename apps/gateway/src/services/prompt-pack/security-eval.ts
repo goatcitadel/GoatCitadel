@@ -1,24 +1,25 @@
-import fsSync from "node:fs";
-import path from "node:path";
 import type {
   PromptPackRecord,
   PromptPackSecurityEvalPackRecord,
   PromptPackSecurityQualityGateRecord,
 } from "@goatcitadel/contracts";
-import { parsePromptPackTests } from "./parser.js";
-
-const PROMPT_PACK_EVAL_ASSETS_DIR = "eval-assets";
-export const SECURITY_RED_TEAM_PACK_FILE = "goatcitadel_prompt_pack_v6_security_red_team.md";
+import { prepareBuiltinPromptPack, SECURITY_RED_TEAM_PACK_FILE } from "./builtin-definition.js";
+export { SECURITY_RED_TEAM_PACK_FILE, resolveEvalAssetsPackPath } from "./builtin-definition.js";
 
 export function buildSecurityRedTeamEvalPack(
   rootDir: string,
   importedPacks: PromptPackRecord[],
   warnings: string[],
+  exactTarget?: PromptPackRecord | null,
 ): PromptPackSecurityEvalPackRecord {
+  // Existing evidence recognition and exact create-only occupancy are separate:
+  // a custom pack at the fixed key blocks creation without becoming security evidence.
   const imported = importedPacks.find(isSecurityRedTeamPack);
-  const filePath = resolveSecurityRedTeamPackPath(rootDir);
-  if (!filePath) {
-    warnings.push(`${SECURITY_RED_TEAM_PACK_FILE} was not found in this checkout.`);
+  let definition: ReturnType<typeof prepareBuiltinPromptPack>;
+  try {
+    definition = prepareBuiltinPromptPack(rootDir, "security-red-team-v6");
+  } catch {
+    warnings.push(`${SECURITY_RED_TEAM_PACK_FILE} is unavailable or invalid in this checkout.`);
     return {
       packKey: "security-red-team-v6",
       title: "Defensive Security Evaluation",
@@ -32,18 +33,30 @@ export function buildSecurityRedTeamEvalPack(
       capabilityTargets: [],
       likelyFailureClasses: [],
       safetyPosture: buildSecurityEvalSafetyPosture(),
-      blockers: ["Bundled security red-team prompt-pack markdown is unavailable in this checkout."],
+      blockers: ["Bundled security red-team prompt-pack markdown is unavailable or invalid in this checkout."],
     };
   }
 
-  const tests = parsePromptPackTests(fsSync.readFileSync(filePath, "utf8"));
+  const tests = definition.write.tests;
   return {
     packKey: "security-red-team-v6",
     title: "Defensive Security Evaluation",
-    sourceLabel: path.basename(filePath),
+    sourceLabel: SECURITY_RED_TEAM_PACK_FILE,
     status: imported ? "imported" : "available",
     importedPackId: imported?.packId,
     importedPackName: imported?.name,
+    ...(exactTarget !== undefined
+      ? {
+          importCapability: {
+            version: "prompt_pack.builtin_import.v1" as const,
+            operation: "create_only" as const,
+            packId: "security-red-team-v6",
+            definitionRevision: definition.definitionRevision,
+            contentSha256: definition.write.contentSha256,
+            targetState: exactTarget ? ("present" as const) : ("absent" as const),
+          },
+        }
+      : {}),
     testCount: tests.length,
     modeCounts: countPromptPackModes(tests),
     toolTierCounts: countPromptPackToolTiers(tests),
@@ -89,20 +102,6 @@ export function buildSecurityQualityGateRecord(
   };
 }
 
-export function resolveEvalAssetsPackPath(rootDir: string, fileName: string): string | undefined {
-  const candidates = [
-    path.resolve(rootDir, PROMPT_PACK_EVAL_ASSETS_DIR, fileName),
-    path.resolve(process.cwd(), PROMPT_PACK_EVAL_ASSETS_DIR, fileName),
-    path.resolve(process.cwd(), "..", "..", PROMPT_PACK_EVAL_ASSETS_DIR, fileName),
-    path.resolve(process.cwd(), "..", "..", "..", PROMPT_PACK_EVAL_ASSETS_DIR, fileName),
-    path.resolve(rootDir, fileName),
-    path.resolve(process.cwd(), fileName),
-    path.resolve(process.cwd(), "..", "..", fileName),
-    path.resolve(process.cwd(), "..", "..", "..", fileName),
-  ];
-  return candidates.find((candidate) => fsSync.existsSync(candidate));
-}
-
 function buildSecurityQualityGateNextActions(status: PromptPackSecurityQualityGateRecord["status"]): string[] {
   switch (status) {
     case "missing_definition":
@@ -130,10 +129,6 @@ function buildSecurityEvalSafetyPosture(): PromptPackSecurityEvalPackRecord["saf
     mutationPerformed: false,
     note: "This catalog endpoint only describes the red-team pack. Running or scoring tests remains an explicit operator action.",
   };
-}
-
-function resolveSecurityRedTeamPackPath(rootDir: string): string | undefined {
-  return resolveEvalAssetsPackPath(rootDir, SECURITY_RED_TEAM_PACK_FILE);
 }
 
 function isSecurityRedTeamPack(pack: PromptPackRecord): boolean {

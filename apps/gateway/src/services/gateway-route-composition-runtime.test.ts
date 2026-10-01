@@ -31,9 +31,11 @@ const mocks = vi.hoisted(() => ({
   createLlamaCppRoutePort: vi.fn(
     (deps: {
       llamaCppRuntime: { status: () => string };
+      setup: { get: (workspaceId: string) => unknown };
       publishRealtime: (type: string, source: string) => unknown;
     }) => ({
       status: () => deps.llamaCppRuntime.status(),
+      setup: (workspaceId: string) => deps.setup.get(workspaceId),
       publish: () => deps.publishRealtime("llama.status", "llamacpp"),
     }),
   ),
@@ -341,6 +343,8 @@ describe("composeRuntimeAdminRouteDependencies", () => {
     expect(deps.health.getDatabaseHealthSnapshot()).toEqual({ healthy: true });
     expect(deps.hooks.normalize(" Team ")).toBe("workspace:Team");
     expect(deps.llamaCpp.status()).toBe("llama-ready");
+    expect(deps.llamaCpp.setup("workspace-setup")).toEqual({ workspaceId: "workspace-setup" });
+    expect(gateway.llamaCppSetupService.get.mock.contexts).toEqual([gateway.llamaCppSetupService]);
     expect(deps.llamaCpp.publish()).toEqual({ eventId: "event-1" });
     expect(deps.mesh.status()).toEqual({ mesh: "online" });
     expect(deps.mesh.publish()).toEqual({ eventId: "event-1" });
@@ -419,6 +423,25 @@ describe("composeRuntimeAdminRouteDependencies", () => {
 
     await expect(deps.masonInterpret("extract answers", {})).resolves.toBe("");
   });
+
+  it("shares the canonical backup owner with dashboard and preserves all admin method receivers", async () => {
+    const gateway = createGateway();
+    const backup = gateway.backupRetentionService;
+    const deps = composeRuntimeAdminRouteDependencies(gateway as never);
+    await deps.authAdmin.getRetentionPolicy();
+    await deps.authAdmin.listBackups(5);
+    await deps.authAdmin.pruneRetention({ dryRun: true });
+    await deps.authAdmin.updateRetentionPolicy({ keepDays: 8 } as never);
+    await deps.authAdmin.createBackup({ label: "review" } as never);
+
+    expect(mocks.createDashboardRoutePort).toHaveBeenLastCalledWith(
+      expect.objectContaining({ backupRetentionService: backup }),
+    );
+    for (const method of Object.values(backup)) {
+      expect(method.mock.contexts).toEqual([backup]);
+    }
+    expect(backup.pruneRetention).toHaveBeenCalledWith({ dryRun: true });
+  });
 });
 
 function createGateway() {
@@ -457,6 +480,7 @@ function createGateway() {
       status: () => "llama-ready",
       acquireLease: vi.fn(async () => ({ release: vi.fn() })),
     },
+    llamaCppSetupService: { get: vi.fn((workspaceId: string) => ({ workspaceId })) },
     llmService: {
       chatCompletions: vi.fn(async () => ({ choices: [{ message: { content: "{}" } }] })),
     },

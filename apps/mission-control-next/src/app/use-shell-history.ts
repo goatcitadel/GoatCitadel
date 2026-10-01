@@ -28,6 +28,7 @@ export function useShellHistory(apply: (route: AppRoute) => void) {
     const nextPosition = options?.replace ? position.current : position.current + 1;
     const mutate = options?.replace ? window.history.replaceState : window.history.pushState;
     mutate.call(window.history, { ...window.history.state, [POSITION]: nextPosition }, "", href);
+    window.dispatchEvent(new Event("goatcitadel:classic-location"));
     position.current = nextPosition;
     currentHref.current = href;
     applyRef.current(normalized);

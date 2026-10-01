@@ -8,7 +8,7 @@ import { useMediaQuery } from "../hooks/useMediaQuery";
  * and drag is fully disabled. Keep this in sync with the `@media (max-width: ...)`
  * rule that sets `transform: none` on the docked drawer.
  */
-export const SIDE_INSPECTOR_DOCKED_MAX_WIDTH = 1180;
+export const SIDE_INSPECTOR_DOCKED_MAX_WIDTH = 1279;
 
 interface SideInspectorDrawerProps {
   title: string;

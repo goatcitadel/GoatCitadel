@@ -23,7 +23,7 @@ function readCompactViewport() {
     return false;
   }
 
-  return window.matchMedia("(max-width: 767px)").matches;
+  return window.matchMedia("(max-width: 639px)").matches;
 }
 
 function defaultAriaLabelForTier(tier: PageTabsProps["tier"]): string {
@@ -46,7 +46,7 @@ export function PageTabs({ items, activeId, onSelect, tier, vertical = false, cl
       return undefined;
     }
 
-    const mediaQuery = window.matchMedia("(max-width: 767px)");
+    const mediaQuery = window.matchMedia("(max-width: 639px)");
     const updateViewport = (event?: MediaQueryListEvent) => {
       setCompactViewport(event?.matches ?? mediaQuery.matches);
     };

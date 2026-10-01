@@ -166,6 +166,17 @@ export async function buildThemeTokens({ styleDir = STYLE_DIR } = {}) {
   return { dark: build(".theme-signal-noir"), light: build(".theme-citadel-light") };
 }
 
+export async function buildCockpitThemeTokens({ cssPath = path.join(repoRoot, "apps", "mission-control-next", "src", "cockpit", "styles", "cockpit.css") } = {}) {
+  const css = await fs.readFile(cssPath, "utf8");
+  const rootStart = css.indexOf(":root {");
+  if (rootStart < 0) throw new Error("Cockpit stylesheet has no root token block.");
+  const themeCss = css.slice(rootStart);
+  const light = extractDecls(themeCss, [":root"]);
+  const dark = new Map(light);
+  for (const [name, value] of extractDecls(themeCss, ['[data-theme="dark"]'])) dark.set(name, value);
+  return { light, dark };
+}
+
 // Areas drive --primary via --mc-area-color; check button text on every accent.
 const AREAS = ["chat", "cowork", "code", "projects", "library", "ops", "settings"];
 const AA_NORMAL = 4.5;
@@ -204,9 +215,27 @@ export function collectContrastViolations(themes) {
   return violations;
 }
 
+export function collectCockpitContrastViolations(themes) {
+  const violations = [];
+  const foregrounds = ["--cockpit-text", "--cockpit-text-secondary", "--cockpit-text-muted", "--cockpit-accent", "--cockpit-running", "--cockpit-waiting", "--cockpit-done", "--cockpit-failed"];
+  const backgrounds = ["--cockpit-canvas", "--cockpit-raised", "--cockpit-sunken", "--cockpit-overlay"];
+  for (const [theme, tokens] of Object.entries(themes)) {
+    const pairs = foregrounds.flatMap((fg) => backgrounds.map((bg) => [fg, bg]));
+    pairs.push(["--cockpit-accent-ink", "--cockpit-accent"]);
+    for (const [fg, bg] of pairs) {
+      const foreground = resolveValue(`var(${fg})`, tokens);
+      const background = resolveValue(`var(${bg})`, tokens);
+      const ratio = foreground && background ? contrastRatio(foreground, background) : 0;
+      if (ratio < AA_NORMAL) violations.push({ theme: `cockpit-${theme}`, label: `${fg} on ${bg}`, ratio: Math.round(ratio * 100) / 100 });
+    }
+  }
+  return violations;
+}
+
 async function main() {
   const themes = await buildThemeTokens();
-  const violations = collectContrastViolations(themes);
+  const cockpitThemes = await buildCockpitThemeTokens();
+  const violations = [...collectContrastViolations(themes), ...collectCockpitContrastViolations(cockpitThemes)];
   if (violations.length === 0) {
     console.log("mc-next contrast: ok (all required token pairs clear AA 4.5:1 in both themes)");
     process.exit(0);

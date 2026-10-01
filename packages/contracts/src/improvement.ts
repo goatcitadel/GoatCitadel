@@ -475,6 +475,8 @@ export type ImprovementCandidateLifecycleAction = "validate" | "approve" | "reje
 
 export interface CuratorReviewItem {
   candidate: ImprovementCandidateRecord;
+  /** Present only when this owner can atomically bind approve/reject to the reviewed state. */
+  reviewPrecondition?: ImprovementCandidateReviewPrecondition;
   currentRevision?: ImprovementCandidateRevisionRecord;
   latestEvaluation?: ImprovementEvaluationRecord;
   latestActivation?: ImprovementActivationRecord;
@@ -501,6 +503,27 @@ export interface ImprovementCandidateLifecycleInput {
   actorId?: string;
   reason?: string;
   snoozeUntil?: string;
+}
+
+export interface ImprovementCandidateReviewPrecondition {
+  workspaceId: string;
+  expectedStatus: ImprovementCandidateStatus;
+  expectedRevisionId: string | null;
+  expectedChangeHash: string | null;
+}
+
+/** Optional binding preserves existing callers; cockpit decisions always send it. */
+export interface ImprovementCandidateReviewInput extends ImprovementCandidateLifecycleInput {
+  reviewPrecondition?: ImprovementCandidateReviewPrecondition;
+}
+
+/** Canonical decision at commit, retained if subsequent review or audit delivery fails. */
+export interface ImprovementCandidateDecisionReceipt {
+  candidateId: string;
+  workspaceId: string;
+  status: "approved" | "rejected";
+  currentRevisionId: string | null;
+  changeHash: string | null;
 }
 
 export interface ImprovementCandidateLifecycleResult {

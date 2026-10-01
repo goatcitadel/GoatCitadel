@@ -10,6 +10,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import type { AppRoute } from "../../../app/route-model";
 import { NativeButton } from "../primitives";
+import { SettingsApprovalContinuation } from "./SettingsApprovalContinuation";
 
 type Receipt = NonNullable<RuntimeSettingsResponse["changePlanReceipt"]>;
 type PendingChange = {
@@ -71,6 +72,7 @@ export function useSettingsChange<
   key: string;
   operation?: string;
   matchesPlan?: (plan: ChangePlanRecord, submitted: T) => boolean;
+  matchesTargetRevision?: (plan: ChangePlanRecord, submitted: T, baseRevision: number) => boolean;
   read?: (submitted: T) => Promise<R>;
   matches: (settings: R, submitted: T) => boolean;
   savedValue?: (submitted: T) => T;
@@ -171,7 +173,9 @@ export function useSettingsChange<
             plan.request.kind === "runtime_configuration" &&
             plan.request.change.operation === owner.operation &&
             plan.target.ownerId === "runtime_settings") ||
-        plan.target.expectedRevision !== pending.baseRevision ||
+        !(owner.matchesTargetRevision
+          ? owner.matchesTargetRevision(plan, pending.submitted as T, pending.baseRevision)
+          : plan.target.expectedRevision === pending.baseRevision) ||
         !statuses.has(plan.status) ||
         !Number.isSafeInteger(plan.revision) ||
         plan.revision < pending.receipt.revision
@@ -288,6 +292,7 @@ export function SettingsChangeStatus({
   onReview?: (plan: ChangePlanRecord) => void;
 }) {
   if (!change) return null;
+  const confirmed = settingsChangeIsConfirmed(change);
   const action = change.receipt.requiredAction;
   const approvalId =
     action?.kind === "approval" ? action.approvalId : undefined;
@@ -319,7 +324,7 @@ export function SettingsChangeStatus({
             Continue setup
           </NativeButton>
         ) : null}
-        {approvalId ? (
+        {approvalId && !confirmed ? (
           <NativeButton
             variant="default"
             onClick={() =>
@@ -335,6 +340,7 @@ export function SettingsChangeStatus({
           </NativeButton>
         ) : null}
       </div>
+      {!confirmed ? <SettingsApprovalContinuation plan={change.plan} onSettled={onRefresh} /> : null}
       <details>
         <summary>Change details</summary>
         <dl>
@@ -354,6 +360,10 @@ export function SettingsChangeStatus({
       </details>
     </section>
   );
+}
+
+export function settingsChangeIsConfirmed(change?: Pick<PendingChange, "receipt" | "blocking" | "error">) {
+  return Boolean(change && !change.blocking && !change.error && completed(change.receipt.status));
 }
 
 export function __resetSettingsChangesForTests() {

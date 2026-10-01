@@ -1,4 +1,4 @@
-export { startMcpOAuth } from "./mcp-oauth-handshake-service.js";
+import { startMcpOAuth as startMcpOAuthHandshake } from "./mcp-oauth-handshake-service.js";
 import { randomUUID } from "node:crypto";
 import type {
   McpToolRecord,
@@ -11,6 +11,12 @@ import type {
 import { resolveMcpServerConnectionMode } from "@goatcitadel/contracts";
 import { ValidationError, NotFoundError } from "@goatcitadel/contracts";
 import { assertMcpServerReview, mcpServerRevision, type McpServerWriteReview } from "./mcp-server-revision.js";
+import { assertReviewedStaticServer, assertReviewedMcpOAuth, type McpConnectionActionReview, type McpOAuthExchangeReview } from "./mcp-reviewed-connection.js";
+import { assertMcpConnectionReview } from "./mcp-server-revision.js";
+import { sameConfiguration } from "./mcp-server-state-helpers.js";
+import { buildPublicMcpAuthState } from "./mcp-oauth-token-service.js";
+import { isDeepStrictEqual } from "node:util";
+import type { McpConnectionFence } from "./mcp-static-environment-service.js";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ToolPolicyActorContext } from "@goatcitadel/contracts";
 import { inferMcpCategory, normalizeMcpPolicy } from "./mcp-server-policy.js";
@@ -61,6 +67,7 @@ export interface McpAuthStateUpdate {
   server: McpServerRecord;
   expected: McpAuthStateRecord | undefined;
   next: McpAuthStateRecord | undefined;
+  fence?: McpConnectionFence;
 }
 
 export interface McpServerAdminHost {
@@ -70,17 +77,18 @@ export interface McpServerAdminHost {
   readMcpServers(): Promise<McpServerRecord[]>;
   writeMcpServers(servers: McpServerRecord[], expectedServers: McpServerRecord[], review?: McpServerWriteReview): Promise<McpServerRecord[]>;
   captureMcpServerSessionCloser?(serverId: string): () => void;
-  prepareMcpStaticEnvironment?(server: McpServerRecord): Promise<McpServerRecord>;
-  resolveMcpOAuthClientId?(server: McpServerRecord): Promise<string | undefined>;
+  prepareMcpStaticEnvironment?(server: McpServerRecord, fence?: McpConnectionFence): Promise<McpServerRecord>;
+  resolveMcpOAuthClientId?(server: McpServerRecord, fence?: McpConnectionFence): Promise<string | undefined>;
   patchMcpServerState(serverId: string, patch: Partial<McpServerRecord>, expected: McpServerRecord): Promise<McpServerRecord>;
   completeMcpServerConnection(expected: McpServerRecord, tools: McpToolRecord[]): Promise<McpServerRecord>;
   readMcpTools(): Promise<McpToolRecord[]>;
   writeMcpTools(tools: McpToolRecord[]): Promise<void>;
-  resolveConnectedMcpTools(server: McpServerRecord, existing: McpToolRecord[]): Promise<McpToolRecord[]>;
+  resolveConnectedMcpTools(server: McpServerRecord, existing: McpToolRecord[], fence?: McpConnectionFence): Promise<McpToolRecord[]>;
   exchangeMcpOAuthCode?(
     server: McpServerRecord,
     code: string,
     stateRecord: McpAuthStateRecord,
+    review?: McpOAuthExchangeReview,
   ): Promise<McpAuthStateRecord>;
   requireMcpServer(serverId: string): Promise<McpServerRecord>;
   readMcpAuthState(): Promise<Record<string, McpAuthStateRecord>>;
@@ -206,59 +214,78 @@ export async function updateMcpServerPolicy(
   return await updateMcpServer(host, serverId, { policy }, undefined, review);
 }
 
-export async function connectMcpServer(host: McpServerAdminHost, serverId: string): Promise<McpServerRecord> {
+export async function connectMcpServer(host: McpServerAdminHost, serverId: string, review?: McpConnectionActionReview): Promise<McpServerRecord> {
+  const expected = review ? { expectedRevision: review.expectedRevision, expectedConnectionRevision: review.expectedConnectionRevision } : undefined;
   let server = await host.requireMcpServer(serverId);
-  // HX-415: a requester-scoped server resolves its connection per authenticated
-  // requester. It is never connected or discovered globally, and never mutates
-  // shared server status, tool cache, or error state. Fail closed BEFORE any
-  // `connecting`/`error` status patch so no global state is written.
-  if (resolveMcpServerConnectionMode(server) === "requester_scoped") {
-    throw new Error(
-      "Requester-scoped MCP servers require an authenticated requester context and cannot be connected or discovered globally.",
-    );
-  }
-  if (!isRuntimeSupportedMcpDefinition(server)) {
-    throw new Error(buildUnsupportedMcpTransportMessage(server.transport));
-  }
-  if (host.prepareMcpStaticEnvironment) server = await host.prepareMcpStaticEnvironment(server);
-  const connecting = await host.patchMcpServerState(serverId, {
-    status: "connecting",
-    lastError: undefined,
-  }, server);
+  if (expected) assertReviewedStaticServer(server, expected);
+  // Requester-scoped transports never mutate global connection state or inventory.
+  if (resolveMcpServerConnectionMode(server) === "requester_scoped") throw new Error("Requester-scoped MCP servers require an authenticated requester context and cannot be connected or discovered globally.");
+  if (!isRuntimeSupportedMcpDefinition(server)) throw new Error(buildUnsupportedMcpTransportMessage(server.transport));
+  const claim = (observed: McpServerRecord) => host.patchMcpServerState(serverId, { status: "connecting", lastError: undefined }, observed);
+  // The guarded path consumes review before environment work. Legacy enrollment order is retained.
+  let connecting = expected ? await claim(server) : undefined;
+  const fence = connecting?.connectionRevision ? Object.freeze({ expectedConnectionRevision: connecting.connectionRevision }) : undefined;
   try {
-    const tools = await host.readMcpTools();
-    const existing = tools.filter((item) => item.serverId === serverId);
-    const resolvedTools = await host.resolveConnectedMcpTools(connecting, existing);
-    // Live discovery is authoritative, including a valid empty catalog. Always
-    // replace this server's cache so removed tools cannot survive reconnect.
-    return await host.completeMcpServerConnection(connecting, resolvedTools);
-  } catch (error) {
-    await host.patchMcpServerState(serverId, {
-      status: "error",
-      lastError: (error as Error).message,
-    }, connecting);
+    if (expected) {
+      await review?.onCommitted?.();
+      if (!fence) throw new Error("MCP connection admission did not return its generation.");
+      server = connecting!;
+    }
+    if (host.prepareMcpStaticEnvironment) server = fence ? await host.prepareMcpStaticEnvironment(server, fence) : await host.prepareMcpStaticEnvironment(server);
+    // Enrollment may rotate configuration authority; it must never adopt a replacement connection attempt.
+    if (fence && server.connectionRevision !== fence.expectedConnectionRevision) throw new Error("MCP connection admission was superseded.");
+    connecting = connecting ? server : await claim(server);
+    const existing = (await host.readMcpTools()).filter(item => item.serverId === serverId);
+    const tools = fence ? await host.resolveConnectedMcpTools(connecting, existing, fence) : await host.resolveConnectedMcpTools(connecting, existing);
+    return await host.completeMcpServerConnection(connecting, tools);
+  } catch (cause) {
+    if (!connecting) throw cause;
+    const patchFailure = () => host.patchMcpServerState(serverId, { status: "error", lastError: expected
+      ? "Reviewed MCP connection did not complete. Inspect the current server before retrying."
+      : (cause as Error).message }, connecting!);
+    if (!expected) { await patchFailure(); throw cause; }
+    // Own admission is canonical. A replacement generation must never receive this late result.
+    try { await patchFailure(); } catch { /* Preserve the committed failure; the replacement owns its state. */ }
+    const error = cause instanceof Error ? cause : new Error("MCP connection outcome requires inspection.");
+    Object.assign(error, { mutationCommitted: true });
     throw error;
   }
 }
 
-export async function disconnectMcpServer(host: McpServerAdminHost, serverId: string): Promise<McpServerRecord> {
+export async function disconnectMcpServer(host: McpServerAdminHost, serverId: string, review?: McpConnectionActionReview, validateBeforeAdmission?: (server: McpServerRecord) => void): Promise<McpServerRecord> {
+  const expected = review ? { expectedRevision: review.expectedRevision, expectedConnectionRevision: review.expectedConnectionRevision } : undefined;
   const previous = await host.requireMcpServer(serverId);
+  if (expected) assertReviewedStaticServer(previous, expected);
+  validateBeforeAdmission?.(previous);
+  // Capture before publication; a replacement session must never be looked up after await.
   const closeOwnedSessions = host.captureMcpServerSessionCloser?.(serverId);
-  const server = await host.patchMcpServerState(serverId, {
-    status: "disconnected",
-  }, previous);
-  closeOwnedSessions?.();
+  const server = await host.patchMcpServerState(serverId, { status: "disconnected" }, previous);
+  if (expected) await afterMcpCommit(review?.onCommitted, () => { closeOwnedSessions?.(); });
+  else closeOwnedSessions?.();
   return server;
 }
 
-
+export async function startMcpOAuth(host: McpServerAdminHost, serverId: string, review?: McpConnectionActionReview) {
+  if (!review) return startMcpOAuthHandshake(host, serverId);
+  const expected = { expectedRevision: review.expectedRevision, expectedConnectionRevision: review.expectedConnectionRevision };
+  // Explicit OAuth review closes the captured old connection before replacing its grant.
+  const admitted = await disconnectMcpServer(host, serverId, review, assertReviewedMcpOAuth);
+  try {
+    return await startMcpOAuthHandshake(host, serverId, { server: admitted, reviewed: expected });
+  } catch (cause) {
+    const error = cause instanceof Error ? cause : new Error("Reviewed OAuth initialization requires inspection.");
+    Object.assign(error, { mutationCommitted: true }); throw error;
+  }
+}
 
 export async function completeMcpOAuth(
   host: McpServerAdminHost,
   serverId: string,
   code: string,
   state?: string,
+  review?: McpConnectionActionReview,
 ): Promise<McpServerRecord> {
+  review = review ? { ...review } : undefined;
   const authRows = await host.readMcpAuthState();
   const authRow = authRows[serverId];
   if (!authRow?.oauthState) {
@@ -271,11 +298,26 @@ export async function completeMcpOAuth(
     throw new Error("OAuth state mismatch.");
   }
   const server = await host.requireMcpServer(serverId);
-  if (!host.exchangeMcpOAuthCode) {
+  if (review) { assertReviewedStaticServer(server, review); assertReviewedMcpOAuth(server); }
+  const exchange = host.exchangeMcpOAuthCode;
+  if (!exchange) {
     throw new Error("MCP OAuth token exchange is not available in this Gateway runtime.");
   }
   // The OAuth owner publishes the returned credential refs before acknowledging success.
-  await host.exchangeMcpOAuthCode(server, code, authRow);
+  if (review) {
+    if (!server.connectionRevision) throw new Error("Reviewed OAuth requires its original connection generation.");
+    const published = await exchange.call(host, server, code, authRow, {
+      fence: { expectedConnectionRevision: server.connectionRevision }, onCommitted: review.onCommitted,
+    });
+    try {
+      const current = await host.requireMcpServer(serverId);
+      assertMcpConnectionReview(current, { expectedRevision: mcpServerRevision(current), expectedConnectionRevision: server.connectionRevision });
+      if (!sameConfiguration(current, server) || !isDeepStrictEqual(current.authState, buildPublicMcpAuthState(current, published)))
+        throw new Error("OAuth publication changed before acknowledgement.");
+      return current; // Guarded completion never starts a process or discovers tools.
+    } catch (cause) { const error = cause instanceof Error ? cause : new Error("OAuth readback requires inspection."); Object.assign(error, { mutationCommitted: true }); throw error; }
+  }
+  await exchange.call(host, server, code, authRow);
   return await connectMcpServer(host, serverId);
 }
 

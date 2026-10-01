@@ -13,6 +13,7 @@ import type {
   ImprovementCandidateLifecycleInput,
   ImprovementCandidateLifecycleResult,
   ImprovementCandidateRecord,
+  ImprovementCandidateReviewInput,
   ImprovementLifecycleOperationKind,
   ImprovementLifecycleTargetKind,
   ImprovementSignalRecord,
@@ -29,6 +30,7 @@ export type {
   ImprovementCandidateLifecycleAction,
   ImprovementCandidateLifecycleInput,
   ImprovementCandidateLifecycleResult,
+  ImprovementCandidateReviewInput,
 };
 
 /**
@@ -165,14 +167,14 @@ export async function validateImprovementCandidate(
 
 export async function approveImprovementCandidate(
   candidateId: string,
-  input?: ImprovementCandidateLifecycleInput,
+  input?: ImprovementCandidateReviewInput,
 ): Promise<ImprovementCandidateLifecycleResult> {
   return runImprovementCandidateLifecycleAction(candidateId, "approve", input);
 }
 
 export async function rejectImprovementCandidate(
   candidateId: string,
-  input?: ImprovementCandidateLifecycleInput,
+  input?: ImprovementCandidateReviewInput,
 ): Promise<ImprovementCandidateLifecycleResult> {
   return runImprovementCandidateLifecycleAction(candidateId, "reject", input);
 }

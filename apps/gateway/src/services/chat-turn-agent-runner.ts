@@ -2356,6 +2356,7 @@ export class ChatTurnAgentRunner {
       effectiveProviderId: input.providerId,
       effectiveModel: input.model,
       ...(input.modelRouter ? { modelRouter: input.modelRouter } : {}),
+      ...(input.runVariableEvidence ? { runVariables: input.runVariableEvidence } : {}),
     };
     let lastCodingCheckpointAt = codingCheckpoint?.createdAt;
     const persistCodingProgress = async (nextAction: string): Promise<void> => {

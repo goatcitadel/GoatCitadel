@@ -30,8 +30,8 @@ try {
   $source=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'repair-broker-inspection.ps1'))
   $source=$source.Replace("if ([Environment]::MachineName -cne 'GOATBOX' -or `$env:COMPUTERNAME -cne 'GOATBOX') { throw 'Run this repair on GOATBOX only.' }",'')
   $source=$source.Replace("if (-not (Test-BrokerCoordinatorElevation)) { throw 'Use Administrator PowerShell.' }",'')
-  $source=$source.Replace('$PSScriptRoot',("'"+$PSScriptRoot+"'"))
   $source=$source.Replace('C:\',($root+'\'))
+  $source=$source.Replace('$PSScriptRoot',("'"+$PSScriptRoot+"'"))
   $pins=@('b3b056ef523b57bce4e6f3aec20ceefcd69e524961bc0d1167c1184fa6235381','48402f8212e1e0a57d1d36ff546ab781b1ed0731a89470d6628e3c5fec0196b0','6f7309533bf1034c537e9e4c50a19c31d07354490092e8b97d9a29ba3af05948')
   for ($i=0;$i -lt 3;$i++) { $source=$source.Replace($pins[$i],$original[$names[$i]]) }
   $shim=@'
@@ -89,9 +89,15 @@ function Get-BrokerCoordinatorPaths { param($SystemDrive); return [pscustomobjec
   $command=@('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$copy,'-PackageRoot',$package,'-ManifestSha256',$hash,'-OutputRoot',$output)
   if ($Case -ne 'preflight') { $command+='-Apply' }
   $engine=(Get-Process -Id $PID).Path
+  # The child may intentionally fail in rollback/running cases. Capture its
+  # stderr and exit code before treating a missing receipt as the test failure.
+  $ErrorActionPreference='Continue'
   $text=& $engine @command 2>&1
   $code=$LASTEXITCODE
-  $report=Get-Content -Raw -LiteralPath (Join-Path $output 'broker-inspection-update-evidence.json') | ConvertFrom-Json
+  $ErrorActionPreference='Stop'
+  $reportPath=Join-Path $output 'broker-inspection-update-evidence.json'
+  if (-not (Test-Path -LiteralPath $reportPath)) { throw ($text | Out-String) }
+  $report=Get-Content -Raw -LiteralPath $reportPath | ConvertFrom-Json
   $success=$Case -in @('preflight','apply')
   if (($success -and $code -ne 0) -or (-not $success -and $code -eq 0)) { throw ($text|Out-String) }
   if (@($report.rollbackFailures).Count -ne 0) { throw 'Rollback failed.' }

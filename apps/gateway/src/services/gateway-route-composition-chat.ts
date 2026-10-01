@@ -140,6 +140,10 @@ export function composeChatRouteDependencies(
     publishRealtime: (channel, topic, payload, options) => gateway.publishRealtime(channel, topic, payload, options),
   };
   const chatMessageRouteRuntimeHost = gateway.chatMessageRouteRuntimeHost;
+  const chatHistoryHost: chatHistoryService.ChatHistoryServiceDependencies = {
+    storage: gateway.storage,
+    ensureChatMessageProjection: (sessionId) => gateway.ensureChatMessageProjection(sessionId),
+  };
   const ChatThreadKnowledgeDependencies = createChatThreadKnowledgeDependenciesForGateway(gateway);
   const chatAttachments: GatewayRouteServiceDependencies["chatAttachments"] = {
     getChatAttachment: (attachmentId) => chatAttachmentService.getChatAttachment(chatAttachmentHost, attachmentId),
@@ -233,18 +237,18 @@ export function composeChatRouteDependencies(
       }
       return gateway.chatSessionStatusService.getOperatorStatus(sessionId);
     },
-    getChatSessionWorkbench: (sessionId) =>
-      chatWorkbenchService.getChatSessionWorkbench(ChatWorkbenchDependencies, sessionId),
+    getChatSessionWorkbench: (sessionId, options) =>
+      chatWorkbenchService.getChatSessionWorkbench(ChatWorkbenchDependencies, sessionId, options),
     getChatSessionWorkbenchDiff: (sessionId) =>
       chatWorkbenchService.getChatSessionWorkbenchDiff(ChatWorkbenchDependencies, sessionId),
-    getChatSessionWorkbenchFile: (sessionId, relativePath) =>
-      chatWorkbenchService.getChatSessionWorkbenchFile(ChatWorkbenchDependencies, sessionId, relativePath),
+    getChatSessionWorkbenchFile: (sessionId, relativePath, options) =>
+      chatWorkbenchService.getChatSessionWorkbenchFile(ChatWorkbenchDependencies, sessionId, relativePath, options),
     getChatSessionWorkbenchFileDiff: (sessionId, relativePath) =>
       chatWorkbenchService.getChatSessionWorkbenchFileDiff(ChatWorkbenchDependencies, sessionId, relativePath),
     getChatSessionWorkbenchOutput: (sessionId) =>
       chatWorkbenchService.getChatSessionWorkbenchOutput(ChatWorkbenchDependencies, sessionId),
-    getChatSessionWorkbenchTree: (sessionId) =>
-      chatWorkbenchService.getChatSessionWorkbenchTree(ChatWorkbenchDependencies, sessionId),
+    getChatSessionWorkbenchTree: (sessionId, options) =>
+      chatWorkbenchService.getChatSessionWorkbenchTree(ChatWorkbenchDependencies, sessionId, options),
     getChatSideChat: (sessionId) => chatSessionService.getChatSideChat(ChatSessionDependencies, sessionId),
     listChatGeneratedArtifacts: async (input) => {
       const { citadelId, ...artifactInput } = input ?? {};
@@ -568,31 +572,12 @@ export function composeChatRouteDependencies(
     getTurnContextManifestForSession: (sessionId, turnId) =>
       chatMessageRouteRuntime.getTurnContextManifestForSession(chatMessageRouteRuntimeHost, sessionId, turnId),
     listChatMessagePage: (input) =>
-      chatHistoryService.listChatMessagePage(
-        {
-          storage: gateway.storage,
-          ensureChatMessageProjection: (sessionId) => gateway.ensureChatMessageProjection(sessionId),
-        },
-        input,
-      ),
+      chatHistoryService.listChatMessagePage(chatHistoryHost, input),
     listChatMessages: (sessionId, limit, cursor) => gateway.listChatMessages(sessionId, limit, cursor),
     readChatHistoryWindow: (anchor, limit) =>
-      chatHistoryService.readChatHistoryWindow(
-        {
-          storage: gateway.storage,
-          ensureChatMessageProjection: (sessionId) => gateway.ensureChatMessageProjection(sessionId),
-        },
-        anchor,
-        limit,
-      ),
+      chatHistoryService.readChatHistoryWindow(chatHistoryHost, anchor, limit),
     readChatHistoryContinuation: (input) =>
-      chatHistoryService.readChatHistoryContinuation(
-        {
-          storage: gateway.storage,
-          ensureChatMessageProjection: (sessionId) => gateway.ensureChatMessageProjection(sessionId),
-        },
-        input,
-      ),
+      chatHistoryService.readChatHistoryContinuation(chatHistoryHost, input),
     resumeAgentChatTurnStream: (sessionId, turnId, sinceEventId, signal?: AbortSignal) =>
       gateway.chatTurnRuntime.resumeAgentChatTurnStream(sessionId, turnId, sinceEventId, { abortSignal: signal }),
     retryChatTurn: (sessionId, turnId, input, authenticatedOperator) =>

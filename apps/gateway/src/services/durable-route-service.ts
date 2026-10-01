@@ -17,6 +17,7 @@ type DurableRoutePort = Pick<
   | "getBackgroundTaskRail"
   | "controlBackgroundTask"
   | "listRuns"
+  | "listRunHistory"
   | "pauseRun"
   | "recoverDeadLetter"
   | "resumeRun"
@@ -33,6 +34,10 @@ export class DurableRouteService {
 
   public listRuns(limit: number) {
     return this.durable.listRuns(limit);
+  }
+
+  public listRunHistory(query: Parameters<DurableRoutePort["listRunHistory"]>[0]) {
+    return this.durable.listRunHistory(query);
   }
 
   public listDeadLetters(limit: number) {

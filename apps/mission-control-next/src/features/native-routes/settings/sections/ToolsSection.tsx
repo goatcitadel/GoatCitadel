@@ -6,20 +6,10 @@ import { DetailInspector } from "../../../../components/DetailInspector";
 // per-section settings decomposition.
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Plus, Save } from "lucide-react";
-import {
-  createToolGrant,
-  fetchSettings,
-  fetchToolCatalog,
-  fetchToolGrants,
-  isApiRequestError,
-  patchSettings,
-  revokeToolGrant,
-} from "@goatcitadel/mission-control-shared/api/client";
+import { fetchSettings, isApiRequestError, patchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
   getErrorMessage,
-  nativeLoad,
-  nativeLoadIssues,
   type Notice,
   SettingsActionList,
   SettingsButtonRow,
@@ -34,6 +24,8 @@ import {
   SettingsStack,
   useAsyncLoad,
 } from "../SettingsShared";
+import { useToolGrantActions } from "../use-tool-grant-actions";
+import { loadToolGrantsSnapshot } from "../tool-grants-snapshot";
 import { NativeCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid, NativeSelectableList } from "../../primitives";
 import {
@@ -44,48 +36,61 @@ import {
   matchesToolGrant,
   normalizeToolApprovalMode,
   TOOL_APPROVAL_MODE_OPTIONS,
-} from "../../SettingsNativePage";
+} from "../helpers/permission-helpers";
 
 export function ToolsSection({ activeWorkspaceId, route, navigate }: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [tools, grants, settings] = await Promise.all([
-      nativeLoad("Tool catalog", fetchToolCatalog(), { items: [] }),
-      nativeLoad("Tool grants", fetchToolGrants({ limit: 400 }), { items: [] }),
-      fetchSettings().catch(() => null),
-    ]);
-    return {
-      issues: nativeLoadIssues([tools, grants]),
-      tools: tools.data.items,
-      grants: grants.data.items,
-      settings,
-    };
+    const [snapshot, settings] = await Promise.all([loadToolGrantsSnapshot(), fetchSettings().catch(() => null)]);
+    return { ...snapshot, settings };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [pendingRevokeGrantId, setPendingRevokeGrantId] = useState<string | null>(null);
-  const [revokePending, setRevokePending] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedToolName, setSelectedToolName] = useState("");
   const [detailView, setDetailView] = useState<"tool" | "grant" | "all-grants" | null>(null);
   const [savingMode, setSavingMode] = useState(false);
   const savingModeRef = useRef(false);
-  const [creatingGrant, setCreatingGrant] = useState(false);
-  const creatingGrantRef = useRef(false);
   const leave = useDraftLeave();
-  const approvalEditor = useSessionDraft("tools:system:approval-mode", normalizeToolApprovalMode(data?.settings?.toolApprovalMode), data?.settings?.revision, { label: "Tool prompt mode", available: Boolean(data?.settings), onSave: () => handleSaveApprovalMode() });
-  const approvalChange = useSettingsChange({ key: approvalEditor.key, operation: "tool_approval_mode", matches: (settings, submitted: typeof approvalEditor.value) => settings.toolApprovalMode === submitted, acceptSaved: approvalEditor.acceptSaved, reload });
+  const approvalEditor = useSessionDraft(
+    "tools:system:approval-mode",
+    normalizeToolApprovalMode(data?.settings?.toolApprovalMode),
+    data?.settings?.revision,
+    { label: "Tool prompt mode", available: Boolean(data?.settings), onSave: () => handleSaveApprovalMode() },
+  );
+  const approvalChange = useSettingsChange({
+    key: approvalEditor.key,
+    operation: "tool_approval_mode",
+    matches: (settings, submitted: typeof approvalEditor.value) => settings.toolApprovalMode === submitted,
+    acceptSaved: approvalEditor.acceptSaved,
+    reload,
+  });
   const approvalModeDraft = approvalEditor.value;
   const setApprovalModeDraft = approvalEditor.setValue;
   const [defaultExpiry] = useState(defaultToolGrantExpiry);
-  const emptyGrant = { toolPattern: selectedToolName, decision: "allow", scope: "workspace", grantType: "persistent", scopeRef: activeWorkspaceId, expiresAt: defaultExpiry };
-  const grantEditor = useSessionDraft(`tool-grant:${activeWorkspaceId}:${selectedToolName || "new"}`, emptyGrant, undefined, { label: "Tool grant", active: detailView === "grant", onSave: () => reviewGrant() });
+  const emptyGrant = {
+    toolPattern: selectedToolName,
+    decision: "allow",
+    scope: "workspace",
+    grantType: "persistent",
+    scopeRef: activeWorkspaceId,
+    expiresAt: defaultExpiry,
+  };
+  const grantEditor = useSessionDraft(
+    `tool-grant:${activeWorkspaceId}:${selectedToolName || "new"}`,
+    emptyGrant,
+    undefined,
+    { label: "Tool grant", active: detailView === "grant", onSave: () => reviewGrant() },
+  );
   const grantForm = grantEditor.value;
   const setGrantForm = grantEditor.setValue;
-  const [grantReview, setGrantReview] = useState<{ draft: typeof grantForm; resolve: (saved: boolean) => void } | null>(null);
-  const reviewGrant = (): Promise<boolean> => new Promise((resolve) => {
-    if (creatingGrantRef.current || grantReview) { resolve(false); return; }
-    setGrantReview({ draft: { ...grantForm }, resolve });
-  });
+  const grants = useToolGrantActions(grantEditor.key, reload);
+  const creatingGrant = Boolean(grants.attemptFor("create"));
+  const grantReview = grants.review?.kind === "create" ? grants.review : null;
+  async function reviewGrant(): Promise<boolean> {
+    const submitted = { ...grantForm };
+    const confirmed = await grants.requestCreate(submitted);
+    return confirmed ? grantEditor.acceptSaved(emptyGrant, undefined, submitted) : false;
+  }
   const openDetails = (next: typeof detailView) => leave.request(() => setDetailView(next), [grantEditor.key]);
 
   const filteredTools = useMemo(() => {
@@ -107,55 +112,11 @@ export function ToolsSection({ activeWorkspaceId, route, navigate }: SettingsSec
       ? "Remote Hardened mode keeps routine prompt skipping unavailable."
       : null;
 
-  const handleCreateGrant = async (submittedForm = grantForm): Promise<boolean> => {
-    if (creatingGrantRef.current) return false;
-    const submitted = submittedForm;
-    if (!submitted.toolPattern.trim()) {
-      setNotice({ tone: "warning", message: "Tool pattern is required." });
-      return false;
-    }
-    const grantScope = submitted.scope as "global" | "session" | "workspace" | "agent" | "task";
-    const scopeRef = grantScope === "global" ? undefined : submitted.scopeRef.trim();
-    if ((grantScope === "session" || grantScope === "agent" || grantScope === "task") && !scopeRef) {
-      setNotice({ tone: "warning", message: `Add a ${grantScope} id before creating this tool grant.` });
-      return false;
-    }
-    creatingGrantRef.current = true; setCreatingGrant(true);
-    try {
-      const expiresAt = submitted.grantType === "ttl" ? submitted.expiresAt.trim() : undefined;
-      await createToolGrant({
-        toolPattern: submitted.toolPattern.trim(),
-        decision: submitted.decision as "allow" | "deny",
-        scope: grantScope,
-        scopeRef,
-        grantType: submitted.grantType as "persistent" | "ttl" | "one_time",
-        ...(expiresAt ? { expiresAt } : {}),
-      });
-      const clean = grantEditor.acceptSaved(emptyGrant, undefined, submitted);
-      setNotice({ tone: "success", message: "Tool grant created." });
-      await reload();
-      return clean;
-    } catch (createError) {
-      setNotice({ tone: "error", message: getErrorMessage(createError) });
-      return false;
-    } finally { creatingGrantRef.current = false; setCreatingGrant(false); }
-  };
-
-  const handleRevokeGrant = async (grantId: string) => {
-    setRevokePending(true);
-    try {
-      await revokeToolGrant(grantId);
-      setNotice({ tone: "success", message: "Tool grant revoked." });
-      await reload();
-    } catch (revokeError) {
-      setNotice({ tone: "error", message: getErrorMessage(revokeError) });
-    } finally {
-      setRevokePending(false);
-    }
-  };
-
   const handleSaveApprovalMode = async (): Promise<boolean> => {
-    if (approvalChange.isPending()) { await approvalChange.refresh(); return false; }
+    if (approvalChange.isPending()) {
+      await approvalChange.refresh();
+      return false;
+    }
     if (savingModeRef.current || approvalEditor.hasRemoteChanges) return false;
     if (approvalBypassRestriction && approvalModeDraft === "bypass") {
       setNotice({ tone: "warning", message: approvalBypassRestriction });
@@ -165,14 +126,19 @@ export function ToolsSection({ activeWorkspaceId, route, navigate }: SettingsSec
       setNotice({ tone: "warning", message: "Reload settings before saving the tool approval mode." });
       return false;
     }
-    savingModeRef.current = true; setSavingMode(true);
+    savingModeRef.current = true;
+    setSavingMode(true);
     const submitted = approvalModeDraft;
     try {
       const updated = await patchSettings({
         expectedRevision: Number(approvalEditor.baseRevision ?? data.settings.revision),
         toolApprovalMode: approvalModeDraft,
       });
-      const clean = approvalChange.receive(updated, submitted, Number(approvalEditor.baseRevision ?? data.settings.revision));
+      const clean = approvalChange.receive(
+        updated,
+        submitted,
+        Number(approvalEditor.baseRevision ?? data.settings.revision),
+      );
       if (clean) setNotice({ tone: "success", message: "Tool approval mode saved." });
       await reload();
       return clean;
@@ -188,13 +154,25 @@ export function ToolsSection({ activeWorkspaceId, route, navigate }: SettingsSec
       }
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
       return false;
-    } finally { savingModeRef.current = false; setSavingMode(false); }
+    } finally {
+      savingModeRef.current = false;
+      setSavingMode(false);
+    }
   };
 
   return (
     <SettingsSectionShell loading={loading && !data} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
-      <SettingsChangeStatus change={approvalChange.change} onRefresh={approvalChange.refresh} navigate={navigate} route={route} />
+      {grants.notice ? <SettingsNotice notice={grants.notice} /> : null}
+      {grants.attemptFor("create")?.phase === "uncertain" ? (
+        <SettingsNotice notice={{ tone: "warning", message: grants.attemptFor("create")!.message }} />
+      ) : null}
+      <SettingsChangeStatus
+        change={approvalChange.change}
+        onRefresh={approvalChange.refresh}
+        navigate={navigate}
+        route={route}
+      />
       {data ? (
         <SettingsStack>
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
@@ -213,7 +191,20 @@ export function ToolsSection({ activeWorkspaceId, route, navigate }: SettingsSec
               { label: "Hard blocks", value: "Always enforced" },
             ]}
           >
-            {approvalEditor.hasRemoteChanges ? <div role="status"><p>Current saved mode: {data.settings?.toolApprovalMode ? describeToolApprovalMode(data.settings.toolApprovalMode) : "Unavailable"}. Your approval-mode draft is preserved.</p><NativeButton variant="outline" onClick={approvalEditor.rebaseToCurrent}>Apply draft to current prompt mode</NativeButton></div> : null}
+            {approvalEditor.hasRemoteChanges ? (
+              <div role="status">
+                <p>
+                  Current saved mode:{" "}
+                  {data.settings?.toolApprovalMode
+                    ? describeToolApprovalMode(data.settings.toolApprovalMode)
+                    : "Unavailable"}
+                  . Your approval-mode draft is preserved.
+                </p>
+                <NativeButton variant="outline" onClick={approvalEditor.rebaseToCurrent}>
+                  Apply draft to current prompt mode
+                </NativeButton>
+              </div>
+            ) : null}
             <SettingsField label="Tool approvals">
               <select
                 className="mc-next-settings-input"
@@ -240,7 +231,11 @@ export function ToolsSection({ activeWorkspaceId, route, navigate }: SettingsSec
               ) : null}
             </SettingsField>
             <SettingsButtonRow>
-              <NativeButton variant="default" disabled={savingMode || approvalChange.hasPending || approvalEditor.hasRemoteChanges} onClick={() => void handleSaveApprovalMode()}>
+              <NativeButton
+                variant="default"
+                disabled={savingMode || approvalChange.hasPending || approvalEditor.hasRemoteChanges}
+                onClick={() => void handleSaveApprovalMode()}
+              >
                 <Save size={16} />
                 Save mode
               </NativeButton>
@@ -257,7 +252,11 @@ export function ToolsSection({ activeWorkspaceId, route, navigate }: SettingsSec
                 { label: "Grants", value: String(data.grants?.length ?? 0) },
               ]}
             >
-              <SettingsButtonRow><NativeButton variant="outline" onClick={() => openDetails("all-grants")}>All grants</NativeButton></SettingsButtonRow>
+              <SettingsButtonRow>
+                <NativeButton variant="outline" onClick={() => openDetails("all-grants")}>
+                  All grants
+                </NativeButton>
+              </SettingsButtonRow>
               <SettingsField label="Search">
                 <input
                   className="mc-next-settings-input"
@@ -274,172 +273,227 @@ export function ToolsSection({ activeWorkspaceId, route, navigate }: SettingsSec
                   body: item.description || "Tool catalog entry",
                 }))}
                 selectedId={selectedToolName}
-                onSelect={(toolName) => leave.request(() => { setSelectedToolName(toolName); setDetailView("tool"); }, [grantEditor.key])}
+                onSelect={(toolName) =>
+                  leave.request(() => {
+                    setSelectedToolName(toolName);
+                    setDetailView("tool");
+                  }, [grantEditor.key])
+                }
                 emptyLabel="No tools match the current search."
                 maxHeight=""
               />
             </NativeCard>
-            {detailView === "grant" ? <DetailInspector open title="Create tool grant" onClose={() => openDetails(null)}><NativeCard
+            {detailView === "grant" ? (
+              <DetailInspector open title="Create tool grant" onClose={() => openDetails(null)}>
+                <NativeCard
+                  density="compact"
+                  className="mc-next-settings-panel"
+                  title="Create tool grant"
+                  subtitle="Create a scoped policy grant for the selected tool."
+                >
+                  <SettingsFieldGrid>
+                    <SettingsField label="Tool pattern">
+                      <input
+                        className="mc-next-settings-input"
+                        value={grantForm.toolPattern}
+                        onChange={(event) =>
+                          setGrantForm((current) => ({ ...current, toolPattern: event.target.value }))
+                        }
+                      />
+                    </SettingsField>
+                    <SettingsField label="Decision">
+                      <select
+                        className="mc-next-settings-input"
+                        value={grantForm.decision}
+                        onChange={(event) => setGrantForm((current) => ({ ...current, decision: event.target.value }))}
+                      >
+                        <option value="allow">Allow</option>
+                        <option value="deny">Deny</option>
+                      </select>
+                    </SettingsField>
+                    <SettingsField label="Scope">
+                      <select
+                        className="mc-next-settings-input"
+                        value={grantForm.scope}
+                        onChange={(event) =>
+                          setGrantForm((current) => ({
+                            ...current,
+                            scope: event.target.value,
+                            scopeRef: event.target.value === "workspace" ? activeWorkspaceId : "",
+                          }))
+                        }
+                      >
+                        <option value="global">Global</option>
+                        <option value="workspace">Workspace</option>
+                        <option value="session">Session</option>
+                        <option value="agent">Agent</option>
+                        <option value="task">Task</option>
+                      </select>
+                    </SettingsField>
+                    <SettingsField label="Scope ref">
+                      <input
+                        className="mc-next-settings-input"
+                        value={grantForm.scopeRef}
+                        onChange={(event) => setGrantForm((current) => ({ ...current, scopeRef: event.target.value }))}
+                        disabled={grantForm.scope === "global"}
+                      />
+                    </SettingsField>
+                    <SettingsField label="Grant type">
+                      <select
+                        className="mc-next-settings-input"
+                        value={grantForm.grantType}
+                        onChange={(event) =>
+                          setGrantForm((current) => ({
+                            ...current,
+                            grantType: event.target.value,
+                            expiresAt:
+                              event.target.value === "ttl" && !current.expiresAt
+                                ? defaultToolGrantExpiry()
+                                : current.expiresAt,
+                          }))
+                        }
+                      >
+                        <option value="persistent">Persistent</option>
+                        <option value="ttl">TTL</option>
+                        <option value="one_time">One time</option>
+                      </select>
+                    </SettingsField>
+                    {grantForm.grantType === "ttl" ? (
+                      <SettingsField label="Expires at">
+                        <input
+                          className="mc-next-settings-input"
+                          value={grantForm.expiresAt}
+                          onChange={(event) =>
+                            setGrantForm((current) => ({ ...current, expiresAt: event.target.value }))
+                          }
+                          placeholder="2099-01-01T00:00:00.000Z"
+                        />
+                      </SettingsField>
+                    ) : null}
+                  </SettingsFieldGrid>
+                  <p className="mc-next-settings-field-note">
+                    {grantForm.decision === "deny" ? "Deny" : "Allow"} {grantForm.toolPattern || "the selected tool"} in{" "}
+                    {grantForm.scope}
+                    {grantForm.scope !== "global" ? ` ${grantForm.scopeRef}` : ""}.{" "}
+                    {grantForm.grantType === "ttl"
+                      ? `Expires ${grantForm.expiresAt}.`
+                      : grantForm.grantType === "one_time"
+                        ? "One use."
+                        : "Persists until revoked."}{" "}
+                    Deny rules and approval-required execution remain authoritative.
+                  </p>
+                  <SettingsButtonRow>
+                    <NativeButton variant="default" disabled={creatingGrant} onClick={() => void reviewGrant()}>
+                      <Plus size={16} />
+                      Create grant
+                    </NativeButton>
+                  </SettingsButtonRow>
+                </NativeCard>
+              </DetailInspector>
+            ) : null}
+          </SettingsStack>
+          <DetailInspector
+            open={detailView === "tool" || detailView === "all-grants"}
+            title={detailView === "all-grants" ? "All tool grants" : (selectedTool?.toolName ?? "Tool unavailable")}
+            onClose={() => openDetails(null)}
+          >
+            <NativeCard
               density="compact"
               className="mc-next-settings-panel"
-              title="Create tool grant"
-              subtitle="Create a scoped policy grant for the selected tool."
+              title={selectedTool?.toolName ?? "Tool detail"}
+              subtitle="Selected catalog entry and tool grants."
             >
-              <SettingsFieldGrid>
-                <SettingsField label="Tool pattern">
-                  <input
-                    className="mc-next-settings-input"
-                    value={grantForm.toolPattern}
-                    onChange={(event) => setGrantForm((current) => ({ ...current, toolPattern: event.target.value }))}
+              {selectedTool ? (
+                <>
+                  <NativeMetricGrid
+                    items={[
+                      {
+                        label: "Category",
+                        value: selectedTool.category || "tool",
+                        meta: `${selectedTool.pack} pack · ${selectedTool.riskLevel} risk`,
+                      },
+                      {
+                        label: "Available grants",
+                        value: String(
+                          (data.grants ?? []).filter(
+                            (item) => matchesToolGrant(item, selectedTool.toolName) && isToolGrantAvailable(item),
+                          ).length,
+                        ),
+                        meta: "Active, unexpired matches",
+                      },
+                    ]}
                   />
-                </SettingsField>
-                <SettingsField label="Decision">
-                  <select
-                    className="mc-next-settings-input"
-                    value={grantForm.decision}
-                    onChange={(event) => setGrantForm((current) => ({ ...current, decision: event.target.value }))}
-                  >
-                    <option value="allow">Allow</option>
-                    <option value="deny">Deny</option>
-                  </select>
-                </SettingsField>
-                <SettingsField label="Scope">
-                  <select
-                    className="mc-next-settings-input"
-                    value={grantForm.scope}
-                    onChange={(event) =>
-                      setGrantForm((current) => ({
-                        ...current,
-                        scope: event.target.value,
-                        scopeRef: event.target.value === "workspace" ? activeWorkspaceId : "",
-                      }))
-                    }
-                  >
-                    <option value="global">Global</option>
-                    <option value="workspace">Workspace</option>
-                    <option value="session">Session</option>
-                    <option value="agent">Agent</option>
-                    <option value="task">Task</option>
-                  </select>
-                </SettingsField>
-                <SettingsField label="Scope ref">
-                  <input
-                    className="mc-next-settings-input"
-                    value={grantForm.scopeRef}
-                    onChange={(event) => setGrantForm((current) => ({ ...current, scopeRef: event.target.value }))}
-                    disabled={grantForm.scope === "global"}
-                  />
-                </SettingsField>
-                <SettingsField label="Grant type">
-                  <select
-                    className="mc-next-settings-input"
-                    value={grantForm.grantType}
-                    onChange={(event) =>
-                      setGrantForm((current) => ({
-                        ...current,
-                        grantType: event.target.value,
-                        expiresAt:
-                          event.target.value === "ttl" && !current.expiresAt
-                            ? defaultToolGrantExpiry()
-                            : current.expiresAt,
-                      }))
-                    }
-                  >
-                    <option value="persistent">Persistent</option>
-                    <option value="ttl">TTL</option>
-                    <option value="one_time">One time</option>
-                  </select>
-                </SettingsField>
-                {grantForm.grantType === "ttl" ? (
-                  <SettingsField label="Expires at">
-                    <input
-                      className="mc-next-settings-input"
-                      value={grantForm.expiresAt}
-                      onChange={(event) => setGrantForm((current) => ({ ...current, expiresAt: event.target.value }))}
-                      placeholder="2099-01-01T00:00:00.000Z"
-                    />
-                  </SettingsField>
-                ) : null}
-              </SettingsFieldGrid>
-              <p className="mc-next-settings-field-note">{grantForm.decision === "deny" ? "Deny" : "Allow"} {grantForm.toolPattern || "the selected tool"} in {grantForm.scope}{grantForm.scope !== "global" ? ` ${grantForm.scopeRef}` : ""}. {grantForm.grantType === "ttl" ? `Expires ${grantForm.expiresAt}.` : grantForm.grantType === "one_time" ? "One use." : "Persists until revoked."} Deny rules and approval-required execution remain authoritative.</p>
-              <SettingsButtonRow>
-                <NativeButton variant="default" disabled={creatingGrant} onClick={() => void reviewGrant()}>
-                  <Plus size={16} />
-                  Create grant
-                </NativeButton>
-              </SettingsButtonRow>
-            </NativeCard></DetailInspector> : null}
-          </SettingsStack>
-          <DetailInspector open={detailView === "tool" || detailView === "all-grants"} title={detailView === "all-grants" ? "All tool grants" : selectedTool?.toolName ?? "Tool unavailable"} onClose={() => openDetails(null)}><NativeCard
-            density="compact"
-            className="mc-next-settings-panel"
-            title={selectedTool?.toolName ?? "Tool detail"}
-            subtitle="Selected catalog entry and tool grants."
-          >
-            {selectedTool ? (
-              <>
-                <NativeMetricGrid
-                  items={[
-                    {
-                      label: "Category",
-                      value: selectedTool.category || "tool",
-                      meta: `${selectedTool.pack} pack · ${selectedTool.riskLevel} risk`,
-                    },
-                    {
-                      label: "Available grants",
-                      value: String(
-                        (data.grants ?? []).filter(
-                          (item) => matchesToolGrant(item, selectedTool.toolName) && isToolGrantAvailable(item),
-                        ).length,
-                      ),
-                      meta: "Active, unexpired matches",
-                    },
-                  ]}
-                />
-                <SettingsButtonRow><NativeButton onClick={() => openDetails("grant")}>Create tool grant{grantEditor.isDirty ? " · Unsaved" : ""}</NativeButton></SettingsButtonRow>
-                <SettingsCodeBlock label="Tool description">
-                  {selectedTool.description || "No tool description provided."}
-                </SettingsCodeBlock>
-              </>
-            ) : (
-              <SettingsEmptyState label="Choose a tool from the catalog to inspect it." />
-            )}
-            <SettingsActionList
-              ariaLabel={selectedTool ? `${selectedTool.toolName} grants` : "Tool grants"}
-              items={(data.grants ?? [])
-                .filter((item) => (selectedTool && detailView !== "all-grants" ? matchesToolGrant(item, selectedTool.toolName) : true))
-                .map((item) => ({
-                  id: item.grantId,
-                  label: item.toolPattern,
-                  description: `${item.scope}${item.scopeRef ? `:${item.scopeRef}` : ""} · ${item.decision} · ${item.grantType}${
-                    item.revokedBy ? ` · revoked by ${item.revokedBy}` : ""
-                  }`,
-                  meta: describeToolGrantAvailability(item),
-                  onClick: item.revokedAt ? undefined : () => setPendingRevokeGrantId(item.grantId),
-                  actionLabel: item.revokedAt ? "Revoked" : "Revoke",
-                }))}
-              emptyLabel={selectedTool ? "No tool grants match this catalog entry." : "No tool grants created yet."}
-              maxHeight="min(42vh, 24rem)"
-            />
-          </NativeCard></DetailInspector>
+                  <SettingsButtonRow>
+                    <NativeButton onClick={() => openDetails("grant")}>
+                      Create tool grant{grantEditor.isDirty ? " · Unsaved" : ""}
+                    </NativeButton>
+                  </SettingsButtonRow>
+                  <SettingsCodeBlock label="Tool description">
+                    {selectedTool.description || "No tool description provided."}
+                  </SettingsCodeBlock>
+                </>
+              ) : (
+                <SettingsEmptyState label="Choose a tool from the catalog to inspect it." />
+              )}
+              <SettingsActionList
+                ariaLabel={selectedTool ? `${selectedTool.toolName} grants` : "Tool grants"}
+                items={(data.grants ?? [])
+                  .filter((item) =>
+                    selectedTool && detailView !== "all-grants" ? matchesToolGrant(item, selectedTool.toolName) : true,
+                  )
+                  .map((item) => ({
+                    id: item.grantId,
+                    label: item.toolPattern,
+                    description: `${item.scope}${item.scopeRef ? `:${item.scopeRef}` : ""} · ${item.decision} · ${item.grantType}${
+                      item.revokedBy ? ` · revoked by ${item.revokedBy}` : ""
+                    }`,
+                    meta: grants.attemptFor(`revoke:${item.grantId}`)?.message ?? describeToolGrantAvailability(item),
+                    onClick:
+                      item.revokedAt || grants.attemptFor(`revoke:${item.grantId}`)
+                        ? undefined
+                        : () => grants.requestRevoke(item),
+                    actionLabel: item.revokedAt ? "Revoked" : "Revoke",
+                  }))}
+                emptyLabel={selectedTool ? "No tool grants match this catalog entry." : "No tool grants created yet."}
+                maxHeight="min(42vh, 24rem)"
+              />
+            </NativeCard>
+          </DetailInspector>
         </SettingsStack>
       ) : null}
       {leave.dialog}
-      <ConfirmModal open={grantReview !== null} title="Confirm tool grant" pending={creatingGrant} message={grantReview ? `${grantReview.draft.decision} ${grantReview.draft.toolPattern || "the selected tool"} for ${grantReview.draft.scope}${grantReview.draft.scope !== "global" ? ` ${grantReview.draft.scopeRef}` : ""}. ${grantReview.draft.grantType === "ttl" ? `Expires ${grantReview.draft.expiresAt}.` : grantReview.draft.grantType === "one_time" ? "One use." : "Persists until revoked."} Deny rules and approval-required execution still apply.` : ""} confirmLabel="Create grant" onCancel={() => { grantReview?.resolve(false); setGrantReview(null); }} onConfirm={() => { const review = grantReview; if (review) void handleCreateGrant(review.draft).then((saved) => { review.resolve(saved); setGrantReview(null); }); }} />
       <ConfirmModal
-        open={pendingRevokeGrantId !== null}
-        danger
-        title="Revoke tool grant?"
-        message="This tool grant will be revoked. This cannot be undone."
-        confirmLabel="Revoke"
-        pending={revokePending}
-        onCancel={() => setPendingRevokeGrantId(null)}
-        onConfirm={() => {
-          if (pendingRevokeGrantId !== null) {
-            void handleRevokeGrant(pendingRevokeGrantId);
-          }
-          setPendingRevokeGrantId(null);
-        }}
+        open={grants.review !== null}
+        title={grantReview ? "Confirm tool grant" : "Revoke tool grant?"}
+        danger={!grantReview}
+        pending={grants.pending}
+        message={
+          grantReview
+            ? [
+                grantReview.input.decision,
+                grantReview.input.toolPattern,
+                "for",
+                grantReview.input.scope,
+                grantReview.input.scopeRef ?? "all contexts",
+                ".",
+                grantReview.input.grantType,
+                grantReview.input.expiresAt ?? "",
+                "Deny rules and approval-required execution still apply.",
+              ].join(" ")
+            : grants.review?.kind === "revoke"
+              ? [
+                  "Revoke",
+                  grants.review.grant.toolPattern,
+                  "in",
+                  grants.review.grant.scope,
+                  grants.review.grant.scopeRef,
+                  ". This cannot be undone.",
+                ].join(" ")
+              : ""
+        }
+        confirmLabel={grantReview ? "Create grant" : "Revoke"}
+        onCancel={grants.cancel}
+        onConfirm={() => void grants.confirm()}
       />
     </SettingsSectionShell>
   );

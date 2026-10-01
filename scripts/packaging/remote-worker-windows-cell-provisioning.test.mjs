@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { test } from "node:test";
+import { GATEWAY_PROOF_TEST_COUNT, GATEWAY_PROOF_DEADLINE_MS, nativeProvisioningBridgeBudget, runBoundedNativeProofCommand } from "./lib/native-proof-command.mjs";
 import { buildWindowsTlsKeyAdapter, compileTlsNative, CELL_PROVISIONING_SOURCES, CELL_PROVISIONING_HOST_SOURCES } from "./build-remote-worker-windows-tls.mjs";
 import { resolveExactWindowsToolchain } from "./lib/remote-worker-windows-toolchain.mjs";
 import { createWindowsWorkerCellProvisioning, encodeWindowsWorkerCellProvisioning,
@@ -19,6 +20,8 @@ import { createFileWorkerDurableState } from "../../apps/remote-worker/dist/work
 const repository = path.resolve(import.meta.dirname, "../..");
 const source = path.join(repository, "apps/remote-worker-windows-cell-native");
 const requireNative = createRequire(import.meta.url);
+const nativeSourceCount = [...CELL_PROVISIONING_SOURCES, ...CELL_PROVISIONING_HOST_SOURCES].filter(name => name.endsWith(".cpp")).length;
+const bridgeBudget = nativeProvisioningBridgeBudget(nativeSourceCount);
 
 // This harness starts and joins only its own helper. A harness timeout is a
 // failure, never a substitute for the helper's independent deadline.
@@ -58,7 +61,7 @@ async function raw(executable, input, { acknowledgement, endInput = false, env =
 }
 
 test("native provisioning bridge joins canonical commits, image custody and bounded recovery", {
-  skip: process.platform !== "win32", timeout: 300000,
+  skip: process.platform !== "win32", timeout: bridgeBudget.totalMs,
 }, async (t) => {
   const output = fs.mkdtempSync(path.join(os.tmpdir(), "Goat Worker Provisioning Bridge "));
   t.diagnostic(`Retained real native provisioning bridge evidence: ${output}`);
@@ -75,17 +78,18 @@ test("native provisioning bridge joins canonical commits, image custody and boun
       cellName: `gc-cell-${randomUUID().replaceAll("-", "")}`, diskIdentifierHex: randomUUID().replaceAll("-", ""),
       virtualDiskBytes: 16 * 1024 * 1024, reservedDiskBytes: 80 * 1024 * 1024 } };
   };
-  await t.test("real Gateway coordinator commits and recovers the helper's exact journal", () => {
+  await t.test("real Gateway coordinator commits and recovers the helper's exact journal", async (proof) => {
     const resultFile = path.join(output, "gateway-tests.json");
-    const result = spawnSync(process.execPath, [path.join(repository, "node_modules/vitest/vitest.mjs"),
-      "run", "src/services/remote-worker-cell-service.test.ts", "--reporter=json", `--outputFile=${resultFile}`], {
-      cwd: path.join(repository, "apps/gateway"), encoding: "utf8", windowsHide: true, timeout: 60000, maxBuffer: 4 * 1024 * 1024,
-      env: { ...process.env, GOATCITADEL_CELL_PROVISIONING_PROOF: JSON.stringify({ output, setup, guardAddon: built.guardAddon }) },
+    const receipt = await runBoundedNativeProofCommand({ executablePath: process.execPath,
+      args: [path.join(repository, "node_modules/vitest/vitest.mjs"), "run", "src/services/remote-worker-cell-service.test.ts",
+        "--reporter=verbose", "--reporter=json", `--outputFile=${resultFile}`],
+      cwd: path.join(repository, "apps/gateway"), outputDirectory: output,
+      deadlineMs: GATEWAY_PROOF_DEADLINE_MS, signal: proof.signal,
+      environment: { ...process.env, GOATCITADEL_CELL_PROVISIONING_PROOF: JSON.stringify({ output, setup, guardAddon: built.guardAddon }) },
     });
-    fs.writeFileSync(path.join(output, "gateway-tests.log"), `${result.stdout ?? ""}${result.stderr ?? ""}`, { flag: "wx" });
-    assert.equal(result.error, undefined); assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(receipt.result.exitCode, 0); assert.equal(receipt.result.stopReason, "process_exit");
     const report = JSON.parse(fs.readFileSync(resultFile, "utf8"));
-    assert.equal(report.numFailedTests, 0); assert.equal(report.numPendingTests, 0); assert.equal(report.numPassedTests, 18);
+    assert.equal(report.numFailedTests, 0); assert.equal(report.numPendingTests, 0); assert.equal(report.numPassedTests, GATEWAY_PROOF_TEST_COUNT);
     for (const [name, count] of [["real-native-complete", 5], ["real-native-lost-ack", 2], ["real-native-cancelled", 1]]) {
       const evidence = JSON.parse(fs.readFileSync(path.join(output, `${name}.json`), "utf8"));
       assert.equal(evidence.snapshot.checkpoints.length, count);

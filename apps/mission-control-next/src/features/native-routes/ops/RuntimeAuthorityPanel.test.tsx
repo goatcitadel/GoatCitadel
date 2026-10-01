@@ -77,8 +77,8 @@ describe("RuntimeAuthorityPanel", () => {
   it("keeps the authority card grid responsive for narrow and mobile layouts", () => {
     const cssPath = fileURLToPath(new URL("./runtime-authority.css", import.meta.url));
     const css = fs.readFileSync(cssPath, "utf8");
-    expect(css).toMatch(/@media \(max-width: 860px\)[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
-    expect(css).toMatch(/@media \(max-width: 560px\)[\s\S]*flex-direction: column/);
+    expect(css).toMatch(/@media \(max-width: 1023px\)[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
+    expect(css).toMatch(/@media \(max-width: 639px\)[\s\S]*flex-direction: column/);
     expect(css).toMatch(/overflow-wrap: anywhere/);
   });
 

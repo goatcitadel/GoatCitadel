@@ -7,6 +7,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { preflightChatRoute } from "@goatcitadel/mission-control-shared/api/client";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type { OutboundRequestPrefsSnapshot } from "./useChatSurfaceOrchestration";
 
 const PREFLIGHT_TTL_MS = 30_000;
@@ -150,7 +151,7 @@ export function useChatRoutePreflight(input: {
           if (cancelled) {
             return;
           }
-          setError(cause instanceof Error ? cause.message : String(cause));
+          setError(describeApiError(cause).summary);
         })
         .finally(() => {
           if (!cancelled) {

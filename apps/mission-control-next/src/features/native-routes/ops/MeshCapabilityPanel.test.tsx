@@ -367,8 +367,8 @@ describe("MeshCapabilityPanel", () => {
     expect(css).toMatch(/\.mc-next-mesh-caps-entry\[data-status="active"\]\s*{[^}]*var\(--gc-risk-safe\)/s);
     expect(css).toMatch(/\.mc-next-mesh-caps-entry\[data-status="blocked"\][^{]*{[^}]*var\(--gc-risk-danger\)/s);
     expect(css).toMatch(/overflow-wrap: anywhere/);
-    expect(css).toMatch(/@media \(max-width: 860px\)[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
-    expect(css).toMatch(/@media \(max-width: 560px\)[\s\S]*flex-direction: column/);
+    expect(css).toMatch(/@media \(max-width: 1023px\)[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
+    expect(css).toMatch(/@media \(max-width: 639px\)[\s\S]*flex-direction: column/);
     // Canonical tokens only — the dead --mc-accent variable must not appear.
     expect(css).not.toMatch(/--mc-accent/);
   });

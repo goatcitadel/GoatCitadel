@@ -1,4 +1,5 @@
-import { canonicalJsonString } from "@goatcitadel/contracts";
+import { canonicalJsonString, normalizeRemoteWorkerInferenceOperationIdentifier } from "@goatcitadel/contracts";
+import { randomUUID } from "node:crypto";
 import {
   RemoteWorkerInferenceRuntime,
   type RemoteWorkerInferenceRuntimeDependencies,
@@ -43,6 +44,11 @@ export interface RemoteWorkerExecutionOwnersDependencies
   approvals: Pick<ApprovalRuntime, "createApproval">;
   nativeRuntimePolicy?: RemoteWorkerNativeRuntimePolicyPort;
   nativeInstallationPolicy?: RemoteWorkerInstallationPolicy;
+}
+
+/** Retain node and instance identity without forming a numeric-prefix credential. */
+export function createRemoteWorkerDispatchOwnerId(nodeId: string): string {
+  return normalizeRemoteWorkerInferenceOperationIdentifier(`remote-worker:${nodeId}.${randomUUID()}`, "dispatch owner id");
 }
 
 /** Shared by the native Gateway composition and its connected-process proof. */

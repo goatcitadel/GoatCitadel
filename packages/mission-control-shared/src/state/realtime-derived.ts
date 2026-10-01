@@ -26,7 +26,8 @@ export interface DerivedRealtimeNotification {
     | "runtime_degraded"
     | "activity_update"
     | "conversation_update"
-    | "replay_gap";
+    | "replay_gap"
+    | "handoff_ready";
   soundCue?: OperatorAttentionSoundCue;
 }
 
@@ -119,7 +120,7 @@ export function deriveRealtimeRefresh(
   if (event.links?.approvalId) {
     explicitTopics.add("approvals");
   }
-  if (event.links?.taskId) {
+  if (event.links?.taskId || event.links?.runId || event.links?.durableRunId) {
     explicitTopics.add("tasks");
   }
   if (event.source === "system") {
@@ -154,6 +155,9 @@ export function deriveRealtimeRefresh(
 }
 
 export function deriveRealtimeNotification(event: RealtimeEvent): DerivedRealtimeNotification | undefined {
+  // This retained signal only invalidates owner projections. It must stay silent
+  // even when future payload fields contain attention-like words or labels.
+  if (event.eventType === "inbox.changed") return undefined;
   if (event.eventAuthority === "durable_history") {
     return undefined;
   }
@@ -315,7 +319,7 @@ export function deriveRealtimeNotification(event: RealtimeEvent): DerivedRealtim
       message: "Handoff is ready to review.",
       groupKey: event.links?.taskId ? `handoff-${event.links.taskId}` : "handoff-ready",
       truthMode: event.links?.taskId ? "authoritative" : "compatibility",
-      attentionKind: "activity_update",
+      attentionKind: "handoff_ready",
       soundCue: "handoff_ready",
     };
   }

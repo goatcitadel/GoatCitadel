@@ -1,202 +1,25 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useId } from "react";
 import { Check, Download, Upload, X } from "lucide-react";
-import type { CitadelBlueprint, CitadelBlueprintValidationResult, CitadelStructureSnapshot } from "@goatcitadel/contracts";
-import {
-  exportCitadelBlueprint,
-  importCitadelBlueprint,
-  getCitadelStructureSnapshot,
-  isApiRequestError,
-  listCitadels,
-  validateCitadelBlueprint,
-} from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
-import { getErrorMessage } from "../shared/native-helpers";
-import { useSessionDraft } from "./session-drafts";
-import { useDraftLeave } from "./DraftLeaveDialog";
+import { useCitadelBlueprint } from "./use-citadel-blueprint";
+import { buildBlueprintProofItems, downloadBlueprint } from "./citadel-blueprint-artifact";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
 import "./citadel-confirmation.css";
 
-interface ExportState {
-  loading: boolean;
-  error: string | null;
-  staged: boolean;
-  json: string | null;
-}
-
-interface ImportState {
-  validation: CitadelBlueprintValidationResult | null;
-  busy: boolean;
-  done: boolean;
-  error: string | null;
-}
-
-const INITIAL_IMPORT: ImportState = { validation: null, busy: false, done: false, error: null };
-
-function parseBlueprint(text: string): { blueprint: unknown } | { parseError: string } {
-  try {
-    return { blueprint: JSON.parse(text) };
-  } catch (error) {
-    return { parseError: getErrorMessage(error) };
-  }
-}
-
-/**
- * Blueprint import/export (spec §8). A Blueprint is the portable, secret-free
- * description of a Citadel. Export serializes the active Citadel; import validates
- * (schema + secret-scan) before applying, so a shared Blueprint can never smuggle
- * credentials or silently activate connections.
- */
-export function CitadelBlueprintRoutePage({
-  route,
-  activeWorkspaceId,
-  activeWorkspaceName,
-  activeCitadelId = activeWorkspaceId,
-  activeCitadelName = activeWorkspaceName,
-}: NativeRoutePagesProps) {
+export function CitadelBlueprintRoutePage({ route, activeCitadelId = "default", activeCitadelName = "this Citadel" }: NativeRoutePagesProps) {
   const importId = useId();
-  const [exportState, setExportState] = useState<ExportState>({
-    loading: true,
-    error: null,
-    staged: false,
-    json: null,
-  });
-  const [view, setView] = useState<"export" | "import">("export");
-  const [confirmImport, setConfirmImport] = useState(false);
-  const [validatedText, setValidatedText] = useState<string | null>(null);
-  const [reviewedTarget, setReviewedTarget] = useState<CitadelStructureSnapshot | null>(null);
-  const validationGeneration = useRef(0);
-  const importBusyRef = useRef(false);
-  const scopeRef = useRef(activeCitadelId);
-  scopeRef.current = activeCitadelId;
-  const leave = useDraftLeave();
-  const blueprintDraft = useSessionDraft(`blueprint-import:${activeCitadelId}`, "", undefined, { label: "Blueprint import", active: view === "import" });
-  const importText = blueprintDraft.value;
-  const setImportText = blueprintDraft.setValue;
-  const acceptSavedBlueprint = blueprintDraft.acceptSaved;
-  const [importState, setImportState] = useState<ImportState>(INITIAL_IMPORT);
-  const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const control = useCitadelBlueprint(activeCitadelId);
+  const { exportState, importState, view, setView, confirmImport, setConfirmImport, reviewedTarget, validatedText,
+    importText, blueprintDraft, leave, canApply, validate, applyImport, loadExportForImport, exportNotice } = control;
   const exportProofItems = buildBlueprintProofItems(exportState.json, activeCitadelId);
-
-  useEffect(() => {
-    validationGeneration.current += 1;
-    setValidatedText(null);
-    setReviewedTarget(null);
-    setConfirmImport(false);
-    setImportState(INITIAL_IMPORT);
-    return () => { validationGeneration.current += 1; };
-  }, [activeCitadelId]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setExportState((current) => ({ ...current, loading: true, error: null }));
-    void listCitadels("active", 500)
-      .then(async ({ items }) => {
-        const listed = items.find((item) => item.citadelId === activeCitadelId || item.slug === activeCitadelId);
-        if (!listed || listed.hasCharter === false) {
-          return null;
-        }
-        return exportCitadelBlueprint(activeCitadelId);
-      })
-      .then((blueprint) => {
-        if (!cancelled) {
-          setExportState({
-            loading: false,
-            error: null,
-            staged: Boolean(blueprint),
-            json: blueprint ? JSON.stringify(blueprint, null, 2) : null,
-          });
-        }
-      })
-      .catch((error: unknown) => {
-        if (cancelled) {
-          return;
-        }
-        if (isApiRequestError(error) && error.status === 404) {
-          setExportState({ loading: false, error: null, staged: false, json: null });
-        } else {
-          setExportState({ loading: false, error: getErrorMessage(error), staged: false, json: null });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeCitadelId]);
-
-  const validate = useCallback(async () => {
-    const generation = ++validationGeneration.current;
-    setValidatedText(null);
-    setReviewedTarget(null);
-    setConfirmImport(false);
-    const parsed = parseBlueprint(importText);
-    if ("parseError" in parsed) {
-      setImportState({ ...INITIAL_IMPORT, validation: { ok: false, errors: [`Invalid JSON: ${parsed.parseError}`] } });
-      return;
-    }
-    try {
-      setImportState({ ...INITIAL_IMPORT, busy: true });
-      const validation = await validateCitadelBlueprint(parsed.blueprint);
-      const target = validation.ok ? await getCitadelStructureSnapshot(activeCitadelId) : null;
-      if (generation !== validationGeneration.current) return;
-      if (target) { setValidatedText(importText); setReviewedTarget(target); }
-      setImportState({ ...INITIAL_IMPORT, validation });
-    } catch (error) {
-      if (generation === validationGeneration.current) setImportState({ ...INITIAL_IMPORT, error: getErrorMessage(error) });
-    }
-  }, [activeCitadelId, importText]);
-
-  const applyImport = useCallback(async () => {
-    if (validatedText !== importText || !importState.validation?.ok || importState.busy || importBusyRef.current || reviewedTarget?.citadelId !== activeCitadelId) return;
-    const submitted = importText;
-    const parsed = parseBlueprint(importText);
-    if ("parseError" in parsed) {
-      return;
-    }
-    setImportState((current) => ({ ...current, busy: true, error: null }));
-    importBusyRef.current = true;
-    try {
-      await importCitadelBlueprint(activeCitadelId, parsed.blueprint as CitadelBlueprint, reviewedTarget.revision);
-      acceptSavedBlueprint("", undefined, submitted);
-      if (scopeRef.current !== activeCitadelId) return;
-      setValidatedText(null);
-      setReviewedTarget(null);
-      setImportState((current) => ({ ...current, validation: null, busy: false, done: true }));
-      setConfirmImport(false);
-    } catch (error) {
-      if (scopeRef.current !== activeCitadelId) return;
-      if (isApiRequestError(error) && error.status === 409) {
-        setConfirmImport(false);
-        setValidatedText(null);
-        setReviewedTarget(null);
-        setImportState({ ...INITIAL_IMPORT, error: "The Citadel changed. Your Blueprint is preserved. Validate again to review the current Charter and Chambers before importing." });
-      } else setImportState((current) => ({ ...current, busy: false, error: getErrorMessage(error) }));
-    } finally {
-      importBusyRef.current = false;
-    }
-  }, [activeCitadelId, importText, validatedText, reviewedTarget, importState.validation, importState.busy, acceptSavedBlueprint]);
-
-  const canApply = validatedText === importText && reviewedTarget?.citadelId === activeCitadelId && reviewedTarget.record?.lifecycleStatus !== "archived" && importState.validation?.ok === true && !importState.busy;
-
-  const loadExportForImport = useCallback(() => {
-    if (!exportState.json) {
-      return;
-    }
-    leave.request(() => {
-      setImportText(exportState.json!); setView("import");
-      validationGeneration.current += 1; setValidatedText(null); setImportState(INITIAL_IMPORT);
-    }, [blueprintDraft.key]);
-  }, [exportState.json, leave, blueprintDraft.key, setImportText]);
-
-  const downloadExport = useCallback(() => {
-    if (!exportState.json) {
-      return;
-    }
+  const downloadExport = () => {
+    if (!exportState.json) return;
     downloadBlueprint(exportState.json, activeCitadelId);
-    setExportNotice("Blueprint downloaded as a secret-free JSON file.");
-  }, [activeCitadelId, exportState.json]);
-
+    control.setExportNotice("Blueprint downloaded as a secret-free JSON file.");
+  };
   return (
     <NativePageFrame
       icon={Download}
@@ -244,18 +67,13 @@ export function CitadelBlueprintRoutePage({
               className="mc-next-settings-textarea"
               value={importText}
               rows={6}
-              disabled={importState.busy}
+              disabled={control.locked || importState.busy}
               placeholder='{ "schemaVersion": "goatcitadel.blueprint.v1", ... }'
-              onChange={(event) => {
-                validationGeneration.current += 1; setValidatedText(null);
-                setReviewedTarget(null); setConfirmImport(false);
-                setImportText(event.target.value);
-                setImportState(INITIAL_IMPORT);
-              }}
+              onChange={(event) => control.changeText(event.target.value)}
             />
           </label>
           <div className="mc-next-blueprint-actions">
-            <NativeButton variant="default" disabled={importText.trim().length === 0 || importState.busy} onClick={() => void validate()}>
+            <NativeButton variant="default" disabled={control.locked || importText.trim().length === 0 || importState.busy} onClick={() => void validate()}>
               <Check size={16} />
               Validate
             </NativeButton>
@@ -270,7 +88,7 @@ export function CitadelBlueprintRoutePage({
           {reviewedTarget && validatedText === importText ? <NativeList items={[
             { title: "Current Charter", body: reviewedTarget.charter?.purpose ?? "No Charter yet" },
             { title: "Current Chambers", body: reviewedTarget.chambers.map((chamber) => `${chamber.name} (${chamber.sensitivity}${chamber.sealed ? ", sealed" : ""})`).join(" · ") || "None" },
-            { title: "Import effect", body: "Replaces the Charter and adds the Blueprint's Chambers. Existing Chambers are retained." },
+            { title: "Import effect", body: "Replaces the Charter, clears its default Chamber selection, and adds the Blueprint's Chambers. Existing Chambers are retained." },
           ]} emptyLabel="No target review available." density="compact" /> : null}
           {reviewedTarget?.record?.lifecycleStatus === "archived" ? <NoticeBanner tone="warning" message="Restore this Citadel, then validate again before importing." /> : null}
           {importState.validation ? (
@@ -295,66 +113,11 @@ export function CitadelBlueprintRoutePage({
           ) : null}
         </NativeCard> : null}
       </NativeGrid>
+      {control.attempt.message ? <NoticeBanner tone={control.attempt.phase === "uncertain" ? "error" : "info"} message={control.attempt.message} /> : null}
       {leave.dialog}
-      <ConfirmModal className="mc-next-citadel-confirmation" open={confirmImport} title="Apply this Blueprint?" message={`Replace the Charter and add the Blueprint's Chambers in ${activeCitadelName}? Existing Chambers are retained. External connections and grants require their existing setup and approval steps.`} confirmLabel={importState.busy ? "Importing…" : "Apply Blueprint"} pending={importState.busy} disableDismiss={importState.busy} cancelDisabled={importState.busy} onCancel={() => setConfirmImport(false)} onConfirm={() => void applyImport()} />
+      <ConfirmModal className="mc-next-citadel-confirmation" open={confirmImport} title="Apply this Blueprint?" message={`Replace the Charter, clear its default Chamber selection, and add the Blueprint's Chambers in ${activeCitadelName}? Existing Chambers are retained. External connections and grants require their existing setup and approval steps.`} confirmLabel={importState.busy ? "Importing…" : "Apply Blueprint"} pending={importState.busy} disableDismiss={importState.busy} cancelDisabled={importState.busy} onCancel={() => setConfirmImport(false)} onConfirm={() => void applyImport()} />
     </NativePageFrame>
   );
 }
 
-export function downloadBlueprint(exportedJson: string, citadelId: string): void {
-  if (typeof document === "undefined" || typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
-    throw new Error("Browser downloads are unavailable in this environment.");
-  }
-  const objectUrl = URL.createObjectURL(new Blob([exportedJson], { type: "application/json;charset=utf-8" }));
-  const anchor = document.createElement("a");
-  anchor.href = objectUrl;
-  anchor.download = `${sanitizeBlueprintFilename(citadelId)}-blueprint.json`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  globalThis.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
-}
-
-function sanitizeBlueprintFilename(value: string): string {
-  const normalized = value
-    .trim()
-    .replace(/[^a-zA-Z0-9._-]+/gu, "-")
-    .replace(/^-+|-+$/gu, "");
-  return normalized.slice(0, 80) || "citadel";
-}
-
-export function buildBlueprintProofItems(
-  exportedJson: string | null,
-  citadelId: string,
-): Array<{ title: string; meta?: string; body?: string }> {
-  if (!exportedJson) {
-    return [];
-  }
-  const parsed = parseBlueprint(exportedJson);
-  const blueprint =
-    "blueprint" in parsed && parsed.blueprint && typeof parsed.blueprint === "object"
-      ? (parsed.blueprint as Record<string, unknown>)
-      : {};
-  return [
-    {
-      title: "Citadel",
-      meta: citadelId,
-      body: "Export is generated through the Gateway-backed Citadel blueprint API.",
-    },
-    {
-      title: "Schema",
-      meta: typeof blueprint.schemaVersion === "string" ? blueprint.schemaVersion : "unknown",
-      body: "Portable Blueprint schema used for validation before import.",
-    },
-    {
-      title: "Content",
-      meta: `${exportedJson.length} chars`,
-      body: "Read-only artifact preview; importing requires explicit validation and operator action.",
-    },
-    {
-      title: "Secret posture",
-      meta: "secret-free contract",
-      body: "Blueprint export omits credentials and import validation runs a secret scan.",
-    },
-  ];
-}
+export { buildBlueprintProofItems, downloadBlueprint } from "./citadel-blueprint-artifact";

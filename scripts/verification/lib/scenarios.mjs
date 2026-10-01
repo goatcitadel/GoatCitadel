@@ -58,6 +58,7 @@ import {
 } from "./scenarios/browser-helpers.mjs";
 import { seedMissionControlNextFixture as seedMissionControlNextFixtureImpl } from "./scenarios/fixture-seeding.mjs";
 import { collectVisualBaselineCoverage } from "./visual-baseline-coverage.mjs";
+import { waitForCockpitVisualRouteReady } from "./scenarios/cockpit-visual-readiness.mjs";
 import {
   captureConfigJsonSnapshots,
   findBackupConfigSnapshotDrift,
@@ -109,6 +110,7 @@ import {
   probeKeyboardFocus,
   runAccessibilitySmokeLane as runAccessibilitySmokeLaneImpl,
 } from "./scenarios/accessibility-smoke-lane.mjs";
+import { runUxBudgetsLane as runUxBudgetsLaneImpl } from "./scenarios/ux-budgets-lane.mjs";
 import { runApiCompatibilityLane as runApiCompatibilityLaneImpl } from "./scenarios/api-compatibility-lane.mjs";
 import { runVisualRegressionLane as runVisualRegressionLaneImpl } from "./scenarios/visual-regression-lane.mjs";
 import { runRuntimeTruthLane as runRuntimeTruthLaneImpl } from "./scenarios/runtime-truth-lane.mjs";
@@ -2439,6 +2441,10 @@ export async function runAccessibilitySmokeLane(context, options = {}) {
   return await runAccessibilitySmokeLaneImpl(context, options, verificationLaneDeps());
 }
 
+export async function runUxBudgetsLane(context, options = {}) {
+  return await runUxBudgetsLaneImpl(context, options, verificationLaneDeps());
+}
+
 export async function runCatalogParityLane(context, options = {}) {
   return await runCatalogParityLaneImpl(context, options, verificationLaneDeps());
 }
@@ -3412,7 +3418,9 @@ export async function runUiParityLane(context, _options = {}) {
     const events = await requestJson(stack.gatewayUrl, "/api/v1/events?limit=20");
     assertOk(events, "read ui-parity events");
     const approvalNeedle = approvals.body?.items?.[0]?.kind ?? approvals.body?.items?.[0]?.approvalId ?? "shell.exec";
-    const activityNeedle = events.body?.items?.[0]?.eventType ?? "approval_created";
+    const activityEventType = events.body?.items?.[0]?.eventType ?? "approval_created";
+    const activityWords = activityEventType.replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[_.\s-]+/).filter(Boolean).join(" ").toLowerCase();
+    const activityNeedle = activityWords.charAt(0).toUpperCase() + activityWords.slice(1);
 
     await runScenario(
       context,
@@ -3465,9 +3473,6 @@ export async function runUiParityLane(context, _options = {}) {
               baseUrl: nextUi.uiUrl,
               href: "/ops/diagnostics",
               route: { expectedArea: "ops", expectedSection: "diagnostics", readyText: "Diagnostics directory" },
-              prepare: async (page) => {
-                await page.getByLabel("About Diagnostics directory", { exact: true }).click();
-              },
               packageName: NEXT_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
@@ -3992,20 +3997,15 @@ export async function runRealtimeTruthLane(context, _options = {}) {
             },
             NEXT_UI_PACKAGE,
           );
-          await page
-            .getByText(
-              "Live event history rotated past this browser cursor. Mission Control is refreshing from the latest retained state.",
-              { exact: false },
-            )
-            .first()
-            .waitFor({ timeout: 15000 });
           await openSystemStatusPopover(page);
-          const realtimeCopy = (await page.locator("body").innerText({ timeout: 15000 })) ?? "";
-          if (!/(Live recovery|Polling|Realtime degraded)/.test(realtimeCopy)) {
-            throw new Error("realtime-truth expected visible realtime degraded/recovery posture copy");
-          }
-          if (!/(Streaming via replay recovery|Polling fallback|Streaming \(replay recovery\))/.test(realtimeCopy)) {
-            throw new Error("realtime-truth expected visible realtime replay recovery or polling fallback copy");
+          // Transport recovery is shown in System status without a repeated toast.
+          // Ordinary streaming cannot satisfy this retained-cursor recovery proof.
+          const recoveryPill = page.locator('details.mc-next-status-system [aria-label^="Live updates"]')
+            .filter({ hasText: /Polling fallback|Streaming \(replay recovery\)/ });
+          await recoveryPill.waitFor({ state: "visible", timeout: 15000 });
+          const realtimeCopy = await recoveryPill.getAttribute("aria-label");
+          if (!/^Live updates: (Polling fallback|Streaming \(replay recovery\))/.test(realtimeCopy ?? "")) {
+            throw new Error("realtime-truth expected accessible realtime replay recovery or polling fallback status");
           }
           const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, NEXT_UI_PACKAGE);
           const artifacts = await captureBrowserArtifacts(context, {
@@ -4138,7 +4138,8 @@ export async function runRealtimeTruthLane(context, _options = {}) {
           }
 
           await page.getByLabel("Refresh Ops runtime data").click();
-          await page.getByText("verification_memory_refresh", { exact: false }).first().waitFor({ timeout: 15000 });
+          await page.getByRole("button", { name: "Inspect activity event verification_memory_refresh", exact: true })
+            .waitFor({ state: "visible", timeout: 15000 });
           await page.screenshot({ path: recoveredScreenshot, fullPage: false });
           const browserSanity = assertBrowserConsoleHealthy(browserLog, recoveryLogCursor, NEXT_UI_PACKAGE);
           const artifacts = await captureBrowserArtifacts(context, {
@@ -4334,6 +4335,10 @@ async function waitForMissionControlShell(page, options = {}) {
 }
 
 async function waitForVerificationRouteReady(page, route, packageName = DEFAULT_UI_PACKAGE, timeoutMs = 30000) {
+  if (packageName === NEXT_UI_PACKAGE && route.shell === "cockpit") {
+    await waitForCockpitVisualRouteReady(page, route, timeoutMs);
+    return;
+  }
   await waitForMissionControlShell(page, { packageName, timeoutMs });
   if (packageName === NEXT_UI_PACKAGE) {
     await page.waitForFunction(

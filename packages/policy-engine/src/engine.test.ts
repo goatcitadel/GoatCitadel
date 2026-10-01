@@ -142,13 +142,9 @@ function createHeartbeatBoundaryRegistry(): ToolRegistry {
 }
 
 const policyConfig: ToolPolicyConfig = {
-  profiles: {
-    danger: ["*"],
-  },
   tools: {
-    profile: "danger",
     approvalMode: "approve_risky",
-    allow: [],
+    allow: ["*"],
     deny: [],
   },
   agents: {},
@@ -540,12 +536,9 @@ describe("ToolPolicyEngine grants", () => {
     const engine = new ToolPolicyEngine(
       {
         ...policyConfig,
-        profiles: {
-          minimal: [],
-        },
         tools: {
           ...policyConfig.tools,
-          profile: "minimal",
+          allow: [],
           approvalMode: "bypass",
         },
         sandbox: {
@@ -589,12 +582,9 @@ describe("ToolPolicyEngine grants", () => {
     const engine = new ToolPolicyEngine(
       {
         ...policyConfig,
-        profiles: {
-          minimal: [],
-        },
         tools: {
           ...policyConfig.tools,
-          profile: "minimal",
+          allow: [],
           approvalMode: "approve_all",
         },
         sandbox: {
@@ -1593,7 +1583,7 @@ describe("ToolPolicyEngine approval bypass safety", () => {
 });
 
 describe("ToolPolicyEngine policy edge coverage", () => {
-  it("reports explicit policy denies, unknown tools, and profile disallows", async () => {
+  it("reports explicit policy denies, unknown tools, and missing allows", async () => {
     const denyStorage = createStorageStub();
     const denyEngine = new ToolPolicyEngine(
       {
@@ -1617,19 +1607,15 @@ describe("ToolPolicyEngine policy edge coverage", () => {
       ).reasonCodes,
     ).toEqual(["policy_deny"]);
 
-    const emptyProfileConfig: ToolPolicyConfig = {
+    const emptyAllowConfig: ToolPolicyConfig = {
       ...policyConfig,
-      profiles: {
-        minimal: [],
-      },
       tools: {
         ...policyConfig.tools,
-        profile: "minimal",
         allow: [],
         deny: [],
       },
     };
-    const unknownEngine = new ToolPolicyEngine(emptyProfileConfig, createStorageStub());
+    const unknownEngine = new ToolPolicyEngine(emptyAllowConfig, createStorageStub());
     expect(
       (
         await unknownEngine.evaluateAccess({
@@ -1643,12 +1629,8 @@ describe("ToolPolicyEngine policy edge coverage", () => {
 
     const wildcardConfig: ToolPolicyConfig = {
       ...policyConfig,
-      profiles: {
-        danger: ["*"],
-      },
       tools: {
         ...policyConfig.tools,
-        profile: "danger",
         allow: ["*"],
         deny: [],
         approvalMode: "bypass",
@@ -1690,7 +1672,7 @@ describe("ToolPolicyEngine policy edge coverage", () => {
       ).reasonCodes,
     ).toEqual(["unknown_tool"]);
 
-    const disallowEngine = new ToolPolicyEngine(emptyProfileConfig, createStorageStub());
+    const disallowEngine = new ToolPolicyEngine(emptyAllowConfig, createStorageStub());
     expect(
       (
         await disallowEngine.evaluateAccess({
@@ -1863,12 +1845,9 @@ describe("ToolPolicyEngine policy edge coverage", () => {
       const engine = new ToolPolicyEngine(
         {
           ...policyConfig,
-          profiles: {
-            minimal: [],
-          },
           tools: {
             ...policyConfig.tools,
-            profile: "minimal",
+            allow: [],
           },
         },
         storage,
@@ -1982,12 +1961,9 @@ describe("ToolPolicyEngine policy edge coverage", () => {
     const grantEngine = new ToolPolicyEngine(
       {
         ...policyConfig,
-        profiles: {
-          minimal: [],
-        },
         tools: {
           ...policyConfig.tools,
-          profile: "minimal",
+          allow: [],
           approvalMode: "bypass",
         },
         sandbox: {
@@ -3554,21 +3530,20 @@ describe("ToolPolicyEngine outside-root read access", () => {
       agentId: "agent",
       sessionId: "session",
     } as const;
-    const outsideProfile = await new ToolPolicyEngine(
+    const outsideAllow = await new ToolPolicyEngine(
       {
         ...policyConfig,
-        profiles: { minimal: [] },
-        tools: { ...policyConfig.tools, profile: "minimal" },
+        tools: { ...policyConfig.tools, allow: [] },
       },
       storage,
     ).evaluateAccess(request);
-    expect(outsideProfile.allowed).toBe(false);
-    expect(outsideProfile.reasonCodes).toContain("policy_disallow");
-    expect(outsideProfile.matchedGrantId).toBeUndefined();
+    expect(outsideAllow.allowed).toBe(false);
+    expect(outsideAllow.reasonCodes).toContain("policy_disallow");
+    expect(outsideAllow.matchedGrantId).toBeUndefined();
 
-    const inProfile = await new ToolPolicyEngine(policyConfig, storage).evaluateAccess(request);
-    expect(inProfile.allowed).toBe(true);
-    expect(inProfile.matchedGrantId).toBeUndefined();
+    const inAllow = await new ToolPolicyEngine(policyConfig, storage).evaluateAccess(request);
+    expect(inAllow.allowed).toBe(true);
+    expect(inAllow.matchedGrantId).toBeUndefined();
   });
 
   it("requires one exact grant to cover both providers in research mode", async () => {

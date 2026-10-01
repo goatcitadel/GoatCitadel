@@ -2,6 +2,8 @@ import { DetailInspector } from "../../../components/DetailInspector";
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { fetchCapabilityCatalog } from "@goatcitadel/mission-control-shared/api/client";
+import { humanizeToken, type StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { presentCapabilityDescription, presentCapabilityTitle } from "@goatcitadel/mission-control-shared/content/capability-rows";
 import { NativeCard, NativeDisclosureCard, QuickJumpCard } from "../NativeRoutePageLayout";
 import { ErrorState } from "../primitives";
 import type { NativeRoutePagesProps } from "../types";
@@ -105,9 +107,10 @@ export function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePages
               const status = deriveCapabilityStatus(item);
               return {
                 id: item.capabilityId,
-                title: item.title,
-                meta: status.label,
-                body: `${item.kind} · ${item.category} · ${truncateText(item.summary, 140)}`,
+                title: presentCapabilityTitle(item),
+                meta: humanizeToken(item.kind),
+                body: truncateText(presentCapabilityDescription(item), 140),
+                status: { label: status.label, tone: capabilityRowTone(status.status) },
               };
             })}
             selectedId={visibleSelectedCapabilityId}
@@ -122,7 +125,7 @@ export function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePages
           </LibraryButtonRow>
         </NativeCard>
         <div className="mc-next-settings-stack">
-          <DetailInspector open={detailOpen} title={selectedCapability?.title ?? "Capability unavailable"} subtitle={selectedCapability?.summary} onClose={() => setDetailOpen(false)}>
+          <DetailInspector open={detailOpen} title={selectedCapability ? /[_.]/.test(selectedCapability.title) ? humanizeToken(selectedCapability.title) : selectedCapability.title : "Capability unavailable"} subtitle={selectedCapability?.summary} onClose={() => setDetailOpen(false)}>
             {selectedCapability && selectedStatus ? (
               <>
                 <LibraryMetricGrid
@@ -287,6 +290,13 @@ function capabilityStatusTone(
   if (status === "unavailable") {
     return "danger";
   }
+  return "neutral";
+}
+
+function capabilityRowTone(status: ReturnType<typeof deriveCapabilityStatus>["status"]): StatusTone {
+  if (status === "available" || status === "configured") return "done";
+  if (status === "degraded") return "waiting";
+  if (status === "unavailable") return "failed";
   return "neutral";
 }
 

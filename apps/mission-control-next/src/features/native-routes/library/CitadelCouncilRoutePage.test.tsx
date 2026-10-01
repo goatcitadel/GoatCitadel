@@ -1,4 +1,5 @@
 import type { CitadelAccessSnapshot } from "@goatcitadel/contracts";
+import { __resetCitadelAccessAttemptsForTests } from "./citadel-access-state";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +22,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   getCitadelAccessSnapshot: apiMocks.getCitadelAccessSnapshot,
   isApiRequestError: (error: { status?: number }) => typeof error?.status === "number",
   unassignCitadelCouncilAgent: apiMocks.unassignCitadelCouncilAgent,
+}));
+vi.mock("@goatcitadel/mission-control-shared/components/ConfirmModal", () => ({
+  ConfirmModal: (props: { open: boolean; title: string; confirmLabel: string; onConfirm: () => void; onCancel: () => void }) => props.open
+    ? <div role="dialog" aria-label={props.title}><button type="button" onClick={props.onConfirm}>{props.confirmLabel}</button><button type="button" onClick={props.onCancel}>Cancel</button></div> : null,
 }));
 
 const revision = "a".repeat(64);
@@ -45,19 +50,19 @@ function treeString(renderer: ReactTestRenderer): string {
 
 describe("CitadelCouncilRoutePage", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks(); __resetCitadelAccessAttemptsForTests();
     apiMocks.listCitadelCouncil.mockResolvedValue([]);
     apiMocks.getCitadelAccessSnapshot.mockImplementation(async (id: string) => snapshot(await apiMocks.listCitadelCouncil(id), revision, id));
     apiMocks.fetchAgents.mockResolvedValue({
       items: [{ agentId: "research-agent", name: "Research", lifecycleStatus: "active" }],
     });
-    apiMocks.assignCitadelCouncilAgent.mockResolvedValue(snapshot([{
+    apiMocks.assignCitadelCouncilAgent.mockImplementation(async () => { const saved = snapshot([{
       assignmentId: "a1",
       citadelId: "default",
       agentId: "research-agent",
       createdAt: "t",
-    }], "b".repeat(64)));
-    apiMocks.unassignCitadelCouncilAgent.mockResolvedValue(snapshot([], "b".repeat(64)));
+    }], "b".repeat(64)); apiMocks.getCitadelAccessSnapshot.mockResolvedValue(saved); return saved; });
+    apiMocks.unassignCitadelCouncilAgent.mockImplementation(async () => { const saved = snapshot([], "b".repeat(64)); apiMocks.getCitadelAccessSnapshot.mockResolvedValue(saved); return saved; });
   });
 
   it("renders the Council header", () => {
@@ -96,6 +101,8 @@ describe("CitadelCouncilRoutePage", () => {
     await act(async () => {
       button?.props.onClick();
     });
+    expect(apiMocks.assignCitadelCouncilAgent).not.toHaveBeenCalled();
+    await act(async () => { renderer!.root.findAllByType("button").find(item => item.props.children === "Confirm Council seat")!.props.onClick(); });
     expect(apiMocks.assignCitadelCouncilAgent).toHaveBeenCalledWith("default", "research-agent", revision);
   });
 
@@ -127,22 +134,24 @@ describe("CitadelCouncilRoutePage", () => {
 
   it("preserves the selected agent on conflict, requires review, and never refetches over its acknowledgement", async () => {
     const peer = { ...snapshot([], "b".repeat(64)), members: [{ memberId: "m", citadelId: "default", subjectId: "peer", role: "viewer" as const, createdAt: "t", updatedAt: "t" }] };
-    apiMocks.getCitadelAccessSnapshot.mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(peer);
-    apiMocks.assignCitadelCouncilAgent.mockRejectedValueOnce(Object.assign(new Error("Changed"), { status: 409 }));
+    apiMocks.getCitadelAccessSnapshot.mockResolvedValueOnce(snapshot()).mockResolvedValue(peer);
+    apiMocks.assignCitadelCouncilAgent.mockImplementationOnce(async () => { const saved = { ...peer, revision: "c".repeat(64), council: [{ assignmentId: "own", citadelId: "default", agentId: "research-agent", createdAt: "t" }] }; apiMocks.getCitadelAccessSnapshot.mockResolvedValue(saved); return saved; });
     let renderer!: ReactTestRenderer;
     await act(async () => { renderer = create(<CitadelCouncilRoutePage {...makeProps()} />); });
     const seat = () => renderer.root.findAllByType("button").find((item) => Array.isArray(item.props.children) && item.props.children.includes("Seat"))!;
     await act(async () => { await seat().props.onClick(); });
+    await act(async () => { renderer.root.findAllByType("button").find(item => item.props.children === "Confirm Council seat")!.props.onClick(); });
     expect(renderer.root.findByType("select").props.value).toBe("research-agent");
     expect(seat().props.disabled).toBe(true);
     expect(treeString(renderer)).toContain("peer");
     await act(async () => { await seat().props.onClick(); });
-    expect(apiMocks.assignCitadelCouncilAgent).toHaveBeenCalledTimes(1);
+    expect(apiMocks.assignCitadelCouncilAgent).toHaveBeenCalledTimes(0);
     await act(async () => { renderer.root.findAllByType("button").find((item) => item.props.children === "Use current access review")!.props.onClick(); });
-    expect(apiMocks.assignCitadelCouncilAgent).toHaveBeenCalledTimes(1);
+    expect(apiMocks.assignCitadelCouncilAgent).toHaveBeenCalledTimes(0);
     await act(async () => { await seat().props.onClick(); });
+    await act(async () => { renderer.root.findAllByType("button").find(item => item.props.children === "Confirm Council seat")!.props.onClick(); });
     expect(apiMocks.assignCitadelCouncilAgent).toHaveBeenLastCalledWith("default", "research-agent", peer.revision);
-    expect(apiMocks.getCitadelAccessSnapshot).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getCitadelAccessSnapshot).toHaveBeenCalledTimes(4);
     expect(treeString(renderer)).toContain("Agent seated in this Citadel.");
     act(() => renderer.unmount());
   });

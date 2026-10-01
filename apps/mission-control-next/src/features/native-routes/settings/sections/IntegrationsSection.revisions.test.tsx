@@ -8,12 +8,13 @@ import type { SettingsSectionProps } from "../SettingsShared";
 import { __resetSessionDraftsForTests } from "../../library/session-drafts";
 import { __resetFormDirtyRegistryForTests } from "../../library/use-form-dirty";
 import { __resetSessionViewStateForTests } from "../../../../hooks/use-session-view-state";
+import { __resetIntegrationConnectionMutationsForTests } from "../integration-connection-mutation";
 
 const api = vi.hoisted(() => ({ fetchIntegrationCatalog: vi.fn(), fetchIntegrationConnections: vi.fn(), fetchIntegrationConnection: vi.fn(), fetchSettings: vi.fn(), fetchIntegrationFormSchema: vi.fn(), createIntegrationConnection: vi.fn(), updateIntegrationConnection: vi.fn(), deleteIntegrationConnection: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", async importOriginal => ({ ...await importOriginal<object>(), ...api }));
 const renderers: ReactTestRenderer[] = [];
 const connection = (revision = "a", patch: Partial<IntegrationConnection> = {}): IntegrationConnection => ({ connectionId: "fixture-connection", catalogId: "productivity.github", kind: "productivity", key: "github", label: "Fixture GitHub", enabled: true, status: "connected", config: { owner: "original-owner", apiKey: "[REDACTED]" }, revision: revision.repeat(64), createdAt: "2026-09-13T00:00:00.000Z", updatedAt: "2026-09-13T00:00:00.001Z", ...patch });
-const failure = (status = 409) => new ApiRequestError(status === 409 ? "Connection changed" : "Synthetic read unavailable", { kind: "http", method: "PATCH", path: "/fixture", status });
+const failure = (status = 409) => new ApiRequestError(status === 409 ? "Connection changed" : "Synthetic read unavailable", { kind: "http", method: "PATCH", path: "/api/v1/integrations/connections/fixture-connection", status, body: status === 409 ? {code:"WRITE_CONFLICT",details:{reason:"INTEGRATION_CONNECTION_REVISION_CONFLICT"}} : status === 404 ? {code:"ENTITY_NOT_FOUND"} : undefined });
 const textOf = (node: ReactTestInstance | string): string => typeof node === "string" ? node : node.children.map(textOf).join(" ");
 const button = (page: ReactTestRenderer, label: string) => {
   const buttons = page.root.findAllByType("button");
@@ -30,10 +31,24 @@ async function mount() { let page!: ReactTestRenderer; await act(async () => { p
 async function edit(page: ReactTestRenderer) { await click(page, "Fixture GitHub"); await click(page, "Edit connection"); await editLabel(page, "Fixture GitHub", "Local draft"); }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; }
 beforeEach(() => {
+  __resetIntegrationConnectionMutationsForTests();
   vi.resetAllMocks(); __resetSessionDraftsForTests(); __resetFormDirtyRegistryForTests(); __resetSessionViewStateForTests();
   api.fetchIntegrationCatalog.mockResolvedValue({ items: [{ catalogId: "productivity.github", key: "github", label: "GitHub", kind: "productivity", capabilities: [], authMethods: [] }] });
   api.fetchIntegrationConnections.mockResolvedValue({ items: [connection()] });
-  api.fetchIntegrationConnection.mockResolvedValue(connection("b", { label: "Peer connection", config: { owner: "peer-owner", apiKey: "[REDACTED]" }, enabled: false, status: "paused" }));
+  api.fetchIntegrationConnection.mockImplementation(async () => {
+    if (api.deleteIntegrationConnection.mock.calls.length) {
+      try { if ((await api.deleteIntegrationConnection.mock.results.at(-1)?.value)?.deleted) throw new ApiRequestError("Connection deleted", {kind:"http",method:"GET",path:"/api/v1/integrations/connections/fixture-connection",status:404,body:{code:"ENTITY_NOT_FOUND"}}); }
+      catch (error) { if (error instanceof ApiRequestError && error.method === "GET") throw error; }
+    }
+    if (api.updateIntegrationConnection.mock.calls.length) {
+      try { return await api.updateIntegrationConnection.mock.results.at(-1)?.value; }
+      catch (error) {
+        // The simulated API/transport rejection leaves the peer owner unchanged.
+        expect(error).toBeInstanceOf(Error);
+      }
+    }
+    return connection("b", { label: "Peer connection", config: { owner: "peer-owner", apiKey: "[REDACTED]" }, enabled: false, status: "paused" });
+  });
   api.fetchIntegrationFormSchema.mockResolvedValue({ catalogId: "productivity.github", title: "GitHub", fields: [{ key: "owner", label: "Owner", type: "text" }] });
   api.fetchSettings.mockResolvedValue({ features: {} });
   api.updateIntegrationConnection.mockResolvedValue(connection("c", { label: "Local draft" }));
@@ -91,7 +106,7 @@ describe("reviewed integration settings", () => {
   });
   it("requires a new delete confirmation after a peer change", async () => {
     const page = await mount(); await click(page, "Fixture GitHub"); await click(page, "Delete");
-    api.deleteIntegrationConnection.mockRejectedValueOnce(failure());
+    api.deleteIntegrationConnection.mockRejectedValueOnce(new ApiRequestError("Connection changed", {kind:"http",method:"DELETE",path:"/api/v1/integrations/connections/fixture-connection",status:409,body:{code:"WRITE_CONFLICT",details:{reason:"INTEGRATION_CONNECTION_REVISION_CONFLICT"}}}));
     await act(async () => { void modal(page).props.onConfirm(); });
     expect(api.deleteIntegrationConnection).toHaveBeenCalledExactlyOnceWith("fixture-connection", "a".repeat(64));
     expect(modal(page).props.open).toBe(false);
@@ -103,6 +118,19 @@ describe("reviewed integration settings", () => {
     expect(api.deleteIntegrationConnection).toHaveBeenLastCalledWith("fixture-connection", "b".repeat(64));
     expect(textOf(page.root)).toContain("No integration connections yet");
     expect(api.fetchIntegrationConnections).toHaveBeenCalledTimes(1);
+  });
+  it("retains an unknown save lock after review acceptance and remount", async () => {
+    const page = await mount(); await edit(page);
+    api.updateIntegrationConnection.mockRejectedValueOnce(new Error("Response lost after dispatch"));
+    await click(page, "Save changes");
+    expect(textOf(page.root)).toContain("outcome is unconfirmed");
+    await click(page, "Use current connection review");
+    expect(button(page, "Save changes").props.disabled).toBe(true);
+    await act(async () => page.unmount());
+    const reopened = await mount(); await click(reopened, "Fixture GitHub"); await click(reopened, "Edit connection");
+    expect(button(reopened, "Save changes").props.disabled).toBe(true);
+    await click(reopened, "Save changes");
+    expect(api.updateIntegrationConnection).toHaveBeenCalledTimes(1);
   });
   it.each(["write", "review"] as const)("ignores a late %s after switching workspace and back", async stage => {
     const page = await mount(); await edit(page);

@@ -94,6 +94,7 @@ export function ShellTopbar({
   realtimeDegraded,
   route,
   soundEnabled,
+  statusSlot,
   theme,
 }: {
   activeCitadelId: string;
@@ -123,6 +124,7 @@ export function ShellTopbar({
   realtimeDegraded: boolean;
   route: AppRoute;
   soundEnabled: boolean;
+  statusSlot?: ReactNode;
   theme: "dark" | "light";
   workspaceOptions: Array<{ workspaceId: string; name: string }>;
   workspaceSelectionStatus?: WorkspaceSelectionStatus;
@@ -178,6 +180,7 @@ export function ShellTopbar({
         <span className="mc-next-page-context">{AREA_META[navigationAreaForRoute(route)].label}</span>
       </div>
       <div className="mc-next-topbar-right">
+        {statusSlot}
         <button
           type="button"
           className="mc-next-icon-button"
@@ -384,7 +387,7 @@ export function ShellRail({
                   key={area}
                   type="button"
                   className={`mc-next-rail-area-link${navigationAreaForRoute(route) === area ? " active" : ""}`}
-                  aria-current={route.area === area ? "page" : undefined}
+                  aria-current={navigationAreaForRoute(route) === area ? "page" : undefined}
                   aria-label={AREA_META[area].label}
                   title={AREA_META[area].label}
                   onClick={() => {
@@ -401,66 +404,63 @@ export function ShellRail({
         }
         {route.area === "chat" ? <SidebarChatSlot /> : null}
         <div className="mc-next-rail-menu" hidden={route.area === "chat"}>
-          {groupedRailItems.map((group) => {
-            const groupLabelId = group.label ? `mc-next-rail-group-${group.id}` : undefined;
-            return (
-              <section key={group.id} className="mc-next-rail-section" aria-labelledby={groupLabelId}>
-                {group.label ? (
-                  <div className="mc-next-rail-separator" id={groupLabelId}>
-                    <span>{group.label}</span>
-                  </div>
-                ) : null}
-                <div className="mc-next-rail-group">
-                  {group.items.map((item) => {
-                    const target = buildNavigationTarget(route, item);
-                    const releaseScope = getRouteReleaseScope(target);
-                    const releaseStatusLabel = describeReleaseSurfaceStatus(releaseScope.status);
-                    const releaseScopeOperatorSummary = describeReleaseScopeForOperator(releaseScope);
-                    const backlogCount =
-                      item.section === "tasks"
-                        ? taskBacklogCount
-                        : item.section === "approvals"
-                          ? pendingApprovals
-                          : undefined;
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className={`mc-next-rail-link${isRailItemActive(route, item) ? " active" : ""}`}
-                        aria-label={`${item.label}: ${item.description}`}
-                        onFocus={() => preloadRouteChunk(target)}
-                        onMouseEnter={() => preloadRouteChunk(target)}
-                        onClick={() => {
-                          navigate(target);
-                          if (isMobileNav) onClose();
-                        }}
-                      >
-                        <div>
-                          <strong>
-                            {item.label}
-                            {releaseScope.status === "ship" ? null : (
-                              <span
-                                className="mc-next-rail-release-badge"
-                                data-release-status={releaseScope.status}
-                                title={releaseScopeOperatorSummary}
-                                aria-label={releaseScopeOperatorSummary}
-                              >
-                                {releaseStatusLabel}
-                              </span>
-                            )}
-                          </strong>
-                          <span title={item.description}>{item.description}</span>
-                        </div>
-                        {typeof backlogCount === "number" ? (
-                          <span className="mc-next-rail-count">{backlogCount}</span>
-                        ) : null}
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
-            );
-          })}
+          <div className="mc-next-rail-group">
+            {groupedRailItems.flatMap((group) => {
+              const first = group.items[0];
+              if (!first) return [];
+              const entries = group.label
+                ? [{ key: group.id, label: group.label, items: group.items }]
+                : group.items.map((item) => ({ key: item.id, label: item.label, items: [item] }));
+              return entries.map((entry) => {
+                const lead = entry.items[0]!;
+                const target = buildNavigationTarget(route, lead);
+                const active = entry.items.some((item) => isRailItemActive(route, item));
+                const releaseScope = getRouteReleaseScope(target);
+                const releaseStatusLabel = describeReleaseSurfaceStatus(releaseScope.status);
+                const releaseScopeOperatorSummary = describeReleaseScopeForOperator(releaseScope);
+                const backlogCount = entry.items.some((item) => item.section === "approvals")
+                  ? pendingApprovals
+                  : entry.items.some((item) => item.section === "tasks")
+                    ? taskBacklogCount
+                    : undefined;
+                return (
+                  <button
+                    key={entry.key}
+                    type="button"
+                    className={`mc-next-rail-link${active ? " active" : ""}`}
+                    aria-current={active ? "page" : undefined}
+                    aria-label={`${entry.label}: ${lead.description}`}
+                    onFocus={() => preloadRouteChunk(target)}
+                    onMouseEnter={() => preloadRouteChunk(target)}
+                    onClick={() => {
+                      navigate(target);
+                      if (isMobileNav) onClose();
+                    }}
+                  >
+                    <div>
+                      <strong>
+                        {entry.label}
+                        {releaseScope.status === "ship" ? null : (
+                          <span
+                            className="mc-next-rail-release-badge"
+                            data-release-status={releaseScope.status}
+                            title={releaseScopeOperatorSummary}
+                            aria-label={releaseScopeOperatorSummary}
+                          >
+                            {releaseStatusLabel}
+                          </span>
+                        )}
+                      </strong>
+                      <span title={lead.description}>{lead.description}</span>
+                    </div>
+                    {typeof backlogCount === "number" && backlogCount > 0 ? (
+                      <span className="mc-next-rail-count">{backlogCount}</span>
+                    ) : null}
+                  </button>
+                );
+              });
+            })}
+          </div>
         </div>
         <details className="mc-next-rail-signal-card">
           <summary>Workspace status</summary>
@@ -536,14 +536,14 @@ export function ShellStatusStrip({
         ? "Checking"
         : "Healthy";
   return (
-    <footer className="mc-next-status-strip" aria-label="Mission Control status strip" data-status={systemStatus}>
+    <div className="mc-next-status-strip" data-placement="topbar" aria-label="Mission Control status" data-status={systemStatus}>
       <DesktopUpdateBadge />
       <details
         className="mc-next-status-details mc-next-status-system"
         open={systemDetailsOpen}
         onToggle={(event) => setSystemDetailsOpen(event.currentTarget.open)}
       >
-        <summary aria-expanded={systemDetailsOpen} aria-controls={systemDetailsId}>
+        <summary aria-expanded={systemDetailsOpen} aria-controls={systemDetailsId} aria-label={`System status: ${systemSummary}`}>
           <ShieldCheck size={14} aria-hidden="true" />
           <span>System</span>
           <strong>{systemSummary}</strong>
@@ -594,12 +594,13 @@ export function ShellStatusStrip({
           <StatusPill icon={<Bot size={15} />} label="Daemon" value={daemonStatusValue} degraded={daemonDegraded} />
         </div>
       </details>
-    </footer>
+    </div>
   );
 }
 
 export function ShellRouteStage({
   children,
+  sectionTabs,
   currentRouteDescription,
   currentRouteLabel,
   fallback,
@@ -608,6 +609,7 @@ export function ShellRouteStage({
   usesFullStageLayout,
 }: {
   children: ReactNode;
+  sectionTabs?: ReactNode;
   currentRouteDescription: string;
   currentRouteLabel: string;
   fallback: ReactNode;
@@ -625,6 +627,7 @@ export function ShellRouteStage({
       <PageErrorBoundary resetKey={pageErrorResetKey} pageLabel={currentRouteLabel} onReturnToChat={onReturnToChat}>
         <Suspense fallback={fallback}>
           <div className="mc-next-stage-scroll">
+            {sectionTabs}
             <section
               className={`space-page mc-next-surface-host${
                 usesFullStageLayout ? " space-page-surface mc-next-surface-host-work" : ""

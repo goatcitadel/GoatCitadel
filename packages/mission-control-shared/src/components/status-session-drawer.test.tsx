@@ -333,6 +333,6 @@ describe("status/session/drawer components", () => {
   });
 
   it("exports the docked breakpoint constant used by the media query", () => {
-    expect(SIDE_INSPECTOR_DOCKED_MAX_WIDTH).toBe(1180);
+    expect(SIDE_INSPECTOR_DOCKED_MAX_WIDTH).toBe(1279);
   });
 });

@@ -146,6 +146,27 @@ describe("ApprovalRepository", () => {
     );
   });
 
+  it("finds a scoped approval beyond the legacy global over-fetch window", () => {
+    const { db, repo } = createInMemoryHarness();
+    const scoped = repo.create({
+      kind: "shell.exec", riskLevel: "danger", payload: { command: "scoped" },
+      preview: { command: "scoped" }, linkage: { workspaceId: "workspace-a" },
+    });
+    db.prepare("UPDATE approvals SET created_at = @createdAt WHERE approval_id = @approvalId").run({
+      createdAt: "2020-01-01T00:00:00.000Z", approvalId: scoped.approvalId,
+    });
+    for (let index = 0; index < 1001; index += 1) {
+      repo.create({
+        kind: "shell.exec", riskLevel: "danger", payload: { command: `foreign-${index}` },
+        preview: { command: `foreign-${index}` }, linkage: { workspaceId: "workspace-b" },
+      });
+    }
+
+    const page = repo.listPage({ status: "pending", limit: 200, workspaceId: "workspace-a" });
+    assert.deepEqual(page.items.map((item) => item.approvalId), [scoped.approvalId]);
+    assert.equal(page.nextCursor, undefined);
+  });
+
   it("tracks explanation lifecycle state", () => {
     const repo = createRepo();
     const created = repo.create({

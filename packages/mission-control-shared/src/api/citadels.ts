@@ -43,12 +43,13 @@ function id(value: string): string {
 export async function listCitadels(
   view: "active" | "archived" | "all" = "active",
   limit = 200,
+  options: { signal?: AbortSignal } = {},
 ): Promise<CitadelsResponse> {
   const query = new URLSearchParams({
     view,
     limit: String(Math.max(1, Math.min(limit, 500))),
   });
-  return request<CitadelsResponse>(`/api/v1/citadels?${query.toString()}`);
+  return request<CitadelsResponse>(`/api/v1/citadels?${query.toString()}`, options.signal ? { signal: options.signal, cache: "no-store" } : undefined);
 }
 
 export async function createCitadel(input: CitadelCreateInput): Promise<CitadelRecord> {
@@ -101,8 +102,8 @@ export async function getCitadel(citadelId: string): Promise<Citadel> {
   return request<Citadel>(`/api/v1/citadels/${id(citadelId)}`);
 }
 
-export async function getCitadelStructureSnapshot(citadelId: string): Promise<CitadelStructureSnapshot> {
-  return request<CitadelStructureSnapshot>(`/api/v1/citadels/${id(citadelId)}/structure`);
+export async function getCitadelStructureSnapshot(citadelId: string, options: { signal?: AbortSignal } = {}): Promise<CitadelStructureSnapshot> {
+  return request<CitadelStructureSnapshot>(`/api/v1/citadels/${id(citadelId)}/structure`, options.signal ? { signal: options.signal, cache: "no-store" } : undefined);
 }
 
 export async function upsertCitadelCharter(citadelId: string, charter: CharterBody): Promise<CitadelStructureSnapshot> {
@@ -256,6 +257,12 @@ export async function sendMasonMessage(sessionId: string, message: string): Prom
 
 export async function draftBlueprintFromMasonSession(sessionId: string): Promise<CitadelBlueprint> {
   return request<CitadelBlueprint>(`/api/v1/mason/sessions/${id(sessionId)}/draft`, { method: "POST" });
+}
+
+export async function stageMasonBlueprint(citadelId: string, blueprint: CitadelBlueprint, expectedRevision: string): Promise<{ citadel: CitadelStructureSnapshot; review: BlueprintReviewSummary }> {
+  return request(`/api/v1/citadels/${id(citadelId)}/mason/stage`, {
+    method: "POST", body: JSON.stringify({ blueprint, expectedRevision }),
+  });
 }
 
 // --- The Vault (§13) ---

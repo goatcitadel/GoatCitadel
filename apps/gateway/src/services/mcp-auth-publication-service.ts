@@ -6,7 +6,7 @@ import type { McpAuthStateRecord, McpAuthStateUpdate } from "./mcp-server-admin-
 import type { McpCredentialRetirementStore } from "./mcp-credential-retirement-store.js";
 import type { McpCredentialStagingStore } from "./mcp-credential-staging-store.js";
 import { isMcpOAuthTokenRefForServer } from "./mcp-oauth-token-service.js";
-import { newMcpServerRevision } from "./mcp-server-revision.js";
+import { newMcpServerRevision, mcpServerRevision, assertMcpConnectionReview } from "./mcp-server-revision.js";
 import { callerOwnedServers, assertUniqueServers, assertConfigurationSnapshot, jsonMaterial } from "./mcp-server-state-helpers.js";
 const MCP_SERVERS_SETTING_KEY = "mcp_servers_v1";
 interface McpAuthPublicationPort {
@@ -27,6 +27,7 @@ export async function publishMcpAuthState(ctx: McpServerStoreCtx, port: McpAuthP
           const current = servers.find((server) => server.serverId === update.server.serverId);
           if (!current) throw new ConflictError({ message: "MCP server was removed before auth publication." });
           assertConfigurationSnapshot([current], [update.server]);
+          if (update.fence) assertMcpConnectionReview(current, { expectedRevision: mcpServerRevision(update.server), expectedConnectionRevision: update.fence.expectedConnectionRevision });
           if (resolveMcpServerConnectionMode(current) !== "static" || (update.next && current.authType !== "oauth2")) {
             throw new ConflictError({ message: "MCP auth publication requires static OAuth configuration." });
           }

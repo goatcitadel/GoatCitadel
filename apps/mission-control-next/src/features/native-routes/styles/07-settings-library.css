@@ -1228,7 +1228,7 @@
 .mc-next-settings-oauth-code-card strong {
   max-width: 100%;
   font-family: var(--font-mono, "SFMono-Regular", Consolas, monospace);
-  font-size: clamp(1.25rem, 2.4vw, 2rem);
+  font-size: var(--text-2xl);
   line-height: 1;
   letter-spacing: 0;
   overflow-wrap: anywhere;
@@ -1246,6 +1246,8 @@
 .mc-next-settings-selectable-list,
 .mc-next-settings-action-list {
   display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
   gap: 0.36rem;
 }
 
@@ -1394,7 +1396,7 @@
 }
 
 .mc-next-settings-selectable-list.is-compact .mc-next-settings-selectable p {
-  display: none;
+  -webkit-line-clamp: 1;
 }
 
 .mc-next-library-route-focus {
@@ -1438,7 +1440,7 @@
   white-space: nowrap;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 639px) {
   .mc-next-curator-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1455,7 +1457,7 @@
   min-width: 0;
 }
 
-.mc-next-settings-selectable-head > span {
+.mc-next-settings-selectable-meta {
   flex: none;
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
@@ -1490,12 +1492,25 @@
 
 .mc-next-settings-selectable-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
   gap: 0.45rem;
   min-width: 0;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.mc-next-settings-selectable-name {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.mc-next-settings-selectable-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-secondary);
 }
 
 .mc-next-settings-selectable-head strong,
@@ -1511,7 +1526,7 @@
   word-break: break-word;
 }
 
-.mc-next-settings-selectable-head span {
+.mc-next-settings-selectable-meta {
   overflow: hidden;
   min-width: 0;
   max-width: min(12rem, 36vw);
@@ -2239,7 +2254,7 @@
   text-align: right;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .mc-next-activity-feed-row summary {
     grid-template-columns: minmax(0, 1fr);
     gap: 0.28rem;
@@ -2418,13 +2433,13 @@
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 960px) {
+@media (max-width: 1023px) {
   .mc-next-skill-hub-layout {
     grid-template-columns: minmax(0, 1fr);
   }
 }
 
-@media (max-width: 620px) {
+@media (max-width: 639px) {
   .mc-next-skill-hub-heading,
   .mc-next-skill-hub-error {
     align-items: stretch;
@@ -2562,7 +2577,7 @@
   font-size: var(--text-2xs);
 }
 
-@media (max-width: 720px) {
+@media (max-width: 639px) {
   .mc-next-ext-source-item {
     align-items: flex-start;
     flex-direction: column;

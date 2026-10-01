@@ -8,12 +8,13 @@ import type { SettingsSectionProps } from "../SettingsShared";
 import { __resetSessionDraftsForTests } from "../../library/session-drafts";
 import { __resetFormDirtyRegistryForTests } from "../../library/use-form-dirty";
 import { __resetSessionViewStateForTests } from "../../../../hooks/use-session-view-state";
+import { __resetMcpServerMutationsForTests } from "../mcp-server-mutation";
 
 const api = vi.hoisted(() => ({ fetchMcpServers: vi.fn(), fetchMcpServer: vi.fn(), fetchMcpElicitations: vi.fn(), updateMcpServer: vi.fn(), deleteMcpServer: vi.fn(), createMcpServer: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", async importOriginal => ({ ...await importOriginal<object>(), ...api }));
 const renderers: ReactTestRenderer[] = [];
 const server = (revision = "a", patch: Partial<McpServerRecord> = {}): McpServerRecord => ({ serverId: "fixture-server", label: "Fixture MCP", transport: "stdio", command: "node", args: ["--password", "[REDACTED]"], authType: "none", enabled: false, status: "disconnected", category: "development", trustTier: "restricted", costTier: "free", policy: { requireFirstToolApproval: true, redactionMode: "strict", allowedToolPatterns: [], blockedToolPatterns: [], allowedEnvKeys: [] }, revision: revision.repeat(64), createdAt: "2026-09-13T00:00:00.000Z", updatedAt: "2026-09-13T00:00:00.001Z", ...patch });
-const failure = (status = 409) => new ApiRequestError("Synthetic MCP failure", { kind: "http", method: "PATCH", path: "/fixture", status });
+const failure = (status = 409) => new ApiRequestError("Synthetic MCP failure", { kind: "http", method: "PATCH", path: "/api/v1/mcp/servers/fixture-server", status, body: status === 409 ? { code: "WRITE_CONFLICT", details: { reason: "MCP_SERVER_REVIEW_REQUIRED" } } : { code: "ENTITY_NOT_FOUND" } });
 const textOf = (node: ReactTestInstance | string): string => typeof node === "string" ? node : node.children.map(textOf).join(" ");
 const button = (page: ReactTestRenderer, label: string) => {
   const found = page.root.findAllByType("button").find(node => textOf(node).trim() === label) ?? page.root.findAllByType("button").find(node => textOf(node).includes(label));
@@ -28,7 +29,7 @@ async function mount() { let page!: ReactTestRenderer; await act(async () => { p
 async function edit(page: ReactTestRenderer) { await click(page, "Fixture MCP"); await click(page, "Edit server"); await typeLabel(page, "Local draft"); }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; }
 beforeEach(() => {
-  vi.resetAllMocks(); __resetSessionDraftsForTests(); __resetFormDirtyRegistryForTests(); __resetSessionViewStateForTests();
+  vi.resetAllMocks(); __resetSessionDraftsForTests(); __resetFormDirtyRegistryForTests(); __resetSessionViewStateForTests(); __resetMcpServerMutationsForTests();
   api.fetchMcpServers.mockResolvedValue({ items: [server()] }); api.fetchMcpElicitations.mockResolvedValue({ items: [] });
   api.fetchMcpServer.mockResolvedValue(server("b", { label: "Peer MCP", command: "peer-node" }));
   api.updateMcpServer.mockResolvedValue(server("c", { label: "Local draft" })); api.deleteMcpServer.mockResolvedValue({ deleted: true });
@@ -37,7 +38,7 @@ afterEach(async () => { await act(async () => { renderers.splice(0).forEach(page
 
 it("retains unsaved edits during a failed refresh, then requires explicit review and a separate save", async () => {
   const page = await mount(); await edit(page);
-  api.updateMcpServer.mockRejectedValueOnce(failure()); api.fetchMcpServer.mockRejectedValueOnce(failure(503));
+  api.updateMcpServer.mockRejectedValueOnce(failure()); api.fetchMcpServer.mockResolvedValueOnce(server()).mockRejectedValueOnce(failure(503));
   await click(page, "Save changes");
   expect(label(page).props.value).toBe("Local draft");
   expect(button(page, "Save changes").props.disabled).toBe(true);
@@ -48,6 +49,7 @@ it("retains unsaved edits during a failed refresh, then requires explicit review
   expect(label(page).props.value).toBe("Newer typing");
   await click(page, "Use current server review");
   expect(api.updateMcpServer).toHaveBeenCalledTimes(1);
+  api.updateMcpServer.mockResolvedValueOnce(server("c", { label: "Newer typing" }));
   await click(page, "Save changes");
   expect(api.updateMcpServer).toHaveBeenLastCalledWith("fixture-server", expect.objectContaining({ expectedRevision: "b".repeat(64), label: "Newer typing", command: "node" }));
   expect(api.fetchMcpServers).toHaveBeenCalledTimes(1);
@@ -55,17 +57,20 @@ it("retains unsaved edits during a failed refresh, then requires explicit review
 
 it("retains typing that arrives during a successful save and advances its comparison revision", async () => {
   const page = await mount(); await edit(page);
+  api.fetchMcpServer.mockResolvedValueOnce(server());
   const saved = deferred<McpServerRecord>(); api.updateMcpServer.mockReturnValueOnce(saved.promise);
   await click(page, "Save changes"); await typeLabel(page, "Newer typing");
   await act(async () => { saved.resolve(server("b", { label: "Local draft" })); });
   expect(label(page).props.value).toBe("Newer typing");
+  api.fetchMcpServer.mockResolvedValueOnce(server("b", { label: "Local draft" }));
+  api.updateMcpServer.mockResolvedValueOnce(server("c", { label: "Newer typing" }));
   await click(page, "Save changes");
   expect(api.updateMcpServer).toHaveBeenLastCalledWith("fixture-server", expect.objectContaining({ expectedRevision: "b".repeat(64), label: "Newer typing" }));
 });
 
 it("retains a deleted server's draft without offering a save", async () => {
   const page = await mount(); await edit(page);
-  api.updateMcpServer.mockRejectedValueOnce(failure(404)); api.fetchMcpServer.mockRejectedValueOnce(failure(404));
+  api.updateMcpServer.mockRejectedValueOnce(failure(404)); api.fetchMcpServer.mockResolvedValueOnce(server()).mockRejectedValueOnce(failure(404));
   await click(page, "Save changes");
   expect(textOf(page.root)).toContain("This server was deleted");
   expect(textOf(page.root)).toContain("Local draft");
@@ -74,28 +79,30 @@ it("retains a deleted server's draft without offering a save", async () => {
 
 it("requires a fresh deletion confirmation after reviewing a peer change", async () => {
   const page = await mount(); await click(page, "Fixture MCP"); await click(page, "Delete");
-  api.deleteMcpServer.mockRejectedValueOnce(failure());
   await act(async () => { void modal(page).props.onConfirm(); });
-  expect(api.deleteMcpServer).toHaveBeenCalledExactlyOnceWith("fixture-server", "a".repeat(64));
+  expect(api.deleteMcpServer).not.toHaveBeenCalled();
   expect(modal(page).props.open).toBe(false);
   expect(button(page, "Delete").props.disabled).toBe(true);
   await click(page, "Use current server review");
-  expect(api.deleteMcpServer).toHaveBeenCalledTimes(1);
+  expect(api.deleteMcpServer).not.toHaveBeenCalled();
   await click(page, "Delete"); expect(modal(page).props.open).toBe(true);
+  api.fetchMcpServer.mockResolvedValueOnce(server("b", { label: "Peer MCP", command: "peer-node" }))
+    .mockRejectedValueOnce(new ApiRequestError("Missing", { kind: "http", method: "GET", path: "/api/v1/mcp/servers/fixture-server", status: 404, body: { code: "ENTITY_NOT_FOUND" } }));
   await act(async () => { void modal(page).props.onConfirm(); });
-  expect(api.deleteMcpServer).toHaveBeenLastCalledWith("fixture-server", "b".repeat(64));
+  expect(api.deleteMcpServer).toHaveBeenCalledExactlyOnceWith("fixture-server", "b".repeat(64));
   expect(api.fetchMcpServers).toHaveBeenCalledTimes(1);
 });
 
 it.each(["write", "review"] as const)("ignores a late %s after switching workspace and back", async stage => {
   const page = await mount(); await edit(page);
+  api.fetchMcpServer.mockResolvedValueOnce(server());
   const pending = deferred<McpServerRecord>();
   if (stage === "write") api.updateMcpServer.mockReturnValueOnce(pending.promise);
   else { api.updateMcpServer.mockRejectedValueOnce(failure()); api.fetchMcpServer.mockReturnValueOnce(pending.promise); }
   await click(page, "Save changes");
   await act(async () => { page.update(<McpSection {...props("other-workspace")} />); });
   await act(async () => { page.update(<McpSection {...props()} />); });
-  await act(async () => { pending.resolve(server("f", { label: "Stale response" })); });
+  await act(async () => { pending.resolve(server("f", { label: stage === "write" ? "Local draft" : "Stale response" })); });
   expect(textOf(page.root)).not.toContain("Stale response");
   await click(page, "Fixture MCP"); await click(page, "Edit server");
   expect(button(page, "Save changes").props.disabled).toBe(false);

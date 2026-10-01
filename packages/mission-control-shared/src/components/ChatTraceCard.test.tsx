@@ -687,10 +687,11 @@ describe("ChatTraceCard", () => {
     });
     const text = collectText(renderer.toJSON()).replace(/\s+/g, " ").trim();
 
-    expect(text).toContain("Effect truth: uncertain");
+    expect(text).toContain("Tool effect");
+    expect(text).toContain("Outcome uncertain. Check before retrying.");
     expect(text).toContain("potential unknown · disposition unknown · outcome uncertain");
     expect(text).toContain("evidence dispatch_may_have_occurred");
-    expect(text).toContain("Inspect external or runtime state before retry");
+    expect(text).toContain("Automatic replay is suppressed");
     expect(text).toContain("verify it against the canonical owner ledger");
     expect(text).not.toContain("Verified effect receipt");
     expect(text).not.toContain("verified-code-run");

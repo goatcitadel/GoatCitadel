@@ -382,8 +382,8 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     },
     {
       id: "library-communications",
-      label: "Communications",
-      description: "Inbox, calendar agenda, contacts, and approval-gated drafts.",
+      label: "Mail",
+      description: "Mail, calendar agenda, contacts, and approval-gated drafts.",
       area: "library",
       section: "communications",
     },
@@ -701,25 +701,34 @@ export interface RailGroup {
  * grouped so operators can find them without command search.
  */
 export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
- settings: [
- { id: "settings-preferences", label: "Preferences", sections: ["general", "personalities"] },
- { id: "settings-connections", label: "Connections", sections: ["onboarding", "providers", "local-ai", "integrations", "channels", "mcp", "addons"] },
- { id: "settings-security", label: "Security", sections: ["access", "permissions", "trust-policy", "tools", "budget"] },
- { id: "settings-workspace", label: "Workspace & Citadel", sections: ["workspaces", "citadel-overview", "citadel", "citadel-wards", "citadel-council", "citadel-vault", "citadel-blueprint", "workspace-capabilities", "citadel-capabilities"] },
- { id: "settings-advanced", label: "Advanced", sections: ["runtime", "hooks"] },
- ],
- library: [
- { id: "library-agents", label: "Agents & skills", sections: ["agents", "skills", "capabilities", "prompt-packs", "curator"] },
- { id: "library-knowledge", label: "Knowledge", sections: ["memory", "knowledge", "notes", "journey"] },
- { id: "library-assets", label: "Files & outputs", sections: ["files", "artifacts", "communications"] },
- ],
- ops: [
- { id: "ops-overview", label: "Overview", sections: ["boards"] },
- { id: "ops-monitor", label: "Monitor", sections: ["activity", "sessions", "notifications", "costs", "runtime", "diagnostics", "workers"] },
- { id: "ops-decisions", label: "Decisions", sections: ["approvals"] },
- { id: "ops-automations", label: "Automations", sections: ["schedules", "kanban"] },
- { id: "ops-quality", label: "Quality", sections: ["quality", "improvement"] },
- ],
+  settings: [
+    { id: "settings-general", label: "General", sections: ["general", "personalities"] },
+    { id: "settings-models", label: "Models", sections: ["onboarding", "providers", "local-ai"] },
+    { id: "settings-connections", label: "Connections", sections: ["channels", "integrations", "mcp", "addons"] },
+    { id: "settings-safety", label: "Safety", sections: ["permissions", "tools", "trust-policy", "hooks", "budget"] },
+    {
+      id: "settings-citadel",
+      label: "Citadel",
+      sections: ["citadel-overview", "workspaces", "citadel", "citadel-wards", "citadel-council", "citadel-vault", "citadel-blueprint", "workspace-capabilities", "citadel-capabilities"],
+    },
+    { id: "settings-access", label: "Access", sections: ["access"] },
+    { id: "settings-advanced", label: "Advanced", sections: ["runtime"] },
+  ],
+  library: [
+    { id: "library-agents", label: "Agents", sections: ["agents"] },
+    { id: "library-skills", label: "Skills and tools", sections: ["skills", "capabilities", "prompt-packs", "curator", "journey"] },
+    { id: "library-knowledge", label: "Knowledge", sections: ["knowledge", "memory", "notes"] },
+    { id: "library-files", label: "Files", sections: ["files", "artifacts"] },
+    { id: "library-mail", label: "Mail", sections: ["communications"] },
+  ],
+  ops: [
+    { id: "ops-approvals", label: "Approvals", sections: ["approvals"] },
+    { id: "ops-activity", label: "Activity", sections: ["activity", "sessions", "notifications"] },
+    { id: "ops-work-board", label: "Work board", sections: ["kanban", "boards", "schedules"] },
+    { id: "ops-costs", label: "Costs", sections: ["costs"] },
+    { id: "ops-health", label: "Health", sections: ["runtime", "diagnostics", "workers"] },
+    { id: "ops-quality", label: "Quality", sections: ["quality", "improvement"] },
+  ],
 };
 
 /** Navigation ownership can change while old public paths remain canonical. */

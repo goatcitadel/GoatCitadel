@@ -20,6 +20,13 @@ function event(overrides: Partial<RealtimeEvent> = {}): RealtimeEvent {
 }
 
 describe("realtime-derived", () => {
+  it.each(["retained_stream", "durable_history", "derived_projection"] as const)("keeps Inbox invalidations silent under %s", (eventAuthority) => {
+    expect(deriveRealtimeNotification(event({ eventType: "inbox.changed", source: "operator_inbox", eventAuthority,
+      eventClass: "ui_notification", links: { approvalId: "approval" },
+      payload: { title: "Approval waiting", message: "Run failed", type: "durable_run_completed" },
+    }))).toBeUndefined();
+  });
+
   it("prefers explicit links for refresh derivation", () => {
     const result = deriveRealtimeRefresh({
       eventId: "evt-1",

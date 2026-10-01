@@ -1,16 +1,18 @@
-import { fetchTasksByView, createTask } from "@goatcitadel/mission-control-shared/api/tasks";
+import { fetchTask, fetchTasksByView, createTask } from "@goatcitadel/mission-control-shared/api/tasks";
 import { __resetSessionDraftsForTests } from "../library/session-drafts";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgenticRunListItem } from "@goatcitadel/contracts";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 import { KanbanRoutePage } from "./KanbanRoutePage";
+import { __resetTaskMutationsForTests } from "./task-mutation-state";
 
 const fetchAgenticRuns = vi.fn();
 const bulkTaskAction = vi.fn();
 
 vi.mock("@goatcitadel/mission-control-shared/api/tasks", () => ({
   fetchTasksByView: vi.fn(async () => ({ items: [] })),
+  fetchTask: vi.fn(),
   createTask: vi.fn(),
   fetchTaskActivities: vi.fn(async () => ({ items: [] })),
   fetchTaskDeliverables: vi.fn(async () => ({ items: [] })),
@@ -86,8 +88,19 @@ const baseProps = {
 };
 
 beforeEach(() => {
+  __resetTaskMutationsForTests();
   __resetSessionDraftsForTests();
   vi.mocked(fetchTasksByView).mockReset().mockResolvedValue({ items: [], view: "active" });
+  vi.mocked(fetchTask)
+    .mockReset()
+    .mockImplementation(async (id) => {
+      const calls = bulkTaskAction.mock.results;
+      if (!calls.length) throw new Error("No task receipt");
+      const result = await calls[calls.length - 1]!.value;
+      const record = result.tasks.find((item: { taskId: string }) => item.taskId === id);
+      if (!record) throw new Error("Task not found");
+      return record;
+    });
   vi.mocked(createTask).mockReset();
   baseProps.navigate.mockClear();
   fetchAgenticRuns.mockReset();
@@ -160,6 +173,113 @@ describe("KanbanRoutePage", () => {
       renderer.root.findAll((node) => node.type === "button" && collectText(node) === "Run evidence"),
     ).toHaveLength(0);
     act(() => renderer.unmount());
+  });
+  it("opens a linked task from the scoped loaded board", async () => {
+    vi.stubGlobal("window", { location: { search: "?shell=classic&taskId=standalone" } });
+    vi.mocked(fetchTask).mockResolvedValue({
+      taskId: "standalone",
+      workspaceId: "default",
+      revision: 1,
+      title: "Plan the launch",
+      status: "inbox",
+      priority: "normal",
+      updatedAt: "2026-09-12T00:00:00Z",
+    } as any);
+    vi.mocked(fetchTasksByView).mockResolvedValue({
+      view: "active",
+      items: [
+        {
+          taskId: "standalone",
+          workspaceId: "default",
+          revision: 1,
+          title: "Plan the launch",
+          status: "inbox",
+          priority: "normal",
+          updatedAt: "2026-09-12T00:00:00Z",
+        } as any,
+      ],
+    });
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      renderer = await renderPage();
+      expect(collectText(renderer.root)).toContain("No run attached");
+      expect(collectText(renderer.root)).toContain("No linked Chat session is recorded.");
+      expect(fetchTask).toHaveBeenCalledWith("standalone", "default", undefined);
+    } finally {
+      if (renderer) {
+        const page = renderer;
+        act(() => page.unmount());
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+  it("fetches a linked task outside the loaded page through the scoped owner route", async () => {
+    vi.stubGlobal("window", { location: { search: "?shell=classic&taskId=older-task" } });
+    vi.mocked(fetchTask)
+      .mockResolvedValueOnce({
+        taskId: "older-task",
+        workspaceId: "default",
+        revision: 2,
+        title: "Older task",
+        status: "done",
+        priority: "normal",
+        updatedAt: "2026-09-01T00:00:00Z",
+      } as any)
+      .mockResolvedValueOnce({
+        taskId: "older-task",
+        workspaceId: "default",
+        revision: 3,
+        title: "Updated older task",
+        status: "done",
+        priority: "normal",
+        updatedAt: "2026-09-28T00:00:00Z",
+      } as any);
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      renderer = await renderPage();
+      expect(fetchTask).toHaveBeenCalledWith("older-task", "default", undefined);
+      await act(async () => {
+        await vi.mocked(fetchTask).mock.results[0]?.value;
+      });
+      expect(collectText(renderer.root)).toContain("No run attached");
+      expect(collectText(renderer.root)).toContain("Older task");
+      await act(async () => findRequiredButton(renderer!, "refresh").props.onClick());
+      expect(fetchTask).toHaveBeenCalledTimes(2);
+      expect(collectText(renderer.root)).toContain("Updated older task");
+    } finally {
+      if (renderer) {
+        const page = renderer;
+        act(() => page.unmount());
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+  it("refuses a linked task returned with another workspace scope", async () => {
+    vi.stubGlobal("window", { location: { search: "?shell=classic&taskId=private-task" } });
+    vi.mocked(fetchTask).mockResolvedValue({
+      taskId: "private-task",
+      workspaceId: "other",
+      revision: 1,
+      title: "Private task",
+      status: "done",
+      priority: "normal",
+      updatedAt: "2026-09-01T00:00:00Z",
+    } as any);
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      renderer = await renderPage();
+      await act(async () => {
+        await vi.mocked(fetchTask).mock.results[0]?.value;
+      });
+      expect(collectText(renderer.root)).toContain("The linked task is no longer available in this workspace.");
+      expect(collectText(renderer.root)).not.toContain("Private task");
+    } finally {
+      if (renderer) {
+        const page = renderer;
+        act(() => page.unmount());
+      }
+      vi.unstubAllGlobals();
+    }
   });
   it("keeps selection when a bulk response cannot confirm all changes", async () => {
     bulkTaskAction.mockResolvedValueOnce({ tasks: [] });
@@ -274,6 +394,16 @@ describe("KanbanRoutePage", () => {
     expect(collectText(renderer.root)).toContain("bulk route offline");
     const checkedAfterFailure = findRequiredByTestId(renderer, "kanban-select-t-3");
     expect((checkedAfterFailure.props as { checked: boolean }).checked).toBe(true);
+    expect(findRequiredButton(renderer, "unblock").props.disabled).toBe(true);
+    act(() => renderer.unmount());
+    const remounted = await renderPage();
+    await act(async () => {
+      findRequiredByTestId(remounted, "kanban-select-t-3").props.onChange();
+    });
+    expect(collectText(remounted.root)).toContain("mutation lock remains active in both shells");
+    expect(findRequiredButton(remounted, "unblock").props.disabled).toBe(true);
+    expect(bulkTaskAction).toHaveBeenCalledTimes(1);
+    act(() => remounted.unmount());
     act(() => renderer.unmount());
   });
 
@@ -317,6 +447,38 @@ describe("KanbanRoutePage", () => {
     expect((findRequiredByTestId(renderer, "kanban-select-t-3").props as { checked: boolean }).checked).toBe(false);
     act(() => renderer.unmount());
   });
+
+  it.each(["unblock", "close"] as const)(
+    "accepts an independently confirmed %s no-op without an uncertain lock",
+    async (action) => {
+      const status = action === "close" ? ("done" as const) : ("assigned" as const);
+      const noOp = {
+        taskId: "t-3",
+        workspaceId: "default",
+        revision: 3,
+        title: "No-op task",
+        status,
+        priority: "normal" as const,
+        createdAt: "2026-09-29T00:00:00.000Z",
+        updatedAt: "2026-09-29T00:00:00.000Z",
+      };
+      fetchAgenticRuns.mockResolvedValue({
+        items: baseRuns.map((run) => (run.taskId === "t-3" ? { ...run, taskStatus: status } : run)),
+      });
+      bulkTaskAction.mockResolvedValue({ tasks: [noOp] });
+      const renderer = await renderPage();
+      await act(async () => {
+        findRequiredByTestId(renderer, "kanban-select-t-3").props.onChange();
+      });
+      await act(async () => {
+        await findRequiredButton(renderer, action).props.onClick();
+      });
+      expect(collectText(renderer.root)).toContain("1 already matched this action");
+      expect(collectText(renderer.root)).not.toContain("mutation lock remains active");
+      expect(fetchTask).toHaveBeenCalled();
+      act(() => renderer.unmount());
+    },
+  );
 
   it("calls fetchAgenticRuns with the active workspace id", async () => {
     const renderer = await renderPage();

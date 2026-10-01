@@ -83,9 +83,10 @@ export async function listChatSessions(
   const scope = query.scope ?? "all";
   const view = query.view ?? "active";
   const includeHidden = query.includeHidden ?? false;
-  const limit = Math.max(1, Math.min(1000, Math.floor(query.limit ?? 200)));
+  const limit = query.sessionId !== undefined ? 1 : Math.max(1, Math.min(1000, Math.floor(query.limit ?? 200)));
   const candidates = await deps.storage.chatSessionLists.listCandidates({
     workspaceId,
+    sessionId: query.sessionId,
     scope,
     view,
     includeHidden,
@@ -896,7 +897,7 @@ export async function restoreChatSession(
     sessionId,
     {
       lifecycleStatus: "active",
-      archivedAt: undefined,
+      archivedAt: null,
     },
     expectedRevision ?? current.revision,
   );

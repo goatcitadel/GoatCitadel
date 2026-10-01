@@ -169,6 +169,101 @@ describe("approval lifecycle service", () => {
     expect(host.storage.approvals.create).toHaveBeenCalledOnce();
   });
 
+  it("allows an exact governed Code Mode request from a completed Chat turn", async () => {
+    const linkage = {
+      workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1", runId: "code-run-1",
+      originSurface: "chat" as const, actionType: "code_mode.run", toolName: "code_mode.run",
+    };
+    const payload = {
+      workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1", runId: "code-run-1",
+      codeHash: "code-hash", wrapperManifestHash: "wrapper-hash", capabilitySnapshotId: "cap-snap-1",
+    };
+    const host = createApprovalHarness({
+      approvalKind: "code_mode.run", approvalLinkage: linkage, approvalPayload: payload,
+      codeModeRun: createCodeModeRunRecord({ workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1" }),
+    });
+    host.storage.chatTurnTraces.get.mockReturnValue({
+      turnId: "turn-1", sessionId: "session-1", status: "completed", durable: { runId: "durable-turn-1" },
+    } as never);
+    await createApproval(host, { kind: "code_mode.run", riskLevel: "caution", payload, linkage });
+    expect(host.storage.approvals.create).toHaveBeenCalledOnce();
+    const approved = await resolveApproval(host, "approval-1", { decision: "approve", resolvedBy: "operator" });
+    expect(approved.approval.status).toBe("approved");
+    expect(host.storage.codeModeRuns.find).toHaveBeenCalledWith("code-run-1");
+  });
+
+  it("rejects completed-turn Code Mode approval when the pending run binding drifts", async () => {
+    const linkage = {
+      workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1", runId: "code-run-1",
+      originSurface: "chat" as const, actionType: "code_mode.run", toolName: "code_mode.run",
+    };
+    const payload = {
+      workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1", runId: "code-run-1",
+      codeHash: "code-hash", wrapperManifestHash: "wrapper-hash", capabilitySnapshotId: "cap-snap-1",
+    };
+    const host = createApprovalHarness({
+      approvalKind: "code_mode.run", approvalLinkage: linkage, approvalPayload: payload,
+      codeModeRun: createCodeModeRunRecord({ workspaceId: "workspace-1", sessionId: "session-1", turnId: "another-turn" }),
+    });
+    host.storage.chatTurnTraces.get.mockReturnValue({
+      turnId: "turn-1", sessionId: "session-1", status: "completed", durable: { runId: "durable-turn-1" },
+    } as never);
+    await expect(resolveApproval(host, "approval-1", { decision: "approve", resolvedBy: "operator" }))
+      .rejects.toThrow("no longer matches its pending run");
+    expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
+  });
+
+  it.each(["failed", "cancelled"] as const)("does not reopen a %s Chat turn for Code Mode", async (status) => {
+    const linkage = {
+      workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1", runId: "code-run-1",
+      originSurface: "chat" as const, actionType: "code_mode.run", toolName: "code_mode.run",
+    };
+    const payload = {
+      workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1", runId: "code-run-1",
+      codeHash: "code-hash", wrapperManifestHash: "wrapper-hash", capabilitySnapshotId: "cap-snap-1",
+    };
+    const host = createApprovalHarness({ approvalKind: "code_mode.run", approvalLinkage: linkage, approvalPayload: payload });
+    host.storage.chatTurnTraces.get.mockReturnValue({
+      turnId: "turn-1", sessionId: "session-1", status, durable: { runId: "durable-turn-1" },
+    } as never);
+    await expect(createApproval(host, { kind: "code_mode.run", riskLevel: "caution", payload, linkage }))
+      .rejects.toThrow("already stopped or finished");
+    expect(host.storage.approvals.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects completed-turn Code Mode approval when the immutable code hash drifts", async () => {
+    const linkage = {
+      workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1", runId: "code-run-1",
+      originSurface: "chat" as const, actionType: "code_mode.run", toolName: "code_mode.run",
+    };
+    const payload = {
+      workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1", runId: "code-run-1",
+      codeHash: "changed-code-hash", wrapperManifestHash: "wrapper-hash", capabilitySnapshotId: "cap-snap-1",
+    };
+    const host = createApprovalHarness({
+      approvalKind: "code_mode.run", approvalLinkage: linkage, approvalPayload: payload,
+      codeModeRun: createCodeModeRunRecord({ workspaceId: "workspace-1", sessionId: "session-1", turnId: "turn-1" }),
+    });
+    host.storage.chatTurnTraces.get.mockReturnValue({
+      turnId: "turn-1", sessionId: "session-1", status: "completed", durable: { runId: "durable-turn-1" },
+    } as never);
+    await expect(resolveApproval(host, "approval-1", { decision: "approve", resolvedBy: "operator" }))
+      .rejects.toThrow("no longer matches its pending run");
+    expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
+  });
+
+  it("keeps completed Chat turns closed to ordinary tool approvals", async () => {
+    const host = createApprovalHarness({ approvalLinkage: { sessionId: "session-1", turnId: "turn-1" } });
+    host.storage.chatTurnTraces.get.mockReturnValue({
+      turnId: "turn-1", sessionId: "session-1", status: "completed", durable: { runId: "durable-turn-1" },
+    } as never);
+    await expect(createApproval(host, {
+      kind: "tool.invoke", riskLevel: "caution", payload: { toolName: "documents.create" },
+      linkage: { sessionId: "session-1", turnId: "turn-1" },
+    })).rejects.toThrow("already stopped or finished");
+    expect(host.storage.approvals.create).not.toHaveBeenCalled();
+  });
+
   it("rejects cancelled-turn approvals through the canonical owner, including an unprojected approval", async () => {
     const host = createApprovalHarness({
       approvalLinkage: { sessionId: "session-1", turnId: "turn-1", workspaceId: "workspace-1" },

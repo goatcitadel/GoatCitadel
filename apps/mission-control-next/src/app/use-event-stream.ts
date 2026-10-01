@@ -16,6 +16,7 @@ import {
   deriveRealtimeRefresh,
   type RealtimeTruthMode,
 } from "@goatcitadel/mission-control-shared/state/realtime-derived";
+import type { RealtimeNotificationOrigin } from "@goatcitadel/mission-control-shared/state/notification-policy";
 import { emitRefresh } from "@goatcitadel/mission-control-shared/state/refresh-bus";
 import type { RealtimeNotificationDescriptor } from "./use-shell-notifications";
 import { publishOpsSavedBoardRealtimeEvent } from "./ops-saved-board-realtime";
@@ -40,7 +41,7 @@ import { publishRemoteWorkerRealtimeEvent } from "./remote-worker-realtime";
 
 export interface UseEventStreamOptions {
   gatewayReady: boolean;
-  onRealtimeNotification: (notification: RealtimeNotificationDescriptor) => void;
+  onRealtimeNotification: (notification: RealtimeNotificationDescriptor, origin: RealtimeNotificationOrigin) => void;
 }
 
 export interface UseEventStreamResult {
@@ -134,7 +135,7 @@ export function useEventStream(options: UseEventStreamOptions): UseEventStreamRe
     }
 
     const close = connectEventStream(
-      (event) => {
+      (event, delivery) => {
         publishChannelActivityFromRealtimeEvent(event);
         publishOpsSavedBoardRealtimeEvent(event);
         publishRemoteWorkerRealtimeEvent(event);
@@ -151,7 +152,10 @@ export function useEventStream(options: UseEventStreamOptions): UseEventStreamRe
         setStreamTruthMode(derivedRefresh.truthMode);
         scheduleDecay(decayHandle, derivedRefresh.truthMode, () => setStreamTruthMode("authoritative"));
         const notification = deriveRealtimeNotification(event);
-        onRealtimeNotification(notification);
+        onRealtimeNotification(notification, {
+          replayed: delivery?.replayed ?? false,
+          eventSessionId: event.links?.sessionId,
+        });
       },
       (nextState) => {
         setStreamState(nextState);

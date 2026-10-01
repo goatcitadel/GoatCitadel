@@ -10,6 +10,7 @@ import type {
   ApprovalLinkage,
   ApprovalRequest,
   EffectiveToolPolicy,
+  IntegrationConnection,
   ToolGrantConstraints,
   ToolAccessEvaluateRequest,
   ToolAccessEvaluateResponse,
@@ -1573,7 +1574,8 @@ export class ToolPolicyEngine {
       if (request.toolName === "docs.ingest" && docsIngestSourceType !== "url") {
         return "grant host constraints require a URL docs.ingest source";
       }
-      const candidates = await extractGrantHostCandidates(request, this.storage);
+      const { hosts: candidates, blockedReason } = await extractGrantHostCandidates(request, this.storage);
+      if (blockedReason) return blockedReason;
       if (candidates.length === 0 && request.toolName === "browser.search") {
         return HOST_CONSTRAINED_BROWSER_SEARCH_GRANT_INAPPLICABLE;
       }
@@ -2638,11 +2640,35 @@ function extractHostCandidates(args?: Record<string, unknown>): string[] {
 export const extractHostCandidatesForTests = extractHostCandidates;
 
 async function extractGrantHostCandidates(
-  request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">,
+  request: Pick<ToolAccessEvaluateRequest, "toolName" | "args" | "workspaceId">,
   storage?: AsyncStorage,
-): Promise<string[]> {
-  const candidates = extractHostCandidates(request.args);
+): Promise<{ hosts: string[]; blockedReason?: string }> {
+  const connection = await resolveGrantIntegrationConnection(request, storage);
   const args = request.args;
+  if (request.toolName === "channel.send" && !connection) {
+    return { hosts: [], blockedReason: "grant host constraints require a canonical channel connection" };
+  }
+  const ntfySend = request.toolName === "channel.send" && connection?.key === "ntfy";
+  if (ntfySend && (connection.kind !== "channel" ||
+    (connection.workspaceId !== undefined && connection.workspaceId !== request.workspaceId))) {
+    return { hosts: [], blockedReason: "grant host constraints rejected the ntfy connection scope" };
+  }
+  // ntfy encodes target as a topic path; it never selects the network origin.
+  // Use the same canonical base URL/default as the executor, retaining every
+  // attachment and other URL constraint. Execution rechecks the grant as well.
+  const candidates = extractHostCandidates(ntfySend ? { ...args, target: undefined } : args);
+  if (ntfySend) {
+    const configured = connection.config.baseUrl;
+    const baseUrl = typeof configured === "string" && configured.trim() ? configured.trim() : "https://ntfy.sh";
+    let endpoint: URL;
+    try { endpoint = new URL(baseUrl); } catch {
+      return { hosts: [], blockedReason: "grant host constraints require a valid ntfy endpoint" };
+    }
+    if (!["http:", "https:"].includes(endpoint.protocol) || !endpoint.hostname) {
+      return { hosts: [], blockedReason: "grant host constraints require an HTTP ntfy endpoint" };
+    }
+    candidates.push(endpoint.hostname.toLowerCase());
+  }
   if (request.toolName === "browser.search") {
     candidates.push(
       ...extractOutboundHostCandidates(request).flatMap((target) => extractHostCandidates({ url: target })),
@@ -2652,21 +2678,21 @@ async function extractGrantHostCandidates(
     candidates.push(...extractHostCandidates({ url: args.source }));
   }
   candidates.push(
-    ...resolveFixedOutboundHostsForTool(request.toolName, await resolveIntegrationConnectionKey(request, storage)),
+    ...resolveFixedOutboundHostsForTool(request.toolName, connection?.key),
   );
-  return [...new Set(candidates)];
+  return { hosts: [...new Set(candidates)] };
 }
 
-async function resolveIntegrationConnectionKey(
+async function resolveGrantIntegrationConnection(
   request: Pick<ToolAccessEvaluateRequest, "args">,
   storage?: AsyncStorage,
-): Promise<string | undefined> {
+): Promise<IntegrationConnection | undefined> {
   const connectionId = request.args?.connectionId;
   if (typeof connectionId !== "string" || !connectionId.trim()) {
     return undefined;
   }
   try {
-    return (await storage?.integrationConnections?.get(connectionId.trim()))?.key;
+    return await storage?.integrationConnections?.get(connectionId.trim());
   } catch {
     return undefined;
   }

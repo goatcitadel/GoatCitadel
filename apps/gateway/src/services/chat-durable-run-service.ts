@@ -389,12 +389,19 @@ export interface ChatDurableRunFinalizeDeps {
   recordTerminalResultMaterialization?(runId: string, prepared: PreparedAgentChatTurn): Promise<void>;
 }
 
+export interface BeginDurableChatRunOptions {
+  mutationLifecycle?: ChatStreamMutationLifecycle;
+  runId?: string;
+  /** Internal canonical child linkage. Must not emit events or perform external I/O. */
+  onChildDurableRunAdmitted?: (runId: string) => Promise<void>;
+}
+
 export async function beginDurableChatRun(
   deps: ChatDurableRunBeginDeps,
   prepared: PreparedAgentChatTurn,
   input: ChatSendMessageRequest,
   threadEventType: ChatDurableThreadEventType,
-  options?: { mutationLifecycle?: ChatStreamMutationLifecycle; runId?: string },
+  options?: BeginDurableChatRunOptions,
 ): Promise<DurableRunRecord | undefined> {
   const inputCarriesContextRefs = hasOwnRoutedContextRefs(input);
   const provisionalRoutedContextSnapshot = readPreparedRoutedContextSnapshot(prepared);
@@ -412,6 +419,13 @@ export async function beginDurableChatRun(
   }
   if (Boolean(prepared.capabilityProfile) !== Boolean(prepared.capabilityCatalogSnapshot)) {
     throw new Error(`Durable Chat turn ${prepared.turnId} has an incomplete historical capability binding.`);
+  }
+  if (
+    input.parentDelegationStepId &&
+    !prepared.capabilityProfile &&
+    (!options?.onChildDurableRunAdmitted || !deps.runImmediateTransaction)
+  ) {
+    throw new Error("Live delegated Chat requires atomic child admission linkage.");
   }
   const mode = resolvePreparedTurnMode(prepared);
   const runId = options?.runId ?? randomUUID();
@@ -540,6 +554,7 @@ export async function beginDurableChatRun(
       },
     });
     await retainDurableChatWorkerContext(deps, prepared, run.runId, remoteWorkerChatContext);
+    await options?.onChildDurableRunAdmitted?.(run.runId);
     if (prepared.turnAdmission) {
       if (!deps.bindTurnAdmissionToDurableRun) {
         throw new Error(`Durable Chat turn ${prepared.turnId} cannot bind its mutation admission.`);
@@ -1166,7 +1181,8 @@ export async function finalizeDurableChatRun(
   const completionFailed = trace.completion ? trace.completion.status !== "complete" : false;
   const failed = trace.status === "failed" || trace.status === "partial" || completionFailed;
   const nextStatus: DurableRunStatus = failed ? "failed" : "completed";
-  const terminalTraceStatus: ChatTurnTraceRecord["status"] = trace.status === "partial" ? "partial" : failed ? "failed" : trace.status;
+  const terminalTraceStatus: ChatTurnTraceRecord["status"] =
+    trace.status === "partial" ? "partial" : failed ? "failed" : trace.status;
   const checkpointKind: DurableCheckpointRecord["checkpointKind"] = failed ? "run_failed" : "run_completed";
   if (heartbeatIdentity && nextStatus !== "completed") assertNoSystemHeartbeatDecisionEvidence(currentRun!);
   if (

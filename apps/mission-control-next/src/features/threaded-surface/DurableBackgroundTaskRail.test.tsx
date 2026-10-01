@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DurableBackgroundTaskRailResponse } from "@goatcitadel/contracts";
 import { DurableBackgroundTaskRail } from "./DurableBackgroundTaskRail";
 import { useDurableBackgroundTaskRail } from "./useDurableBackgroundTaskRail";
+import { useBackgroundTaskSettledRefresh } from "./useBackgroundTaskSettledRefresh";
 
 vi.mock("./useDurableBackgroundTaskRail", () => ({
   useDurableBackgroundTaskRail: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock("./RemoteWorkerInlineActivity", () => ({
 const mockedUseRail = vi.mocked(useDurableBackgroundTaskRail);
 const control = vi.fn(async () => true);
 const refresh = vi.fn(async () => undefined);
+const review = (watcherId: string) => ({ scopeKey: "scope", view: {}, watcherId, childRunId: "child-running", watcherRevision: 1, childVersion: 7 });
 
 const snapshot: DurableBackgroundTaskRailResponse = {
   version: "durable.background_task_rail.v1",
@@ -193,6 +195,7 @@ describe("DurableBackgroundTaskRail", () => {
       refreshing: false,
       error: null,
       pendingWatcherId: null,
+      controlFailure: null, review, dismissReview: vi.fn(), isReviewCurrent: () => true,
       refresh,
       control,
     });
@@ -255,9 +258,9 @@ describe("DurableBackgroundTaskRail", () => {
     expect(detach).toBeDefined();
     expect(reattach).toBeDefined();
     act(() => detach.props.onClick());
-    expect(control).toHaveBeenCalledWith("watcher-running", "detach", undefined);
+    expect(control).toHaveBeenCalledWith("watcher-running", "detach", undefined, undefined);
     act(() => reattach.props.onClick());
-    expect(control).toHaveBeenCalledWith("watcher-terminal", "reattach", undefined);
+    expect(control).toHaveBeenCalledWith("watcher-terminal", "reattach", undefined, undefined);
     act(() => button(renderer, "Child run")!.props.onClick());
     expect(onOpenSemanticLink).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "durable_run", id: "child-running" }),
@@ -333,7 +336,7 @@ describe("DurableBackgroundTaskRail", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(control).toHaveBeenCalledWith("watcher-running", "detach", undefined);
+    expect(control).toHaveBeenCalledWith("watcher-running", "detach", undefined, undefined);
     expect(onContinueInBackground).toHaveBeenCalledWith(
       expect.objectContaining({ watcherId: "watcher-running", childRunId: "child-running" }),
     );
@@ -389,6 +392,7 @@ describe("DurableBackgroundTaskRail", () => {
       refreshing: false,
       error: null,
       pendingWatcherId: null,
+      controlFailure: null, review, dismissReview: vi.fn(), isReviewCurrent: () => true,
       refresh,
       control,
     });
@@ -416,6 +420,7 @@ describe("DurableBackgroundTaskRail", () => {
       refreshing: false,
       error: null,
       pendingWatcherId: null,
+      controlFailure: null, review, dismissReview: vi.fn(), isReviewCurrent: () => true,
       refresh,
       control,
     });
@@ -450,6 +455,7 @@ describe("DurableBackgroundTaskRail", () => {
       refreshing: false,
       error: null,
       pendingWatcherId: null,
+      controlFailure: null, review, dismissReview: vi.fn(), isReviewCurrent: () => true,
       refresh,
       control,
     });
@@ -495,6 +501,7 @@ describe("DurableBackgroundTaskRail", () => {
       refreshing: false,
       error: null,
       pendingWatcherId: null,
+      controlFailure: null, review, dismissReview: vi.fn(), isReviewCurrent: () => true,
       refresh,
       control,
     });
@@ -522,6 +529,7 @@ describe("DurableBackgroundTaskRail", () => {
       refreshing: false,
       error: null,
       pendingWatcherId: null,
+      controlFailure: null, review, dismissReview: vi.fn(), isReviewCurrent: () => true,
       refresh,
       control,
     });
@@ -555,6 +563,43 @@ describe("DurableBackgroundTaskRail", () => {
     expect(onBackgroundTaskSettled).toHaveBeenCalledTimes(3);
     renderer.unmount();
     vi.useRealTimers();
+  });
+
+  it.each([
+    ["scope", "scheduled"], ["scope", "late"], ["unmount", "scheduled"], ["unmount", "late"],
+  ] as const)("cancels %s retries after a %s refresh response", async (departure, responseTiming) => {
+    vi.useFakeTimers();
+    let settle!: (accepted: boolean) => void;
+    const callback = vi.fn(() => new Promise<boolean>((resolve) => { settle = resolve; }));
+    const nextCallback = vi.fn(async () => true);
+    const terminal = { ...snapshot, tasks: [{ ...snapshot.tasks[0]!, canonicalStatus: "completed" as const,
+      attention: { ...snapshot.tasks[0]!.attention, state: "background" as const } }] };
+    function Probe({ scope, current, onSettled }: {
+      scope: string; current: DurableBackgroundTaskRailResponse | null;
+      onSettled: (task: DurableBackgroundTaskRailResponse["tasks"][number]) => Promise<boolean>;
+    }) {
+      useBackgroundTaskSettledRefresh(current, scope, onSettled);
+      return null;
+    }
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(<Probe scope="parent-a\u0000session-a" current={terminal} onSettled={callback} />);
+      });
+      expect(callback).toHaveBeenCalledTimes(1);
+      if (responseTiming === "scheduled") await act(async () => settle(false));
+      await act(async () => {
+        if (departure === "scope") renderer!.update(<Probe scope="parent-b\u0000session-b" current={null} onSettled={nextCallback} />);
+        else { renderer!.unmount(); renderer = undefined; }
+      });
+      if (responseTiming === "late") await act(async () => settle(false));
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(nextCallback).not.toHaveBeenCalled();
+    } finally {
+      if (renderer) act(() => renderer!.unmount());
+      vi.useRealTimers();
+    }
   });
 
   it("announces an in-place attention change once but not initial state after reload", () => {
@@ -599,6 +644,7 @@ describe("DurableBackgroundTaskRail", () => {
       refreshing: false,
       error: null,
       pendingWatcherId: null,
+      controlFailure: null, review, dismissReview: vi.fn(), isReviewCurrent: () => true,
       refresh,
       control,
     });
@@ -659,7 +705,24 @@ describe("DurableBackgroundTaskRail", () => {
     act(() => button(renderer, "Cancel child")!.props.onClick());
 
     await act(async () => button(renderer, "Confirm cancel")!.props.onClick());
-    expect(control).toHaveBeenCalledWith("watcher-running", "cancel", "Operator cancelled from Chat");
+    expect(control).toHaveBeenCalledWith("watcher-running", "cancel", "Operator cancelled from Chat", expect.objectContaining({ watcherId: "watcher-running", childVersion: 7, watcherRevision: 1 }));
+  });
+
+  it("dismisses the exact shared review and withholds a retained confirmation after a fresh review", async () => {
+    const dismissed = new WeakSet<object>();
+    // Configure the real owner contract while keeping this presentation test hermetic.
+    const baseline = mockedUseRail.getMockImplementation()!({ parentRunId: "parent-run", workspaceId: "workspace-a", sessionId: "session-a" });
+    mockedUseRail.mockReturnValue({ ...baseline, dismissReview: (item) => { dismissed.add(item); }, isReviewCurrent: (item) => !dismissed.has(item) });
+    let renderer!: ReactTestRenderer;
+    act(() => { renderer = create(<DurableBackgroundTaskRail parentRunId="parent-run" workspaceId="workspace-a" sessionId="session-a" queuedCount={0} streamStatus="idle" queueLabels={[]} />); });
+    act(() => button(renderer, "Cancel child")!.props.onClick());
+    const oldConfirm = button(renderer, "Confirm cancel")!.props.onClick;
+    act(() => button(renderer, "Keep running")!.props.onClick());
+    act(() => button(renderer, "Cancel child")!.props.onClick());
+    await act(async () => { await oldConfirm(); });
+    expect(control).not.toHaveBeenCalled();
+    expect(instanceText(renderer.toJSON())).toContain("Completed work stays in its evidence record");
+    act(() => renderer.unmount());
   });
 
   it("shows loading, error, empty, and no-selected-run states truthfully", () => {
@@ -669,6 +732,7 @@ describe("DurableBackgroundTaskRail", () => {
       refreshing: false,
       error: "Gateway unavailable",
       pendingWatcherId: null,
+      controlFailure: null, review, dismissReview: vi.fn(), isReviewCurrent: () => true,
       refresh,
       control,
     });

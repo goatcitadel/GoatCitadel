@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayService } from "./gateway-service.js";
 import { LlmService } from "./llm-service.js";
 import { buildSettingsCandidate, type SettingsConfigCandidate } from "./settings-auth-service.js";
+import { updateLlmConfigWithTransportReceipt } from "./provider-transport-receipt.js";
+import { projectLlmConfigPublicValue } from "./provider-settings-public-projection.js";
 import {
   ConfigGenerationApplyError,
   ConfigGenerationCommitDecisionError,
@@ -22,6 +24,58 @@ afterEach(async () => {
 });
 
 describe("Gateway settings owner transaction", () => {
+  it("persists exact transport privately, attests its command, and preserves it through unrelated settings", async () => {
+    const { runtime, generation, root } = await buildAutonomySettingsGatewayHarness();
+    const providerId = runtime.llmService.snapshotRuntimeConfigForPersistence().providers[0].providerId;
+    const saved = await updateLlmConfigWithTransportReceipt(runtime, {
+      expectedRevision: 1, upsertProvider: { providerId, request: { headers: { "X-Fixture": "private-fixture-value" } } },
+    });
+    expect(saved).toMatchObject({ revision: 2, providerTransportReceipt: {
+      version: "llm.provider_transport_receipt.v1", providerId, expectedRevision: 1, appliedRevision: 2,
+      acceptedHeaderNames: ["X-Fixture"],
+    } });
+    expect(JSON.stringify(projectLlmConfigPublicValue(saved))).not.toContain("private-fixture-value");
+    expect(runtime.llmService.exportConfigFile().providers.find((item: { providerId: string }) => item.providerId === providerId).request).toBeUndefined();
+    await runtime.updateSettings({ expectedRevision: 2, budgetMode: "saver" });
+    await updateLlmConfigWithTransportReceipt(runtime, {
+      expectedRevision: 3, upsertProvider: { providerId, request: { headers: { "X-Second": "second-fixture-value" } } },
+    });
+    const expectedHeaders = { "X-Fixture": "private-fixture-value", "X-Second": "second-fixture-value" };
+    expect(runtime.llmService.snapshotRuntimeConfigForPersistence().providers.find((item: { providerId: string }) => item.providerId === providerId).request.headers).toEqual(expectedHeaders);
+    expect(generation.getActivePayload().llm.providers.find((item) => item.providerId === providerId)?.request?.headers).toEqual(expectedHeaders);
+    const persisted = JSON.parse(await fsPromises.readFile(path.join(root, "config", "goatcitadel.json"), "utf8"));
+    expect(persisted.llm.providers.find((item: { providerId: string }) => item.providerId === providerId).request.headers).toEqual(expectedHeaders);
+    await expect(updateLlmConfigWithTransportReceipt(runtime, { expectedRevision: 3,
+      upsertProvider: { providerId, request: { headers: { "X-Second": "stale" } } },
+    })).rejects.toMatchObject({ name: "ConflictError" });
+  });
+
+  it("does not attest a discarded transport or a concurrent settings revision", async () => {
+    const { runtime } = await buildAutonomySettingsGatewayHarness();
+    const providerId = runtime.llmService.snapshotRuntimeConfigForPersistence().providers[0].providerId;
+    const current = await runtime.getSettings();
+    runtime.updateSettings = vi.fn(async () => ({ ...current, revision: 2 }));
+    runtime.readSettingsRevision = () => 2;
+    const input = { expectedRevision: 1, upsertProvider: { providerId, request: { headers: { "X-Fixture": "discarded" } } } };
+    expect(await updateLlmConfigWithTransportReceipt(runtime, input)).not.toHaveProperty("providerTransportReceipt");
+    runtime.llmService.updateRuntimeConfig(input);
+    runtime.readSettingsRevision = () => 3;
+    expect(await updateLlmConfigWithTransportReceipt(runtime, input)).not.toHaveProperty("providerTransportReceipt");
+  });
+
+  it("restores private transport values after a later owner fails", async () => {
+    const { runtime, generation, updateFeatureFlags } = await buildAutonomySettingsGatewayHarness();
+    const providerId = runtime.llmService.snapshotRuntimeConfigForPersistence().providers[0].providerId;
+    await runtime.updateSettings({ expectedRevision: 1, llm: { upsertProvider: { providerId, request: { headers: { "X-Fixture": "original" } } } } });
+    updateFeatureFlags.mockRejectedValueOnce(new Error("later feature owner failed"));
+    await expect(runtime.updateSettings({ expectedRevision: 2,
+      llm: { upsertProvider: { providerId, request: { headers: { "X-Fixture": "replacement" } } } },
+      features: { autonomyV1Disabled: false },
+    })).rejects.toBeInstanceOf(ConfigGenerationApplyError);
+    expect(runtime.llmService.snapshotRuntimeConfigForPersistence().providers.find((item: { providerId: string }) => item.providerId === providerId).request.headers).toEqual({ "X-Fixture": "original" });
+    expect(generation.getActivePayload().llm.providers.find((item) => item.providerId === providerId)?.request?.headers).toEqual({ "X-Fixture": "original" });
+  });
+
   it("fences the public settings revision accessor during owner reconciliation", () => {
     const fence = new Error("settings generation is reconciling");
     const getRevision = vi.fn(() => 2);
@@ -581,6 +635,7 @@ function buildHarness() {
   };
   const llmService = {
     exportConfigFile: vi.fn(() => structuredClone(initialConfig.llm)),
+    snapshotRuntimeConfigForPersistence: vi.fn(() => structuredClone(initialConfig.llm)),
     replaceRuntimeConfig: vi.fn(() => undefined),
     updateNetworkAllowlist: vi.fn(() => undefined),
   };

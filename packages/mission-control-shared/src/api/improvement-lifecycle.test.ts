@@ -94,4 +94,15 @@ describe("shared improvement lifecycle API", () => {
       expect(outcome.activation).toMatchObject({ activationId: "activation-1", status: "paused" });
     }
   });
+
+  it.each(["approve", "reject"] as const)("preserves the entire %s review binding on the wire", async (action) => {
+    const input = { reviewPrecondition: { workspaceId: "workspace-a", expectedStatus: "ready_for_approval" as const,
+      expectedRevisionId: "revision-a", expectedChangeHash: "hash-a" } };
+    const call = action === "approve" ? improvement.approveImprovementCandidate : improvement.rejectImprovementCandidate;
+    await call("candidate/1", input);
+    const [path, init] = apiMocks.request.mock.calls.at(-1) ?? [];
+    expect(path).toBe(`/api/v1/improvement/candidates/candidate%2F1/${action}`);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual(input);
+  });
 });

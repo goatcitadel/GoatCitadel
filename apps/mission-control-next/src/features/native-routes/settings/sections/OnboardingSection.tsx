@@ -1,21 +1,15 @@
-import { useSessionDraft } from "../../library/session-drafts";
 import { useDraftLeave } from "../../library/DraftLeaveDialog";
 import { FocusedDetail } from "../../shared/FocusedDetail";
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, Play, RefreshCw, Save } from "lucide-react";
 import type { DemoBootstrapStateResponse, OnboardingState } from "@goatcitadel/contracts";
 import {
-  bootstrapDemo,
-  bootstrapOnboarding,
-  completeOnboarding,
   fetchAgenticRuns,
   fetchDemoState,
   fetchEvidenceEnvelopes,
   fetchOnboardingState,
   fetchSettings,
-  isApiRequestError,
 } from "@goatcitadel/mission-control-shared/api/client";
 import type { AppRoute } from "@next/app/route-model";
 import {
@@ -24,8 +18,6 @@ import {
   type Notice,
   SettingsActionList,
   SettingsButtonRow,
-  SettingsField,
-  SettingsFieldGrid,
   type SettingsNativePageProps,
   SettingsNotice,
   type SettingsSectionProps,
@@ -34,28 +26,26 @@ import {
   useAsyncLoad,
 } from "../SettingsShared";
 import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
-import { ErrorState, NativeButton, NativeMetricGrid } from "../../primitives";
+import { NativeButton, NativeMetricGrid } from "../../primitives";
 import { GuidedModelSetup } from "./GuidedModelSetup";
 import { LlamaCppSetupFlow } from "./LlamaCppSetupFlow";
 import {
-  BUDGET_MODE_OPTIONS,
   buildFirstRunEvidenceSnapshot,
-  deriveEcosystemProofLaneItems,
   deriveFirstOutcomePathItems,
   deriveFirstRunGovernedJobState,
+  type FirstRunEvidenceSnapshot,
+} from "../helpers/first-run-evidence";
+import {
+  deriveEcosystemProofLaneItems,
   deriveOnboardingProviderSmokeEvidenceItems,
   deriveSetupCenterItems,
-  describeBudgetMode,
-  describeToolApprovalMode,
-  describeToolApprovalModeHelp,
-  type FirstRunEvidenceSnapshot,
-  labelForBudgetMode,
-  normalizeBudgetMode,
-  normalizeToolApprovalMode,
   setupMeta,
-  splitCommaList,
-  TOOL_APPROVAL_MODE_OPTIONS,
-} from "../../SettingsNativePage";
+} from "../helpers/onboarding-readiness";
+import { useOnboardingCompletion } from "../use-onboarding-completion";
+
+import { useOnboardingDefaults } from "../use-onboarding-defaults";
+import { OnboardingDefaultsPanel } from "./OnboardingDefaultsPanel";
+import { OnboardingDemoPanel } from "./OnboardingDemoPanel";
 
 type OnboardingPageState = OnboardingState & {
   runtimeSettings: Awaited<ReturnType<typeof fetchSettings>> | null;
@@ -63,7 +53,8 @@ type OnboardingPageState = OnboardingState & {
   firstRunEvidence: FirstRunEvidenceSnapshot;
 };
 
-export function OnboardingSection({ route, navigate, setActiveWorkspaceId, activeWorkspaceId }: SettingsSectionProps) {
+export function OnboardingSection(props: SettingsSectionProps) {
+  const { route, navigate, activeWorkspaceId } = props;
   const [modelSetup, setModelSetup] = useState<"llamacpp" | "other">(route.view === "llamacpp" ? "llamacpp" : "other");
   const [panel, setPanel] = useState<"defaults" | "verification" | "demo" | null>(null);
   const [evidenceRequested, setEvidenceRequested] = useState(false);
@@ -87,91 +78,14 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId, activ
   }, [evidenceRequested]);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const busyDefaults = useRef(false);
-  const [applyingDefaults, setApplyingDefaults] = useState(false);
-  const defaults = useSessionDraft(
-    "onboarding:" + activeWorkspaceId + ":defaults",
-    {
-      toolApprovalMode: normalizeToolApprovalMode(data?.settings?.toolApprovalMode),
-      budgetMode: normalizeBudgetMode(data?.settings?.budgetMode),
-      networkAllowlist: data?.settings?.networkAllowlist?.join(", ") ?? "",
-    },
-    data?.runtimeSettings?.revision,
-    {
-      label: "First-run defaults",
-      active: panel === "defaults",
-      available: Boolean(data),
-      onSave: () => applyDefaults(),
-    },
-  );
-  const defaultsDraft = defaults.value,
-    setDefaultsDraft = defaults.setValue;
-
-  const onboardingPromptSkippingRestriction = !data?.runtimeSettings
-    ? "Settings could not be loaded, so first-run defaults that skip normal prompts stay unavailable."
-    : data.runtimeSettings.deploymentProfile === "remote_hardened"
-      ? "Remote Hardened keeps first-run defaults that skip normal prompts unavailable."
-      : null;
-
-  const applyDefaults = async (): Promise<boolean> => {
-    if (busyDefaults.current) return false;
-    if (defaults.hasRemoteChanges) {
-      setNotice({
-        tone: "warning",
-        message:
-          "First-run defaults changed elsewhere. Review the current revision before applying your retained input.",
-      });
-      return false;
-    }
-    if (!data?.runtimeSettings) {
-      setNotice({ tone: "warning", message: "Reload settings before applying first-run defaults." });
-      return false;
-    }
-    if (
-      onboardingPromptSkippingRestriction &&
-      defaultsDraft.toolApprovalMode === "bypass"
-    ) {
-      setNotice({ tone: "warning", message: onboardingPromptSkippingRestriction });
-      return false;
-    }
-    busyDefaults.current = true;
-    setApplyingDefaults(true);
-    const submitted = defaultsDraft;
-    try {
-      await bootstrapOnboarding({
-        expectedRevision: defaults.baseRevision as number,
-        toolApprovalMode: defaultsDraft.toolApprovalMode,
-        budgetMode: defaultsDraft.budgetMode,
-        networkAllowlist: splitCommaList(defaultsDraft.networkAllowlist),
-        auth: {
-          allowLoopbackBypass: false,
-        },
-      });
-      setNotice({ tone: "success", message: "First-run defaults applied." });
-      const clean = defaults.acceptSaved(submitted, undefined, submitted);
-      await reload();
-      return clean;
-    } catch (defaultsError) {
-      if (isApiRequestError(defaultsError) && defaultsError.status === 409) {
-        await reload();
-        setNotice({
-          tone: "warning",
-          message:
-            "Onboarding settings changed elsewhere. Your defaults draft is preserved; review the current settings, then apply again to retry.",
-        });
-        return false;
-      }
-      setNotice({ tone: "error", message: getErrorMessage(defaultsError) });
-      return false;
-    } finally {
-      busyDefaults.current = false;
-      setApplyingDefaults(false);
-    }
-  };
+  const completion = useOnboardingCompletion({ state: error ? undefined : data ?? undefined, scope: `${activeWorkspaceId}:${panel}` });
+  const defaultsOwner = useOnboardingDefaults({ state: error ? undefined : data ?? undefined, runtime: error ? undefined : data?.runtimeSettings ?? undefined,
+    workspaceId: activeWorkspaceId, active: panel === "defaults", onSettled: reload });
+  const defaults = defaultsOwner.draft;
 
   const markComplete = async () => {
     try {
-      await completeOnboarding("operator");
+      if (!(await completion.complete())) return;
       setNotice({ tone: "success", message: "Onboarding marked complete." });
       await reload();
     } catch (completeError) {
@@ -208,124 +122,12 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId, activ
   return (
     <SettingsSectionShell loading={loading && !data} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
+      {completion.notice || completion.attempt ? <SettingsNotice notice={{ tone: "warning", message: completion.attempt?.message ?? completion.notice! }} /> : null}
       {data ? (
         <div className="mc-next-settings-stack mc-next-preference-stack">
           {panel === "defaults" ? (
             <FocusedDetail title="First-run defaults" onClose={closePanel}>
-              {defaults.hasRemoteChanges ? (
-                <NativeCard
-                  title="Defaults changed"
-                  subtitle="Review the current settings before applying your retained draft."
-                >
-                  <p>
-                    Approval mode: {data.settings?.toolApprovalMode}. Budget: {data.settings?.budgetMode}.
-                  </p>
-                  <p>Network allowlist: {data.settings?.networkAllowlist?.join(", ") || "Empty"}</p>
-                  <NativeButton onClick={defaults.rebaseToCurrent}>Apply draft to current defaults</NativeButton>
-                </NativeCard>
-              ) : null}
-              <NativeCard
-                density="compact"
-                className="mc-next-settings-panel"
-                title="Apply first-run defaults"
-                subtitle="Set the minimum runtime defaults without duplicating advanced setup."
-              >
-                <SettingsFieldGrid>
-                  <SettingsField label="Tool approvals">
-                    <select
-                      className="mc-next-settings-input"
-                      value={defaultsDraft.toolApprovalMode}
-                      onChange={(event) => {
-                        const nextMode = normalizeToolApprovalMode(event.target.value);
-                        if (onboardingPromptSkippingRestriction && nextMode === "bypass") {
-                          return;
-                        }
-                        setDefaultsDraft((current) => ({
-                          ...current,
-                          toolApprovalMode: nextMode,
-                        }));
-                      }}
-                    >
-                      {TOOL_APPROVAL_MODE_OPTIONS.map((mode) => (
-                        <option
-                          key={mode}
-                          value={mode}
-                          disabled={Boolean(onboardingPromptSkippingRestriction && mode === "bypass")}
-                        >
-                          {describeToolApprovalMode(mode)}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mc-next-settings-field-note">
-                      {describeToolApprovalModeHelp(defaultsDraft.toolApprovalMode)}
-                    </p>
-                    {onboardingPromptSkippingRestriction ? (
-                      <p className="mc-next-settings-field-note">{onboardingPromptSkippingRestriction}</p>
-                    ) : null}
-                  </SettingsField>
-                  <SettingsField label="Budget mode">
-                    <select
-                      className="mc-next-settings-input"
-                      value={defaultsDraft.budgetMode}
-                      onChange={(event) =>
-                        setDefaultsDraft((current) => ({
-                          ...current,
-                          budgetMode: normalizeBudgetMode(event.target.value),
-                        }))
-                      }
-                    >
-                      {BUDGET_MODE_OPTIONS.map((mode) => (
-                        <option key={mode} value={mode}>
-                          {labelForBudgetMode(mode)}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mc-next-settings-field-note">{describeBudgetMode(defaultsDraft.budgetMode)}</p>
-                  </SettingsField>
-                  <SettingsField label="Network allowlist" span={2}>
-                    <input
-                      className="mc-next-settings-input"
-                      value={defaultsDraft.networkAllowlist}
-                      onChange={(event) =>
-                        setDefaultsDraft((current) => ({ ...current, networkAllowlist: event.target.value }))
-                      }
-                      placeholder="example.com, api.example.com"
-                    />
-                  </SettingsField>
-                </SettingsFieldGrid>
-                <NativeMetricGrid
-                  items={[
-                    {
-                      label: "Auth",
-                      value: data.settings?.auth?.mode ?? "unknown",
-                      meta: data.settings?.auth?.tokenConfigured ? "token configured" : "no token configured",
-                    },
-                    {
-                      label: "Mesh",
-                      value: data.settings?.mesh?.enabled ? (data.settings?.mesh?.mode ?? "unknown") : "off",
-                      meta: data.settings?.mesh?.nodeId || "no node id",
-                    },
-                  ]}
-                />
-                <SettingsButtonRow>
-                  <NativeButton
-                    variant="default"
-                    disabled={applyingDefaults || defaults.hasRemoteChanges}
-                    onClick={() => void applyDefaults()}
-                  >
-                    <Save size={16} />
-                    Apply defaults
-                  </NativeButton>
-                  <NativeButton variant="secondary" onClick={() => void markComplete()}>
-                    <CheckCircle2 size={16} />
-                    Mark complete
-                  </NativeButton>
-                  <NativeButton variant="secondary" onClick={() => void reload()}>
-                    <RefreshCw size={16} />
-                    Refresh
-                  </NativeButton>
-                </SettingsButtonRow>
-              </NativeCard>
+              <OnboardingDefaultsPanel control={defaultsOwner} completion={completion} onComplete={markComplete} />
             </FocusedDetail>
           ) : panel === "verification" ? (
             <FocusedDetail title="Setup verification" onClose={closePanel}>
@@ -455,7 +257,7 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId, activ
             </FocusedDetail>
           ) : panel === "demo" ? (
             <FocusedDetail title="Try a safe demo" onClose={closePanel}>
-              <DemoStartPanel route={route} navigate={navigate} setActiveWorkspaceId={setActiveWorkspaceId} />
+              <OnboardingDemoPanel {...props} />
             </FocusedDetail>
           ) : (
             <>
@@ -506,109 +308,6 @@ export function OnboardingSection({ route, navigate, setActiveWorkspaceId, activ
       ) : null}
       {leave.dialog}
     </SettingsSectionShell>
-  );
-}
-
-function DemoStartPanel({
-  route,
-  navigate,
-  setActiveWorkspaceId,
-}: {
-  route: AppRoute;
-  navigate: SettingsNativePageProps["navigate"];
-  setActiveWorkspaceId: (workspaceId: string) => void;
-}) {
-  const load = useCallback(async () => fetchDemoState(), []);
-  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<Notice | null>(null);
-
-  const startDemo = async () => {
-    setBusy(true);
-    setNotice(null);
-    try {
-      const result = await bootstrapDemo();
-      if (result.workspace?.workspaceId) {
-        setActiveWorkspaceId(result.workspace.workspaceId);
-      }
-      const nextSession = result.sessions.find((item) => item.mode === "chat") ?? result.sessions[0];
-      setNotice({ tone: result.status === "ready" ? "success" : "warning", message: result.notes[0] ?? "Demo ready." });
-      await reload();
-      navigate({
-        area: "chat",
-        sessionId: nextSession?.sessionId,
-        theme: route.theme,
-      });
-    } catch (demoError) {
-      setNotice({ tone: "error", message: getErrorMessage(demoError) });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const promptPreview = data?.starterPrompts?.slice(0, 3) ?? [];
-  const workspaceLabel = data?.workspace?.name ?? "Not created";
-
-  return (
-    <NativeCard
-      id="onboarding-start"
-      density="compact"
-      className="mc-next-settings-panel"
-      title="Try a safe demo"
-      subtitle="Explore GoatCitadel with local sample data first. It does not need a model or any credentials."
-      stats={[
-        { label: "Demo", value: loading ? "Checking" : humanizeEnumToken(data?.status) || "Unknown" },
-        { label: "Workspace", value: workspaceLabel },
-        { label: "Credentials", value: "Not required" },
-      ]}
-    >
-      {notice ? <SettingsNotice notice={notice} /> : null}
-      {error ? <ErrorState size="inline" description={error} /> : null}
-      <SettingsWizardSteps
-        steps={[
-          {
-            label: "Safe demo workspace",
-            description: data?.workspace
-              ? "Existing demo workspace will be reused."
-              : "Creates a local-only workspace with no provider or channel credentials.",
-            // The button below is the single first-run CTA. Leaving these steps
-            // pending avoids presenting the demo plan as already selected.
-            state: data?.workspace ? "complete" : "pending",
-          },
-          {
-            label: "Sample mission",
-            description: "Seeds a planning run and build review scenario you can inspect without sending messages.",
-            state: data?.sessions?.length ? "complete" : "pending",
-          },
-          {
-            label: "Guided context",
-            description: "Adds starter prompts and a memory example so Guided mode has something concrete to explain.",
-            state: data?.status === "ready" ? "complete" : "pending",
-          },
-        ]}
-      />
-      <SettingsActionList
-        ariaLabel="Starter prompt samples"
-        items={promptPreview.map((prompt) => ({
-          id: `${prompt.surface}-${prompt.title}`,
-          label: prompt.title,
-          description: prompt.prompt,
-          meta: prompt.surface,
-          actionLabel: "Sample",
-        }))}
-        emptyLabel="Starter prompts will appear after the demo state loads."
-      />
-      <SettingsButtonRow>
-        <NativeButton variant="default" onClick={() => void startDemo()} disabled={busy}>
-          <Play size={16} />
-          {data?.status === "ready" ? "Open demo" : "Start safe demo"}
-        </NativeButton>
-        <NativeButton variant="secondary" onClick={() => void reload()} disabled={busy}>
-          <RefreshCw size={16} />
-          Refresh
-        </NativeButton>
-      </SettingsButtonRow>
-    </NativeCard>
   );
 }
 

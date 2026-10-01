@@ -55,7 +55,7 @@ export interface ChatSessionMetaPatchInput {
   includeInHistory?: boolean;
   pinned?: boolean;
   lifecycleStatus?: "active" | "archived";
-  archivedAt?: string;
+  archivedAt?: string | null;
   folderId?: string;
   folderName?: string;
   tags?: string[];

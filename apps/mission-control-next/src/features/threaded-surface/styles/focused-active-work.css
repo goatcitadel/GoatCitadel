@@ -85,13 +85,25 @@
   display: none;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 639px) {
   .mc-next-active-work-summary {
     align-items: stretch;
     flex-direction: column;
+    padding: 0.45rem 0.6rem;
+    gap: 0.4rem;
+  }
+
+  .mc-next-active-work-copy > span {
+    display: none;
   }
 
   .mc-next-active-work-actions {
     justify-content: flex-start;
+    flex-wrap: nowrap;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-active-work-actions .mc-next-thread-inline-button {
+    width: auto;
+    flex: 0 1 auto;
   }
 }

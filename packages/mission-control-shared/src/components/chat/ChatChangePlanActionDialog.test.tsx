@@ -71,6 +71,33 @@ function callbacks() {
 }
 
 describe("ChatChangePlanActionDialog", () => {
+  it("preserves the Classic approval callback and exact current plan", async () => {
+    const handlers = callbacks();
+    const value = plan({ kind: "approval", actionId: "approval-action", actionNonce: "approval-nonce",
+      title: "Review required approval", risk: "danger", approvalId: "exact-approval" });
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<ChatChangePlanActionDialog plan={value} {...handlers} />); });
+    expect(latestModalProps?.onConfirm).toBeTypeOf("function");
+    await act(async () => latestModalProps?.onConfirm?.());
+    expect(handlers.onOpenApproval).toHaveBeenCalledExactlyOnceWith(value);
+    await act(async () => renderer.unmount());
+  });
+
+  it("uses the optional native owner renderer without retaining a second generic approval callback", async () => {
+    const handlers = callbacks();
+    const value = plan({ kind: "approval", actionId: "approval-action", actionNonce: "approval-nonce",
+      title: "Review required approval", risk: "danger", approvalId: "exact-approval" });
+    const renderApprovalAction = vi.fn((current: ChangePlanRecord, pending: boolean) =>
+      <a href={`/ops/approvals?approvalId=${current.requiredAction?.kind === "approval" ? current.requiredAction.approvalId : "missing"}&shell=classic`} aria-disabled={pending}>Guarded owner port</a>);
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<ChatChangePlanActionDialog plan={value} {...handlers} pending={true} renderApprovalAction={renderApprovalAction} />); });
+    expect(renderApprovalAction).toHaveBeenLastCalledWith(value, true);
+    expect(latestModalProps?.onConfirm).toBeUndefined();
+    expect(handlers.onOpenApproval).not.toHaveBeenCalled();
+    expect(renderer.root.findByType("a").props.href).toBe("/ops/approvals?approvalId=exact-approval&shell=classic");
+    await act(async () => renderer.unmount());
+  });
+
   beforeEach(() => {
     latestModalProps = null;
     vi.clearAllMocks();

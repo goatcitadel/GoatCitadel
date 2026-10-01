@@ -37,8 +37,7 @@ import type { HooksService } from "./hooks-service.js";
 import type { ImprovementService } from "./improvement-service.js";
 import type { AutonomyControlService } from "./autonomy-control-service.js";
 import type { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
-import type { LlamaCppSetupSelectionService } from "./llama-cpp-setup-selection-service.js";
-import type { EvolutionControlPlaneService } from "./evolution-control-plane-service.js";
+import type { LlamaCppSetupService } from "./llama-cpp-setup-service.js";
 import type { LlmService } from "./llm-service.js";
 import type { McpElicitationService } from "./mcp-elicitation-service.js";
 import type { MediaVoiceService } from "./media-voice-service.js";
@@ -111,8 +110,7 @@ export interface GatewayRouteCompositionPort {
   readonly improvementService: ImprovementService;
   readonly autonomyControlService: AutonomyControlService;
   readonly llamaCppRuntime: LlamaCppRuntimeService;
-  readonly llamaCppSetupSelection: LlamaCppSetupSelectionService;
-  readonly evolutionControlPlaneService: EvolutionControlPlaneService;
+  readonly llamaCppSetupService: LlamaCppSetupService;
   readonly llmService: LlmService;
   readonly mcpElicitationService: McpElicitationService;
   readonly mediaVoiceService: MediaVoiceService;
@@ -167,11 +165,6 @@ export interface GatewayRouteCompositionPort {
   createChatCompletion: RouteDependencyMethod<"llm", "createChatCompletion">;
   createChatCompletionStream: RouteDependencyMethod<"devVerification", "createChatCompletionStream">;
   createChatSession: RouteDependencyMethod<"chatSessions", "createChatSession">;
-  agentSendChatMessage: (
-    sessionId: string,
-    input: import("@goatcitadel/contracts").ChatSendMessageRequest,
-    options?: { abortSignal?: AbortSignal },
-  ) => Promise<import("@goatcitadel/contracts").ChatSendMessageResponse>;
   createChatSessionSpecialistCandidate: RouteDependencyMethod<
     "chatSupport",
     "specialists"
@@ -182,7 +175,6 @@ export interface GatewayRouteCompositionPort {
   ensureChatMessageProjection(sessionId: string): Promise<void>;
   ensureChatSessionRuntimeGrants: chatSessionService.ChatSessionDependencies["ensureChatSessionRuntimeGrants"];
   fetchWithDiagnosticsTimeout: IntegrationChannelServicePort["fetchWithDiagnosticsTimeout"];
-  getSettings(): Promise<RuntimeSettings>;
   getChatSessionPrefs: RouteDependencyMethod<"chatSupport", "prefs">["getChatSessionPrefs"];
   getRun: RouteDependencyMethod<"orchestration", "getRun">;
   getRunTrace: RouteDependencyMethod<"orchestration", "getRunTrace">;
@@ -245,7 +237,6 @@ export interface GatewayRouteCompositionPort {
   reloadSkills: RouteDependencyMethod<"skills", "reloadSkills">;
   requireChatSession: chatToolArtifactService.ChatToolArtifactHost["requireChatSession"];
   requireFeatureEnabled: IntegrationChannelServicePort["requireFeatureEnabled"];
-  requireMcpServer: mcpServerAdminService.McpServerAdminHost["requireMcpServer"];
   resolveApproval: settingsAuthService.SettingsAuthRuntimeDependencies["resolveApproval"];
   resolveApprovalWithRemoteToken: RouteDependencyMethod<"integrationWebhooks", "resolveApprovalWithRemoteToken">;
   resolveApprovalWithRemoteTokenId: RouteDependencyMethod<"integrationWebhooks", "resolveApprovalWithRemoteTokenId">;
@@ -363,9 +354,8 @@ export function createGatewayRouteCompositionPort(
     discordRuntimeService: gateway.discordRuntimeService,
     hooksService: gateway.hooksService,
     llamaCppRuntime: gateway.llamaCppRuntime,
-    llamaCppSetupSelection: gateway.llamaCppSetupSelection,
-    get evolutionControlPlaneService() {
-      return gateway.evolutionControlPlaneService;
+    get llamaCppSetupService() {
+      return gateway.llamaCppSetupService;
     },
     llmService: gateway.llmService,
     mcpElicitationService: gateway.mcpElicitationService,
@@ -406,7 +396,6 @@ export function createGatewayRouteCompositionPort(
     createChatCompletion: gateway.createChatCompletion.bind(gateway),
     createChatCompletionStream: gateway.createChatCompletionStream.bind(gateway),
     createChatSession: gateway.createChatSession.bind(gateway),
-    agentSendChatMessage: gateway.agentSendChatMessage.bind(gateway),
     createChatSessionSpecialistCandidate: gateway.createChatSessionSpecialistCandidate.bind(gateway),
     createOrchestrationPlan: gateway.createOrchestrationPlan.bind(gateway),
     enqueueApprovalResolutionEffects: gateway.enqueueApprovalResolutionEffects.bind(gateway),
@@ -414,7 +403,6 @@ export function createGatewayRouteCompositionPort(
     ensureChatMessageProjection: gateway.ensureChatMessageProjection.bind(gateway),
     ensureChatSessionRuntimeGrants: gateway.ensureChatSessionRuntimeGrants.bind(gateway),
     fetchWithDiagnosticsTimeout: gateway.fetchWithDiagnosticsTimeout.bind(gateway),
-    getSettings: gateway.getSettings.bind(gateway),
     getChatSessionPrefs: gateway.getChatSessionPrefs.bind(gateway),
     getRun: gateway.getRun.bind(gateway),
     getRunTrace: gateway.getRunTrace.bind(gateway),
@@ -476,7 +464,6 @@ export function createGatewayRouteCompositionPort(
     reloadSkills: gateway.reloadSkills.bind(gateway),
     requireChatSession: gateway.requireChatSession.bind(gateway),
     requireFeatureEnabled: gateway.requireFeatureEnabled.bind(gateway),
-    requireMcpServer: gateway.requireMcpServer.bind(gateway),
     resolveApproval: gateway.resolveApproval.bind(gateway),
     resolveApprovalWithRemoteToken: gateway.resolveApprovalWithRemoteToken.bind(gateway),
     resolveApprovalWithRemoteTokenId: gateway.resolveApprovalWithRemoteTokenId.bind(gateway),

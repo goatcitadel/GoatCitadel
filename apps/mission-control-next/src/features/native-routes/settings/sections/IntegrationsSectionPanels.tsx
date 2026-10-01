@@ -21,7 +21,7 @@ import {
 } from "../SettingsShared";
 import { NativeCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid } from "../../primitives";
-import { formatDateTime } from "../../SettingsNativePage";
+import { formatDateTime } from "../helpers/input-format";
 
 export function OperatorActionResultPanel({
   result,
@@ -609,7 +609,7 @@ export function GoogleMeetStatusPanel({
       density="compact"
       className="mc-next-settings-panel"
       title="Google Meet voice"
-      subtitle="OpenAI Realtime meeting voice stays gated by OAuth, provider, browser, audio, and explicit user start."
+      subtitle="Prepare Gateway records and optional OpenAI credentials. These controls do not join Google Meet or establish live audio; account references do not prove external sign-in."
       stats={[
         { label: "State", value: status?.state ?? "unknown" },
         { label: "Sessions", value: String(sessions.length) },
@@ -644,7 +644,7 @@ export function GoogleMeetStatusPanel({
       <SettingsButtonRow>
         <NativeButton variant="default" disabled={Boolean(busySessionId)} onClick={onStartOpenAIRealtime}>
           <Plus size={16} />
-          Start OpenAI Realtime
+          Review meeting preparation
         </NativeButton>
         {actionableSession ? (
           <>
@@ -654,7 +654,7 @@ export function GoogleMeetStatusPanel({
               onClick={() => onConsultSession(actionableSession)}
             >
               <ExternalLink size={16} />
-              Consult Chat
+              Review Chat handoff
             </NativeButton>
             <NativeButton
               variant="secondary"
@@ -662,7 +662,7 @@ export function GoogleMeetStatusPanel({
               onClick={() => onStopSession(actionableSession)}
             >
               <Square size={16} />
-              Stop session
+              Review stop record
             </NativeButton>
           </>
         ) : null}

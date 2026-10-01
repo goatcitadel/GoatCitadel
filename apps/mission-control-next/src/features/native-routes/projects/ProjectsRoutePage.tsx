@@ -705,10 +705,6 @@ function ProjectsWorkspace({
           title="Projects"
           subtitle="Containers that bind Chat threads, files, and proof together."
           density="compact"
-          stats={[
-            { label: "Projects", value: String(state.projects.length) },
-            { label: "Sessions", value: String(totalProjectSessions) },
-          ]}
           actions={
             <button type="button" className="mc-next-settings-filter" onClick={() => void loadProjects()}>
               <RefreshCw size={16} />

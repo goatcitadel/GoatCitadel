@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
 import type { TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
-import { createTask } from "@goatcitadel/mission-control-shared/api/tasks";
+import { useTaskCreate } from "./use-task-create";
+import { taskCreateDraftKey } from "./work-form-drafts";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { TASK_CREATE_BOUNDARY } from "./task-create-mutation";
 import { useSessionDraft } from "../library/session-drafts";
 import { NativeButton, NoticeBanner } from "../primitives";
 export function KanbanNewTask({
@@ -12,68 +14,43 @@ export function KanbanNewTask({
   citadelId?: string;
   onCreated: (task: TaskRecord) => void;
 }) {
-  const [busy, setBusy] = useState(false),
-    [error, setError] = useState<string | null>(null);
-  const lock = useRef(false),
-    mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
   const draft = useSessionDraft(
-    "kanban:" + (citadelId ?? "") + ":" + workspaceId + ":create",
+    taskCreateDraftKey(getGatewayApiBaseUrl(), workspaceId, citadelId),
     { title: "", description: "", priority: "normal" as TaskRecord["priority"] },
     undefined,
-    { label: "New task", onSave: () => save() },
+    { label: "New task" },
   );
-  const save = async (): Promise<boolean> => {
-    if (lock.current) return false;
-    const submitted = draft.value;
-    if (!submitted.title.trim()) {
-      setError("Enter a task title.");
-      return false;
-    }
-    lock.current = true;
-    setBusy(true);
-    setError(null);
-    try {
-      const created = await createTask({
-        workspaceId,
-        citadelId,
-        title: submitted.title.trim(),
-        description: submitted.description,
-        priority: submitted.priority,
-      });
-      if (!created.taskId || !created.revision || created.workspaceId !== workspaceId)
-        throw new Error("The saved task could not be confirmed. Your input is preserved.");
-      const cleared = draft.acceptSaved({ title: "", description: "", priority: "normal" }, undefined, submitted);
-      if (cleared && mounted.current) onCreated(created);
-      return cleared;
-    } catch (cause) {
-      if (mounted.current) setError(cause instanceof Error ? cause.message : "Could not save the task.");
-      return false;
-    } finally {
-      lock.current = false;
-      if (mounted.current) setBusy(false);
-    }
+  const control = useTaskCreate({
+    workspaceId,
+    citadelId,
+    draft: draft.value,
+    onRecorded: (_task, submitted) => {
+      const empty = { title: "", description: "", priority: "normal" as TaskRecord["priority"] };
+      return draft.acceptSaved(empty, undefined, submitted) ? empty : undefined;
+    },
+  });
+  const edit: typeof draft.setValue = (value) => {
+    control.invalidate();
+    draft.setValue(value);
   };
   return (
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        void save();
+        control.begin();
       }}
     >
-      {error ? <NoticeBanner tone="error" message={error} /> : null}
-      <fieldset disabled={busy}>
+      {control.message ? (
+        <NoticeBanner tone={control.uncertain ? "warning" : "error"} message={control.message} />
+      ) : null}
+      <p>{TASK_CREATE_BOUNDARY}</p>
+      <fieldset disabled={control.locked}>
         <label className="mc-next-settings-field">
           Task title
           <input
             required
             value={draft.value.title}
-            onChange={(event) => draft.setValue((value) => ({ ...value, title: event.target.value }))}
+            onChange={(event) => edit((value) => ({ ...value, title: event.target.value }))}
           />
         </label>
         <label className="mc-next-settings-field">
@@ -81,7 +58,7 @@ export function KanbanNewTask({
           <textarea
             rows={5}
             value={draft.value.description}
-            onChange={(event) => draft.setValue((value) => ({ ...value, description: event.target.value }))}
+            onChange={(event) => edit((value) => ({ ...value, description: event.target.value }))}
           />
         </label>
         <label className="mc-next-settings-field">
@@ -89,7 +66,7 @@ export function KanbanNewTask({
           <select
             value={draft.value.priority}
             onChange={(event) =>
-              draft.setValue((value) => ({ ...value, priority: event.target.value as TaskRecord["priority"] }))
+              edit((value) => ({ ...value, priority: event.target.value as TaskRecord["priority"] }))
             }
           >
             {["low", "normal", "high", "urgent"].map((priority) => (
@@ -97,8 +74,22 @@ export function KanbanNewTask({
             ))}
           </select>
         </label>
-        <NativeButton type="submit">{busy ? "Saving…" : "Create task"}</NativeButton>
+        <NativeButton type="submit">{control.busy ? "Saving…" : "Create task"}</NativeButton>
       </fieldset>
+      {control.review ? (
+        <section aria-label="Review new task">
+          <p>
+            Create {control.review.title} in workspace {workspaceId} with {control.review.priority} priority?
+          </p>
+          <p>{control.review.description || "No description."}</p>
+          <NativeButton disabled={control.locked} onClick={() => void control.confirm((task) => onCreated(task))}>
+            Confirm create task
+          </NativeButton>
+          <NativeButton disabled={control.busy} onClick={control.invalidate}>
+            Keep editing task
+          </NativeButton>
+        </section>
+      ) : null}
     </form>
   );
 }

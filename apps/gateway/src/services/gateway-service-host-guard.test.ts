@@ -218,6 +218,8 @@ describe("gateway service host guard", () => {
   it("keeps chat-turn runtime host contracts split by collaborator", async () => {
     const files = await readServiceSources();
     const prep = files.find(({ relativePath }) => relativePath === "chat-turn-prep-service.ts")?.source ?? "";
+    const delegationAuthority =
+      files.find(({ relativePath }) => relativePath === "chat-local-delegation-authority.ts")?.source ?? "";
     const entry = files.find(({ relativePath }) => relativePath === "chat-turn-entry-service.ts")?.source ?? "";
     const stream = files.find(({ relativePath }) => relativePath === "chat-turn-stream-service.ts")?.source ?? "";
     const dispatch = files.find(({ relativePath }) => relativePath === "chat-turn-dispatch-service.ts")?.source ?? "";
@@ -225,7 +227,50 @@ describe("gateway service host guard", () => {
       files.find(({ relativePath }) => relativePath === "chat-turn-runtime-host-composition.ts")?.source ?? "";
 
     expect(prep).not.toContain("readonly storage: Storage;");
-    expect(prep).toContain("type ChatTurnPrepStorage = Pick<");
+    const prepStorage = prep.match(/type ChatTurnPrepStorage\s*=[\s\S]*?\r?\n\s*\};/)?.[0] ?? "";
+    expect(normalizeTypeAlias(prepStorage)).toBe(normalizeTypeAlias(`
+      type ChatTurnPrepStorage = LocalDelegationAuthorityStorage &
+        Pick<
+          Storage,
+          | "chatAttachments"
+          | "chatSessionMeta"
+          | "chatSessionPrefs"
+          | "chatSessionProjects"
+          | "chatFanoutInvocations"
+          | "chatDelegationSteps"
+          | "chatTurnTraces"
+          | "chatSideChats"
+          | "chatSpecialistCandidates"
+          | "runImmediateTransaction"
+          | "sessionAutonomyPrefs"
+          | "systemSettings"
+          | "workspaces"
+        > & {
+          audit?: Pick<Storage["audit"], "append">;
+        };
+    `));
+    const delegationStorage =
+      delegationAuthority.match(/export type LocalDelegationAuthorityStorage\s*=[\s\S]*?;/)?.[0] ?? "";
+    expect(normalizeTypeAlias(delegationStorage)).toBe(normalizeTypeAlias(`
+      export type LocalDelegationAuthorityStorage = Pick<
+        AsyncStorage,
+        | "chatDelegationRuns"
+        | "chatDelegationSteps"
+        | "chatSessionMeta"
+        | "chatSessionLifecycles"
+        | "chatTurnTraces"
+        | "durableRuns"
+        | "durableChildWatchers"
+        | "sessionMutationAdmissions"
+        | "tasks"
+        | "runImmediateTransaction"
+      >;
+    `));
+    expect(prep).toMatch(
+      /import\s*\{[^}]*\btype LocalDelegationAuthorityStorage\b[^}]*\}\s*from "\.\/chat-local-delegation-authority\.js";/,
+    );
+    expect(prep).toMatch(/export interface ChatTurnPrepHost\s*\{\s*readonly storage: ChatTurnPrepStorage;/);
+    expect(entry).toContain('Omit<ChatTurnPrepHost, "storage">');
     for (const collaborator of [
       "ChatTurnActiveExecutionControl",
       "ChatTurnDurableRunOwner",

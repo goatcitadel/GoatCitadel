@@ -9,7 +9,6 @@ import { createFilesRoutePort } from "./files-route-service.js";
 import { createHooksRoutePort } from "./hooks-route-service.js";
 import { createLocalAiRouteService as createLocalAiRoutePort } from "./local-ai-route-service.js";
 import { createLlamaCppRoutePort } from "./llama-cpp-route-service.js";
-import { LlamaCppSetupService } from "./llama-cpp-setup-service.js";
 import { acquireBoundLlamaCppEmbeddingLease } from "./llama-cpp-provider-lease.js";
 import { createMeshRoutePort } from "./mesh-route-service.js";
 import { MobileApprovalKeyService } from "./mobile-approval-key-service.js";
@@ -97,6 +96,7 @@ export function composeRuntimeAdminRouteDependencies(
   const settingsAuthDeps = createSettingsAuthRuntimeDependenciesForGateway(gateway);
   const workspaces = createWorkspacesRoutePortForGateway(gateway);
   const onboardingStateHost = gateway.onboardingStateHost;
+  const backupRetentionService = gateway.backupRetentionService;
   const devVerificationVaultKey = resolveDevVerificationVaultKey(
     gateway.devDiagnostics.isEnabled(),
     process.env[DEV_VERIFICATION_VAULT_KEY_ENV],
@@ -162,12 +162,12 @@ export function composeRuntimeAdminRouteDependencies(
         settingsAuthService.getCompanionSessionRecord(settingsAuthDeps, sessionId),
       getDeviceAccessRequestStatus: (requestId, secret) =>
         settingsAuthService.getDeviceAccessRequestStatus(settingsAuthDeps, requestId, secret),
-      getRetentionPolicy: () => gateway.backupRetentionService.getRetentionPolicy(),
-      listBackups: (limit) => gateway.backupRetentionService.listBackups(limit),
+      getRetentionPolicy: () => backupRetentionService.getRetentionPolicy(),
+      listBackups: (limit) => backupRetentionService.listBackups(limit),
       listCompanionAuditEvents: (input) => settingsAuthService.listCompanionAuditEvents(settingsAuthDeps, input),
       listCompanionSessions: (input) => settingsAuthService.listCompanionSessions(settingsAuthDeps, input),
       listDeviceAccessGrants: () => settingsAuthService.listDeviceAccessGrants(settingsAuthDeps),
-      pruneRetention: (input) => gateway.backupRetentionService.pruneRetention(input),
+      pruneRetention: (input) => backupRetentionService.pruneRetention(input),
       resolveGatewayInstallToken: (input) => gateway.resolveGatewayInstallToken(input),
       revokeCompanionSession: (sessionId, actorId, options) =>
         settingsAuthService.revokeCompanionSession(settingsAuthDeps, sessionId, actorId, options),
@@ -209,8 +209,8 @@ export function composeRuntimeAdminRouteDependencies(
       },
       rotateCompanionSession: (input) => settingsAuthService.rotateCompanionSession(settingsAuthDeps, input),
       runDatabaseCutover: (input) => gateway.runDatabaseCutover(input),
-      updateRetentionPolicy: (patch) => gateway.backupRetentionService.updateRetentionPolicy(patch),
-      createBackup: (input) => gateway.backupRetentionService.createBackup(input),
+      updateRetentionPolicy: (patch) => backupRetentionService.updateRetentionPolicy(patch),
+      createBackup: (input) => backupRetentionService.createBackup(input),
       verifyBackup: (input) => gateway.verifyBackup(input),
       verifyDatabaseCutover: (input) => gateway.verifyDatabaseCutover(input),
     },
@@ -277,7 +277,7 @@ export function composeRuntimeAdminRouteDependencies(
     },
     cron: createCronRoutePort(gateway.cronAutomationService),
     dashboard: createDashboardRoutePort({
-      backupRetentionService: gateway.backupRetentionService,
+      backupRetentionService,
       durableOperatorService: gateway.durableOperatorService,
       isFeatureEnabled: (flag) => gateway.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
       memoryLifecycleService: gateway.memoryLifecycleService,
@@ -358,15 +358,7 @@ export function composeRuntimeAdminRouteDependencies(
     }),
     llamaCpp: createLlamaCppRoutePort({
       llamaCppRuntime: gateway.llamaCppRuntime,
-      setup: new LlamaCppSetupService({
-        getSettings: () => gateway.getSettings(),
-        runtime: gateway.llamaCppRuntime,
-        selections: gateway.llamaCppSetupSelection,
-        plans: gateway.evolutionControlPlaneService,
-        previewModels: (baseUrl) => gateway.llmService.previewModels({ providerId: "llamacpp", baseUrl }),
-        createChatSession: (input) => gateway.createChatSession(input),
-        sendChatMessage: (sessionId, input, options) => gateway.agentSendChatMessage(sessionId, input, options),
-      }),
+      setup: gateway.llamaCppSetupService,
       publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
     }),
     mesh: createMeshRoutePort({

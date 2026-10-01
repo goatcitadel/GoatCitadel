@@ -26,7 +26,7 @@ test("the packaged runtime helper links its complete production closure reproduc
     for (const attempt of [1, 2]) {
       const directory = path.join(output, `${target}-${attempt}`); fs.mkdirSync(directory);
       const image = compileTlsNative({ target, outputDirectory: directory, outputName: CELL_PROVISIONING_EXE,
-        sources: names.filter(name => name.endsWith(".cpp")).map(name => path.join(source, name)), includes: [source] });
+        sources: names.filter(name => name.endsWith(".cpp")).map(name => path.join(source, name)), includes: [source], sourceBatchSize: 8 });
       const bytes = fs.readFileSync(image); assertNoRemoteWorkerBuildPathLeak(bytes, [repository, output]);
       hashes.push(createHash("sha256").update(bytes).digest("hex"));
     }

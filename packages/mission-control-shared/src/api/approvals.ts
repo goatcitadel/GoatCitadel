@@ -29,6 +29,7 @@ export interface ApprovalFetchOptions {
   status?: ApprovalRequest["status"];
   limit?: number;
   cursor?: string;
+  workspaceId?: string;
 }
 
 export async function fetchApprovals(
@@ -45,6 +46,9 @@ export async function fetchApprovals(
   if (options.cursor?.trim()) {
     query.set("cursor", options.cursor.trim());
   }
+  if (options.workspaceId?.trim()) {
+    query.set("workspaceId", options.workspaceId.trim());
+  }
   return request<ApprovalsResponse>(`/api/v1/approvals${query.size > 0 ? `?${query.toString()}` : ""}`);
 }
 
@@ -52,7 +56,7 @@ export async function resolveApproval(
   approvalId: string,
   decision: "approve" | "reject",
 ): Promise<ApprovalResolveResponse> {
-  return request<ApprovalResolveResponse>(`/api/v1/approvals/${approvalId}/resolve`, {
+  return request<ApprovalResolveResponse>(`/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`, {
     method: "POST",
     body: JSON.stringify({
       decision,
@@ -85,7 +89,7 @@ export async function resolveApprovalWithRemoteToken(
 }
 
 export async function fetchApprovalReplay(approvalId: string): Promise<ApprovalReplayResponse> {
-  return request<ApprovalReplayResponse>(`/api/v1/approvals/${approvalId}/replay`);
+  return request<ApprovalReplayResponse>(`/api/v1/approvals/${encodeURIComponent(approvalId)}/replay`);
 }
 
 export async function fetchToolCatalog(): Promise<{ items: ToolCatalogEntry[] }> {

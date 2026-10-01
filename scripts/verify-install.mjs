@@ -1,11 +1,16 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { createRunContext, finalizeRunContext, runScenario } from "./verification/lib/shared.mjs";
+import { chromium } from "playwright";
+import assert from "node:assert/strict";
+import { createRunContext, finalizeRunContext, releaseRunContext, runScenario } from "./verification/lib/shared.mjs";
 import { requestJson, startVerificationStack, stopVerificationStack } from "./verification/lib/runtime.mjs";
-import { startDeterministicLlmStub } from "./verification/lib/scenarios/deterministic-llm-stub.mjs";
+import { DETERMINISTIC_LLM_MODEL, startDeterministicLlmStub } from "./verification/lib/scenarios/deterministic-llm-stub.mjs";
+import { runCockpitFirstRunGuardProof } from "./verification/lib/scenarios/cockpit-first-run-proof.mjs";
 
 async function main() {
+  const coldStartMs = Date.now();
   const context = await createRunContext("install-smoke", {
     profile: "local",
   });
@@ -91,18 +96,18 @@ async function main() {
           body: {
             expectedRevision,
             budgetMode: "balanced",
+            toolApprovalMode: "approve_all",
             networkAllowlist: ["127.0.0.1", "localhost"],
             llm: {
               activeProviderId: "openai",
-              activeModel: "gpt-5",
+              activeModel: DETERMINISTIC_LLM_MODEL,
               upsertProvider: {
                 providerId: "openai",
                 apiKeyEnv: "OPENAI_API_KEY",
                 baseUrl: llmStub.baseUrl,
               },
             },
-            markComplete: true,
-            completedBy: "install-smoke",
+            markComplete: false,
           },
         });
         if (!response.ok) {
@@ -233,6 +238,80 @@ async function main() {
       },
     );
 
+    await runCockpitFirstRunGuardProof({ context, stack, requestJson, runScenario });
+
+    await runScenario(
+      context,
+      {
+        id: "install.ui.first-answer",
+        lane: "install-smoke",
+        title: "Isolated source stack reaches a verified first Chat answer through cockpit setup",
+        subsystem: "mission-control",
+      },
+      async () => {
+        const before = await requestJson(stack.gatewayUrl, "/api/v1/onboarding/state");
+        const providerDispatchesBefore = llmStub.completionDispatches();
+        if (!before.ok || before.body?.completed || before.body?.firstTask?.status === "verified") {
+          throw new Error("First-answer proof did not start from an incomplete onboarding state.");
+        }
+        const browser = await chromium.launch({ headless: true });
+        try {
+          const browserContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+          try {
+            const page = await browserContext.newPage();
+            await page.goto(`${stack.uiUrl}/settings/first-run?shell=cockpit`, { waitUntil: "domcontentloaded" });
+            await page.getByRole("heading", { name: "Your first answer" }).waitFor({ timeout: 30_000 });
+            await page.getByRole("button", { name: /Step 2.*Set your safety posture/u }).click();
+            await page.getByRole("button", { name: "Keep current rule" }).click();
+            await page.getByRole("button", { name: "Finish setup and open Chat" }).click();
+            await page.waitForURL((url) => url.pathname === "/chat", { timeout: 30_000 });
+            const complete = await requestJson(stack.gatewayUrl, "/api/v1/onboarding/state");
+            if (!complete.ok || complete.body?.completed !== true) throw new Error("Cockpit did not complete the reviewed first-run setup before Chat.");
+            await page.getByRole("complementary", { name: "Conversations" }).getByRole("button", { name: "New", exact: true }).click();
+            const composer = page.getByRole("textbox", { name: "Message" });
+            await composer.waitFor({ timeout: 30_000 });
+            await composer.fill("Give me a short first answer.");
+            await page.getByRole("button", { name: "Send", exact: true }).click();
+            await page.getByText("Verification stub reply.", { exact: true }).waitFor({ timeout: 60_000 });
+            let verified;
+            for (let attempt = 0; attempt < 30; attempt += 1) {
+              const state = await requestJson(stack.gatewayUrl, "/api/v1/onboarding/state");
+              if (state.ok && state.body?.firstTask?.status === "verified") { verified = state.body.firstTask; break; }
+              await page.waitForTimeout(500);
+            }
+            const elapsedMs = Date.now() - coldStartMs;
+            if (!verified?.sessionId || !verified?.turnId || !verified?.providerId || !verified?.model) {
+              throw new Error("Gateway did not verify a completed provider-backed first Chat answer.");
+            }
+            const thread = await requestJson(stack.gatewayUrl, `/api/v1/chat/sessions/${encodeURIComponent(verified.sessionId)}/thread`);
+            const after = await requestJson(stack.gatewayUrl, "/api/v1/onboarding/state");
+            if (!thread.ok || !after.ok) throw new Error("Independent canonical first-answer readback failed.");
+            assertVerifiedFirstAnswer({ before: before.body, completed: complete.body, after: after.body, verified,
+              turn: thread.body?.turns?.find((turn) => turn.turnId === verified.turnId),
+              providerDispatches: llmStub.completionDispatches() - providerDispatchesBefore });
+            if (elapsedMs >= 180_000) throw new Error(`Isolated source first answer took ${elapsedMs}ms; the three-minute target is 180000ms.`);
+            await page.goto(`${stack.uiUrl}/settings/first-run?shell=cockpit`, { waitUntil: "domcontentloaded" });
+            await page.getByRole("button", { name: /Step 3.*Send a test message/u }).click();
+            await page.getByText("First response: Verified", { exact: false }).waitFor({ timeout: 30_000 });
+            const screenshotDir = path.join(context.artifactRoot, "screenshots");
+            await mkdir(screenshotDir, { recursive: true });
+            const screenshot = path.join(screenshotDir, "install-source-first-answer.png");
+            await page.screenshot({ path: screenshot });
+            return {
+              status: "passed",
+              notes: ["This measures an isolated source stack with a provider seeded through Gateway setup APIs and a deterministic loopback reply; it does not prove a live external provider or packaged Windows first-run.",
+                "Cold-start elapsed time includes the preceding desktop/mobile negative first-run fixtures."],
+              metrics: { elapsedMs, targetMs: 180_000, verifiedProviderId: verified.providerId, verifiedModel: verified.model,
+                sessionId: verified.sessionId, turnId: verified.turnId, actualCanonicalTurnReadback: true,
+                providerDispatches: llmStub.completionDispatches() - providerDispatchesBefore, settingsPreserved: true,
+                providerProvisionedThroughUi: false, liveExternalProvider: false, installedWindowsJourney: false },
+              artifacts: { diagnostics: [], screenshots: ["screenshots/install-source-first-answer.png"], traces: [], logs: [], perf: [], playwright: [] },
+            };
+          } finally { await browserContext.close(); }
+        } finally { await browser.close(); }
+      },
+    );
+
     await runScenario(
       context,
       {
@@ -311,6 +390,7 @@ async function main() {
   } finally {
     await stopVerificationStack(stack).catch(() => undefined);
     await llmStub?.close().catch(() => undefined);
+    await releaseRunContext(context);
   }
 
   console.log("GoatCitadel install smoke");
@@ -324,6 +404,28 @@ async function main() {
   if (manifest?.status !== "passed") {
     process.exitCode = 1;
   }
+}
+
+export function assertVerifiedFirstAnswer({ before, completed, after, verified, turn, providerDispatches }) {
+  assert.equal(before.completed, false);
+  assert.equal(completed.completed, true);
+  assert.equal(completed.completedBy, "operator");
+  assert.ok(completed.completedAt && Number.isFinite(Date.parse(completed.completedAt)));
+  assert.equal(after.completedAt, completed.completedAt);
+  assert.deepEqual(completed.settings, before.settings);
+  assert.deepEqual(after.settings, before.settings);
+  for (const key of ["status", "sessionId", "turnId", "providerId", "model", "completedAt"])
+    assert.equal(after.firstTask?.[key], verified[key]);
+  assert.equal(verified.status, "verified");
+  assert.equal(verified.providerId, before.settings.llm.activeProviderId);
+  assert.equal(verified.model, before.settings.llm.activeModel);
+  assert.equal(turn?.turnId, verified.turnId);
+  assert.equal(turn?.trace?.sessionId, verified.sessionId);
+  assert.equal(turn?.trace?.status, "completed");
+  assert.equal(turn?.trace?.model, verified.model);
+  assert.equal(turn?.trace?.routing?.primaryProviderId, verified.providerId);
+  assert.equal(turn?.assistantMessage?.content, "Verification stub reply.");
+  assert.ok(Number.isInteger(providerDispatches) && providerDispatches > 0, "No actual loopback model dispatch was recorded.");
 }
 
 export function resolveOnboardingRevision(response) {

@@ -37,6 +37,12 @@ describe("ThreePartChip", () => {
     expect(markup).not.toContain("mc-next-chip-3-age");
   });
 
+  it("omits empty middle and age segments", () => {
+    const markup = renderToStaticMarkup(<ThreePartChip tone="caution" state="Stale proof" mid="" age="" />);
+    expect(markup).not.toContain("mc-next-chip-3-mid");
+    expect(markup).not.toContain("mc-next-chip-3-age");
+  });
+
   it("renders dot by default and omits when dot={false}", () => {
     const withDot = renderToStaticMarkup(<ThreePartChip tone="safe" state="x" />);
     expect(withDot).toContain("mc-next-chip-3-dot");

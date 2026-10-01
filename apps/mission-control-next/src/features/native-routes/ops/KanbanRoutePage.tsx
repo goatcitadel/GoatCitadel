@@ -2,9 +2,13 @@ import type { TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { DetailInspector } from "../../../components/DetailInspector";
 import { useDraftLeave } from "../library/DraftLeaveDialog";
 import { hasSessionDraft, useSessionDraftVersion } from "../library/session-drafts";
-import { fetchTasksByView } from "@goatcitadel/mission-control-shared/api/tasks";
+import { fetchTask, fetchTasksByView } from "@goatcitadel/mission-control-shared/api/tasks";
 import { KanbanNewTask } from "./KanbanNewTask";
+import { taskCreateDraftKey } from "./work-form-drafts";
 import { KanbanTaskInspector } from "./KanbanTaskInspector";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { acquireTaskMutations, readTaskMutation, taskMutationKey, useTaskMutations } from "./task-mutation-state";
+import { taskRecordsEqual } from "./task-detail-mutation";
 import {
   forwardRef,
   memo,
@@ -65,12 +69,18 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
   return <KanbanWorkspacePage key={(props.activeCitadelId ?? "") + ":" + props.activeWorkspaceId} {...props} />;
 }
 function KanbanWorkspacePage(props: NativeRoutePagesProps) {
+  const gatewayBase = getGatewayApiBaseUrl();
+  useTaskMutations();
   const leave = useDraftLeave();
   const leaveRef = useRef(leave);
   leaveRef.current = leave;
   useSessionDraftVersion();
   const [creating, setCreating] = useState(false);
   const [inspected, setInspected] = useState<{ taskId: string; runId: string } | null>(null);
+  const linkedTaskId = useRef(
+    typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("taskId"),
+  );
+  const linkedTaskOpened = useRef(false);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [runCursor, setRunCursor] = useState<string | undefined>();
   const [taskCursor, setTaskCursor] = useState<string | undefined>();
@@ -95,7 +105,7 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
   const load = useCallback(async () => {
     const loadId = ++loadIdRef.current;
     setLoading(true);
-    const [runResult, taskResult] = await Promise.allSettled([
+    const [runResult, taskResult, linkedResult] = await Promise.allSettled([
       readKanbanPages(
         (cursor) =>
           fetchAgenticRuns({ workspaceId: props.activeWorkspaceId, limit: 200, ...(cursor ? { cursor } : {}) }),
@@ -112,9 +122,19 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
         pageCounts.current.tasks,
         (item) => item.taskId,
       ),
+      linkedTaskId.current
+        ? fetchTask(linkedTaskId.current, props.activeWorkspaceId, props.activeCitadelId)
+        : Promise.resolve(null),
     ]);
     if (loadId !== loadIdRef.current) return;
     const issues: string[] = [];
+    const linkedTask =
+      linkedResult.status === "fulfilled" &&
+      linkedResult.value?.taskId === linkedTaskId.current &&
+      (linkedResult.value.workspaceId ?? "default") === props.activeWorkspaceId &&
+      !linkedResult.value.deletedAt
+        ? linkedResult.value
+        : null;
     if (runResult.status === "fulfilled") {
       setRuns(runResult.value.items);
       setRunCursor(runResult.value.nextCursor);
@@ -124,13 +144,34 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
           String(runResult.reason instanceof Error ? runResult.reason.message : runResult.reason),
       );
     if (taskResult.status === "fulfilled") {
-      setTasks(taskResult.value.items);
+      setTasks(
+        linkedTask
+          ? mergeKanbanRows(taskResult.value.items, [linkedTask], (item) => item.taskId)
+          : taskResult.value.items,
+      );
       setTaskCursor(taskResult.value.nextCursor);
     } else
       issues.push(
         "Task records unavailable: " +
           String(taskResult.reason instanceof Error ? taskResult.reason.message : taskResult.reason),
       );
+    if (linkedTask) {
+      if (taskResult.status === "rejected")
+        setTasks((current) => mergeKanbanRows(current, [linkedTask], (item) => item.taskId));
+      if (!linkedTaskOpened.current) {
+        linkedTaskOpened.current = true;
+        setInspected({
+          taskId: linkedTask.taskId,
+          runId:
+            runResult.status === "fulfilled"
+              ? (runResult.value.items.find((run) => run.taskId === linkedTask.taskId)?.runId ?? "")
+              : "",
+        });
+      }
+    } else if (linkedTaskId.current) {
+      setNotice("The linked task is no longer available in this workspace. Refresh Kanban to try again.");
+      setInspected((current) => (current?.taskId === linkedTaskId.current ? null : current));
+    }
     setError(issues.length ? issues.join(" · ") : null);
     setLoading(false);
     setMoreBusy(false);
@@ -259,21 +300,40 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
               workspaceId: props.activeWorkspaceId,
             }
           : { action, taskIds: ids, expectedRevisionsByTaskId, workspaceId: props.activeWorkspaceId };
+      const admission = acquireTaskMutations(
+        ids.map((id) => taskMutationKey(gatewayBase, props.activeWorkspaceId, id)),
+      );
+      if (!admission) {
+        setActionError(
+          "A selected task has a pending or unconfirmed action in this app session. Inspect its owner record before continuing.",
+        );
+        return;
+      }
       bulkLock.current = true;
       setBulkBusy(true);
       setActionError(null);
       setNotice(null);
+      let confirmed = false;
       try {
         const result = await bulkTaskAction(body);
         if (
           !Array.isArray(result.tasks) ||
+          result.tasks.length !== ids.length ||
+          new Set(result.tasks.map((task) => task.taskId)).size !== ids.length ||
           ids.some(
             (taskId) =>
               !result.tasks.some(
                 (task) =>
                   task.taskId === taskId &&
                   task.workspaceId === props.activeWorkspaceId &&
-                  task.revision > expectedRevisionsByTaskId[taskId]!,
+                  (task.revision === expectedRevisionsByTaskId[taskId]! + 1 ||
+                    (task.revision === expectedRevisionsByTaskId[taskId]! &&
+                      (action === "close"
+                        ? task.status === "done"
+                        : action === "unblock" &&
+                          task.status === "assigned" &&
+                          (!task.retryBudget ||
+                            (task.retryBudget.retryCount === 0 && !task.retryBudget.exhaustedAt))))),
               ),
           )
         ) {
@@ -281,15 +341,45 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
             "The Gateway did not confirm every selected task update. Refresh to review their recorded state before retrying.",
           );
         }
+        if (getGatewayApiBaseUrl() !== gatewayBase)
+          throw new Error("The original Gateway installation is no longer selected.");
+        const readback = await Promise.all(
+          result.tasks.map((task) =>
+            fetchTask(task.taskId, props.activeWorkspaceId, props.activeCitadelId, {
+              signal: new AbortController().signal,
+            }),
+          ),
+        );
+        if (
+          getGatewayApiBaseUrl() !== gatewayBase ||
+          readback.some((task, index) => !taskRecordsEqual(task, result.tasks[index]!))
+        )
+          throw new Error("Independent task owner reads did not confirm the bulk action receipt.");
+        confirmed = true;
         if (!isMounted()) {
           return;
         }
         setSelected(new Set());
         setPendingConflict(null);
-        setNotice(`${ids.length} selected task${ids.length === 1 ? "" : "s"} updated.`);
+        const changed = result.tasks.filter((task) => task.revision > expectedRevisionsByTaskId[task.taskId]!).length;
+        setNotice(
+          `${changed} selected task${changed === 1 ? "" : "s"} updated.${changed < ids.length ? ` ${ids.length - changed} already matched this action.` : ""}`,
+        );
         await load();
       } catch (err) {
-        if (err instanceof ApiRequestError && err.status === 409) {
+        if (confirmed) {
+          if (isMounted())
+            setActionError(
+              "The Gateway confirmed the task update, but the board could not refresh. Reopen its current records.",
+            );
+        } else if (
+          err instanceof ApiRequestError &&
+          err.status === 409 &&
+          err.method === "POST" &&
+          err.path === "/api/v1/tasks/bulk"
+        ) {
+          // This owner's 409 is raised by transactional revision validation,
+          // before the batch commits. Other failures may follow a commit.
           await load();
           if (isMounted()) {
             setPendingConflict({ action, taskIds: ids });
@@ -298,19 +388,38 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
             );
           }
         } else if (isMounted()) {
+          admission.uncertain(
+            "The task action outcome is unconfirmed. Further actions for these tasks are locked in both shells for this app session.",
+          );
           setActionError(err instanceof Error ? err.message : String(err));
-        }
+        } else
+          admission.uncertain(
+            "The task action outcome is unconfirmed. Further actions for these tasks are locked in both shells for this app session.",
+          );
       } finally {
+        admission.settle();
         bulkLock.current = false;
         if (isMounted()) {
           setBulkBusy(false);
         }
       }
     },
-    [cards, isMounted, load, props.activeWorkspaceId, selected],
+    [cards, isMounted, load, gatewayBase, props.activeCitadelId, props.activeWorkspaceId, selected],
   );
 
   const hasSelection = selected.size > 0;
+  const selectionLocked = [...selected].some(
+    (id) => readTaskMutation(taskMutationKey(gatewayBase, props.activeWorkspaceId, id)).phase !== "idle",
+  );
+  const uncertainTask =
+    tasks.find(
+      (task) =>
+        readTaskMutation(taskMutationKey(gatewayBase, props.activeWorkspaceId, task.taskId)).phase === "uncertain",
+    ) ??
+    runs?.find(
+      (run) =>
+        readTaskMutation(taskMutationKey(gatewayBase, props.activeWorkspaceId, run.taskId)).phase === "uncertain",
+    );
 
   return (
     <NativePageFrame
@@ -337,7 +446,7 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
             }
           >
             New task
-            {hasSessionDraft("kanban:" + (props.activeCitadelId ?? "") + ":" + props.activeWorkspaceId + ":create")
+            {hasSessionDraft(taskCreateDraftKey(gatewayBase, props.activeWorkspaceId, props.activeCitadelId))
               ? " · Unsaved"
               : ""}
           </NativeButton>
@@ -353,7 +462,7 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
           <NativeButton
             variant="default"
             className="mc-next-kanban-action"
-            disabled={!hasSelection || bulkBusy}
+            disabled={!hasSelection || bulkBusy || selectionLocked}
             onClick={() => void runBulk("unblock")}
           >
             Unblock
@@ -361,7 +470,7 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
           <NativeButton
             variant="outline"
             className="mc-next-kanban-action"
-            disabled={!hasSelection || bulkBusy}
+            disabled={!hasSelection || bulkBusy || selectionLocked}
             onClick={() => void runBulk("retry")}
           >
             Retry
@@ -369,7 +478,7 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
           <NativeButton
             variant="outline"
             className="mc-next-kanban-action"
-            disabled={!hasSelection || bulkBusy}
+            disabled={!hasSelection || bulkBusy || selectionLocked}
             onClick={() => void runBulk("close")}
           >
             Close
@@ -384,6 +493,12 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
           </NativeButton>
         </div>
       ) : null}
+      {uncertainTask ? (
+        <NoticeBanner
+          tone="warning"
+          message="A task action outcome is unconfirmed. Its mutation lock remains active in both shells for this app session; refreshing records does not authorize a retry."
+        />
+      ) : null}
       {error && (runs !== null || tasks.length > 0) ? (
         <NoticeBanner tone="warning" message={error + " Previously loaded records may be stale."} />
       ) : null}
@@ -396,7 +511,7 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
               className="mc-next-kanban-action"
               data-testid="kanban-conflict-retry"
               aria-label={`Retry ${pendingConflict.action} for ${pendingConflict.taskIds.length} previously selected tasks`}
-              disabled={bulkBusy || selected.size === 0}
+              disabled={bulkBusy || selected.size === 0 || selectionLocked}
               onClick={() => void runBulk(pendingConflict.action)}
             >
               Retry {formatBulkAction(pendingConflict.action)}

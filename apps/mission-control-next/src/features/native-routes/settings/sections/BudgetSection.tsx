@@ -22,7 +22,7 @@ import {
   describeBudgetMode,
   labelForBudgetMode,
   normalizeBudgetMode,
-} from "../../SettingsNativePage";
+} from "../helpers/budget-preferences";
 import { ErrorState, NativeButton } from "../../primitives";
 
 export function BudgetSection({ route, navigate }: SettingsSectionProps) {

@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 export { prepareWorkflowSkillCapture, stageWorkflowSkillCapture } from "./workflow-skill-capture.js";
+export { updateProviderTransport } from "./provider-transport.js";
 /* eslint-disable max-lines -- Client transport remains centralized so auth/bootstrap/request behavior stays consistent across surfaces. */
 import type {
   AddonActionResponse,
@@ -957,9 +958,12 @@ export {
   createMcpElicitation,
   createMcpServer,
   completeMcpOAuth,
+  completeReviewedMcpOAuth,
   connectMcpServer,
+  connectReviewedMcpServer,
   deleteMcpServer,
   disconnectMcpServer,
+  disconnectReviewedMcpServer,
   fetchMcpElicitations,
   fetchMcpRemotePreview,
   fetchMcpServerModeManifest,
@@ -972,6 +976,7 @@ export {
   respondMcpElicitation,
   runMcpServerHealthCheck,
   startMcpOAuth,
+  startReviewedMcpOAuth,
   updateMcpServer,
   updateMcpServerPolicy,
 } from "./mcp.js";
@@ -1114,8 +1119,15 @@ export interface EventStreamStatus {
   gatewayNodeId?: string;
 }
 
+/** Events received before stream-ready are catch-up frames, not fresh news. */
+export interface RealtimeEventDelivery {
+  replayed: boolean;
+}
+
+export const STREAM_READY_FALLBACK_MS = 5_000;
+
 interface EventStreamSubscriber {
-  onEvent: (event: RealtimeEvent) => void;
+  onEvent: (event: RealtimeEvent, delivery: RealtimeEventDelivery) => void;
   onStateChange?: (state: EventStreamConnectionState) => void;
   onStatusChange?: (status: EventStreamStatus) => void;
 }
@@ -1135,9 +1147,10 @@ let activeEventStreamGatewayNodeId: string | undefined;
 let pendingRealtimeCursor: number | undefined;
 let realtimeCursorFlushTimer: number | null = null;
 let realtimeCursorFlushListenersRegistered = false;
+let eventStreamLiveFallbackTimer: number | null = null;
 
 export function connectEventStream(
-  onEvent: (event: RealtimeEvent) => void,
+  onEvent: (event: RealtimeEvent, delivery: RealtimeEventDelivery) => void,
   onStateChange?: (state: EventStreamConnectionState) => void,
   onStatusChange?: (status: EventStreamStatus) => void,
 ): () => void {
@@ -1237,6 +1250,14 @@ async function ensureEventStreamConnected(): Promise<void> {
 
   const source = new EventSource(streamUrl);
   sharedEventSource = source;
+  let streamLive = false;
+  const markStreamLive = () => {
+    streamLive = true;
+    if (eventStreamLiveFallbackTimer !== null) {
+      window.clearTimeout(eventStreamLiveFallbackTimer);
+      eventStreamLiveFallbackTimer = null;
+    }
+  };
 
   source.onopen = () => {
     if (sharedEventSource !== source) {
@@ -1251,6 +1272,7 @@ async function ensureEventStreamConnected(): Promise<void> {
       event: "open",
       message: "Realtime event stream connected",
     });
+    eventStreamLiveFallbackTimer = window.setTimeout(markStreamLive, STREAM_READY_FALLBACK_MS);
   };
 
   source.onmessage = (evt) => {
@@ -1290,8 +1312,9 @@ async function ensureEventStreamConnected(): Promise<void> {
         },
       });
       notifyEventStreamStatusToAll();
+      const delivery: RealtimeEventDelivery = { replayed: !streamLive };
       for (const subscriber of eventStreamSubscribers) {
-        subscriber.onEvent(event);
+        subscriber.onEvent(event, delivery);
       }
     } catch {
       // ignore malformed messages
@@ -1308,7 +1331,7 @@ async function ensureEventStreamConnected(): Promise<void> {
     const replayGapEvent = buildReplayGapRealtimeEvent(evt.data);
     notifyEventStreamStatusToAll();
     for (const subscriber of eventStreamSubscribers) {
-      subscriber.onEvent(replayGapEvent);
+      subscriber.onEvent(replayGapEvent, { replayed: !streamLive });
     }
   });
 
@@ -1316,6 +1339,7 @@ async function ensureEventStreamConnected(): Promise<void> {
     if (sharedEventSource !== source) {
       return;
     }
+    markStreamLive();
     try {
       const payload = JSON.parse(evt.data) as {
         leaseId?: string;
@@ -1335,6 +1359,7 @@ async function ensureEventStreamConnected(): Promise<void> {
     if (sharedEventSource !== source) {
       return;
     }
+    markStreamLive();
     closeSharedEventSource();
     if (eventStreamSubscribers.size === 0) {
       setEventConnectionState("closed");
@@ -1379,6 +1404,10 @@ function scheduleReconnect(): void {
 
 function closeSharedEventSource(): void {
   eventConnectInFlight = false;
+  if (eventStreamLiveFallbackTimer !== null && typeof window !== "undefined") {
+    window.clearTimeout(eventStreamLiveFallbackTimer);
+    eventStreamLiveFallbackTimer = null;
+  }
   if (!sharedEventSource) {
     return;
   }

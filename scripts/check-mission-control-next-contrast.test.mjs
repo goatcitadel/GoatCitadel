@@ -5,6 +5,8 @@ import {
   contrastRatio,
   buildThemeTokens,
   collectContrastViolations,
+  buildCockpitThemeTokens,
+  collectCockpitContrastViolations,
 } from "./check-mission-control-next-contrast.mjs";
 
 test("relative luminance extremes", () => {
@@ -35,4 +37,11 @@ test("all required token pairs clear AA in both themes", async () => {
     [],
     "contrast violations:\n" + violations.map((v) => `  ${JSON.stringify(v)}`).join("\n"),
   );
+});
+
+test("cockpit text, status, and action colors clear AA in both themes", async () => {
+  const themes = await buildCockpitThemeTokens();
+  assert.ok(themes.light.has("--cockpit-canvas") && themes.dark.has("--cockpit-canvas"));
+  const violations = collectCockpitContrastViolations(themes);
+  assert.deepEqual(violations, [], "cockpit contrast violations:\n" + violations.map((v) => `  ${JSON.stringify(v)}`).join("\n"));
 });

@@ -1,6 +1,6 @@
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
 import { Bell, Volume2 } from "lucide-react";
 import {
   fetchInstalledAddons,
@@ -12,6 +12,7 @@ import {
   fetchWorkspaces,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { type UiDensity, useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { useShellHandoff } from "@next/app/use-shell-handoff";
 import {
   nativeLoad,
   nativeLoadIssues,
@@ -45,28 +46,10 @@ function labelForDensity(value: UiDensity): string {
 }
 
 import { DesktopUpdatesPanel } from "../../../desktop-updates/DesktopUpdatesPanel";
-
-type DesktopPermission = "unsupported" | NotificationPermission;
-
-function readDesktopPermission(): DesktopPermission {
-  if (typeof window === "undefined" || !("Notification" in window)) return "unsupported";
-  return window.Notification.permission;
-}
-
-function describeDesktopPermission(permission: DesktopPermission): string {
-  switch (permission) {
-    case "granted":
-      return "Allowed by your browser or host.";
-    case "denied":
-      return "Blocked by your browser or host. Change this site's notification permission in host settings.";
-    case "default":
-      return "Not decided yet. Check permission to allow system notifications.";
-    case "unsupported":
-      return "This browser or host does not support system notifications.";
-  }
-}
+import { describeDesktopPermission, useDesktopNotifications } from "../use-desktop-notifications";
 
 export function GeneralSection(props: SettingsSectionProps) {
+  const shellSwitch = useShellHandoff([props.activeCitadelId, props.activeWorkspaceId]);
   const { activeWorkspaceName, route, navigate } = props;
   const {
     density,
@@ -77,57 +60,13 @@ export function GeneralSection(props: SettingsSectionProps) {
     setNotificationSoundMode,
     setNotificationToastsEnabled,
   } = useUiPreferences();
-  const [desktopPermission, setDesktopPermission] = useState<DesktopPermission>(readDesktopPermission);
-  const [notificationFeedback, setNotificationFeedback] = useState<string | null>(null);
-
-  useEffect(() => {
-    const refresh = () => setDesktopPermission(readDesktopPermission());
-    refresh();
-    window.addEventListener?.("focus", refresh);
-    if (typeof document !== "undefined") document.addEventListener?.("visibilitychange", refresh);
-    return () => {
-      window.removeEventListener?.("focus", refresh);
-      if (typeof document !== "undefined") document.removeEventListener?.("visibilitychange", refresh);
-    };
-  }, []);
-
-  const checkDesktopPermission = async () => {
-    if (typeof window === "undefined" || !("Notification" in window)) {
-      setDesktopPermission("unsupported");
-      setNotificationFeedback("System notifications are unavailable in this host.");
-      return;
-    }
-    try {
-      const current = window.Notification.permission;
-      const next = current === "default" ? await window.Notification.requestPermission() : current;
-      setDesktopPermission(next);
-      setNotificationFeedback(
-        next === "granted"
-          ? "System notifications are allowed."
-          : next === "denied"
-            ? "System notifications are blocked by the browser or host."
-            : "Permission was not changed.",
-      );
-    } catch {
-      setDesktopPermission(readDesktopPermission());
-      setNotificationFeedback("The host could not check notification permission.");
-    }
-  };
-
-  const sendTestNotification = () => {
-    if (desktopPermission !== "granted" || typeof window === "undefined" || !("Notification" in window)) return;
-    try {
-      new window.Notification("GoatCitadel test notification", {
-        body: "System notifications are working in this host.",
-      });
-      setNotificationFeedback("Test notification sent.");
-    } catch {
-      setNotificationFeedback("The host could not display a test notification.");
-    }
-  };
+  const { desktopPermission, notificationFeedback, checkingPermission, checkDesktopPermission, sendTestNotification } = useDesktopNotifications();
 
   return (
     <SettingsStack className="mc-next-preference-stack">
+      {shellSwitch.dialog}
+      {shellSwitch.error ? <p role="alert">{shellSwitch.error}</p> : null}
+      {shellSwitch.opening ? <p role="status">Opening view…</p> : null}
       <DesktopUpdatesPanel />
       <p className="mc-next-settings-field-note">Workspace: {activeWorkspaceName}</p>
       <NativeCard
@@ -150,6 +89,14 @@ export function GeneralSection(props: SettingsSectionProps) {
             </select>
             <p className="mc-next-settings-field-note">
               Comfortable enlarges type and controls; Compact tightens them for dense, evidence-heavy work.
+            </p>
+          </SettingsField>
+          <SettingsField label="New Mission Control (preview)">
+            <NativeButton variant="outline" onClick={() => shellSwitch.request("cockpit")}>
+              Try the new Mission Control
+            </NativeButton>
+            <p className="mc-next-settings-field-note">
+              Opens the redesigned layout. Switch back any time from its settings menu.
             </p>
           </SettingsField>
         </SettingsFieldGrid>
@@ -228,7 +175,7 @@ export function GeneralSection(props: SettingsSectionProps) {
           </SettingsField>
         </SettingsFieldGrid>
         <SettingsButtonRow>
-          <NativeButton variant="secondary" onClick={() => void checkDesktopPermission()}>
+          <NativeButton variant="secondary" disabled={checkingPermission} onClick={() => void checkDesktopPermission()}>
             <Bell size={16} />
             {desktopPermission === "default" ? "Allow notifications" : "Re-check permission"}
           </NativeButton>

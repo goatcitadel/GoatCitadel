@@ -40,6 +40,7 @@ import type {
   LlmProviderAdviceResponse,
   LlmProviderConfig,
   LlmProviderRequestConfig,
+  LlmProviderTransportReceipt,
   LlmRuntimeMeasurementsQuery,
   LlmRuntimeMeasurementsResponse,
   LlamaCppAdvisorRecommendation,
@@ -83,6 +84,7 @@ export interface FetchAddonSlotsParams {
 export type LlmRuntimeConfigResponse = RuntimeSettingsResponse["llm"] & {
   revision: number;
   providerConfigs?: LlmProviderConfig[];
+  providerTransportReceipt?: LlmProviderTransportReceipt;
 };
 
 export interface ProviderSecretStatus {
@@ -636,8 +638,11 @@ export async function fetchLlamaCppStatus(): Promise<LlamaCppRuntimeStatus> {
   return request<LlamaCppRuntimeStatus>("/api/v1/llamacpp/status");
 }
 
-export async function fetchLlamaCppSetup(workspaceId = "default"): Promise<LlamaCppSetupProjection> {
-  return request<LlamaCppSetupProjection>(`/api/v1/llamacpp/setup?workspaceId=${encodeURIComponent(workspaceId)}`);
+export async function fetchLlamaCppSetup(workspaceId = "default", signal?: AbortSignal): Promise<LlamaCppSetupProjection> {
+  return request<LlamaCppSetupProjection>(
+    `/api/v1/llamacpp/setup?workspaceId=${encodeURIComponent(workspaceId)}`,
+    signal ? { signal, cache: "no-store" } : undefined,
+  );
 }
 
 export async function stageLlamaCppManagedSelection(input: {

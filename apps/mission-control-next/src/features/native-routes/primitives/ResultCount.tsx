@@ -18,6 +18,8 @@ export interface ResultCountProps {
   total: number;
   /** Plural noun for the items, e.g. "rows", "skills". Default "items". */
   noun?: string;
+  /** Override the singular form when removing the final "s" is insufficient. */
+  nounSingular?: string;
   /** Optional "View all" affordance, shown only when the list is truncated. */
   onViewAll?: () => void;
   viewAllLabel?: string;
@@ -28,14 +30,16 @@ export function ResultCount({
   shown,
   total,
   noun = "items",
+  nounSingular,
   onViewAll,
   viewAllLabel = "View all",
   className,
 }: ResultCountProps) {
   const truncated = shown < total;
+  const label = total === 1 ? (nounSingular ?? noun.replace(/s$/, "")) : noun;
   const text = truncated
-    ? `Showing ${shown.toLocaleString()} of ${total.toLocaleString()} ${noun}`
-    : `${total.toLocaleString()} ${noun}`;
+    ? `Showing ${shown.toLocaleString()} of ${total.toLocaleString()} ${label}`
+    : `${total.toLocaleString()} ${label}`;
   return (
     <p className={clsx("mc-next-result-count", className)}>
       <span aria-live="polite" aria-atomic="true">

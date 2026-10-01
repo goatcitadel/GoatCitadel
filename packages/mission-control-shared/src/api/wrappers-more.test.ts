@@ -183,6 +183,8 @@ describe("additional shared API wrappers", () => {
       });
     }
     await expectCall(durable.fetchDurableRun("run/1"), "/api/v1/durable/runs/run%2F1");
+    await expectCall(durable.fetchDurableRuns(999), "/api/v1/durable/runs?limit=500");
+    await expectCall(durable.fetchDurableDeadLetters(999), "/api/v1/durable/dead-letters?limit=500");
     await expectCall(durable.fetchObserveRunTrace("run/1"), "/api/v1/observe/runs/run%2F1/trace");
     await expectCall(durable.exportObserveRunTrace("run/1"), "/api/v1/observe/runs/run%2F1/trace/export");
     await expectCall(
@@ -343,6 +345,10 @@ describe("additional shared API wrappers", () => {
     await expectCall(
       integrations.fetchNotificationRules("workspace/1"),
       "/api/v1/notifications/rules?workspaceId=workspace%2F1",
+    );
+    await expectCall(
+      integrations.fetchNotificationRules("workspace/1", true),
+      "/api/v1/notifications/rules?workspaceId=workspace%2F1&includeArchived=true",
     );
     await expectCall(
       integrations.createNotificationRule("workspace/1", {

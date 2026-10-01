@@ -18,6 +18,8 @@ import type {
   DurableRetryPolicy,
   DurableRunCreateRequest,
   DurableRunRecord,
+  DurableRunHistoryPage,
+  DurableRunHistoryQuery,
   DurableRunTimelineEvent,
   DurableWakeResult,
 } from "@goatcitadel/contracts";
@@ -750,12 +752,13 @@ export class DurableRunService {
   // ── queries ──────────────────────────────────────────────────────
 
   async getDurableDiagnostics(): Promise<DurableDiagnosticsResponse> {
+    const durableRuns = this.ctx.storage.durableRuns;
     const [statusCounts, runCount, deadLetters, recentRuns, recentDeadLetters] = await Promise.all([
-      this.ctx.storage.durableRuns.statusCounts(),
-      this.ctx.storage.durableRuns.countRuns(),
-      this.ctx.storage.durableRuns.listDeadLetters(1000),
-      this.ctx.storage.durableRuns.listRuns(25),
-      this.ctx.storage.durableRuns.listDeadLetters(25),
+      durableRuns.statusCounts(),
+      durableRuns.countRuns(),
+      durableRuns.listDeadLetters(1000),
+      durableRuns.listRuns(25),
+      durableRuns.listDeadLetters(25),
     ]);
     const durableFoundationReady = this.isDurableFoundationEnabled() && Boolean(this.deps?.workflowRegistry);
     return {
@@ -787,6 +790,11 @@ export class DurableRunService {
 
   async listDurableRuns(limit = 50): Promise<DurableRunRecord[]> {
     return (await this.ctx.storage.durableRuns.listRuns(limit)).map((run) => deriveDurableRunOperationalState(run));
+  }
+
+  async listDurableRunHistory(query: DurableRunHistoryQuery): Promise<DurableRunHistoryPage> {
+    const page = await this.ctx.storage.durableRuns.listRunHistory(query);
+    return { ...page, items: page.items.map((run) => deriveDurableRunOperationalState(run)) };
   }
 
   async listDurableDeadLetters(limit = 50): Promise<DurableDeadLetterRecord[]> {

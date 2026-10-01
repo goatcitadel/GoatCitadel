@@ -1,3 +1,4 @@
+import { resetChatSessionCreationForTests } from "@goatcitadel/mission-control-shared/state/chat-session-creation";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +28,7 @@ const createChatGeneratedArtifactMock = vi.fn();
 const createChangePlanMock = vi.fn();
 const createChatSideChatMock = vi.fn();
 const createChatSessionMock = vi.fn();
+const fetchChatSessionStatusMock = vi.fn();
 const forkChatSessionFromTurnMock = vi.fn();
 const fetchChangePlansMock = vi.fn(async () => ({ items: [] }));
 const fetchAgentsMock = vi.fn();
@@ -157,6 +159,8 @@ const selectedTurn = {
   },
   generatedArtifacts: [{ artifactId: "artifact-1" }],
   trace: {
+    sessionId: "session-1",
+    turnId: "turn-1",
     status: "completed",
     model: "gpt-5.5",
     routing: {
@@ -242,6 +246,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   createChatGeneratedArtifact: (...args: unknown[]) => createChatGeneratedArtifactMock(...args),
   createChatSideChat: (...args: unknown[]) => createChatSideChatMock(...args),
   createChatSession: (...args: unknown[]) => createChatSessionMock(...args),
+  fetchChatSessionStatus: (...args: unknown[]) => fetchChatSessionStatusMock(...args),
   createChangePlan: (...args: unknown[]) => createChangePlanMock(...args),
   cancelChangePlan: vi.fn(),
   confirmChangePlan: vi.fn(),
@@ -616,20 +621,29 @@ function setupMocks() {
     decision: { providerId: "openai", model: "gpt-5.5" },
   });
   streamAgentChatMessageMock.mockImplementation(async () => undefined);
-  createChatSessionMock.mockResolvedValue({
+  fetchChatSessionStatusMock.mockImplementation(async (sessionId: string) => ({ sessionId, workspaceId: "workspace-1" }));
+  createChatSessionMock.mockImplementation(async (input: { workspaceId?: string; projectId?: string }) => ({
     ...selectedSession,
+    workspaceId: input.workspaceId ?? "workspace-1",
+    projectId: input.projectId,
     sessionId: "session-new",
     sessionKey: "session-new",
     title: "Trail from Launch plan",
-  });
+  }));
   forkChatSessionFromTurnMock.mockResolvedValue({
     session: {
       ...selectedSession,
       sessionId: "session-new",
       sessionKey: "session-new",
       title: "Fork of Launch plan",
+      forkRelationships: [{ forkId: "fork-1", direction: "forked_from", relatedSessionId: "session-1",
+        sourceTurnId: "turn-1", transcriptPathHash: "a".repeat(64), createdAt: "2026-09-30T00:00:00Z" }],
     },
-    manifest: { forkId: "fork-1" },
+    manifest: { manifestVersion: "chat.session-fork-manifest.v1", forkId: "fork-1", sourceSessionId: "session-1",
+      sourceTurnId: "turn-1", newSessionId: "session-new", workspaceId: "workspace-1", transcriptPathHash: "a".repeat(64),
+      turnMappings: [{ sourceTurnId: "turn-1", copiedTurnId: "copied-turn-1", sourceTraceHash: "b".repeat(64), copiedTraceHash: "c".repeat(64) }],
+      messageMappings: [], attachmentCopies: [], artifactCopies: [], contextSnapshotHashes: [], sourceEvidenceHashes: [],
+      createdByActorId: "operator", createdAt: "2026-09-30T00:00:00Z" },
   });
   fetchChatSessionGoalMock.mockResolvedValue({
     sessionId: "session-1",
@@ -1052,6 +1066,7 @@ async function selectDefaultSession() {
 
 describe("MissionThreadedControllerHost", () => {
   beforeEach(() => {
+  resetChatSessionCreationForTests();
     vi.clearAllMocks();
     confirmModalProps = [];
     latestSurfaceInput = null;
@@ -1326,6 +1341,17 @@ describe("MissionThreadedControllerHost", () => {
       sessionId: "session-1",
     });
     expect("sessionIncarnationId" in hookInput).toBe(false);
+  });
+
+  it("does not fetch active-only external attachments for an archived conversation", async () => {
+    useChatThreadControllerMock.mockReturnValue({
+      ...useChatThreadControllerMock(),
+      selectedSession: { ...selectedSession, lifecycleStatus: "archived", archivedAt: "2026-09-30T00:00:00.000Z" },
+    });
+    await renderHost();
+    await selectDefaultSession();
+    const hookInput = useExternalSourceAttachmentsMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(hookInput).toMatchObject({ workspaceId: "workspace-1", sessionId: null });
   });
 
   it("rejects malformed, foreign, traversing, duplicate, and oversized hydrated attachment references", () => {
@@ -1808,7 +1834,7 @@ describe("MissionThreadedControllerHost", () => {
           steps: [],
         },
       ),
-    ).toBe("Run: delegation partial");
+    ).toBe("Run: Delegation partial");
     expect(
       formatThreadedRunStateSummary(
         {
@@ -1832,7 +1858,7 @@ describe("MissionThreadedControllerHost", () => {
           steps: [],
         },
       ),
-    ).toBe("Run: delegation partial");
+    ).toBe("Run: Delegation partial");
     expect(
       formatThreadedRunStateSummary(
         {
@@ -1848,7 +1874,7 @@ describe("MissionThreadedControllerHost", () => {
           steps: [],
         },
       ),
-    ).toBe("Run: waiting_for_approval");
+    ).toBe("Run: Waiting on you");
     expect(
       formatThreadedRunStateSummary(null, {
         attachedTurnId: "turn-1",
@@ -1858,7 +1884,7 @@ describe("MissionThreadedControllerHost", () => {
         status: "failed",
         steps: [],
       }),
-    ).toBe("Run: delegation failed");
+    ).toBe("Run: Delegation failed");
 
     expect(requiresBoundaryAcknowledgment(null)).toBe(false);
     expect(requiresBoundaryAcknowledgment({ fallbackResult: "local_to_cloud" } as any)).toBe(true);
@@ -2127,6 +2153,7 @@ describe("MissionThreadedControllerHost", () => {
   });
 
   it("does not promote older terminal receipts after dismissing the newest one", async () => {
+    const recentSettlement = new Date().toISOString();
     const newestTerminalPlan = {
       planId: "plan-newest",
       revision: 3,
@@ -2135,6 +2162,8 @@ describe("MissionThreadedControllerHost", () => {
       kind: "session_model",
       request: { kind: "session_model", providerId: "openai", model: "gpt-5.6" },
       createdAt: "2026-08-15T12:00:00.000Z",
+      updatedAt: recentSettlement,
+      origin: { turnId: "turn-1" },
     };
     const olderTerminalPlan = {
       planId: "plan-older",
@@ -2144,6 +2173,8 @@ describe("MissionThreadedControllerHost", () => {
       kind: "session_model",
       request: { kind: "session_model", providerId: "openai", model: "gpt-5.5" },
       createdAt: "2026-08-14T12:00:00.000Z",
+      updatedAt: "2026-08-14T12:00:00.000Z",
+      origin: { turnId: "turn-1" },
     };
     // Gateway change-plan history is newest-first.
     fetchChangePlansMock.mockResolvedValueOnce({ items: [newestTerminalPlan, olderTerminalPlan] });
@@ -2172,6 +2203,8 @@ describe("MissionThreadedControllerHost", () => {
       kind: "session_model",
       request: { kind: "session_model", providerId: "openai", model: "gpt-5.6" },
       createdAt: "2026-08-15T12:00:00.000Z",
+      updatedAt: new Date().toISOString(),
+      origin: { turnId: "turn-1" },
     };
     let rejectNextSessionFetch: ((reason?: unknown) => void) | undefined;
     const nextSessionFetch = new Promise<{ items: never[] }>((_resolve, reject) => {
@@ -2343,7 +2376,7 @@ describe("MissionThreadedControllerHost", () => {
     });
 
     expect(latestSurfaceInput?.workflowPanel?.kind).toBe("cowork");
-    expect(latestSurfaceInput?.activeSessionSurfaceProps?.trust.runStateSummary).toBe("Run: delegation running");
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.trust.runStateSummary).toBe("Run: Delegation running");
     const props = latestSurfaceInput?.workflowPanel?.kind === "cowork" ? latestSurfaceInput.workflowPanel.props : null;
     await act(async () => {
       props?.onAgenticControl?.({ action: "pause", enabled: false, label: "Pause" } as any);
@@ -2484,7 +2517,7 @@ describe("MissionThreadedControllerHost", () => {
         effectiveProviderModelSummary: "Anthropic / claude-4",
         fallbackSummary: "Fallback used · primary unavailable",
         fallbackTone: "warning",
-        runStateSummary: "Run: running",
+        runStateSummary: "Run: Running",
       }),
     );
   });
@@ -3249,6 +3282,10 @@ describe("MissionThreadedControllerHost", () => {
       title: "Fork of Launch plan",
     });
     expect(createChatSessionMock).not.toHaveBeenCalled();
+    expect(latestSurfaceInput?.sessionRail.selectedSessionId).toBe("session-new");
+    const sessionData = useChatSessionDataMock.mock.results.at(-1)?.value;
+    expect(sessionData.setSessions).toHaveBeenCalled();
+    expect(sessionData.loadSidebar).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ preferredSessionId: "session-new" }));
   });
 
   it("hydrates server metadata without overwriting conflicting rename and organization drafts", async () => {

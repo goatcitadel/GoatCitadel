@@ -23,6 +23,8 @@ import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { CronSpecMutationOwner } from "./cron-config-generation-owner.js";
 import { assertNoAssembledPromptInjection } from "./assembled-prompt-injection-guard.js";
 import { trackBackgroundTask } from "./background-scheduler.js";
+import { assertImprovementReviewPrecondition, hasPassingCurrentImprovementEvaluation,
+  ImprovementCandidateDecisionPostCommitError } from "./improvement-review-precondition.js";
 import { IMPROVEMENT_WEEKLY_JOB_ID } from "./gateway/cron-job-ids.js";
 
 const log = logger.child("improvement-service");
@@ -56,6 +58,7 @@ import type {
   ImprovementCandidateLifecycleResult,
   ImprovementCandidateKind,
   ImprovementCandidateRecord,
+  ImprovementCandidateReviewInput,
   ImprovementCandidateRevisionRecord,
   ImprovementCandidateStatus,
   ImprovementEvaluationKind,
@@ -1006,69 +1009,62 @@ export class ImprovementService {
 
   async approveImprovementCandidate(
     candidateId: string,
-    input: ImprovementCandidateLifecycleInput = {},
+    input: ImprovementCandidateReviewInput = {},
   ): Promise<ImprovementCandidateLifecycleResult> {
-    await this.ensureImprovementLedgerTables();
-    const actorId = input.actorId?.trim() || "operator";
-    const candidate = await this.readImprovementCandidate(candidateId);
-    const revision = await this.readCurrentRevision(candidateId);
-    const evaluation = await this.readLatestEvaluation(candidateId);
-    if (
-      !revision ||
-      !evaluation ||
-      evaluation.status !== "passed" ||
-      candidate.currentRevisionId !== evaluation.revisionId
-    ) {
-      throw new Error(`Candidate ${candidateId} must pass validation before approval.`);
-    }
-    this.assertCandidateNotCorruptOrQuarantined(candidate, revision);
-    await this.updateCandidateStatus(candidateId, "approved", actorId, "operator");
-    const review = await this.getCuratorReviewItem(candidateId);
-    await this.emitLifecycleAuditSignal("candidate_approved", {
-      candidateId,
-      actorId,
-      workspaceId: review.candidate.workspaceId,
-      fingerprint: review.candidate.fingerprint,
-      targetKey: review.candidate.targetKey,
-      mutationApplied: review.mutationApplied,
-      reason: input.reason,
-    });
-    return {
-      action: "approve",
-      status: "approved",
-      review,
-      mutationApplied: review.mutationApplied,
-    };
+    return this.reviewImprovementCandidate(candidateId, "approve", input);
   }
 
   async rejectImprovementCandidate(
     candidateId: string,
-    input: ImprovementCandidateLifecycleInput = {},
+    input: ImprovementCandidateReviewInput = {},
+  ): Promise<ImprovementCandidateLifecycleResult> {
+    return this.reviewImprovementCandidate(candidateId, "reject", input);
+  }
+
+  private async reviewImprovementCandidate(
+    candidateId: string,
+    action: "approve" | "reject",
+    input: ImprovementCandidateReviewInput,
   ): Promise<ImprovementCandidateLifecycleResult> {
     await this.ensureImprovementLedgerTables();
     const actorId = input.actorId?.trim() || "operator";
-    await this.ctx.storage.runImmediateTransaction(async () => {
+    const committed = await this.ctx.storage.runImmediateTransaction(async () => {
       await this.lockCandidateForLifecycleMutation(candidateId);
+      const candidate = await this.readImprovementCandidate(candidateId);
+      const revision = await this.readCurrentRevision(candidateId);
+      if (action === "approve") {
+        const evaluation = await this.readLatestEvaluation(candidateId);
+        assertImprovementReviewPrecondition(input.reviewPrecondition, candidate, revision);
+        if (!revision || !hasPassingCurrentImprovementEvaluation(candidate, revision, evaluation)) {
+          throw new Error(`Candidate ${candidateId} must pass validation before approval.`);
+        }
+        this.assertCandidateNotCorruptOrQuarantined(candidate, revision);
+        await this.updateCandidateStatus(candidateId, "approved", actorId, "operator");
+        return { candidateId, workspaceId: candidate.workspaceId, status: "approved" as const,
+          currentRevisionId: revision.revisionId, changeHash: revision.changeHash };
+      }
+      assertImprovementReviewPrecondition(input.reviewPrecondition, candidate, revision);
       await this.assertCandidateHasNoAppliedActivation(candidateId);
       await this.updateCandidateStatus(candidateId, "rejected", actorId, "operator");
       await this.clearCandidateSuppression(candidateId, actorId, "operator");
+      return { candidateId, workspaceId: candidate.workspaceId, status: "rejected" as const,
+        currentRevisionId: candidate.currentRevisionId ?? null, changeHash: revision?.changeHash ?? null };
     });
-    const review = await this.getCuratorReviewItem(candidateId);
-    await this.emitLifecycleAuditSignal("candidate_rejected", {
-      candidateId,
-      actorId,
-      workspaceId: review.candidate.workspaceId,
-      fingerprint: review.candidate.fingerprint,
-      targetKey: review.candidate.targetKey,
-      mutationApplied: review.mutationApplied,
-      reason: input.reason,
-    });
-    return {
-      action: "reject",
-      status: "rejected",
-      review,
-      mutationApplied: review.mutationApplied,
-    };
+    try {
+      const review = await this.getCuratorReviewItem(candidateId);
+      await this.emitLifecycleAuditSignal(`candidate_${committed.status}`, {
+        candidateId,
+        actorId,
+        workspaceId: review.candidate.workspaceId,
+        fingerprint: review.candidate.fingerprint,
+        targetKey: review.candidate.targetKey,
+        mutationApplied: review.mutationApplied,
+        reason: input.reason,
+      });
+      return { action, status: committed.status, review, mutationApplied: review.mutationApplied };
+    } catch (error) {
+      throw new ImprovementCandidateDecisionPostCommitError(committed, error);
+    }
   }
 
   async snoozeImprovementCandidate(
@@ -4313,8 +4309,9 @@ export class ImprovementService {
     await this.ctx.storage.db
       .prepare(
         `
-        INSERT OR IGNORE INTO improvement_candidate_signals (candidate_id, signal_id, created_at)
+        INSERT INTO improvement_candidate_signals (candidate_id, signal_id, created_at)
         VALUES (@candidateId, @signalId, @createdAt)
+        ON CONFLICT(candidate_id, signal_id) DO NOTHING
       `,
       )
       .run({
@@ -4826,9 +4823,7 @@ export class ImprovementService {
       asOptionalString(proposedChange.risk) ?? asOptionalString(agenticProposal.risk) ?? detail.candidate.severity,
     );
     const approvalReady =
-      Boolean(revision) &&
-      detail.latestEvaluation?.status === "passed" &&
-      detail.latestEvaluation.revisionId === detail.candidate.currentRevisionId &&
+      hasPassingCurrentImprovementEvaluation(detail.candidate, revision, detail.latestEvaluation) &&
       corruptionStatus === "clean" &&
       detail.candidate.status !== "rejected";
     const activationNeedsRuntimeCallable = callableImpact === "widens_after_approval";
@@ -4870,6 +4865,12 @@ export class ImprovementService {
     }
     return {
       candidate: detail.candidate,
+      reviewPrecondition: {
+        workspaceId: detail.candidate.workspaceId,
+        expectedStatus: detail.candidate.status,
+        expectedRevisionId: detail.candidate.currentRevisionId ?? null,
+        expectedChangeHash: revision?.changeHash ?? null,
+      },
       currentRevision: revision,
       latestEvaluation: detail.latestEvaluation,
       latestActivation,

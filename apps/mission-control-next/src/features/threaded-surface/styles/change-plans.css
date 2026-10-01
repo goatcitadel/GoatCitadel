@@ -169,6 +169,7 @@
   color: var(--fg-secondary);
   line-height: 1.6;
   white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 .chat-change-plan-modal .gc-modal-actions {
@@ -279,7 +280,7 @@
   font-size: var(--text-xs);
 }
 
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .mc-dialog-content.chat-change-plan-modal {
     inset: 0;
     transform: none;

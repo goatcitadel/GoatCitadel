@@ -12,7 +12,7 @@ export function DetailInspector({ open, title, subtitle, children, actions, owne
   owner?: "shell" | "feature";
   pinned?: boolean; onTogglePinned?: () => void; onClose: () => void;
 }) {
-  const compact = useMediaQuery("(max-width: 1179px)");
+  const compact = useMediaQuery("(max-width: 1279px)");
   const ref = useRef<HTMLElement | null>(null);
   const headingRef = useRef<HTMLHeadingElement | null>(null);
   const headingId = useId();

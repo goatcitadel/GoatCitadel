@@ -1,4 +1,6 @@
 import type {
+  PromptPackBuiltinImportInput,
+  PromptPackBuiltinImportResult,
   CapabilityTrendSeries,
   PromptPackAutoScoreBatchResult,
   PromptPackAutoScoreResult,
@@ -64,6 +66,16 @@ export async function importBuiltinPromptPack(packKey: string): Promise<{
 }> {
   return request(`/api/v1/prompt-packs/builtins/${encodeURIComponent(packKey)}/import`, {
     method: "POST",
+  });
+}
+
+export async function importBuiltinPromptPackIfAbsent(
+  packKey: string,
+  input: PromptPackBuiltinImportInput,
+): Promise<PromptPackBuiltinImportResult> {
+  return request(`/api/v1/prompt-packs/builtins/${encodeURIComponent(packKey)}/import-if-absent`, {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 

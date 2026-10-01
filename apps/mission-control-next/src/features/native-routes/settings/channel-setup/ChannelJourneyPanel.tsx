@@ -1,55 +1,11 @@
-import { useEffect, useState } from "react";
-import type { ChannelRuntimeStatus, IntegrationConnection } from "@goatcitadel/contracts";
-import {
-  fetchAgenticChannelDeliveries,
-  fetchChannelRuntimeStatus,
-  type AgenticChannelDeliveryRuntimeRecord,
-} from "@goatcitadel/mission-control-shared/api/client";
+import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { NativeCard } from "../../NativeRoutePageLayout";
 import { NativeButton } from "../../primitives";
-
-const PRIMARY_CHANNELS = ["telegram", "discord", "slack", "signal"];
+import { useChannelJourney } from "./use-channel-journey";
 const timestamp = (value?: string) =>
   value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : "Not observed";
-
 export function ChannelJourneyPanel({ connections }: { connections: IntegrationConnection[] }) {
-  const available = connections.filter((item) => PRIMARY_CHANNELS.includes(item.key));
-  const [selected, setSelected] = useState("");
-  const connectionId = available.some((item) => item.connectionId === selected) ? selected : available[0]?.connectionId;
-  const [revision, setRevision] = useState(0);
-  const [result, setResult] = useState<{
-    runtime?: ChannelRuntimeStatus;
-    deliveries: AgenticChannelDeliveryRuntimeRecord[];
-    errors: string[];
-  }>();
-  const [loading, setLoading] = useState(false);
-  useEffect(() => {
-    let current = true;
-    setResult(undefined);
-    if (!connectionId) {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    void Promise.allSettled([
-      fetchChannelRuntimeStatus(connectionId),
-      fetchAgenticChannelDeliveries({ connectionId, limit: 10 }),
-    ]).then(([runtime, deliveries]) => {
-      if (!current) return;
-      setResult({
-        runtime: runtime.status === "fulfilled" ? runtime.value : undefined,
-        deliveries: deliveries.status === "fulfilled" ? deliveries.value.deliveries : [],
-        errors: [
-          runtime.status === "rejected" ? "Runtime evidence could not be loaded." : "",
-          deliveries.status === "rejected" ? "Delivery evidence could not be loaded." : "",
-        ].filter(Boolean),
-      });
-      setLoading(false);
-    });
-    return () => {
-      current = false;
-    };
-  }, [connectionId, revision]);
+  const { available, connectionId, setSelected, setRevision, result, loading } = useChannelJourney(connections);
   if (!available.length) return null;
   const runtime = result?.runtime;
   return (

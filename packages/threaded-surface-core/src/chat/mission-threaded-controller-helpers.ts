@@ -17,6 +17,7 @@ import type {
 import type { ChatVisualStreamMode } from "./chat-streaming-preview";
 import type { OutboundContextBlock } from "./useChatSurfaceOrchestration";
 import { formatWorkProviderModelSummary, type WorkTrustDescriptor } from "./work-trust";
+import { presentChatTurnStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 
 export const VISUAL_STREAM_MODE_PREF_KEY = "goatcitadel.chat.visual_stream_mode.v1";
 const SELECTED_CONTEXT_MAX_CHARS = 12_000;
@@ -272,7 +273,7 @@ export function formatThreadedRunStateSummary(
   delegationRun: MissionControlActiveSessionSurfaceProps["delegationRun"] | null | undefined,
 ): string | undefined {
   const label = formatThreadedRunStateLabel(activeWorkflowTurn, delegationRun);
-  return label ? `Run: ${label}` : undefined;
+  return label ? `Run: ${presentChatTurnStatus(label).label}` : undefined;
 }
 
 export function formatAgenticBackgroundHandoffSummary(

@@ -29,6 +29,7 @@ import type {
   CuratorReviewItem,
   ImprovementCandidateLifecycleAction,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { presentSkillRow } from "@goatcitadel/mission-control-shared/content/library-rows";
 import { NativeCard, NativeDisclosureCard, QuickJumpCard } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
 import {
@@ -225,12 +226,16 @@ export function LibrarySkillsSection({ route, navigate, activeWorkspaceId }: Nat
             </LibraryField>
           </LibraryFieldGrid>
           <LibrarySelectableList
-            items={filteredSkills.map((item) => ({
-              id: item.skillId,
-              title: `${item.name}${hasSessionDraft(`skill-evaluation:${activeWorkspaceId}:${item.skillId}`) ? " · Unsaved" : ""}`,
-              meta: item.state,
-              body: item.note ?? item.reviewWarning ?? item.capabilityCategory ?? item.source,
-            }))}
+            items={filteredSkills.map((item) => {
+              const row = presentSkillRow(item);
+              return {
+                id: item.skillId,
+                title: `${item.name}${hasSessionDraft(`skill-evaluation:${activeWorkspaceId}:${item.skillId}`) ? " · Unsaved" : ""}`,
+                meta: row.trust,
+                body: item.reviewWarning ?? row.description,
+                status: row.status,
+              };
+            })}
             selectedId={selectedSkillId}
             onSelect={(id) => detailLeave.request(() => { setSelectedSkillId(id); setDetailOpen(true); })}
             emptyLabel="No skills available yet."

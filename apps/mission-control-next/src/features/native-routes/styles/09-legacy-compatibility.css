@@ -303,7 +303,7 @@
 }
 
 .mc-next-shell .page-header-title {
-  font-size: clamp(1.02rem, 1.45vw, 1.24rem);
+  font-size: var(--text-lg);
   line-height: 1.08;
   letter-spacing: -0.03em;
 }
@@ -316,7 +316,7 @@
 }
 
 .mc-next-shell .stat-card-value {
-  font-size: clamp(0.82rem, 1.1vw, 1rem);
+  font-size: var(--text-md);
 }
 
 .mc-next-shell .stat-card-note {

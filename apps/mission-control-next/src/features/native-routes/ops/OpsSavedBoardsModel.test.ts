@@ -14,6 +14,19 @@ describe("OpsSavedBoardsModel", () => {
     expect(OPS_SAVED_BOARDS_WIDGET_OPTIONS).toHaveLength(5);
   });
 
+  it("fills both desktop columns without overlapping a widened widget", () => {
+    let draft = createOpsSavedBoardsDraft();
+    for (const kind of OPS_SAVED_BOARD_WIDGET_KINDS.filter((item) => item !== "runtime_truth_summary")) {
+      draft = addOpsSavedBoardsWidget(draft, kind);
+    }
+    expect(draft.placements.map(({ x, y }) => ({ x, y }))).toEqual([
+      { x: 0, y: 0 }, { x: 6, y: 0 }, { x: 0, y: 4 }, { x: 6, y: 4 }, { x: 0, y: 8 },
+    ]);
+
+    const widened = adjustOpsSavedBoardsPlacement(createOpsSavedBoardsDraft(), draft.placements[0]!.widgetId, "wider");
+    expect(addOpsSavedBoardsWidget(widened, "task_status_summary").placements[1]).toMatchObject({ x: 0, y: 4 });
+  });
+
   it("keeps placement moves and resizes inside contract bounds", () => {
     let draft = createOpsSavedBoardsDraft();
     const widgetId = draft.placements[0]!.widgetId;

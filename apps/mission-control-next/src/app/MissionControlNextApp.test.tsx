@@ -270,6 +270,8 @@ vi.mock("./lazy-legacy-pages", () => ({
 
 function installBrowser(href: string): void {
   const location = new URL(href);
+  const events = new EventTarget();
+  let historyState: unknown = null;
   const classSet = () => {
     const values = new Set<string>();
     return {
@@ -294,11 +296,13 @@ function installBrowser(href: string): void {
   vi.stubGlobal("window", {
     location,
     history: {
-      pushState: vi.fn((_state: unknown, _title: string, next: string) => updateLocation(next)),
-      replaceState: vi.fn((_state: unknown, _title: string, next: string) => updateLocation(next)),
+      get state() { return historyState; },
+      pushState: vi.fn((state: unknown, _title: string, next: string) => { historyState = state; updateLocation(next); }),
+      replaceState: vi.fn((state: unknown, _title: string, next: string) => { historyState = state; updateLocation(next); }),
     },
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
+    addEventListener: vi.fn(events.addEventListener.bind(events)),
+    removeEventListener: vi.fn(events.removeEventListener.bind(events)),
+    dispatchEvent: vi.fn(events.dispatchEvent.bind(events)),
     setInterval: vi.fn(() => 1),
     clearInterval: vi.fn(),
   });
@@ -501,17 +505,17 @@ describe("MissionControlNextApp", () => {
     expect(css).toContain("z-index: var(--z-modal);");
     expect(css).toContain(".mc-dialog-content {");
     expect(css).toContain("transform: translate(-50%, -50%);");
-    expect(css).toContain("@media (max-width: 1180px) {");
-    expect(sidebarCss).toContain("@media (max-width: 1179px)");
+    expect(css).toContain("@media (max-width: 1279px) {");
+    expect(sidebarCss).toContain("@media (max-width: 1279px)");
     // Identity and Gateway evidence remain in the responsive System details popover.
-    expect(css).toContain(".mc-next-shell .mc-next-status-strip {");
+    expect(css).toContain('.mc-next-status-strip[data-placement="topbar"] {');
     // Detail and status values must not wrap character-by-character and expand
     // the fixed mobile strip.
     expect(css).toContain(
       ".mc-next-shell .mc-next-status-details summary strong {\n    flex: 0 0 auto;\n    min-width: max-content;",
     );
     expect(css).toContain("width: min(24rem, calc(100vw - 1rem));");
-    expect(css).toContain(".mc-next-status-details summary > span {\n    display: inline;");
+    expect(css).toContain(".mc-next-status-details summary > span {\n    display: none;");
     expect(css).toContain(".mc-next-status-strip:has(.mc-next-status-details[open]) {\n  overflow: visible;");
     expect(css).toContain(".mc-next-shell .mc-next-status-details-popover {\n    position: fixed;\n    right: 0.5rem;");
     expect(css).toContain("left: 0.5rem;\n    width: auto;\n    max-width: none;");
@@ -531,9 +535,13 @@ describe("MissionControlNextApp", () => {
     expect(css).toContain(
       ".mc-next-stage:not(.mc-next-stage-work) {\n  background: color-mix(in oklab, var(--background) 94%, var(--mc-surface-2));\n  height: 100%;\n  overflow: hidden;\n}",
     );
-    expect(css).toContain(
-      ".mc-next-stage:not(.mc-next-stage-work) .mc-next-stage-scroll {\n  height: 100%;\n  padding: 0.85rem 0.85rem 2.75rem;\n  overflow: auto;",
-    );
+    const stageScrollRule = css.match(
+      /\.mc-next-stage:not\(\.mc-next-stage-work\) \.mc-next-stage-scroll\s*\{([^}]*)\}/,
+    )?.[1];
+    expect(stageScrollRule).toBeDefined();
+    expect(stageScrollRule).toMatch(/(?:^|;)\s*height:\s*100%;/);
+    expect(stageScrollRule).toMatch(/(?:^|;)\s*padding:\s*0\.85rem\s+0\.85rem\s+2\.75rem;/);
+    expect(stageScrollRule).toMatch(/(?:^|;)\s*overflow:\s*auto;/);
     expect(css).toContain("scrollbar-gutter: stable;");
     expect(nativeCss).toContain("overflow: auto;\n  overscroll-behavior-x: contain;\n  overscroll-behavior-y: auto;");
     expect(css).toMatch(
@@ -689,7 +697,7 @@ describe("MissionControlNextApp", () => {
     });
     expect(window.location.pathname).toBe("/ops/notifications");
     expect(readNodeText(renderer.root.findByProps({ "aria-label": "Open notifications" }))).toBe("2");
-    expect(appMocks.playOperatorAttentionSound).toHaveBeenCalledWith("soft_update", "off");
+    expect(appMocks.playOperatorAttentionSound).not.toHaveBeenCalled();
 
     await openTopbarMore(renderer);
     await act(async () => {
@@ -1000,20 +1008,14 @@ describe("MissionControlNextApp", () => {
     expect(JSON.stringify(renderer.toJSON())).not.toContain("Release readiness");
   });
 
-  it("keeps grouped rail labels visible to assistive technology", async () => {
+  it("keeps grouped page labels visible to assistive technology", async () => {
     const renderer = await renderApp("http://localhost:5173/settings/providers");
-    const railSeparators = renderer.root.findAllByProps({ className: "mc-next-rail-separator" });
-    const separatorIds = railSeparators.map((node) => node.props.id);
+    const modelsPage = renderer.root.findAll((node) => node.props["aria-label"]?.startsWith?.("Models:"));
 
-    expect(readNodeText(renderer.root)).toContain("Connections");
-    expect(separatorIds).toContain("mc-next-rail-group-settings-connections");
-    expect(railSeparators.every((node) => node.props["aria-hidden"] === undefined)).toBe(true);
-    expect(
-      renderer.root.findAllByProps({
-        className: "mc-next-rail-section",
-        "aria-labelledby": "mc-next-rail-group-settings-connections",
-      }),
-    ).toHaveLength(1);
+    expect(modelsPage).toHaveLength(1);
+    expect(modelsPage[0]?.props["aria-current"]).toBe("page");
+    expect(renderer.root.findAllByProps({ className: "mc-next-rail-separator" })).toHaveLength(0);
+    expect(readNodeText(renderer.root)).toContain("Providers");
     expect(readNodeText(renderer.root)).not.toContain("Workspace capabilities");
     expect(readNodeText(renderer.root)).not.toContain("Citadel capabilities");
 
@@ -1274,9 +1276,7 @@ describe("MissionControlNextApp", () => {
     expect(rendered).toContain("Streaming (replay recovery)");
     expect(rendered).toContain("Needs attention");
     expect(rendered).toContain('"data-status":"attention"');
-    expect(rendered).toContain(
-      "Live event history rotated past this browser cursor. Mission Control is refreshing from the latest retained state.",
-    );
+    expect(rendered).not.toContain("Live event history rotated past this browser cursor.");
   });
 
   it("covers shell fallback and trust-report warning/error branches", async () => {

@@ -406,7 +406,7 @@ describe("ChatCapabilityProfilePanel", () => {
 
   it("has a narrow-screen single-column proof for facts and selection cards", () => {
     const css = readFileSync(new URL("./styles/capability-profile.css", import.meta.url), "utf8");
-    const mobile = css.slice(css.indexOf("@media (width < 720px)"));
+    const mobile = css.slice(css.indexOf("@media (width < 640px)"));
 
     expect(mobile).toContain(".mc-next-capability-profile-facts");
     expect(mobile).toContain(".mc-next-capability-profile-columns");

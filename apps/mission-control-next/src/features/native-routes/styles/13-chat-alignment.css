@@ -56,7 +56,7 @@
 
 .mc-next-directory-title-row h1 {
   color: var(--foreground);
-  font-size: clamp(1.22rem, 1.1rem + 0.45vw, 1.65rem);
+  font-size: var(--text-xl);
   letter-spacing: 0;
 }
 
@@ -204,7 +204,7 @@
   border-radius: var(--r-pill);
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1023px) {
   .mc-next-directory-header:has(.mc-next-directory-icon),
   .mc-next-directory-header {
     grid-template-columns: auto minmax(0, 1fr);
@@ -224,7 +224,7 @@
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .mc-next-directory-page {
     gap: 0.58rem;
     padding: 0.58rem 0.58rem 0.9rem;

@@ -155,6 +155,18 @@ export interface DurableRunRecord {
   updatedAt: string;
 }
 
+/** Read-only history filtered by the workspace recorded on the durable run. */
+export interface DurableRunHistoryQuery {
+  workspaceId: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface DurableRunHistoryPage {
+  items: DurableRunRecord[];
+  nextCursor?: string;
+}
+
 export type DurableWakeOutcome =
   | "woke"
   | "skipped_paused"

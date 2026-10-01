@@ -21,6 +21,36 @@ const { sendPreparedIntegrationChatTurn, streamPreparedIntegrationChatTurn } =
   await import("./chat-turn-dispatch-service.js");
 
 describe("chat turn dispatch durable ownership", () => {
+  it.each([false, true])(
+    "settles an atomic local child from its exact canonical receipt after a stale stream (foreign=%s)",
+    async (foreign) => {
+      const host = createHost({ beginDurableChatRun: vi.fn(() => ({ runId: "child-run" }) as DurableRunRecord) });
+      const observed = await host.storage.chatTurnTraces.get("turn-1");
+      const canonical: ChatTurnTraceRecord = {
+        ...observed,
+        assistantMessageId: "assistant-1",
+        status: "cancelled",
+        durable: { runId: foreign ? "foreign-run" : "child-run", status: "cancelled" },
+      };
+      vi.mocked(host.storage.chatTurnTraces.get).mockResolvedValue(canonical);
+      vi.mocked(host.streamPersistedChatTurnEvents).mockImplementation(async function* () {
+        yield { type: "trace_update", sessionId: "session-1", turnId: "turn-1", trace: observed };
+      });
+      const result = consumePreparedAgentChatTurn(
+        host,
+        "session-1",
+        { content: "Review", parentDelegationStepId: "step-1" },
+        createPrepared("chat"),
+        "chat_thread_turn_appended",
+        undefined,
+        { onChildDurableRunAdmitted: async () => undefined },
+      );
+      if (foreign) await expect(result).rejects.toThrow("exact canonical durable trace");
+      else expect((await result).trace).toMatchObject({ status: "cancelled", durable: { runId: "child-run" } });
+      expect(host.storage.chatTurnTraces.patch).not.toHaveBeenCalled();
+    },
+  );
+
   it("acknowledges a watched durable child without waiting on the occupied parent worker", async () => {
     const durableRun = { runId: "child-run" } as DurableRunRecord;
     const host = createHost({

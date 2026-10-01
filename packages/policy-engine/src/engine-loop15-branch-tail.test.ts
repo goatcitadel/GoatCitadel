@@ -38,8 +38,7 @@ function createStorageStub(): Storage & AsyncStorage {
 
 function createConfig(overrides: Partial<ToolPolicyConfig> = {}): ToolPolicyConfig {
   return {
-    profiles: { danger: ["*"] },
-    tools: { profile: "danger", allow: [], deny: [] },
+    tools: { allow: ["*"], deny: [] },
     agents: {},
     sandbox: {
       writeJailRoots: ["./workspace"],
@@ -101,7 +100,7 @@ describe("ToolPolicyEngine loop 15 branch tails", () => {
     const { ToolPolicyEngine } = await import("./engine.js");
     const engine = new ToolPolicyEngine(
       createConfig({
-        tools: { profile: "danger", approvalMode: "bypass", allow: [], deny: [] },
+        tools: { approvalMode: "bypass", allow: ["*"], deny: [] },
       }),
       createStorageStub(),
     ) as unknown as EngineWithBranchPrivates;
@@ -121,7 +120,7 @@ describe("ToolPolicyEngine loop 15 branch tails", () => {
     expect(result.audit?.startedAt).toBe(result.audit?.completedAt);
   });
 
-  it("treats an omitted approval mode on the danger profile as bypass audit eligible", async () => {
+  it("defaults to approve_risky when approval mode is omitted", async () => {
     const { ToolPolicyEngine } = await import("./engine.js");
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(createConfig(), storage) as unknown as EngineWithBranchPrivates;
@@ -133,18 +132,9 @@ describe("ToolPolicyEngine loop 15 branch tails", () => {
       sessionId: "session",
     });
 
-    expect(storage.audit.append).toHaveBeenCalledWith(
+    expect(storage.audit.append).not.toHaveBeenCalledWith(
       "tool_invocations",
-      expect.objectContaining({
-        event: "approval_bypass_mode_network_target",
-        auditEventId: "audit-default-mode",
-        toolName: "http.post",
-        targets: [
-          expect.objectContaining({
-            hostname: "blocked.example.test",
-          }),
-        ],
-      }),
+      expect.objectContaining({ event: "approval_bypass_mode_network_target" }),
     );
   });
 

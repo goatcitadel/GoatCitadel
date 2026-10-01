@@ -3,6 +3,7 @@
 #if defined(GOATCITADEL_PROVISIONER_TESTING)
 
 #include <windows.h>
+#include "protected_handle_diagnostics.test.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2848,10 +2849,45 @@ int TestIsolatedCommittedRecoveryReplay() noexcept {
   return failures;
 }
 
+int TestProtectedFileHandleAccounting() noexcept {
+  int failures = 0;
+  IsolatedRecoveryFixture fixture{};
+  DWORD baseline = 0U, held = 0U, closed = 0U;
+  const bool ready = CreateIsolatedRecoveryFixture(&fixture) &&
+      gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &baseline) != FALSE;
+  HANDLE leaked = ready ? CreateFileW(fixture.normal_root.data(), FILE_LIST_DIRECTORY,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS, nullptr) : INVALID_HANDLE_VALUE;
+  if (leaked == INVALID_HANDLE_VALUE ||
+      gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &held) == FALSE || held != baseline + 1U) {
+    CanonicalFailure(&failures, "protected_operations: live directory handle must fail exact cleanup count\n");
+  }
+  if (leaked != INVALID_HANDLE_VALUE && CloseHandle(leaked) == FALSE) {
+    CanonicalFailure(&failures, "protected_operations: accounting fixture close\n");
+  }
+  if (!ready || gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &closed) == FALSE || closed != baseline) {
+    CanonicalFailure(&failures, "protected_operations: closed directory handle must restore exact count\n");
+  }
+  std::array<HANDLE, 512U> excess{};
+  for (auto& event : excess) {
+    event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!event) { CanonicalFailure(&failures, "protected_operations: bounded accounting fixture creation\n"); break; }
+  }
+  DWORD incomplete = 0U;
+  if (gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &incomplete) != FALSE || GetLastError() != ERROR_MORE_DATA) {
+    CanonicalFailure(&failures, "protected_operations: incomplete handle table must fail closed\n");
+  }
+  for (HANDLE event : excess) {
+    if (event && CloseHandle(event) == FALSE) CanonicalFailure(&failures, "protected_operations: bounded accounting fixture cleanup\n");
+  }
+  RemoveIsolatedRecoveryFixture(&fixture);
+  return failures;
+}
+
 int TestIsolatedDirectoryMoveAuthority() noexcept {
   int failures = 0;
   DWORD baseline_handles = 0U;
-  if (GetProcessHandleCount(GetCurrentProcess(), &baseline_handles) == FALSE) {
+  if (gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &baseline_handles) == FALSE) {
     CanonicalFailure(
         &failures,
         "protected_operations: directory move baseline handle count\n");
@@ -2867,7 +2903,9 @@ int TestIsolatedDirectoryMoveAuthority() noexcept {
        ++shape_index) {
     const MoveCandidateShape shape = kSuccessShapes[shape_index];
     DWORD handles_before = 0U;
-    GetProcessHandleCount(GetCurrentProcess(), &handles_before);
+    if (gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &handles_before) == FALSE) {
+      CanonicalFailure(&failures, "protected_operations: filesystem baseline metadata unavailable\n");
+    }
     IsolatedRecoveryFixture fixture{};
     gc::ProtectedOperationsState state{};
     bool valid = CreateIsolatedRecoveryFixture(&fixture) &&
@@ -2899,7 +2937,7 @@ int TestIsolatedDirectoryMoveAuthority() noexcept {
     gc::CloseProtectedOperations(&state);
     RemoveIsolatedRecoveryFixture(&fixture);
     DWORD handles_after = 0U;
-    if (GetProcessHandleCount(GetCurrentProcess(), &handles_after) == FALSE) {
+    if (gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &handles_after) == FALSE) {
       handles_after = UINT32_MAX;
     }
     if (shape_index == 0U) {
@@ -2933,7 +2971,9 @@ int TestIsolatedDirectoryMoveAuthority() noexcept {
       MoveCandidateShape::OverCapacity};
   for (MoveCandidateShape shape : kRejectedShapes) {
     DWORD handles_before = 0U;
-    GetProcessHandleCount(GetCurrentProcess(), &handles_before);
+    if (gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &handles_before) == FALSE) {
+      CanonicalFailure(&failures, "protected_operations: filesystem baseline metadata unavailable\n");
+    }
     IsolatedRecoveryFixture fixture{};
     gc::ProtectedOperationsState state{};
     bool valid = CreateIsolatedRecoveryFixture(&fixture) &&
@@ -2960,7 +3000,7 @@ int TestIsolatedDirectoryMoveAuthority() noexcept {
     gc::CloseProtectedOperations(&state);
     RemoveIsolatedRecoveryFixture(&fixture);
     DWORD handles_after = 0U;
-    if (GetProcessHandleCount(GetCurrentProcess(), &handles_after) == FALSE ||
+    if (gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &handles_after) == FALSE ||
         handles_before != post_warm_baseline ||
         handles_after != post_warm_baseline) {
       DiagnosticCount(
@@ -2980,7 +3020,9 @@ int TestIsolatedDirectoryMoveAuthority() noexcept {
 
   for (std::uint32_t cut = 1U; cut <= 8U; ++cut) {
     DWORD handles_before = 0U;
-    GetProcessHandleCount(GetCurrentProcess(), &handles_before);
+    if (gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &handles_before) == FALSE) {
+      CanonicalFailure(&failures, "protected_operations: filesystem baseline metadata unavailable\n");
+    }
     IsolatedRecoveryFixture fixture{};
     gc::ProtectedOperationsState state{};
     bool valid = CreateIsolatedRecoveryFixture(&fixture) &&
@@ -3026,7 +3068,7 @@ int TestIsolatedDirectoryMoveAuthority() noexcept {
     gc::CloseProtectedOperations(&state);
     RemoveIsolatedRecoveryFixture(&fixture);
     DWORD handles_after = 0U;
-    if (GetProcessHandleCount(GetCurrentProcess(), &handles_after) == FALSE ||
+    if (gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &handles_after) == FALSE ||
         handles_before != post_warm_baseline ||
         handles_after != post_warm_baseline) {
       DiagnosticCount(
@@ -3043,7 +3085,7 @@ int TestIsolatedDirectoryMoveAuthority() noexcept {
     }
   }
   DWORD final_handles = 0U;
-  if (GetProcessHandleCount(GetCurrentProcess(), &final_handles) == FALSE ||
+  if (gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &final_handles) == FALSE ||
       final_handles != post_warm_baseline) {
     DiagnosticCount(
         "protected_operations: directory move pre-warm handles ",
@@ -3072,14 +3114,22 @@ int TestIsolatedJournalPublicationFailureRecovery() noexcept {
       1U, 1U, 0U, 0U, 0U, 0U, 0U, 5U, 18U, 0U, 0U, 0U};
   gc::Byte32 binding{};
   binding.fill(0x66U);
+  const bool handle_diagnostics = gc::test::HandleDiagnosticsEnabled();
+  bool diagnostic_printed = false;
+  static gc::test::HandleSnapshot baseline_snapshot{};
+  static gc::test::HandleSnapshot failure_snapshot{};
   DWORD pre_warm_handles = 0U;
   DWORD stable_handles = 0U;
-  GetProcessHandleCount(GetCurrentProcess(), &pre_warm_handles);
+  if (gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &pre_warm_handles) == FALSE) {
+    CanonicalFailure(&failures, "protected_operations: filesystem pre-warm metadata unavailable\n");
+  }
   for (std::uint32_t pass = 0U; pass < 2U; ++pass) {
     const bool warmup = pass == 0U;
     for (std::uint32_t call = 1U; call <= 3U; ++call) {
       const std::uint32_t final_stage = warmup ? 1U : 4U;
       for (std::uint32_t stage = 1U; stage <= final_stage; ++stage) {
+      std::array<DWORD, 5U> diagnostic_counts{};
+      if (handle_diagnostics) diagnostic_counts[0] = gc::test::DiagnosticHandleCount();
       IsolatedRecoveryFixture fixture{};
       gc::ProtectedOperationsState state{};
       HANDLE stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -3107,6 +3157,7 @@ int TestIsolatedJournalPublicationFailureRecovery() noexcept {
                 &result,
                 &result_length)
           : gc::ProtectedOperationResult::Success;
+      if (handle_diagnostics) diagnostic_counts[1] = gc::test::DiagnosticHandleCount();
       std::array<wchar_t, gc::kProtectedPathCharacters> operation_path{};
       std::array<wchar_t, gc::kProtectedPathCharacters> pending_path{};
       std::array<wchar_t, gc::kProtectedPathCharacters> candidate_path{};
@@ -3147,6 +3198,7 @@ int TestIsolatedJournalPublicationFailureRecovery() noexcept {
       }
       gc::SetProtectedJournalPublicationFailureForTest(0U, 0U);
       gc::CloseProtectedOperations(&state);
+      if (handle_diagnostics) diagnostic_counts[2] = gc::test::DiagnosticHandleCount();
       gc::ResetProtectedRecoveryEvidenceForTest();
       valid = gc::InitializeProtectedOperations(
           kDummyVolumeRoot,
@@ -3228,11 +3280,16 @@ int TestIsolatedJournalPublicationFailureRecovery() noexcept {
             "protected_operations: ordinary publication restart\n");
       }
       gc::CloseProtectedOperations(&state);
-      if (stop != nullptr) CloseHandle(stop);
+      if (stop != nullptr && CloseHandle(stop) == FALSE) {
+      CanonicalFailure(&failures, "protected_operations: test stop event cleanup\n");
+    }
+      if (handle_diagnostics) diagnostic_counts[3] = gc::test::DiagnosticHandleCount();
+      const auto diagnostic_root = handle_diagnostics ? fixture.normal_root : decltype(fixture.normal_root){};
       RemoveIsolatedRecoveryFixture(&fixture);
+      if (handle_diagnostics) diagnostic_counts[4] = gc::test::DiagnosticHandleCount();
       DWORD handles_after = 0U;
       if (!warmup &&
-          (GetProcessHandleCount(GetCurrentProcess(), &handles_after) == FALSE ||
+          (gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &handles_after) == FALSE ||
            handles_after != stable_handles)) {
         DiagnosticCount(
             "protected_operations: journal handle call ", call);
@@ -3246,11 +3303,24 @@ int TestIsolatedJournalPublicationFailureRecovery() noexcept {
         CanonicalFailure(
             &failures,
             "protected_operations: ordinary publication handle cleanup\n");
+        if (handle_diagnostics && !diagnostic_printed) {
+          diagnostic_printed = true;
+          gc::test::CaptureHandleSnapshot(&failure_snapshot);
+          gc::test::PrintHandleSnapshotDifference(baseline_snapshot, failure_snapshot);
+          std::fprintf(stderr, "handle_diagnostic checkpoints=before_fixture:%lu,after_execute:%lu,first_close:%lu,recovery_and_stop_close:%lu,fixture_removed:%lu call=%lu stage=%lu\n",
+              diagnostic_counts[0], diagnostic_counts[1], diagnostic_counts[2], diagnostic_counts[3], diagnostic_counts[4], call, stage);
+          const DWORD preserved_error = GetLastError();
+          const DWORD attributes = GetFileAttributesW(diagnostic_root.data());
+          const DWORD root_error = attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() : ERROR_SUCCESS;
+          std::fprintf(stderr, "handle_diagnostic fixture_root_present=%d attributes=%lu error=%lu\n",
+              attributes != INVALID_FILE_ATTRIBUTES ? 1 : 0, attributes, root_error);
+          SetLastError(preserved_error);
+        }
       }
       }
     }
     if (warmup &&
-        (GetProcessHandleCount(GetCurrentProcess(), &stable_handles) == FALSE ||
+        (gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &stable_handles) == FALSE ||
          stable_handles < pre_warm_handles)) {
       DiagnosticCount(
           "protected_operations: journal pre-warm handles ", pre_warm_handles);
@@ -3260,6 +3330,7 @@ int TestIsolatedJournalPublicationFailureRecovery() noexcept {
           &failures,
           "protected_operations: ordinary publication handle warmup\n");
     }
+    if (warmup && handle_diagnostics) gc::test::CaptureHandleSnapshot(&baseline_snapshot);
   }
 
   IsolatedRecoveryFixture fixture{};
@@ -3296,7 +3367,9 @@ int TestIsolatedJournalPublicationFailureRecovery() noexcept {
         "protected_operations: ordinary publication stage-five success\n");
   }
   gc::CloseProtectedOperations(&state);
-  if (stop != nullptr) CloseHandle(stop);
+  if (stop != nullptr && CloseHandle(stop) == FALSE) {
+      CanonicalFailure(&failures, "protected_operations: test stop event cleanup\n");
+    }
   RemoveIsolatedRecoveryFixture(&fixture);
   return failures;
 }
@@ -3312,9 +3385,15 @@ int TestIsolatedRevokeControlFailureRecovery() noexcept {
       1U, 1U, 0U, 0U, 0U, 0U, 0U, 5U, 18U, 0U, 0U, 0U};
   gc::Byte32 binding{};
   binding.fill(0x66U);
+  const bool handle_diagnostics = gc::test::HandleDiagnosticsEnabled();
+  bool diagnostic_printed = false;
+  static gc::test::HandleSnapshot baseline_snapshot{};
+  static gc::test::HandleSnapshot failure_snapshot{};
   DWORD pre_warm_handles = 0U;
   DWORD stable_handles = 0U;
-  GetProcessHandleCount(GetCurrentProcess(), &pre_warm_handles);
+  if (gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &pre_warm_handles) == FALSE) {
+    CanonicalFailure(&failures, "protected_operations: filesystem pre-warm metadata unavailable\n");
+  }
   for (std::uint32_t pass = 0U; pass < 2U; ++pass) {
     const bool warmup = pass == 0U;
     const std::uint32_t final_stage = warmup ? 1U : 6U;
@@ -3505,11 +3584,13 @@ int TestIsolatedRevokeControlFailureRecovery() noexcept {
           "protected_operations: revoke final-only restart\n");
     }
     gc::CloseProtectedOperations(&state);
-    if (stop != nullptr) CloseHandle(stop);
+    if (stop != nullptr && CloseHandle(stop) == FALSE) {
+      CanonicalFailure(&failures, "protected_operations: test stop event cleanup\n");
+    }
     RemoveIsolatedRecoveryFixture(&fixture);
     DWORD handles_after = 0U;
     if (!warmup &&
-        (GetProcessHandleCount(GetCurrentProcess(), &handles_after) == FALSE ||
+        (gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &handles_after) == FALSE ||
          handles_after != stable_handles)) {
       DiagnosticCount(
           "protected_operations: revoke handles before ", stable_handles);
@@ -3518,10 +3599,15 @@ int TestIsolatedRevokeControlFailureRecovery() noexcept {
       CanonicalFailure(
           &failures,
           "protected_operations: revoke failure handle cleanup\n");
+      if (handle_diagnostics && !diagnostic_printed) {
+        diagnostic_printed = true;
+        gc::test::CaptureHandleSnapshot(&failure_snapshot);
+        gc::test::PrintHandleSnapshotDifference(baseline_snapshot, failure_snapshot);
+      }
     }
     }
     if (warmup &&
-        (GetProcessHandleCount(GetCurrentProcess(), &stable_handles) == FALSE ||
+        (gc::test::GetProtectedFileHandleCount(GetCurrentProcess(), &stable_handles) == FALSE ||
          stable_handles < pre_warm_handles)) {
       DiagnosticCount(
           "protected_operations: revoke pre-warm handles ", pre_warm_handles);
@@ -3531,6 +3617,7 @@ int TestIsolatedRevokeControlFailureRecovery() noexcept {
           &failures,
           "protected_operations: revoke handle warmup\n");
     }
+    if (warmup && handle_diagnostics) gc::test::CaptureHandleSnapshot(&baseline_snapshot);
   }
   return failures;
 }
@@ -3538,7 +3625,11 @@ int TestIsolatedRevokeControlFailureRecovery() noexcept {
 }  // namespace
 
 int RunProtectedOperationsTests() noexcept {
-  int failures = TestCanonicalStateCalculator() + TestRecoveryActionSelector() +
+  static gc::test::HandleSnapshot diagnostic_baseline{};
+  static gc::test::HandleSnapshot diagnostic_final{};
+  const bool handle_diagnostics = gc::test::HandleDiagnosticsEnabled();
+  if (handle_diagnostics) gc::test::CaptureHandleSnapshot(&diagnostic_baseline);
+  int failures = TestProtectedFileHandleAccounting() + TestCanonicalStateCalculator() + TestRecoveryActionSelector() +
                  TestPublicationInventoryAndResidueBinding() +
                  TestRecoveryPublicationAuthorityAndLifecycle() +
                  TestRecoveryFilesystemDuplication() +
@@ -3547,6 +3638,10 @@ int RunProtectedOperationsTests() noexcept {
                  TestIsolatedDirectoryMoveAuthority() +
                  TestIsolatedJournalPublicationFailureRecovery() +
                  TestIsolatedRevokeControlFailureRecovery();
+  if (handle_diagnostics && failures != 0) {
+    gc::test::CaptureHandleSnapshot(&diagnostic_final);
+    gc::test::PrintHandleSnapshotDifference(diagnostic_baseline, diagnostic_final);
+  }
   std::array<std::uint8_t, gc::kStateHeaderBytes> header{};
   for (std::size_t index = 0U; index < header.size(); ++index) {
     header[index] = static_cast<std::uint8_t>(index & 0xffU);

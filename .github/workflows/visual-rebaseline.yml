@@ -78,6 +78,11 @@ jobs:
             echo "No baseline changes produced; nothing to do."
             exit 0
           fi
+          if [ "${GITHUB_REF_TYPE}" != "branch" ]; then
+            echo "Rebaseline PRs require a branch ref."
+            exit 1
+          fi
+          BASE_BRANCH="${GITHUB_REF_NAME}"
           BRANCH="chore/visual-rebaseline-${GITHUB_RUN_ID}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -87,4 +92,4 @@ jobs:
           git push origin "$BRANCH"
           SCOPE_ROUTES="${{ inputs.route_slugs }}"
           SCOPE_VARIANTS="${{ inputs.variant_slugs }}"
-          gh pr create --base main --head "$BRANCH" --title "chore(verification): refresh visual baselines (mc-next)" --body "Automated rebaseline run ${GITHUB_RUN_ID}. Scope: routes=[${SCOPE_ROUTES:-all}] variants=[${SCOPE_VARIANTS:-all}]. Review the image diff before merging."
+          gh pr create --base "$BASE_BRANCH" --head "$BRANCH" --title "chore(verification): refresh visual baselines (mc-next)" --body "Automated rebaseline run ${GITHUB_RUN_ID}. Scope: routes=[${SCOPE_ROUTES:-all}] variants=[${SCOPE_VARIANTS:-all}]. Review the image diff before merging."

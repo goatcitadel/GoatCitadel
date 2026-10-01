@@ -1,6 +1,7 @@
-// Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
-// per-section settings decomposition.
-import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
+import { readEffectivePermissionSurfaceState } from "../effective-permission-contexts";
+import { useAutonomousGrantRevocation } from "../use-autonomous-grant-revocation";
+import { autonomousGrantReviewDescription, grantCanBeRevoked, readAutonomousGrants } from "../autonomous-grant-binding";
+import { useCallback, useState, type SetStateAction } from "react";
 import { AlertTriangle, Code2, Plus, Save, ShieldCheck, Trash2 } from "lucide-react";
 import type {
   LocalOperatorOverrideRecord,
@@ -8,31 +9,20 @@ import type {
   PermissionSurface,
 } from "@goatcitadel/contracts";
 import {
-  activatePermissionProfile,
-  archivePermissionProfile,
-  createLocalOperatorOverride,
-  createPermissionProfile,
   fetchActiveLocalOperatorOverrides,
-  fetchAutonomousActivationGrants,
   fetchEffectivePermissionProfile,
   fetchPermissionProfiles,
   fetchSettings,
-  revokeAutonomousActivationGrant,
-  revokeLocalOperatorOverride,
-  updatePermissionProfile,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
-  getErrorMessage,
   nativeLoad,
   nativeLoadIssues,
-  type Notice,
   SettingsActionList,
   SettingsButtonRow,
   SettingsEmptyState,
   SettingsField,
   SettingsLoadWarnings,
-  SettingsNotice,
   type SettingsSectionProps,
   SettingsSectionShell,
   SettingsStack,
@@ -40,24 +30,28 @@ import {
 } from "../SettingsShared";
 import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeSelectableList } from "../../primitives";
-import { useSessionDraft, hasSessionDraft, discardSessionDraft } from "../../library/session-drafts";
+import { useSessionDraft, hasSessionDraft } from "../../library/session-drafts";
 import { useDraftLeave } from "../../library/DraftLeaveDialog";
 import { DetailInspector } from "../../../../components/DetailInspector";
 import { FocusedDetail } from "../../shared/FocusedDetail";
 import { usePermissionSelectionReview } from "./usePermissionSelectionReview";
+import { usePermissionProfileActivation } from "../use-permission-profile-activation";
+import { usePermissionManagement } from "../use-permission-management";
+import { PermissionManagementReview } from "../PermissionManagementReview";
+import type { PermissionManagementOperation } from "../permission-management-binding";
 import { PermissionSelectionReviewDetails } from "./PermissionSelectionReviewDetails";
 import {
   createEmptyPermissionProfileDraft,
   createPermissionProfileDraftFromRecord,
   describePermissionProfile,
   describeToolApprovalMode,
-  formatDateTime,
   labelForLocalOperatorOverrideScope,
   normalizeToolApprovalMode,
   permissionProfileDraftToMutation,
   resetLocalOperatorOverrideScopeRefForScope,
   resolveLocalOperatorOverrideScopeRef,
-} from "../../SettingsNativePage";
+} from "../helpers/permission-helpers";
+import { formatDateTime } from "../helpers/input-format";
 import {
   describeReadAccessMode,
   EFFECTIVE_PERMISSION_CONTEXTS,
@@ -79,14 +73,6 @@ const LOCAL_OPERATOR_OVERRIDE_SCOPE_OPTIONS = [
   "operator",
 ] as const satisfies readonly LocalOperatorOverrideScope[];
 
-interface EffectivePermissionSurfaceState {
-  surface: (typeof EFFECTIVE_PERMISSION_CONTEXTS)[number];
-  profileId?: string;
-  profileLabel?: string;
-  approvalMode?: string;
-  localOperatorOverrideId?: string;
-  localOperatorOverride?: LocalOperatorOverrideRecord;
-}
 
 export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
   const load = useCallback(async () => {
@@ -104,7 +90,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
       nativeLoad("Permission profiles", fetchPermissionProfiles({ workspaceId: activeWorkspaceId }), { items: [] }),
       effectiveLoadsPromise,
       nativeLoad("Active Local Operator Overrides", fetchActiveLocalOperatorOverrides(), { items: [] }),
-      nativeLoad("Autonomous activation grants", fetchAutonomousActivationGrants(true), { items: [] }),
+      nativeLoad("Autonomous activation grants", readAutonomousGrants(), []),
       fetchSettings().catch(() => null),
     ]);
     return {
@@ -112,33 +98,23 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
       profiles: profiles.data.items,
       effective: effectiveLoads.map(({ surface, load }) => readEffectivePermissionSurfaceState(surface, load.data)),
       activeOverrides: activeOverrides.data.items,
-      autonomyGrants: autonomyGrants.data.items,
+      autonomyGrants: autonomyGrants.data,
       settings,
     };
   }, [activeWorkspaceId]);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
-  const [notice, setNotice] = useState<Notice | null>(null);
-  const [pendingRevokeGrantId, setPendingRevokeGrantId] = useState<string | null>(null);
-  const [revokePending, setRevokePending] = useState(false);
-  const [pendingArchiveProfile, setPendingArchiveProfile] = useState<{ profileId: string; label: string; expectedRevision: string } | null>(null);
-  const [archiveProfilePending, setArchiveProfilePending] = useState(false);
+  const grantRevocation = useAutonomousGrantRevocation({ scope: activeWorkspaceId, reload });
+  const [grantLimit, setGrantLimit] = useState(30);
   const [selectedProfileId, setSelectedProfileId] = useState("safe");
   const [view, setView] = useState<"profile" | "edit" | "new" | "override" | "effective" | null>(null);
-  const [saving, setSaving] = useState(false);
-  const savingRef = useRef(false);
-  const [activationSaving, setActivationSaving] = useState(false);
-  const activationSavingRef = useRef(false);
-  const [profileConflict, setProfileConflict] = useState<{ key: string; revision: string } | null>(null);
   const leave = useDraftLeave();
   const [overrideAcknowledged, setOverrideAcknowledged] = useState(false);
-  const [recentLocalOverride, setRecentLocalOverride] = useState<LocalOperatorOverrideRecord | null>(null);
   const selectedProfile =
     data?.profiles?.find((profile) => profile.profileId === selectedProfileId);
   const effectiveOverride = data?.effective.find((item) => item.localOperatorOverride)?.localOperatorOverride;
   const activeOverrides = collectActiveLocalOperatorOverrides([
     effectiveOverride,
     ...(data?.activeOverrides ?? []),
-    recentLocalOverride,
   ]);
   const primaryActiveOverride = activeOverrides[0];
   const chatEffectiveProfileLabel =
@@ -160,62 +136,49 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
   const activeAutonomyGrants = (data?.autonomyGrants ?? []).filter((grant) => grant.status === "active");
   const primaryEffectiveContexts = (data?.effective ?? []).filter((item) => isPrimaryPermissionContext(item.surface));
   const legacyEffectiveContexts = (data?.effective ?? []).filter((item) => isLegacyPermissionContext(item.surface));
-  const createEditor = useSessionDraft(`permission-profile:${activeWorkspaceId}:new`, createEmptyPermissionProfileDraft(), undefined, { label: "New permission profile", active: view === "new", onSave: () => handleCreateProfile() });
+  const createEditor = useSessionDraft(`permission-profile:${activeWorkspaceId}:new`, createEmptyPermissionProfileDraft(), undefined, { label: "New permission profile", active: view === "new" });
   const editBaseline = selectedProfile ? createPermissionProfileDraftFromRecord(selectedProfile) : createEmptyPermissionProfileDraft();
-  const editEditor = useSessionDraft(`permission-profile:${activeWorkspaceId}:${selectedProfileId}`, editBaseline, selectedProfile?.revision, { label: selectedProfile?.label ?? "Permission profile", active: view === "edit", available: Boolean(selectedProfile), onSave: () => handleUpdateSelectedProfile() });
+  const editEditor = useSessionDraft(`permission-profile:${activeWorkspaceId}:${selectedProfileId}`, editBaseline, selectedProfile?.revision, { label: selectedProfile?.label ?? "Permission profile", active: view === "edit", available: Boolean(selectedProfile) });
   const emptyOverride = { scope: "workspace" as LocalOperatorOverrideScope, scopeRef: activeWorkspaceId, reason: "", ttlSeconds: 600 };
-  const overrideEditor = useSessionDraft(`permission-override:${activeWorkspaceId}:new`, emptyOverride, undefined, { label: "Temporary override", active: view === "override", onSave: () => handleStartOverride() });
+  const overrideEditor = useSessionDraft(`permission-override:${activeWorkspaceId}:new`, emptyOverride, undefined, { label: "Temporary override", active: view === "override" });
   const profileDraft = createEditor.value;
-  const setProfileDraft = createEditor.setValue;
+  const setProfileDraft = (value: SetStateAction<typeof profileDraft>) => { management.invalidate(); createEditor.setValue(value); };
   const profileEditDraft = editEditor.value;
-  const hasProfileConflict = profileConflict?.key === editEditor.key;
-  const activationSelection = usePermissionSelectionReview(JSON.stringify([activeWorkspaceId, selectedProfileId, selectedProfile?.revision, view]));
+  const activation = usePermissionProfileActivation({
+    key: JSON.stringify([activeWorkspaceId, selectedProfileId, view]),
+    workspaceId: activeWorkspaceId, profile: selectedProfile,
+    available: !loading && !error && Boolean(data?.settings),
+    deploymentProfile: data?.settings?.deploymentProfile, reload,
+  });
+  const activationSaving = activation.locked;
+  const activationSelection = { review: activation.review, pending: activation.reviewing, error: activation.error, clear: activation.clear };
   const defaultSelection = usePermissionSelectionReview(JSON.stringify([activeWorkspaceId, view, selectedProfileId,
     editEditor.baseRevision, view === "new" ? profileDraft : profileEditDraft]));
   const createNeedsDefaultReview = profileDraft.defaultForSurfaces.length > 0;
   const editNeedsDefaultReview = JSON.stringify([...profileEditDraft.defaultForSurfaces].sort())
     !== JSON.stringify([...(selectedProfile?.defaultForSurfaces ?? [])].sort());
-  const setProfileEditDraft = editEditor.setValue;
+  const setProfileEditDraft = (value: SetStateAction<typeof profileEditDraft>) => { management.invalidate(); editEditor.setValue(value); };
   const overrideDraft = overrideEditor.value;
-  const setOverrideDraft = (update: SetStateAction<typeof overrideDraft>) => { overrideEditor.setValue(update); setOverrideAcknowledged(false); };
+  const setOverrideDraft = (update: SetStateAction<typeof overrideDraft>) => { management.invalidate(); overrideEditor.setValue(update); setOverrideAcknowledged(false); };
+  const management = usePermissionManagement({ workspaceId: activeWorkspaceId,
+    identity: JSON.stringify([view, selectedProfileId, profileDraft, profileEditDraft, editEditor.baseRevision, overrideDraft, overrideAcknowledged]), reload });
+  const activeManagementOperation: PermissionManagementOperation = view === "override"
+    ? { kind: "override-create", input: { ...overrideDraft, reason: overrideDraft.reason.trim(), scopeRef: resolveLocalOperatorOverrideScopeRef(overrideDraft.scope, overrideDraft.scopeRef, activeWorkspaceId) } }
+    : view === "new" || !selectedProfile ? { kind: "create", fields: permissionProfileDraftToMutation(profileDraft) }
+      : { kind: "update", profile: selectedProfile, fields: permissionProfileDraftToMutation(profileEditDraft) };
+  const managementAttempt = management.attemptFor(activeManagementOperation);
+  const saving = management.checking || Boolean(managementAttempt);
+  const hasProfileConflict = managementAttempt?.phase === "rejected" || Boolean(selectedProfile && editEditor.baseRevision !== selectedProfile.revision);
   const draftKeys = [createEditor.key, editEditor.key, overrideEditor.key];
-  const openView = (next: typeof view) => leave.request(() => { setView(next); setOverrideAcknowledged(false); }, draftKeys);
-  const profileSelectionGuard = { requestTransition: (profileId: string) => leave.request(() => { setSelectedProfileId(profileId); setView("profile"); setOverrideAcknowledged(false); }, draftKeys) };
-  useEffect(() => { if (effectiveOverride) setRecentLocalOverride(effectiveOverride); }, [effectiveOverride]);
+  const openView = (next: typeof view) => leave.request(() => { management.invalidate(); setView(next); setOverrideAcknowledged(false); }, draftKeys);
+  const profileSelectionGuard = { requestTransition: (profileId: string) => leave.request(() => { management.invalidate(); setSelectedProfileId(profileId); setView("profile"); setOverrideAcknowledged(false); }, draftKeys) };
 
   const handleActivateProfile = async (profileId: string, surface: PermissionSurface) => {
-    if (activationSavingRef.current) return;
-    const profile = data?.profiles?.find((item) => item.profileId === profileId);
-    if (promptSkippingProfileRestriction && profile?.approvalMode === "bypass") {
-      setNotice({ tone: "warning", message: promptSkippingProfileRestriction });
-      return;
-    }
-    await activationSelection.request({ operation: "activate", profileId, workspaceId: activeWorkspaceId, surface });
+    if (profileId === selectedProfile?.profileId) await activation.request(surface);
   };
 
   const handleApplyReviewedActivation = async () => {
-    const review = activationSelection.review;
-    if (activationSavingRef.current || !review?.profile || review.input.operation !== "activate" || !activationSelection.isCurrent()) return;
-    if (promptSkippingProfileRestriction && review.profile.approvalMode === "bypass") {
-      setNotice({ tone: "warning", message: promptSkippingProfileRestriction }); return;
-    }
-    activationSavingRef.current = true; setActivationSaving(true);
-    try {
-      await activatePermissionProfile({ profileId: review.input.profileId, workspaceId: review.input.workspaceId,
-        sessionId: review.input.sessionId, surface: review.input.surface,
-        expectedProfileRevision: review.profile.revision, expectedSelectionRevision: review.revision });
-      if (!activationSelection.isCurrent()) return;
-      activationSelection.clear();
-      setNotice({ tone: "success", message: `${review.profile.label} activated.` });
-      await reload();
-    } catch (activateError) {
-      if (!activationSelection.isCurrent()) return;
-      activationSelection.clear();
-      if (isPermissionProfileConflict(activateError)) {
-        setNotice({ tone: "warning", message: "Permission selections changed. Review the current selection before applying it again." });
-        await reload();
-      } else setNotice({ tone: "error", message: getErrorMessage(activateError) });
-    } finally { activationSavingRef.current = false; setActivationSaving(false); }
+    await activation.confirm();
   };
 
   const handleReviewDefaults = async () => {
@@ -229,200 +192,45 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
   };
 
   const handleCreateProfile = async (): Promise<boolean> => {
-    if (savingRef.current) return false;
-    if (createNeedsDefaultReview && !defaultSelection.review) {
-      setNotice({ tone: "warning", message: "Review the default selection before creating this profile." }); return false;
-    }
+    if (saving || (createNeedsDefaultReview && !defaultSelection.review)) return false;
     const submitted = profileDraft;
-    if (!profileDraft.label.trim()) {
-      setNotice({ tone: "warning", message: "Profile name is required." });
-      return false;
-    }
-    if (promptSkippingProfileRestriction && profileDraft.approvalMode === "bypass") {
-      setNotice({ tone: "warning", message: promptSkippingProfileRestriction });
-      return false;
-    }
-    savingRef.current = true; setSaving(true);
-    try {
-      const created = await createPermissionProfile({
-        scope: "workspace",
-        scopeRef: activeWorkspaceId,
-        ...permissionProfileDraftToMutation(profileDraft),
-        expectedSelectionRevision: createNeedsDefaultReview ? defaultSelection.review?.revision : undefined,
-      });
-      setSelectedProfileId(created.profileId);
-      const clean = createEditor.acceptSaved(createEmptyPermissionProfileDraft(), undefined, submitted);
-      setNotice({ tone: "success", message: "Permission profile created." });
-      await reload();
-      return clean;
-    } catch (createError) {
-      if (isPermissionProfileConflict(createError)) {
-        defaultSelection.clear();
-        setNotice({ tone: "warning", message: "Permission selections changed. Your draft is preserved; review the default selection again." });
-        await reload();
-      } else setNotice({ tone: "error", message: getErrorMessage(createError) });
-      return false;
-    } finally { savingRef.current = false; setSaving(false); }
+    await management.request({ kind: "create", fields: permissionProfileDraftToMutation(submitted) }, (receipt) => {
+      if ("profileId" in receipt) createEditor.acceptSaved(createEmptyPermissionProfileDraft(), undefined, submitted);
+    });
+    return false;
   };
-
   const handleUpdateSelectedProfile = async (): Promise<boolean> => {
-    if (savingRef.current || editEditor.hasRemoteChanges || hasProfileConflict) return false;
-    if (editNeedsDefaultReview && !defaultSelection.review) {
-      setNotice({ tone: "warning", message: "Review the default selection before saving this profile." }); return false;
-    }
+    if (saving || !selectedProfile || editEditor.hasRemoteChanges || hasProfileConflict
+      || (editNeedsDefaultReview && !defaultSelection.review)) return false;
     const submitted = profileEditDraft;
-    const expectedRevision = editEditor.baseRevision;
-    if (typeof expectedRevision !== "string") {
-      setNotice({ tone: "warning", message: "Reload this permission profile before editing it." });
-      return false;
-    }
-    if (!selectedProfile || selectedProfile.builtin) {
-      setNotice({ tone: "warning", message: "Select a custom permission profile to edit." });
-      return false;
-    }
-    if (!profileEditDraft.label.trim()) {
-      setNotice({ tone: "warning", message: "Profile name is required." });
-      return false;
-    }
-    if (promptSkippingProfileRestriction && profileEditDraft.approvalMode === "bypass") {
-      setNotice({ tone: "warning", message: promptSkippingProfileRestriction });
-      return false;
-    }
-    savingRef.current = true; setSaving(true);
-    try {
-      const updated = await updatePermissionProfile(selectedProfile.profileId, {
-        ...permissionProfileDraftToMutation(profileEditDraft),
-        expectedRevision,
-        expectedSelectionRevision: editNeedsDefaultReview ? defaultSelection.review?.revision : undefined,
-      });
-      const nextDraft = createPermissionProfileDraftFromRecord(updated);
-      setSelectedProfileId(updated.profileId);
-      const clean = editEditor.acceptSaved(nextDraft, updated.revision, submitted);
-      setNotice({ tone: "success", message: "Permission profile updated." });
-      await reload();
-      return clean;
-    } catch (updateError) {
-      if (isPermissionSelectionConflict(updateError)) {
-        defaultSelection.clear();
-        setNotice({ tone: "warning", message: "Permission selections changed. Your draft is preserved; review the default selection again." });
-        await reload();
-      } else if (isPermissionProfileConflict(updateError)) {
-        setProfileConflict({ key: editEditor.key, revision: expectedRevision });
-        setNotice({ tone: "warning", message: "This permission profile changed. Your draft is preserved; review the latest profile before saving." });
-        await reload();
-      } else setNotice({ tone: "error", message: getErrorMessage(updateError) });
-      return false;
-    } finally { savingRef.current = false; setSaving(false); }
+    await management.request({ kind: "update", profile: selectedProfile, fields: permissionProfileDraftToMutation(submitted) }, (receipt) => {
+      if ("profileId" in receipt) editEditor.acceptSaved(createPermissionProfileDraftFromRecord(receipt), receipt.revision, submitted);
+    });
+    return false;
   };
-
   const handleArchiveSelectedProfile = async () => {
-    if (!pendingArchiveProfile) {
-      return;
-    }
-    setArchiveProfilePending(true);
-    try {
-      await archivePermissionProfile(pendingArchiveProfile.profileId, { expectedRevision: pendingArchiveProfile.expectedRevision });
-      discardSessionDraft(`permission-profile:${activeWorkspaceId}:${pendingArchiveProfile.profileId}`);
-      setSelectedProfileId("safe"); setView(null);
-      setNotice({ tone: "success", message: "Permission profile archived." });
-      setPendingArchiveProfile(null);
-      await reload();
-    } catch (archiveError) {
-      if (isPermissionProfileConflict(archiveError)) {
-        setPendingArchiveProfile(null);
-        setNotice({ tone: "warning", message: "This permission profile changed. Review it again before archiving; your draft is preserved." });
-        await reload();
-      } else setNotice({ tone: "error", message: getErrorMessage(archiveError) });
-    } finally {
-      setArchiveProfilePending(false);
-    }
+    if (saving || !selectedProfile || editEditor.hasRemoteChanges || hasProfileConflict) return;
+    const submitted = profileEditDraft;
+    await management.request({ kind: "archive", profile: selectedProfile }, () => editEditor.acceptSaved(createEmptyPermissionProfileDraft(), undefined, submitted));
   };
-
   const handleStartOverride = async (): Promise<boolean> => {
-    if (savingRef.current) return false;
+    if (saving || !overrideAcknowledged || localOperatorOverrideRestriction || activeManagementOperation.kind !== "override-create") return false;
     const submitted = overrideDraft;
-    if (localOperatorOverrideRestriction) {
-      setNotice({ tone: "warning", message: localOperatorOverrideRestriction });
-      return false;
-    }
-    if (!overrideDraft.reason.trim()) {
-      setNotice({ tone: "warning", message: "Add a reason before starting Local Operator Override." });
-      return false;
-    }
-    const scopeRef = resolveLocalOperatorOverrideScopeRef(
-      overrideDraft.scope,
-      overrideDraft.scopeRef,
-      activeWorkspaceId,
-    );
-    if (overrideDraft.scope !== "operator" && !scopeRef) {
-      setNotice({ tone: "warning", message: "Add a target for this Local Operator Override scope." });
-      return false;
-    }
-    if (!overrideAcknowledged) {
-      setNotice({
-        tone: "warning",
-        message:
-          "Confirm that this grants broad local tool access, skips normal prompts, and keeps hard safety boundaries in force.",
-      });
-      return false;
-    }
-    savingRef.current = true; setSaving(true);
-    try {
-      const override = await createLocalOperatorOverride({
-        scope: overrideDraft.scope,
-        scopeRef,
-        reason: overrideDraft.reason.trim(),
-        ttlSeconds: overrideDraft.ttlSeconds,
-      });
-      setRecentLocalOverride(override);
-      const clean = overrideEditor.acceptSaved(emptyOverride, undefined, submitted);
-      setOverrideAcknowledged(false);
-      setNotice({
-        tone: "warning",
-        message: `Local Operator Override ${override.overrideId} is active until ${formatDateTime(override.expiresAt)}.`,
-      });
-      await reload();
-      return clean;
-    } catch (overrideError) {
-      setNotice({ tone: "error", message: getErrorMessage(overrideError) });
-      return false;
-    } finally { savingRef.current = false; setSaving(false); }
+    await management.request(activeManagementOperation, () => overrideEditor.acceptSaved(emptyOverride, undefined, submitted));
+    return false;
   };
-
   const handleRevokeOverride = async (overrideId?: string) => {
-    if (!overrideId) {
-      setNotice({ tone: "warning", message: "No active Local Operator Override to end." });
-      return;
-    }
-    try {
-      const revoked = await revokeLocalOperatorOverride(overrideId);
-      const revokedAt = revoked.revokedAt ? ` at ${formatDateTime(revoked.revokedAt)}` : "";
-      const revokedBy = revoked.revokedBy ? ` by ${revoked.revokedBy}` : "";
-      const revokedStatus = revoked.status ? ` (${revoked.status})` : "";
-      setRecentLocalOverride((current) => (current?.overrideId === overrideId ? null : current));
-      setNotice({
-        tone: "success",
-        message: `Local Operator Override ${revoked.overrideId} ended${revokedBy}${revokedAt}${revokedStatus}.`,
-      });
-      await reload();
-    } catch (revokeError) {
-      setNotice({ tone: "error", message: getErrorMessage(revokeError) });
-    }
-  };
-
-  const runServerActionForPermissions = async (action: () => Promise<unknown>, successMessage: string) => {
-    try {
-      await action();
-      setNotice({ tone: "success", message: successMessage });
-      await reload();
-    } catch (actionError) {
-      setNotice({ tone: "error", message: getErrorMessage(actionError) });
-    }
+    const override = activeOverrides.find((item) => item.overrideId === overrideId);
+    if (!override || saving) return;
+    await management.request({ kind: "override-revoke", override });
   };
 
   return (
     <SettingsSectionShell loading={loading && !data} error={error} onRetry={reload}>
-      {notice ? <SettingsNotice notice={notice} /> : null}
+      {grantRevocation.message ? <p role="status">{grantRevocation.message}</p> : null}
+      {management.message ? <p role="status">{management.message}</p> : null}
+      {managementAttempt ? <p role={managementAttempt.phase === "uncertain" ? "alert" : "status"}>{managementAttempt.message}</p> : null}
+      {activation.notice ? <p role={activation.uncertain ? "alert" : "status"}>{activation.notice}</p> : null}
       {data ? (
         <>
 
@@ -616,7 +424,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                         />
                       </details>
                       <SettingsButtonRow>
-                        <NativeButton variant="outline" disabled={!selectedProfile?.revision || selectedProfile.revision === profileConflict?.revision} onClick={() => { editEditor.rebaseToCurrent(); setProfileConflict(null); }}>Apply draft to current profile</NativeButton>
+                        <NativeButton variant="outline" disabled={!selectedProfile?.revision || managementAttempt?.phase === "rejected"} onClick={() => { management.invalidate(); editEditor.rebaseToCurrent(); }}>Apply draft to current profile</NativeButton>
                         <NativeButton variant="outline" onClick={() => void reload()}>Reload latest profile</NativeButton>
                       </SettingsButtonRow>
                     </div>
@@ -639,20 +447,14 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                     </NativeButton>
                     <NativeButton
                       variant="destructive"
-                      onClick={() =>
-                        selectedProfile && !selectedProfile.builtin
-                          ? setPendingArchiveProfile({
-                              profileId: selectedProfile.profileId,
-                              label: selectedProfile.label,
-                              expectedRevision: selectedProfile.revision,
-                            })
-                          : setNotice({ tone: "warning", message: "Select a custom permission profile to archive." })
-                      }
+                      disabled={saving || editEditor.hasRemoteChanges || hasProfileConflict}
+                      onClick={() => void handleArchiveSelectedProfile()}
                     >
                       <Trash2 size={16} />
                       Archive profile
                     </NativeButton>
                   </SettingsButtonRow>
+                  <PermissionManagementReview control={management} retainedAttempt={managementAttempt} />
                 </NativeCard></FocusedDetail>
               ) : null}
               {view === "new" ? <FocusedDetail title="New permission profile" onClose={() => openView(null)}><NativeCard
@@ -677,6 +479,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                     Create profile
                   </NativeButton>
                 </SettingsButtonRow>
+                <PermissionManagementReview control={management} retainedAttempt={managementAttempt} />
               </NativeCard></FocusedDetail> : null}
             </SettingsStack>
             <DetailInspector open={view === "effective"} title="Effective policy contexts" onClose={() => openView(null)}><NativeCard
@@ -821,7 +624,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                 <input
                   type="checkbox"
                   checked={overrideAcknowledged}
-                  onChange={(event) => setOverrideAcknowledged(event.target.checked)}
+                  onChange={(event) => { management.invalidate(); setOverrideAcknowledged(event.target.checked); }}
                   disabled={Boolean(localOperatorOverrideRestriction)}
                 />
                 <span>
@@ -839,6 +642,7 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
                   Start temporary override
                 </NativeButton>
               </SettingsButtonRow>
+              <PermissionManagementReview control={management} retainedAttempt={managementAttempt} />
             </NativeCard></DetailInspector>
             <NativeDisclosureCard
               id="permissions-autonomy"
@@ -850,103 +654,39 @@ export function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) 
               </p>
               <SettingsActionList
                 ariaLabel="Autonomous activation grants"
-                items={(data.autonomyGrants ?? []).map((grant) => ({
+                items={(data.autonomyGrants ?? []).slice(0, grantLimit).map((grant) => ({
                   label: grant.grantId,
                   description: `${grant.workspaceId} · ${formatPermissionContextList(grant.surfaces)} · ${grant.activationKinds.join(", ")} · ${grant.reason}`,
                   meta: `${grant.status} · max ${grant.maxRiskLevel} · ${grant.usedActivations}/${grant.maxActivations ?? "unlimited"} used · expires ${formatDateTime(grant.expiresAt)}${
                     hasLegacyOnlyPermissionContexts(grant.surfaces)
                       ? " · Compatibility warning: this legacy-only grant does not govern current Chat; reissue it for Chat or All policy contexts if intended."
                       : ""
-                  }`,
-                  onClick: grant.status === "active" ? () => setPendingRevokeGrantId(grant.grantId) : undefined,
-                  actionLabel: grant.status === "active" ? "Revoke" : undefined,
+                  }${grantRevocation.attemptFor(grant.grantId) ? ` · ${grantRevocation.attemptFor(grant.grantId)!.message}` : ""}`,
+                  onClick: grantCanBeRevoked(grant) && !grantRevocation.busy(grant.grantId) && !loading
+                    ? () => void grantRevocation.request(grant) : undefined,
+                  actionLabel: grantCanBeRevoked(grant) ? "Review revoke" : undefined,
                 }))}
                 emptyLabel="No autonomous activation grants recorded."
               />
+              {(data.autonomyGrants?.length ?? 0) > grantLimit ? <NativeButton onClick={() => setGrantLimit(value => value + 30)}>Show more autonomous grants</NativeButton> : null}
             </NativeDisclosureCard>
           </SettingsStack>
         </>
       ) : null}
       {leave.dialog}
       <ConfirmModal
-        open={pendingArchiveProfile !== null}
-        danger
-        pending={archiveProfilePending}
-        title="Archive permission profile?"
-        message={`Archive ${pendingArchiveProfile?.label ?? "this permission profile"}? It will no longer be available for activation.`}
-        confirmLabel="Archive profile"
-        onCancel={() => setPendingArchiveProfile(null)}
-        onConfirm={() => void handleArchiveSelectedProfile()}
-      />
-      <ConfirmModal
-        open={pendingRevokeGrantId !== null}
+        open={Boolean(grantRevocation.review)}
         danger
         title="Revoke autonomous activation grant?"
-        message="This grant will no longer permit agentic activation. This cannot be undone."
+        message={grantRevocation.review ? autonomousGrantReviewDescription(grantRevocation.review) : ""}
         confirmLabel="Revoke"
-        pending={revokePending}
-        onCancel={() => setPendingRevokeGrantId(null)}
-        onConfirm={() => {
-          const grantId = pendingRevokeGrantId;
-          setPendingRevokeGrantId(null);
-          if (grantId === null) {
-            return;
-          }
-          setRevokePending(true);
-          void runServerActionForPermissions(async () => {
-            await revokeAutonomousActivationGrant(grantId, {
-              revokedBy: "operator",
-              reason: "Revoked from Settings.",
-            });
-          }, "Autonomous activation grant revoked.").finally(() => setRevokePending(false));
-        }}
+        pending={grantRevocation.pending}
+        confirmDisabled={Boolean(grantRevocation.review && grantRevocation.busy(grantRevocation.review.grantId))}
+        onCancel={grantRevocation.cancel}
+        onConfirm={() => void grantRevocation.confirm()}
       />
     </SettingsSectionShell>
   );
-}
-
-function readEffectivePermissionSurfaceState(
-  surface: EffectivePermissionSurfaceState["surface"],
-  context: Record<string, unknown>,
-): EffectivePermissionSurfaceState {
-  const profile = isRecord(context.permissionProfile) ? context.permissionProfile : undefined;
-  const override = readLocalOperatorOverride(context.localOperatorOverride);
-  return {
-    surface,
-    profileId: readString(context.permissionProfileId) ?? readString(profile?.profileId),
-    profileLabel: readString(context.permissionProfileLabel) ?? readString(profile?.label),
-    approvalMode: readString(context.permissionProfileApprovalMode) ?? readString(profile?.approvalMode),
-    localOperatorOverrideId: readString(context.localOperatorOverrideId) ?? override?.overrideId,
-    localOperatorOverride: override,
-  };
-}
-
-function readLocalOperatorOverride(value: unknown): LocalOperatorOverrideRecord | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  const overrideId = readString(record.overrideId);
-  const operatorId = readString(record.operatorId);
-  const reason = readString(record.reason);
-  const createdAt = readString(record.createdAt);
-  const expiresAt = readString(record.expiresAt);
-  if (!overrideId || !operatorId || !reason || !createdAt || !expiresAt) {
-    return undefined;
-  }
-  return {
-    overrideId,
-    operatorId,
-    scope: (readString(record.scope) as LocalOperatorOverrideRecord["scope"] | undefined) ?? "workspace",
-    scopeRef: readString(record.scopeRef),
-    reason,
-    status: (readString(record.status) as LocalOperatorOverrideRecord["status"] | undefined) ?? "active",
-    createdBy: readString(record.createdBy) ?? operatorId,
-    createdAt,
-    expiresAt,
-    revokedAt: readString(record.revokedAt),
-    revokedBy: readString(record.revokedBy),
-  };
 }
 
 function isActiveLocalOperatorOverride(
@@ -973,22 +713,4 @@ function collectActiveLocalOperatorOverrides(
       return true;
     })
     .sort((left, right) => Date.parse(left.expiresAt) - Date.parse(right.expiresAt));
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function isPermissionProfileConflict(error: unknown): boolean {
-  return Boolean(error && typeof error === "object" && "status" in error && error.status === 409);
-}
-
-function isPermissionSelectionConflict(error: unknown): boolean {
-  if (!isPermissionProfileConflict(error) || !isRecord(error)) return false;
-  const body = isRecord(error.body) ? error.body : undefined;
-  return isRecord(body?.details) && body.details.reason === "PERMISSION_SELECTION_REVISION_CONFLICT";
 }

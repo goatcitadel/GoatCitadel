@@ -127,7 +127,7 @@
   overflow: auto;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .mc-tool-result-preview > summary {
     flex-wrap: wrap;
   }

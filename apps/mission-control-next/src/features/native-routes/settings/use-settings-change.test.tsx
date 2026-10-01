@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   useSettingsChange,
   __resetSettingsChangesForTests,
+  settingsChangeIsConfirmed,
 } from "./use-settings-change";
 import {
   useSessionDraft,
@@ -50,6 +51,13 @@ function plan(status = "awaiting_approval") {
   };
 }
 describe("Settings save settlement", () => {
+  it("does not hide pending, failed, or unknown settlement evidence", () => {
+    expect(settingsChangeIsConfirmed({ receipt: { ...receipt, status: "completed" }, blocking: false })).toBe(true);
+    expect(settingsChangeIsConfirmed({ receipt: { ...receipt, status: "completed" }, blocking: true })).toBe(false);
+    expect(settingsChangeIsConfirmed({ receipt: { ...receipt, status: "completed" }, blocking: false, error: "Readback failed" })).toBe(false);
+    expect(settingsChangeIsConfirmed({ receipt: { ...receipt, status: "failed" }, blocking: false })).toBe(false);
+    expect(settingsChangeIsConfirmed({ receipt, blocking: true })).toBe(false);
+  });
   let renderer: ReactTestRenderer;
   let editor: ReturnType<typeof useSessionDraft<string>>;
   let change: ReturnType<typeof useSettingsChange<string>>;

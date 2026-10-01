@@ -1,9 +1,12 @@
 import { createElement, type ReactElement } from "react";
+import type { CronJobRecordResponse } from "@goatcitadel/mission-control-shared/api/types";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
+import { resetScheduleOperationsForTests } from "./use-schedule-operations";
 import { DraftLeaveDialog } from "../library/DraftLeaveDialog";
 import { __resetSessionDraftsForTests } from "../library/session-drafts";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReviewReadinessSummary } from "@goatcitadel/contracts";
 import {
   buildNeedsAttentionItems,
@@ -32,6 +35,8 @@ import {
 
 const runtimeApiMocks = vi.hoisted(() => ({
   createCronJob: vi.fn(),
+  fetchCronJob: vi.fn(),
+  fetchCronJobs: vi.fn(),
   createNotificationRule: vi.fn(),
   createNotificationTarget: vi.fn(),
   deleteCronJob: vi.fn(),
@@ -108,6 +113,8 @@ const runtimeSnapshotOverrides = vi.hoisted(() => ({
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+  getGatewayApiBaseUrl: () => "http://127.0.0.1:8787",
+  isApiRequestError: (error: unknown) => error instanceof ApiRequestError,
   createCronJob: runtimeApiMocks.createCronJob,
   createNotificationRule: runtimeApiMocks.createNotificationRule,
   createNotificationTarget: runtimeApiMocks.createNotificationTarget,
@@ -122,6 +129,15 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   sendTestNotification: runtimeApiMocks.sendTestNotification,
   updateNotificationRule: runtimeApiMocks.updateNotificationRule,
   updateNotificationTarget: runtimeApiMocks.updateNotificationTarget,
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/api/cron", () => ({
+  createCronJob: runtimeApiMocks.createCronJob,
+  fetchCronJob: runtimeApiMocks.fetchCronJob,
+  fetchCronJobs: runtimeApiMocks.fetchCronJobs,
+  runCronJobNow: runtimeApiMocks.runCronJobNow,
+  deleteCronJob: runtimeApiMocks.deleteCronJob,
+  pauseCronJob: vi.fn(), startCronJob: vi.fn(),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/review-readiness", () => ({
@@ -183,7 +199,8 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
                     revision: 7,
                     name: "Daily review",
                     enabled: true,
-                    action: "review",
+                    action: "task",
+                    schedule: "0 9 * * *",
                     nextRunAt: "2026-04-23T00:00:00.000Z",
                   },
                 ],
@@ -602,7 +619,26 @@ function renderInspectedMarkup(element: ReactElement) {
   return markup;
 }
 
+const scheduleRecord = (patch: Partial<CronJobRecordResponse> = {}): CronJobRecordResponse => ({
+  jobId: "job-1", revision: 7, name: "Daily review", action: "task", schedule: "0 9 * * *", enabled: true, ...patch,
+});
+const scheduleRecords = new Map<string, CronJobRecordResponse>();
 describe("RuntimeRoutePage", () => {
+  beforeEach(() => {
+    resetScheduleOperationsForTests();
+    scheduleRecords.clear();
+    scheduleRecords.set("job-1", scheduleRecord());
+    runtimeApiMocks.fetchCronJobs.mockImplementation(async () => ({ items: [...scheduleRecords.values()] }));
+    runtimeApiMocks.fetchCronJob.mockImplementation(async (id: string) => {
+      const value = scheduleRecords.get(id);
+      if (!value) throw new ApiRequestError("Missing", { kind: "http", status: 404, method: "GET",
+        path: "/api/v1/cron/jobs/" + encodeURIComponent(id), body: { error: "Cron job not found: " + id } });
+      return value;
+    });
+    runtimeApiMocks.createCronJob.mockImplementation(async (input: Parameters<typeof import("@goatcitadel/mission-control-shared/api/cron").createCronJob>[0]) => {
+      const saved = scheduleRecord({ ...input, revision: 1 }); scheduleRecords.set(saved.jobId, saved); return saved;
+    });
+  });
   afterEach(() => {
     act(() => {
       __resetSessionDraftsForTests();
@@ -1132,7 +1168,6 @@ describe("RuntimeRoutePage", () => {
   });
 
   it("creates schedules from the native schedules route and validates required fields", async () => {
-    runtimeApiMocks.createCronJob.mockResolvedValue({ jobId: "manual-daily-review-test" });
     let renderer: ReactTestRenderer | null = null;
 
     await act(async () => {
@@ -1184,8 +1219,11 @@ describe("RuntimeRoutePage", () => {
   });
 
   it("runs and explicitly confirms cancellation of a scheduled job", async () => {
-    runtimeApiMocks.runCronJobNow.mockResolvedValue({ jobId: "job-1", runId: "run-manual-1", status: "ok" });
-    runtimeApiMocks.deleteCronJob.mockResolvedValue({ deleted: true, jobId: "job-1" });
+    runtimeApiMocks.runCronJobNow.mockImplementation(async () => {
+      scheduleRecords.set("job-1", scheduleRecord({ lastRunId: "run-manual-1" }));
+      return { jobId: "job-1", runId: "run-manual-1", status: "ok" };
+    });
+    runtimeApiMocks.deleteCronJob.mockImplementation(async () => { scheduleRecords.delete("job-1"); return { deleted: true, jobId: "job-1" }; });
     let renderer: ReactTestRenderer | null = null;
 
     await act(async () => {
@@ -1518,7 +1556,7 @@ describe("RuntimeRoutePage", () => {
 
     expect(runtimeApiMocks.createCronJob).toHaveBeenCalledWith(expect.objectContaining({ name: "Daily review" }));
     expect(runtimeSnapshotOverrides.reload).not.toHaveBeenCalled();
-    expect(collectText(renderer!.root)).toContain("cron backend offline");
+    expect(collectText(renderer!.root)).toContain("create outcome is unconfirmed");
     expect(renderer!.root.findAllByType("input")[0]!.props.value).toBe("Daily review");
   });
 
@@ -2666,7 +2704,9 @@ describe("RuntimeRoutePage", () => {
       renderer!.root.findAllByType("input")[0]!.props.onChange({ target: { value: "Next schedule input" } });
     });
     await act(async () => {
-      resolveCreate({ jobId: "created-schedule" });
+      const saved = scheduleRecord({ ...runtimeApiMocks.createCronJob.mock.calls[0]![0], revision: 1 });
+      scheduleRecords.set(saved.jobId, saved);
+      resolveCreate(saved);
     });
     expect(renderer!.root.findAllByType("input")[0]!.props.value).toBe("Next schedule input");
     await act(async () => {

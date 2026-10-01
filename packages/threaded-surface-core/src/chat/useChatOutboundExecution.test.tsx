@@ -871,6 +871,53 @@ describe("useChatOutboundExecution", () => {
     );
   });
 
+  it("reattaches a persisted running turn after mount without dispatching another provider request", async () => {
+    vi.useFakeTimers();
+    const runningThread = makeThread();
+    runningThread.turns[0]!.trace.status = "running";
+    runningThread.turns[0]!.assistantMessage = undefined;
+    const liveTail = createDeferred<void>();
+    let onReplayChunk: ((chunk: any) => void) | undefined;
+    resumeChatTurnStreamMock.mockImplementationOnce((_sessionId, _turnId, onChunk) => {
+      onReplayChunk = onChunk;
+      return liveTail.promise;
+    });
+
+    await act(async () => {
+      create(<Harness streamEnabled initialThread={runningThread} />);
+    });
+    expect(resumeChatTurnStreamMock).toHaveBeenCalledWith(
+      "session-1",
+      "turn-1",
+      expect.any(Function),
+      expect.objectContaining({ originSurface: "chat", sinceEventId: undefined }),
+    );
+    expect(latest?.getSnapshot()).toMatchObject({ sending: true, activeStream: { turnId: "turn-1" } });
+    expect(streamAgentChatMessageMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      onReplayChunk?.({
+        type: "message_start", eventId: "replay-1", sequence: 1, sessionId: "session-1",
+        turnId: "turn-1", messageId: "assistant-1", branchKind: "append",
+      });
+      onReplayChunk?.({
+        type: "delta", eventId: "replay-2", sequence: 2, sessionId: "session-1",
+        turnId: "turn-1", messageId: "assistant-1", delta: "Saved partial answer.",
+      });
+      await vi.advanceTimersByTimeAsync(260);
+    });
+    expect(getChatStreamingPreview("session-1")).toMatchObject({
+      turnId: "turn-1", text: "Saved partial answer.", visibleText: "Saved partial answer.",
+    });
+    expect(streamAgentChatMessageMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      liveTail.resolve();
+      await Promise.resolve();
+    });
+    expect(latest?.getSnapshot()).toMatchObject({ sending: false, activeStream: null });
+  });
+
   it("does not reconnect after a terminal provider error stream", async () => {
     const pushLocalNotice = vi.fn();
     streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {

@@ -12,7 +12,7 @@ describe("odysseus personal AI routes", () => {
     expect(buildAppHref(communications)).toBe("/library/communications");
     expect(buildAppHref(localAi)).toBe("/settings/local-ai");
     expect(getRouteLabel(notes)).toBe("Notes");
-    expect(getRouteLabel(communications)).toBe("Communications");
+    expect(getRouteLabel(communications)).toBe("Mail");
     expect(getRouteLabel(localAi)).toBe("Local AI");
     expect(RAIL_ITEMS.library.find((item) => item.id === "library-notes")?.section).toBe("notes");
     expect(RAIL_ITEMS.library.find((item) => item.id === "library-communications")?.section).toBe("communications");

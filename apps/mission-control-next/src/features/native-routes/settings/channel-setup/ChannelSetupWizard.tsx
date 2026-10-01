@@ -1,232 +1,65 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
-  ChannelProbeReport,
-  ChannelSetupDefinition,
   ChannelSetupDraft,
   ChannelSetupFieldDefinition,
-  ChannelSetupIssue,
   ChannelSetupRichBlock,
-  ChannelSetupStatus,
   ChannelSetupStepDefinition,
+  ChannelSetupIssue,
 } from "@goatcitadel/contracts";
 import { Check, CheckCircle2, ChevronLeft, ChevronRight, FileJson2, Play, Save, ShieldCheck } from "lucide-react";
-import { useSessionViewState } from "../../../../hooks/use-session-view-state";
 import { NativeButton } from "../../primitives";
 import { SettingsButtonRow } from "../SettingsShared";
-
-const SECRET_REDACTION_MARKER = "[REDACTED]";
-
-export interface ChannelSetupWizardFeedback {
-  kind: "validate" | "test";
-  status: ChannelSetupStatus;
-  issues: ChannelSetupIssue[];
-  recommendedNextAction?: string;
-  probe?: ChannelProbeReport;
-}
-
-interface ChannelSetupWizardProps {
-  scopeId?: string;
-  advancedValue?: string;
-  onAdvancedValueChange?: (value: string) => void;
-  definition: ChannelSetupDefinition;
-  draft: ChannelSetupDraft;
-  values: Record<string, unknown>;
-  label: string;
-  enabled: boolean;
-  dirty: boolean;
-  reviewRequired?: boolean;
-  busyAction?: "save" | "validate" | "test" | "finalize" | null;
-  feedback?: ChannelSetupWizardFeedback | null;
-  supplementaryActions?: ReactNode;
-  onValuesChange: (next: Record<string, unknown>) => void;
-  onLabelChange: (next: string) => void;
-  onEnabledChange: (next: boolean) => void;
-  onDirty: () => void;
-  onSave: (valuesOverride?: Record<string, unknown>) => Promise<boolean>;
-  onValidate: (valuesOverride?: Record<string, unknown>) => Promise<void>;
-  onTest: (valuesOverride?: Record<string, unknown>) => Promise<void>;
-  onFinalize: (valuesOverride?: Record<string, unknown>) => Promise<void>;
-}
-
-export function ChannelSetupWizard({
-  scopeId = "global",
-  advancedValue,
-  onAdvancedValueChange,
-  definition,
-  draft,
-  values,
-  label,
-  enabled,
-  dirty,
-  reviewRequired = false,
-  busyAction = null,
-  feedback,
-  supplementaryActions,
-  onValuesChange,
-  onLabelChange,
-  onEnabledChange,
-  onDirty,
-  onSave,
-  onValidate,
-  onTest,
-  onFinalize,
-}: ChannelSetupWizardProps) {
-  const visibleSteps = useMemo(
-    () => definition.wizard.steps.filter((step) => isStepVisible(step, values)),
-    [definition.wizard.steps, values],
-  );
-  const viewKey = "channel:" + scopeId + ":" + draft.draftId;
-  const [activeStepId, setActiveStepId] = useSessionViewState(viewKey + ":step", visibleSteps[0]?.id ?? "");
-  const [visitedStepIds, setVisitedStepIds] = useSessionViewState<Record<string, boolean>>(viewKey + ":visited", {});
-  const [checkedItems, setCheckedItems] = useSessionViewState<Record<string, boolean>>(viewKey + ":checklist", {});
-  const [advancedMode, setAdvancedMode] = useSessionViewState(viewKey + ":advanced-mode", false);
-  const [localAdvancedJson, setLocalAdvancedJson] = useState(() => formatJson(values));
-  const advancedJson = advancedValue ?? localAdvancedJson;
-  const setAdvancedJson = (value: string) => {
-    if (onAdvancedValueChange) onAdvancedValueChange(value);
-    else setLocalAdvancedJson(value);
-  };
-  const [localError, setLocalError] = useState<string | null>(null);
-  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
-  const shouldFocusStepRef = useRef(false);
-
-  const activeStepIndex = Math.max(
-    0,
-    visibleSteps.findIndex((step) => step.id === activeStepId),
-  );
-  const activeStep = visibleSteps[activeStepIndex] ?? visibleSteps[0];
-  const anyBusy = busyAction !== null;
-
-  useEffect(() => {
-    setLocalError(null);
-  }, [draft.draftId]);
-
-  useEffect(() => {
-    if (!visibleSteps.some((step) => step.id === activeStepId)) {
-      setActiveStepId(visibleSteps[0]?.id ?? "");
-    }
-  }, [activeStepId, visibleSteps, setActiveStepId]);
-
-  useEffect(() => {
-    if (!shouldFocusStepRef.current) {
-      return;
-    }
-    shouldFocusStepRef.current = false;
-    stepHeadingRef.current?.focus();
-  }, [activeStepId]);
-
-  useEffect(() => {
-    if (advancedValue === undefined && (!advancedMode || !dirty)) {
-      setLocalAdvancedJson(formatJson(values));
-    }
-  }, [advancedValue, advancedMode, dirty, values]);
-
-  useEffect(() => {
-    const firstFieldIssue = feedback?.issues.find((issue) => issue.fieldKey)?.fieldKey;
-    if (!firstFieldIssue || feedback?.status === "ok") {
-      return;
-    }
-    const targetStep = visibleSteps.find((step) => step.fields?.some((field) => field.key === firstFieldIssue));
-    if (targetStep) {
-      setAdvancedMode(false);
-      setActiveStepId(targetStep.id);
-    }
-  }, [feedback, visibleSteps, setActiveStepId, setAdvancedMode]);
-
-  const selectStep = (stepId: string) => {
-    if (activeStep) {
-      setVisitedStepIds((current) => ({ ...current, [activeStep.id]: true }));
-    }
-    shouldFocusStepRef.current = true;
-    setActiveStepId(stepId);
-    setLocalError(null);
-  };
-
-  const prepareValues = (): Record<string, unknown> | undefined => {
-    if (!advancedMode) {
-      return values;
-    }
-    try {
-      const parsed = JSON.parse(advancedJson) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        setLocalError("Advanced JSON must contain one object at the top level.");
-        return undefined;
-      }
-      const next = parsed as Record<string, unknown>;
-      if (formatJson(next) !== formatJson(values)) {
-        onValuesChange(next);
-      }
-      setAdvancedJson(formatJson(next));
-      setLocalError(null);
-      return next;
-    } catch (error) {
-      setLocalError(
-        error instanceof Error ? `Advanced JSON is invalid: ${error.message}` : "Advanced JSON is invalid.",
-      );
-      return undefined;
-    }
-  };
-
-  const switchToGuidedMode = () => {
-    const next = prepareValues();
-    if (!next) {
-      return;
-    }
-    setAdvancedMode(false);
-  };
-
-  const handleSave = async () => {
-    const next = prepareValues();
-    if (!next) {
-      return false;
-    }
-    return onSave(next);
-  };
-
-  const handleValidate = async () => {
-    if (reviewRequired) return;
-    const next = prepareValues();
-    if (next) {
-      await onValidate(next);
-    }
-  };
-
-  const handleTest = async () => {
-    if (reviewRequired) return;
-    const next = prepareValues();
-    if (next) {
-      await onTest(next);
-    }
-  };
-
-  const handleFinalize = async () => {
-    if (reviewRequired) return;
-    const next = prepareValues();
-    if (next) {
-      await onFinalize(next);
-    }
-  };
-
-  const moveForward = async () => {
-    if (!activeStep) {
-      return;
-    }
-    const missing = findMissingFieldLabels(definition, draft, activeStep, values);
-    if (missing.length > 0) {
-      setLocalError(`Complete the required setup values before continuing: ${missing.join(", ")}.`);
-      return;
-    }
-    if ((activeStep.fields?.length ?? 0) > 0 && !(await handleSave())) {
-      return;
-    }
-    setVisitedStepIds((current) => ({ ...current, [activeStep.id]: true }));
-    const next = visibleSteps[activeStepIndex + 1];
-    if (next) {
-      setActiveStepId(next.id);
-      setLocalError(null);
-    }
-  };
-
+import { useChannelWizard } from "./use-channel-wizard";
+import {
+  isStepComplete,
+  updateFieldValue,
+  humanizeStepKind,
+  finalizeDisabledReason,
+  formatJson,
+  SECRET_REDACTION_MARKER,
+  type ChannelSetupWizardProps,
+  type ChannelSetupWizardFeedback,
+} from "./channel-wizard-model";
+export type { ChannelSetupWizardFeedback } from "./channel-wizard-model";
+export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
+  const {
+    definition,
+    draft,
+    values,
+    label,
+    enabled,
+    dirty,
+    reviewRequired = false,
+    busyAction = null,
+    feedback,
+    supplementaryActions,
+    onValuesChange,
+    onLabelChange,
+    onEnabledChange,
+    onDirty,
+  } = props;
+  const {
+    visibleSteps,
+    activeStepIndex,
+    activeStep,
+    anyBusy,
+    visitedStepIds,
+    checkedItems,
+    setCheckedItems,
+    advancedMode,
+    setAdvancedMode,
+    advancedJson,
+    setAdvancedJson,
+    localError,
+    setLocalError,
+    stepHeadingRef,
+    selectStep,
+    switchToGuidedMode,
+    handleSave,
+    handleValidate,
+    handleTest,
+    handleFinalize,
+    moveForward,
+  } = useChannelWizard(props);
   if (!activeStep) {
     return <p className="mc-next-settings-field-note">This channel definition has no setup steps.</p>;
   }
@@ -417,11 +250,19 @@ export function ChannelSetupWizard({
                 </NativeButton>
                 {activeStep.kind === "test" ? (
                   <>
-                    <NativeButton variant="secondary" disabled={anyBusy || reviewRequired} onClick={() => void handleValidate()}>
+                    <NativeButton
+                      variant="secondary"
+                      disabled={anyBusy || reviewRequired}
+                      onClick={() => void handleValidate()}
+                    >
                       <ShieldCheck size={16} />
                       {busyAction === "validate" ? "Validating…" : "Validate"}
                     </NativeButton>
-                    <NativeButton variant="outline" disabled={anyBusy || reviewRequired} onClick={() => void handleTest()}>
+                    <NativeButton
+                      variant="outline"
+                      disabled={anyBusy || reviewRequired}
+                      onClick={() => void handleTest()}
+                    >
                       <Play size={16} />
                       {busyAction === "test" ? "Testing…" : "Run live test"}
                     </NativeButton>
@@ -430,7 +271,9 @@ export function ChannelSetupWizard({
                 {activeStep.kind === "confirm" ? (
                   <NativeButton
                     variant="default"
-                    disabled={anyBusy || reviewRequired || dirty || feedback?.kind !== "test" || feedback.status !== "ok"}
+                    disabled={
+                      anyBusy || reviewRequired || dirty || feedback?.kind !== "test" || feedback.status !== "ok"
+                    }
                     title={finalizeDisabledReason(dirty, feedback)}
                     onClick={() => void handleFinalize()}
                   >
@@ -904,108 +747,4 @@ function WizardFeedback({
       ) : null}
     </section>
   );
-}
-
-function isStepVisible(step: ChannelSetupStepDefinition, values: Record<string, unknown>): boolean {
-  const condition = step.visibleWhenFieldEquals;
-  return !condition || values[condition.fieldKey] === condition.value;
-}
-
-function isStepComplete(
-  step: ChannelSetupStepDefinition,
-  definition: ChannelSetupDefinition,
-  draft: ChannelSetupDraft,
-  values: Record<string, unknown>,
-  visitedStepIds: Record<string, boolean>,
-  checkedItems: Record<string, boolean>,
-  feedback?: ChannelSetupWizardFeedback | null,
-): boolean {
-  if (step.kind === "test") {
-    return feedback?.kind === "test" && feedback.status === "ok";
-  }
-  if (step.kind === "confirm") {
-    return false;
-  }
-  if (step.checklist?.length) {
-    return step.checklist.every((item) => checkedItems[`${draft.draftId}:${step.id}:${item.id}`]);
-  }
-  if (step.fields?.length) {
-    return findMissingFieldLabels(definition, draft, step, values).length === 0;
-  }
-  return Boolean(visitedStepIds[step.id]);
-}
-
-function findMissingFieldLabels(
-  definition: ChannelSetupDefinition,
-  draft: ChannelSetupDraft,
-  step: ChannelSetupStepDefinition,
-  values: Record<string, unknown>,
-): string[] {
-  const missing = (step.fields ?? [])
-    .filter((field) => field.required && !hasFieldValue(draft, values, field.key))
-    .map((field) => field.label);
-  if (
-    definition.catalog.catalogId === "channel.discord" &&
-    step.fields?.some((field) => field.key === "botTokenEnv") &&
-    !hasFieldValue(draft, values, "botTokenEnv") &&
-    !hasFieldValue(draft, values, "botToken") &&
-    !hasFieldValue(draft, values, "webhookUrl")
-  ) {
-    missing.unshift("Bot token env var or bot token");
-  }
-  return missing;
-}
-
-function hasFieldValue(draft: ChannelSetupDraft, values: Record<string, unknown>, key: string): boolean {
-  const value = values[key];
-  if (typeof value === "string") {
-    return value.trim().length > 0;
-  }
-  if (value !== undefined && value !== null) {
-    return true;
-  }
-  return draft.hydration?.fieldState[key] === "configured";
-}
-
-function updateFieldValue(
-  draft: ChannelSetupDraft,
-  values: Record<string, unknown>,
-  field: ChannelSetupFieldDefinition,
-  next: unknown,
-): Record<string, unknown> {
-  const current = values[field.key];
-  if (
-    field.sensitive &&
-    typeof next === "string" &&
-    next.length === 0 &&
-    (current === SECRET_REDACTION_MARKER || draft.hydration?.fieldState[field.key] === "configured")
-  ) {
-    return { ...values, [field.key]: SECRET_REDACTION_MARKER };
-  }
-  return { ...values, [field.key]: next };
-}
-
-function humanizeStepKind(kind: ChannelSetupStepDefinition["kind"]): string {
-  return kind.replaceAll("-", " ");
-}
-
-function finalizeDisabledReason(dirty: boolean, feedback?: ChannelSetupWizardFeedback | null): string | undefined {
-  if (dirty) {
-    return "Save these changes and run the live test again before finalizing.";
-  }
-  if (feedback?.kind !== "test") {
-    return "Run the live test before finalizing this connection.";
-  }
-  if (feedback.status !== "ok") {
-    return "Resolve the live test results and rerun the test before finalizing.";
-  }
-  return undefined;
-}
-
-function formatJson(value: Record<string, unknown>): string {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return "{}";
-  }
 }

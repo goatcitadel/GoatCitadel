@@ -1,278 +1,73 @@
-import { useSessionDraft } from "../../library/session-drafts";
-import { useDraftLeave } from "../../library/DraftLeaveDialog";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { FocusedDetail } from "../../shared/FocusedDetail";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bell, Plus, RefreshCw, Send, Trash2 } from "lucide-react";
-import {
-  NOTIFICATION_EVENT_TYPES,
-  type NotificationEventType,
-  type NotificationRule,
-  type NotificationTarget,
-  type NotificationTargetKind,
-} from "@goatcitadel/contracts";
-import {
-  createNotificationRule,
-  createNotificationTarget,
-  fetchNotificationDeliveries,
-  fetchNotificationRules,
-  fetchNotificationTargets,
-  sendTestNotification,
-  updateNotificationRule,
-  updateNotificationTarget,
-  type IntegrationConnection,
-} from "@goatcitadel/mission-control-shared/api/client";
+import { NOTIFICATION_EVENT_TYPES, type NotificationTargetKind } from "@goatcitadel/contracts";
+import type { IntegrationConnection } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeButton } from "../../primitives";
 import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
-import {
-  getErrorMessage,
-  SettingsButtonRow,
-  SettingsField,
-  SettingsFieldGrid,
-  SettingsNotice,
-  SettingsStack,
-  type Notice,
-} from "../SettingsShared";
-
+import { SettingsButtonRow, SettingsField, SettingsFieldGrid, SettingsNotice, SettingsStack } from "../SettingsShared";
+import { useNotificationRouting } from "./use-notification-routing";
 interface NotificationRoutingPanelProps {
   workspaceId: string;
   channels: IntegrationConnection[];
   defaultTargetKind?: NotificationTargetKind;
 }
-
-const DEFAULT_EVENT_TYPES: NotificationEventType[] = [
-  "turn.failed",
-  "turn.blocked",
-  "approval.requested",
-  "user_input.requested",
-  "durable.attention_required",
-  "timer.due",
-  "scheduled_turn.failed",
-];
-
 export function NotificationRoutingPanel({
   workspaceId,
-  channels,
+  channels: suppliedChannels,
   defaultTargetKind = "channel_connection",
 }: NotificationRoutingPanelProps) {
-  const [targets, setTargets] = useState<NotificationTarget[]>([]);
-  const [rules, setRules] = useState<NotificationRule[]>([]);
-  const [deliveries, setDeliveries] = useState<Awaited<ReturnType<typeof fetchNotificationDeliveries>>["items"]>([]);
-  const [loading, setLoading] = useState(true);
-  const [busyId, setBusyId] = useState("");
-  const [notice, setNotice] = useState<Notice | null>(null);
-  const [editor, setEditor] = useState<"target" | "rule" | null>(null);
-  const leave = useDraftLeave();
-  const busyRef = useRef(false);
-  const loadGeneration = useRef(0);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const emptyTarget = {
-    label: "",
-    kind: defaultTargetKind,
-    channelConnectionId: "",
-    webhookUrlSecretRef: "",
-    credentialSecretRef: "",
-  };
-  const emptyRule = {
-    label: "",
-    eventTypes: DEFAULT_EVENT_TYPES,
-    targetIds: [] as string[],
-    deliveryPolicy: "when_away" as "always" | "when_away",
-  };
-  const targetDraft = useSessionDraft("notifications:" + workspaceId + ":target:new", emptyTarget, undefined, {
-    label: "Notification destination",
-    active: editor === "target",
-    onSave: () => handleCreateTarget(),
-  });
-  const ruleDraft = useSessionDraft("notifications:" + workspaceId + ":rule:new", emptyRule, undefined, {
-    label: "Notification rule",
-    active: editor === "rule",
-    onSave: () => handleCreateRule(),
-  });
-  const targetForm = targetDraft.value,
-    setTargetForm = targetDraft.setValue,
-    ruleForm = ruleDraft.value,
-    setRuleForm = ruleDraft.setValue;
-
-  const reload = useCallback(async () => {
-    const generation = ++loadGeneration.current;
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const [targetResponse, ruleResponse, deliveryResponse] = await Promise.all([
-        fetchNotificationTargets(workspaceId),
-        fetchNotificationRules(workspaceId),
-        fetchNotificationDeliveries(workspaceId, 30),
-      ]);
-      if (generation !== loadGeneration.current) return;
-      setTargets(targetResponse.items ?? []);
-      setRules(ruleResponse.items ?? []);
-      setDeliveries(deliveryResponse.items ?? []);
-    } catch (error) {
-      if (generation === loadGeneration.current) setLoadError(getErrorMessage(error));
-    } finally {
-      if (generation === loadGeneration.current) setLoading(false);
-    }
-  }, [workspaceId]);
-
-  useEffect(() => {
-    setTargets([]);
-    setRules([]);
-    setDeliveries([]);
-    setEditor(null);
-    void reload();
-    return () => {
-      loadGeneration.current += 1;
-    };
-  }, [reload]);
-
-  const activeTargets = useMemo(() => targets.filter((target) => target.lifecycleState === "active"), [targets]);
-
-  const handleCreateTarget = async (): Promise<boolean> => {
-    if (busyRef.current) return false;
-    busyRef.current = true;
-    const submitted = targetForm;
-    setBusyId("create-target");
-    setNotice(null);
-    try {
-      await createNotificationTarget(workspaceId, {
-        label: targetForm.label,
-        kind: targetForm.kind,
-        ...(targetForm.kind === "channel_connection"
-          ? { channelConnectionId: targetForm.channelConnectionId }
-          : {
-              webhookUrlSecretRef: targetForm.webhookUrlSecretRef,
-              ...(targetForm.credentialSecretRef ? { credentialSecretRef: targetForm.credentialSecretRef } : {}),
-            }),
-      });
-      const clean = targetDraft.acceptSaved(emptyTarget, undefined, submitted);
-      setNotice({ tone: "success", message: "Notification target created." });
-      await reload();
-      if (clean) setEditor(null);
-      return clean;
-    } catch (error) {
-      setNotice({ tone: "error", message: getErrorMessage(error) });
-      return false;
-    } finally {
-      busyRef.current = false;
-      setBusyId("");
-    }
-  };
-
-  const handleTargetState = async (target: NotificationTarget, lifecycleState: "disabled" | "archived") => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    setBusyId(target.targetId);
-    try {
-      await updateNotificationTarget(workspaceId, target.targetId, target.revision, {
-        label: target.label,
-        kind: target.kind,
-        channelConnectionId: target.channelConnectionId,
-        webhookUrlSecretRef: target.webhookUrlSecretRef,
-        credentialSecretRef: target.credentialSecretRef,
-        lifecycleState,
-      });
-      await reload();
-    } catch (error) {
-      setNotice({ tone: "error", message: getErrorMessage(error) });
-      return false;
-    } finally {
-      busyRef.current = false;
-      setBusyId("");
-    }
-  };
-
-  const handleTest = async (target: NotificationTarget) => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    setBusyId(`test:${target.targetId}`);
-    try {
-      const result = await sendTestNotification(workspaceId, target.targetId);
-      const status = result.status;
-      setNotice({
-        tone: status === "failed" ? "error" : status === "delivered" ? "success" : "info",
-        message: `Test delivery: ${status}.`,
-      });
-      await reload();
-    } catch (error) {
-      setNotice({ tone: "error", message: getErrorMessage(error) });
-      return false;
-    } finally {
-      busyRef.current = false;
-      setBusyId("");
-    }
-  };
-
-  const handleCreateRule = async (): Promise<boolean> => {
-    if (busyRef.current) return false;
-    busyRef.current = true;
-    const submitted = ruleForm;
-    setBusyId("create-rule");
-    try {
-      await createNotificationRule(workspaceId, ruleForm);
-      const clean = ruleDraft.acceptSaved(emptyRule, undefined, submitted);
-      setNotice({ tone: "success", message: "Notification rule created." });
-      await reload();
-      if (clean) setEditor(null);
-      return clean;
-    } catch (error) {
-      setNotice({ tone: "error", message: getErrorMessage(error) });
-      return false;
-    } finally {
-      busyRef.current = false;
-      setBusyId("");
-    }
-  };
-
-  const handleArchiveRule = async (rule: NotificationRule) => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    setBusyId(rule.ruleId);
-    try {
-      await updateNotificationRule(workspaceId, rule.ruleId, rule.revision, {
-        label: rule.label,
-        eventTypes: rule.eventTypes,
-        targetIds: rule.targetIds,
-        deliveryPolicy: rule.deliveryPolicy,
-        lifecycleState: "archived",
-      });
-      await reload();
-    } catch (error) {
-      setNotice({ tone: "error", message: getErrorMessage(error) });
-      return false;
-    } finally {
-      busyRef.current = false;
-      setBusyId("");
-    }
-  };
-
-  const toggleEventType = (eventType: NotificationEventType) => {
-    setRuleForm((current) => ({
-      ...current,
-      eventTypes: current.eventTypes.includes(eventType)
-        ? current.eventTypes.filter((item) => item !== eventType)
-        : [...current.eventTypes, eventType],
-    }));
-  };
-
-  const toggleTarget = (targetId: string) => {
-    setRuleForm((current) => ({
-      ...current,
-      targetIds: current.targetIds.includes(targetId)
-        ? current.targetIds.filter((item) => item !== targetId)
-        : [...current.targetIds, targetId],
-    }));
-  };
-
+  const s = useNotificationRouting(workspaceId, suppliedChannels, defaultTargetKind);
+  const {
+    targets,
+    rules,
+    deliveries,
+    loading,
+    loadError,
+    notice,
+    editor,
+    setEditor,
+    leave,
+    targetDraft,
+    ruleDraft,
+    targetForm,
+    ruleForm,
+    setTargetForm,
+    setRuleForm,
+    activeTargets,
+    channels,
+    reload,
+    toggleTarget,
+    toggleEventType,
+    handleCreateTarget,
+    handleCreateRule,
+    handleTargetState,
+    handleArchiveRule,
+    handleTest,
+    busyId,
+  } = s;
   return (
     <NativeCard
       density="compact"
       className="mc-next-settings-panel"
       title="Notification routing"
       subtitle="Operator-managed destinations and rules. Chat and models can reference rules, never raw endpoints or credentials."
-      stats={[{label:"Targets",value:loadError ? "Unavailable" : loading ? "Loading" : String(activeTargets.length)},{label:"Rules",value:loadError ? "Unavailable" : loading ? "Loading" : String(rules.length)},{label:"Recent",value:loadError ? "Unavailable" : loading ? "Loading" : String(deliveries.length)}]}
+      stats={[
+        { label: "Targets", value: loadError ? "Unavailable" : loading ? "Loading" : String(activeTargets.length) },
+        { label: "Rules", value: loadError ? "Unavailable" : loading ? "Loading" : String(rules.length) },
+        { label: "Recent", value: loadError ? "Unavailable" : loading ? "Loading" : String(deliveries.length) },
+      ]}
     >
       <SettingsStack>
         {notice ? <SettingsNotice notice={notice} /> : null}
+        {s.attempt.phase === "uncertain" ? (
+          <SettingsNotice
+            notice={{
+              tone: "warning",
+              message: s.attempt.message ?? "Notification outcome is unconfirmed; further changes are withheld.",
+            }}
+          />
+        ) : null}
         {loading ? <p role="status">Loading notification routing…</p> : null}
         {loadError ? (
           <SettingsNotice
@@ -284,7 +79,7 @@ export function NotificationRoutingPanel({
             title={editor === "target" ? "New notification destination" : "New notification rule"}
             onClose={() => leave.request(() => setEditor(null))}
           >
-            <fieldset className="mc-next-settings-fieldset" disabled={Boolean(busyId)}>
+            <fieldset className="mc-next-settings-fieldset" disabled={s.attempt.locked}>
               {editor === "target" ? (
                 <>
                   {" "}
@@ -356,7 +151,7 @@ export function NotificationRoutingPanel({
                   <SettingsButtonRow>
                     <NativeButton
                       variant="default"
-                      disabled={busyId === "create-target" || !targetForm.label.trim()}
+                      disabled={s.attempt.locked || busyId === "create-target" || !targetForm.label.trim()}
                       onClick={() => void handleCreateTarget()}
                     >
                       <Plus size={16} />
@@ -421,6 +216,7 @@ export function NotificationRoutingPanel({
                     <NativeButton
                       variant="default"
                       disabled={
+                        s.attempt.locked ||
                         busyId === "create-rule" ||
                         !ruleForm.label.trim() ||
                         ruleForm.eventTypes.length === 0 ||
@@ -467,10 +263,24 @@ export function NotificationRoutingPanel({
                           {target.lifecycleState} · revision {target.revision}
                         </p>
                       </div>
+                      {s.testDelivery(target.targetId) ? (
+                        <p role="status">
+                          Latest test for {target.label}: {s.testDelivery(target.targetId)!.status.replaceAll("_", " ")}
+                          .{" "}
+                          {s.testPending(target.targetId)
+                            ? "Refresh evidence before another send."
+                            : "Confirmed by the Gateway."}
+                        </p>
+                      ) : null}
                       <SettingsButtonRow>
                         <NativeButton
                           variant="secondary"
-                          disabled={busyId === `test:${target.targetId}` || target.lifecycleState !== "active"}
+                          disabled={
+                            s.attempt.locked ||
+                            s.testPending(target.targetId) ||
+                            busyId === `test:${target.targetId}` ||
+                            target.lifecycleState !== "active"
+                          }
                           onClick={() => void handleTest(target)}
                           aria-label={`Test notification destination ${target.label}`}
                         >
@@ -478,7 +288,7 @@ export function NotificationRoutingPanel({
                         </NativeButton>
                         <NativeButton
                           variant="ghost"
-                          disabled={busyId === target.targetId}
+                          disabled={s.attempt.locked || busyId === target.targetId}
                           onClick={() => void handleTargetState(target, "disabled")}
                           aria-label={`Disable notification destination ${target.label}`}
                         >
@@ -486,7 +296,7 @@ export function NotificationRoutingPanel({
                         </NativeButton>
                         <NativeButton
                           variant="ghost"
-                          disabled={busyId === target.targetId}
+                          disabled={s.attempt.locked || busyId === target.targetId}
                           onClick={() => void handleTargetState(target, "archived")}
                           aria-label={`Archive notification destination ${target.label}`}
                         >
@@ -518,7 +328,7 @@ export function NotificationRoutingPanel({
                       </div>
                       <NativeButton
                         variant="ghost"
-                        disabled={busyId === rule.ruleId}
+                        disabled={s.attempt.locked || busyId === rule.ruleId}
                         onClick={() => void handleArchiveRule(rule)}
                         aria-label={`Archive notification rule ${rule.label}`}
                       >
@@ -548,6 +358,16 @@ export function NotificationRoutingPanel({
             </NativeDisclosureCard>
           </>
         )}
+        <ConfirmModal
+          open={Boolean(s.review)}
+          title={s.review?.title ?? "Review notification change"}
+          message={s.review?.message ?? ""}
+          confirmLabel="Apply reviewed notification action"
+          pending={s.attempt.pending}
+          confirmDisabled={s.attempt.phase === "uncertain"}
+          onCancel={s.cancelReview}
+          onConfirm={() => void s.confirmReview()}
+        />
         {leave.dialog}
       </SettingsStack>
     </NativeCard>

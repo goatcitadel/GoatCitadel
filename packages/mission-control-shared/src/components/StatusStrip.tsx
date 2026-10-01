@@ -22,7 +22,7 @@ function readCompactViewport(): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
     return false;
   }
-  return window.matchMedia("(max-width: 767px)").matches;
+  return window.matchMedia("(max-width: 639px)").matches;
 }
 
 function formatUsd(value: number): string {
@@ -58,7 +58,7 @@ export function StatusStrip({
       return undefined;
     }
 
-    const media = window.matchMedia("(max-width: 767px)");
+    const media = window.matchMedia("(max-width: 639px)");
     const handleChange = (event: MediaQueryListEvent | MediaQueryList) => {
       setCompactViewport(event.matches);
     };

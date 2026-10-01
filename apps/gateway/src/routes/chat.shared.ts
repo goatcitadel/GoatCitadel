@@ -305,42 +305,84 @@ export async function* coalesceStreamingDeltas(
   };
 
   let lastEmit = Date.now();
-
-  for await (const raw of source) {
-    if (!raw || typeof raw !== "object") {
-      const drained = flush();
-      if (drained) yield drained;
-      yield raw;
-      continue;
-    }
-    const event = raw as Record<string, unknown>;
-    const type = typeof event.type === "string" ? event.type : "";
-    if (!types.has(type) || typeof event.delta !== "string") {
-      const drained = flush();
-      if (drained) yield drained;
-      yield event;
-      lastEmit = Date.now();
-      continue;
-    }
-
-    if (pendingType !== null && pendingType !== type) {
-      const drained = flush();
-      if (drained) yield drained;
-    }
-    pendingType = type;
-    pendingDelta += event.delta;
-    pendingTemplate = { ...event };
-    delete pendingTemplate.delta;
-
-    if (Date.now() - lastEmit >= window) {
-      const drained = flush();
-      if (drained) {
-        yield drained;
+  const iterator = source[Symbol.asyncIterator]();
+  let nextResult: Promise<IteratorResult<unknown>> | null = null;
+  let sourceDone = false;
+  try {
+    while (true) {
+      // Keep one read in flight while the timer releases a buffered delta.
+      // Calling next() again after a timeout would skip or reorder the event
+      // that eventually wakes this read.
+      nextResult ??= iterator.next();
+      let result: IteratorResult<unknown>;
+      if (pendingType !== null) {
+        const remainingMs = Math.max(0, window - (Date.now() - lastEmit));
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const outcome = await Promise.race([
+          nextResult.then((value) => ({ kind: "event" as const, value })),
+          new Promise<{ kind: "timeout" }>((resolve) => {
+            timer = setTimeout(() => resolve({ kind: "timeout" }), remainingMs);
+          }),
+        ]);
+        if (timer) clearTimeout(timer);
+        if (outcome.kind === "timeout") {
+          const drained = flush();
+          if (drained) yield drained;
+          lastEmit = Date.now();
+          continue;
+        }
+        result = outcome.value;
+      } else {
+        result = await nextResult;
+      }
+      nextResult = null;
+      if (result.done) {
+        sourceDone = true;
+        break;
+      }
+      const raw = result.value;
+      if (!raw || typeof raw !== "object") {
+        const drained = flush();
+        if (drained) yield drained;
+        yield raw;
+        continue;
+      }
+      const event = raw as Record<string, unknown>;
+      const type = typeof event.type === "string" ? event.type : "";
+      if (!types.has(type) || typeof event.delta !== "string") {
+        const drained = flush();
+        if (drained) yield drained;
+        yield event;
         lastEmit = Date.now();
+        continue;
+      }
+
+      if (pendingType !== null && pendingType !== type) {
+        const drained = flush();
+        if (drained) yield drained;
+      }
+      pendingType = type;
+      pendingDelta += event.delta;
+      pendingTemplate = { ...event };
+      delete pendingTemplate.delta;
+
+      if (Date.now() - lastEmit >= window) {
+        const drained = flush();
+        if (drained) {
+          yield drained;
+          lastEmit = Date.now();
+        }
       }
     }
-  }
 
-  const tail = flush();
-  if (tail) yield tail;
+    const tail = flush();
+    if (tail) yield tail;
+  } finally {
+    if (!sourceDone) {
+      // A consumer can close while next() is waiting on a provider. Do not
+      // wait for return() here; the route abort signal releases that read.
+      void iterator.return?.().catch(() => undefined);
+      void nextResult?.catch(() => undefined);
+    }
+  }
 }

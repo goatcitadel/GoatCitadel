@@ -47,6 +47,10 @@ jobs:
         run: |
           node --test scripts/check-mission-control-next-typography.test.mjs
           node scripts/check-mission-control-next-typography.mjs
+          node --test scripts/codemods/normalize-mission-control-next-breakpoints.test.mjs scripts/check-mission-control-next-breakpoints.test.mjs
+          node scripts/check-mission-control-next-breakpoints.mjs
+          node --test scripts/check-mission-control-next-cockpit-classes.test.mjs
+          node scripts/check-mission-control-next-cockpit-classes.mjs
           node scripts/check-mission-control-next-token-drift.mjs
           node --test scripts/check-mission-control-next-contrast.test.mjs
           node scripts/check-mission-control-next-contrast.mjs

@@ -21,7 +21,7 @@ import type {
   McpOAuthRequestReservation,
   McpOAuthTokenRequest,
 } from "./mcp-server-admin-service.js";
-import { type McpEnvironmentBindingRecord } from "./mcp-static-environment-service.js";
+import { type McpEnvironmentBindingRecord, type McpConnectionFence } from "./mcp-static-environment-service.js";
 import type { McpCredentialRetirementStore, McpCredentialDelete } from "./mcp-credential-retirement-store.js";
 import type { McpCredentialStagingStore, McpCredentialWriteProbe } from "./mcp-credential-staging-store.js";
 import { createMcpCredentialStores } from "./mcp-credential-store-composition.js";
@@ -168,12 +168,13 @@ export class McpServerStore {
     server: McpServerRecord,
     expected: McpAuthStateRecord | undefined,
     kind: McpOAuthTokenRequest["kind"],
+    fence?: McpConnectionFence,
   ): Promise<McpOAuthRequestReservation> {
     return reserveMcpOAuthRequest(this.ctx, {
       requireServer: (id) => this.requireServer(id),
       ensureStaticConfigurationBinding: (id) => this.ensureStaticConfigurationBinding(id),
       writeAuthState: (input) => this.writeAuthState(input),
-    }, server, expected, kind);
+    }, server, expected, kind, fence);
   }
 
   async writeAuthState(input: McpAuthStateUpdate): Promise<void> {
@@ -192,13 +193,14 @@ export class McpServerStore {
     server: McpServerRecord,
     expected: McpEnvironmentBindingRecord | undefined,
     next: McpEnvironmentBindingRecord | undefined,
+    fence?: McpConnectionFence,
   ): Promise<McpServerRecord> {
     return publishMcpEnvironmentBinding(this.ctx, {
       credentialRetirements: this.credentialRetirements,
       credentialStaging: this.credentialStaging,
       removeAuthState: (serverIds) => this.removeAuthState(serverIds),
       removeFirstApprovals: (serverIds) => this.removeFirstApprovals(serverIds),
-    }, server, expected, next);
+    }, server, expected, next, fence);
   }
 
   private async removeAuthState(serverIds: string[]): Promise<void> {
@@ -229,6 +231,7 @@ export class McpServerStore {
 
 function assertConnectionSnapshot(current: McpServerRecord, expected: McpServerRecord): void {
   assertConfigurationSnapshot([current], [expected]);
+  if (mcpServerRevision(current) !== mcpServerRevision(expected)) throw new ConflictError({ code: "WRITE_CONFLICT", message: "MCP configuration revision changed before connection admission." });
   if (current.connectionRevision !== expected.connectionRevision) {
     throw new ConflictError({ code: "WRITE_CONFLICT", message: "MCP connection attempt was superseded; its late result was not applied." });
   }

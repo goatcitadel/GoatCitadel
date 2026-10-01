@@ -34,6 +34,7 @@ import { isAbortError } from "./chat-page-derivations";
 import { shouldApplyFetchedMessagesAfterStream, shouldExecuteLocalChatCommand } from "./chat-page-pure-helpers";
 import type { ChatErrorSource } from "./chat-error-copy";
 import { useChatOperatorPrompts } from "./useChatOperatorPrompts";
+import { useChatRetainedStreamReattachment } from "./useChatRetainedStreamReattachment";
 import { useChatStreamingPreviewState } from "./useChatStreamingPreviewState";
 import type { OutboundQueueItem, OutboundRequestPrefsSnapshot } from "./useChatSurfaceOrchestration";
 import type { ActiveChatStreamState, UseChatOutboundExecutionInput } from "./useChatOutboundExecution.types";
@@ -180,6 +181,7 @@ export function useChatOutboundExecution(
   const latestMessagesRef = useRef<ChatMessageRecord[]>(messages);
   const streamReconcileTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendingRef = useRef(false);
+  const locallyHandledTurnKeysRef = useRef(new Set<string>());
   const prefsRef = useRef<ChatSessionPrefsRecord | null>(prefs);
   const threadRef = useRef<ChatThreadResponse | null>(thread);
   const [optimisticUserMessage, setOptimisticUserMessage] = useState<OptimisticChatUserMessage | null>(null);
@@ -229,6 +231,20 @@ export function useChatOutboundExecution(
     visualStreamMode,
     commitThreadUpdate,
     prefsRef,
+  });
+
+  useChatRetainedStreamReattachment({
+    selectedSessionId,
+    thread,
+    streamEnabled,
+    activeStreamRef,
+    sendingRef,
+    locallyHandledTurnKeysRef,
+    setSending,
+    getStreamingPreviewBuffer,
+    clearStreamingPreview,
+    loadSessionCoreState,
+    pushLocalNotice,
   });
 
   const {
@@ -735,6 +751,7 @@ export function useChatOutboundExecution(
               previewDeltaCount = 0;
               previewCharCount = 0;
               liveStream.turnId = chunk.turnId;
+              locallyHandledTurnKeysRef.current.add(`${chunk.sessionId}:${chunk.turnId}`);
               setOptimisticUserMessage((current) => (current?.queueItemId === item.id ? null : current));
               getStreamingPreviewBuffer().start({
                 sessionId: chunk.sessionId,

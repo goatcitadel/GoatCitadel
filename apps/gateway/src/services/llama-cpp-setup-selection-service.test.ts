@@ -6,10 +6,43 @@ import { LlamaCppSetupSelectionService } from "./llama-cpp-setup-selection-servi
 
 const ownedDirs: string[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(ownedDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
 describe("LlamaCppSetupSelectionService", () => {
+  it("accepts the last millisecond of custody and rejects the exact elapsed TTL boundary", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "goat-llama-selection-ttl-"));
+    ownedDirs.push(dir);
+    const modelPath = path.join(dir, "model.gguf");
+    const command = path.join(dir, process.platform === "win32" ? "llama-server.exe" : "llama-server");
+    await Promise.all([fs.writeFile(modelPath, "gguf"), fs.writeFile(command, "binary")]);
+    const custody = new Map<string, string>();
+    const service = new LlamaCppSetupSelectionService({
+      listModels: async () => [{ modelId: "model.gguf", source: "filesystem", filePath: modelPath }],
+      detectInstall: async () => ({ found: true, command, source: "configured", recommendedBaseUrl: "http://127.0.0.1:8080/v1" }),
+      custody: {
+        setSecret: (key, value) => { custody.set(key, value); },
+        getSecret: (key) => custody.get(key),
+        deleteSecret: (key) => { custody.delete(key); },
+      },
+    });
+    const stagedAt = Date.parse("2026-09-30T00:00:00.000Z");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(stagedAt);
+    const staged = await service.stage({ workspaceId: "workspace-ttl", modelId: "model.gguf" });
+    const expiresAt = Date.parse(staged.expiresAt);
+    expect(expiresAt - stagedAt).toBe(30 * 60_000);
+    clock.mockReturnValue(expiresAt - 1);
+    await expect(service.resolve(staged.selectionId, "workspace-ttl")).resolves.toMatchObject({
+      selectionId: staged.selectionId,
+      workspaceId: "workspace-ttl",
+    });
+    clock.mockReturnValue(expiresAt);
+    await expect(service.resolve(staged.selectionId, "workspace-ttl")).rejects.toThrow("stale");
+    clock.mockReturnValue(expiresAt + 1);
+    await expect(service.resolve(staged.selectionId, "workspace-ttl")).rejects.toThrow("stale");
+  });
+
   it("keeps host paths out of the selection response and revalidates both files before apply", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "goat-llama-selection-"));
     ownedDirs.push(dir);

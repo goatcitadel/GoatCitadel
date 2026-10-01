@@ -142,7 +142,11 @@ describe("shared API wrapper tail coverage", () => {
       "/api/v1/approvals?status=pending&limit=200&cursor=cursor+next",
     );
     await expectCall(approvals.fetchApprovals(), "/api/v1/approvals");
-    await expectCall(approvals.resolveApproval("approval/1", "approve"), "/api/v1/approvals/approval/1/resolve", {
+    await expectCall(
+      approvals.fetchApprovals({ status: "pending", workspaceId: "workspace-a" }),
+      "/api/v1/approvals?status=pending&workspaceId=workspace-a",
+    );
+    await expectCall(approvals.resolveApproval("approval/1", "approve"), "/api/v1/approvals/approval%2F1/resolve", {
       method: "POST",
     });
     await expectCall(approvals.resolveApprovalsBulk({ decision: "reject" }), "/api/v1/approvals/bulk-resolve", {
@@ -154,7 +158,7 @@ describe("shared API wrapper tail coverage", () => {
       "/api/v1/approvals/remote-resolve",
       { method: "POST" },
     );
-    await expectCall(approvals.fetchApprovalReplay("approval/1"), "/api/v1/approvals/approval/1/replay");
+    await expectCall(approvals.fetchApprovalReplay("approval/1"), "/api/v1/approvals/approval%2F1/replay");
     await expectCall(approvals.fetchToolCatalog(), "/api/v1/tools/catalog");
     await expectCall(approvals.evaluateToolAccess({ toolName: "fs.read" } as never), "/api/v1/tools/access/evaluate", {
       method: "POST",
@@ -262,6 +266,9 @@ describe("shared API wrapper tail coverage", () => {
     await expectCall(mcp.runMcpServerHealthCheck("server/1"), "/api/v1/mcp/servers/server%2F1/health-check", {
       method: "POST",
     });
+    const review = { expectedRevision: "a".repeat(64), expectedConnectionRevision: null };
+    await expectCall(mcp.connectReviewedMcpServer("server/1", review), "/api/v1/mcp/servers/server%2F1/connect-reviewed", { method: "POST", body: JSON.stringify(review) });
+    await expectCall(mcp.disconnectReviewedMcpServer("server/1", review), "/api/v1/mcp/servers/server%2F1/disconnect-reviewed", { method: "POST", body: JSON.stringify(review) });
 
     await expectCall(operatorsAgentsFiles.fetchOperators(), "/api/v1/operators");
     await expectCall(operatorsAgentsFiles.fetchAgents("all", 10), "/api/v1/agents?view=all&limit=10");

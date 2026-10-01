@@ -19,14 +19,15 @@ export async function settleRefusedChangePlanApproval(
   if (plan.status !== "awaiting_approval" || !approvalId)
     throw new ConflictError({ message: "Change Plan is not awaiting canonical approval." });
   const rollback = plan.result?.failureCode === "rollback_approval_pending";
-  const current = await deps.repository.get(plan.planId);
+  const repository = deps.repository;
+  const current = await repository.get(plan.planId);
   if (current.revision !== plan.revision) return current;
   // Keep the target claim until the existing idempotent cleanup has succeeded.
   // An unavailable cleanup owner leaves this refusal retryable by the durable signal.
   if (!rollback) await discardTemporaryInput();
   let settled: ChangePlanRecord;
   try {
-    settled = await deps.repository.transition(plan.planId, {
+    settled = await repository.transition(plan.planId, {
       expectedRevision: plan.revision,
       status: rollback ? "manual_required" : disposition === "denied" ? "cancelled" : "failed",
       internal: true,
@@ -44,7 +45,7 @@ export async function settleRefusedChangePlanApproval(
     });
   } catch (error) {
     if (!(error instanceof ConflictError)) throw error;
-    const current = await deps.repository.get(plan.planId);
+    const current = await repository.get(plan.planId);
     if (current.revision === plan.revision) throw error;
     return current;
   }

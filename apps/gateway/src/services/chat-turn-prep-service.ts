@@ -7,9 +7,12 @@
  * module no longer needs to type itself as the gateway monolith.
  */
 
+import {
+  assertLocalDelegationTurnAuthority,
+  type LocalDelegationAuthorityStorage,
+} from "./chat-local-delegation-authority.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
-  applyChatModePresetToPatch,
   chatModeAllowsDynamicTeamGrowth,
   chatModeRequiresProjectBinding,
   canonicalJsonString,
@@ -29,6 +32,7 @@ import type {
   ChatMode,
   ChatRoutedContextSnapshotRecord,
   ChatSendMessageRequest,
+  ChatSessionPrefsPatch,
   ChatSessionPrefsRecord,
   ChatTurnBranchKind,
   ChatTurnTraceRecord,
@@ -147,24 +151,25 @@ export interface ChatTurnSessionState {
   activeLeafTurnId?: string;
 }
 
-type ChatTurnPrepStorage = Pick<
-  Storage,
-  | "chatAttachments"
-  | "chatSessionMeta"
-  | "chatSessionPrefs"
-  | "chatSessionProjects"
-  | "chatFanoutInvocations"
-  | "chatDelegationSteps"
-  | "chatTurnTraces"
-  | "chatSideChats"
-  | "chatSpecialistCandidates"
-  | "runImmediateTransaction"
-  | "sessionAutonomyPrefs"
-  | "systemSettings"
-  | "workspaces"
-> & {
-  audit?: Pick<Storage["audit"], "append">;
-};
+type ChatTurnPrepStorage = LocalDelegationAuthorityStorage &
+  Pick<
+    Storage,
+    | "chatAttachments"
+    | "chatSessionMeta"
+    | "chatSessionPrefs"
+    | "chatSessionProjects"
+    | "chatFanoutInvocations"
+    | "chatDelegationSteps"
+    | "chatTurnTraces"
+    | "chatSideChats"
+    | "chatSpecialistCandidates"
+    | "runImmediateTransaction"
+    | "sessionAutonomyPrefs"
+    | "systemSettings"
+    | "workspaces"
+  > & {
+    audit?: Pick<Storage["audit"], "append">;
+  };
 
 export interface ChatTurnPrepHost {
   readonly storage: ChatTurnPrepStorage;
@@ -613,8 +618,13 @@ export async function prepareAgentChatTurn(
     });
   }
   if (!boundCapabilityProfile && input.parentDelegationStepId) {
-    throw new ConflictError({
-      message: "Delegated Chat turns are temporarily unavailable while new Chat turns use live capabilities.",
+    await assertLocalDelegationTurnAuthority(host.storage, {
+      sessionId,
+      turnId,
+      request: input,
+      admission: options?.turnAdmission,
+      userMessageId: existingUserMessage?.messageId ?? options?.userMessageId ?? "",
+      assistantMessageId: options?.assistantMessageId ?? "",
     });
   }
   if (!systemHeartbeatPosture) {
@@ -787,7 +797,9 @@ export async function prepareAgentChatTurn(
     ? buildSideChatSystemInstruction(host, sessionId, input.sideChatContext)
     : Promise.resolve(undefined);
 
-  const prefsOverride = applyChatModePresetToPatch({
+  // Sending or replaying a turn is not a request to reapply the Chat preset.
+  // Merge only explicit overrides so saved autonomy and orchestration choices survive.
+  const prefsOverride: ChatSessionPrefsPatch = {
     ...(input.prefsOverride ?? {}),
     mode: "chat",
     providerId: input.providerId ?? input.prefsOverride?.providerId,
@@ -797,7 +809,7 @@ export async function prepareAgentChatTurn(
     thinkingLevel: input.thinkingLevel ?? input.prefsOverride?.thinkingLevel,
     speedMode: input.speedMode ?? input.prefsOverride?.speedMode,
     subagentPolicy: input.subagentPolicy ?? input.prefsOverride?.subagentPolicy,
-  });
+  };
   const splitPrefs = splitChatPrefsPatch(prefsOverride);
   let persistedPrefs: ChatSessionPrefsRecord;
   if (systemHeartbeatPosture) {

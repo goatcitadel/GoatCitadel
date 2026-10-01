@@ -72,7 +72,7 @@
   font-size: var(--text-xs);
 }
 
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .mc-next-chat-timer {
     width: calc(100vw - 1rem);
     max-height: calc(100dvh - 1rem);

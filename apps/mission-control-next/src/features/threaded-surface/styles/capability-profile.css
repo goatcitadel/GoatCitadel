@@ -246,7 +246,7 @@
   text-transform: capitalize;
 }
 
-@media (width < 720px) {
+@media (width < 640px) {
   .mc-next-capability-profile-head {
     display: grid;
     justify-items: start;

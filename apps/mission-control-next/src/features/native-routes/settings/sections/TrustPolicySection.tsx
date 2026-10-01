@@ -1,14 +1,8 @@
 import { DetailInspector } from "../../../../components/DetailInspector";
 import { useSessionViewState } from "../../../../hooks/use-session-view-state";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { RefreshCw, ChevronDown, ChevronRight } from "lucide-react";
-import {
-  fetchTrustPolicySnapshot,
-  type TrustPolicyLastUseEvidence,
-  type TrustPolicyPosture,
-  type TrustPolicySkillDeclaredMetadata,
-  type TrustPolicySnapshot,
-} from "@goatcitadel/mission-control-shared/api/trust";
+import { humanizeToken, type StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { StatusChip, type StatusChipTone } from "../../primitives";
 import {
   SettingsActionList,
@@ -18,9 +12,6 @@ import {
   SettingsLoadWarnings,
   SettingsSectionShell,
   SettingsStack,
-  nativeLoad,
-  nativeLoadIssues,
-  useAsyncLoad,
   type SettingsSectionProps,
 } from "../SettingsShared";
 import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
@@ -32,93 +23,18 @@ import {
   normalizeDeclaredGovernance,
 } from "./TrustPolicyRowDetails";
 
-type TrustPolicyDashboardStatus =
-  | "ready"
-  | "not_callable"
-  | "blocked"
-  | "quarantined"
-  | "approval_required"
-  | "medium_trust"
-  | "experimental"
-  | "unknown";
-type TrustPolicyEntryKind = "capability" | "tool" | "source";
-type TrustPolicyCallableState = "callable" | "inspectable" | "not_callable" | "approval_required" | "blocked";
-type TrustPolicyStatusFilter = TrustPolicyDashboardStatus | "all" | "needs_review";
-type TrustPolicyKindFilter = TrustPolicyEntryKind | "all";
-
-export interface TrustPolicyMatrixRow {
-  id: string;
-  kind: TrustPolicyEntryKind;
-  label: string;
-  source?: string;
-  status: TrustPolicyDashboardStatus;
-  trustState?: string;
-  owner?: string;
-  callableState?: TrustPolicyCallableState;
-  callable?: boolean;
-  grants?: string[];
-  blockers?: string[];
-  declaredMetadata?: TrustPolicySkillDeclaredMetadata;
-  bundleWarnings?: string[];
-  missingRequiredEnv?: string[];
-  actionNeeded?: string;
-  lastUse?: {
-    at?: string;
-    label?: string;
-    runId?: string;
-    approvalId?: string;
-    evidenceRef?: string;
-  } | null;
-}
-
-export interface TrustPolicyDeclaredGovernanceView {
-  requiredEnv: Array<{ name: string; secret?: boolean }>;
-  stateDirs: Array<{ path: string; writeable?: boolean }>;
-  dependencies: {
-    tools: string[];
-    skillIds: string[];
-    capabilities: string[];
-  };
-}
-
-const STATUS_ORDER: TrustPolicyDashboardStatus[] = [
-  "ready",
-  "not_callable",
-  "blocked",
-  "quarantined",
-  "approval_required",
-  "medium_trust",
-  "experimental",
-  "unknown",
-];
+import type { TrustPolicyDashboardStatus, TrustPolicyMatrixRow, TrustPolicyStatusFilter, TrustPolicyKindFilter } from "../trust-policy-types";
+export type { TrustPolicyMatrixRow, TrustPolicyDeclaredGovernanceView } from "../trust-policy-types";
+import { buildTrustPolicyRows } from "../trust-policy-rows";
+import { summarizeTrustPolicyRows, filterTrustPolicyRows, normalizeTrustPolicyStatus, labelForTrustPolicyStatus, labelForCallableState, formatList, formatLastUse, formatEvidenceDate } from "../trust-policy-filters";
+import { useTrustPolicySnapshot } from "../use-trust-policy-snapshot";
 
 export function TrustPolicySection({ activeWorkspaceId, route, navigate }: SettingsSectionProps) {
   const [search, setSearch] = useSessionViewState(`trust:${activeWorkspaceId}:search`, "");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<TrustPolicyStatusFilter>("all");
   const [kindFilter, setKindFilter] = useState<TrustPolicyKindFilter>("all");
-  const load = useCallback(async () => {
-    const snapshot = await nativeLoad("Trust & Policy snapshot", fetchTrustPolicySnapshot(), {
-      generatedAt: "",
-      readOnly: true,
-      mutationSemantics: "none",
-      enforcementSources: [],
-      sources: [],
-      permissionProfiles: [],
-      toolGrants: [],
-      localOperatorOverrides: [],
-      capabilities: { inspectable: [], callable: [] },
-      mcpServers: [],
-      skills: [],
-      addons: [],
-      lastUseEvidence: [],
-    });
-    return {
-      issues: nativeLoadIssues([snapshot]),
-      snapshot: snapshot.data,
-    };
-  }, []);
-  const { loading, error, data, reload } = useAsyncLoad(load, [load]);
+  const { loading, error, data, reload } = useTrustPolicySnapshot();
   const rows = useMemo(() => buildTrustPolicyRows(data?.snapshot), [data?.snapshot]);
   const visibleRows = useMemo(
     () => filterTrustPolicyRows(rows, { search, statusFilter, kindFilter }),
@@ -138,7 +54,7 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
   return (
     <SettingsSectionShell loading={loading && !data} error={error} onRetry={reload}>
       <SettingsLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
-      <p className="mc-next-settings-field-note">Scope: {activeWorkspaceId} · {data?.snapshot.generatedAt ? `Snapshot ${formatEvidenceDate(data.snapshot.generatedAt)}` : "Snapshot time unavailable"}</p>
+      <p className="mc-next-settings-field-note">Gateway snapshot · recorded scopes may differ · {data?.snapshot.generatedAt ? `Snapshot ${formatEvidenceDate(data.snapshot.generatedAt)}` : "Snapshot time unavailable"}</p>
       <SettingsButtonRow><NativeButton variant="outline" onClick={() => void reload()}>Refresh snapshot</NativeButton></SettingsButtonRow>
       <NativeDisclosureCard id="trust-snapshot-summary" title="Snapshot summary and setting owners">
       <SettingsGrid variant="detail-wide">
@@ -146,7 +62,7 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
           density="compact"
           className="mc-next-settings-panel"
           title="Trust & Policy snapshot"
-          subtitle={`Read-only dashboard for ${activeWorkspaceId} capability, tool, and source posture. Open owner surfaces to edit.`}
+          subtitle="Read-only dashboard for the capability, tool, and source posture across recorded scopes. Open owner surfaces to edit."
           stats={[
             { label: "Rows", value: available ? String(rows.length) : "Unavailable" },
             { label: "Visible", value: available ? String(visibleRows.length) : "Unavailable" },
@@ -248,7 +164,19 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
             />
             {visibleRows.length > 0 ? (
               <>
-                <NativeSelectableList items={visibleRows.map((row) => ({ id: row.id, title: row.label, meta: `${labelForKind(row.kind)} · ${labelForTrustPolicyStatus(row.status)} · ${labelForCallableState(row)}`, body: row.blockers?.[0] ?? row.actionNeeded ?? "Inspect effective policy" }))} selectedId={selectedId ?? ""} onSelect={setSelectedId} emptyLabel="No matching policy rows." maxHeight="" />
+                <NativeSelectableList
+                  items={visibleRows.map((row) => ({
+                    id: row.id,
+                    title: displayTrustRowLabel(row.label),
+                    meta: [...new Set([labelForKind(row.kind), row.trustState ? humanizeToken(row.trustState) : labelForCallableState(row)])].join(" · "),
+                    body: row.blockers?.[0] ?? row.actionNeeded ?? "Inspect effective policy",
+                    status: { label: labelForTrustPolicyStatus(row.status), tone: trustRowTone(row.status) },
+                  }))}
+                  selectedId={selectedId ?? ""}
+                  onSelect={setSelectedId}
+                  emptyLabel="No matching policy rows."
+                  maxHeight="min(62vh, 40rem)"
+                />
                 <NativeDisclosureCard id="trust-full-matrix" title="Full matrix"><TrustPolicyMatrix rows={visibleRows} /></NativeDisclosureCard>
               </>
             ) : (
@@ -259,7 +187,7 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
           <TrustPolicyEmptyState hasIssues={Boolean(data?.issues.length)} />
         )}
       </NativeCard>
-      <DetailInspector open={selectedId !== null} title={selected?.label ?? "Policy details unavailable"} onClose={() => setSelectedId(null)}>
+      <DetailInspector open={selectedId !== null} title={selected ? displayTrustRowLabel(selected.label) : "Policy details unavailable"} onClose={() => setSelectedId(null)}>
         {selected ? <>
           <p><TrustPolicyStatusBadge status={selected.status} /> · {labelForCallableState(selected)}</p>
           <dl className="mc-next-detail-fields"><dt>Source</dt><dd>{selected.source ?? "Unavailable"}</dd><dt>Trust state</dt><dd>{selected.trustState ?? "Unknown"}</dd><dt>Grants</dt><dd>{formatList(selected.grants, "No grants attached")}</dd><dt>Blockers</dt><dd>{formatList(selected.blockers, "No blockers reported")}</dd></dl>
@@ -494,8 +422,8 @@ function TrustPolicyEmptyState({ hasIssues }: { hasIssues: boolean }) {
       <SettingsEmptyState
         label={
           hasIssues
-            ? "Trust & Policy snapshot is unavailable; gateway data loaded as an empty dashboard."
-            : "No Trust & Policy rows returned for this workspace."
+            ? "Some Trust & Policy sources are unavailable; no rows were returned by the available sources."
+            : "No Trust & Policy rows returned by the Gateway."
         }
       />
       <p className="mc-next-settings-field-note">
@@ -529,444 +457,13 @@ function TrustPolicyStatusBadge({ status }: { status: TrustPolicyDashboardStatus
   return <StatusChip tone={toneForTrustPolicyStatus(status)}>{labelForTrustPolicyStatus(status)}</StatusChip>;
 }
 
-function buildTrustPolicyRows(snapshot: TrustPolicySnapshot | null | undefined): TrustPolicyMatrixRow[] {
-  if (!snapshot) {
-    return [];
-  }
-  const rows: TrustPolicyMatrixRow[] = [];
-  const callableCapabilityIds = new Set(snapshot.capabilities.callable.map((item) => item.capabilityId));
-  const capabilitiesById = new Map(
-    [...snapshot.capabilities.inspectable, ...snapshot.capabilities.callable].map((item) => [item.capabilityId, item]),
-  );
-  for (const capability of capabilitiesById.values()) {
-    const callable = Boolean(capability.callable || callableCapabilityIds.has(capability.capabilityId));
-    rows.push({
-      id: `capability:${capability.capabilityId}`,
-      kind: "capability",
-      label: capability.title ?? capability.capabilityId,
-      source: capability.source,
-      status: capability.reviewWarning
-        ? "blocked"
-        : callable
-          ? statusForPosture(capability.posture)
-          : capability.proposalId || capability.candidateId
-            ? "experimental"
-            : "not_callable",
-      trustState: capability.trustLabel ?? capability.lifecycleState ?? "Unknown",
-      callable,
-      callableState: callable ? "callable" : "inspectable",
-      grants: capability.declaredTools,
-      blockers: [capability.reviewWarning, ...(capability.requires ?? []).map((item) => `Requires ${item}`)].filter(
-        (item): item is string => Boolean(item?.trim()),
-      ),
-      lastUse: null,
-    });
-  }
-  for (const grant of snapshot.toolGrants) {
-    const status = grant.decision === "deny" || grant.revokedAt ? "blocked" : statusForPosture(grant.posture);
-    rows.push({
-      id: `tool-grant:${grant.grantId ?? grant.toolPattern ?? rows.length}`,
-      kind: "tool",
-      label: grant.toolPattern ?? grant.grantId ?? "Tool grant",
-      source: grant.source,
-      status,
-      trustState: grant.decision ?? "Unknown",
-      callable: status === "ready",
-      callableState: status === "ready" ? "callable" : "blocked",
-      grants: [grant.scope, grant.grantType, grant.scopeRef].filter((item): item is string => Boolean(item)),
-      blockers: [
-        grant.revokedAt ? "Revoked" : undefined,
-        grant.expiresAt ? `Expires ${grant.expiresAt}` : undefined,
-      ].filter((item): item is string => Boolean(item)),
-      lastUse: null,
-    });
-  }
-  for (const server of snapshot.mcpServers) {
-    const evidence = findLastUseEvidence(snapshot.lastUseEvidence, "mcp_server", server.serverId);
-    rows.push({
-      id: `mcp-server:${server.serverId ?? server.label ?? rows.length}`,
-      kind: "source",
-      label: server.label ?? server.serverId ?? "MCP server",
-      source: server.source,
-      status: server.enabled ? statusForPosture(server.posture) : "blocked",
-      trustState: server.trustTier ?? server.status ?? "Unknown",
-      callable: server.enabled && server.posture === "callable",
-      callableState: server.enabled && server.posture === "callable" ? "callable" : "blocked",
-      grants: [server.transport, server.policy?.requireFirstToolApproval ? "First tool approval" : undefined].filter(
-        (item): item is string => Boolean(item),
-      ),
-      blockers: [server.lastError, server.enabled ? undefined : "Disabled"].filter((item): item is string =>
-        Boolean(item),
-      ),
-      lastUse: evidenceToLastUse(evidence),
-    });
-    for (const tool of server.tools) {
-      rows.push({
-        id: `mcp-tool:${server.serverId ?? server.label}:${tool.toolName ?? rows.length}`,
-        kind: "tool",
-        label: tool.toolName ?? "MCP tool",
-        source: tool.source,
-        status: tool.enabled ? statusForPosture(tool.posture) : "blocked",
-        trustState: server.trustTier ?? "Unknown",
-        callable: tool.enabled && tool.posture === "callable",
-        callableState: tool.enabled && tool.posture === "callable" ? "callable" : "blocked",
-        grants: [server.label, server.transport].filter((item): item is string => Boolean(item)),
-        blockers: tool.enabled ? [] : ["Disabled"],
-        lastUse: evidenceToLastUse(evidence),
-      });
-    }
-  }
-  for (const skill of snapshot.skills) {
-    const evidence = findLastUseEvidence(snapshot.lastUseEvidence, "skill", skill.skillId);
-    const elevatedDeclarations = skill.posture === "medium_trust_unverified" || Boolean(skill.bundleWarnings?.length);
-    rows.push({
-      id: `skill:${skill.skillId ?? skill.name ?? rows.length}`,
-      kind: "source",
-      label: skill.name ?? skill.skillId ?? "Skill",
-      source: skill.source,
-      status: skill.reviewWarning
-        ? "blocked"
-        : elevatedDeclarations
-          ? "medium_trust"
-          : skill.callable
-            ? statusForPosture(skill.posture)
-            : skill.lifecycleState === "candidate"
-              ? "experimental"
-              : "not_callable",
-      trustState: skill.trustLabel ?? skill.lifecycleState ?? skill.state,
-      callable: skill.callable,
-      callableState: skill.callable ? "callable" : "not_callable",
-      grants: skill.declaredTools,
-      blockers: [skill.reviewWarning, ...(skill.requires ?? []).map((item) => `Requires ${item}`)].filter(
-        (item): item is string => Boolean(item?.trim()),
-      ),
-      declaredMetadata: skill.declaredMetadata,
-      bundleWarnings: skill.bundleWarnings,
-      missingRequiredEnv: skill.missingRequiredEnv,
-      lastUse: evidenceToLastUse(evidence) ?? {
-        at: skill.lastUsedAt,
-        label: skill.usageCount ? `${skill.usageCount} uses` : undefined,
-      },
-    });
-  }
-  for (const addon of snapshot.addons) {
-    const evidence = findLastUseEvidence(snapshot.lastUseEvidence, "addon", addon.addonId);
-    rows.push({
-      id: `addon:${addon.addonId ?? addon.label ?? rows.length}`,
-      kind: "source",
-      label: addon.label ?? addon.addonId ?? "Add-on",
-      source: addon.source,
-      status: addon.enabled === false ? "blocked" : statusForPosture(addon.posture),
-      trustState: addon.trustTier ?? addon.status,
-      callable: addon.enabled !== false && addon.posture === "callable",
-      callableState: addon.enabled !== false && addon.posture === "callable" ? "callable" : "blocked",
-      grants: [addon.category, addon.runtimeType].filter((item): item is string => Boolean(item)),
-      blockers: [addon.lastError, addon.enabled === false ? "Disabled" : undefined].filter((item): item is string =>
-        Boolean(item),
-      ),
-      lastUse: evidenceToLastUse(evidence),
-    });
-  }
-  for (const profile of snapshot.permissionProfiles) {
-    const profileCallable = profile.posture === "callable";
-    const profileCallableState = profileCallable
-      ? profile.approvalMode === "approve_all"
-        ? "approval_required"
-        : "callable"
-      : profile.posture === "non_callable" || profile.posture === "not_installed"
-        ? "not_callable"
-        : "blocked";
-    rows.push({
-      id: `permission-profile:${profile.profileId ?? profile.label ?? rows.length}`,
-      kind: "source",
-      label: profile.label ?? profile.profileId ?? "Permission profile",
-      source: profile.source,
-      status:
-        profileCallable && profile.approvalMode === "approve_all"
-          ? "approval_required"
-          : statusForPosture(profile.posture),
-      trustState: profile.status,
-      callable: profileCallable,
-      callableState: profileCallableState,
-      grants: [profile.scope, profile.approvalMode, ...(profile.allow ?? [])].filter((item): item is string =>
-        Boolean(item),
-      ),
-      blockers: [profile.archivedAt ? "Archived" : undefined, ...(profile.deny ?? [])].filter((item): item is string =>
-        Boolean(item),
-      ),
-      lastUse: null,
-    });
-  }
-  for (const override of snapshot.localOperatorOverrides) {
-    rows.push({
-      id: `local-override:${override.overrideId ?? rows.length}`,
-      kind: "source",
-      label: override.reason ?? override.overrideId ?? "Local Operator Override",
-      source: override.source,
-      status: override.status === "active" ? "approval_required" : statusForPosture(override.posture),
-      trustState: override.status,
-      callable: override.status === "active",
-      callableState: override.status === "active" ? "approval_required" : "blocked",
-      grants: [override.scope, override.scopeRef, override.operatorId].filter((item): item is string => Boolean(item)),
-      blockers: [
-        override.revokedAt ? "Revoked" : undefined,
-        override.expiresAt ? `Expires ${override.expiresAt}` : undefined,
-      ].filter((item): item is string => Boolean(item)),
-      lastUse: null,
-    });
-  }
-  return rows.map(withTrustPolicyOwnerAction);
+function displayTrustRowLabel(label: string): string {
+  return /[_.]/.test(label) ? humanizeToken(label) : label;
 }
 
-function withTrustPolicyOwnerAction(row: TrustPolicyMatrixRow): TrustPolicyMatrixRow {
-  const status = normalizeTrustPolicyStatus(row.status);
-  const owner = ownerForTrustPolicyRow(row);
-  const blockers = row.blockers?.map((item) => item.trim()).filter(Boolean) ?? [];
-  const missingEnv = row.missingRequiredEnv?.map((item) => item.trim()).filter(Boolean) ?? [];
-  const actionNeeded =
-    missingEnv.length > 0
-      ? `Set required env before runtime use: ${missingEnv.join(", ")}.`
-      : status === "medium_trust"
-        ? "Review the declared env, state directories, and dependencies before trusting this skill."
-        : status === "ready"
-          ? "No action needed; monitor last-use evidence and grants."
-          : status === "approval_required"
-            ? "Review the approval or grant before allowing runtime use."
-            : status === "blocked" || status === "quarantined"
-              ? (blockers[0] ?? "Resolve the blocker in the owner surface before runtime use.")
-              : status === "not_callable"
-                ? "Use as inspectable context only until an owner promotes it."
-                : status === "experimental"
-                  ? "Evaluate and approve through the owner lifecycle before promotion."
-                  : "Refresh the snapshot or inspect the owner source for missing evidence.";
-  return {
-    ...row,
-    owner,
-    actionNeeded,
-  };
-}
-
-function ownerForTrustPolicyRow(row: TrustPolicyMatrixRow): string {
-  switch (row.source) {
-    case "tools.permissionProfiles":
-      return "Settings / Permissions";
-    case "tools.grants":
-      return "Settings / Tools";
-    case "tools.localOperatorOverrides":
-      return "Ops / Approvals";
-    case "capabilities.catalog":
-      return "Library / Capabilities";
-    case "mcp.servers":
-    case "mcp.tools":
-      return "Settings / MCP";
-    case "skills.lifecycle":
-      return "Library / Skills";
-    case "addons.catalog":
-    case "addons.installed":
-      return "Settings / Add-ons";
-    default:
-      return row.kind === "tool"
-        ? "Settings / Tools"
-        : row.kind === "capability"
-          ? "Library / Capabilities"
-          : "Settings";
-  }
-}
-
-function statusForPosture(posture: TrustPolicyPosture | string): TrustPolicyDashboardStatus {
-  switch (posture) {
-    case "callable":
-      return "ready";
-    case "non_callable":
-    case "not_installed":
-      return "not_callable";
-    case "quarantined":
-      return "quarantined";
-    case "medium_trust_unverified":
-      return "medium_trust";
-    case "blocked":
-    case "disabled":
-    case "unavailable":
-      return "blocked";
-    default:
-      return "unknown";
-  }
-}
-
-function findLastUseEvidence(
-  evidence: TrustPolicyLastUseEvidence[],
-  subjectType: string,
-  subjectId: string | undefined,
-): TrustPolicyLastUseEvidence | undefined {
-  if (!subjectId) {
-    return undefined;
-  }
-  return evidence.find((item) => item.subjectType === subjectType && item.subjectId === subjectId);
-}
-
-function evidenceToLastUse(evidence: TrustPolicyLastUseEvidence | undefined): TrustPolicyMatrixRow["lastUse"] {
-  if (!evidence) {
-    return null;
-  }
-  return {
-    at: evidence.lastUsedAt ?? evidence.lastConnectedAt ?? evidence.latestToolUpdatedAt ?? evidence.updatedAt,
-    label: evidence.status ?? (evidence.usageCount !== undefined ? `${evidence.usageCount} uses` : evidence.source),
-    runId: evidence.runId,
-    approvalId: evidence.approvalId,
-    evidenceRef: evidence.evidenceRef,
-  };
-}
-
-function summarizeTrustPolicyRows(rows: TrustPolicyMatrixRow[]): Record<TrustPolicyDashboardStatus, number> {
-  const counts = STATUS_ORDER.reduce(
-    (next, status) => ({ ...next, [status]: 0 }),
-    {} as Record<TrustPolicyDashboardStatus, number>,
-  );
-  for (const row of rows) {
-    counts[normalizeTrustPolicyStatus(row.status)] += 1;
-  }
-  return counts;
-}
-
-function filterTrustPolicyRows(
-  rows: TrustPolicyMatrixRow[],
-  filters: { search: string; statusFilter: TrustPolicyStatusFilter; kindFilter: TrustPolicyKindFilter },
-): TrustPolicyMatrixRow[] {
-  const query = filters.search.trim().toLowerCase();
-  return rows.filter((row) => {
-    const status = normalizeTrustPolicyStatus(row.status);
-    if (filters.kindFilter !== "all" && row.kind !== filters.kindFilter) {
-      return false;
-    }
-    if (filters.statusFilter === "needs_review") {
-      if (
-        status !== "blocked" &&
-        status !== "quarantined" &&
-        status !== "approval_required" &&
-        status !== "medium_trust"
-      ) {
-        return false;
-      }
-    } else if (filters.statusFilter !== "all" && status !== filters.statusFilter) {
-      return false;
-    }
-    if (!query) {
-      return true;
-    }
-    return trustPolicyRowSearchText(row).includes(query);
-  });
-}
-
-function trustPolicyRowSearchText(row: TrustPolicyMatrixRow): string {
-  return [
-    row.label,
-    row.kind,
-    row.source,
-    row.status,
-    row.trustState,
-    row.owner,
-    row.callableState,
-    row.grants?.join(" "),
-    row.blockers?.join(" "),
-    row.actionNeeded,
-    row.bundleWarnings?.join(" "),
-    row.missingRequiredEnv?.join(" "),
-    declaredGovernanceSearchText(row.declaredMetadata),
-    row.lastUse?.label,
-    row.lastUse?.runId,
-    row.lastUse?.approvalId,
-    row.lastUse?.evidenceRef,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join(" ")
-    .toLowerCase();
-}
-
-function declaredGovernanceSearchText(meta: TrustPolicySkillDeclaredMetadata | undefined): string | undefined {
-  const normalized = normalizeDeclaredGovernance(meta);
-  if (!normalized) {
-    return undefined;
-  }
-  const parts = [
-    ...normalized.requiredEnv.map((env) => env.name),
-    ...normalized.stateDirs.map((dir) => dir.path),
-    ...normalized.dependencies.tools,
-    ...normalized.dependencies.skillIds,
-    ...normalized.dependencies.capabilities,
-  ].filter((value): value is string => Boolean(value?.trim()));
-  return parts.length ? parts.join(" ") : undefined;
-}
-
-function normalizeTrustPolicyStatus(status: TrustPolicyDashboardStatus | undefined): TrustPolicyDashboardStatus {
-  return STATUS_ORDER.includes(status as TrustPolicyDashboardStatus)
-    ? (status as TrustPolicyDashboardStatus)
-    : "unknown";
-}
-
-function labelForTrustPolicyStatus(status: TrustPolicyDashboardStatus): string {
-  switch (status) {
-    case "ready":
-      return "Ready";
-    case "not_callable":
-      return "Not callable";
-    case "blocked":
-      return "Blocked";
-    case "quarantined":
-      return "Quarantined";
-    case "approval_required":
-      return "Approval required";
-    case "medium_trust":
-      return "Medium trust";
-    case "experimental":
-      return "Experimental";
-    default:
-      return "Unknown";
-  }
-}
-
-function labelForCallableState(row: TrustPolicyMatrixRow): string {
-  if (row.callableState === "approval_required") {
-    return "Approval required";
-  }
-  if (row.callableState === "blocked") {
-    return "Blocked";
-  }
-  if (row.callableState === "inspectable") {
-    return "Not callable";
-  }
-  if (row.callable === false || row.callableState === "not_callable") {
-    return "Not callable";
-  }
-  if (row.callable === true || row.callableState === "callable") {
-    return "Ready";
-  }
-  return "Unknown";
-}
-
-function formatList(values: string[] | undefined, emptyLabel: string): string {
-  const clean = values?.map((value) => value.trim()).filter(Boolean) ?? [];
-  return clean.length ? clean.join(", ") : emptyLabel;
-}
-
-function formatLastUse(row: TrustPolicyMatrixRow): string {
-  const lastUse = row.lastUse;
-  if (!lastUse) {
-    return "No last-use evidence";
-  }
-  const parts = [
-    lastUse.label,
-    formatEvidenceDate(lastUse.at),
-    lastUse.runId ? `run ${lastUse.runId}` : undefined,
-    lastUse.approvalId ? `approval ${lastUse.approvalId}` : undefined,
-    lastUse.evidenceRef,
-  ].filter((part): part is string => Boolean(part?.trim()));
-  return parts.length ? parts.join(" - ") : "No last-use evidence";
-}
-
-function formatEvidenceDate(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : value;
+function trustRowTone(status: TrustPolicyDashboardStatus): StatusTone {
+  if (status === "ready") return "done";
+  if (status === "blocked" || status === "quarantined") return "failed";
+  if (status === "approval_required" || status === "medium_trust") return "waiting";
+  return "neutral";
 }

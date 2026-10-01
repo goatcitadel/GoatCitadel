@@ -16,6 +16,10 @@ test("deterministic provider metadata supports Chat thinking off", async () => {
     const metadata = JSON.parse(await fs.readFile(path.join(configRoot, "llm-model-metadata.json"), "utf8"));
     assert.deepEqual(metadata.entries["verification-stub/verification-stub-chat"].reasoning.supportedEfforts,
       ["none", "low", "medium", "high"]);
+    const config = JSON.parse(await fs.readFile(path.join(configRoot, "llm-providers.json"), "utf8"));
+    assert.deepEqual(config.providers[0].capabilities, {
+      reasoning: true, reasoningEfforts: ["none", "low", "medium", "high"],
+    });
   } finally {
     await fs.rm(runtimeRoot, { recursive: true, force: true });
   }
@@ -472,6 +476,25 @@ test("expectedAuthorization rejects invalid provider credentials without dispatc
       stub.requestSummaries().map((entry) => entry.outcome),
       ["credential_rejected", "success"],
     );
+  } finally {
+    await stub.close();
+  }
+});
+
+test("credential rotation invalidates the previous key without recording credential bytes", async () => {
+  const before = "Bearer synthetic-before";
+  const after = "Bearer synthetic-after";
+  const stub = await startDeterministicLlmStub({ expectedAuthorization: before });
+  const models = (authorization) => fetch(stub.baseUrl + "/models", { headers: { authorization } });
+  try {
+    assert.equal((await models(before)).status, 200);
+    stub.replaceExpectedAuthorization(after);
+    assert.equal((await models(before)).status, 401);
+    assert.equal((await models(after)).status, 200);
+    assert.throws(() => stub.replaceExpectedAuthorization(""), /expectedAuthorization/u);
+    assert.equal((await models(before)).status, 401);
+    const evidence = JSON.stringify(stub.requestSummaries());
+    assert.ok(!evidence.includes(before) && !evidence.includes(after));
   } finally {
     await stub.close();
   }

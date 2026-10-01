@@ -647,7 +647,7 @@ describe("profile-free routed-context admission", () => {
   it.each([
     [{ workspaceSnapshot: { capture: true, requestId: "snapshot-disabled" } }, "Workspace snapshots are temporarily unavailable"],
     [{ modelCouncil: { enabled: true } }, "Model council is temporarily unavailable"],
-    [{ parentDelegationStepId: "step-disabled" }, "Delegated Chat turns are temporarily unavailable"],
+    [{ parentDelegationStepId: "step-disabled" }, "Local delegated Chat requires current supervised parent"],
   ] as const)("rejects %s before user ingestion", async (requestPatch, reason) => {
     const harness = createHarness();
     await expect(

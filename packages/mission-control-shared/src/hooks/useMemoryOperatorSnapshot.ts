@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { describeApiError } from "../api/describe-api-error.js";
 import {
   acceptMemoryMaintenanceRecommendation,
   addMemoryDecisionRetrospective,
@@ -933,8 +934,6 @@ function createEmptySectionErrors(): MemoryOperatorSectionErrors {
 }
 
 function getErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-  return "Something went wrong.";
+  if (!(error instanceof Error)) return "Something went wrong.";
+  return describeApiError(error).summary;
 }

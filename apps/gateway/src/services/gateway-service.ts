@@ -65,7 +65,12 @@ import {
   providerRecognizesModelId,
   ValidationError,
 } from "@goatcitadel/contracts";
-import { buildUnifiedConfigPayload } from "../config-sync-lib.js";
+import {
+  applyDurableExecutionBaselineToConfig,
+  buildUnifiedConfigPayloadFromRuntime,
+  replaceMutableConfigValue,
+} from "../config-sync-lib.js";
+import { projectTranscriptMessages, selectTranscriptMessageWindow } from "./chat-transcript-projection.js";
 import { createGatewayStorage } from "../storage-factory.js";
 import { DatabaseCutoverService } from "./database-cutover-service.js";
 import { startBackgroundInterval, trackBackgroundTask, type BackgroundIntervalHandle } from "./background-scheduler.js";
@@ -408,6 +413,7 @@ import { type ChannelSetupRecentTestCacheEntry } from "./channel-setup-test-cach
 import { MemoryContextService } from "./memory-context-service.js";
 import { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import { LlamaCppSetupSelectionService } from "./llama-cpp-setup-selection-service.js";
+import { LlamaCppSetupService } from "./llama-cpp-setup-service.js";
 import { acquireBoundLlamaCppEmbeddingLease, acquireBoundLlamaCppLease } from "./llama-cpp-provider-lease.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
@@ -447,7 +453,7 @@ import {
   resolveDevDiagnosticsVerbose,
 } from "../dev-diagnostics/service.js";
 import { PostgresStorageWaitMonitor } from "../postgres-storage-wait-monitor.js";
-import { serializePathWithinRoot } from "./security-utils.js";
+import { normalizeRelativePath, serializePathWithinRoot } from "./security-utils.js";
 import { MediaVoiceService } from "./media-voice-service.js";
 import { ChannelVoiceInboundService } from "./channel-voice-inbound-service.js";
 import {
@@ -556,7 +562,7 @@ import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import type { McpRequesterScopePosture } from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
 import { McpOAuthTokenService } from "./mcp-oauth-token-service.js";
-import { McpStaticEnvironmentService, readMcpStaticEnvironment } from "./mcp-static-environment-service.js";
+import { McpStaticEnvironmentService, readMcpStaticEnvironment, type McpConnectionFence } from "./mcp-static-environment-service.js";
 import { McpStaticChatService } from "./mcp-static-chat-service.js";
 import { McpElicitationService } from "./mcp-elicitation-service.js";
 import { GatewayMcpOAuthService } from "./gateway-mcp-oauth-service.js";
@@ -656,7 +662,7 @@ import {
   ToolInvocationCoordinatorService,
   type ToolInvocationRuntimeOptions,
 } from "./tool-invocation-coordinator-service.js";
-import { createRemoteWorkerExecutionOwners } from "./remote-worker-execution-owners.js";
+import { createRemoteWorkerDispatchOwnerId, createRemoteWorkerExecutionOwners } from "./remote-worker-execution-owners.js";
 import { createRemoteWorkerNativeRuntimePolicy } from "./remote-worker-native-runtime-policy.js";
 import { createRemoteWorkerInstallationPolicy } from "./remote-worker-installation-policy.js";
 import type { RemoteWorkerChatOfferDependencies } from "./remote-worker-chat-offer-service.js";
@@ -929,25 +935,6 @@ function isValidToolName(name: string): boolean {
   return VALID_TOOL_NAME_PATTERN.test(name);
 }
 
-function applyDurableExecutionBaselineToConfig(config: GatewayRuntimeConfig): GatewayRuntimeConfig {
-  return {
-    ...config,
-    assistant: {
-      ...config.assistant,
-      durable: {
-        ...config.assistant.durable,
-        enabled: true,
-        executionEnabled: true,
-        chatAutoPromoteEnabled: true,
-      },
-      features: {
-        ...config.assistant.features,
-        durableKernelV1Enabled: true,
-      },
-    },
-  };
-}
-
 async function transitionLlamaCppRuntimeConfig(
   runtime: LlamaCppRuntimeService,
   nextConfig: GatewayRuntimeConfig["assistant"]["llamaCpp"],
@@ -987,6 +974,7 @@ export class GatewayService {
   public readonly npuSidecar: NpuSidecarService;
   public readonly llamaCppRuntime: LlamaCppRuntimeService;
   public readonly llamaCppSetupSelection: LlamaCppSetupSelectionService;
+  public readonly llamaCppSetupService: LlamaCppSetupService;
   private readonly approvalExplainer: ApprovalExplainerService;
   private readonly commitmentClassifier: CommitmentClassifierService;
   private readonly backgroundReviewService: BackgroundReviewService;
@@ -1391,8 +1379,8 @@ export class GatewayService {
       secretStore,
       stageCredentials: (...args) => this.stageMcpCredentialVersions(...args),
       networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
-      environmentResolver: async (server) =>
-        readMcpStaticEnvironment(await this.mcpStaticEnvironment.capture(server), server),
+      environmentResolver: async (server, fence) =>
+        readMcpStaticEnvironment(await this.mcpStaticEnvironment.capture(server, fence), server),
     });
     this.mcpOAuth = new GatewayMcpOAuthService({
       tokenService: this.mcpOAuthTokenService,
@@ -2834,10 +2822,10 @@ export class GatewayService {
     this.mcpAdministration = composeMcpAdministration(this.mcpServerStore, {
       storage: { approvalInbox: this.storage.approvalInbox },
       captureMcpServerSessionCloser: (serverId) => this.mcpStdioSessions.captureServerCloser(serverId),
-      prepareMcpStaticEnvironment: (server) => this.prepareMcpStaticEnvironment(server),
-      resolveMcpOAuthClientId: (server) => this.resolveMcpOAuthClientId(server),
-      resolveConnectedMcpTools: (server, existing) => this.resolveConnectedMcpTools(server, existing),
-      exchangeMcpOAuthCode: (server, code, state) => this.mcpOAuth.exchangeAuthorizationCode(server, code, state),
+      prepareMcpStaticEnvironment: (server, fence) => this.prepareMcpStaticEnvironment(server, fence),
+      resolveMcpOAuthClientId: (server, fence) => this.resolveMcpOAuthClientId(server, fence),
+      resolveConnectedMcpTools: (server, existing, fence) => this.resolveConnectedMcpTools(server, existing, undefined, fence),
+      exchangeMcpOAuthCode: (server, code, state, review) => this.mcpOAuth.exchangeAuthorizationCode(server, code, state, review),
       publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
     });
     this.durableWorkflowRegistry = durableExecutionService.createDurableWorkflowExecutorRegistry(
@@ -3277,6 +3265,15 @@ export class GatewayService {
         });
         return approval.approvalId;
       },
+    });
+    this.llamaCppSetupService = new LlamaCppSetupService({
+      getSettings: () => this.getSettings(),
+      runtime: this.llamaCppRuntime,
+      selections: this.llamaCppSetupSelection,
+      plans: this.evolutionControlPlaneService,
+      previewModels: (baseUrl) => this.llmService.previewModels({ providerId: "llamacpp", baseUrl }),
+      createChatSession: (input) => this.createChatSession(input),
+      sendChatMessage: (sessionId, input, options) => this.agentSendChatMessage(sessionId, input, options),
     });
     this.chatChangePlanCompatibilityService = new ChatChangePlanCompatibilityService({
       controlPlane: this.evolutionControlPlaneService,
@@ -8561,7 +8558,7 @@ export class GatewayService {
     prepared: Awaited<ReturnType<GatewayService["prepareAgentChatTurn"]>>,
     input: ChatSendMessageRequest,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
-    options?: { mutationLifecycle?: import("./chat-turn-types.js").ChatStreamMutationLifecycle; runId?: string },
+    options?: chatDurableRunService.BeginDurableChatRunOptions,
   ): Promise<DurableRunRecord | undefined> {
     return await chatDurableRunService.beginDurableChatRun(
       {
@@ -8896,7 +8893,7 @@ export class GatewayService {
       createMeshTurnContext: createMeshChatTurnContext,
       resolveMeshChatToolBinding: (request, context) =>
         resolveMeshChatToolBinding(this.meshChatBindingDeps(), request, context),
-      dispatchOwnerId: `remote-worker:${this.config.assistant.mesh.nodeId}:${randomUUID()}`,
+      dispatchOwnerId: createRemoteWorkerDispatchOwnerId(this.config.assistant.mesh.nodeId),
       artifactRoot: path.resolve(this.config.rootDir, this.config.assistant.dataDir, "remote-worker-cas"),
     }));
   }
@@ -10707,7 +10704,7 @@ export class GatewayService {
     const previousRuntime: settingsAuthService.SettingsConfigCandidate = {
       config: structuredClone(this.config),
       features: structuredClone(await this.readFeatureFlags()),
-      llm: this.llmService.exportConfigFile(),
+      llm: this.llmService.snapshotRuntimeConfigForPersistence(),
       settings: await this.getSettings(),
       input: structuredClone(input),
     };
@@ -10855,7 +10852,7 @@ export class GatewayService {
     }
 
     if (input.llm || input.llamaCpp) {
-      const previousLlm = this.llmService.exportConfigFile();
+      const previousLlm = this.llmService.snapshotRuntimeConfigForPersistence();
       compensations.push(() => {
         this.llmService.replaceRuntimeConfig(previousLlm);
       });
@@ -12043,9 +12040,9 @@ export class GatewayService {
     return await this.mcpServerStore.requireServer(serverId);
   }
 
-  /** @internal */ public async prepareMcpStaticEnvironment(server: McpServerRecord): Promise<McpServerRecord> {
+  /** @internal */ public async prepareMcpStaticEnvironment(server: McpServerRecord, fence?: McpConnectionFence): Promise<McpServerRecord> {
     if (GATEWAY_OWNED_MCP_SERVER_IDS.has(server.serverId)) return server;
-    return this.mcpStaticEnvironment.enroll(server);
+    return this.mcpStaticEnvironment.enroll(server, fence);
   }
 
   private async revalidateNativeMcpChatTool(
@@ -12073,8 +12070,8 @@ export class GatewayService {
       throw new Error("Mesh Chat tool publication authority changed.");
   }
 
-  /** @internal */ public async resolveMcpOAuthClientId(server: McpServerRecord): Promise<string | undefined> {
-    const environment = readMcpStaticEnvironment(await this.mcpStaticEnvironment.capture(server), server);
+  /** @internal */ public async resolveMcpOAuthClientId(server: McpServerRecord, fence?: McpConnectionFence): Promise<string | undefined> {
+    const environment = readMcpStaticEnvironment(await this.mcpStaticEnvironment.capture(server, fence), server);
     const key = server.oauth?.clientIdEnv?.trim();
     return key ? environment[key]?.trim() || undefined : undefined;
   }
@@ -12083,13 +12080,14 @@ export class GatewayService {
     server: McpServerRecord,
     existingTools: McpToolRecord[],
     actorContext?: ToolPolicyActorContext,
+    fence?: McpConnectionFence,
   ): Promise<McpToolRecord[]> {
     return mcpServerAdminService.resolveConnectedMcpTools(
       {
         packageRoot: path.resolve(this.config.rootDir, this.config.assistant.dataDir, "reviewed-mcp-packages"),
         networkAllowlist: this.config.toolPolicy.sandbox.networkAllowlist,
         resolveOAuthAccessToken: (mcpServer) => this.mcpOAuth.resolveAccessToken(mcpServer),
-        staticEnvironmentResolver: (mcpServer) => this.mcpStaticEnvironment.capture(mcpServer),
+        staticEnvironmentResolver: (mcpServer) => this.mcpStaticEnvironment.capture(mcpServer, fence),
       },
       server,
       existingTools,
@@ -12685,10 +12683,7 @@ export class GatewayService {
       return;
     }
     const events = await this.readTranscriptOrEmpty(sessionId);
-    const projected = events
-      .filter((event) => event.type === "message.user" || event.type === "message.assistant")
-      .map((event) => toChatMessageRecord(event))
-      .filter((message): message is ChatMessageRecord => Boolean(message));
+    const projected = projectTranscriptMessages(events);
     if (projected.length === 0) {
       return;
     }
@@ -12700,19 +12695,7 @@ export class GatewayService {
     limit: number,
     cursor?: string,
   ): Promise<ChatMessageRecord[]> {
-    const events = await this.readTranscriptOrEmpty(sessionId);
-    let messages = events
-      .filter((event) => event.type === "message.user" || event.type === "message.assistant")
-      .map((event) => toChatMessageRecord(event))
-      .filter((message): message is ChatMessageRecord => Boolean(message));
-
-    if (cursor) {
-      const index = messages.findIndex((message) => message.messageId === cursor);
-      if (index >= 0) {
-        messages = messages.slice(0, index);
-      }
-    }
-    return messages.slice(-Math.max(1, Math.min(limit, 1000)));
+    return selectTranscriptMessageWindow(await this.readTranscriptOrEmpty(sessionId), limit, cursor);
   }
 
   /** @internal */ public normalizeWorkspaceId(workspaceId?: string): string {
@@ -13027,21 +13010,7 @@ export class GatewayService {
   }
 
   private normalizeRelativePath(inputPath: string): string {
-    const normalized = path.normalize(inputPath).replaceAll("\\", "/");
-    if (
-      !normalized ||
-      normalized === "." ||
-      normalized === ".." ||
-      normalized.startsWith("../") ||
-      normalized.endsWith("/..") ||
-      normalized.includes("/../")
-    ) {
-      throw new Error(`Invalid relative path: ${inputPath}`);
-    }
-    if (path.isAbsolute(normalized)) {
-      throw new Error(`Absolute paths are not allowed: ${inputPath}`);
-    }
-    return normalized;
+    return normalizeRelativePath(inputPath);
   }
 
   private async loadOnboardingMarker(): Promise<void> {
@@ -13091,49 +13060,13 @@ export class GatewayService {
     features: RuntimeSettings["features"],
     cronJobs: { jobs: ReturnType<typeof projectCanonicalCronSpec>[] },
   ): CompleteUnifiedConfigPayload {
-    const assistantPayload = {
-      environment: runtimeConfig.assistant.environment,
-      deploymentProfile: runtimeConfig.assistant.deploymentProfile,
-      dataDir: runtimeConfig.assistant.dataDir,
-      transcriptsDir: runtimeConfig.assistant.transcriptsDir,
-      auditDir: runtimeConfig.assistant.auditDir,
-      workspaceDir: runtimeConfig.assistant.workspaceDir,
-      worktreesDir: runtimeConfig.assistant.worktreesDir,
-      auth: {
-        mode: runtimeConfig.assistant.auth.mode,
-        allowLoopbackBypass: runtimeConfig.assistant.auth.allowLoopbackBypass,
-        token: {
-          queryParam: runtimeConfig.assistant.auth.token.queryParam,
-        },
-        basic: {},
-      },
-      approvalExplainer: runtimeConfig.assistant.approvalExplainer,
-      memory: runtimeConfig.assistant.memory,
-      web: runtimeConfig.assistant.web,
-      mesh: runtimeConfig.assistant.mesh,
-      npu: runtimeConfig.assistant.npu,
-      llamaCpp: runtimeConfig.assistant.llamaCpp,
-      database: runtimeConfig.assistant.database,
-      sqlite: runtimeConfig.assistant.sqlite,
-      durable: runtimeConfig.assistant.durable,
-      features,
-      budgets: runtimeConfig.assistant.budgets,
-    };
-    const toolPolicyPayload = {
-      ...runtimeConfig.toolPolicy,
-      sandbox: {
-        ...runtimeConfig.toolPolicy.sandbox,
-        writeJailRoots: runtimeConfig.toolPolicy.sandbox.writeJailRoots.map((root) => this.serializeRootPath(root)),
-        readOnlyRoots: runtimeConfig.toolPolicy.sandbox.readOnlyRoots.map((root) => this.serializeRootPath(root)),
-      },
-    };
-    return buildUnifiedConfigPayload(
-      assistantPayload,
-      toolPolicyPayload,
-      runtimeConfig.budgets,
+    return buildUnifiedConfigPayloadFromRuntime(
+      runtimeConfig,
       llmConfig,
+      features,
       cronJobs,
-    ) as CompleteUnifiedConfigPayload;
+      (fullPath) => this.serializeRootPath(fullPath),
+    );
   }
 
   private serializeRootPath(fullPath: string): string {
@@ -13162,37 +13095,6 @@ export function findPlanPhase(plan: OrchestrationPlan, phaseId: string) {
   return undefined;
 }
 
-function toChatMessageRecord(event: TranscriptEvent): ChatMessageRecord | undefined {
-  const payload = event.payload as {
-    message?: {
-      role?: string;
-      content?: unknown;
-      parts?: unknown;
-      attachments?: unknown;
-    };
-  };
-  const message = payload.message;
-  if (!message || typeof message.content !== "string") {
-    return undefined;
-  }
-  const role = message.role === "assistant" ? "assistant" : "user";
-  return {
-    messageId: event.eventId,
-    sessionId: event.sessionId,
-    role,
-    actorType: event.actorType,
-    actorId: event.actorId,
-    sourceAuthority: event.sourceAuthority ?? "unknown",
-    content: message.content,
-    timestamp: event.timestamp,
-    tokenInput: event.tokenInput,
-    tokenOutput: event.tokenOutput,
-    costUsd: event.costUsd,
-    parts: chatMessageHistoryService.parseMessageParts(message.parts),
-    attachments: chatMessageHistoryService.parseMessageAttachments(message.attachments),
-  };
-}
-
 function computeSkillActivationConfidence(reasons: string[], isExplicit: boolean): number {
   if (isExplicit) {
     return 1;
@@ -13218,32 +13120,6 @@ function dedupeStrings(values: readonly string[]): string[] {
     out.push(trimmed);
   }
   return out;
-}
-
-function replaceMutableConfigValue(target: object, source: object): void {
-  const targetRecord = target as Record<string, unknown>;
-  const sourceRecord = source as Record<string, unknown>;
-  for (const key of Object.keys(targetRecord)) {
-    if (!Object.prototype.hasOwnProperty.call(sourceRecord, key)) {
-      delete targetRecord[key];
-    }
-  }
-  for (const [key, nextValue] of Object.entries(sourceRecord)) {
-    const currentValue = targetRecord[key];
-    if (Array.isArray(currentValue) && Array.isArray(nextValue)) {
-      currentValue.splice(0, currentValue.length, ...structuredClone(nextValue));
-      continue;
-    }
-    if (isPlainMutableRecord(currentValue) && isPlainMutableRecord(nextValue)) {
-      replaceMutableConfigValue(currentValue, nextValue);
-      continue;
-    }
-    targetRecord[key] = structuredClone(nextValue);
-  }
-}
-
-function isPlainMutableRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readRecordString(record: Record<string, unknown>, key: string): string | undefined {

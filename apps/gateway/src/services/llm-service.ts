@@ -1003,7 +1003,7 @@ export class LlmService {
     };
   }
 
-  /** @internal Exact in-memory owner snapshot for reverse compensation only. */
+  /** @internal Exact owner snapshot for candidate persistence and reverse compensation; never a public DTO. */
   public snapshotRuntimeConfigForPersistence(): LlmConfigFile {
     return {
       activeProviderId: this.activeProviderId,
@@ -3408,6 +3408,16 @@ function normalizeProviderRequestConfig(
     return undefined;
   }
   return normalizedRequest;
+}
+
+/** Internal write verification. Never returns configured values or a secret-derived fingerprint. */
+export function matchesAppliedProviderTransport(
+  actual: LlmProviderRequestConfig | undefined,
+  requested: LlmProviderRequestConfig,
+): boolean {
+  return canonicalJsonString(actual ?? null) === canonicalJsonString(
+    normalizeProviderRequestConfig(mergeProviderRequestConfig(actual, requested), undefined) ?? null,
+  );
 }
 
 function normalizeGoogleCloudConfig(config: LlmProviderConfig["googleCloud"]): LlmProviderConfig["googleCloud"] {

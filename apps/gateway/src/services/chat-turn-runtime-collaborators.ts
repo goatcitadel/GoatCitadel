@@ -11,7 +11,6 @@ import type {
   DurableRunRecord,
 } from "@goatcitadel/contracts";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
-import type { ChatStreamMutationLifecycle } from "./chat-turn-types.js";
 import type { ChatSteerService } from "./chat-steer-service.js";
 import type { ActiveChatTurnStreamExecution } from "./chat-turn-execution-registry.js";
 import type { SessionControlRuntimeOwner } from "./session-control-runtime-owner.js";
@@ -127,7 +126,7 @@ export interface ChatTurnDurableRunOwner {
     prepared: PreparedAgentChatTurn,
     input: ChatSendMessageRequest,
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
-    options?: { mutationLifecycle?: ChatStreamMutationLifecycle; runId?: string },
+    options?: import("./chat-durable-run-service.js").BeginDurableChatRunOptions,
   ): Promise<DurableRunRecord | undefined>;
   finalizeDurableChatRun(
     runId: string,

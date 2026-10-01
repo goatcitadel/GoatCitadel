@@ -8,7 +8,7 @@ import { createWindowsInstalledNativeRuntime } from "./worker-windows-installed-
 import { runWindowsWorkerAssignmentRuntime } from "./worker-windows-runtime-startup.js";
 import { exchangeWorkerCellCapacity } from "./worker-cell-capacity-client.js";
 import { retainWorkerRuntimeOutput } from "./worker-runtime-output-client.js";
-import { reconcileWindowsWorkerAssignmentInstallation } from "./worker-windows-installation-recovery.js";
+import { ensureWindowsWorkerAssignmentInstallation } from "./worker-windows-installation-startup.js";
 import type { WorkerNativeContinuationOwner } from "./worker-native-continuation.js";
 import type { WorkerProtectedKeyOwner } from "./worker-protected-key-owner.js";
 import type { WindowsRuntimeParentSessionOwner } from "./worker-windows-runtime-parent-session.js";
@@ -16,7 +16,7 @@ import type { WindowsRuntimeParentSessionOwner } from "./worker-windows-runtime-
 vi.mock("./worker-windows-runtime-startup.js", () => ({ runWindowsWorkerAssignmentRuntime: vi.fn() }));
 vi.mock("./worker-cell-capacity-client.js", () => ({ exchangeWorkerCellCapacity: vi.fn() }));
 vi.mock("./worker-runtime-output-client.js", () => ({ retainWorkerRuntimeOutput: vi.fn() }));
-vi.mock("./worker-windows-installation-recovery.js", () => ({ reconcileWindowsWorkerAssignmentInstallation: vi.fn() }));
+vi.mock("./worker-windows-installation-startup.js", () => ({ ensureWindowsWorkerAssignmentInstallation: vi.fn() }));
 beforeEach(() => vi.resetAllMocks());
 
 function fixture() {
@@ -37,7 +37,9 @@ function fixture() {
   const result = { lease: input.lease, receipt: f.response(null, true).record!,
     outcome: projectRemoteWorkerRuntimeOutcome(readRemoteWorkerRuntimeResult(f.resultHex, f.expectation, f.history)) };
   vi.mocked(exchangeWorkerCellCapacity).mockResolvedValue({ schemaVersion: REMOTE_WORKER_CELL_CAPACITY_EXCHANGE_SCHEMA_VERSION, history: f.history, record: null });
-  vi.mocked(reconcileWindowsWorkerAssignmentInstallation).mockResolvedValue({ lease: input.lease, evidence: null, outcome: null });
+  // Installation admission has its own owner tests; this fixture exercises the
+  // installed policy's stream/file/custody checks through a controlled driver.
+  vi.mocked(ensureWindowsWorkerAssignmentInstallation).mockResolvedValue({ lease: input.lease, evidence: null, outcome: null });
   vi.mocked(retainWorkerRuntimeOutput).mockResolvedValue({ evidenceSha256: "66".repeat(32) } as never);
   let ports: Omit<WindowsRuntimeParentSessionOwner, "retain"> | undefined;
   const work = vi.fn(async (owner: Omit<WindowsRuntimeParentSessionOwner, "retain">) => { await owner.authorizePeer(owner.signal); });

@@ -20,6 +20,7 @@ export async function withRenewingWorkerLease<T>(
     readControl?: typeof readControl;
   },
   execute: (lease: LeaseBinding, signal: AbortSignal) => Promise<T>,
+  shouldParkVerifiedResult?: (value: T) => boolean,
 ): Promise<{ lease: LeaseBinding; value: T }> {
   const controller = new AbortController();
   let lease = input.lease;
@@ -61,9 +62,10 @@ export async function withRenewingWorkerLease<T>(
     clearTimeout(nextTimer);
     await renewal;
     if (failure) throw failure;
-    // A parent heartbeat can advance while the provider is working. Re-enter
-    // the exact renewal fence before any subsequent worker publication.
-    await renew();
+    // Verified parked work cannot continue or publish; its parent may now be
+    // waiting. Prior renewal failures still stop it. Other work must re-enter
+    // the exact active renewal fence before any subsequent publication.
+    if (!shouldParkVerifiedResult?.(value)) await renew();
     if (input.owner.remainingLeaseMs() <= 0) throw new Error("Worker completion lost its lease window.");
     return { lease, value };
   } finally {

@@ -288,6 +288,8 @@ export interface ChatSessionCreateInput {
 }
 
 export interface ChatSessionListQuery {
+  /** Exact record lookup, still constrained by workspace and visibility. */
+  sessionId?: string;
   scope?: ChatSessionScope | "all";
   citadelId?: string;
   workspaceId?: string;
@@ -389,6 +391,11 @@ export interface CodeDiagnostic {
   line?: number;
   column?: number;
   code?: string;
+}
+
+export interface ChatSessionWorkbenchReadOptions {
+  /** Inspect existing state without initializing, synchronizing, or selecting a file. */
+  preview?: boolean;
 }
 
 export interface ChatSessionWorkbenchRecord {

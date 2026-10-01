@@ -141,8 +141,18 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
     expect(applied.status).toBe("verifying");
     expect(updateSettings).toHaveBeenCalledTimes(2);
     expect(updateSettings.mock.calls[0]?.[0]).toMatchObject({
+      expectedRevision: 7,
       llamaCpp: { managementMode: "managed", autoStart: true, modelPath: "C:/models/file.gguf" },
     });
+    expect(updateSettings.mock.calls[1]?.[0]).toEqual({
+      expectedRevision: 8,
+      llm: { activeProviderId: "llamacpp", activeModel: "file", defaultThinkingLevel: "off" },
+    });
+    const receiver = resolveManagedSelection.mock.contexts[0];
+    expect(receiver).toMatchObject({ resolveManagedSelection, updateSettings, discardManagedSelection });
+    expect(resolveManagedSelection.mock.contexts.every((current) => current === receiver)).toBe(true);
+    expect(updateSettings.mock.contexts.every((current) => current === receiver)).toBe(true);
+    expect(discardManagedSelection.mock.contexts).toEqual([receiver]);
     expect(current.llm).toMatchObject({
       activeProviderId: "llamacpp",
       activeModel: "file",

@@ -174,7 +174,7 @@ describe("ChatTurnActivityRows effect truth presentation", () => {
     const textOf = (node: TestRenderer.ReactTestInstance): string =>
       node.children.map((child) => (typeof child === "string" ? child : textOf(child))).join("");
     const summary = renderer.root.findByProps({ className: "mc-next-thread-tool-activity-summary" });
-    expect(textOf(summary)).toContain("Outcome uncertain. Inspect external or runtime state before retry.");
+    expect(textOf(summary)).toContain("Outcome uncertain. Check before retrying. Automatic replay is suppressed.");
     expect(textOf(summary)).not.toContain("disposition unknown");
     expect(textOf(summary)).not.toContain("legacy_or_malformed_effect_evidence");
     const technical = renderer.root.findAll(

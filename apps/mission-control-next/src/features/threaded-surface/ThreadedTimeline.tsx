@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { WorkflowSkillCaptureControl } from "./WorkflowSkillCaptureControl";
 import {
-  type ChatCitationRecord,
   type ChatThreadSystemNoticeRecord,
   type ChatThreadTurnRecord,
 } from "@goatcitadel/contracts";
@@ -9,12 +8,6 @@ import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/thre
 import { ChatOptimisticUserMessage } from "@goatcitadel/mission-control-shared/components/chat/ChatOptimisticUserMessage";
 import { SurfaceReconnectBanner } from "@goatcitadel/mission-control-shared/components/chat/SurfaceReconnectBanner";
 import { focusPendingUserInputControl } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingUserInputPanel";
-import {
-  formatMemoryCitationMeta,
-  formatMemorySignals,
-  isMemoryCitation,
-  normalizeCitationDisplayText,
-} from "@goatcitadel/mission-control-shared/components/chat/assistant-display-text";
 import { toTitleCase } from "@goatcitadel/mission-control-shared/components/chat/chat-display-helpers";
 import {
   ChatThreadDelegationSummary,
@@ -37,7 +30,9 @@ import { useChatStreamingPreviewSnapshot } from "@goatcitadel/mission-control-sh
 import { useEscapeToStopStream } from "./useEscapeToStopStream";
 import { useOptionalStableHandler, useStableHandler } from "./useStableHandler";
 import { FocusedActiveWorkSummary, deriveFocusedActiveWorkState } from "./FocusedActiveWorkSummary";
-import { resolveChatRouteReadiness, type ChatRouteReadiness } from "./chat-route-readiness";
+import { ThreadBlockingPrompt } from "./ThreadBlockingPrompt";
+import { ChatFirstMessageCanvas } from "./ChatFirstMessageCanvas";
+import { ThreadCitationList } from "./ThreadCitationList";
 import "./styles/focused-active-work.css";
 import "./styles/tool-result-preview.css";
 
@@ -115,15 +110,6 @@ function TurnChannelActivityBadge({ sessionId, messageId }: { sessionId: string 
   return <ChannelActivityBadge activity={activity} />;
 }
 
-function isSafeCitationHref(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
 const GROUPING_WINDOW_MS = 2 * 60 * 1000;
 const STREAM_SCROLL_CHARACTER_BUCKET = 128;
 
@@ -139,278 +125,6 @@ function isTurnGroupedWith(previous: ChatThreadTurnRecord, current: ChatThreadTu
     return false;
   }
   return Math.abs(currentTime - previousTime) <= GROUPING_WINDOW_MS;
-}
-
-function formatCitationSource(citation: ChatCitationRecord): string {
-  if (isMemoryCitation(citation)) {
-    if (citation.knowledge) {
-      return citation.knowledge.retrievalMode === "full_text" ? "memory full text" : "memory retrieval";
-    }
-    return "memory";
-  }
-  if (citation.knowledge) {
-    return citation.knowledge.retrievalMode === "full_text" ? "knowledge full text" : "knowledge retrieval";
-  }
-  return citation.sourceType ?? "source";
-}
-
-function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) {
-  const [expanded, setExpanded] = useState(false);
-  const overflowId = useId();
-  if (citations.length === 0) {
-    return null;
-  }
-  const collapsedLimit = 6;
-  const primaryCitations = citations.slice(0, collapsedLimit);
-  const overflowCitations = citations.slice(collapsedLimit);
-  const renderCitation = (citation: ChatCitationRecord, index: number) => {
-    const label = normalizeCitationDisplayText(citation.title) || citation.url;
-    const snippet = normalizeCitationDisplayText(citation.snippet);
-    const source = formatCitationSource(citation);
-    const safeHref = isSafeCitationHref(citation.url);
-    const memoryWhyUsed = isMemoryCitation(citation)
-      ? (citation.provenance?.selectionReason ?? "Memory selection reason was not recorded.")
-      : null;
-    const memoryMeta = formatMemoryCitationMeta(citation.provenance);
-    const memorySignals = formatMemorySignals(citation.provenance?.matchSignals);
-    const memoryCitation = isMemoryCitation(citation);
-    return (
-      <article
-        key={citation.citationId || `${citation.url}-${index}`}
-        className={memoryCitation ? "is-memory" : undefined}
-      >
-        <div>
-          <strong>{index + 1}</strong>
-          {safeHref ? (
-            <a href={citation.url} target="_blank" rel="noreferrer">
-              {label}
-            </a>
-          ) : (
-            <span>{label}</span>
-          )}
-        </div>
-        <p>
-          {source}
-          {snippet ? ` · ${snippet}` : ""}
-        </p>
-        {memoryWhyUsed ? <p className="citation-memory-reason">Why used: {memoryWhyUsed}</p> : null}
-        {memoryMeta ? <p className="citation-memory-meta">{memoryMeta}</p> : null}
-        {memorySignals ? <p className="citation-memory-meta">{memorySignals}</p> : null}
-      </article>
-    );
-  };
-  return (
-    <div className="mc-next-thread-citations" aria-label="Citations for this answer">
-      {primaryCitations.map(renderCitation)}
-      {overflowCitations.length > 0 ? (
-        <>
-          <div id={overflowId} className="mc-next-thread-citations-overflow" hidden={!expanded}>
-            {expanded
-              ? overflowCitations.map((citation, index) => renderCitation(citation, collapsedLimit + index))
-              : null}
-          </div>
-          <button
-            type="button"
-            className="mc-next-thread-inline-button mc-next-thread-citations-toggle"
-            aria-expanded={expanded}
-            aria-controls={overflowId}
-            onClick={() => setExpanded((current) => !current)}
-          >
-            {expanded ? "Show fewer citations" : `Show ${overflowCitations.length} more citations`}
-          </button>
-        </>
-      ) : null}
-    </div>
-  );
-}
-
-const CHAT_STARTER_PROMPTS = [
-  {
-    label: "Orient me",
-    prompt: "Summarize the current workspace state and suggest the safest next step.",
-  },
-  {
-    label: "Plan a task",
-    prompt: "Turn this goal into a short plan with risks, open questions, and a first action.",
-  },
-  {
-    label: "Review context",
-    prompt: "Review the available context and call out what is known, missing, and uncertain.",
-  },
-] as const;
-
-function ChatFirstMessageCanvas({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
-  const readiness = resolveChatRouteReadiness(props);
-  const readinessCards = buildChatReadinessCards(props, readiness);
-  const hasConfiguredModelChoices = (props.providerOptions ?? []).some(
-    (provider) => !provider.disabled && provider.models.length > 0,
-  );
-  const canOpenModelPalette = hasConfiguredModelChoices && Boolean(props.composerPalette?.enabled);
-  const applyStarterPrompt = (prompt: string) => {
-    props.onDraftChange(prompt);
-    props.composerRef.current?.focus();
-  };
-  const openModelPalette = () => {
-    props.composerPalette?.onQueryChange("model");
-    props.composerPalette?.onOpen();
-  };
-
-  return (
-    <div className="mc-next-chat-start-canvas">
-      <div className="mc-next-chat-start-hero">
-        <p className="mc-next-thread-meta">
-          <strong data-readiness={readiness.state}>{readiness.title}</strong>
-        </p>
-        <h2>What should we tackle?</h2>
-        <p>{readiness.message}</p>
-        {readiness.state === "no_provider" ? (
-          // Nothing is connected, so no model choice can help yet: route to
-          // the real provider settings instead of the model palette.
-          <div className="mc-next-chat-start-readiness-actions" aria-label="Chat setup actions">
-            {props.onOpenProviderSettings ? (
-              <button
-                type="button"
-                className="mc-next-thread-inline-button primary"
-                onClick={props.onOpenProviderSettings}
-              >
-                Connect a model
-              </button>
-            ) : null}
-            {props.onOpenLocalAiSettings ? (
-              <button type="button" className="mc-next-thread-inline-button" onClick={props.onOpenLocalAiSettings}>
-                Set up a local model
-              </button>
-            ) : null}
-          </div>
-        ) : readiness.state === "blocked" ? (
-          <div className="mc-next-chat-start-readiness-actions" aria-label="Chat setup actions">
-            {canOpenModelPalette ? (
-              <button type="button" className="mc-next-thread-inline-button primary" onClick={openModelPalette}>
-                Choose a model
-              </button>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  className="mc-next-thread-inline-button primary"
-                  onClick={props.onOpenProviderSettings}
-                >
-                  Configure providers
-                </button>
-                <button type="button" className="mc-next-thread-inline-button" onClick={props.onOpenLocalAiSettings}>
-                  Set up a local model
-                </button>
-              </>
-            )}
-          </div>
-        ) : null}
-      </div>
-
-      <div className="mc-next-chat-start-readiness" aria-label="Chat readiness">
-        {readinessCards.map((card) => (
-          <article key={card.label} className={`mc-next-chat-start-card tone-${card.tone}`}>
-            <span>{card.label}</span>
-            <strong>{card.value}</strong>
-          </article>
-        ))}
-      </div>
-
-      {readiness.state === "no_provider" ? <ChatModelFreeDestinations props={props} /> : null}
-
-      <div className="mc-next-chat-start-section">
-        <h3>Starter prompts</h3>
-        {readiness.state === "no_provider" ? (
-          <p className="mc-next-chat-start-note">
-            Starter prompts fill in the message box. Send them once a model is connected.
-          </p>
-        ) : null}
-        <div className="mc-next-chat-start-prompts">
-          {CHAT_STARTER_PROMPTS.map((starter) => (
-            <button
-              key={starter.label}
-              type="button"
-              className="mc-next-chat-start-prompt"
-              onClick={() => applyStarterPrompt(starter.prompt)}
-            >
-              <strong>{starter.label}</strong>
-              <span>{starter.prompt}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Pending approvals stay on the Chat header's compact count; the canvas does not repeat them. */}
-      <div className="mc-next-chat-start-actions" aria-label="Chat handoff actions">
-        <button type="button" className="mc-next-thread-inline-button" onClick={props.onAttachFiles}>
-          Attach files
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/** Places that stay useful before any model is connected (e.g. right after the safe demo). */
-function ChatModelFreeDestinations({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
-  const destinations = [
-    props.onOpenLibraryArtifacts
-      ? {
-          label: "Library",
-          description: "Browse saved artifacts, knowledge, and memory for this workspace.",
-          onSelect: props.onOpenLibraryArtifacts,
-        }
-      : null,
-    props.onOpenOpsRuntime
-      ? {
-          label: "Runtime health",
-          description: "Check the Gateway, storage, and local runtimes.",
-          onSelect: props.onOpenOpsRuntime,
-        }
-      : null,
-  ].filter((destination): destination is NonNullable<typeof destination> => destination !== null);
-  if (destinations.length === 0) {
-    return null;
-  }
-  return (
-    <div className="mc-next-chat-start-section" aria-label="Explore without a model">
-      <h3>Explore without a model</h3>
-      <div className="mc-next-chat-start-prompts">
-        {destinations.map((destination) => (
-          <button
-            key={destination.label}
-            type="button"
-            className="mc-next-chat-start-prompt"
-            onClick={() => destination.onSelect()}
-          >
-            <strong>{destination.label}</strong>
-            <span>{destination.description}</span>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function buildChatReadinessCards(props: MissionThreadedActiveSessionSurfaceProps, readiness: ChatRouteReadiness) {
-  const contextValue = props.contextSelection
-    ? `${props.contextSelection.label} · ${props.contextSelection.turnCount} selected`
-    : props.outboundContext
-      ? props.outboundContext.sourceLabel
-        ? `${props.outboundContext.label} · ${props.outboundContext.sourceLabel}`
-        : props.outboundContext.label
-      : props.pendingAttachments.length > 0
-        ? `${props.pendingAttachments.length} attachment${props.pendingAttachments.length === 1 ? "" : "s"} pending`
-        : "No extra context selected";
-
-  return [
-    {
-      label: "Model",
-      value: readiness.state === "no_provider" ? "Not connected" : props.trust.providerModelSummary,
-      tone: readiness.state === "no_provider" ? "warning" : "default",
-    },
-    { label: "Runtime", value: props.trust.runtimeSummary, tone: props.trust.runtimeTone ?? "muted" },
-    { label: "Policy", value: props.trust.approvalsSummary, tone: props.approvalsCount > 0 ? "warning" : "muted" },
-    { label: "Context", value: contextValue, tone: props.contextSelection || props.outboundContext ? "live" : "muted" },
-  ] as const;
 }
 
 // Counts lines without split("\n")'s per-call array allocation: this runs on
@@ -855,25 +569,25 @@ export function ThreadedTimeline({
       <div className="mc-next-thread-live-region" role="status" aria-live="polite" aria-atomic="true">
         {liveStatus}
       </div>
-      <div className="mc-next-thread-status-lane">
-        <SurfaceReconnectBanner mode={props.mode} status={props.eventStreamStatus} onRefresh={props.onRefreshThread} />
-        <FocusedActiveWorkSummary
-          state={displayActiveWorkState}
-          approvalActionsInComposer={Boolean(props.pendingApproval)}
-          onFocusComposer={() => props.composerRef.current?.focus()}
-          onFocusPendingInput={() => {
-            // Fall back to the composer only when no prompt panel is mounted.
-            if (!focusPendingUserInputControl()) {
-              props.composerRef.current?.focus();
-            }
-          }}
-          onOpenActivity={openActivity}
-          onOpenApprovals={props.onOpenApprovals}
-          onRetry={onRetryTurn}
-          onStop={onStopStreamingTurn}
-        />
-      </div>
       <div ref={scrollRef} className="mc-next-thread-scroll" onScroll={handleThreadScroll}>
+        <div className="mc-next-thread-status-lane">
+          <SurfaceReconnectBanner mode={props.mode} status={props.eventStreamStatus} onRefresh={props.onRefreshThread} />
+          <FocusedActiveWorkSummary
+            state={displayActiveWorkState}
+            approvalActionsInComposer={Boolean(props.pendingApproval)}
+            onFocusComposer={() => props.composerRef.current?.focus()}
+            onFocusPendingInput={() => {
+              // Fall back to the composer only when no prompt panel is mounted.
+              if (!focusPendingUserInputControl()) {
+                props.composerRef.current?.focus();
+              }
+            }}
+            onOpenActivity={openActivity}
+            onOpenApprovals={props.onOpenApprovals}
+            onRetry={onRetryTurn}
+            onStop={onStopStreamingTurn}
+          />
+        </div>
         {props.loading ? (
           <div className="mc-next-thread-empty">Loading thread...</div>
         ) : props.mode === "chat" && props.thread && !hasThreadContent ? (
@@ -959,10 +673,11 @@ export function ThreadedTimeline({
                 <ChatOptimisticUserMessage message={visibleOptimisticUserMessage} />
               ) : null}
               <ChatThreadNotices notices={props.notices} scopeKey={sessionId} />
-              <div ref={threadEndRef} aria-hidden="true" />
             </div>
           </div>
         )}
+        <ThreadBlockingPrompt props={props} />
+        <div ref={threadEndRef} aria-hidden="true" />
         {/*
           Inside the scroll container (matching the chat demo): position:
           sticky needs a scrolling ancestor to float against. As a sibling of

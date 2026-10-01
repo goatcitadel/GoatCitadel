@@ -1740,6 +1740,54 @@
       "maxHostCallbacks": 0,
       "reason": "Operator-approved scope exception (2026-09-22) for C0 gate reconciliation of the chat-delegation change 5a1b7b244, whose existing-owner regressions are fixed by consolidation in the same change. Projects the canonical resolution and approved-action outcome recorded in approval events onto approval API records. Moved out of approval-follow-up so that baseline-era owner returns to zero dependency reads.",
       "evidence": "Measured one dependency access and zero host callbacks. The moved canonical-outcome tests (approval-canonical-outcome.test.ts) and the approval lifecycle suite pass unchanged."
+    },
+    {
+      "planStep": "mission-control-cockpit:phase-3",
+      "path": "apps/gateway/src/services/inbox-projection-service.ts",
+      "maxDependencyMemberAccesses": 24,
+      "maxHostCallbacks": 0,
+      "reason": "Reviewed new Phase 3 Inbox owner for the authorized Mission Control cockpit roadmap. Aggregates bounded workspace-scoped reads through eleven narrowed repository ports and existing memory, improvement, durable, and runtime-health owners. Pure projections are separate; this owner exposes no mutation or activation port. Missing, partial, and conflicting owner evidence remains explicit. Original baseline, inventory, and existing-owner caps are unchanged.",
+      "evidence": "2026-09-30 focused inbox-projection-service, inbox route, and chat-workbench-service suites pass 63 tests, including foreign workspace exclusion, contradictory linkage, scoped pagination, owner failures, bounded redacted projections, and non-mutating previews. Architecture artifact 2026-09-30T11-35-51-528Z-architecture-metrics-fb85fd44 records raw Inbox dependency accesses 24 and host callbacks 0 before this registration. Existing-owner debt remains separately failing."
+    },
+    {
+      "planStep": "mission-control-cockpit:phase-0d",
+      "path": "apps/gateway/src/services/orchestration-phase-child-service.ts",
+      "maxDependencyMemberAccesses": 7,
+      "maxHostCallbacks": 6,
+      "reason": "Independently reviewed Phase 0d extraction of canonical orchestration child wake and recovery decisions. Exact parent/child/watcher correlation, approval-wait distinction, canonical harvest and aggregate read errors are preserved. Lifecycle retains transaction writes, lease fences, dispatch and phase advancement. Original baseline, inventory and existing-owner caps are unchanged.",
+      "evidence": "docs/MISSION_CONTROL_COCKPIT_ARCHITECTURE_OWNER_REVIEW.md records the caller and extracted-owner review. On 2026-09-30 the lifecycle, loop43, phase-execution and durable-child-watcher focused suites passed 170 tests with 4 existing skips, including receiver/CAS and recovery paging proof. Raw child owner counts are 7 dependencies and 6 host callbacks; original lifecycle is 124/80 within its 126/82 limits."
+    },
+    {
+      "planStep": "mission-control-cockpit:phase-0d",
+      "path": "apps/gateway/src/services/orchestration-phase-harvest-service.ts",
+      "maxDependencyMemberAccesses": 5,
+      "maxHostCallbacks": 0,
+      "reason": "Independently reviewed Phase 0d extraction of canonical settled-child trace, assistant message and model-usage reads. Preserves original optional-reader receivers, exact requested IDs, approval-wait distinction, output and measured-cost truth. Dispatch, spec path validation and lifecycle mutations stay with their existing owners. Original baseline, inventory and caps are unchanged.",
+      "evidence": "docs/MISSION_CONTROL_COCKPIT_ARCHITECTURE_OWNER_REVIEW.md records source and caller review. The 59-line owner measures exactly 5 dependency accesses and 0 host callbacks through explicit narrow reader ports. Part of 142 passing focused tests with 4 existing skips on 2026-09-30, including canonical IDs/receivers/cost, lifecycle recovery and no redispatch; execution owner returns to its original 5-access limit."
+    },
+    {
+      "planStep": "mission-control-cockpit:phase-0d",
+      "path": "apps/gateway/src/services/runtime-llama-setup-change.ts",
+      "maxDependencyMemberAccesses": 11,
+      "maxHostCallbacks": 0,
+      "reason": "Independently reviewed Phase 0d extraction of llama setup selection validation, fresh model verification, ordered runtime/Chat settings CAS, custody discard and pure observation projections. Adapter approval/revision checks and auth custody remain unchanged; failed runtime verification retains the previous Chat default without claiming rollback of the first setting write. Original baseline, inventory and caps are unchanged.",
+      "evidence": "docs/MISSION_CONTROL_COCKPIT_ARCHITECTURE_OWNER_REVIEW.md records source and caller review. The 132-line owner measures 11 dependency accesses and 0 host callbacks through explicit narrow ports. Part of 142 passing focused tests with 4 existing skips on 2026-09-30, including exact ordered revisions and original callback receiver, opaque selection revalidation, catalog failure and observation; runtime adapter returns to its original 11-access limit."
+    },
+    {
+      "planStep": "llama-cpp-setup:settings-owner",
+      "path": "apps/gateway/src/services/llama-cpp-setup-selection-service.ts",
+      "maxDependencyMemberAccesses": 5,
+      "maxHostCallbacks": 0,
+      "reason": "Independently reviewed inherited Settings setup owner introduced in 26cedae10ab242ed71a45f0da8f8ba22d2bd8d94, absent from the pinned baseline inventory. Owns discovery and opaque selection custody with exact workspace, expiry and file revalidation. Host paths stay in Gateway custody. This registration does not change behavior, existing-owner caps, baseline hash or inventory.",
+      "evidence": "docs/MISSION_CONTROL_COCKPIT_ARCHITECTURE_OWNER_REVIEW.md and docs/LLAMA_CPP_SETUP.md record origin and responsibility. Selection tests pass host-path redaction, workspace mismatch, changed-file and missing-custody rejection, plus last-valid-millisecond and exact 30-minute expiry rejection. Part of 142 passing focused tests with 4 existing skips on 2026-09-30; raw dependencies5/callbacks0."
+    },
+    {
+      "planStep": "llama-cpp-setup:settings-owner",
+      "path": "apps/gateway/src/services/llama-cpp-setup-service.ts",
+      "maxDependencyMemberAccesses": 11,
+      "maxHostCallbacks": 0,
+      "reason": "Independently reviewed inherited Settings setup owner introduced in 26cedae10ab242ed71a45f0da8f8ba22d2bd8d94, absent from the pinned baseline inventory. Composes canonical settings, runtime, catalog, selection and Change Plan projections plus explicitly requested normal scoped Chat diagnostics. Preserves manual tool posture and stale-route checks; no new provider execution authority. Original baseline, inventory and caps remain unchanged.",
+      "evidence": "docs/MISSION_CONTROL_COCKPIT_ARCHITECTURE_OWNER_REVIEW.md and docs/LLAMA_CPP_SETUP.md record origin and responsibility. Setup unit tests cover completed-plan projection, hidden scoped Chat with web/memory/delegation off, completion failure, changed-settings staleness and missing-route errors. Part of 142 passing focused tests with 4 existing skips on 2026-09-30; raw dependencies11/callbacks0. No host model was started or called."
     }
   ]
 }

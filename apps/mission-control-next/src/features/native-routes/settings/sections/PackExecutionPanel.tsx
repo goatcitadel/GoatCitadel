@@ -1,17 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import type { CapabilityPackManifest, ChangePlanRecord } from "@goatcitadel/contracts";
-import {
-  createChangePlan,
-  fetchChangePlan,
-  fetchChangePlans,
-  verifyChangePlan,
-} from "@goatcitadel/mission-control-shared/api/client";
-import { OwnedChangePlanList } from "@goatcitadel/mission-control-shared/components/chat/OwnedChangePlanList";
-import { useSessionDraft } from "../../library/session-drafts";
-import { NativeDisclosureCard } from "../../NativeRoutePageLayout";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { NativeButton } from "../../primitives";
 import type { SettingsSectionProps } from "../SettingsShared";
-import "../../../threaded-surface/styles/change-plans.css";
+import { usePackExecution } from "./use-pack-execution";
+import { usePackPlanAction, PACK_ACTION_LABELS } from "./use-pack-plan-action";
+import { PACK_SETUP_WARNING, packActionDescription, packChildItem, packInboxUrl } from "./pack-plan-presentation";
+import { CockpitOwnerLink } from "@next/app/CockpitOwnerLink";
 import "./PackExecutionPanel.css";
 
 export function PackExecutionPanel({
@@ -25,106 +19,32 @@ export function PackExecutionPanel({
   navigate: SettingsSectionProps["navigate"];
   route: SettingsSectionProps["route"];
 }) {
-  const setupDraft = useSessionDraft("pack-setup:" + workspaceId + ":" + manifest.packId, manifest.assets.filter(asset => asset.binding && asset.id).map(asset => asset.id), manifest.provenance.contentHash, { label: manifest.name || "Pack setup", onSave: () => reviewSetup() });
-  const { value: selected, setValue: setSelected } = setupDraft;
-  const ownerKey = `${workspaceId}:${manifest.packId}:${manifest.provenance.contentHash ?? "unavailable"}`;
-  const ownerRef = useRef(ownerKey);
-  ownerRef.current = ownerKey;
-  const alive = useRef(true);
-  const generation = useRef(0);
-  const busyRef = useRef(false);
-  const [plans, setPlans] = useState<ChangePlanRecord[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const refresh = useCallback(
-    async (verify = false) => {
-      const currentGeneration = ++generation.current;
-      const result = await fetchChangePlans({ workspaceId }, { limit: 200 });
-      let parents = result.items.filter(
-        (plan) => plan.request.kind === "capability_pack" && plan.request.packId === manifest.packId,
-      );
-      if (verify) {
-        parents = await Promise.all(
-          parents.map((plan) =>
-            plan.status === "monitoring" ? verifyChangePlan(plan.planId, { workspaceId }, plan.revision) : plan,
-          ),
-        );
-      }
-      const childIds = [
-        ...new Set(
-          parents.flatMap((plan) =>
-            plan.evidenceRefs.filter((ref) => ref.startsWith("change_plan:")).map((ref) => ref.slice(12)),
-          ),
-        ),
-      ];
-      const children = await Promise.all(childIds.map((id) => fetchChangePlan(id, { workspaceId })));
-      if (alive.current && currentGeneration === generation.current) setPlans([...parents, ...children]);
-    },
-    [workspaceId, manifest.packId],
-  );
-  useEffect(() => {
-    alive.current = true;
-    busyRef.current = false;
-    setBusy(false);
-    setPlans([]);
-    setError(null);
-    let cancelled = false;
-    void refresh().catch((failure) => {
-      if (!cancelled) setError(failure instanceof Error ? failure.message : "Pack executions could not be loaded.");
-    });
-      return () => {
-      cancelled = true; alive.current = false; generation.current += 1;
-    };
-  }, [refresh, ownerKey]);
-  const run = async (operation: () => Promise<void>) => {
-    if (busyRef.current) return;
-    const operationOwner = ownerRef.current;
-    busyRef.current = true; setBusy(true);
-    setError(null);
-    try {
-      await operation();
-    } catch (failure) {
-      if (alive.current && ownerRef.current === operationOwner)
-        setError(failure instanceof Error ? failure.message : "Pack execution failed.");
-    } finally {
-      if (ownerRef.current === operationOwner) {
-        busyRef.current = false; if (alive.current) setBusy(false);
-      }
-    }
-  };
-  async function reviewSetup(): Promise<boolean> {
-    if (busyRef.current || setupDraft.hasRemoteChanges || !selected.length || !manifest.provenance.contentHash) return false;
-    const submitted = selected;
-    const submittedOwner = ownerRef.current;
-    let saved = false;
-    await run(async () => {
-      generation.current += 1;
-      const plan = await createChangePlan({ workspaceId, surface: "settings", request: { kind: "capability_pack", packId: manifest.packId, manifestHash: manifest.provenance.contentHash!, assetIds: submitted } });
-      if (alive.current && ownerRef.current === submittedOwner) {
-        generation.current += 1;
-        saved = setupDraft.acceptSaved(submitted, manifest.provenance.contentHash, submitted);
-        setPlans(current => [plan, ...current.filter(item => item.planId !== plan.planId)]);
-      }
-    });
-    return saved;
-  }
+  const owner = usePackExecution(manifest, workspaceId);
+  const selected = owner.draft.value;
   return (
     <section aria-label="Pack execution" className="mc-next-pack-execution">
-      <p>
-        Choose assets to set up. Each asset keeps its own approval and runtime checks. Policy-default labels in the
-        portable preview are advisory.
-      </p>
-      {setupDraft.hasRemoteChanges ? <p role="alert">This manifest changed while assets were selected. Review its current verified bytes, then choose assets again. <NativeButton variant="secondary" onClick={setupDraft.discard}>Use current manifest</NativeButton></p> : null}
-      <NativeDisclosureCard id="pack-verified-manifest" title="Verified manifest"><dl><dt>Pack</dt><dd>{manifest.packId}</dd><dt>Version</dt><dd>{manifest.version}</dd><dt>Publisher</dt><dd>{manifest.provenance.publisher}</dd><dt>Content hash</dt><dd>{manifest.provenance.contentHash || "Unavailable: execution disabled"}</dd></dl></NativeDisclosureCard>
-      {manifest.assets.map((asset, index) => (
-        <label key={asset.id ?? "unavailable-asset-" + index} className="mc-next-settings-checkbox mc-next-pack-asset">
+      <p>{PACK_SETUP_WARNING}</p>
+      <p>Choose up to 32 bound assets. Some configured resources are shared across the installation.</p>
+      {owner.draft.hasRemoteChanges ? (
+        <p role="alert">
+          This manifest changed while the selection was retained.{" "}
+          <NativeButton onClick={owner.draft.discard}>Use current manifest</NativeButton>
+        </p>
+      ) : null}
+      {manifest.assets.slice(0, 100).map((asset) => (
+        <label key={asset.id} className="mc-next-settings-checkbox mc-next-pack-asset">
           <input
             type="checkbox"
             checked={selected.includes(asset.id)}
-            disabled={!asset.id || !asset.binding || busy || setupDraft.hasRemoteChanges}
+            disabled={
+              !asset.binding ||
+              owner.attempt.phase !== "idle" ||
+              owner.draft.hasRemoteChanges ||
+              (!selected.includes(asset.id) && selected.length >= 32)
+            }
             onChange={(event) =>
-              setSelected((values) =>
-                event.target.checked ? [...values, asset.id] : values.filter((id) => id !== asset.id),
+              owner.setSelected(
+                event.target.checked ? [...selected, asset.id] : selected.filter((id) => id !== asset.id),
               )
             }
           />
@@ -132,25 +52,127 @@ export function PackExecutionPanel({
           {!asset.binding ? " — execution unavailable" : ""}
         </label>
       ))}
+      {manifest.assets.length > 100 ? (
+        <p>Only the first 100 assets are shown. Setup accepts at most 32 bound assets.</p>
+      ) : null}
+      <NativeButton disabled={!owner.ready} onClick={owner.reviewSetup}>
+        Review setup plan
+      </NativeButton>
       <NativeButton
-        type="button"
-        disabled={busy || !selected.length || !manifest.provenance.contentHash || setupDraft.hasRemoteChanges}
-        onClick={() => void reviewSetup()}
+        variant="secondary"
+        disabled={owner.loading || owner.attempt.phase === "pending"}
+        onClick={() => void owner.refresh()}
       >
-        Review setup
+        Refresh setup records
       </NativeButton>
-      <NativeButton type="button" variant="secondary" disabled={busy} onClick={() => void run(() => refresh(true))}>
-        Refresh execution status
-      </NativeButton>
-      {error ? <p role="alert">{error}</p> : null}
-      <OwnedChangePlanList
-        plans={plans}
-        onUpdated={(plan) => {
-          setPlans((current) => current.map((item) => (item.planId === plan.planId ? plan : item)));
-          void run(() => refresh(true));
-        }}
-        onOpenApproval={(approvalId) => navigate({ area: "ops", section: "approvals", approvalId, theme: route.theme })}
+      {owner.loading ? <p role="status">Reading setup records…</p> : null}
+      {owner.error ? <p role="alert">{owner.error}</p> : null}
+      {owner.attempt.message ? <p role="alert">{owner.attempt.message}</p> : null}
+      <p>
+        Partial history: at most 20 matching plans from the latest 200 workspace records and 64 explicitly linked
+        children. Refresh only reads; owner verification is a separate reviewed action.
+      </p>
+      {owner.parents.map((plan) => (
+        <ClassicPackPlan
+          key={plan.planId}
+          plan={plan}
+          workspaceId={workspaceId}
+          onUpdated={() => void owner.refresh()}
+          onApproval={(approvalId) => navigate({ area: "ops", section: "approvals", approvalId, theme: route.theme })}
+        />
+      ))}
+      {owner.children.map((child) => (
+        <article key={child.planId}>
+          <h4>{child.title}</h4>
+          <p>
+            {child.status.replaceAll("_", " ")} · {child.summary}
+          </p>
+          <code>{child.planId}</code>
+          <p>
+            Specialized review remains with the canonical owner. Linked item:{" "}
+            <code>{packChildItem(child) ?? "Exact handoff unavailable"}</code>
+          </p>
+          {packChildItem(child) ? (
+            <CockpitOwnerLink
+              href={`${packInboxUrl(packChildItem(child)!, workspaceId)}&shell=cockpit`}
+              scope={workspaceId}
+              label="Inspect linked owner in Inbox"
+            />
+          ) : null}
+          <NativeButton
+            variant="secondary"
+            onClick={() => navigate({ area: "library", section: "capabilities", theme: route.theme })}
+          >
+            Open capability library
+          </NativeButton>
+        </article>
+      ))}
+      <ConfirmModal
+        open={Boolean(owner.review)}
+        title="Create reviewed setup plan"
+        message={`${PACK_SETUP_WARNING} Selected: ${owner.review?.selected.map((id) => manifest.assets.find((asset) => asset.id === id)?.label).join(", ") ?? ""}. Manifest: ${manifest.provenance.contentHash ?? "unavailable"}.`}
+        confirmLabel="Create reviewed setup plan"
+        cancelLabel="Cancel setup review"
+        pending={owner.attempt.phase === "pending"}
+        confirmDisabled={owner.attempt.phase !== "idle"}
+        onConfirm={() => void owner.confirmSetup()}
+        onCancel={owner.cancelReview}
       />
     </section>
+  );
+}
+function ClassicPackPlan({
+  plan,
+  workspaceId,
+  onUpdated,
+  onApproval,
+}: {
+  plan: ChangePlanRecord;
+  workspaceId: string;
+  onUpdated: () => void;
+  onApproval: (id: string) => void;
+}) {
+  const owner = usePackPlanAction(plan, workspaceId, onUpdated),
+    required = plan.requiredAction;
+  return (
+    <article>
+      <h4>{plan.title}</h4>
+      <p>
+        {plan.status.replaceAll("_", " ")} · revision {plan.revision}
+      </p>
+      <p>{plan.summary}</p>
+      <p>{plan.impact}</p>
+      {plan.result ? <p>{plan.result.summary}</p> : null}
+      <code>{plan.planId}</code>
+      <div>
+        {owner.actions.map((action) => (
+          <NativeButton key={action} disabled={owner.attempt.phase !== "idle"} onClick={() => owner.request(action)}>
+            {PACK_ACTION_LABELS[action]}
+          </NativeButton>
+        ))}
+        {required?.kind === "approval" && required.approvalId && plan.approvalRefs.includes(required.approvalId) ? (
+          <NativeButton variant="secondary" onClick={() => onApproval(required.approvalId!)}>
+            Inspect required approval
+          </NativeButton>
+        ) : null}
+      </div>
+      {owner.notice ? <p role="status">{owner.notice}</p> : null}
+      {owner.attempt.message ? <p role="alert">{owner.attempt.message}</p> : null}
+      <ConfirmModal
+        open={Boolean(owner.review)}
+        title={owner.review ? PACK_ACTION_LABELS[owner.review.action] : "Review setup action"}
+        message={
+          owner.review
+            ? `${packActionDescription(owner.review.plan, owner.review.action)} ${owner.review.plan.impact} Revision ${owner.review.plan.revision}. ${owner.review.plan.requiredAction?.kind === "confirmation" ? owner.review.plan.requiredAction.confirmationText : ""}`
+            : ""
+        }
+        confirmLabel="Submit reviewed plan action"
+        cancelLabel="Cancel plan review"
+        pending={owner.attempt.phase === "pending"}
+        confirmDisabled={owner.attempt.phase !== "idle"}
+        onConfirm={() => void owner.confirm()}
+        onCancel={owner.cancel}
+      />
+    </article>
   );
 }

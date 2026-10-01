@@ -322,7 +322,7 @@
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 639px) {
   .mc-next-background-task__title-row,
   .mc-next-background-rail__synthesis > div {
     align-items: stretch;

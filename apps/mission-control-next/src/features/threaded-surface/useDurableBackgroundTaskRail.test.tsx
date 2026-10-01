@@ -6,7 +6,11 @@ import {
   fetchDurableBackgroundTaskRail,
 } from "@goatcitadel/mission-control-shared/api/durable";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
-import { useDurableBackgroundTaskRail, type DurableBackgroundTaskRailState } from "./useDurableBackgroundTaskRail";
+import {
+  useDurableBackgroundTaskRail,
+  __resetBackgroundControlsForTests,
+  type DurableBackgroundTaskRailState,
+} from "./useDurableBackgroundTaskRail";
 
 vi.mock("@goatcitadel/mission-control-shared/api/durable", () => ({
   fetchDurableBackgroundTaskRail: vi.fn(),
@@ -106,6 +110,7 @@ function text(renderer: ReactTestRenderer): string {
 
 describe("useDurableBackgroundTaskRail", () => {
   beforeEach(() => {
+    __resetBackgroundControlsForTests();
     mockedFetch.mockReset();
     mockedControl.mockReset();
   });
@@ -230,5 +235,193 @@ describe("useDurableBackgroundTaskRail", () => {
 
     expect(mockedFetch.mock.calls.length).toBeGreaterThanOrEqual(2);
     act(() => renderer.unmount());
+  });
+});
+
+describe("background control reviews and retained outcomes", () => {
+  let owner: DurableBackgroundTaskRailState;
+  let renderer: ReactTestRenderer;
+  function Capture({ runId = "review-run" }: { runId?: string }) {
+    owner = useDurableBackgroundTaskRail({ parentRunId: runId, workspaceId: "workspace-a", sessionId: "session-a" });
+    return null;
+  }
+  const rail = () => ({ ...snapshot("review-run"), tasks: [activeTask("watcher-review")] });
+  const conflict = (
+    body: unknown = { error: "Durable run child-1 changed from version 7 to 8 before cancellation." },
+  ) =>
+    new ApiRequestError("HTTP 409", {
+      kind: "http",
+      method: "POST",
+      path: "/api/v1/durable/runs/review-run/background-tasks/watcher-review/control",
+      status: 409,
+      body,
+    });
+  beforeEach(async () => {
+    __resetBackgroundControlsForTests();
+    mockedFetch.mockReset();
+    mockedControl.mockReset();
+    mockedFetch.mockResolvedValue(rail());
+    await act(async () => {
+      renderer = create(<Capture />);
+    });
+  });
+  afterEach(() => {
+    act(() => renderer.unmount());
+    vi.unstubAllGlobals();
+  });
+
+  it("returns no review when neither a parent nor a snapshot is available", async () => {
+    function NoParentCapture() {
+      owner = useDurableBackgroundTaskRail({ workspaceId: "workspace-a", sessionId: "session-a" });
+      return null;
+    }
+    await act(async () => { renderer.update(<NoParentCapture />); });
+    expect(owner.snapshot).toBeNull();
+    expect(owner.review("watcher-review")).toBeNull();
+    expect(mockedControl).not.toHaveBeenCalled();
+  });
+
+  it("withholds a known stale review after polling instead of silently upgrading its versions", async () => {
+    const review = owner.review("watcher-review")!;
+    const newer = rail();
+    newer.tasks[0]!.childVersion = 8;
+    mockedFetch.mockResolvedValue(newer);
+    await act(async () => {
+      await owner.refresh();
+    });
+    await act(async () => {
+      expect(await owner.control("watcher-review", "cancel", "reviewed reason", review)).toBe(false);
+    });
+    expect(mockedControl).not.toHaveBeenCalled();
+    expect(owner.snapshot?.tasks[0]?.childVersion).toBe(8);
+    expect(owner.controlFailure?.kind).toBe("conflict");
+    expect(owner.error).toContain("Close this review");
+    await act(async () => {
+      await owner.refresh();
+      await owner.control("watcher-review", "cancel", undefined, review);
+    });
+    expect(mockedControl).not.toHaveBeenCalled();
+    expect(owner.error).toContain("Close this review");
+    expect(owner.review("watcher-review")?.childVersion).toBe(8);
+  });
+
+  it("preserves a proven owner conflict through refresh and requires another explicit review", async () => {
+    const review = owner.review("watcher-review")!;
+    mockedControl.mockRejectedValue(conflict());
+    await act(async () => {
+      await owner.control("watcher-review", "cancel", "reviewed reason", review);
+    });
+    expect(mockedControl).toHaveBeenCalledWith(
+      "review-run",
+      "watcher-review",
+      expect.objectContaining({ expectedChildVersion: 7, expectedWatcherRevision: 1 }),
+    );
+    expect(owner.error).toContain("Close this review");
+    await act(async () => {
+      await owner.refresh();
+      await owner.control("watcher-review", "cancel", undefined, review);
+    });
+    expect(owner.controlFailure?.kind).toBe("conflict");
+    expect(mockedControl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["lost response", () => new Error("connection lost")],
+    ["generic conflict", () => conflict({ error: "Owner unavailable" })],
+    [
+      "committed conflict",
+      () =>
+        conflict({
+          error: "Durable run child-1 changed from version 7 to 8 before cancellation.",
+          mutationCommitted: true,
+        }),
+    ],
+    [
+      "foreign child",
+      () => conflict({ error: "Durable run another-child changed from version 7 to 8 before cancellation." }),
+    ],
+  ])("retains the unknown lock across refresh and remount: %s", async (_label, error) => {
+    mockedControl.mockRejectedValue(error());
+    await act(async () => {
+      await owner.control("watcher-review", "cancel");
+    });
+    expect(owner.controlFailure?.kind).toBe("unknown");
+    act(() => renderer.unmount());
+    await act(async () => {
+      renderer = create(<Capture />);
+    });
+    await act(async () => {
+      await owner.refresh();
+      await owner.control("watcher-review", "cancel");
+    });
+    expect(owner.error).toContain("unconfirmed");
+    expect(mockedControl).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects retained scope and navigation ABA callbacks without dispatch", async () => {
+    const review = owner.review("watcher-review")!;
+    const oldControl = owner.control;
+    mockedFetch.mockImplementation(async (runId) => ({ ...rail(), parent: { ...rail().parent, runId } }));
+    await act(async () => {
+      renderer.update(<Capture runId="other-run" />);
+    });
+    await act(async () => {
+      renderer.update(<Capture />);
+    });
+    expect(await oldControl("watcher-review", "cancel", undefined, review)).toBe(false);
+    expect(await owner.control("watcher-review", "cancel", undefined, review)).toBe(false);
+    expect(mockedControl).not.toHaveBeenCalled();
+  });
+
+  it("a retained refresh cannot dispatch or strand the terminal current scope", async () => {
+    const oldRefresh = owner.refresh;
+    mockedFetch.mockResolvedValue(snapshot("terminal-b"));
+    await act(async () => {
+      renderer.update(<Capture runId="terminal-b" />);
+    });
+    const readCount = mockedFetch.mock.calls.length;
+    await act(async () => {
+      await oldRefresh();
+    });
+    expect(mockedFetch).toHaveBeenCalledTimes(readCount);
+    expect(owner.snapshot?.parent.runId).toBe("terminal-b");
+    expect(owner.refreshing).toBe(false);
+  });
+
+  it("dismissal and replacement make retained confirmations inert", async () => {
+    const oldReview = owner.review("watcher-review")!;
+    owner.dismissReview(oldReview);
+    await act(async () => {
+      expect(await owner.control("watcher-review", "cancel", undefined, oldReview)).toBe(false);
+    });
+    const replaced = owner.review("watcher-review")!;
+    const newest = owner.review("watcher-review")!;
+    owner.dismissReview(replaced);
+    await act(async () => {
+      expect(await owner.control("watcher-review", "cancel", undefined, replaced)).toBe(false);
+    });
+    expect(owner.isReviewCurrent(newest)).toBe(true);
+    expect(mockedControl).not.toHaveBeenCalled();
+  });
+
+  it("admits one POST synchronously and keeps an unknown late result after unmount", async () => {
+    const write = deferred<Awaited<ReturnType<typeof controlDurableBackgroundTask>>>();
+    mockedControl.mockReturnValue(write.promise);
+    let pending!: Promise<boolean>;
+    const review = owner.review("watcher-review")!;
+    await act(async () => {
+      pending = owner.control("watcher-review", "cancel", undefined, review);
+      expect(await owner.control("watcher-review", "cancel", undefined, review)).toBe(false);
+    });
+    act(() => renderer.unmount());
+    await act(async () => {
+      write.reject(new Error("lost after write"));
+      await pending;
+    });
+    await act(async () => {
+      renderer = create(<Capture />);
+    });
+    expect(owner.controlFailure?.kind).toBe("unknown");
+    expect(mockedControl).toHaveBeenCalledTimes(1);
   });
 });

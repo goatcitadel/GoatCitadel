@@ -1,0 +1,32 @@
+.cockpit-model-setup { min-width: 0; }
+.cockpit-model-setup .mc-next-directory-card-body { display: grid; gap: 1rem; }
+.cockpit-model-setup .mc-next-directory-card-head { display: grid; gap: 0.75rem; }
+.cockpit-model-setup .mc-next-directory-card-head h2 { color: var(--cockpit-text); font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600; }
+.cockpit-model-setup .mc-next-card-subtitle,
+.cockpit-model-setup .mc-next-settings-field-note,
+.cockpit-model-setup .mc-next-disclosure-card small { color: var(--cockpit-text-muted); font-size: var(--text-xs); }
+.cockpit-model-setup .mc-next-directory-stats { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.cockpit-model-setup .mc-next-directory-stats > div { display: grid; gap: 0.15rem; min-width: 8rem; border: 1px solid var(--cockpit-border); border-radius: 8px; padding: 0.5rem 0.65rem; }
+.cockpit-model-setup .mc-next-directory-stats span { color: var(--cockpit-text-muted); font-size: var(--text-xs); }
+.cockpit-model-setup .mc-next-directory-stats strong { overflow-wrap: anywhere; color: var(--cockpit-text); font-size: var(--text-sm); }
+.cockpit-model-setup .mc-next-settings-wizard { display: grid; gap: 0.5rem; padding: 0; list-style: none; }
+.cockpit-model-setup .mc-next-settings-wizard-step { display: flex; gap: 0.75rem; border-left: 2px solid var(--cockpit-border); padding: 0.4rem 0.75rem; }
+.cockpit-model-setup .mc-next-settings-wizard-step.complete { border-color: var(--cockpit-done); }
+.cockpit-model-setup .mc-next-settings-wizard-step.current { border-color: var(--cockpit-accent); }
+.cockpit-model-setup .mc-next-settings-wizard-index { display: grid; flex: none; width: 1.25rem; height: 1.25rem; place-items: center; color: var(--cockpit-accent); }
+.cockpit-model-setup .mc-next-settings-wizard-step strong { color: var(--cockpit-text); font-size: var(--text-sm); }
+.cockpit-model-setup .mc-next-settings-wizard-step p { color: var(--cockpit-text-muted); font-size: var(--text-xs); }
+.cockpit-model-setup .mc-next-settings-field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: 0.75rem; }
+.cockpit-model-setup .mc-next-settings-field { display: grid; gap: 0.35rem; min-width: 0; color: var(--cockpit-text); font-size: var(--text-sm); }
+.cockpit-model-setup .mc-next-settings-input,
+.cockpit-model-setup .chat-change-plan-field :is(input, select) { min-height: 2.75rem; width: 100%; min-width: 0; border: 1px solid var(--cockpit-border); border-radius: 6px; background: var(--cockpit-canvas); padding: 0.4rem 0.6rem; color: var(--cockpit-text); }
+.cockpit-model-setup .mc-next-disclosure-card { border: 1px solid var(--cockpit-border); border-radius: 8px; }
+.cockpit-model-setup .mc-next-disclosure-card summary { display: flex; cursor: pointer; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.75rem; color: var(--cockpit-text); }
+.cockpit-model-setup .mc-next-disclosure-card summary span { display: grid; gap: 0.2rem; }
+.cockpit-model-setup .mc-next-disclosure-card-body { display: grid; gap: 0.75rem; border-top: 1px solid var(--cockpit-border); padding: 0.75rem; }
+.cockpit-model-setup .mc-next-settings-button-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.cockpit-model-setup :is(.mc-next-button, .mc-next-button-secondary, .gc-button) { display: inline-flex; min-height: 2.5rem; align-items: center; gap: 0.4rem; border: 1px solid var(--cockpit-border); border-radius: 6px; background: var(--cockpit-sunken); padding: 0.45rem 0.75rem; color: var(--cockpit-text); font-size: var(--text-sm); }
+.cockpit-model-setup .mc-next-button { border-color: var(--cockpit-accent); background: var(--cockpit-accent); color: var(--cockpit-accent-ink); }
+.cockpit-model-setup button:disabled { cursor: not-allowed; opacity: 0.55; }
+.cockpit-model-setup .mc-next-settings-code-block { overflow-x: auto; border: 1px solid var(--cockpit-border); border-radius: 6px; background: var(--cockpit-sunken); padding: 0.6rem; font-family: var(--font-mono); font-size: var(--text-xs); }
+.cockpit-model-setup ol:not(.mc-next-settings-wizard) { margin-left: 1.25rem; list-style: decimal; }

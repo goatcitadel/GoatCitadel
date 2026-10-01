@@ -1,5 +1,6 @@
 import { createAddonsRoutePort } from "./addons-route-service.js";
 import { createCostsRoutePort } from "./costs-route-service.js";
+import { createDaemonRouteService } from "./daemon-route-service.js";
 import { createPersonalOpsRouteService } from "./personal-ops-route-service.js";
 import { PersonalOpsService } from "./personal-ops-service.js";
 import * as settingsAuthService from "./settings-auth-service.js";
@@ -17,6 +18,7 @@ export function composeSystemRouteDependencies(
   | "assembly"
   | "autonomyControl"
   | "costs"
+  | "inbox"
   | "media"
   | "personalOps"
   | "settings"
@@ -24,13 +26,15 @@ export function composeSystemRouteDependencies(
   | "voice"
   | "workspaces"
 > {
+  // Capture each route owner once; retain its receiver when calling methods.
+  const { storage, assemblyService, autonomyControlService, personalityCatalogService, mediaVoiceService, taskLifecycleService } = gateway;
   const settingsRuntimeDeps = createSettingsRuntimeDependenciesForGateway(gateway);
 
   return {
     a2a: {
       config: gateway.config,
-      storage: gateway.storage,
-      tasks: gateway.taskLifecycleService,
+      storage,
+      tasks: taskLifecycleService,
       createChatSession: (input) => gateway.createChatSession(input),
       chatTurnRuntime: gateway.chatTurnRuntime,
       mutationIdempotencyStore: gateway.mutationIdempotencyStore,
@@ -43,38 +47,50 @@ export function composeSystemRouteDependencies(
       recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),
     }),
     assembly: {
-      createAssemblyRun: (input) => gateway.assemblyService.createRun(input),
-      getAssemblyRunDetail: (runId) => gateway.assemblyService.getRunDetail(runId),
-      listAssemblyReputations: (limit) => gateway.assemblyService.listReputations(limit),
-      listAssemblyRuns: (limit) => gateway.assemblyService.listRuns(limit),
+      createAssemblyRun: (input) => assemblyService.createRun(input),
+      getAssemblyRunDetail: (runId) => assemblyService.getRunDetail(runId),
+      listAssemblyReputations: (limit) => assemblyService.listReputations(limit),
+      listAssemblyRuns: (limit) => assemblyService.listRuns(limit),
     },
     autonomyControl: {
-      getStatus: (recentLimit) => gateway.autonomyControlService.getStatus(recentLimit),
+      getStatus: (recentLimit) => autonomyControlService.getStatus(recentLimit),
       revertAutonomousChangesSince: (sinceIso, opts) =>
-        gateway.autonomyControlService.revertAutonomousChangesSince(sinceIso, opts),
+        autonomyControlService.revertAutonomousChangesSince(sinceIso, opts),
       setKillSwitch: (disabled, expectedRevision) =>
-        gateway.autonomyControlService.setKillSwitch(disabled, expectedRevision),
+        autonomyControlService.setKillSwitch(disabled, expectedRevision),
     },
     costs: createCostsRoutePort({
-      storage: gateway.storage,
+      storage,
     }),
-    media: gateway.mediaVoiceService,
-    personalOps: createPersonalOpsRouteService(new PersonalOpsService(gateway.storage.personalOps)),
+    inbox: {
+      storage,
+      memory: gateway.memoryLifecycleService,
+      improvement: gateway.improvementService,
+      durable: gateway.durableOperatorService,
+      runtimeHealth: {
+        getDatabaseHealthSnapshot: () => gateway.databaseCutoverService.getHealthSnapshot(),
+        getDaemonStatus: () => createDaemonRouteService({ systemSettings: storage.systemSettings }).getDaemonStatus(),
+        inspectLatestBackupTrust: () => gateway.backupRetentionService.inspectLatestBackupTrust(),
+        costUsageAvailability: (from, to) => storage.costLedger.usageAvailability(from, to),
+      },
+    },
+    media: mediaVoiceService,
+    personalOps: createPersonalOpsRouteService(new PersonalOpsService(storage.personalOps)),
     settings: {
-      createPersonality: (input) => gateway.personalityCatalogService.createPersonality(input),
-      deletePersonality: (id, expectedRevision) => gateway.personalityCatalogService.deletePersonality(id, expectedRevision),
+      createPersonality: (input) => personalityCatalogService.createPersonality(input),
+      deletePersonality: (id, expectedRevision) => personalityCatalogService.deletePersonality(id, expectedRevision),
       getAuthRuntimeSettings: () => {
         gateway.readSettingsRevision();
         return settingsAuthService.getAuthRuntimeSettings(settingsRuntimeDeps);
       },
-      getPersonalityCatalog: () => gateway.personalityCatalogService.getCatalog(),
+      getPersonalityCatalog: () => personalityCatalogService.getCatalog(),
       getSettings: async () => await settingsAuthService.getSettings(settingsRuntimeDeps),
-      setDefaultPersonality: (id, expectedRevision) => gateway.personalityCatalogService.setDefaultPersonality(id, expectedRevision),
-      updatePersonality: (id, input) => gateway.personalityCatalogService.updatePersonality(id, input),
+      setDefaultPersonality: (id, expectedRevision) => personalityCatalogService.setDefaultPersonality(id, expectedRevision),
+      updatePersonality: (id, input) => personalityCatalogService.updatePersonality(id, input),
       updateSettings: (input) => gateway.updateSettings(input),
     },
-    tasks: gateway.taskLifecycleService,
-    voice: gateway.mediaVoiceService,
+    tasks: taskLifecycleService,
+    voice: mediaVoiceService,
     workspaces: createWorkspacesRoutePortForGateway(gateway),
   };
 }

@@ -22,6 +22,7 @@ export interface OpsSavedBoardsEditorSession {
 export function OpsSavedBoardsEditor({
   session,
   busy,
+  locked = false,
   error,
   conflict,
   onChange,
@@ -33,6 +34,7 @@ export function OpsSavedBoardsEditor({
 }: {
   session: OpsSavedBoardsEditorSession;
   busy: boolean;
+  locked?: boolean;
   error: string | null;
   conflict: OpsSavedBoardRecord | null;
   onChange: (session: OpsSavedBoardsEditorSession) => void;
@@ -43,6 +45,7 @@ export function OpsSavedBoardsEditor({
   onUseFreshCreateIdentity: () => void;
 }) {
   const updateDraft = (draft: OpsSavedBoardsDraft) => onChange({ ...session, draft });
+  const disabled = busy || locked;
   const atWidgetLimit = session.draft.placements.length >= OPS_SAVED_BOARD_LIMITS.placementsPerBoard;
 
   return (
@@ -65,17 +68,17 @@ export function OpsSavedBoardsEditor({
             </p>
           </div>
           <div className="mc-next-ops-board-inline-actions">
-            <NativeButton variant="outline" onClick={onAdoptConflictRevision} disabled={busy}>
+            <NativeButton variant="outline" onClick={onAdoptConflictRevision} disabled={disabled}>
               Use revision {conflict.revision}
             </NativeButton>
-            <NativeButton variant="ghost" onClick={onDiscardForCanonical} disabled={busy}>
+            <NativeButton variant="ghost" onClick={onDiscardForCanonical} disabled={disabled}>
               Discard draft
             </NativeButton>
           </div>
         </div>
       ) : session.mode === "create" && error ? (
         <div className="mc-next-ops-board-inline-actions">
-          <NativeButton variant="outline" onClick={onUseFreshCreateIdentity} disabled={busy}>
+          <NativeButton variant="outline" onClick={onUseFreshCreateIdentity} disabled={disabled}>
             Start a fresh create request
           </NativeButton>
         </div>
@@ -85,7 +88,7 @@ export function OpsSavedBoardsEditor({
         <label>
           <span>Board name</span>
           <input
-            disabled={busy}
+            disabled={disabled}
             value={session.draft.name}
             maxLength={OPS_SAVED_BOARD_LIMITS.nameCharacters}
             autoComplete="off"
@@ -95,7 +98,7 @@ export function OpsSavedBoardsEditor({
         <label>
           <span>Description</span>
           <textarea
-            disabled={busy}
+            disabled={disabled}
             value={session.draft.description}
             maxLength={OPS_SAVED_BOARD_LIMITS.descriptionCharacters}
             rows={3}
@@ -123,7 +126,7 @@ export function OpsSavedBoardsEditor({
                 </div>
                 <NativeButton
                   variant="outline"
-                  disabled={atWidgetLimit || busy}
+                  disabled={atWidgetLimit || disabled}
                   onClick={() => updateDraft(addOpsSavedBoardsWidget(session.draft, option.kind))}
                 >
                   Add {option.label}
@@ -152,14 +155,14 @@ export function OpsSavedBoardsEditor({
                 </span>
               </div>
               <PlacementControls
-                disabled={busy}
+                disabled={disabled}
                 onAdjust={(adjustment) =>
                   updateDraft(adjustOpsSavedBoardsPlacement(session.draft, placement.widgetId, adjustment))
                 }
               />
               <NativeButton
                 variant="ghost"
-                disabled={busy || session.draft.placements.length <= 1}
+                disabled={disabled || session.draft.placements.length <= 1}
                 onClick={() => updateDraft(removeOpsSavedBoardsWidget(session.draft, placement.widgetId))}
               >
                 Remove
@@ -173,7 +176,7 @@ export function OpsSavedBoardsEditor({
         <NativeButton variant="outline" onClick={onCancel} disabled={busy}>
           Cancel
         </NativeButton>
-        <NativeButton onClick={onSave} disabled={busy}>
+        <NativeButton onClick={onSave} disabled={disabled}>
           {busy ? "Saving…" : session.mode === "create" ? "Create board" : "Save changes"}
         </NativeButton>
       </footer>

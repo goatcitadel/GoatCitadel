@@ -111,6 +111,16 @@ export interface LlmProviderRequestConfig {
   tls?: LlmProviderRequestTlsConfig;
 }
 
+/** Exact transport command acknowledgement; hidden header values are never returned or hashed. */
+export interface LlmProviderTransportReceipt {
+  version: "llm.provider_transport_receipt.v1";
+  providerId: string;
+  expectedRevision: number;
+  appliedRevision: number;
+  acceptedHeaderNames: string[];
+  publicRequest?: LlmProviderRequestConfig;
+}
+
 export interface LlmProviderConfig {
   providerId: string;
   label: string;

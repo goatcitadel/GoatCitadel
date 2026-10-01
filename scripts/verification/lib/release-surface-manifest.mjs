@@ -1,3 +1,5 @@
+import { COCKPIT_VISUAL_MANIFEST } from "./cockpit-visual-manifest.mjs";
+
 /*
  * Legacy `RELEASE_SURFACE_MANIFEST` was retired in Track D Phase 3 alongside
  * the on-disk `apps/mission-control/` source. The Mission Control Next
@@ -534,7 +536,7 @@ export const NEXT_VISUAL_SCENARIO_MANIFEST = [
   {
     slug: "chat-pending-approval",
     href: "/chat?vr-blocked=1",
-    readySelector: '.mc-next-composer-blocking-prompt[data-blocker-kind="approval"]',
+    readySelector: '.mc-next-thread-blocking-prompt[data-blocker-kind="approval"]',
     expectedArea: "chat",
     expectedSection: "root",
     interaction: "open-inspector",
@@ -543,7 +545,7 @@ export const NEXT_VISUAL_SCENARIO_MANIFEST = [
   {
     slug: "chat-pending-user-input",
     href: "/chat?vr-blocked=1",
-    readySelector: '.mc-next-composer-blocking-prompt[data-blocker-kind="user-input"]',
+    readySelector: '.mc-next-thread-blocking-prompt[data-blocker-kind="user-input"]',
     expectedArea: "chat",
     expectedSection: "root",
     interaction: "open-inspector",
@@ -551,7 +553,10 @@ export const NEXT_VISUAL_SCENARIO_MANIFEST = [
   },
 ];
 
-export const NEXT_VISUAL_REGRESSION_MANIFEST = [...NEXT_RELEASE_SURFACE_MANIFEST, ...NEXT_VISUAL_SCENARIO_MANIFEST];
+export const NEXT_VISUAL_REGRESSION_MANIFEST = [
+  ...[...NEXT_RELEASE_SURFACE_MANIFEST, ...NEXT_VISUAL_SCENARIO_MANIFEST].map(route => ({ ...route, shell: "classic" })),
+  ...COCKPIT_VISUAL_MANIFEST,
+];
 
 export const NEXT_LEGACY_REDIRECT_MANIFEST = [
   { slug: "legacy-tab-chat", href: "/?tab=chat&surface=chat", expectedPath: "/chat" },
@@ -712,6 +717,7 @@ export function buildVisualBaselineFileName(routeSlug, variantSlug) {
 
 export function resolveReleaseSurfaceHref(route, variant = {}, fixture = {}) {
   let href = appendQuery(route.href, variant.themeQuery);
+  if (route.shell) href = appendQuery(href, `shell=${encodeURIComponent(route.shell)}`);
   for (const [routeKey, fixtureKey, queryKey] of [
     ["fixtureSessionKey", "sessions", "sessionId"],
     ["fixtureProjectKey", "projects", "projectId"],

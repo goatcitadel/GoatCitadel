@@ -5,6 +5,10 @@
  * depending on the full gateway facade.
  */
 
+import {
+  assertLocalDelegationTurnAuthority,
+  type LocalDelegationAuthorityStorage,
+} from "./chat-local-delegation-authority.js";
 import { randomUUID } from "node:crypto";
 import { CHAT_TURN_ACTIVE_STATUSES, NotFoundError } from "@goatcitadel/contracts";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
@@ -57,7 +61,8 @@ export interface ChatTurnDispatchHost
     ChatTurnDurableRunOwner,
     ChatTurnIntegrationDispatch,
     ChatTurnStreamLifecycleControl {
-  readonly storage: chatTurnStreamService.ChatTurnStreamHost["storage"] &
+  readonly storage: LocalDelegationAuthorityStorage &
+    chatTurnStreamService.ChatTurnStreamHost["storage"] &
     Pick<Storage, "durableRuns" | "runImmediateTransaction" | "sessionMutationAdmissions" | "chatMessages">;
   updateActiveLeafOrThrow(
     sessionId: string,
@@ -280,6 +285,20 @@ export async function consumePreparedAgentChatTurn(
       } else if (chunk.type === "citation") {
         citations = dedupeChatCitations([...citations, chunk.citation]);
       }
+    }
+    if (launchedDurableRunId && input.parentDelegationStepId && options?.onChildDurableRunAdmitted) {
+      // A durable interrupt may end the retained stream before its final trace
+      // event is observed. Only the exact canonical child receipt settles it.
+      const canonical = await storage.chatTurnTraces.get(prepared.turnId);
+      if (
+        canonical.sessionId !== sessionId ||
+        canonical.turnId !== prepared.turnId ||
+        canonical.userMessageId !== prepared.userMessage.messageId ||
+        canonical.assistantMessageId !== prepared.assistantMessageId ||
+        canonical.durable?.runId !== launchedDurableRunId
+      )
+        throw new Error("Local child settlement has no exact canonical durable trace.");
+      trace = canonical;
     }
     const dedupedTraceCitations = dedupeChatCitations(trace?.citations ?? []);
     return {
@@ -821,6 +840,21 @@ export async function launchPreparedAgentChatTurnStream(
   const durableRun = await host.beginDurableChatRun(prepared, input, threadEventType, {
     mutationLifecycle: options?.mutationLifecycle,
     runId: options?.durableRunId,
+    onChildDurableRunAdmitted: options?.onChildDurableRunAdmitted
+      ? async (runId) => {
+          if (input.parentDelegationStepId && !prepared.capabilityProfile) {
+            await assertLocalDelegationTurnAuthority(host.storage, {
+              sessionId,
+              request: input,
+              admission: prepared.turnAdmission,
+              turnId: prepared.turnId,
+              userMessageId: prepared.userMessage.messageId,
+              assistantMessageId: prepared.assistantMessageId,
+            });
+          }
+          await options.onChildDurableRunAdmitted!(runId);
+        }
+      : undefined,
   });
   const streamRegistration = await host.registerActiveChatTurnStream(sessionId, prepared.turnId, durableRun?.runId, {
     ...(durableRun ? { reservation: true } : {}),

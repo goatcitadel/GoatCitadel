@@ -14,6 +14,7 @@ import {
 const chatOnlyModeSchema = z.enum(["chat", "cowork", "code"]).transform(() => "chat" as const);
 
 const listChatSessionsSchema = z.object({
+  sessionId: z.string().trim().min(1).max(256).optional(),
   scope: z.enum(["mission", "external", "all"]).optional(),
   citadelId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
@@ -178,6 +179,11 @@ const workbenchWorktreeBodySchema = z.object({
 const workbenchFileQuerySchema = z.object({
   path: z.string().min(1),
 });
+
+const workbenchReadQuerySchema = z.object({
+  preview: z.enum(["true", "false"]).optional().transform((value) => value === "true"),
+});
+const workbenchFileReadQuerySchema = workbenchFileQuerySchema.extend(workbenchReadQuerySchema.shape);
 
 const workbenchSaveFileBodySchema = z.object({
   path: z.string().min(1),
@@ -695,15 +701,19 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
 
   fastify.get("/api/v1/chat/sessions/:sessionId/workbench", async (request, reply) => {
     const params = sessionParamsSchema.safeParse(request.params);
+    const query = workbenchReadQuerySchema.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
       return reply.send({
-        state: await fastify.services.chatSessions.getChatSessionWorkbench(params.data.sessionId),
+        state: await (query.data.preview
+          ? fastify.services.chatSessions.getChatSessionWorkbench(params.data.sessionId, { preview: true })
+          : fastify.services.chatSessions.getChatSessionWorkbench(params.data.sessionId)),
       });
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return query.data.preview ? sendRouteError(reply, error, request.log) : reply.code(400).send({ error: (error as Error).message });
     }
   });
 
@@ -729,19 +739,23 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
 
   fastify.get("/api/v1/chat/sessions/:sessionId/workbench/tree", async (request, reply) => {
     const params = sessionParamsSchema.safeParse(request.params);
+    const query = workbenchReadQuerySchema.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.services.chatSessions.getChatSessionWorkbenchTree(params.data.sessionId));
+      return reply.send(await (query.data.preview
+        ? fastify.services.chatSessions.getChatSessionWorkbenchTree(params.data.sessionId, { preview: true })
+        : fastify.services.chatSessions.getChatSessionWorkbenchTree(params.data.sessionId)));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return query.data.preview ? sendRouteError(reply, error, request.log) : reply.code(400).send({ error: (error as Error).message });
     }
   });
 
   fastify.get("/api/v1/chat/sessions/:sessionId/workbench/file", async (request, reply) => {
     const params = sessionParamsSchema.safeParse(request.params);
-    const query = workbenchFileQuerySchema.safeParse(request.query);
+    const query = workbenchFileReadQuerySchema.safeParse(request.query);
     if (!params.success || !query.success) {
       return reply.code(400).send({
         error: {
@@ -752,10 +766,12 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(
-        await fastify.services.chatSessions.getChatSessionWorkbenchFile(params.data.sessionId, query.data.path),
+        await (query.data.preview
+          ? fastify.services.chatSessions.getChatSessionWorkbenchFile(params.data.sessionId, query.data.path, { preview: true })
+          : fastify.services.chatSessions.getChatSessionWorkbenchFile(params.data.sessionId, query.data.path)),
       );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return query.data.preview ? sendRouteError(reply, error, request.log) : reply.code(400).send({ error: (error as Error).message });
     }
   });
 

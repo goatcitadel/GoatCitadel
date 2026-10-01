@@ -75,6 +75,11 @@ describe("ProviderConnectionChangePlanAdapter", () => {
     expect(prepared.status).toBe("awaiting_input");
     expect(prepared.requiredAction?.kind).toBe("secure_input");
     expect(JSON.stringify(prepared)).not.toMatch(/api.?key|credentialValue|password/iu);
+    expect(prepared.requiredAction).toMatchObject({ fields: [{ description: expect.stringContaining("OS keychain") }] });
+    const envPrepared = await adapter.prepare(context, { kind: "provider_connection", providerId: "openai",
+      credentialAction: "replace_api_key", credentialStorage: "env", credentialEnvVar: "VERIFICATION_API_KEY" });
+    expect(envPrepared.requiredAction).toMatchObject({ fields: [{ description: expect.stringContaining("plaintext in this installation's environment file (VERIFICATION_API_KEY)") }] });
+    expect(JSON.stringify(envPrepared.requiredAction)).not.toContain("OS keychain");
   });
 
   it("binds the secure owner receipt before presenting final confirmation", async () => {
@@ -94,6 +99,7 @@ describe("ProviderConnectionChangePlanAdapter", () => {
       {
         planId: "plan-1",
         request: { kind: "provider_connection", providerId: "openai" },
+        target: { ownerId: "provider_connection", resourceId: "openai", expectedRevision: 5 },
       } as ChangePlanRecord,
       {
         actionId: "secure-1",
@@ -132,7 +138,8 @@ describe("ProviderConnectionChangePlanAdapter", () => {
   it("confirms a new secret-free profile before asking the dedicated credential owner", async () => {
     let settings = { ...runtimeSettings(), llm: { providers: [] } } as any;
     const updateSettings = vi.fn(async () => {
-      settings = runtimeSettings();
+      settings = { ...runtimeSettings(), revision: 6, llm: { providers: [{ ...runtimeSettings().llm.providers[0],
+        baseUrl: "https://api.openai.com/v1", apiStyle: "openai-responses", defaultModel: "gpt-5" }] } };
       return settings;
     });
     const adapter = new ProviderConnectionChangePlanAdapter({
@@ -162,6 +169,7 @@ describe("ProviderConnectionChangePlanAdapter", () => {
 
     const outcome = await adapter.apply(context, {
       planId: "plan-profile",
+      intentHash: "a".repeat(64),
       request,
       target: prepared.target,
     } as ChangePlanRecord);
@@ -264,6 +272,7 @@ describe("ProviderConnectionChangePlanAdapter", () => {
       {
         planId: "plan-oauth",
         request,
+        target: prepared.target,
       } as ChangePlanRecord,
       {
         actionId: "oauth-1",

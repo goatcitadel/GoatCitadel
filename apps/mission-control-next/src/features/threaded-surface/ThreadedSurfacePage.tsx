@@ -1,65 +1,37 @@
+import { MODE_META, formatThreadedPermissionSummary, type ThreadedPermissionState } from "./threaded-surface-model";
+import { panelOwnsActiveFocus, getDrawerFocusableElements, resolveDrawerTabTarget } from "./threaded-drawer-focus";
+import type { ThreadedUtilityPanelId } from "./threaded-utility-navigation";
+import { LazyThreadedWorkflowPanel } from "./ThreadedWorkflowPanelLoader";
+import { ThreadConversationSurface } from "./ThreadConversationSurface";
+import { ThreadEmptyState } from "./ThreadEmptyState";
+import { ThreadedUtilityPanel } from "./ThreadedUtilityPanel";
+import { ThreadedSessionRail } from "./ThreadedSessionRail";
+export {
+  formatThreadedPermissionSummary,
+  formatThreadedApprovalMode,
+  formatThreadedOverrideExpiry,
+  getArchiveActionLabel,
+  type ThreadedPermissionState,
+} from "./threaded-surface-model";
+export { panelOwnsActiveFocus, getDrawerFocusableElements, resolveDrawerTabTarget } from "./threaded-drawer-focus";
 import { useDraftLeave } from "../native-routes/library/DraftLeaveDialog";
-/* eslint-disable max-lines -- ThreadedSurfacePage coordinates the chat layout, composer chrome, timeline, drawer, and workflow panels while decomposition lands (plan W3.1 in local decomposition notes). */
-import {
-  useCallback,
-  useEffect,
-  useId,
-  lazy,
-  useMemo,
-  useRef,
-  useState,
-  Suspense,
-  type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
-  type ReactNode,
-} from "react";
-import {
-  ChevronRight,
-  Code2,
-  FileText,
-  Folder,
-  FolderPlus,
-  Menu,
-  MessageSquareText,
-  PanelRight,
-  Pin,
-  PinOff,
-  Settings2,
-  Play,
-  Search,
-  Workflow,
-  X,
-} from "lucide-react";
-import type { ChangePlanRecord, ChatMode, ChatSessionRecord, ChatSessionSearchHitRecord } from "@goatcitadel/contracts";
-import type {
-  MissionThreadedActiveSessionSurfaceProps,
-  MissionThreadedDropTargetProps,
-  MissionThreadedRenderSurfaceInput,
-} from "@goatcitadel/threaded-surface-core";
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense, type CSSProperties } from "react";
+import { Code2, Menu, PanelRight } from "lucide-react";
+import type { ChatMode } from "@goatcitadel/contracts";
+import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
 import { groupDelegatedSessionsForRail } from "@goatcitadel/threaded-surface-core";
-import { buildThreadedSessionStatusSummary } from "@goatcitadel/threaded-surface-core/work-trust";
-import { StatusChip, type StatusChipTone } from "../native-routes/primitives";
-import { ChatModelPicker } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
+
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
-import { ChatExecutionPlanSummary } from "@goatcitadel/mission-control-shared/components/chat/ChatExecutionPlanSummary";
-import { ChatChangePlanCard } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard";
 
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
-import { ThreadedComposer } from "./ThreadedComposer";
-import { SidebarChatPortal, useUnifiedSidebar } from "@next/app/UnifiedSidebar";
-import { ChatSessionStatusPanel } from "./ChatSessionStatusPanel";
-import { resolveChatRouteReadiness } from "./chat-route-readiness";
-import { ChatTimerPanel } from "./ChatTimerPanel";
-import { RunVariablePanel } from "./RunVariablePanel";
-import { SessionControlBanner } from "./SessionControlBanner";
+
+import { useUnifiedSidebar } from "@next/app/UnifiedSidebar";
+
 import { ThreadedBtwSideChatPanel } from "./ThreadedBtwSideChatPanel";
 import { ThreadedContextDrawer } from "./ThreadedContextDrawer";
-import { ThreadedModeControl } from "./ThreadedModeControl";
-import { ThreadedTimeline } from "./ThreadedTimeline";
-import { DurableBackgroundTaskRail } from "./DurableBackgroundTaskRail";
-import { shortId } from "./workflow/format";
+
+import { PaneResizeHandle, useHorizontalPaneResize } from "./ThreadedPaneResize";
+
 import "./styles/rail.css";
 import "./styles/header.css";
 import "./styles/timeline-frame.css";
@@ -81,102 +53,7 @@ import "./styles/run-variables.css";
 import "./styles/change-plans.css";
 import "./styles/calm-chat.css";
 
-const LazyThreadedWorkflowPanel = lazy(async () => {
-  const module = await import("./ThreadedWorkflowPanel");
-  return { default: module.ThreadedWorkflowPanel };
-});
-
-const MODE_META: Record<
-  ChatMode,
-  { label: string; icon: typeof MessageSquareText; helper: string; posture: string; stageLabel: string }
-> = {
-  chat: {
-    label: "Chat",
-    icon: MessageSquareText,
-    helper: "Conversation, attachments, planning, tools, approvals, and source context in one place.",
-    posture: "chat",
-    stageLabel: "Chat workspace stage",
-  },
-  cowork: {
-    label: "Chat",
-    icon: Workflow,
-    helper: "Legacy planning posture now resolves into Chat.",
-    posture: "chat",
-    stageLabel: "Chat workspace stage",
-  },
-  code: {
-    label: "Chat",
-    icon: Code2,
-    helper: "Legacy build posture now resolves into Chat with governed code capabilities.",
-    posture: "chat",
-    stageLabel: "Chat workspace stage",
-  },
-};
-
-type EmptyStateGuidance = {
-  title: string;
-  body: string;
-  startLabel: string;
-  startHereLabel: string;
-  cards: Array<{ title: string; body: string }>;
-};
-
-const EMPTY_STATE_GUIDANCE: Record<ChatMode, EmptyStateGuidance> = {
-  chat: {
-    title: "Start with the first useful move",
-    body: "Ask directly, attach context, or open Start Here when this workspace still needs its first chat.",
-    startLabel: "Start chat",
-    startHereLabel: "Open Start Here",
-    cards: [
-      { title: "Fast answer", body: "Draft, compare, summarize, or ask a short question." },
-      { title: "Guided setup", body: "Use the sample mission when provider, workspace, or memory context is unclear." },
-      {
-        title: "Escalate",
-        body: "Ask for a plan, use tools, or add source context in the same chat when the work needs structure.",
-      },
-    ],
-  },
-  cowork: {
-    title: "Set up supervised work",
-    body: "Turn a goal into a visible plan with task lanes, approvals, checkpoints, and delegated follow-through.",
-    startLabel: "Start plan",
-    startHereLabel: "Use Start Here mission",
-    cards: [
-      { title: "Plan", body: "Frame the work before durable steps begin." },
-      { title: "Task board", body: "Track delegation, retries, blockers, and checkpoints." },
-      { title: "Approvals", body: "Review human-gated decisions before the run advances." },
-    ],
-  },
-  code: {
-    title: "Prepare a governed code pass",
-    body: "Bind source context, review diffs, run validation, and keep Code Mode proof visible before handoff.",
-    startLabel: "Start build",
-    startHereLabel: "Use Start Here mission",
-    cards: [
-      { title: "Source", body: "Attach files or start from a project-bound thread." },
-      { title: "Diffs", body: "Keep implementation changes reviewable in the workbench." },
-      { title: "Proof", body: "Pair approvals, artifacts, and validation with the final code pass." },
-    ],
-  },
-};
-
-type ThreadedUtilityPanelId = "preview" | "context" | "artifacts" | "session" | "trace" | "assist" | "diff" | "terminal" | "files" | "background" | "plan" | "status";
-type ThreadedUtilityTabId = "activity" | "context" | "outputs" | "settings";
-type ThreadedUtilityTabMeta = { id: ThreadedUtilityTabId; panel: ThreadedUtilityPanelId; label: string; icon: typeof PanelRight };
-
-const UTILITY_TAB_ITEMS: ThreadedUtilityTabMeta[] = [
-  { id: "activity", panel: "preview", label: "Activity", icon: Play },
-  { id: "context", panel: "context", label: "Context", icon: FileText },
-  { id: "outputs", panel: "artifacts", label: "Outputs", icon: Folder },
-  { id: "settings", panel: "session", label: "Chat settings", icon: Settings2 },
-];
-
-function getUtilityTab(panel: ThreadedUtilityPanelId): ThreadedUtilityTabId {
-  if (panel === "context") return "context";
-  if (panel === "artifacts" || panel === "diff" || panel === "files") return "outputs";
-  if (panel === "session" || panel === "assist") return "settings";
-  return "activity";
-}
+export { formatRelativeTime } from "./ThreadedSessionGroup";
 
 const PANE_WIDTHS = {
   rail: { initial: 216, min: 184, max: 300 },
@@ -185,119 +62,6 @@ const PANE_WIDTHS = {
 };
 const MIN_CONVERSATION_WIDTH = 680;
 const PANEL_GRID_GAP = 12;
-
-/**
- * Escape belongs to the disclosure that currently owns focus. On wide
- * desktops both panels can be open, so a document-level listener must not
- * close Threads while the operator is working in Activity (or vice versa).
- */
-export function panelOwnsActiveFocus(panel: Pick<HTMLElement, "contains"> | null, activeElement: Node | null): boolean {
-  return panel === null || panel.contains(activeElement);
-}
-
-/**
- * Return the controls that are actually reachable in a modal drawer. Native
- * summaries are focusable, while controls inside a closed <details> element
- * are not; both facts matter when we calculate the Tab boundary ourselves.
- */
-export function getDrawerFocusableElements(modalPanel: HTMLElement): HTMLElement[] {
-  return Array.from(
-    modalPanel.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary:not([tabindex="-1"]), [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex="-1"])',
-    ),
-  ).filter((element) => {
-    if (element.tabIndex < 0 || element.closest('[hidden], [aria-hidden="true"], [inert]')) {
-      return false;
-    }
-    const closedDetails = element.closest("details:not([open])");
-    return !closedDetails || (element.tagName === "SUMMARY" && element.parentElement === closedDetails);
-  });
-}
-
-export function resolveDrawerTabTarget({
-  activeElement,
-  focusable,
-  modalPanel,
-  shiftKey,
-}: {
-  activeElement: Node | null;
-  focusable: readonly HTMLElement[];
-  modalPanel: HTMLElement;
-  shiftKey: boolean;
-}): HTMLElement | null {
-  if (focusable.length === 0) {
-    return modalPanel;
-  }
-  const first = focusable[0]!;
-  const last = focusable[focusable.length - 1]!;
-  const activeIndex = focusable.indexOf(activeElement as HTMLElement);
-
-  // The context sheet deliberately receives focus first. Without this branch,
-  // Shift+Tab immediately walks back to the underlying page instead of the
-  // dialog's final control. It also recovers focus if a browser extension,
-  // stale DOM selection, or a just-closed <details> leaves focus somewhere
-  // that is not part of the current focus order.
-  if (activeElement === modalPanel || !modalPanel.contains(activeElement) || activeIndex === -1) {
-    return shiftKey ? last : first;
-  }
-  if (shiftKey && activeIndex === 0) {
-    return last;
-  }
-  if (!shiftKey && activeIndex === focusable.length - 1) {
-    return first;
-  }
-  return null;
-}
-
-export interface ThreadedPermissionState {
-  loading?: boolean;
-  error?: string;
-  profileId?: string;
-  profileLabel?: string;
-  approvalMode?: string;
-  localOperatorOverrideId?: string;
-  overrideExpiresAt?: string;
-}
-
-export function formatThreadedPermissionSummary(state?: ThreadedPermissionState): string {
-  if (!state || state.loading) {
-    return "Policy loading";
-  }
-  if (state.error) {
-    return "Policy unavailable";
-  }
-  const profile = state.profileLabel ?? state.profileId ?? "Safe";
-  const details = [formatThreadedApprovalMode(state.approvalMode)].filter(Boolean);
-  if (state.localOperatorOverrideId) {
-    details.push(
-      state.overrideExpiresAt
-        ? `override until ${formatThreadedOverrideExpiry(state.overrideExpiresAt)}`
-        : "local override active",
-    );
-  }
-  return `Policy: ${[profile, ...details].join(" · ")}`;
-}
-
-export function formatThreadedApprovalMode(value?: string): string | undefined {
-  switch (value) {
-    case "approve_all":
-      return "asks every time";
-    case "approve_risky":
-      return "asks on risk";
-    case "bypass":
-      return "skips normal prompts";
-    default:
-      return value;
-  }
-}
-
-export function formatThreadedOverrideExpiry(value: string): string {
-  const timestamp = Date.parse(value);
-  if (Number.isNaN(timestamp)) {
-    return value;
-  }
-  return `${new Date(timestamp).toISOString().slice(11, 16)} UTC`;
-}
 
 export function ThreadedSurfacePage({
   surface,
@@ -314,10 +78,10 @@ export function ThreadedSurfacePage({
 }) {
   const sidebar = useUnifiedSidebar();
   const detailLeave = useDraftLeave();
-  const leaveRef=useRef(detailLeave);
-  leaveRef.current=detailLeave;
+  const leaveRef = useRef(detailLeave);
+  leaveRef.current = detailLeave;
   const embeddedRail = Boolean(sidebar);
-  const railDrawerLayout = useMediaQuery("(width < 1180px)");
+  const railDrawerLayout = useMediaQuery("(width < 1280px)");
   // The controller-owned rail state is intentionally reserved for the compact
   // drawer. Desktop Chat owns its own temporary disclosure state so opening
   // Threads never makes a persistent rail compete with the conversation.
@@ -343,7 +107,13 @@ export function ThreadedSurfacePage({
   const desktopPanelsCanCoexist = useMediaQuery(
     `(width >= ${MIN_CONVERSATION_WIDTH + railPane.width + contextPane.width + PANEL_GRID_GAP}px)`,
   );
-  const railOpen = sidebar ? (sidebar.mobile ? sidebar.navOpen : !sidebar.collapsed) : railDrawerLayout ? input.sessionRailOpen : desktopSessionRailOpen;
+  const railOpen = sidebar
+    ? sidebar.mobile
+      ? sidebar.navOpen
+      : !sidebar.collapsed
+    : railDrawerLayout
+      ? input.sessionRailOpen
+      : desktopSessionRailOpen;
   const railDrawerOpen = !embeddedRail && railDrawerLayout && railOpen;
   const railCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const railPanelRef = useRef<HTMLElement | null>(null);
@@ -353,9 +123,21 @@ export function ThreadedSurfacePage({
   const contextFocusReturnRef = useRef<HTMLElement | null>(null);
   const activeProps = input.activeSessionSurfaceProps;
   const [activeUtilityPanel, setActiveUtilityPanel] = useState<ThreadedUtilityPanelId | null>(null);
-  const [inspectorPinned,setInspectorPinned]=useState(()=>{try{return typeof window!=="undefined"&&window.localStorage.getItem("mc-next:chat:inspector-pinned")==="true";}catch{return false;}});
-  useEffect(()=>{try{window.localStorage.setItem("mc-next:chat:inspector-pinned",String(inspectorPinned));}catch{/* Presentation preference storage is optional. */}},[inspectorPinned]);
-  const previousSessionRef=useRef(activeProps?.selectedSessionId);
+  const [inspectorPinned, setInspectorPinned] = useState(() => {
+    try {
+      return typeof window !== "undefined" && window.localStorage.getItem("mc-next:chat:inspector-pinned") === "true";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("mc-next:chat:inspector-pinned", String(inspectorPinned));
+    } catch {
+      /* Presentation preference storage is optional. */
+    }
+  }, [inspectorPinned]);
+  const previousSessionRef = useRef(activeProps?.selectedSessionId);
   const dockOpen = Boolean((input.dockOpen || activeUtilityPanel) && activeProps);
   const workflowPanel = input.workflowPanel;
   const activeMode: ChatMode = "chat";
@@ -365,9 +147,12 @@ export function ThreadedSurfacePage({
   const lastActivityOpenRequestRef = useRef(0);
   const statusWasOpen = useRef(false);
   const workflowPanelOpen = Boolean(workflowPanel && codeWorkbenchOpen);
-  const workbenchEvidenceRequested = codeWorkbenchOpen || ["files", "diff", "runlog", "background"].includes(activeUtilityPanel ?? "");
+  const workbenchEvidenceRequested =
+    codeWorkbenchOpen || ["files", "diff", "runlog", "background"].includes(activeUtilityPanel ?? "");
   const onWorkbenchOpenChange = input.onWorkbenchOpenChange;
-  useEffect(() => { onWorkbenchOpenChange?.(workbenchEvidenceRequested); }, [onWorkbenchOpenChange, workbenchEvidenceRequested]);
+  useEffect(() => {
+    onWorkbenchOpenChange?.(workbenchEvidenceRequested);
+  }, [onWorkbenchOpenChange, workbenchEvidenceRequested]);
   const missionSessionGroups = useMemo(
     () => groupDelegatedSessionsForRail(input.sessionRail.missionSessions),
     [input.sessionRail.missionSessions],
@@ -429,22 +214,26 @@ export function ThreadedSurfacePage({
     });
   }, []);
   const handleDockOpenChange = useCallback(
-    (next: boolean) => leaveRef.current.request(() => {
-      if (next && !dockOpen) {
-        captureContextFocusReturn();
-      }
-      if (!next) {
-        activeProps?.sessionStatusPanel?.onClose();
-        restoreContextFocusReturn();
-      }
-      setActiveUtilityPanel(null);
-      input.onDockOpenChange(next);
-    }),
+    (next: boolean) =>
+      leaveRef.current.request(() => {
+        if (next && !dockOpen) {
+          captureContextFocusReturn();
+        }
+        if (!next) {
+          activeProps?.sessionStatusPanel?.onClose();
+          restoreContextFocusReturn();
+        }
+        setActiveUtilityPanel(null);
+        input.onDockOpenChange(next);
+      }),
     [activeProps?.sessionStatusPanel, captureContextFocusReturn, dockOpen, input, restoreContextFocusReturn],
   );
   const closeSessionRail = useCallback(
     (restoreFocus = true) => {
-      if (sidebar) { sidebar.close(); return; }
+      if (sidebar) {
+        sidebar.close();
+        return;
+      }
       if (railDrawerLayout) {
         input.onSessionRailOpenChange(false);
       } else {
@@ -468,7 +257,10 @@ export function ThreadedSurfacePage({
     [input, railDrawerLayout, sidebar],
   );
   const openSessionRail = useCallback(() => {
-    if (sidebar) { sidebar.open(); return; }
+    if (sidebar) {
+      sidebar.open();
+      return;
+    }
     if (
       typeof document !== "undefined" &&
       typeof HTMLElement !== "undefined" &&
@@ -491,24 +283,25 @@ export function ThreadedSurfacePage({
     }
   }, [desktopPanelsCanCoexist, dockOpen, input, railDrawerLayout, sidebar]);
   const handleSelectUtilityPanel = useCallback(
-    (panel: ThreadedUtilityPanelId) => leaveRef.current.request(() => {
-      if (!dockOpen) {
-        captureContextFocusReturn();
-      }
-      // The build workbench and Activity compete for the same supporting
-      // panel budget. Opening Activity from any entry point closes the editor
-      // just as opening the editor closes Activity below.
-      if (workflowPanel?.kind === "code" && codeWorkbenchOpen) {
-        setCodeWorkbenchOpen(false);
-      }
-      if (railOpen && (railDrawerLayout || !desktopPanelsCanCoexist)) {
-        closeSessionRail(false);
-      }
-      if (panel !== "status") activeProps?.sessionStatusPanel?.onClose();
-      else if (!activeProps?.sessionStatusPanel?.open) activeProps?.sessionStatusPanel?.onRefresh();
-      setActiveUtilityPanel(panel);
-      input.onDockOpenChange(true);
-    }),
+    (panel: ThreadedUtilityPanelId) =>
+      leaveRef.current.request(() => {
+        if (!dockOpen) {
+          captureContextFocusReturn();
+        }
+        // The build workbench and Activity compete for the same supporting
+        // panel budget. Opening Activity from any entry point closes the editor
+        // just as opening the editor closes Activity below.
+        if (workflowPanel?.kind === "code" && codeWorkbenchOpen) {
+          setCodeWorkbenchOpen(false);
+        }
+        if (railOpen && (railDrawerLayout || !desktopPanelsCanCoexist)) {
+          closeSessionRail(false);
+        }
+        if (panel !== "status") activeProps?.sessionStatusPanel?.onClose();
+        else if (!activeProps?.sessionStatusPanel?.open) activeProps?.sessionStatusPanel?.onRefresh();
+        setActiveUtilityPanel(panel);
+        input.onDockOpenChange(true);
+      }),
     [
       captureContextFocusReturn,
       closeSessionRail,
@@ -529,21 +322,29 @@ export function ThreadedSurfacePage({
     }
     handleSelectUtilityPanel("preview");
   }, [dockOpen, handleDockOpenChange, handleSelectUtilityPanel]);
-  const openBuildEditor = useCallback(() => leaveRef.current.request(() => {
-    setCodeWorkbenchOpen(true);
-    setActiveUtilityPanel(null);
-    activeProps?.sessionStatusPanel?.onClose();
-    input.onDockOpenChange(false);
-  }), [activeProps?.sessionStatusPanel, input]);
+  const openBuildEditor = useCallback(
+    () =>
+      leaveRef.current.request(() => {
+        setCodeWorkbenchOpen(true);
+        setActiveUtilityPanel(null);
+        activeProps?.sessionStatusPanel?.onClose();
+        input.onDockOpenChange(false);
+      }),
+    [activeProps?.sessionStatusPanel, input],
+  );
   const handleToggleBuildEditor = useCallback(() => {
     if (codeWorkbenchOpen) leaveRef.current.request(() => setCodeWorkbenchOpen(false));
     else openBuildEditor();
   }, [codeWorkbenchOpen, openBuildEditor]);
-  const handleCreateSessionFromRail = useCallback(() => leaveRef.current.request(async () => {
-    // Keep the drawer over the old composer until the new session owns its draft.
-    await input.sessionRail.onCreateSession();
-    closeSessionRail();
-  }), [closeSessionRail, input.sessionRail]);
+  const handleCreateSessionFromRail = useCallback(
+    () =>
+      leaveRef.current.request(async () => {
+        // Keep the drawer over the old composer until the new session owns its draft.
+        await input.sessionRail.onCreateSession();
+        closeSessionRail();
+      }),
+    [closeSessionRail, input.sessionRail],
+  );
   const handleArchiveWorkspace = () => {
     if (
       !input.sessionRail.archiveWorkspaceEnabled ||
@@ -563,12 +364,15 @@ export function ThreadedSurfacePage({
       setDesktopSessionRailOpen(false);
     }
   }, [railDrawerLayout]);
-  useEffect(()=>{
-    if(previousSessionRef.current===activeProps?.selectedSessionId)return;
-    previousSessionRef.current=activeProps?.selectedSessionId;
-    if(!inspectorPinned){setActiveUtilityPanel(null);input.onDockOpenChange(false);}
+  useEffect(() => {
+    if (previousSessionRef.current === activeProps?.selectedSessionId) return;
+    previousSessionRef.current = activeProps?.selectedSessionId;
+    if (!inspectorPinned) {
+      setActiveUtilityPanel(null);
+      input.onDockOpenChange(false);
+    }
     setCodeWorkbenchOpen(false);
-  },[activeProps?.selectedSessionId,input,inspectorPinned]);
+  }, [activeProps?.selectedSessionId, input, inspectorPinned]);
   useEffect(() => {
     const request = input.activityOpenRequest ?? 0;
     if (request <= lastActivityOpenRequestRef.current) {
@@ -598,12 +402,21 @@ export function ThreadedSurfacePage({
     });
   }, [railOpen, embeddedRail]);
   useEffect(() => {
-    if (embeddedRail || !railOpen || typeof document === "undefined" || typeof document.addEventListener !== "function") {
+    if (
+      embeddedRail ||
+      !railOpen ||
+      typeof document === "undefined" ||
+      typeof document.addEventListener !== "function"
+    ) {
       return undefined;
     }
     const eventTarget = document;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented || !panelOwnsActiveFocus(railPanelRef.current, document.activeElement)) {
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        !panelOwnsActiveFocus(railPanelRef.current, document.activeElement)
+      ) {
         return;
       }
       event.preventDefault();
@@ -627,7 +440,11 @@ export function ThreadedSurfacePage({
     }
     const eventTarget = document;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented || !panelOwnsActiveFocus(contextPanelRef.current, document.activeElement)) {
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        !panelOwnsActiveFocus(contextPanelRef.current, document.activeElement)
+      ) {
         return;
       }
       event.preventDefault();
@@ -648,7 +465,9 @@ export function ThreadedSurfacePage({
       return undefined;
     }
     const handleKeyDown = (event: KeyboardEvent) => {
-      const activeDialog = (document.activeElement as HTMLElement | null)?.closest?.('[role="dialog"][aria-modal="true"]');
+      const activeDialog = (document.activeElement as HTMLElement | null)?.closest?.(
+        '[role="dialog"][aria-modal="true"]',
+      );
       if (event.key !== "Tab" || event.defaultPrevented || (activeDialog && activeDialog !== modalPanel)) {
         return;
       }
@@ -695,170 +514,32 @@ export function ThreadedSurfacePage({
       {activeProps && !dockOpen ? <div id="mc-next-threaded-context-panel" hidden aria-hidden="true" /> : null}
       {detailLeave.dialog}
 
-      <SidebarChatPortal><aside
-        id="mc-next-threaded-session-rail"
-        ref={railPanelRef}
-        className={`mc-next-threaded-rail${railDrawerOpen ? " open" : ""}`}
-        role={!embeddedRail && railDrawerLayout ? "dialog" : "complementary"}
-        aria-label="Threads"
-        aria-modal={!embeddedRail && railDrawerLayout ? true : undefined}
-        tabIndex={railDrawerLayout ? -1 : undefined}
-        aria-hidden={!railOpen}
-        inert={!railOpen}
-        hidden={!railDrawerLayout && !railOpen}
-      >
-        <div className="mc-next-threaded-rail-head">
-          <div>
-            <p>Threads</p>
-            <h2>{input.sessionRail.summaryTitle}</h2>
-            <span>Conversation, planning, and build threads stay connected by project.</span>
-          </div>
-          <button
-            ref={railCloseButtonRef}
-            type="button"
-            className="mc-next-threaded-menu-button"
-            onClick={() => closeSessionRail()}
-            aria-label="Close session rail"
-          >
-            <X size={16} />
-          </button>
-        </div>
-
-        <div className="mc-next-threaded-rail-actions">
-          <button type="button" className="mc-next-threaded-primary" onClick={handleCreateSessionFromRail}>
-            <MessageSquareText size={16} />
-            <span>New chat</span>
-          </button>
-          <button
-            type="button"
-            className={`mc-next-threaded-secondary${input.sessionRail.showProjectCreate ? " active" : ""}`}
-            onClick={input.sessionRail.onToggleProjectCreate}
-            aria-label={input.sessionRail.showProjectCreate ? "Hide project form" : "Create project"}
-          >
-            <FolderPlus size={15} />
-            <span>{input.sessionRail.showProjectCreate ? "Hide project" : "Project"}</span>
-          </button>
-        </div>
-
-        <label className="mc-next-threaded-search">
-          <Search size={15} />
-          <input
-            value={input.sessionRail.search}
-            onChange={(event) => input.sessionRail.onSearchChange(event.target.value)}
-            placeholder="Search threads"
-          />
-        </label>
-
-        <div className="mc-next-threaded-filters secondary">
-          <FilterChip
-            active={input.sessionRail.historyView === "active"}
-            onClick={() => input.sessionRail.onHistoryViewChange("active")}
-          >
-            Active
-          </FilterChip>
-          <FilterChip
-            active={input.sessionRail.historyView === "archived"}
-            onClick={() => input.sessionRail.onHistoryViewChange("archived")}
-          >
-            Archived
-          </FilterChip>
-          <FilterChip
-            active={input.sessionRail.selectedProjectId === "all"}
-            onClick={() => input.sessionRail.onSelectProjectId("all")}
-          >
-            All projects
-          </FilterChip>
-          <FilterChip
-            active={input.sessionRail.selectedProjectId === "none"}
-            onClick={() => input.sessionRail.onSelectProjectId("none")}
-          >
-            Unassigned
-          </FilterChip>
-        </div>
-
-        {input.sessionRail.availableFolders.length > 0 || input.sessionRail.selectedTag ? (
-          <div className="mc-next-threaded-folder-row">
-            <FilterChip
-              active={input.sessionRail.selectedFolderId === "all"}
-              onClick={() => input.sessionRail.onSelectFolderId("all")}
-            >
-              All folders
-            </FilterChip>
-            <FilterChip
-              active={input.sessionRail.selectedFolderId === "none"}
-              onClick={() => input.sessionRail.onSelectFolderId("none")}
-            >
-              No folder
-            </FilterChip>
-            {input.sessionRail.availableFolders.map((folder) => (
-              <FilterChip
-                key={folder.folderId}
-                active={input.sessionRail.selectedFolderId === folder.folderId}
-                onClick={() => input.sessionRail.onSelectFolderId(folder.folderId)}
-              >
-                {folder.name} · {folder.count}
-              </FilterChip>
-            ))}
-            {input.sessionRail.selectedTag ? (
-              <FilterChip active onClick={() => input.sessionRail.onSelectTag(null)}>
-                #{input.sessionRail.selectedTag}
-              </FilterChip>
-            ) : null}
-          </div>
-        ) : null}
-
-        {input.sessionRail.showProjectCreate ? (
-          <section className="mc-next-threaded-project-card">
-            <h3>Project</h3>
-            <input
-              value={input.sessionRail.projectName}
-              onChange={(event) => input.sessionRail.onProjectNameChange(event.target.value)}
-              placeholder="Project name"
-            />
-            <input
-              value={input.sessionRail.projectPath}
-              onChange={(event) => input.sessionRail.onProjectPathChange(event.target.value)}
-              placeholder="Project path (optional)"
-            />
-            <button type="button" className="mc-next-threaded-primary" onClick={input.sessionRail.onCreateProject}>
-              Create project
-            </button>
-          </section>
-        ) : null}
-
-        {input.sessionRail.archiveWorkspaceEnabled && input.sessionRail.onConfirmArchiveWorkspace ? (
-          <button
-            type="button"
-            className="mc-next-threaded-archive"
-            disabled={input.sessionRail.archiveWorkspacePending}
-            onClick={handleArchiveWorkspace}
-          >
-            {input.sessionRail.archiveWorkspacePending ? "Archiving..." : "Archive workspace threads"}
-          </button>
-        ) : null}
-
-        <SessionGroup
-          title="Recent threads"
-          items={missionSessionGroups.topLevelSessions}
-          count={missionSessionGroups.topLevelSessions.length}
-          selectedSessionId={input.sessionRail.selectedSessionId}
-          onSelectSession={(...args) => detailLeave.request(()=>{ input.sessionRail.onSelectSession(...args); if (sidebar?.mobile) sidebar.close(); })}
-          renderSessionLabel={input.sessionRail.renderSessionLabel}
-          nestedChildrenByParentId={missionSessionGroups.delegatedChildrenByParentId}
-          orphanDelegatedItems={missionSessionGroups.orphanDelegatedSessions}
-        />
-        <SessionGroup
-          title="External bindings"
-          items={externalSessionGroups.topLevelSessions}
-          count={externalSessionGroups.topLevelSessions.length}
-          selectedSessionId={input.sessionRail.selectedSessionId}
-          onSelectSession={(...args) => detailLeave.request(() => { input.sessionRail.onSelectSession(...args); if (sidebar?.mobile) sidebar.close(); })}
-          renderSessionLabel={input.sessionRail.renderSessionLabel}
-          nestedChildrenByParentId={externalSessionGroups.delegatedChildrenByParentId}
-          orphanDelegatedItems={externalSessionGroups.orphanDelegatedSessions}
-          emptyCopy="External bindings show up here when a thread is linked out."
-        />
-      </aside></SidebarChatPortal>
+      <ThreadedSessionRail
+        input={input}
+        railPanelRef={railPanelRef}
+        railCloseButtonRef={railCloseButtonRef}
+        railDrawerOpen={railDrawerOpen}
+        embeddedRail={embeddedRail}
+        railDrawerLayout={railDrawerLayout}
+        railOpen={railOpen}
+        closeSessionRail={closeSessionRail}
+        handleCreateSessionFromRail={handleCreateSessionFromRail}
+        handleArchiveWorkspace={handleArchiveWorkspace}
+        missionSessionGroups={missionSessionGroups}
+        externalSessionGroups={externalSessionGroups}
+        onSelectMissionSession={(...args) =>
+          detailLeave.request(() => {
+            input.sessionRail.onSelectSession(...args);
+            if (sidebar?.mobile) sidebar.close();
+          })
+        }
+        onSelectExternalSession={(...args) =>
+          detailLeave.request(() => {
+            input.sessionRail.onSelectSession(...args);
+            if (sidebar?.mobile) sidebar.close();
+          })
+        }
+      />
 
       {!embeddedRail && !railDrawerLayout && railOpen ? (
         <PaneResizeHandle
@@ -1006,7 +687,7 @@ export function ThreadedSurfacePage({
             {activeUtilityPanel && activeProps ? (
               <ThreadedUtilityPanel
                 pinned={inspectorPinned}
-                onTogglePinned={()=>setInspectorPinned(value=>!value)}
+                onTogglePinned={() => setInspectorPinned((value) => !value)}
                 activePanel={activeUtilityPanel}
                 activeProps={activeProps}
                 contextDockProps={input.contextDockProps}
@@ -1028,7 +709,9 @@ export function ThreadedSurfacePage({
                 permissionOverrideActive={Boolean(permissionState?.localOperatorOverrideId)}
                 onCopyTrustReport={onCopyTrustReport}
               />
-            ) : <p>Context evidence is unavailable.</p>}
+            ) : (
+              <p>Context evidence is unavailable.</p>
+            )}
           </aside>
         ) : null}
       </section>
@@ -1048,1641 +731,4 @@ export function ThreadedSurfacePage({
       <ThreadedBtwSideChatPanel sideChat={input.btwSideChatProps} />
     </div>
   );
-}
-
-function ThreadConversationSurface({
-  // `surface` is part of the typed prop contract but not consumed here; don't destructure it.
-  props,
-  dropTarget,
-  dockOpen,
-  railOpen,
-  changePlanReceipt,
-  onReviewChangePlan,
-  onToggleSessionRail,
-  onToggleActivity,
-  onOpenActivity,
-  permissionState,
-  onOpenUniversalRunDetail,
-}: {
-  surface: ChatMode;
-  props: MissionThreadedActiveSessionSurfaceProps;
-  dropTarget: MissionThreadedDropTargetProps;
-  dockOpen: boolean;
-  railOpen: boolean;
-  changePlanReceipt?: MissionThreadedRenderSurfaceInput["changePlanReceipt"];
-  onReviewChangePlan?: MissionThreadedRenderSurfaceInput["onReviewChangePlan"];
-  onToggleSessionRail: () => void;
-  onToggleActivity: () => void;
-  onOpenActivity: (turnId?: string) => void;
-  permissionState?: ThreadedPermissionState;
-  onOpenUniversalRunDetail?: (runId: string) => void;
-}) {
-
-  const approvalSignalText = `${props.trust.approvalsSummary} ${props.trust.runStateSummary ?? ""}`.toLowerCase();
-  const approvalsAreBlocking =
-    props.approvalsCount > 0 &&
-    (approvalSignalText.includes("approval") ||
-      approvalSignalText.includes("pending") ||
-      approvalSignalText.includes("waiting"));
-  const permissionSummary = formatThreadedPermissionSummary(permissionState);
-  const headerStatus = buildThreadedSessionStatusSummary({
-    trust: props.trust,
-    policySummary: permissionSummary,
-    policyOverrideActive: Boolean(permissionState?.localOperatorOverrideId),
-  });
-  // Nothing is "pending" when no provider exists; match the start canvas.
-  const headerModelSummary =
-    resolveChatRouteReadiness(props).state === "no_provider" ? "Not connected" : headerStatus.providerModelSummary;
-  const routeSelectionSummary = props.routePreflight?.selectionSource
-    ? `Selection: ${props.routePreflight.selectionSource}`
-    : (props.trust.selectionSourceSummary ?? "Route pending");
-  // A pending approval is explained once, by the composer's approval panel.
-  const composerGateHint =
-    !props.pendingApproval && props.pendingUserInput
-      ? "This chat needs one answer to continue. You can reply below."
-      : null;
-
-  return (
-    <div
-      className={`mc-next-threaded-dropzone${dropTarget.isDragActive ? " drop-active" : ""}`}
-      onDragEnter={dropTarget.onDragEnter}
-      onDragOver={dropTarget.onDragOver}
-      onDragLeave={dropTarget.onDragLeave}
-      onDrop={dropTarget.onDrop}
-    >
-      {dropTarget.isDragActive ? (
-        <div className="mc-next-threaded-drop-overlay">Drop files to attach to this thread</div>
-      ) : null}
-      <header className="mc-next-threaded-header">
-        <div className="mc-next-threaded-header-copy">
-          <ThreadedModeControl
-            mode={props.modeOverridePending ?? (props.autoRouteActive ? undefined : props.mode)}
-            preview={props.surfaceRoutePreview}
-            onOverride={props.onModeOverride}
-            variant="compact"
-          />
-          <div className="mc-next-threaded-title-block">
-            <h1>{props.sessionTitle}</h1>
-          </div>
-          <span>{props.summary}</span>
-        </div>
-
-        <div className="mc-next-threaded-header-actions">
-          <CompactModelControl
-            providerModelSummary={headerModelSummary}
-            providers={props.providerOptions}
-            providerId={props.selectedProviderId}
-            model={props.selectedModel}
-            disabled={props.modelSwitchDisabled}
-            onChangeProvider={props.onRequestProviderChange}
-            onChangeModel={props.onRequestModelChange}
-          />
-        <details className="mc-next-chat-details"><summary>Chat details</summary><p>{props.summary}</p><div className="mc-next-threaded-header-meta">
-          <div className="mc-next-threaded-chip-row">
-            <StatusChip
-              tone="muted"
-              title="Active provider and model for this session"
-              ariaLabel={`Model: ${headerStatus.providerModelSummary}`}
-            >
-              {headerStatus.providerModelSummary}
-            </StatusChip>
-            <StatusChip tone="muted" title="Route selection source" ariaLabel={`Route: ${routeSelectionSummary}`}>
-              {routeSelectionSummary}
-            </StatusChip>
-            <StatusChip
-              tone={props.trust.runtimeTone ?? "muted"}
-              title="Session runtime and active run state"
-              ariaLabel={`Runtime: ${headerStatus.runtimeRunSummary}`}
-            >
-              {headerStatus.runtimeRunSummary}
-            </StatusChip>
-            <StatusChip
-              tone="muted"
-              title="Pending tool and risk approvals waiting on you"
-              ariaLabel={`Approvals: ${headerStatus.approvalsSummary}`}
-            >
-              {headerStatus.approvalsSummary}
-            </StatusChip>
-            <StatusChip
-              tone={permissionState?.localOperatorOverrideId ? "warning" : "muted"}
-              title="Session policy posture"
-              ariaLabel={`Policy: ${headerStatus.compactPolicySummary}`}
-            >
-              {headerStatus.compactPolicySummary}
-            </StatusChip>
-          </div>
-        </div></details>
-
-          <div className={`mc-next-threaded-action-row${approvalsAreBlocking ? " has-priority-approval" : ""}`}>
-            <button
-              type="button"
-              className="mc-next-threaded-secondary mc-next-threaded-threads"
-              aria-controls="mc-next-threaded-session-rail"
-              aria-expanded={railOpen}
-              onClick={onToggleSessionRail}
-            >
-              <Menu size={14} />
-              Threads
-            </button>
-            <button
-              type="button"
-              className="mc-next-threaded-secondary mc-next-threaded-work-record"
-              aria-controls="mc-next-threaded-context-panel"
-              aria-expanded={dockOpen}
-              onClick={onToggleActivity}
-            >
-              <PanelRight size={14} />
-              Activity
-            </button>
-            {props.approvalsCount > 0 ? (
-              <button
-                type="button"
-                className={`mc-next-threaded-approval-review ${
-                  approvalsAreBlocking ? "mc-next-threaded-primary" : "mc-next-threaded-secondary"
-                }`}
-                onClick={() => props.onOpenApprovals()}
-              >
-                Approvals ({props.approvalsCount})
-              </button>
-            ) : null}
-          </div>
-        </div>
-      </header>
-
-      <section className="mc-next-threaded-conversation">
-        <div className="mc-next-threaded-timeline-region">
-          {props.selectedTurn?.trace.executionPlan ? (
-            <ExecutionPlanDisclosure
-              plan={props.selectedTurn.trace.executionPlan}
-              status={approvalsAreBlocking ? "Waiting for approval" : headerStatus.runtimeRunSummary}
-              tone={approvalsAreBlocking ? "warning" : (props.trust.runtimeTone ?? "muted")}
-            />
-          ) : null}
-          {props.historicalWindow || props.historicalWindowLoading || props.historicalWindowError ? (
-            <section className="mc-next-threaded-history-banner" aria-live="polite">
-              <div>
-                <strong>Viewing history around search result</strong>
-                <span>Sending is paused until you return to the latest conversation.</span>
-              </div>
-              <button type="button" className="mc-next-threaded-secondary" onClick={props.onReturnToLatest}>
-                Return to latest
-              </button>
-            </section>
-          ) : null}
-          {props.sessionControlBanner ? <SessionControlBanner {...props.sessionControlBanner} /> : null}
-          {props.chatTimerPanel ? <ChatTimerPanel panel={props.chatTimerPanel} /> : null}
-          {props.runVariablePanel ? <RunVariablePanel panel={props.runVariablePanel} /> : null}
-          <div className="mc-next-threaded-thread-card">
-            {changePlanReceipt ? <ChatChangePlanCard {...changePlanReceipt} /> : null}
-            {props.historicalWindow || props.historicalWindowLoading || props.historicalWindowError ? (
-              <HistoricalConversationView props={props} />
-            ) : (
-              <ThreadedTimeline
-                props={props}
-                onReviewChangePlan={onReviewChangePlan}
-                onOpenActivity={onOpenActivity}
-                onOpenUniversalRunDetail={onOpenUniversalRunDetail}
-              />
-            )}
-          </div>
-        </div>
-        <div className="mc-next-threaded-composer-card">
-          {props.historicalWindow || props.historicalWindowLoading || props.historicalWindowError ? (
-            <p className="mc-next-threaded-history-send-lock">
-              Return to latest before sending or editing this conversation.
-            </p>
-          ) : null}
-          {composerGateHint ? (
-            <p className="mc-next-threaded-composer-gate-hint" role="status">
-              {composerGateHint}
-            </p>
-          ) : null}
-          <ThreadedComposer props={props} />
-        </div>
-      </section>
-
-
-    </div>
-  );
-}
-
-function CompactModelControl({
-  providerModelSummary,
-  providers,
-  providerId,
-  model,
-  disabled,
-  onChangeProvider,
-  onChangeModel,
-}: {
-  providerModelSummary: string;
-  providers: MissionThreadedActiveSessionSurfaceProps["providerOptions"];
-  providerId: MissionThreadedActiveSessionSurfaceProps["selectedProviderId"];
-  model: MissionThreadedActiveSessionSurfaceProps["selectedModel"];
-  disabled: MissionThreadedActiveSessionSurfaceProps["modelSwitchDisabled"];
-  onChangeProvider: MissionThreadedActiveSessionSurfaceProps["onRequestProviderChange"];
-  onChangeModel: MissionThreadedActiveSessionSurfaceProps["onRequestModelChange"];
-}) {
-  const [open, setOpen] = useState(false);
-  const controlsId = useId();
-
-  return (
-    <details
-      className="mc-next-threaded-model-control"
-      open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-    >
-      <summary aria-expanded={open} aria-controls={controlsId} title="View or change the model for this chat">
-        <span>Model</span>
-        <strong>{providerModelSummary}</strong>
-      </summary>
-      <div id={controlsId} className="mc-next-threaded-model-control-body">
-        <ChatModelPicker
-          providers={providers}
-          providerId={providerId}
-          model={model}
-          disabled={disabled}
-          onChangeProvider={onChangeProvider}
-          onChangeModel={onChangeModel}
-        />
-      </div>
-    </details>
-  );
-}
-
-function ExecutionPlanDisclosure({
-  plan,
-  status,
-  tone,
-}: {
-  plan: NonNullable<NonNullable<MissionThreadedActiveSessionSurfaceProps["selectedTurn"]>["trace"]["executionPlan"]>;
-  status: string;
-  tone: StatusChipTone;
-}) {
-  const [open, setOpen] = useState(false);
-  const controlsId = useId();
-  return (
-    <details
-      className="mc-next-threaded-execution-overview"
-      open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-    >
-      <summary aria-expanded={open} aria-controls={controlsId}>
-        <span>Current plan</span>
-        <StatusChip tone={tone}>{status}</StatusChip>
-      </summary>
-      <div id={controlsId}>
-        <ChatExecutionPlanSummary plan={plan} />
-      </div>
-    </details>
-  );
-}
-
-function HistoricalConversationView({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
-  if (props.historicalWindowLoading) {
-    return <div className="mc-next-threaded-history-state">Loading the exact historical message…</div>;
-  }
-  if (props.historicalWindowError) {
-    return (
-      <div className="mc-next-threaded-history-state error" role="alert">
-        Historical message could not be loaded. {props.historicalWindowError}
-      </div>
-    );
-  }
-  const window = props.historicalWindow;
-  if (!window) return null;
-  if (window.anchor.state === "unavailable") {
-    return (
-      <div className="mc-next-threaded-history-state" role="status">
-        This result is no longer available because the message was deleted or compacted.
-      </div>
-    );
-  }
-  if (window.anchor.state === "identity_mismatch") {
-    return (
-      <div className="mc-next-threaded-history-state error" role="alert">
-        The result identity no longer matches this conversation. No newer message was substituted.
-      </div>
-    );
-  }
-  return (
-    <div className="mc-next-threaded-history-list" aria-label="Historical conversation window">
-      {window.hasOlder && window.olderCursor ? (
-        <button
-          type="button"
-          className="mc-next-threaded-history-page-button"
-          disabled={props.historicalContinuationLoading !== null}
-          onClick={() => props.onLoadHistoricalContinuation("older")}
-        >
-          {props.historicalContinuationLoading === "older" ? "Loading older…" : "Load older messages"}
-        </button>
-      ) : null}
-      {props.historicalContinuationError ? (
-        <p className="mc-next-threaded-history-page-error" role="alert">
-          {props.historicalContinuationError}
-        </p>
-      ) : null}
-      {window.items.map((entry) => (
-        <article
-          key={`${entry.message.messageId}:${entry.sequence}`}
-          className={`mc-next-threaded-history-message role-${entry.message.role}${entry.isAnchor ? " anchor" : ""}`}
-          aria-current={entry.isAnchor ? "true" : undefined}
-          aria-label={entry.isAnchor ? "Exact search result" : `${entry.message.role} historical message`}
-        >
-          <header>
-            <strong>
-              {entry.message.role === "assistant" ? "Assistant" : entry.message.role === "user" ? "You" : "System"}
-            </strong>
-            <time dateTime={entry.message.timestamp}>{formatRelativeTime(entry.message.timestamp)}</time>
-          </header>
-          {entry.isAnchor ? <span className="mc-next-threaded-history-anchor-label">Exact search result</span> : null}
-          <p>{entry.message.content}</p>
-        </article>
-      ))}
-      {window.hasNewer && window.newerCursor ? (
-        <button
-          type="button"
-          className="mc-next-threaded-history-page-button"
-          disabled={props.historicalContinuationLoading !== null}
-          onClick={() => props.onLoadHistoricalContinuation("newer")}
-        >
-          {props.historicalContinuationLoading === "newer" ? "Loading newer…" : "Load newer messages"}
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-export function getArchiveActionLabel(lifecycleStatus: string, pending: boolean) {
-  if (pending) return lifecycleStatus === "archived" ? "Restoring..." : "Archiving...";
-  return lifecycleStatus === "archived" ? "Restore" : "Archive";
-}
-
-type CodeWorkflowPanel = Extract<NonNullable<MissionThreadedRenderSurfaceInput["workflowPanel"]>, { kind: "code" }>;
-
-function clampPaneWidth(value: number, minWidth: number, maxWidth: number): number {
-  return Math.min(maxWidth, Math.max(minWidth, Math.round(value)));
-}
-
-function useHorizontalPaneResize({
-  direction,
-  initialWidth,
-  maxWidth,
-  minWidth,
-}: {
-  direction: "left" | "right";
-  initialWidth: number;
-  maxWidth: number;
-  minWidth: number;
-}) {
-  const [width, setWidth] = useState(initialWidth);
-  const [dragging, setDragging] = useState(false);
-  const dragStateRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
-
-  const resizeBy = useCallback(
-    (delta: number) => {
-      setWidth((current) => clampPaneWidth(current + delta, minWidth, maxWidth));
-    },
-    [maxWidth, minWidth],
-  );
-
-  const reset = useCallback(() => {
-    setWidth(initialWidth);
-  }, [initialWidth]);
-
-  const handlePointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLButtonElement>) => {
-      if (event.button !== 0 || typeof window === "undefined" || window.innerWidth < 1024) {
-        return;
-      }
-      dragStateRef.current = {
-        pointerId: event.pointerId,
-        startWidth: width,
-        startX: event.clientX,
-      };
-      event.currentTarget.setPointerCapture?.(event.pointerId);
-      setDragging(true);
-      event.preventDefault();
-    },
-    [width],
-  );
-
-  const handleKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLButtonElement>) => {
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        resizeBy(-24);
-        return;
-      }
-      if (event.key === "ArrowRight") {
-        event.preventDefault();
-        resizeBy(24);
-        return;
-      }
-      if (event.key === "Home") {
-        event.preventDefault();
-        setWidth(minWidth);
-        return;
-      }
-      if (event.key === "End") {
-        event.preventDefault();
-        setWidth(maxWidth);
-        return;
-      }
-      if (event.key === "Enter") {
-        event.preventDefault();
-        reset();
-      }
-    },
-    [maxWidth, minWidth, reset, resizeBy],
-  );
-
-  useEffect(() => {
-    if (!dragging || typeof window === "undefined") {
-      return undefined;
-    }
-    const eventTarget = window;
-
-    const handlePointerMove = (event: PointerEvent) => {
-      const dragState = dragStateRef.current;
-      if (!dragState || event.pointerId !== dragState.pointerId) {
-        return;
-      }
-      const deltaX = event.clientX - dragState.startX;
-      const directedDelta = direction === "right" ? deltaX : -deltaX;
-      setWidth(clampPaneWidth(dragState.startWidth + directedDelta, minWidth, maxWidth));
-    };
-
-    const handlePointerUp = (event: PointerEvent) => {
-      const dragState = dragStateRef.current;
-      if (!dragState || event.pointerId !== dragState.pointerId) {
-        return;
-      }
-      dragStateRef.current = null;
-      setDragging(false);
-    };
-
-    eventTarget.addEventListener("pointermove", handlePointerMove);
-    eventTarget.addEventListener("pointerup", handlePointerUp);
-    eventTarget.addEventListener("pointercancel", handlePointerUp);
-    return () => {
-      eventTarget.removeEventListener("pointermove", handlePointerMove);
-      eventTarget.removeEventListener("pointerup", handlePointerUp);
-      eventTarget.removeEventListener("pointercancel", handlePointerUp);
-    };
-  }, [direction, dragging, maxWidth, minWidth]);
-
-  return {
-    dragging,
-    handleKeyDown,
-    handlePointerDown,
-    reset,
-    width,
-  };
-}
-
-function PaneResizeHandle({
-  ariaLabel,
-  className,
-  dragging,
-  maxWidth,
-  minWidth,
-  onDoubleClick,
-  onKeyDown,
-  onPointerDown,
-  width,
-}: {
-  ariaLabel: string;
-  className: string;
-  dragging: boolean;
-  maxWidth: number;
-  minWidth: number;
-  onDoubleClick: () => void;
-  onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => void;
-  onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void;
-  width: number;
-}) {
-  return (
-    <button
-      type="button"
-      role="separator"
-      aria-label={ariaLabel}
-      aria-orientation="vertical"
-      aria-valuemax={maxWidth}
-      aria-valuemin={minWidth}
-      aria-valuenow={Math.round(width)}
-      className={`mc-next-threaded-resize-handle ${className}${dragging ? " dragging" : ""}`}
-      onDoubleClick={onDoubleClick}
-      onKeyDown={onKeyDown}
-      onPointerDown={onPointerDown}
-      title="Drag to resize. Double-click to reset."
-    />
-  );
-}
-
-function ThreadedUtilityPanel({
-  pinned, onTogglePinned,
-  activePanel,
-  activeProps,
-  changePlans,
-  contextDockProps,
-  onClose,
-  onOpenBuildEditor,
-  onOpenUniversalRunDetail,
-  onOpenTasks,
-  onSelectPanel,
-  onSelectSession,
-  surface,
-  workflowPanel,
-}: {
-  pinned: boolean; onTogglePinned:()=>void;
-  activePanel: ThreadedUtilityPanelId;
-  activeProps: MissionThreadedActiveSessionSurfaceProps;
-  changePlans?: readonly ChangePlanRecord[];
-  contextDockProps: MissionThreadedRenderSurfaceInput["contextDockProps"];
-  onClose: () => void;
-  onOpenBuildEditor?: () => void;
-  onOpenUniversalRunDetail?: (runId: string) => void;
-  onOpenTasks?: () => void;
-  onSelectPanel: (panel: ThreadedUtilityPanelId) => void;
-  onSelectSession: (sessionId: string, options?: { turnId?: string | null }) => void;
-  surface: ChatMode;
-  workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"];
-}) {
-  const activeTab = getUtilityTab(activePanel);
-  const meta = UTILITY_TAB_ITEMS.find((item) => item.id === activeTab)!;
-  const [executionDetailsOpen, setExecutionDetailsOpen] = useState(activePanel === "trace" || activePanel === "terminal");
-  useEffect(() => {
-    if (activePanel === "trace" || activePanel === "terminal") setExecutionDetailsOpen(true);
-    else setExecutionDetailsOpen(false);
-  }, [activePanel]);
-
-  return (
-    <div className="mc-next-utility-panel" data-mode={surface} data-panel={activePanel}>
-      <div className="mc-next-utility-panel-head">
-        <div>
-          <h3>{meta.label}</h3>
-        </div>
-        <button type="button" className="mc-next-panel-button" onClick={onTogglePinned} aria-label={pinned?"Unpin Chat details":"Pin Chat details"} aria-pressed={pinned}>{pinned?<PinOff size={16}/>:<Pin size={16}/>}</button>
-        <button type="button" className="mc-next-panel-button" onClick={onClose}>
-          Close
-        </button>
-      </div>
-      <div className="mc-next-utility-panel-tabs" role="group" aria-label="Chat details tabs">
-        {UTILITY_TAB_ITEMS.map((item) => {
-          const Icon = item.icon;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              aria-pressed={activeTab === item.id}
-              className={`mc-next-utility-panel-tab${activeTab === item.id ? " active" : ""}`}
-              onClick={() => onSelectPanel(item.panel)}
-            >
-              <Icon size={14} />
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
-      </div>
-      {activeTab === "activity" ? (
-        <div className="mc-next-utility-panel-content" aria-label="Chat activity">
-          <UtilityPreviewPanel
-            activeProps={activeProps}
-            changePlans={changePlans}
-            onOpenBuildEditor={onOpenBuildEditor}
-            onSelectPanel={(panel) => {
-              if (panel === "trace") setExecutionDetailsOpen(true);
-              onSelectPanel(panel);
-            }}
-          />
-          <UtilityApprovalState activeProps={activeProps} />
-          {activeProps.sessionStatusPanel ? (
-            <details className="mc-next-chat-evidence mc-next-utility-session-status">
-              <summary>Gateway session status</summary>
-              <ChatSessionStatusPanel panel={{ ...activeProps.sessionStatusPanel, open: true }} showClose={false} />
-            </details>
-          ) : (
-            <section className="mc-next-utility-card"><h4>Session status</h4><p>Canonical session status is unavailable in this runtime.</p></section>
-          )}
-          {workflowPanel?.kind === "cowork" ? (
-            <Suspense fallback={<p>Loading planning controls…</p>}><LazyThreadedWorkflowPanel panel={workflowPanel} /></Suspense>
-          ) : <UtilityPlanPanel activeProps={activeProps} contextDockProps={contextDockProps} />}
-          <UtilityBackgroundTasksPanel
-            activeProps={activeProps}
-            onOpenUniversalRunDetail={onOpenUniversalRunDetail}
-            onOpenTasks={onOpenTasks}
-            onSelectSession={onSelectSession}
-          />
-          <details
-            className="mc-next-chat-evidence mc-next-utility-execution-details"
-            open={executionDetailsOpen}
-            onToggle={(event) => setExecutionDetailsOpen(event.currentTarget.open)}
-          >
-            <summary>Execution details</summary>
-            {contextDockProps ? (
-              <ThreadedContextDrawer key={`${activeProps.selectedSessionId}:trace`} surface={surface} props={contextDockProps} focusedTab="trace" />
-            ) : <p>Trace details are unavailable.</p>}
-            <UtilityTerminalPanel workflowPanel={workflowPanel} />
-          </details>
-        </div>
-      ) : activeTab === "context" ? (
-        contextDockProps
-          ? <ThreadedContextDrawer key={`${activeProps.selectedSessionId}:context`} surface={surface} props={contextDockProps} focusedTab="context" />
-          : <p>Context evidence is unavailable.</p>
-      ) : activeTab === "outputs" ? (
-        <div className="mc-next-utility-panel-content" aria-label="Chat outputs">
-          {activeProps.activeGeneratedArtifact ? (
-            <section className="mc-next-utility-card">
-              <h4>{activeProps.activeGeneratedArtifact.title}</h4>
-              <GeneratedArtifactViewer artifact={activeProps.activeGeneratedArtifact} />
-              {activeProps.onCloseGeneratedArtifact ? <button type="button" className="mc-next-panel-button" onClick={activeProps.onCloseGeneratedArtifact}>Close artifact preview</button> : null}
-            </section>
-          ) : null}
-          {contextDockProps ? (
-            <ThreadedContextDrawer key={`${activeProps.selectedSessionId}:documents`} surface={surface} props={contextDockProps} focusedTab="documents" />
-          ) : <p>Documents and artifacts are unavailable.</p>}
-          <UtilityDiffPanel workflowPanel={workflowPanel} />
-          <UtilityFilesPanel workflowPanel={workflowPanel} />
-        </div>
-      ) : (
-        <div className="mc-next-utility-panel-content" aria-label="Chat settings">
-          {contextDockProps ? <>
-            <section><h4>Session settings</h4><ThreadedContextDrawer key={`${activeProps.selectedSessionId}:session`} surface={surface} props={contextDockProps} focusedTab="session" /></section>
-            <section><h4>Assist settings</h4><ThreadedContextDrawer key={`${activeProps.selectedSessionId}:assist`} surface={surface} props={contextDockProps} focusedTab="assist" /></section>
-          </> : <p>Chat settings are unavailable.</p>}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function pluralApprovals(count: number): string {
-  return `${count} approval${count === 1 ? " is" : "s are"}`;
-}
-
-/**
- * Activity's single approval entry point. Canonical session status is scoped to
- * this chat but only loads on request; until then the shell's pending count is
- * shown for what it is: a workspace-wide figure.
- */
-function UtilityApprovalState({ activeProps }: { activeProps: MissionThreadedActiveSessionSurfaceProps }) {
-  const panel = activeProps.sessionStatusPanel;
-  const attention = panel?.status?.attention;
-  const chatCount = attention?.availability === "available" ? attention.value.pendingApprovals.length : null;
-  const reviewCount = chatCount ?? activeProps.approvalsCount;
-  const message =
-    chatCount !== null
-      ? chatCount > 0
-        ? `${pluralApprovals(chatCount)} waiting for your review.`
-        : "No approval is waiting for this chat."
-      : attention?.availability === "unavailable"
-        ? `Canonical approval status is unavailable: ${attention.reason}`
-        : panel?.error
-          ? `Canonical approval status is unavailable: ${panel.error}`
-          : panel?.loading
-            ? "Checking canonical approval status…"
-            : activeProps.approvalsCount > 0
-              ? `${pluralApprovals(activeProps.approvalsCount)} waiting in this workspace.`
-              : "No approvals are waiting in this workspace.";
-
-  return (
-    <section className="mc-next-utility-card" aria-label="Approval state">
-      <h4>Approval state</h4>
-      <p role="status">{message}</p>
-      {reviewCount > 0 ? (
-        <button type="button" className="mc-next-panel-button" onClick={() => activeProps.onOpenApprovals()}>
-          Review approvals
-        </button>
-      ) : null}
-    </section>
-  );
-}
-
-function UtilityPreviewPanel({
-  onSelectPanel,
-  activeProps,
-  changePlans,
-  onOpenBuildEditor,
-}: {
-  activeProps: MissionThreadedActiveSessionSurfaceProps;
-  onSelectPanel: (panel: ThreadedUtilityPanelId) => void;
-  changePlans?: readonly ChangePlanRecord[];
-  onOpenBuildEditor?: () => void;
-}) {
-  const selectedTurn = activeProps.selectedTurn;
-  const assistantPreview = formatUtilitySnippet(selectedTurn?.assistantMessage?.content);
-  const userPreview = formatUtilitySnippet(selectedTurn?.userMessage?.content);
-  const toolRuns = selectedTurn?.toolRuns ?? [];
-  const citations = selectedTurn?.citations ?? [];
-  const generatedArtifacts = selectedTurn?.generatedArtifacts ?? [];
-  const threadTurnCount = activeProps.thread?.turns.length ?? 0;
-  const sessionLabel = activeProps.selectedSessionId ? shortId(activeProps.selectedSessionId) : "New chat";
-
-  if (activeProps.activeGeneratedArtifact) {
-    return (
-      <section className="mc-next-utility-card mc-next-work-record-card">
-        <div className="mc-next-work-record-section-head">
-          <div>
-            <p className="mc-next-panel-kicker">Artifact preview</p>
-            <h4>{activeProps.activeGeneratedArtifact.title}</h4>
-          </div>
-          {activeProps.onCloseGeneratedArtifact ? (
-            <button type="button" className="mc-next-panel-button" onClick={activeProps.onCloseGeneratedArtifact}>
-              Close
-            </button>
-          ) : null}
-        </div>
-        <GeneratedArtifactViewer artifact={activeProps.activeGeneratedArtifact} compact />
-        <UtilityChangePlanHistory changePlans={changePlans ?? []} />
-        <div className="mc-next-work-record-actions">
-          <ActivitySessionActions activeProps={activeProps} onOpenBuildEditor={onOpenBuildEditor} />
-        </div>
-      </section>
-    );
-  }
-
-  return (
-    <section className="mc-next-utility-card mc-next-work-record-card">
-      <h4 className="mc-next-chat-record-title">Work Record</h4>
-      <details className="mc-next-chat-evidence"><summary>Session summary</summary>
-      <div className="mc-next-work-record-metrics" aria-label="Thread record summary">
-        <div>
-          <span>Session</span>
-          <strong>{sessionLabel}</strong>
-        </div>
-        <div>
-          <span>Turns</span>
-          <strong>{threadTurnCount}</strong>
-        </div>
-        <div>
-          <span>Approvals</span>
-          <strong>{activeProps.approvalsCount}</strong>
-        </div>
-      </div>
-      </details>
-      {selectedTurn ? (
-        <>
-          <details className="mc-next-chat-evidence"><summary>Selected turn · {selectedTurn.trace.status}</summary>
-          <div className="mc-next-work-record-section">
-            <div className="mc-next-work-record-section-head">
-              <div>
-                <p className="mc-next-panel-kicker">Selected turn</p>
-                <h5>{shortId(selectedTurn.turnId)}</h5>
-              </div>
-              <StatusChip tone={selectedTurn.trace.status === "completed" ? "success" : "muted"}>
-                {selectedTurn.trace.status}
-              </StatusChip>
-            </div>
-            <p className="mc-next-work-record-snippet">
-              <strong>User:</strong> {userPreview}
-            </p>
-            <p className="mc-next-work-record-snippet">
-              <strong>Assistant:</strong> {assistantPreview}
-            </p>
-          </div>
-          </details>
-          <details className="mc-next-chat-evidence"><summary>Artifacts and citations · {generatedArtifacts.length + citations.length}</summary>
-          <div className="mc-next-work-record-section">
-            <div className="mc-next-work-record-section-head">
-              <h5>Artifacts and citations</h5>
-              <div className="mc-next-utility-chip-row">
-                <StatusChip tone={generatedArtifacts.length > 0 ? "success" : "muted"}>
-                  {generatedArtifacts.length} artifact{generatedArtifacts.length === 1 ? "" : "s"}
-                </StatusChip>
-                <StatusChip tone={citations.length > 0 ? "success" : "muted"}>
-                  {citations.length} citation{citations.length === 1 ? "" : "s"}
-                </StatusChip>
-              </div>
-            </div>
-            {generatedArtifacts.length > 0 ? (
-              <ul className="mc-next-work-record-list">
-                {generatedArtifacts.map((artifact) => (
-                  <li key={artifact.artifactId}>
-                    <button type="button" className="mc-next-panel-link" onClick={() => activeProps.onOpenGeneratedArtifact(selectedTurn.turnId, artifact.artifactId)}>{artifact.title}</button>
-                    <strong>{artifact.kind}</strong>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p>No generated artifacts are attached to this turn.</p>
-            )}
-            {citations.length > 0 ? (
-              <ul className="mc-next-work-record-list">
-                {citations.map((citation) => (
-                  <li key={citation.citationId}>
-                    {/^https?:\/\//i.test(citation.url) ? <a href={citation.url} target="_blank" rel="noreferrer">{citation.title ?? citation.url}</a> : <span>{citation.title ?? citation.url}</span>}
-                    <strong>{citation.sourceType ?? "source"}</strong>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-          </details>
-          <div className="mc-next-work-record-section">
-            <div className="mc-next-work-record-section-head">
-              <h5>Recent tool events</h5>
-              <StatusChip tone={toolRuns.length > 0 ? "warning" : "muted"}>
-                {toolRuns.length} event{toolRuns.length === 1 ? "" : "s"}
-              </StatusChip>
-            </div>
-            {toolRuns.length > 0 ? (
-              <ul className="mc-next-work-record-list">
-                {toolRuns.map((toolRun) => (
-                  <li key={toolRun.toolRunId}>
-                    <span>{toolRun.toolName}</span>
-                    <strong>{toolRun.status}</strong>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p>No tool events are recorded on the selected turn.</p>
-            )}
-          </div>
-        </>
-      ) : (
-        <p>Select a turn or open a generated artifact to preview the thread record here.</p>
-      )}
-      <UtilityChangePlanHistory changePlans={changePlans ?? []} />
-      <div className="mc-next-work-record-actions">
-        {selectedTurn ? (
-          <>
-            <button
-              type="button"
-              className="mc-next-panel-button"
-              disabled={generatedArtifacts.length === 0}
-              onClick={() => activeProps.onOpenGeneratedArtifact(selectedTurn.turnId)}
-            >
-              Open artifact
-            </button>
-            <button
-              type="button"
-              className="mc-next-panel-button"
-              onClick={() => onSelectPanel("trace")}
-            >
-              Trace turn
-            </button>
-          </>
-        ) : null}
-        {activeProps.onExportRunBundle ? (
-          <button type="button" className="mc-next-panel-button" onClick={activeProps.onExportRunBundle}>
-            Export proof
-          </button>
-        ) : null}
-        <ActivitySessionActions activeProps={activeProps} onOpenBuildEditor={onOpenBuildEditor} />
-        <button type="button" className="mc-next-panel-link" onClick={activeProps.onOpenLibraryArtifacts}>
-          Library
-        </button>
-        <button type="button" className="mc-next-panel-link" onClick={activeProps.onOpenOpsRuntime}>
-          Ops
-        </button>
-      </div>
-    </section>
-  );
-}
-
-function UtilityChangePlanHistory({ changePlans }: { changePlans: readonly ChangePlanRecord[] }) {
-  const [open, setOpen] = useState(false);
-  const controlsId = useId();
-  if (changePlans.length === 0) {
-    return null;
-  }
-
-  return (
-    <details
-      className="mc-next-work-record-history"
-      open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-    >
-      <summary aria-expanded={open} aria-controls={controlsId}>
-        Activity history ({changePlans.length})
-      </summary>
-      <div id={controlsId}>
-        <p>Completed receipts stay here after you dismiss them from the conversation.</p>
-        <ul className="mc-next-work-record-list">
-          {changePlans.map((plan) => (
-            <ChangePlanHistoryItem key={`${plan.planId}:${plan.revision}:${plan.status}`} plan={plan} />
-          ))}
-        </ul>
-      </div>
-    </details>
-  );
-}
-
-function ChangePlanHistoryItem({ plan }: { plan: ChangePlanRecord }) {
-  const [open, setOpen] = useState(false);
-  const controlsId = useId();
-  const title = plan.kind === "session_model" ? "Model change" : plan.title;
-  const model =
-    plan.request.kind === "session_model" || plan.request.kind === "installation_default_model"
-      ? [plan.request.providerId, plan.request.model].filter(Boolean).join(" / ")
-      : null;
-  const evidence = [...plan.evidenceRefs, ...(plan.result?.evidenceRefs ?? [])];
-
-  return (
-    <li className="mc-next-work-record-history-item">
-      <div>
-        <strong>{title}</strong>
-        <span>{model || plan.status}</span>
-      </div>
-      <StatusChip tone={plan.status === "completed" || plan.status === "applied" ? "success" : "muted"}>
-        {plan.status}
-      </StatusChip>
-      <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-        <summary aria-expanded={open} aria-controls={controlsId}>
-          Details
-        </summary>
-        <div id={controlsId}>
-          <span>Scope: {plan.scope}</span>
-          <span>Revision: {plan.revision}</span>
-          <span>Risk: {plan.risk}</span>
-          <span>Impact: {plan.impact}</span>
-          {plan.result?.summary ? <span>Result: {plan.result.summary}</span> : null}
-          {evidence.length > 0 ? <span>Evidence: {evidence.join(", ")}</span> : null}
-        </div>
-      </details>
-    </li>
-  );
-}
-
-function ActivitySessionActions({
-  activeProps,
-  onOpenBuildEditor,
-}: {
-  activeProps: MissionThreadedActiveSessionSurfaceProps;
-  onOpenBuildEditor?: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const controlsId = useId();
-
-  return (
-    <>
-      {onOpenBuildEditor ? <button type="button" className="mc-next-panel-button" onClick={onOpenBuildEditor}>Open build editor</button> : null}
-    <details
-      className="mc-next-work-record-session-actions"
-      open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-    >
-      <summary className="mc-next-panel-button" aria-expanded={open} aria-controls={controlsId}>
-        Session actions
-      </summary>
-      <div id={controlsId}>
-        <button
-          type="button"
-          className="mc-next-panel-button"
-          disabled={activeProps.sessionArchivePending}
-          onClick={activeProps.onToggleArchiveSession}
-        >
-          {getArchiveActionLabel(activeProps.sessionLifecycleStatus, activeProps.sessionArchivePending)}
-        </button>
-      </div>
-    </details>
-    </>
-  );
-}
-
-function UtilityDiffPanel({ workflowPanel }: { workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"] }) {
-  const codePanel = getCodeWorkflowPanel(workflowPanel);
-  const diff = codePanel?.props.diff;
-  const selectedFileDiff = codePanel?.props.selectedFileDiff;
-  const changedFiles = codePanel?.props.workbenchTree?.changedFiles ?? diff?.changedFiles ?? [];
-  const diffText =
-    diff?.diff ||
-    [selectedFileDiff?.originalContent, selectedFileDiff?.modifiedContent].filter(Boolean).join("\n\n---\n\n");
-
-  return (
-    <section className="mc-next-utility-card">
-      <h4>Repo diff</h4>
-      <div className="mc-next-utility-chip-row">
-        <StatusChip tone={changedFiles.length > 0 ? "warning" : "muted"}>{changedFiles.length} changed</StatusChip>
-        {diff?.summary ? (
-          <StatusChip tone="muted">
-            +{diff.summary.additions} / -{diff.summary.deletions}
-          </StatusChip>
-        ) : null}
-      </div>
-      {changedFiles.length > 0 ? (
-        <ul className="mc-next-utility-list">
-          {changedFiles.slice(0, 12).map((file) => (
-            <li key={file}>{file}</li>
-          ))}
-        </ul>
-      ) : (
-        <p>No worktree diff is open for this session.</p>
-      )}
-      {diffText ? <pre className="mc-next-utility-pre">{formatUtilitySnippet(diffText, 2400)}</pre> : null}
-    </section>
-  );
-}
-
-function UtilityTerminalPanel({
-  workflowPanel,
-}: {
-  workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"];
-}) {
-  const codePanel = getCodeWorkflowPanel(workflowPanel);
-  const output = codePanel?.props.output;
-  const helperRuns = output?.helperRuns ?? [];
-  const terminalText = formatUtilitySnippet(output?.output, 2400);
-
-  return (
-    <section className="mc-next-utility-card">
-      <h4>Run log</h4>
-      <div className="mc-next-utility-chip-row">
-        <StatusChip tone={helperRuns.length > 0 ? "success" : "muted"}>
-          {helperRuns.length} command record{helperRuns.length === 1 ? "" : "s"}
-        </StatusChip>
-        <StatusChip tone="muted">{codePanel?.props.workbenchState?.validationStatus ?? "validation idle"}</StatusChip>
-      </div>
-      {output?.output ? <pre className="mc-next-utility-pre terminal">{terminalText}</pre> : <p>No run output yet.</p>}
-      {helperRuns.length > 0 ? (
-        <ul className="mc-next-utility-list">
-          {helperRuns.slice(0, 5).map((run) => (
-            <li key={run.runId}>
-              {run.language ?? "command"} · {run.status ?? "recorded"}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </section>
-  );
-}
-
-function UtilityFilesPanel({ workflowPanel }: { workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"] }) {
-  const codePanel = getCodeWorkflowPanel(workflowPanel);
-  const files = (codePanel?.props.workbenchTree?.items ?? []).filter((item) => item.kind === "file");
-  const hasDirtyDraft = Boolean(codePanel?.props.hasDirtyDraft);
-  const selectedPath = codePanel?.props.selectedFile?.path;
-
-  return (
-    <section className="mc-next-utility-card">
-      <h4>Workbench files</h4>
-      <div className="mc-next-utility-chip-row">
-        <StatusChip tone={files.length > 0 ? "success" : "muted"}>{files.length} files</StatusChip>
-        {hasDirtyDraft ? <StatusChip tone="warning">Unsaved draft</StatusChip> : null}
-      </div>
-      {files.length > 0 ? (
-        <ul className="mc-next-utility-file-list">
-          {files.slice(0, 28).map((file) => (
-            <li key={file.path}>
-              <button
-                type="button"
-                className={`mc-next-panel-button${selectedPath === file.path ? " active" : ""}`}
-                disabled={hasDirtyDraft && selectedPath !== file.path}
-                onClick={() => codePanel?.props.onSelectFile(file.path)}
-              >
-                <span>{file.path}</span>
-                {file.changed ? <span>changed</span> : null}
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p>No workbench files are loaded yet.</p>
-      )}
-    </section>
-  );
-}
-
-function UtilityBackgroundTasksPanel({
-  activeProps,
-  onOpenUniversalRunDetail,
-  onOpenTasks,
-  onSelectSession,
-}: {
-  activeProps: MissionThreadedActiveSessionSurfaceProps;
-  onOpenUniversalRunDetail?: (runId: string) => void;
-  onOpenTasks?: () => void;
-  onSelectSession: (sessionId: string, options?: { turnId?: string | null }) => void;
-}) {
-  return (
-    <DurableBackgroundTaskRail
-      parentRunId={activeProps.selectedTurn?.trace.durable?.runId}
-      workspaceId={activeProps.workspaceId}
-      sessionId={activeProps.selectedSessionId}
-      turnId={activeProps.selectedTurn?.turnId}
-      queuedCount={activeProps.queuedCount}
-      streamStatus={activeProps.streamStatus}
-      queueLabels={activeProps.queueItems.map((item) => item.label)}
-      onContinueInBackground={(task) => {
-        const parentRunId = activeProps.selectedTurn?.trace.durable?.runId;
-        if (parentRunId) {
-          activeProps.onContinueExplorerInBackground?.({ parentRunId, watcherId: task.watcherId });
-        }
-      }}
-      onBackgroundTaskSettled={(task) => {
-        const parentRunId = activeProps.selectedTurn?.trace.durable?.runId;
-        if (
-          !parentRunId ||
-          !task.delegationRunId ||
-          !task.delegationStepId ||
-          activeProps.delegationRun?.runId !== task.delegationRunId
-        ) {
-          return false;
-        }
-        return (
-          activeProps.onBackgroundExplorerSettled?.({
-            parentRunId,
-            delegationRunId: task.delegationRunId,
-            delegationStepId: task.delegationStepId,
-            childRunId: task.childRunId,
-          }) ?? false
-        );
-      }}
-      onOpenApprovals={activeProps.onOpenApprovals}
-      onOpenTasks={onOpenTasks}
-      onOpenSemanticLink={(link, relatedLinks) => {
-        if (link.kind === "durable_run") {
-          onOpenUniversalRunDetail?.(link.id);
-          return;
-        }
-        if (link.kind === "chat_session") {
-          onSelectSession(link.id);
-          return;
-        }
-        if (link.kind === "chat_turn") {
-          const childSession = relatedLinks.find((candidate) => candidate.kind === "chat_session");
-          if (childSession) onSelectSession(childSession.id, { turnId: link.id });
-          else activeProps.onOpenRunDetails(link.id);
-          return;
-        }
-        if (link.kind === "approval") activeProps.onOpenApprovals();
-        if (link.kind === "task") onOpenTasks?.();
-      }}
-    />
-  );
-}
-
-function UtilityPlanPanel({
-  activeProps,
-  contextDockProps,
-}: {
-  activeProps: MissionThreadedActiveSessionSurfaceProps;
-  contextDockProps: MissionThreadedRenderSurfaceInput["contextDockProps"];
-}) {
-  const planningEnabled = activeProps.planningMode === "advisory";
-  const route = resolveChatRouteReadiness(activeProps);
-  const routeBlocked = route.state === "no_provider" || route.state === "blocked";
-
-  return (
-    <section className="mc-next-utility-card">
-      <div className="mc-next-utility-chip-row">
-        <StatusChip tone={planningEnabled ? "success" : "muted"}>
-          {planningEnabled ? "Planning on" : "Planning off"}
-        </StatusChip>
-        <span className="mc-next-technical-detail">
-          <StatusChip tone="muted">{contextDockProps?.routePreflight?.selectionSource ?? "route pending"}</StatusChip>
-        </span>
-        <StatusChip tone={routeBlocked ? "critical" : activeProps.routeBoundaryAckRequired ? "warning" : "muted"}>
-          {routeBlocked
-            ? "Sending blocked"
-            : activeProps.routeBoundaryAckRequired
-              ? "boundary acknowledgement needed"
-              : route.state === "checking"
-                ? "Checking route"
-                : "Route ready"}
-        </StatusChip>
-      </div>
-      <h4>{activeProps.pinnedGoal ?? "Current plan"}</h4>
-      <p>{routeBlocked ? route.message : (activeProps.routePreflight?.degradedReason ?? activeProps.summary)}</p>
-      <div className="mc-next-utility-actions">
-        <button type="button" className="mc-next-panel-button" onClick={activeProps.onTogglePlanningMode}>
-          {planningEnabled ? "Turn planning off" : "Turn planning on"}
-        </button>
-        <button type="button" className="mc-next-panel-button" onClick={activeProps.onReviewRunDetails}>
-          Review run details
-        </button>
-      </div>
-    </section>
-  );
-}
-
-function getCodeWorkflowPanel(
-  workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"],
-): CodeWorkflowPanel | null {
-  return workflowPanel?.kind === "code" ? workflowPanel : null;
-}
-
-function formatUtilitySnippet(value?: string | null, maxLength = 1200): string {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return "No content yet.";
-  }
-  if (trimmed.length <= maxLength) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, maxLength).trimEnd()}\n...`;
-}
-
-function ThreadEmptyState({
-  surface,
-  helper,
-  input,
-  dropTarget,
-}: {
-  surface: ChatMode;
-  helper: string;
-  input: MissionThreadedRenderSurfaceInput;
-  dropTarget: MissionThreadedDropTargetProps;
-}) {
-  void surface;
-  const Icon = MODE_META.chat.icon;
-  const guidance = EMPTY_STATE_GUIDANCE.chat;
-  return (
-    <section
-      className={`mc-next-threaded-empty mc-next-threaded-dropzone${dropTarget.isDragActive ? " drop-active" : ""}`}
-      onDragEnter={dropTarget.onDragEnter}
-      onDragOver={dropTarget.onDragOver}
-      onDragLeave={dropTarget.onDragLeave}
-      onDrop={dropTarget.onDrop}
-    >
-      {dropTarget.isDragActive ? (
-        <div className="mc-next-threaded-drop-overlay">Drop files to start a thread with attachments</div>
-      ) : null}
-      <div className="mc-next-threaded-empty-icon">
-        <Icon size={22} />
-      </div>
-      <p className="mc-next-threaded-empty-kicker">{input.emptyStateProps.workspaceName}</p>
-      <h2>{guidance.title}</h2>
-      <p>{guidance.body}</p>
-      <p className="mc-next-threaded-empty-support">{helper}</p>
-      <div className="mc-next-threaded-empty-guidance" aria-label="Chat starting points">
-        {guidance.cards.map((card) => (
-          <div key={card.title} className="mc-next-threaded-empty-card">
-            <strong>{card.title}</strong>
-            <span>{card.body}</span>
-          </div>
-        ))}
-      </div>
-      <div className="mc-next-threaded-empty-facts" aria-label="Workspace readiness">
-        <span>
-          <strong>{input.emptyStateProps.sessionCount}</strong>
-          <span>Sessions</span>
-        </span>
-        <span>
-          <strong>{input.emptyStateProps.projectCount}</strong>
-          <span>Projects</span>
-        </span>
-        <span>
-          <strong>{input.emptyStateProps.approvalsCount}</strong>
-          <span>Approvals</span>
-        </span>
-      </div>
-      <div className="mc-next-threaded-empty-actions">
-        <button type="button" className="mc-next-threaded-primary" onClick={input.emptyStateProps.onCreateSession}>
-          {guidance.startLabel}
-        </button>
-        {input.emptyStateProps.onOpenStartHere ? (
-          <button
-            type="button"
-            className="mc-next-threaded-secondary mc-next-threaded-start-here"
-            onClick={input.emptyStateProps.onOpenStartHere}
-          >
-            {guidance.startHereLabel}
-          </button>
-        ) : null}
-        <button type="button" className="mc-next-threaded-secondary" onClick={dropTarget.onAttachFiles}>
-          Attach files
-        </button>
-        {input.emptyStateProps.approvalsCount > 0 ? (
-          <button
-            type="button"
-            className="mc-next-threaded-secondary"
-            onClick={() => input.emptyStateProps.onOpenApprovals()}
-          >
-            Approvals ({input.emptyStateProps.approvalsCount})
-          </button>
-        ) : null}
-      </div>
-    </section>
-  );
-}
-
-type SessionGroupItem = {
-  sessionId: string;
-  title?: string | null;
-  updatedAt?: string;
-  projectName?: string | null;
-  folderName?: string | null;
-  tags?: string[];
-  channel?: string | null;
-  account?: string | null;
-  mode?: ChatMode | null;
-  pinned?: boolean;
-  lifecycleStatus?: ChatSessionRecord["lifecycleStatus"];
-  tokenTotal?: number;
-  costUsdTotal?: number;
-  pinnedGoal?: string;
-  generatedArtifacts?: ChatSessionRecord["generatedArtifacts"];
-  delegationParent?: ChatSessionRecord["delegationParent"];
-  searchHits?: ChatSessionSearchHitRecord[];
-};
-
-function SessionGroup({
-  title,
-  items,
-  count,
-  selectedSessionId,
-  onSelectSession,
-  renderSessionLabel,
-  nestedChildrenByParentId,
-  orphanDelegatedItems = [],
-  emptyCopy = "No sessions in this lane yet.",
-}: {
-  title: string;
-  items: SessionGroupItem[];
-  count?: number;
-  selectedSessionId: string | null;
-  onSelectSession: (
-    sessionId: string,
-    options?: { turnId?: string | null; searchHit?: ChatSessionSearchHitRecord },
-  ) => void;
-  renderSessionLabel: (sessionId: string) => string;
-  nestedChildrenByParentId?: Record<string, SessionGroupItem[]>;
-  orphanDelegatedItems?: SessionGroupItem[];
-  emptyCopy?: string;
-}) {
-  const [collapsedParents, setCollapsedParents] = useState<Record<string, boolean>>({});
-  const selectedParentId = useMemo(() => {
-    if (!selectedSessionId || !nestedChildrenByParentId) {
-      return null;
-    }
-    return (
-      Object.entries(nestedChildrenByParentId).find(([, children]) =>
-        children.some((child) => child.sessionId === selectedSessionId),
-      )?.[0] ?? null
-    );
-  }, [nestedChildrenByParentId, selectedSessionId]);
-  useEffect(() => {
-    if (!nestedChildrenByParentId) {
-      return;
-    }
-    setCollapsedParents((current) => {
-      let changed = false;
-      const next = { ...current };
-      for (const parentId of Object.keys(nestedChildrenByParentId)) {
-        if (next[parentId] === undefined) {
-          next[parentId] = true;
-          changed = true;
-        }
-        if (parentId === selectedParentId && next[parentId]) {
-          next[parentId] = false;
-          changed = true;
-        }
-      }
-      return changed ? next : current;
-    });
-  }, [nestedChildrenByParentId, selectedParentId]);
-  const hasVisibleItems = items.length > 0 || orphanDelegatedItems.length > 0;
-
-  return (
-    <section className="mc-next-threaded-session-group" aria-label={title}>
-      <div className="mc-next-threaded-group-head">
-        <h3>{title}</h3>
-        <span aria-hidden="true">{count ?? items.length}</span>
-      </div>
-      {hasVisibleItems ? (
-        <div className="mc-next-threaded-session-list">
-          {items.map((item) => {
-            const children = nestedChildrenByParentId?.[item.sessionId] ?? [];
-            const collapsed = collapsedParents[item.sessionId] ?? children.length > 0;
-            const childrenControlsId = `mc-next-threaded-session-children-${encodeURIComponent(item.sessionId)}`;
-            return (
-              <div key={item.sessionId} className="mc-next-threaded-session-tree-node">
-                <SessionRow
-                  item={item}
-                  selectedSessionId={selectedSessionId}
-                  onSelectSession={onSelectSession}
-                  renderSessionLabel={renderSessionLabel}
-                  childCount={children.length}
-                  collapsed={collapsed}
-                  childrenControlsId={children.length > 0 ? childrenControlsId : undefined}
-                  onToggleChildren={
-                    children.length > 0
-                      ? () =>
-                          setCollapsedParents((current) => ({
-                            ...current,
-                            [item.sessionId]: !collapsed,
-                          }))
-                      : undefined
-                  }
-                />
-                {children.length > 0 ? (
-                  <div
-                    id={childrenControlsId}
-                    className="mc-next-threaded-session-children"
-                    hidden={collapsed}
-                    aria-hidden={collapsed}
-                  >
-                    {collapsed
-                      ? null
-                      : children.map((child) => (
-                          <SessionRow
-                            key={child.sessionId}
-                            item={child}
-                            selectedSessionId={selectedSessionId}
-                            onSelectSession={onSelectSession}
-                            renderSessionLabel={renderSessionLabel}
-                            nested
-                          />
-                        ))}
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-          {orphanDelegatedItems.length > 0 ? (
-            <div className="mc-next-threaded-orphan-delegates">
-              <div className="mc-next-threaded-orphan-delegates-head">
-                <span>Delegated tasks</span>
-                <span>{orphanDelegatedItems.length}</span>
-              </div>
-              {orphanDelegatedItems.map((child) => (
-                <SessionRow
-                  key={child.sessionId}
-                  item={child}
-                  selectedSessionId={selectedSessionId}
-                  onSelectSession={onSelectSession}
-                  renderSessionLabel={renderSessionLabel}
-                  nested
-                />
-              ))}
-            </div>
-          ) : null}
-        </div>
-      ) : (
-        <p className="mc-next-threaded-empty-copy">{emptyCopy}</p>
-      )}
-    </section>
-  );
-}
-
-function SessionRow({
-  item,
-  selectedSessionId,
-  onSelectSession,
-  renderSessionLabel,
-  childCount = 0,
-  collapsed = false,
-  childrenControlsId,
-  onToggleChildren,
-  nested = false,
-}: {
-  item: SessionGroupItem;
-  selectedSessionId: string | null;
-  onSelectSession: (
-    sessionId: string,
-    options?: { turnId?: string | null; searchHit?: ChatSessionSearchHitRecord },
-  ) => void;
-  renderSessionLabel: (sessionId: string) => string;
-  childCount?: number;
-  collapsed?: boolean;
-  childrenControlsId?: string;
-  onToggleChildren?: () => void;
-  nested?: boolean;
-}) {
-  const label = item.title?.trim() || renderSessionLabel(item.sessionId);
-  const mode: ChatMode = "chat";
-  const delegatedLabel = item.delegationParent?.label?.trim() || item.delegationParent?.role?.trim();
-  const meta = delegatedLabel
-    ? `Delegated task · ${delegatedLabel}`
-    : item.projectName?.trim() ||
-      item.folderName?.trim() ||
-      item.channel?.trim() ||
-      item.account?.trim() ||
-      "Workspace session";
-  const updatedAtLabel = formatRelativeTime(item.updatedAt);
-  const metadataChips = getSessionMetadataChips(item);
-
-  return (
-    <div className={`mc-next-threaded-session-row-shell${nested ? " nested" : ""}`}>
-      <button
-        type="button"
-        className={`mc-next-threaded-session-row mode-${mode}${selectedSessionId === item.sessionId ? " active" : ""}`}
-        onClick={() => onSelectSession(item.sessionId)}
-        title={label}
-      >
-        <div className="mc-next-threaded-session-row-main">
-          <div className="mc-next-threaded-session-row-copy">
-            <span className="mc-next-threaded-mode-label mode-chat">Chat</span>
-            <div className="mc-next-threaded-session-titleline">
-              <strong>{label}</strong>
-              <time className="mc-next-threaded-session-time" dateTime={item.updatedAt}>
-                {updatedAtLabel}
-              </time>
-            </div>
-            <span title={meta}>{meta}</span>
-            {metadataChips.length > 0 ? (
-              <div className="mc-next-threaded-session-meta-chips" aria-label="Session metadata">
-                {metadataChips.map((chip) => (
-                  <span key={chip}>{chip}</span>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </button>
-      {item.searchHits && item.searchHits.length > 0 ? (
-        <div className="mc-next-threaded-search-hits" aria-label={`Search results in ${label}`}>
-          {item.searchHits.map((hit) => (
-            <button
-              key={`${hit.messageId}:${hit.sequence}`}
-              type="button"
-              className="mc-next-threaded-search-hit"
-              onClick={() => onSelectSession(item.sessionId, { searchHit: hit })}
-              aria-label="Open exact search result"
-            >
-              <span>Message match</span>
-              <mark>{hit.excerpt}</mark>
-            </button>
-          ))}
-        </div>
-      ) : null}
-      {onToggleChildren ? (
-        <button
-          type="button"
-          className="mc-next-threaded-session-toggle"
-          onClick={onToggleChildren}
-          aria-label={collapsed ? "Expand delegated chats" : "Collapse delegated chats"}
-          aria-expanded={!collapsed}
-          aria-controls={childrenControlsId}
-          title={collapsed ? "Expand delegated chats" : "Collapse delegated chats"}
-        >
-          <span>{childCount}</span>
-          <ChevronRight size={14} className={collapsed ? "" : "open"} />
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function getSessionMetadataChips(item: SessionGroupItem): string[] {
-  const chips: string[] = [];
-  if (item.pinned) {
-    chips.push("Pinned");
-  }
-  if (item.lifecycleStatus === "archived") {
-    chips.push("Archived");
-  }
-  if (item.pinnedGoal?.trim()) {
-    chips.push("Goal");
-  }
-  if (item.tags?.length) {
-    chips.push(...item.tags.slice(0, 2));
-  }
-  if ((item.generatedArtifacts?.length ?? 0) > 0) {
-    chips.push(`${item.generatedArtifacts!.length} artifact${item.generatedArtifacts!.length === 1 ? "" : "s"}`);
-  }
-  if ((item.tokenTotal ?? 0) > 0) {
-    chips.push(formatCompactSessionNumber(item.tokenTotal!, "token"));
-  }
-  if ((item.costUsdTotal ?? 0) > 0) {
-    chips.push(formatCompactUsd(item.costUsdTotal!));
-  }
-  return chips.slice(0, 4);
-}
-
-function formatCompactSessionNumber(value: number, unit: string): string {
-  return `${new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value)} ${unit}${
-    value === 1 ? "" : "s"
-  }`;
-}
-
-function formatCompactUsd(value: number): string {
-  if (value < 0.01) {
-    return "<$0.01";
-  }
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: value < 1 ? 3 : 2,
-  }).format(value);
-}
-
-function FilterChip({ active, onClick, children }: { active?: boolean; onClick: () => void; children: ReactNode }) {
-  return (
-    <button type="button" className={`mc-next-threaded-filter${active ? " active" : ""}`} onClick={onClick}>
-      {children}
-    </button>
-  );
-}
-
-export function formatRelativeTime(value?: string): string {
-  if (!value) {
-    return "Recent";
-  }
-  const timestamp = Date.parse(value);
-  if (Number.isNaN(timestamp)) {
-    return "Recent";
-  }
-  const deltaMinutes = Math.max(1, Math.round((Date.now() - timestamp) / 60000));
-  if (deltaMinutes < 60) {
-    return `${deltaMinutes}m ago`;
-  }
-  const deltaHours = Math.round(deltaMinutes / 60);
-  if (deltaHours < 24) {
-    return `${deltaHours}h ago`;
-  }
-  const deltaDays = Math.round(deltaHours / 24);
-  return `${deltaDays}d ago`;
 }

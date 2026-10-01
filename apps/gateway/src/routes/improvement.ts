@@ -1,7 +1,10 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { SemanticValidationError, ServiceUnavailableError } from "@goatcitadel/contracts";
+import { SemanticValidationError, ServiceUnavailableError, type ImprovementCandidateReviewInput } from "@goatcitadel/contracts";
 import { sendRouteError } from "./_error-handler.js";
+import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
+import { ImprovementCandidateDecisionPostCommitError } from "../services/improvement-review-precondition.js";
+import { projectPublicErrorValue } from "../services/public-secret-projection.js";
 
 const reportListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(260).default(24),
@@ -57,6 +60,16 @@ const candidateLifecycleBodySchema = z.object({
   snoozeUntil: z.string().trim().min(1).optional(),
 });
 
+const candidateReviewBodySchema = candidateLifecycleBodySchema.extend({
+  reviewPrecondition: z.object({
+    workspaceId: z.string().trim().min(1).max(256),
+    expectedStatus: z.enum(["proposed", "evaluating", "ready_for_approval", "approval_pending", "approved", "rejected", "superseded"]),
+    expectedRevisionId: z.string().trim().min(1).max(256).nullable(),
+    expectedChangeHash: z.string().trim().min(1).max(256).nullable(),
+  }).strict().refine((review) => (review.expectedRevisionId === null) === (review.expectedChangeHash === null),
+    "Revision and change hash must both be supplied or both be null.").optional(),
+});
+
 const activationParamsSchema = z.object({
   activationId: z.string().min(1),
 });
@@ -90,7 +103,20 @@ const replayDraftBodySchema = z.object({
 
 export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
   const improvement = fastify.services.improvement;
-  const replyWithImprovementMutationError = (reply: FastifyReply, error: unknown) => {
+  const replyWithImprovementMutationError = async (reply: FastifyReply, error: unknown, request?: FastifyRequest) => {
+    if (request) {
+      await markMutationCommittedFromError(request, error);
+      if (request.mutationCommitted) {
+        const response = projectPublicErrorValue({
+          error: "The candidate decision was saved, but its review or audit delivery failed. Refresh its current state before taking another action.",
+          code: "mutation_committed",
+          retryable: false,
+          canonicalResult: error instanceof ImprovementCandidateDecisionPostCommitError ? error.canonicalResult : undefined,
+        });
+        reply.log.error(response, "improvement candidate decision failed after commit");
+        return reply.code(500).send(response);
+      }
+    }
     const message = error instanceof Error ? error.message : String(error);
     const statusCode = message.toLowerCase().includes("not found") ? 404 : 409;
     return reply.code(statusCode).send({ error: message });
@@ -99,10 +125,12 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
     paramsValue: unknown,
     bodyValue: unknown,
     reply: FastifyReply,
-    handler: (candidateId: string, body: z.infer<typeof candidateLifecycleBodySchema>) => unknown,
+    handler: (candidateId: string, body: ImprovementCandidateReviewInput) => unknown,
+    bodySchema: z.ZodType<ImprovementCandidateReviewInput> = candidateLifecycleBodySchema,
+    request?: FastifyRequest,
   ) => {
     const params = candidateParamsSchema.safeParse(paramsValue);
-    const body = candidateLifecycleBodySchema.safeParse(bodyValue ?? {});
+    const body = bodySchema.safeParse(bodyValue ?? {});
     if (!params.success || !body.success) {
       return reply.code(400).send({
         error: {
@@ -113,10 +141,13 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return Promise.resolve(handler(params.data.candidateId, body.data))
-        .then((result) => reply.send(result))
-        .catch((error) => replyWithImprovementMutationError(reply, error));
+        .then(async (result) => {
+          if (request) await markMutationCommitted(request);
+          return reply.send(result);
+        })
+        .catch((error) => replyWithImprovementMutationError(reply, error, request));
     } catch (error) {
-      return replyWithImprovementMutationError(reply, error);
+      return replyWithImprovementMutationError(reply, error, request);
     }
   };
   const handleGovernedCandidateActivation = async (
@@ -282,12 +313,16 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post("/api/v1/improvement/candidates/:candidateId/approve", async (request, reply) =>
     handleCandidateLifecycleAction(request.params, request.body, reply, (candidateId, body) =>
       improvement.approveImprovementCandidate(candidateId, body),
+      candidateReviewBodySchema,
+      request,
     ),
   );
 
   fastify.post("/api/v1/improvement/candidates/:candidateId/reject", async (request, reply) =>
     handleCandidateLifecycleAction(request.params, request.body, reply, (candidateId, body) =>
       improvement.rejectImprovementCandidate(candidateId, body),
+      candidateReviewBodySchema,
+      request,
     ),
   );
 

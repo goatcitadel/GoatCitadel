@@ -1,13 +1,5 @@
-import React from "react";
-import { createRoot } from "react-dom/client";
-import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { MissionControlNextApp } from "@next/app/MissionControlNextApp";
 import { retireMissionControlServiceWorkers } from "./service-worker-cleanup";
-import "@next/styles/mission-control-next-tokens.css";
-import "@next/styles/mission-control-next-foundation.css";
-import "@next/styles/mission-control-next-theme-bridge.css";
-import "@next/styles/mission-control-next.css";
-import "@next/features/native-routes/primitives/primitives.css";
+import { resolveShellPreference } from "./shell-preference";
 
 const visualRegressionMode =
   (import.meta.env.VITE_GOATCITADEL_VISUAL_REGRESSION_MODE as string | undefined)?.trim().toLowerCase() === "true";
@@ -27,10 +19,19 @@ if (!root) {
   throw new Error("Root element not found");
 }
 
-createRoot(root).render(
-  <React.StrictMode>
-    <UiPreferencesProvider>
-      <MissionControlNextApp />
-    </UiPreferencesProvider>
-  </React.StrictMode>,
-);
+const storage = (() => {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+})();
+
+const shell = resolveShellPreference({ search: globalThis.location?.search ?? "", storage });
+document.documentElement.dataset.shell = shell;
+
+if (shell === "cockpit") {
+  void import("./cockpit-entry").then(({ mountCockpit }) => mountCockpit(root));
+} else {
+  void import("./classic-entry").then(({ mountClassic }) => mountClassic(root));
+}

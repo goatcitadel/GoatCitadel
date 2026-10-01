@@ -1,9 +1,11 @@
-import type { FastifyPluginAsync, FastifyReply } from "fastify";
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import type {
   McpRemotePreviewItem,
   McpRemotePreviewResponse,
   McpElicitationOwnerMetadata,
   McpServerRecord,
+  McpServerConnectionReceipt,
+  McpOAuthCompletionReceipt,
   McpServerTemplateRecord,
   McpToolRecord,
 } from "@goatcitadel/contracts";
@@ -110,6 +112,7 @@ const updateServerSchema = z.object({
 }).strict();
 
 const revisionSchema = updateServerSchema.pick({ expectedRevision: true }).strict();
+const connectionReviewSchema = revisionSchema.extend({ expectedConnectionRevision: revisionSchema.shape.expectedRevision.nullable() }).strict();
 const updatePolicySchema = policySchema.extend({ expectedRevision: revisionSchema.shape.expectedRevision }).strict();
 
 const oauthCompleteSchema = z.object({
@@ -426,8 +429,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       await markMutationCommitted(request);
       return reply.code(201).send(projectMcpPublicValue(created));
     } catch (error) {
-      await markMutationCommittedFromError(request, error);
-      return sendRouteError(reply, error, request.log);
+      return sendMcpConfigurationWriteError(request, reply, error);
     }
   });
 
@@ -447,8 +449,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       await markMutationCommitted(request);
       return reply.send(projectMcpPublicValue(saved));
     } catch (error) {
-      await markMutationCommittedFromError(request, error);
-      return sendRouteError(reply, error, request.log);
+      return sendMcpConfigurationWriteError(request, reply, error);
     }
   });
 
@@ -463,10 +464,28 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       if (saved.deleted) await markMutationCommitted(request);
       return reply.send(projectMcpPublicValue(saved));
     } catch (error) {
-      await markMutationCommittedFromError(request, error);
-      return sendRouteError(reply, error, request.log);
+      return sendMcpConfigurationWriteError(request, reply, error);
     }
   });
+
+  for (const action of ["connect", "disconnect"] as const) {
+    fastify.post(`/api/v1/mcp/servers/:serverId/${action}-reviewed`, operatorMutationRoute, async (request, reply) => {
+      const params = serverParamsSchema.safeParse(request.params);
+      const body = connectionReviewSchema.safeParse(request.body);
+      if (!params.success || !body.success) return reply.code(400).send({ error: "A current server revision and explicit connection revision review are required." });
+      try {
+        const committed = () => markMutationCommitted(request);
+        const server = action === "connect"
+          ? await fastify.services.mcp.connectMcpServer(params.data.serverId, body.data, committed)
+          : await fastify.services.mcp.disconnectMcpServer(params.data.serverId, body.data, committed);
+        await markMutationCommitted(request);
+        const receipt: McpServerConnectionReceipt = { version: 1, action, reviewed: body.data, server };
+        return reply.send(projectMcpPublicValue(receipt));
+      } catch (error) {
+        return sendMcpConfigurationWriteError(request, reply, error, "The reviewed MCP connection change was admitted, but its outcome needs inspection. Do not repeat it automatically.");
+      }
+    });
+  }
 
   fastify.post("/api/v1/mcp/servers/:serverId/connect", operatorMutationRoute, async (request, reply) => {
     const params = serverParamsSchema.safeParse(request.params);
@@ -489,6 +508,34 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send(projectMcpPublicValue(await fastify.services.mcp.disconnectMcpServer(params.data.serverId)));
     } catch (error) {
       return sendMcpPublicError(reply, 400, error);
+    }
+  });
+
+  fastify.post("/api/v1/mcp/servers/:serverId/oauth/start-reviewed", operatorMutationRoute, async (request, reply) => {
+    const params = serverParamsSchema.safeParse(request.params), body = connectionReviewSchema.safeParse(request.body);
+    if (!params.success || !body.success) return reply.code(400).send({ error: "OAuth requires an exact configuration and connection review." });
+    try {
+      const flow = await fastify.services.mcp.startMcpOAuth(params.data.serverId, body.data, () => markMutationCommitted(request));
+      await markMutationCommitted(request);
+      if (!flow.review) throw new Error("Reviewed OAuth did not return its owner receipt.");
+      return reply.send({ ...flow, review: { ...flow.review, server: projectMcpPublicValue(flow.review.server) } });
+    } catch (error) {
+      return sendMcpConfigurationWriteError(request, reply, error, "The reviewed OAuth start was admitted, but its outcome needs inspection. Do not repeat it automatically.");
+    }
+  });
+
+  fastify.post("/api/v1/mcp/servers/:serverId/oauth/complete-reviewed", operatorMutationRoute, async (request, reply) => {
+    const params = serverParamsSchema.safeParse(request.params);
+    const body = connectionReviewSchema.extend({ code: z.string().trim().min(1).max(8192), state: z.string().uuid() }).strict().safeParse(request.body);
+    if (!params.success || !body.success) return reply.code(400).send({ error: "OAuth requires the reviewed flow state, code and owner revisions." });
+    try {
+      const { code, state, ...reviewed } = body.data;
+      const server = await fastify.services.mcp.completeMcpOAuth(params.data.serverId, code, state, reviewed, () => markMutationCommitted(request));
+      await markMutationCommitted(request);
+      const receipt: McpOAuthCompletionReceipt = { version: 1, reviewed, state, server: projectMcpPublicValue(server) };
+      return reply.send(receipt);
+    } catch (error) {
+      return sendMcpConfigurationWriteError(request, reply, error, "The reviewed OAuth exchange was admitted, but its outcome needs inspection. Do not repeat it automatically.");
     }
   });
 
@@ -625,8 +672,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       await markMutationCommitted(request);
       return reply.send(projectMcpPublicValue(saved));
     } catch (error) {
-      await markMutationCommittedFromError(request, error);
-      return sendRouteError(reply, error, request.log);
+      return sendMcpConfigurationWriteError(request, reply, error);
     }
   });
 
@@ -642,10 +688,30 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("unknown mcp server");
-      return sendMcpPublicError(reply, notFound ? 404 : 409, message);
+      return sendMcpPublicError(reply, notFound ? 404 : 409, error);
     }
   });
 };
+
+/** Typed follow-up errors must not project a committed write as a retryable validation failure. */
+async function sendMcpConfigurationWriteError(request: FastifyRequest, reply: FastifyReply, error: unknown, message = "The MCP configuration change was committed, but follow-up failed. Inspect the saved owner before another change.") {
+  try {
+    await markMutationCommittedFromError(request, error);
+  } catch (markerError) {
+    // markMutationCommitted publishes request-local truth before its persistent callback.
+    // Preserve that truth even when recording the HTTP claim needs operator diagnosis.
+    if (!request.mutationCommitted) throw markerError;
+    request.log.error({ err: projectMcpPublicValue(markerError instanceof Error
+      ? { name: markerError.name, message: markerError.message } : { value: markerError }) }, "MCP committed mutation marker failed");
+  }
+  if (!request.mutationCommitted) return sendRouteError(reply, error, request.log);
+  request.log.error({ err: projectMcpPublicValue(isGoatError(error) ? error.toJSON()
+    : error instanceof Error ? { name: error.name, message: error.message } : { value: error }) }, "MCP configuration follow-up failed after commit");
+  return reply.code(500).send({
+    error: message,
+    mutationCommitted: true,
+  });
+}
 
 function resolveElicitationCallerOwner(
   request: { authActorId?: string },

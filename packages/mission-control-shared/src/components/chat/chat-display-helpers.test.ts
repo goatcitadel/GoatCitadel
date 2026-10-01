@@ -67,6 +67,10 @@ describe("canRetryTurn", () => {
     ).toBe(true);
   });
 
+  it("allows retry after an operator cancels a turn before any assistant output", () => {
+    expect(canRetryTurn({ assistantMessage: undefined, trace: { ...failedTrace(), status: "cancelled", failure: undefined } })).toBe(true);
+  });
+
   it("denies retry when there is no assistant output and no retryable failure", () => {
     expect(canRetryTurn({ assistantMessage: undefined, trace: failedTrace() })).toBe(false);
     expect(

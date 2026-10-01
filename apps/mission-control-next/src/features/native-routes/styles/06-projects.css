@@ -222,7 +222,7 @@
   gap: 0.75rem;
 }
 
-@media (min-width: 1181px) {
+@media (min-width: 1280px) {
   .mc-next-shell.has-shell-inspector[data-area="projects"] .mc-next-native-projects-grid {
     grid-template-columns: minmax(16rem, 0.82fr) minmax(28rem, 1.18fr);
   }

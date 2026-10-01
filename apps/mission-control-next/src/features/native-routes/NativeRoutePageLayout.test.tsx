@@ -133,7 +133,7 @@ describe("NativeRoutePageLayout", () => {
     expect(navigate).toHaveBeenCalledWith({ area: "ops", section: "runtime" });
   });
 
-  it("shows the page description and status metrics inline and keeps technical metrics collapsible", () => {
+  it("shows the page description and status metrics inline while technical metrics follow the preference", () => {
     const container = document.createElement("div");
     container.innerHTML = renderToStaticMarkup(
       <NativePageFrame
@@ -158,9 +158,10 @@ describe("NativeRoutePageLayout", () => {
     const inlineMetrics = [...container.querySelectorAll(".mc-next-directory-head-metric")];
     expect(inlineMetrics.map((node) => node.textContent)).toEqual(["Pending2", "History14"]);
     expect(inlineMetrics.every((node) => node.closest("details") === null)).toBe(true);
-    const details = container.querySelector("details.mc-next-page-explanation");
-    expect(details?.textContent).toContain("citadel-7f3a");
-    expect(details?.textContent).not.toContain("Review pending decisions");
+    const technical = container.querySelector(".mc-next-page-technical.mc-next-technical-detail");
+    expect(technical?.textContent).toContain("citadel-7f3a");
+    expect(technical?.textContent).not.toContain("Review pending decisions");
+    expect(container.querySelector("details.mc-next-page-explanation")).toBeNull();
   });
 
   it("omits the page details disclosure when nothing technical is left to hide", () => {
@@ -181,7 +182,7 @@ describe("NativeRoutePageLayout", () => {
     expect(markup).toContain("Visible");
   });
 
-  it("shows card status stats inline while the explanation and technical stats stay in Details", () => {
+  it("shows card status and description inline while technical stats follow the preference", () => {
     const container = document.createElement("div");
     container.innerHTML = renderToStaticMarkup(
       <NativeCard
@@ -200,10 +201,11 @@ describe("NativeRoutePageLayout", () => {
     expect(inlineStats?.textContent).toContain("Not yet verified");
     expect(inlineStats?.textContent).toContain("First response");
     expect(inlineStats?.textContent).not.toContain("ws-2b91");
-    const details = container.querySelector("details.mc-next-card-explanation");
-    expect(details?.textContent).toContain("Choose a provider, connect it securely");
-    expect(details?.textContent).toContain("ws-2b91");
-    expect(details?.textContent).not.toContain("Not yet verified");
+    expect(container.querySelector(".mc-next-card-subtitle")?.textContent).toContain("Choose a provider, connect it securely");
+    const technical = container.querySelector(".mc-next-card-technical.mc-next-technical-detail");
+    expect(technical?.textContent).toContain("ws-2b91");
+    expect(technical?.textContent).not.toContain("Not yet verified");
+    expect(container.querySelector("details.mc-next-card-explanation")).toBeNull();
   });
 
   it("renders an on-surface Experimental badge for experimental routes (F-M11)", () => {

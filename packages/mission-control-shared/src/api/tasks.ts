@@ -70,6 +70,18 @@ export async function fetchTasksByView(
   );
 }
 
+export async function fetchTask(
+  taskId: string,
+  workspaceId: string,
+  citadelId?: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<TaskRecord> {
+  return request<TaskRecord>(
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}`, workspaceId, citadelId),
+    options.signal ? { cache: "no-store", signal: options.signal } : undefined,
+  );
+}
+
 export async function createTask(input: {
   citadelId?: string;
   workspaceId?: string;
@@ -185,9 +197,11 @@ export async function fetchTaskDeliverables(
   taskId: string,
   workspaceId?: string,
   citadelId?: string,
+  options: { signal?: AbortSignal } = {},
 ): Promise<{ items: TaskDeliverableRecord[] }> {
   return request<{ items: TaskDeliverableRecord[] }>(
     withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/deliverables`, workspaceId, citadelId),
+    options.signal ? { cache: "no-store", signal: options.signal } : undefined,
   );
 }
 

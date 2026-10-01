@@ -385,6 +385,7 @@ export function buildSuggestedRepairPatch(input: {
     return undefined;
   }
   switch (input.causeClass) {
+    case "policy_denied_by_config":
     case "tool_exists_but_not_in_profile":
       return `Review ${input.configArea} and the effective permission profile or explicit allow/deny rules for ${input.requestedTool ?? "the blocked tool"}.`;
     case "tool_requires_approval_but_not_exposed":

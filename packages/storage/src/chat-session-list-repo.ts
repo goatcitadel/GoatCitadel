@@ -9,6 +9,7 @@ export interface ChatSessionListCandidate {
 }
 
 export interface ChatSessionListCandidateQuery {
+  sessionId?: string;
   workspaceId: string;
   scope?: ChatSessionScope | "all";
   view?: ChatSessionLifecycleStatus | "all";
@@ -55,6 +56,12 @@ export class ChatSessionListRepository {
 
     const clauses: string[] = ["m.workspace_id = ?"];
     const params: unknown[] = [workspaceId];
+    if (input.sessionId !== undefined) {
+      const sessionId = input.sessionId.trim();
+      if (!sessionId) return [];
+      clauses.push("s.session_id = ?");
+      params.push(sessionId);
+    }
     const scope = input.scope ?? "all";
     const view = input.view ?? "active";
     const includeHidden = input.includeHidden ?? false;

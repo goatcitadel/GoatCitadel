@@ -52,9 +52,8 @@
 .mc-next-shell[data-area="library"] .notification-stack,
 .mc-next-shell[data-area="ops"] .notification-stack,
 .mc-next-shell[data-area="settings"] .notification-stack {
-  width: min(12.5rem, calc(100vw - 1.5rem));
+  width: min(16rem, calc(100vw - 1.5rem));
   right: 0.75rem;
-  bottom: 0.75rem;
 }
 
 .mc-next-directory-header {
@@ -170,7 +169,7 @@
 }
 
 .mc-next-directory-copy h1 {
-  font-size: clamp(1.05rem, 1.45vw, 1.4rem);
+  font-size: var(--text-xl);
   line-height: 1.22;
   font-weight: 700;
 }
@@ -365,4 +364,32 @@
   border-radius: 2px;
   background: var(--new-session-accent, var(--mc-area-color));
   flex: 0 0 auto;
+}
+
+.mc-next-card-subtitle {
+  margin: 0.15rem 0 0;
+  color: var(--fg-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.mc-next-card-technical,
+.mc-next-page-technical {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  margin: 0.3rem 0 0;
+  font: var(--text-2xs) / 1.4 var(--font-mono);
+  color: var(--fg-muted);
+}
+
+.mc-next-card-technical div,
+.mc-next-page-technical div {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.mc-next-card-technical dd,
+.mc-next-page-technical dd {
+  margin: 0;
 }

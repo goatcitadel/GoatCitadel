@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withRenewingWorkerLease } from "./worker-execution-lease.js";
+import { WorkerProtectedRouteError } from "./worker-protected-route-client.js";
 import type { LeaseBinding, RouteContext } from "./connected-worker-routes.js";
 
 const lease: LeaseBinding = {
@@ -136,6 +137,84 @@ describe("worker execution lease", () => {
     await rejected;
     expect(execute).toHaveBeenCalledTimes(1);
     expect(values.owner.renew).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("parks a verified wait without a new active renewal or a surviving timer", async () => {
+    vi.useFakeTimers();
+    const values = input();
+    const parked = { status: "waiting_approval" };
+    const shouldPark = vi.fn((value: typeof parked) => value.status === "waiting_approval");
+    expect(await withRenewingWorkerLease(values, async () => parked, shouldPark)).toMatchObject({
+      lease: { leaseRevision: 2 },
+      value: parked,
+    });
+    expect(values.owner.renew).toHaveBeenCalledOnce();
+    expect(shouldPark).toHaveBeenCalledExactlyOnceWith(parked);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("drains an in-flight rotation before parking without starting a final renewal", async () => {
+    vi.useFakeTimers();
+    const values = input();
+    values.owner.remainingLeaseMs = () => 900;
+    values.owner.renew.mockImplementationOnce(async (current) => ({ ...current, leaseRevision: 2 }));
+    let finishRenewal: (value: LeaseBinding) => void = () => {};
+    values.owner.renew.mockImplementationOnce(async () => await new Promise<LeaseBinding>((resolve) => {
+      finishRenewal = resolve;
+    }));
+    let finishWork: (value: string) => void = () => {};
+    let returned = false;
+    const run = withRenewingWorkerLease(values, async () => await new Promise<string>((resolve) => {
+      finishWork = resolve;
+    }), (value) => value === "verified wait");
+    void run.then(() => { returned = true; });
+    await vi.advanceTimersByTimeAsync(300);
+    finishWork("verified wait");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(returned).toBe(false);
+    finishRenewal({ ...lease, leaseRevision: 3, leaseToken: "c".repeat(43) });
+    expect(await run).toMatchObject({
+      lease: { leaseRevision: 3, leaseToken: "c".repeat(43) },
+      value: "verified wait",
+    });
+    expect(values.owner.renew).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps an ambiguous in-flight renewal failure closed even after work returns a wait", async () => {
+    vi.useFakeTimers();
+    const values = input();
+    values.owner.remainingLeaseMs = () => 900;
+    values.owner.renew.mockImplementationOnce(async (current) => ({ ...current, leaseRevision: 2 }));
+    let failRenewal: (error: Error) => void = () => {};
+    values.owner.renew.mockImplementationOnce(async () => await new Promise<LeaseBinding>((_resolve, reject) => {
+      failRenewal = reject;
+    }));
+    let finishWork: (value: string) => void = () => {};
+    const execute = vi.fn(async () => await new Promise<string>((resolve) => { finishWork = resolve; }));
+    const shouldPark = vi.fn(() => true);
+    const run = withRenewingWorkerLease(values, execute, shouldPark);
+    const rejected = expect(run).rejects.toThrow("Worker lease renewal or control could not be confirmed.");
+    await vi.advanceTimersByTimeAsync(300);
+    finishWork("verified wait");
+    await vi.advanceTimersByTimeAsync(0);
+    failRenewal(new WorkerProtectedRouteError("renewal refused", 403, { error: "REMOTE_WORKER_ASSIGNMENT_REJECTED" }));
+    await rejected;
+    expect(shouldPark).not.toHaveBeenCalled();
+    expect(execute).toHaveBeenCalledOnce();
+    expect(values.owner.renew).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not return a parked result after its lease window is lost", async () => {
+    vi.useFakeTimers();
+    const values = input();
+    await expect(withRenewingWorkerLease(values, async () => {
+      values.owner.remainingLeaseMs = () => 0;
+      return "verified wait";
+    }, () => true)).rejects.toThrow("Worker completion lost its lease window.");
+    expect(values.owner.renew).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -10,6 +10,8 @@ describe("DurableOperatorService", () => {
     expect(await service.getDiagnostics()).toEqual({ status: "ok" });
     expect(await service.listRuns()).toEqual([{ runId: "run-1", status: "completed" }]);
     expect(await service.listRuns(7)).toEqual([{ runId: "run-1", status: "completed" }]);
+    expect(await service.listRunHistory({ workspaceId: "alpha", limit: 2, cursor: "page" })).toEqual({ items: [], nextCursor: "next" });
+    expect(deps.durableRunService.listDurableRunHistory).toHaveBeenCalledWith({ workspaceId: "alpha", limit: 2, cursor: "page" });
     expect(await service.listDeadLetters()).toEqual([{ entryId: "dead-1" }]);
     expect(await service.listDeadLetters(8)).toEqual([{ entryId: "dead-1" }]);
     expect(await service.listRunCheckpoints("run-1")).toEqual([{ checkpointId: "checkpoint-1" }]);
@@ -194,6 +196,7 @@ function fakeDeps() {
   const durableRunService = {
     getDurableDiagnostics: vi.fn(() => ({ status: "ok" })),
     listDurableRuns: vi.fn(() => [{ runId: "run-1", status: "completed" }] as never),
+    listDurableRunHistory: vi.fn(() => ({ items: [], nextCursor: "next" })),
     listDurableDeadLetters: vi.fn(() => [{ entryId: "dead-1" }] as never),
     listDurableRunCheckpoints: vi.fn(() => [{ checkpointId: "checkpoint-1" }] as never),
     createDurableRun: vi.fn(() => run("queued")),

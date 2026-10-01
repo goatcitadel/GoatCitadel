@@ -1,6 +1,7 @@
 import {
   ConflictError,
   SemanticValidationError,
+  isProviderProfileCheckpoint,
   type ChangePlanProviderConnectionRequest,
   type ChangePlanRecord,
   type LlmProviderConfig,
@@ -153,7 +154,7 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
                     fieldId: "credential",
                     label: `${label} credential`,
                     required: true,
-                    description: "Stored in the OS keychain and never added to Chat or model context.",
+                    description: credentialStorageDescription(request),
                   },
                 ],
               }),
@@ -190,12 +191,14 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
     }
     const settings = await this.deps.getSettings();
     const provider = requireProvider(settings, request.providerId);
+    assertRevision(plan, settings.revision);
+    this.assertCommittedProfile(plan, provider);
     return {
       status: "awaiting_confirmation",
       evidenceRefs: receipt.evidenceRefs,
       requiredAction: context.actions.confirmation({
         title: `Confirm ${provider.label} connection`,
-        confirmationText: `Promote the verified ${provider.label} connection and keep only its secure owner reference.`,
+        confirmationText: `Promote the verified ${provider.label} connection. ${isOAuthProvider(provider) ? "Keep only its dedicated OAuth owner reference." : credentialStorageDescription(request)}`,
       }),
       result: { summary: `${provider.label} input was verified and is ready for final confirmation.` },
     };
@@ -208,7 +211,10 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
     const request = requireRequest(plan);
     let settings = await this.deps.getSettings();
     assertRevision(plan, settings.revision);
+    const originalRevision = settings.revision;
+    let profileCommitted = false;
     const before = settings.llm.providers.find((candidate) => candidate.providerId === request.providerId);
+    this.assertCommittedProfile(plan, before);
     // Re-validate persisted OAuth-lifecycle actions: a plan staged before the
     // provider's auth mode changed (or before this validation existed) must not
     // reach the codex-only OAuth owners.
@@ -230,6 +236,10 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
         expectedRevision: settings.revision,
         llm: { upsertProvider: providerSettingsPatch(request) },
       });
+      profileCommitted = true;
+      if (!providerProfileMatches(requireProvider(settings, request.providerId), request, this.deps.getProviderConfig?.(request.providerId))) {
+        throw new ConflictError({ message: "The provider profile write was acknowledged but its exact saved fields could not be confirmed." });
+      }
     }
     if (request.credentialAction === "remove_api_key") {
       const removed = await this.deps.removeProviderApiKey(
@@ -269,6 +279,11 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
     const requiresCredential =
       ["replace_api_key", "replace_oauth"].includes(request.credentialAction ?? "") || !providerIsReady(provider);
     if (requiresCredential && !hasTemporarySecret && !hasTemporaryOAuthCredential) {
+      // Only an acknowledged profile write can return from applying to input.
+      // Other missing credentials remain an ambiguous owner failure, never retry permission.
+      if (!profileCommitted || settings.revision <= originalRevision || !request.profile || request.credentialAction) {
+        throw new ConflictError({ message: "The provider credential is unavailable after confirmation. Inspect the existing plan before continuing." });
+      }
       return {
         status: "awaiting_input",
         target: { ...plan.target, expectedRevision: settings.revision },
@@ -284,12 +299,17 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
                   fieldId: "credential",
                   label: `${provider.label} credential`,
                   required: true,
-                  description: "Stored in the OS keychain and never added to Chat or model context.",
+                  description: credentialStorageDescription(request),
                 },
               ],
             }),
         result: {
           summary: `${provider.label} profile saved. Its credential is still required through the secure owner flow.`,
+          appliedRevision: settings.revision,
+          providerProfileCheckpoint: {
+            version: "provider_profile_checkpoint.v1", providerId: request.providerId,
+            originalRevision, appliedRevision: settings.revision, intentHash: plan.intentHash,
+          },
         },
       };
     }
@@ -358,9 +378,7 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
           };
     }
     try {
-      const verification = await this.deps.verifyProvider(request.providerId);
-      await this.deps.discardTemporarySecret(plan.planId, request.providerId);
-      await this.deps.discardTemporaryOAuthCredential?.(plan.planId, request.providerId);
+      const verification = await this.verifyAndRetireTemporaryCredentials(plan.planId, request.providerId);
       return {
         status: "completed",
         evidenceRefs: verification.evidenceRefs,
@@ -415,9 +433,7 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
           };
     }
     try {
-      const verification = await this.deps.verifyProvider(request.providerId);
-      await this.deps.discardTemporarySecret(plan.planId, request.providerId);
-      await this.deps.discardTemporaryOAuthCredential?.(plan.planId, request.providerId);
+      const verification = await this.verifyAndRetireTemporaryCredentials(plan.planId, request.providerId);
       return {
         effectObserved: true,
         status: "completed" as const,
@@ -439,8 +455,20 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
 
   public async discard(_context: EvolutionControlPlaneAdapterContext, plan: ChangePlanRecord): Promise<void> {
     const request = requireRequest(plan);
-    await this.deps.discardTemporarySecret(plan.planId, request.providerId);
-    await this.deps.discardTemporaryOAuthCredential?.(plan.planId, request.providerId);
+    await this.retireTemporaryCredentials(plan.planId, request.providerId);
+  }
+
+  private async verifyAndRetireTemporaryCredentials(planId: string, providerId: string) {
+    const verification = await this.deps.verifyProvider(providerId);
+    // Retire staged custody only after the live owner proves the active connection.
+    // A cleanup failure still propagates to the caller's manual recovery outcome.
+    await this.retireTemporaryCredentials(planId, providerId);
+    return verification;
+  }
+
+  private async retireTemporaryCredentials(planId: string, providerId: string): Promise<void> {
+    await this.deps.discardTemporarySecret(planId, providerId);
+    await this.deps.discardTemporaryOAuthCredential?.(planId, providerId);
   }
 
   private async isOAuthCredentialAbsent(providerId: string): Promise<boolean> {
@@ -448,6 +476,18 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
       return false;
     }
     return !(await this.deps.getProviderOAuthCredentialStatus(providerId)).connected;
+  }
+
+  private assertCommittedProfile(plan: ChangePlanRecord, provider: LlmProviderSummary | undefined): void {
+    const checkpoint = plan.result?.providerProfileCheckpoint;
+    if (!checkpoint) return;
+    const request = requireRequest(plan);
+    if (!isProviderProfileCheckpoint(checkpoint) || checkpoint.providerId !== request.providerId
+      || checkpoint.intentHash !== plan.intentHash || checkpoint.appliedRevision !== plan.target.expectedRevision
+      || !plan.evidenceRefs.includes(`provider_profile:${request.providerId}:settings_revision:${checkpoint.appliedRevision}`)
+      || !providerProfileMatches(provider, request, this.deps.getProviderConfig?.(request.providerId))) {
+      throw new ConflictError({ message: "The committed provider profile no longer matches this credential continuation." });
+    }
   }
 }
 
@@ -538,4 +578,10 @@ function assertRevision(plan: ChangePlanRecord, currentRevision: number): void {
     message: "Provider settings changed after this Change Plan was prepared.",
     details: { expectedRevision: plan.target.expectedRevision, currentRevision },
   });
+}
+
+function credentialStorageDescription(request: ChangePlanProviderConnectionRequest): string {
+  return request.credentialStorage === "env"
+    ? `Stored as plaintext in this installation's environment file${request.credentialEnvVar ? ` (${request.credentialEnvVar})` : ""}. Anyone who can read that file can read the credential. Never added to Chat or model context.`
+    : "Stored in the OS keychain and never added to Chat or model context.";
 }

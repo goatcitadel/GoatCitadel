@@ -680,7 +680,8 @@ describe("ProjectsRoutePage", () => {
       findButton(renderer.root, "Refresh").props.onClick();
       await Promise.resolve();
     });
-    expect(renderedText(renderer)).toContain("Something went wrong.");
+    expect(renderedText(renderer)).toContain("Alpha could not load");
+    expect(renderedText(renderer)).toContain("offline");
     expect(renderedText(renderer)).toContain("Alpha");
   });
 

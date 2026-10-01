@@ -78,8 +78,12 @@ export async function createCapabilityProposal(input: {
 
 export async function fetchAutonomousActivationGrants(
   includeExpired = false,
+  signal?: AbortSignal,
 ): Promise<{ items: AutonomousActivationGrantRecord[] }> {
-  return request(`/api/v1/capabilities/autonomy-grants?includeExpired=${includeExpired ? "true" : "false"}`);
+  return request(`/api/v1/capabilities/autonomy-grants?includeExpired=${includeExpired ? "true" : "false"}`, {
+    cache: "no-store",
+    ...(signal ? { signal } : {}),
+  });
 }
 
 export async function createAutonomousActivationGrant(

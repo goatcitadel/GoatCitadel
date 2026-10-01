@@ -1,6 +1,6 @@
 import type { PermissionProfileSelectionReview } from "@goatcitadel/contracts";
 import { SettingsActionList } from "../SettingsShared";
-import { describeToolApprovalMode } from "../../SettingsNativePage";
+import { describeToolApprovalMode } from "../helpers/permission-helpers";
 import { describeReadAccessMode, formatPermissionContextLabel } from "./PermissionProfileDraftFields";
 
 export function PermissionSelectionReviewDetails({ review }: { review: PermissionProfileSelectionReview }) {

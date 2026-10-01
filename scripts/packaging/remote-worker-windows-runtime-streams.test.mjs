@@ -23,7 +23,7 @@ test("runtime stream frames preserve bounded duplex native job input and output"
   const env = { SystemRoot: process.env.SystemRoot, PATH: path.dirname(toolchain.compilerPath), ASAN_OPTIONS: "halt_on_error=1:detect_leaks=0" };
   const outcomes = [];
   for (const asan of [false, true]) {
-    const executable = buildWindowsCellController({ outputDirectory: output, snapshot, asan, fixture, extraSources: [appContainer] });
+    const executable = buildWindowsCellController({ outputDirectory: output, snapshot, sourceBatchSize: 8, asan, fixture, extraSources: [appContainer] });
     const run = spawnSync(executable, [job], { windowsHide: true, encoding: "utf8", timeout: 40000, env });
     fs.writeFileSync(path.join(output, asan ? "asan.log" : "normal.log"), (run.stdout ?? "") + (run.stderr ?? ""), { flag: "wx" });
     assert.equal(run.error, undefined);

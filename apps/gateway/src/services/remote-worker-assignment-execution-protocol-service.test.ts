@@ -1790,15 +1790,19 @@ describe("RemoteWorkerAssignmentExecutionProtocolService", () => {
     expect(smuggled.settlement.effects.dispatchEffect).not.toHaveBeenCalled();
   });
 
-  it.each(["payload", "submission"])("refuses worker-supplied artifact continuation in the %s", async (location) => {
+  it.each(["payload", "submission"].flatMap((location) =>
+    ["continuingArtifact", "continuingToolResult"].map((field) => ({ location, field }))))(
+    "refuses worker-supplied $field in the $location", async ({ location, field }) => {
     const f = fixture();
     const deps = dependencies(f);
-    const submission = { kind: "artifact.open", uploadAttempt: 1, declaredFileCount: 1, declaredTotalBytes: 5,
-      stagingRootSha256: D("staging"), expiresAt: "2099-01-01T00:00:00.000Z" };
+    const submission = field === "continuingToolResult"
+      ? { kind: "chat.tool", inferenceRequestId: "inference-a", attempt: 1, callIndex: 0 }
+      : { kind: "artifact.open", uploadAttempt: 1, declaredFileCount: 1, declaredTotalBytes: 5,
+        stagingRootSha256: D("staging"), expiresAt: "2099-01-01T00:00:00.000Z" };
     const supplied = { uploadId: "other-upload", leaseRevision: 1, parentDispatchAuthority: {} };
     const payload = location === "payload"
-      ? { ...settlementPayload(f, submission), continuingArtifact: supplied }
-      : settlementPayload(f, { ...submission, continuingArtifact: supplied });
+      ? { ...settlementPayload(f, submission), [field]: supplied }
+      : settlementPayload(f, { ...submission, [field]: supplied });
     await expect(service(f, deps).execute(signedRequest(
       f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission, payload,
     ))).rejects.toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);

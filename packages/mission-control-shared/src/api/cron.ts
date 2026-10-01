@@ -15,12 +15,15 @@ export interface CronRunNowResponse {
   profilePosture?: string;
 }
 
-export async function fetchCronJobs(): Promise<CronJobsResponse> {
-  return request<CronJobsResponse>("/api/v1/cron/jobs");
+export async function fetchCronJobs(options?: { signal?: AbortSignal }): Promise<CronJobsResponse> {
+  return request<CronJobsResponse>("/api/v1/cron/jobs", options?.signal ? { signal: options.signal } : undefined);
 }
 
-export async function fetchCronJob(jobId: string): Promise<CronJobRecordResponse> {
-  return request<CronJobRecordResponse>(`/api/v1/cron/jobs/${encodeURIComponent(jobId)}`);
+export async function fetchCronJob(jobId: string, options?: { signal?: AbortSignal }): Promise<CronJobRecordResponse> {
+  return request<CronJobRecordResponse>(
+    `/api/v1/cron/jobs/${encodeURIComponent(jobId)}`,
+    options?.signal ? { signal: options.signal } : undefined,
+  );
 }
 
 export async function createCronJob(input: {

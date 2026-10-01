@@ -423,12 +423,22 @@ export type ChangePlanRequiredAction =
       readonly artifactRefs: readonly string[];
     };
 
+/** Owner acknowledgement of a public-profile commit while credential setup remains pending. */
+export interface ProviderProfileCheckpoint {
+  readonly version: "provider_profile_checkpoint.v1";
+  readonly providerId: string;
+  readonly originalRevision: number;
+  readonly appliedRevision: number;
+  readonly intentHash: string;
+}
+
 export interface ChangePlanResult {
   readonly summary: string;
   readonly appliedRevision?: number;
   readonly evidenceRefs?: readonly string[];
   readonly rollbackRef?: string;
   readonly failureCode?: string;
+  readonly providerProfileCheckpoint?: ProviderProfileCheckpoint;
 }
 
 export interface ChangePlanRecord {
@@ -660,7 +670,7 @@ export function isChangePlanRequest(value: unknown): value is ChangePlanRequest 
 export function isChangePlanResult(value: unknown): value is ChangePlanResult {
   if (
     !isPlainObject(value) ||
-    !hasOnlyKeys(value, ["summary", "appliedRevision", "evidenceRefs", "rollbackRef", "failureCode"])
+    !hasOnlyKeys(value, ["summary", "appliedRevision", "evidenceRefs", "rollbackRef", "failureCode", "providerProfileCheckpoint"])
   ) {
     return false;
   }
@@ -668,9 +678,18 @@ export function isChangePlanResult(value: unknown): value is ChangePlanResult {
     isBoundedText(value.summary, 2_000) &&
     (value.appliedRevision === undefined || isPositiveInteger(value.appliedRevision)) &&
     (value.evidenceRefs === undefined || isReferenceList(value.evidenceRefs)) &&
+    (value.providerProfileCheckpoint === undefined || isProviderProfileCheckpoint(value.providerProfileCheckpoint)) &&
     isOptionalBoundedText(value.rollbackRef, 512) &&
     isOptionalBoundedText(value.failureCode, 128)
   );
+}
+
+export function isProviderProfileCheckpoint(value: unknown): value is ProviderProfileCheckpoint {
+  return isPlainObject(value) && hasOnlyKeys(value, ["version", "providerId", "originalRevision", "appliedRevision", "intentHash"])
+    && value.version === "provider_profile_checkpoint.v1" && isBoundedText(value.providerId, 256)
+    && isPositiveInteger(value.originalRevision) && isPositiveInteger(value.appliedRevision)
+    && Number(value.appliedRevision) > Number(value.originalRevision)
+    && typeof value.intentHash === "string" && /^[a-f0-9]{64}$/u.test(value.intentHash);
 }
 
 function isRuntimeConfigurationOperation(value: unknown): value is ChangePlanRuntimeConfigurationOperation {

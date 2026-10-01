@@ -8,10 +8,8 @@
 
 import {
   ConflictError,
-  isChatTurnTerminalStatus,
   redactSecretText,
   redactStructuredSecrets,
-  type ChatTurnTraceRecord,
   type DurableChildWatcherCreateRequest,
   type DurableRunCreateRequest,
   type DurableRunRecord,
@@ -49,6 +47,24 @@ import {
 } from "./orchestration-lifecycle-state-helpers.js";
 import { publishOrchestrationRealtime, throwIfWorkflowAborted } from "./orchestration-realtime-helpers.js";
 import type { OrchestrationWorktreeReleaseResult } from "./orchestration-worktree-service.js";
+
+import {
+  getDurableRunIfAvailable,
+  getOrchestrationRunIfAvailable,
+  prepareOrchestrationChildRecovery,
+} from "./orchestration-phase-child-service.js";
+import {
+  ORCHESTRATION_PHASE_CHILD_WAKE_EVENT,
+  findPhaseInPlan,
+  isDurableRunTerminal,
+  readRecoverableChildPhase,
+} from "./orchestration-phase-child-state.js";
+export {
+  wakeOrchestrationPhaseParent,
+  reconcileWaitingOrchestrationPhases,
+  type OrchestrationPhaseChildWakeHost,
+} from "./orchestration-phase-child-service.js";
+export { ORCHESTRATION_PHASE_CHILD_WAKE_EVENT } from "./orchestration-phase-child-state.js";
 
 export { parseOrchestrationWorkflowPayload } from "./orchestration-lifecycle-state-helpers.js";
 
@@ -132,12 +148,6 @@ export interface OrchestrationLifecycleRuntimeDeps {
     }): Promise<OrchestrationPhaseExecutionResult | undefined>;
   };
 }
-
-/**
- * Wake key a parent orchestration run parks on while its phase's child Chat
- * turn runs. The correlation id is the child's durable run id.
- */
-export const ORCHESTRATION_PHASE_CHILD_WAKE_EVENT = "orchestration.phase_child.settled";
 
 export interface OrchestrationLifecycleHost {
   readonly config: {
@@ -272,10 +282,6 @@ async function releaseOrchestrationWorktreeIfAvailable(
 
 function isOrchestrationRunTerminal(run: OrchestrationRun): boolean {
   return ["completed", "failed", "stopped_by_limit", "cancelled"].includes(run.status);
-}
-
-function isDurableRunTerminal(run: DurableRunRecord): boolean {
-  return ["completed", "failed", "cancelled", "dead_lettered"].includes(run.status);
 }
 
 const RUN_ERROR_MAX_CHARACTERS = 2000;
@@ -1181,15 +1187,16 @@ async function createOrchestrationRunRecord(
 ): Promise<{ created: boolean; run: OrchestrationRun }> {
   // `upsertPlan` is idempotent on (planId, workspaceId) and `engine.createRun`
   // is a pure computation, so both can run outside the transaction.
-  await host.storage.orchestration.upsertPlan(plan, workspaceId);
+  const orchestration = host.storage.orchestration;
+  await orchestration.upsertPlan(plan, workspaceId);
   const candidate = host.orchestrationEngine.createRun(plan);
 
   return await host.storage.runImmediateTransaction(async () => {
-    const existing = await host.storage.orchestration.findActiveRunByPlan(plan.planId, workspaceId);
+    const existing = await orchestration.findActiveRunByPlan(plan.planId, workspaceId);
     if (existing) {
       return { created: false, run: existing };
     }
-    const persisted = await host.storage.orchestration.createRun({
+    const persisted = await orchestration.createRun({
       ...candidate,
       ...policyContext,
       workspaceId,
@@ -1225,9 +1232,10 @@ export async function runOrchestrationPlan(
   policyContext: OrchestrationRunPolicyContext = {},
 ): Promise<OrchestrationRun> {
   const workspaceId = normalizeRouteWorkspaceId(policyContext.workspaceId);
-  const plan = await host.storage.orchestration.getPlan(planId, workspaceId);
+  const orchestration = host.storage.orchestration;
+  const plan = await orchestration.getPlan(planId, workspaceId);
   host.orchestrationEngine.validate(plan);
-  const activeRun = await host.storage.orchestration.findActiveRunByPlan(planId, workspaceId);
+  const activeRun = await orchestration.findActiveRunByPlan(planId, workspaceId);
   if (activeRun) {
     return resumeExistingActiveRun(host, runtime, plan, activeRun);
   }
@@ -1510,8 +1518,9 @@ export async function approvePhase(
       message: "costIncrementUsd is no longer accepted on phase approval; phase cost is measured from execution.",
     });
   }
-  const run = assertRunWorkspaceAccess(await host.storage.orchestration.getRun(runId), workspaceId);
-  let plan = await host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
+  const orchestration = host.storage.orchestration;
+  const run = assertRunWorkspaceAccess(await orchestration.getRun(runId), workspaceId);
+  let plan = await orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
   host.orchestrationEngine.validate(plan);
   const currentPhase = findPhaseInPlan(plan, phaseId);
 
@@ -1574,7 +1583,7 @@ export async function approvePhase(
     if (plan.mode !== "hitl" && !patchedPhase.requiresApproval) {
       throw new Error(`Phase ${phaseId} is not approval-gated for run ${runId}`);
     }
-    await host.storage.orchestration.upsertPlan(plan, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
+    await orchestration.upsertPlan(plan, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
   }
 
   // Approval records intent only: the run stays paused and the durable worker,
@@ -1586,7 +1595,7 @@ export async function approvePhase(
     pendingApprovedBy: approvedBy,
     pendingCostIncrementUsd: undefined,
   };
-  const persisted = await host.storage.orchestration.updateRunIfCurrentState(nextRun, {
+  const persisted = await orchestration.updateRunIfCurrentState(nextRun, {
     status: run.status,
     executionState: run.executionState,
   });
@@ -1630,7 +1639,7 @@ export async function approvePhase(
 
   return {
     run: persisted,
-    checkpoints: await host.storage.orchestration.listCheckpoints(runId),
+    checkpoints: await orchestration.listCheckpoints(runId),
   };
 }
 
@@ -1641,13 +1650,14 @@ export async function cancelOrchestrationRun(
   actorId = "operator",
   workspaceId?: string,
 ): Promise<{ run: OrchestrationRun; checkpoints: OrchestrationCheckpoint[] }> {
-  const run = assertRunWorkspaceAccess(await host.storage.orchestration.getRun(runId), workspaceId);
-  const plan = await host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
+  const orchestration = host.storage.orchestration;
+  const run = assertRunWorkspaceAccess(await orchestration.getRun(runId), workspaceId);
+  const plan = await orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
   host.orchestrationEngine.validate(plan);
   const cancelled = await markOrchestrationRunCancelled(host, runtime, plan, run, actorId, `cancelled by ${actorId}`);
   return {
     run: cancelled,
-    checkpoints: await host.storage.orchestration.listCheckpoints(runId),
+    checkpoints: await orchestration.listCheckpoints(runId),
   };
 }
 
@@ -1662,7 +1672,8 @@ export async function reconcileTerminalOrchestrationRuns(
   runtime: OrchestrationLifecycleRuntimeDeps,
   limit = 200,
 ): Promise<void> {
-  const activeRuns = (await host.storage.orchestration.listActiveRunsWithEndedDurableRun?.(limit)) ?? [];
+  const orchestration = host.storage.orchestration;
+  const activeRuns = (await orchestration.listActiveRunsWithEndedDurableRun?.(limit)) ?? [];
   const failures: unknown[] = [];
   for (const run of activeRuns) {
     try {
@@ -1670,7 +1681,7 @@ export async function reconcileTerminalOrchestrationRuns(
       if (!linked || !isDurableRunTerminal(linked)) {
         continue;
       }
-      const plan = await host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
+      const plan = await orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
       await commitLinkedDurableTerminalWinner(host, runtime, plan, run, linked, {
         reconciledBy: "orchestration_terminal_reconciler",
       });
@@ -1693,14 +1704,14 @@ export async function reconcileTerminalOrchestrationRuns(
   }
   ownershipRecoveryLastScanByStorage.set(host.storage, now);
   const pageSize = Math.max(1, Math.min(200, Math.floor(limit)));
-  const listUnlinked = host.storage.orchestration.listUnlinkedCreatedRuns;
+  const listUnlinked = orchestration.listUnlinkedCreatedRuns;
   if (!listUnlinked) {
     failures.push(new Error("Unlinked orchestration ownership recovery is unavailable."));
   } else {
     let afterRunId: string | undefined;
     try {
       for (;;) {
-        const page = await listUnlinked.call(host.storage.orchestration, pageSize, afterRunId);
+        const page = await listUnlinked.call(orchestration, pageSize, afterRunId);
         for (const run of page) {
           try {
             const startedAt = Date.parse(run.startedAt);
@@ -1719,7 +1730,7 @@ export async function reconcileTerminalOrchestrationRuns(
             if (!stopped.committed) {
               continue;
             }
-            const plan = await host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
+            const plan = await orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
             await persistCheckpoint(
               host,
               plan,
@@ -1749,14 +1760,15 @@ export async function reconcileTerminalOrchestrationRuns(
     }
   }
 
-  const listUnstarted = host.storage.durableRuns.listUnstartedOrchestrationRunIds;
+  const durableRuns = host.storage.durableRuns;
+  const listUnstarted = durableRuns.listUnstartedOrchestrationRunIds;
   if (!listUnstarted) {
     failures.push(new Error("Unstarted orchestration durable-run recovery is unavailable."));
   } else {
     let afterRunId: string | undefined;
     try {
       for (;;) {
-        const page = await listUnstarted.call(host.storage.durableRuns, pageSize, afterRunId);
+        const page = await listUnstarted.call(durableRuns, pageSize, afterRunId);
         for (const durableRunId of page) {
           try {
             const durable = await getDurableRunIfAvailable(host, durableRunId);
@@ -1849,155 +1861,6 @@ export async function settleOrchestrationRunForEndedDurableRun(
   }
   const plan = await host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
   await commitLinkedDurableTerminalWinner(host, runtime, plan, run, durableRun, details);
-}
-
-/** Server-owned records read to decide whether a parked phase's child has settled. */
-export interface OrchestrationPhaseChildWakeHost {
-  readonly storage: {
-    orchestration: Pick<OrchestrationLifecycleHost["storage"]["orchestration"], "getRun">;
-    durableRuns: Pick<Storage["durableRuns"], "listRunIdsByStatus">;
-    durableChildWatchers: Pick<Storage["durableChildWatchers"], "getByPair">;
-    chatTurnTraces: Pick<Storage["chatTurnTraces"], "get">;
-  };
-  getDurableRun(runId: string): Promise<DurableRunRecord>;
-  wakeDurableRun(
-    runId: string,
-    event: { eventKey: string; correlationId?: string; payload?: Record<string, unknown> },
-  ): Promise<{ outcome: string }>;
-}
-
-/**
- * Wakes the orchestration run whose parked phase waits on this durable Chat
- * run. `orchestrationRunId` is the child's admitted policy run id. The parent
- * wakes only when it registered exactly this child (wait correlation, phase
- * breadcrumb and watcher agree) and the child has settled.
- */
-export async function wakeOrchestrationPhaseParent(
-  host: OrchestrationPhaseChildWakeHost,
-  childRunId: string,
-  orchestrationRunId: string | undefined,
-): Promise<boolean> {
-  const runId = orchestrationRunId?.trim();
-  if (!runId) {
-    return false;
-  }
-  const run = await getOrchestrationRunIfAvailable(host, runId);
-  if (!run?.durableRunId || run.executionState !== "waiting_for_child") {
-    return false;
-  }
-  const parent = await getDurableRunIfAvailable(host, run.durableRunId);
-  return parent ? await wakeParkedOrchestrationPhase(host, parent, run, childRunId) : false;
-}
-
-/**
- * Catches up wakes that were missed, for example when a child settled before
- * its parent finished parking or the gateway restarted in between.
- */
-export async function reconcileWaitingOrchestrationPhases(host: OrchestrationPhaseChildWakeHost): Promise<void> {
-  const failures: unknown[] = [];
-  for (const runId of await host.storage.durableRuns.listRunIdsByStatus("waiting")) {
-    try {
-      const parent = await getDurableRunIfAvailable(host, runId);
-      const childRunId = parent ? readPhaseChildWaitCorrelation(parent) : undefined;
-      const payload = parent && childRunId ? parseOrchestrationWorkflowPayload(parent) : undefined;
-      if (!parent || !childRunId || !payload) {
-        continue;
-      }
-      const run = await getOrchestrationRunIfAvailable(host, payload.orchestrationRunId);
-      if (run) {
-        await wakeParkedOrchestrationPhase(host, parent, run, childRunId);
-      }
-    } catch (error) {
-      // One unreadable parent must not starve the others; report after the scan.
-      failures.push(error);
-    }
-  }
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "Orchestration phase wake reconciliation could not check every parked run.");
-  }
-}
-
-async function wakeParkedOrchestrationPhase(
-  host: OrchestrationPhaseChildWakeHost,
-  parent: DurableRunRecord,
-  run: OrchestrationRun,
-  childRunId: string,
-): Promise<boolean> {
-  if (
-    parent.status !== "waiting" ||
-    readPhaseChildWaitCorrelation(parent) !== childRunId ||
-    run.durableRunId !== parent.runId ||
-    run.executionState !== "waiting_for_child" ||
-    !run.currentPhaseId
-  ) {
-    return false;
-  }
-  const phase = readRecoverableChildPhase(parent, run.currentPhaseId);
-  if (phase?.childRunId !== childRunId) {
-    return false;
-  }
-  const watcher = await host.storage.durableChildWatchers.getByPair(parent.runId, childRunId);
-  if (watcher?.source !== "orchestration_phase") {
-    return false;
-  }
-  if (!(await isPhaseChildSettled(host, childRunId, asString(phase.payload.childTurnId)))) {
-    return false;
-  }
-  const result = await host.wakeDurableRun(parent.runId, {
-    eventKey: ORCHESTRATION_PHASE_CHILD_WAKE_EVENT,
-    correlationId: childRunId,
-    payload: { orchestrationRunId: run.runId, phaseId: run.currentPhaseId },
-  });
-  return result.outcome === "woke";
-}
-
-/**
- * A phase child has settled once it cannot produce more phase output on its
- * own: its durable run ended (or is gone), or its turn finished or stopped to
- * ask for user input. A child waiting on an approval is still working; the
- * operator resolves that approval in Chat.
- */
-async function isPhaseChildSettled(
-  host: OrchestrationPhaseChildWakeHost,
-  childRunId: string,
-  childTurnId: string | undefined,
-): Promise<boolean> {
-  const child = await getDurableRunIfAvailable(host, childRunId);
-  if (!child || isDurableRunTerminal(child)) {
-    return true;
-  }
-  if (!childTurnId) {
-    return false;
-  }
-  let traceStatus: ChatTurnTraceRecord["status"];
-  try {
-    traceStatus = (await host.storage.chatTurnTraces.get(childTurnId)).status;
-  } catch (error) {
-    if (error instanceof NotFoundError) {
-      return false;
-    }
-    throw error;
-  }
-  return traceStatus === "waiting_for_user_input" || isChatTurnTerminalStatus(traceStatus);
-}
-
-function readPhaseChildWaitCorrelation(run: DurableRunRecord): string | undefined {
-  const wait = asRecord(asRecord(run.metadata)?.waitForEvent);
-  return wait?.eventKey === ORCHESTRATION_PHASE_CHILD_WAKE_EVENT ? asString(wait.correlationId) : undefined;
-}
-
-async function getOrchestrationRunIfAvailable(
-  host: { readonly storage: { orchestration: { getRun(runId: string): Promise<OrchestrationRun> } } },
-  runId: string,
-): Promise<OrchestrationRun | undefined> {
-  try {
-    return await host.storage.orchestration.getRun(runId);
-  } catch (error) {
-    if (error instanceof NotFoundError) {
-      return undefined;
-    }
-    throw error;
-  }
 }
 
 export async function executeDurableOrchestrationRun(
@@ -2180,60 +2043,30 @@ export async function executeDurableOrchestrationRun(
     const recoverableChildPhase = readRecoverableChildPhase(durableRun, run.currentPhaseId);
     const isApprovalResume = resumedFrom === "paused_for_approval";
     if (recoverableChildPhase) {
-      const childRunId = recoverableChildPhase.childRunId;
-      if (!childRunId) {
-        // The phase dispatched a child whose durable run id was never recorded
-        // (e.g. durable execution was disabled and the child ran inline, so its
-        // state died with the parent). We cannot safely harvest or reattach it,
-        // so fail the phase recoverably rather than blindly re-running it.
-        const unlinkedChildError = `Orchestration phase ${run.currentPhaseId} dispatched a child without a durable run id before interruption; refusing to duplicate the dispatch.`;
-        return failResumeWithoutChildLinkage({
-          host,
-          runtime,
-          plan,
-          run,
-          durableRun,
-          recordUpdate,
-          phaseId: run.currentPhaseId,
-          payload: recoverableChildPhase.payload,
-          error: unlinkedChildError,
-        });
-      }
-      const childRun = await getDurableRunIfAvailable(host, childRunId);
-      if (!childRun) {
-        const missingChildError = `Child durable run ${childRunId} is missing; refusing to duplicate orchestration phase ${run.currentPhaseId}.`;
-        return failResumeWithoutChildLinkage({
-          host,
-          runtime,
-          plan,
-          run,
-          durableRun,
-          recordUpdate,
-          phaseId: run.currentPhaseId,
-          payload: recoverableChildPhase.payload,
-          error: missingChildError,
-          timelineReason: "child_durable_run_missing",
-          runEvent: "run.child_durable_missing",
-        });
-      }
-      // Prefer the child's canonical Chat records: they carry its output, its
-      // full cost, and whether it stopped to ask for user input.
-      const settledChild = await runtime.phaseExecutor.harvest?.({
+      const recovery = await prepareOrchestrationChildRecovery(host, runtime, {
+        plan,
         phaseId: run.currentPhaseId,
-        ownerAgentId:
-          asString(recoverableChildPhase.payload.ownerAgentId) ??
-          findPhaseInPlan(plan, run.currentPhaseId).ownerAgentId,
-        childRunId,
-        childSessionId: asString(recoverableChildPhase.payload.childSessionId),
-        childTurnId: asString(recoverableChildPhase.payload.childTurnId),
-        startedAt: asString(recoverableChildPhase.payload.startedAt),
-        prompt: asPromptReference(recoverableChildPhase.payload.prompt),
+        childPhase: recoverableChildPhase,
       });
-      if (settledChild) {
-        harvestedWaitingExecution = settledChild;
-      } else if (isDurableRunTerminal(childRun)) {
-        harvestedWaitingExecution = buildHarvestedWaitingExecution(recoverableChildPhase.payload, childRun);
+      if (recovery.outcome === "failed") {
+        return failResumeWithoutChildLinkage({
+          host,
+          runtime,
+          plan,
+          run,
+          durableRun,
+          recordUpdate,
+          phaseId: run.currentPhaseId,
+          payload: recoverableChildPhase.payload,
+          error: recovery.error,
+          timelineReason: recovery.timelineReason,
+          runEvent: recovery.runEvent,
+        });
+      }
+      if (recovery.outcome === "harvested") {
+        harvestedWaitingExecution = recovery.execution;
       } else {
+        const { childRunId, childRun } = recovery;
         // The child is still working. Park again on the child wake: a wake clears
         // waitForEvent, and a run parked without one refuses keyed wakes.
         const waitForEvent = { eventKey: ORCHESTRATION_PHASE_CHILD_WAKE_EVENT, correlationId: childRunId };
@@ -2730,47 +2563,6 @@ export async function executeDurableOrchestrationRun(
 }
 
 /**
- * Reads the linkage breadcrumb for a phase that already dispatched its child
- * turn, so resume can harvest/reattach the existing child instead of
- * re-dispatching it (ORCH-002).
- *
- * Two breadcrumb shapes are recognized, both keyed on the current phase id:
- *  - `waitingPhase`: written by the approval-wait path. Always carries a child
- *    durable run id (approval waits require a linked child).
- *  - `dispatchedPhase`: written the instant a non-approval in-flight phase
- *    dispatches its child. May lack a child durable run id when durable
- *    execution was not used for the child (the unlinked case, handled by the
- *    caller as a recoverable failure rather than a re-dispatch).
- *
- * `waitingPhase` is preferred when both are present because it is the richer,
- * approval-correlated record.
- */
-function readRecoverableChildPhase(
-  durableRun: DurableRunRecord,
-  currentPhaseId: string,
-):
-  | { childRunId?: string; payload: Record<string, unknown>; breadcrumbKey: "waitingPhase" | "dispatchedPhase" }
-  | undefined {
-  const metadata = asRecord(durableRun.metadata);
-  const waitingPhase = asRecord(metadata?.waitingPhase);
-  if (waitingPhase && asString(waitingPhase.phaseId) === currentPhaseId) {
-    const childRunId = asString(waitingPhase.childRunId);
-    if (childRunId) {
-      return { childRunId, payload: waitingPhase, breadcrumbKey: "waitingPhase" };
-    }
-  }
-  const dispatchedPhase = asRecord(metadata?.dispatchedPhase);
-  if (dispatchedPhase && asString(dispatchedPhase.phaseId) === currentPhaseId) {
-    return {
-      childRunId: asString(dispatchedPhase.childRunId),
-      payload: dispatchedPhase,
-      breadcrumbKey: "dispatchedPhase",
-    };
-  }
-  return undefined;
-}
-
-/**
  * Persists the in-flight child linkage breadcrumb for a phase into the parent
  * durable run's metadata at (or before) dispatch. Merges with the freshly
  * rebuilt orchestration metadata so an interruption during the child turn
@@ -2947,20 +2739,6 @@ function describeMalformedWorkspaceId(value: unknown): string {
   }
 }
 
-async function getDurableRunIfAvailable(
-  host: Pick<OrchestrationLifecycleHost, "getDurableRun">,
-  runId: string,
-): Promise<DurableRunRecord | undefined> {
-  try {
-    return await host.getDurableRun(runId);
-  } catch (error) {
-    if (!(error instanceof NotFoundError)) {
-      throw error;
-    }
-    return undefined;
-  }
-}
-
 async function failDurableOrchestrationWorkspaceMismatch(input: {
   host: OrchestrationLifecycleHost;
   runtime: OrchestrationLifecycleRuntimeDeps;
@@ -3013,88 +2791,12 @@ async function failDurableOrchestrationWorkspaceMismatch(input: {
   };
 }
 
-/**
- * Fallback harvest from durable metadata when the child's canonical Chat
- * records are unavailable. The waiting payload was captured before the child
- * finished, so its cost is at most a lower bound and is flagged as unreported.
- */
-function buildHarvestedWaitingExecution(
-  waitingPhase: Record<string, unknown>,
-  childRun: DurableRunRecord,
-): OrchestrationPhaseExecutionResult {
-  const failed = childRun.status !== "completed";
-  const childRunId = asString(waitingPhase.childRunId) ?? childRun.runId;
-  const waitingOutputText = asString(waitingPhase.outputText);
-  const childOutputText = asString(childRun.metadata?.outputText) ?? asString(childRun.metadata?.finalOutput);
-  return {
-    phaseId: asString(waitingPhase.phaseId) ?? "unknown",
-    ownerAgentId: asString(waitingPhase.ownerAgentId) ?? "unknown",
-    status: failed ? "failed" : "completed",
-    startedAt: asString(waitingPhase.startedAt) ?? childRun.startedAt ?? childRun.createdAt,
-    finishedAt: childRun.finishedAt ?? new Date().toISOString(),
-    outputSummary: failed
-      ? `Child phase durable run ${childRunId} ended as ${childRun.status}.`
-      : (asString(childRun.metadata?.outputSummary) ??
-        asString(childRun.metadata?.finalSummary) ??
-        asString(waitingPhase.outputSummary) ??
-        `Child phase durable run ${childRunId} completed after approval.`),
-    outputText: failed ? (childRun.lastError ?? waitingOutputText) : (childOutputText ?? waitingOutputText),
-    childSessionId: asString(waitingPhase.childSessionId),
-    childTurnId: asString(waitingPhase.childTurnId),
-    childRunId,
-    approvalId: asString(waitingPhase.approvalId),
-    responseId: asString(waitingPhase.responseId),
-    model: asString(waitingPhase.model),
-    costUsd: asNumber(waitingPhase.costUsd),
-    costUnreported: true,
-    inputTokens: asNumber(waitingPhase.inputTokens),
-    outputTokens: asNumber(waitingPhase.outputTokens),
-    citations: Array.isArray(waitingPhase.citations) ? (waitingPhase.citations as unknown[]) : undefined,
-    artifacts: Array.isArray(waitingPhase.artifacts) ? (waitingPhase.artifacts as unknown[]) : undefined,
-    prompt: asPromptReference(waitingPhase.prompt),
-    error: failed
-      ? (childRun.lastError ?? `Child phase durable run ${childRunId} ended as ${childRun.status}.`)
-      : undefined,
-  };
-}
-
-function asPromptReference(value: unknown): OrchestrationPhaseExecutionResult["prompt"] {
-  const record = asRecord(value);
-  if (
-    !record ||
-    typeof record.promptId !== "string" ||
-    typeof record.promptVersion !== "string" ||
-    typeof record.promptHash !== "string"
-  ) {
-    return undefined;
-  }
-  return {
-    promptId: record.promptId,
-    promptVersion: record.promptVersion,
-    promptHash: record.promptHash,
-  };
-}
-
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function findPhaseInPlan(plan: OrchestrationPlan, phaseId: string) {
-  for (const wave of plan.waves) {
-    const phase = wave.phases.find((candidate) => candidate.phaseId === phaseId);
-    if (phase) {
-      return phase;
-    }
-  }
-  throw new Error(`Phase ${phaseId} not found in plan ${plan.planId}`);
 }
 
 export async function getRun(
@@ -3110,8 +2812,9 @@ export async function listRunCheckpoints(
   runId: string,
   workspaceId?: string,
 ): Promise<OrchestrationCheckpoint[]> {
-  assertRunWorkspaceAccess(await host.storage.orchestration.getRun(runId), workspaceId);
-  return await host.storage.orchestration.listCheckpoints(runId);
+  const orchestration = host.storage.orchestration;
+  assertRunWorkspaceAccess(await orchestration.getRun(runId), workspaceId);
+  return await orchestration.listCheckpoints(runId);
 }
 
 export async function getRunTrace(
@@ -3119,20 +2822,21 @@ export async function getRunTrace(
   runId: string,
   workspaceId?: string,
 ): Promise<OrchestrationDecisionTrace> {
-  const run = assertRunWorkspaceAccess(await host.storage.orchestration.getRun(runId), workspaceId);
+  const orchestration = host.storage.orchestration;
+  const run = assertRunWorkspaceAccess(await orchestration.getRun(runId), workspaceId);
   const sanitizedRun = projectOrchestrationPublicValue(run) as OrchestrationRun;
-  const checkpoints = (await host.storage.orchestration.listCheckpoints(runId)).map((checkpoint) => ({
+  const checkpoints = (await orchestration.listCheckpoints(runId)).map((checkpoint) => ({
     ...checkpoint,
     details: sanitizeTraceDetails(checkpoint.details),
   }));
   const warnings: string[] = [];
-  const runEvents = host.storage.orchestration.listRunEvents
-    ? (await host.storage.orchestration.listRunEvents(runId)).map((event) => ({
+  const runEvents = orchestration.listRunEvents
+    ? (await orchestration.listRunEvents(runId)).map((event) => ({
         ...event,
         payload: sanitizeTraceDetails(event.payload),
       }))
     : [];
-  if (!host.storage.orchestration.listRunEvents) {
+  if (!orchestration.listRunEvents) {
     warnings.push("Run event storage does not expose listRunEvents; trace is checkpoint-only.");
   }
   const runtimeDecisions = ((await host.storage.runtimeDecisionTraces?.list({ runId, limit: 300 })) ?? []).map(

@@ -21,6 +21,7 @@ import {
   type ChangePlanTargetRef,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
+import { isProviderProfileInputCheckpoint } from "./provider-profile-checkpoint.js";
 
 interface ChangePlanRow {
   schema_version: number | string;
@@ -549,12 +550,20 @@ export class ChangePlanRepository {
       if (!currentRow) throw new NotFoundError({ entity: "Change Plan", id: planId });
       const current = mapRow(currentRow);
       if (current.revision !== input.expectedRevision) throw staleConflict(current, input.expectedRevision);
-      if (!TRANSITIONS[current.status].includes(input.status)) {
+      if (!TRANSITIONS[current.status].includes(input.status) && !isProviderProfileInputCheckpoint(current, input)) {
         throw conflict(`Change Plan cannot transition from ${current.status} to ${input.status}.`, current);
       }
       validateActionAuthority(currentRow, input);
       if (input.result !== undefined && !isChangePlanResult(input.result)) {
         throw new TypeError("Change Plan result is not a bounded secret-free shape.");
+      }
+      const checkpoint = current.result?.providerProfileCheckpoint;
+      if (input.result?.providerProfileCheckpoint && checkpoint
+        && canonicalJsonString(input.result.providerProfileCheckpoint) !== canonicalJsonString(checkpoint)) {
+        throw conflict("The committed provider profile checkpoint cannot change.", current);
+      }
+      if (input.result?.providerProfileCheckpoint && !checkpoint && !isProviderProfileInputCheckpoint(current, input)) {
+        throw conflict("A provider profile checkpoint requires its committed input transition.", current);
       }
       const target = input.target ?? current.target;
       validateTransitionTarget(current.target, target);
@@ -584,7 +593,7 @@ export class ChangePlanRepository {
         evidenceRefsJson: referenceJson(evidence),
         rollbackRefsJson: referenceJson(rollbacks),
         resultJson: input.result
-          ? canonicalJsonString(input.result)
+          ? canonicalJsonString({ ...input.result, ...(checkpoint ? { providerProfileCheckpoint: checkpoint } : {}) })
           : current.result
             ? canonicalJsonString(current.result)
             : null,
@@ -713,6 +722,7 @@ function validateCreateInput(input: ChangePlanRepositoryCreateInput): void {
   validateReferences(input.evidenceRefs);
   validateReferences(input.rollbackRefs);
   if (input.result && !isChangePlanResult(input.result)) throw new TypeError("Change Plan result is invalid.");
+  if (input.result?.providerProfileCheckpoint) throw new TypeError("A new plan cannot claim an already committed provider profile.");
 }
 
 function validateTransitionTarget(current: ChangePlanTargetRef, next: ChangePlanTargetRef): void {

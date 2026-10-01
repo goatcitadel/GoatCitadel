@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { materializeConfigFilesFromExamples, SPLIT_CONFIG_FILENAMES } from "./config-files.js";
 import { isVerboseLoggingEnabled } from "./runtime-ux.js";
+import type { GatewayRuntimeConfig } from "./config.js";
+import type { CompleteUnifiedConfigPayload } from "./services/config-generation-service.js";
+import type { projectCanonicalCronSpec } from "./services/cron-config-generation-owner.js";
+import type { RuntimeSettings } from "./services/gateway/runtime-settings.js";
+import type { LlmService } from "./services/llm-service.js";
 
 const UNIFIED_FILENAME = "goatcitadel.json";
 
@@ -30,6 +35,25 @@ export interface UnifiedConfigSyncOptions {
   createUnifiedIfMissing?: boolean;
 }
 
+export function applyDurableExecutionBaselineToConfig(config: GatewayRuntimeConfig): GatewayRuntimeConfig {
+  return {
+    ...config,
+    assistant: {
+      ...config.assistant,
+      durable: {
+        ...config.assistant.durable,
+        enabled: true,
+        executionEnabled: true,
+        chatAutoPromoteEnabled: true,
+      },
+      features: {
+        ...config.assistant.features,
+        durableKernelV1Enabled: true,
+      },
+    },
+  };
+}
+
 export function buildUnifiedConfigPayload(
   assistant: unknown,
   toolPolicy: unknown,
@@ -45,6 +69,85 @@ export function buildUnifiedConfigPayload(
     llm,
     cronJobs,
   };
+}
+
+export function buildUnifiedConfigPayloadFromRuntime(
+  runtimeConfig: GatewayRuntimeConfig,
+  llmConfig: ReturnType<LlmService["exportConfigFile"]>,
+  features: RuntimeSettings["features"],
+  cronJobs: { jobs: ReturnType<typeof projectCanonicalCronSpec>[] },
+  serializeRootPath: (fullPath: string) => string,
+): CompleteUnifiedConfigPayload {
+  const assistantPayload = {
+    environment: runtimeConfig.assistant.environment,
+    deploymentProfile: runtimeConfig.assistant.deploymentProfile,
+    dataDir: runtimeConfig.assistant.dataDir,
+    transcriptsDir: runtimeConfig.assistant.transcriptsDir,
+    auditDir: runtimeConfig.assistant.auditDir,
+    workspaceDir: runtimeConfig.assistant.workspaceDir,
+    worktreesDir: runtimeConfig.assistant.worktreesDir,
+    auth: {
+      mode: runtimeConfig.assistant.auth.mode,
+      allowLoopbackBypass: runtimeConfig.assistant.auth.allowLoopbackBypass,
+      token: {
+        queryParam: runtimeConfig.assistant.auth.token.queryParam,
+      },
+      basic: {},
+    },
+    approvalExplainer: runtimeConfig.assistant.approvalExplainer,
+    memory: runtimeConfig.assistant.memory,
+    web: runtimeConfig.assistant.web,
+    mesh: runtimeConfig.assistant.mesh,
+    npu: runtimeConfig.assistant.npu,
+    llamaCpp: runtimeConfig.assistant.llamaCpp,
+    database: runtimeConfig.assistant.database,
+    sqlite: runtimeConfig.assistant.sqlite,
+    durable: runtimeConfig.assistant.durable,
+    features,
+    budgets: runtimeConfig.assistant.budgets,
+  };
+  const toolPolicyPayload = {
+    ...runtimeConfig.toolPolicy,
+    sandbox: {
+      ...runtimeConfig.toolPolicy.sandbox,
+      writeJailRoots: runtimeConfig.toolPolicy.sandbox.writeJailRoots.map((root) => serializeRootPath(root)),
+      readOnlyRoots: runtimeConfig.toolPolicy.sandbox.readOnlyRoots.map((root) => serializeRootPath(root)),
+    },
+  };
+  return buildUnifiedConfigPayload(
+    assistantPayload,
+    toolPolicyPayload,
+    runtimeConfig.budgets,
+    llmConfig,
+    cronJobs,
+  ) as CompleteUnifiedConfigPayload;
+}
+
+/** Preserve live owner object/array references while applying or restoring configuration. */
+export function replaceMutableConfigValue(target: object, source: object): void {
+  const targetRecord = target as Record<string, unknown>;
+  const sourceRecord = source as Record<string, unknown>;
+  for (const key of Object.keys(targetRecord)) {
+    if (!Object.prototype.hasOwnProperty.call(sourceRecord, key)) {
+      delete targetRecord[key];
+    }
+  }
+  for (const [key, nextValue] of Object.entries(sourceRecord)) {
+    const currentValue = targetRecord[key];
+    if (Array.isArray(currentValue) && Array.isArray(nextValue)) {
+      currentValue.splice(0, currentValue.length, ...structuredClone(nextValue));
+      continue;
+    }
+    if (isPlainMutableRecord(currentValue) && isPlainMutableRecord(nextValue)) {
+      replaceMutableConfigValue(currentValue, nextValue);
+      continue;
+    }
+    targetRecord[key] = structuredClone(nextValue);
+  }
+}
+
+function isPlainMutableRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export async function syncUnifiedConfig(

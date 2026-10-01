@@ -15,8 +15,8 @@ import type {
 import type { OnboardingCompleteResponse, RuntimeSettingsResponse } from "./types.js";
 import { request } from "./client-core.js";
 
-export async function fetchSettings(): Promise<RuntimeSettingsResponse> {
-  return request<RuntimeSettingsResponse>("/api/v1/settings");
+export async function fetchSettings(options: { signal?: AbortSignal } = {}): Promise<RuntimeSettingsResponse> {
+  return request<RuntimeSettingsResponse>("/api/v1/settings", options.signal ? { signal: options.signal, cache: "no-store" } : undefined);
 }
 
 export async function fetchDeviceAccessGrants(
@@ -32,8 +32,8 @@ export async function revokeDeviceAccessGrant(grantId: string): Promise<DeviceAc
   });
 }
 
-export async function fetchOnboardingState(): Promise<OnboardingState> {
-  return request<OnboardingState>("/api/v1/onboarding/state");
+export async function fetchOnboardingState(options: { signal?: AbortSignal } = {}): Promise<OnboardingState> {
+  return request<OnboardingState>("/api/v1/onboarding/state", options.signal ? { signal: options.signal, cache: "no-store" } : undefined);
 }
 
 export async function bootstrapOnboarding(input: OnboardingBootstrapInput): Promise<OnboardingBootstrapResult> {

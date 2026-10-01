@@ -132,10 +132,14 @@ struct Stdio final {
   static DWORD Read(void* raw, std::span<std::uint8_t> bytes) noexcept {
     auto& self = *static_cast<Stdio*>(raw);
     if (self.mode == "read-failure") return ERROR_BROKEN_PIPE;
-    if (bytes.size() != 149) return ERROR_INVALID_DATA;
-    bytes[0] = 19; bytes[1] = 144;
-    std::copy(self.challenge.begin(), self.challenge.end(), bytes.begin() + 5);
-    if (self.mode == "wrong-echo") bytes[5 + 128] ^= 1;
+    if (bytes.size() == 5) {
+      bytes[0] = 19; bytes[1] = 144;
+      std::fill(bytes.begin() + 2, bytes.end(), std::uint8_t{0});
+      return ERROR_SUCCESS;
+    }
+    if (bytes.size() != self.challenge.size()) return ERROR_INVALID_DATA;
+    std::copy(self.challenge.begin(), self.challenge.end(), bytes.begin());
+    if (self.mode == "wrong-echo") bytes[128] ^= 1;
     return ERROR_SUCCESS;
   }
 };
@@ -164,7 +168,8 @@ void StdioCases() {
       if (!error) error = reservation->Verify();
     }
     const bool success = owner.mode == "success" || owner.mode == "mutated-capture";
-    Check(success ? !error : error != ERROR_SUCCESS, "only exact current parent replies authorize installation");
+    Check(success ? !error : error != ERROR_SUCCESS,
+      ("only exact current parent replies authorize installation: " + owner.mode + " error=" + std::to_string(error)).c_str());
     if (success) Check(owner.frames == std::vector<unsigned>({16, 17, 18, 18}) && owner.challenge[128] == 2,
       "capture precedes exact consecutive authority challenges");
     if (owner.mode == "reentrant") Check(owner.reentered && !reservation, "reentrant capture poisons admission");

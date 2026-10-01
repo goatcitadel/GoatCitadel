@@ -4,6 +4,14 @@
   gap: 6px;
   margin-bottom: 6px;
 }
+.mc-next-composer-active-context.is-inline {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  min-width: 0;
+}
 .mc-next-chat-details {
   position: relative;
   font-size: var(--text-sm);
@@ -40,10 +48,10 @@
 .mc-next-threaded-surface.unified .mc-next-threaded-title-block {
   min-width: 0;
 }
-@media (max-width: 767px) {
+@media (max-width: 639px) {
   .mc-next-threaded-surface.unified .mc-next-threaded-header-actions {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
   }
 }
 
@@ -143,7 +151,7 @@
   border-top: 1px solid var(--border-subtle);
   padding-top: 20px;
 }
-@media (max-width: 1179px) {
+@media (max-width: 1279px) {
   .mc-next-threaded-stage.mode-chat .mc-next-threaded-context-panel {
     width: 100%;
     padding: 16px;
@@ -165,7 +173,7 @@
   white-space: pre-wrap;
   overflow: auto;
 }
-@media (width < 1180px) {
+@media (width < 1280px) {
   .mc-next-threaded-stage.mode-chat .mc-next-threaded-context-panel {
     position: fixed;
     inset: 0;
@@ -185,7 +193,7 @@
   }
 }
 
-@media (max-width: 1680px) and (max-height: 699px), (width < 1180px) {
+@media (max-width: 1599px) and (max-height: 699px), (width < 1280px) {
   .mc-next-stage-work .mc-next-surface-host-work {
     height: 100%;
     min-height: 0;
@@ -239,15 +247,15 @@
   .mc-next-surface-host-work .mc-next-threaded-surface.unified .mc-next-threaded-composer-card {
     position: relative;
     min-height: 0;
-    max-height: 50dvh;
+    max-height: 38dvh;
     overflow: auto;
     padding: 8px 10px max(14px, env(safe-area-inset-bottom));
   }
 }
-@media (width < 1180px) {
+@media (width < 1280px) {
   .mc-next-threaded-surface.unified .mc-next-threaded-header-actions {
     display: flex;
-    flex-flow: row wrap;
+    flex-flow: row nowrap;
     align-items: center;
     gap: 6px;
   }
@@ -271,7 +279,7 @@
   font-family: var(--font-sans);
   font-size: var(--text-sm);
 }
-@media (width < 1180px) {
+@media (width < 1280px) {
   .mc-next-threaded-surface.unified .mc-next-thread-branch-switcher {
     display: flex;
     align-items: center;
@@ -491,7 +499,7 @@
 .mc-next-workbench-panel .mc-next-panel-tab-row > button {
   flex: 0 0 auto;
 }
-@media (max-width: 767px) {
+@media (max-width: 639px) {
   .mc-next-surface-host-work .mc-next-threaded-stage.has-code-panel > .mc-next-threaded-side-panel.code {
     padding: 12px;
   }
@@ -594,7 +602,7 @@
   border-bottom: 1px solid var(--border-subtle);
   border-radius: 0;
 }
-@media (max-width: 767px) {
+@media (max-width: 639px) {
   .mc-next-workbench-files-toggle {
     display: inline-flex;
   }

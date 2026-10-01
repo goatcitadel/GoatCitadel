@@ -672,7 +672,7 @@ describe("ApprovalsRoutePage", () => {
       },
     };
     const text = renderText();
-    expect(text).toContain("rejected");
+    expect(text).toContain("denied");
     expect(text).toContain("Follow-up completed");
     expect(text).not.toContain("Worker resumed");
   });
@@ -763,7 +763,7 @@ describe("ApprovalsRoutePage", () => {
     });
     let text = collectText(renderer!.root);
     expect(text).toContain("approved");
-    expect(text).toContain("rejected");
+    expect(text).toContain("denied");
     expect(text).toContain("safe");
     expect(text).toContain("caution");
     expect(text).toContain("Decision recorded");

@@ -297,6 +297,7 @@ describe("tool executor edge coverage", () => {
       commsConfig,
       commsStorage({
         connectionId: "ntfy-live",
+        kind: "channel",
         key: "ntfy",
         config: {
           baseUrl: "https://ntfy.example.com",
@@ -325,6 +326,7 @@ describe("tool executor edge coverage", () => {
       commsConfig,
       commsStorage({
         connectionId: "ntfy-dry-run",
+        kind: "channel",
         key: "ntfy",
         config: {
           baseUrl: "https://ntfy.example.com",
@@ -1047,6 +1049,7 @@ function storageStub(): Storage & AsyncStorage {
 
 function commsStorage(connection: {
   connectionId: string;
+  kind?: "channel";
   key: string;
   config: Record<string, unknown>;
 }): Storage & AsyncStorage {

@@ -338,7 +338,7 @@ describe("ThreadedComposer", () => {
     expect(markup).not.toContain('role="alert"');
   });
 
-  it("lets the approval panel own a waiting turn and humanizes other recovery states", () => {
+  it("keeps waiting-turn recovery copy with the active work panel", () => {
     const waiting = buildMarkup({
       pendingApproval: {
         approvalId: "approval-1",
@@ -355,8 +355,8 @@ describe("ThreadedComposer", () => {
       selectedTurn: { turnId: "turn-2", trace: { status: "waiting_for_user_input" } },
       selectedTurnRecovery: { summary: "Answer the pending question to continue.", action: "none" },
     });
-    expect(interrupted).toContain("Answer the pending question to continue.");
-    expect(interrupted).toContain("Waiting for your answer");
+    expect(interrupted).not.toContain("Answer the pending question to continue.");
+    expect(interrupted).not.toContain("Waiting for your answer");
     expect(interrupted).not.toContain("waiting_for_user_input");
   });
 
@@ -373,7 +373,7 @@ describe("ThreadedComposer", () => {
       .findAllByType("button")
       .find((button) => button.props.className === "mc-next-composer-primary")!;
     const hint = renderer.root.findByProps({ id: send.props["aria-describedby"] });
-    expect(collectText(hint)).toBe("Sending is unavailable: No model is connected yet.");
+    expect(collectText(hint)).toBe("No model is connected yet.");
     expect(String(hint.props.className).split(" ")).toContain("mc-next-composer-send-block");
     expect(collectText(renderer.root)).not.toContain("Configure");
   });
@@ -487,7 +487,7 @@ describe("ThreadedComposer", () => {
       canSend: false,
       profileDependentAdmissionBlockReason: "Routed documents are temporarily unavailable. Remove the document selection to send.",
     });
-    expect(markup).toContain("Sending is unavailable: Routed documents are temporarily unavailable.");
+    expect(markup).toContain("Routed documents are temporarily unavailable.");
     expect(markup).toContain("Remove the document selection to send.");
   });
 
@@ -758,7 +758,7 @@ describe("ThreadedComposer", () => {
     expect(markup).toContain("Turn planning off");
   });
 
-  it("attaches approval blockers to the composer in compact form", () => {
+  it("keeps approval decisions out of the docked composer", () => {
     const markup = buildMarkup({
       pendingApproval: {
         approvalId: "approval-1",
@@ -769,20 +769,13 @@ describe("ThreadedComposer", () => {
       },
     });
 
-    expect(markup).toContain("mc-next-composer-blocking-prompt");
-    expect(markup).toContain('data-blocker-kind="approval"');
-    expect(markup).toContain('data-variant="compact"');
-    expect(markup).toContain("Approval required");
-    expect(markup).toContain("filesystem.write");
-    expect(markup).toContain("Needs permission to update a file.");
-    expect(markup).toContain("Allow once");
-    expect(markup).toContain("Deny");
-    expect(markup).toContain("Open persisted approval record");
+    expect(markup).not.toContain("mc-next-composer-blocking-prompt");
+    expect(markup).not.toContain("Approval required");
     expect(markup).not.toContain("Action type: tool_call");
     expect(markup).not.toContain("Touches: README.md");
   });
 
-  it("attaches user-input blockers to the composer in compact form", () => {
+  it("keeps durable user-input forms out of the docked composer", () => {
     const markup = buildMarkup({
       pendingUserInput: {
         turnId: "turn-1",
@@ -795,16 +788,12 @@ describe("ThreadedComposer", () => {
       },
     });
 
-    expect(markup).toContain("mc-next-composer-blocking-prompt");
-    expect(markup).toContain('data-blocker-kind="user-input"');
-    expect(markup).toContain('data-variant="compact"');
-    expect(markup).toContain("Need a constraint");
-    expect(markup).toContain("Answer required");
-    expect(markup).toContain("Submit");
-    expect(markup).not.toContain("Dismiss");
+    expect(markup).not.toContain("mc-next-composer-blocking-prompt");
+    expect(markup).not.toContain("Need a constraint");
+    expect(markup).not.toContain("Answer required");
   });
 
-  it("uses the canonical blocker card as the single composer state while blocked", () => {
+  it("keeps the blocked composer free of a second decision card", () => {
     const approvalMarkup = buildMarkup({
       pendingApproval: {
         approvalId: "approval-1",
@@ -813,9 +802,9 @@ describe("ThreadedComposer", () => {
         reason: "Needs approval.",
       },
     });
-    expect(approvalMarkup).toContain("mc-next-composer-blocking-prompt");
+    expect(approvalMarkup).not.toContain("mc-next-composer-blocking-prompt");
     expect(approvalMarkup).not.toContain("mc-next-composer-blocked-actions");
-    expect(approvalMarkup.match(/Approval required/g)).toHaveLength(1);
+    expect(approvalMarkup).not.toContain("Approval required");
     expect(approvalMarkup).not.toContain(">Research<");
     expect(approvalMarkup).not.toContain(">Attach context<");
 
@@ -828,7 +817,7 @@ describe("ThreadedComposer", () => {
         question: "Continue?",
       },
     });
-    expect(userInputMarkup).toContain("Answer required");
+    expect(userInputMarkup).not.toContain("Answer required");
     expect(userInputMarkup).not.toContain("mc-next-composer-blocked-actions");
     expect(userInputMarkup).not.toContain(">Research<");
   });
@@ -1091,7 +1080,7 @@ describe("ThreadedComposer", () => {
     expect(composer.props.value).toBe("Keep this draft while setting up a provider.");
     expect(send.props.disabled).toBe(true);
     expect(send.props["aria-describedby"]).toBeTruthy();
-    expect(collectText(renderer.root)).toContain("Sending is unavailable:");
+    expect(collectText(renderer.root)).not.toContain("Sending is unavailable:");
     expect(collectText(renderer.root)).toContain("No provider is configured.");
   });
 
@@ -1512,7 +1501,7 @@ describe("ThreadedComposer", () => {
 
     await click(findButton(renderer.root, "Plan"));
     await click(findButton(renderer.root, "Research"));
-    await click(findButton(renderer.root, "Review"));
+    await click(findSuggestionButton(renderer.root, "Review"));
     await click(findButton(renderer.root, "Attach context"));
     await click(findButton(renderer.root, "Dismiss"));
     await click(findButton(renderer.root, "Acknowledge fallback"));

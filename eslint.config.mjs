@@ -144,6 +144,13 @@ export default tseslint.config(
     },
   },
   {
+    files: ["apps/mission-control-next/src/cockpit/**/*.{ts,tsx}"],
+    ignores: ["**/*.test.ts", "**/*.test.tsx"],
+    rules: {
+      "max-lines": ["warn", { max: 400, skipBlankLines: true, skipComments: true }],
+    },
+  },
+  {
     files: [
       "apps/gateway/src/services/governed-remediation-coordinator.ts",
       "apps/gateway/src/services/llm-completion-service.ts",

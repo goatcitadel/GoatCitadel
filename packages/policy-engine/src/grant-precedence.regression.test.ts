@@ -61,8 +61,7 @@ function createStorageStub(): Storage & AsyncStorage {
  *  non-safe tool needs approval unless an explicit allow-grant covers it. This isolates the
  *  grant machinery from profile membership. */
 const baseConfig: ToolPolicyConfig = {
-  profiles: { danger: ["*"] },
-  tools: { profile: "danger", approvalMode: "approve_risky", allow: [], deny: [] },
+  tools: { approvalMode: "approve_risky", allow: ["*"], deny: [] },
   agents: {},
   sandbox: {
     writeJailRoots: ["./workspace"],

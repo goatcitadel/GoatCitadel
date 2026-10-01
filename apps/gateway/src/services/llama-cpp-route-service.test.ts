@@ -22,9 +22,15 @@ describe("llama.cpp route service facade", () => {
       startHuggingFaceDownload: vi.fn((input: unknown) => ({ jobId: "download-1", input })),
       stop: vi.fn(async (source: string) => ({ running: false, source })),
     };
+    const setup = {
+      get: vi.fn(async (workspaceId: string) => ({ workspaceId })),
+      stageManagedSelection: vi.fn(async (input: unknown) => input),
+      chatTest: vi.fn(async (workspaceId: string) => ({ workspaceId, success: false })),
+    };
     const publishRealtime = vi.fn();
     const port = createLlamaCppRoutePort({
       llamaCppRuntime: llamaCppRuntime as never,
+      setup: setup as never,
       publishRealtime,
     });
     const service = createLlamaCppRouteService(port);
@@ -46,6 +52,19 @@ describe("llama.cpp route service facade", () => {
     });
     await expect(service.startLlamaCppRuntime()).resolves.toMatchObject({ running: true, source: "api" });
     await expect(service.stopLlamaCppRuntime()).resolves.toMatchObject({ running: false, source: "api" });
+    await expect(service.getLlamaCppSetup("workspace-a")).resolves.toEqual({ workspaceId: "workspace-a" });
+    await service.stageLlamaCppManagedSelection({ workspaceId: "workspace-a", modelId: "model-a" });
+    await expect(service.testLlamaCppChat("workspace-a")).resolves.toEqual({
+      workspaceId: "workspace-a",
+      success: false,
+    });
+
+    for (const method of Object.values(llamaCppRuntime)) {
+      expect(method.mock.contexts).toEqual([llamaCppRuntime]);
+    }
+    for (const method of Object.values(setup)) {
+      expect(method.mock.contexts).toEqual([setup]);
+    }
 
     expect(llamaCppRuntime.advise).toHaveBeenCalledWith({ goal: "local model" });
     expect(llamaCppRuntime.start).toHaveBeenCalledWith("api");
@@ -62,5 +81,27 @@ describe("llama.cpp route service facade", () => {
       type: "llamacpp_stopped",
       status: { running: false, source: "api" },
     });
+    expect(llamaCppRuntime.start.mock.invocationCallOrder[0]).toBeLessThan(
+      publishRealtime.mock.invocationCallOrder[1]!,
+    );
+  });
+
+  it("never emits a successful lifecycle signal when the runtime owner rejects start", async () => {
+    const error = new Error("runtime is externally owned");
+    const runtime = {
+      start: vi.fn(async () => {
+        throw error;
+      }),
+    };
+    const deps = {
+      llamaCppRuntime: runtime as never,
+      setup: {} as never,
+      publishRealtime: vi.fn(async () => undefined),
+    };
+    const service = createLlamaCppRoutePort(deps);
+
+    await expect(service.startLlamaCppRuntime()).rejects.toBe(error);
+    expect(runtime.start.mock.contexts).toEqual([runtime]);
+    expect(deps.publishRealtime).not.toHaveBeenCalled();
   });
 });

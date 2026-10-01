@@ -1059,7 +1059,7 @@ function assertReadinessCoverage(input: ChatTurnCapabilityProfileRecord, canonic
 
 function assertBoundedJsonTree(value: unknown): void {
   let nodes = 0;
-  const seen = new WeakSet<object>();
+  const ancestors = new WeakSet<object>();
   const visit = (current: unknown, depth: number, path: string): void => {
     nodes += 1;
     if (nodes > MAX_JSON_NODES) {
@@ -1089,27 +1089,31 @@ function assertBoundedJsonTree(value: unknown): void {
     if (typeof current !== "object") {
       throw new Error(`Capability profile contains a non-JSON value at ${path}.`);
     }
-    if (seen.has(current)) {
+    if (ancestors.has(current)) {
       throw new Error(`Capability profile contains a cycle at ${path}.`);
     }
-    seen.add(current);
-    if (Array.isArray(current)) {
-      if (current.length > MAX_COLLECTION_ITEMS) {
-        throw new Error(`Capability profile collection at ${path} exceeds ${MAX_COLLECTION_ITEMS} items.`);
+    ancestors.add(current);
+    try {
+      if (Array.isArray(current)) {
+        if (current.length > MAX_COLLECTION_ITEMS) {
+          throw new Error(`Capability profile collection at ${path} exceeds ${MAX_COLLECTION_ITEMS} items.`);
+        }
+        current.forEach((entry, index) => visit(entry, depth + 1, `${path}[${index}]`));
+        return;
       }
-      current.forEach((entry, index) => visit(entry, depth + 1, `${path}[${index}]`));
-      return;
-    }
-    const entries = Object.entries(current as Record<string, unknown>);
-    if (entries.length > MAX_COLLECTION_ITEMS) {
-      throw new Error(`Capability profile object at ${path} exceeds ${MAX_COLLECTION_ITEMS} keys.`);
-    }
-    for (const [key, entry] of entries) {
-      if (key === "__proto__" || key === "prototype" || key === "constructor") {
-        throw new Error(`Capability profile contains a prohibited key at ${path}.${key}.`);
+      const entries = Object.entries(current as Record<string, unknown>);
+      if (entries.length > MAX_COLLECTION_ITEMS) {
+        throw new Error(`Capability profile object at ${path} exceeds ${MAX_COLLECTION_ITEMS} keys.`);
       }
-      assertSafeString(key, `${path} key`, 256);
-      visit(entry, depth + 1, `${path}.${key}`);
+      for (const [key, entry] of entries) {
+        if (key === "__proto__" || key === "prototype" || key === "constructor") {
+          throw new Error(`Capability profile contains a prohibited key at ${path}.${key}.`);
+        }
+        assertSafeString(key, `${path} key`, 256);
+        visit(entry, depth + 1, `${path}.${key}`);
+      }
+    } finally {
+      ancestors.delete(current);
     }
   };
   visit(value, 0, "$profile");

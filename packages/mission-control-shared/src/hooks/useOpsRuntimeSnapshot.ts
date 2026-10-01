@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { describeApiError } from "../api/describe-api-error.js";
 import {
   fetchCostSummary,
   fetchDaemonStatus,
@@ -420,8 +421,6 @@ function sourcesForOpsSection(activeSection: string): RuntimeSnapshotSourceKey[]
 }
 
 function getErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-  return "Something went wrong.";
+  if (!(error instanceof Error)) return "Something went wrong.";
+  return describeApiError(error).summary;
 }

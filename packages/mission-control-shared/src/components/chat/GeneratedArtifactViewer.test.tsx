@@ -22,6 +22,13 @@ describe("isSafeSvgLinkTarget", () => {
 });
 
 describe("hardenMermaidSvg", () => {
+  it("preserves SVG node and edge labels while removing embedded HTML", () => {
+    const hardened = hardenMermaidSvg('<svg xmlns="http://www.w3.org/2000/svg"><g class="node"><text><tspan>Recorded input</tspan></text></g><text>Visible output</text><foreignObject><p>HTML label</p></foreignObject></svg>');
+    expect(hardened).toContain("Recorded input");
+    expect(hardened).toContain("Visible output");
+    expect(hardened).not.toContain("HTML label");
+    expect(hardened).not.toContain("foreignObject");
+  });
   it("strips script elements, foreignObject, and inline event handlers", () => {
     const hardened = hardenMermaidSvg(
       '<svg xmlns="http://www.w3.org/2000/svg">' +

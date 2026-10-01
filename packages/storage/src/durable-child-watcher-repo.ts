@@ -35,6 +35,15 @@ interface DurableChildWatcherRow {
   closed_at: string | null;
 }
 
+interface RecentCompletedDelegationRow extends DurableChildWatcherRow {
+  child_finished_at: string;
+}
+
+export interface RecentCompletedDelegationWatcher {
+  watcher: DurableChildWatcherRecord;
+  finishedAt: string;
+}
+
 interface DurableRunEventRow {
   event_id: string;
   run_id: string;
@@ -89,6 +98,7 @@ export class DurableChildWatcherRepository {
   private readonly getByPairStmt;
   private readonly wouldCreateCycleStmt;
   private readonly listByParentStmt;
+  private readonly listRecentCompletedDelegationsStmt;
   private readonly getScanCursorStmt;
   private readonly listAttachedAfterCursorStmt;
   private readonly listAttachedThroughCursorStmt;
@@ -131,6 +141,22 @@ export class DurableChildWatcherRepository {
       FROM durable_child_watchers
       WHERE parent_run_id = ?
       ORDER BY created_at ASC, watcher_id ASC
+      LIMIT ?
+    `);
+    const childSessionId = db.dialect === "postgres"
+      ? "child.payload_json::jsonb ->> 'sessionId'"
+      : "json_extract(child.payload_json, '$.sessionId')";
+    this.listRecentCompletedDelegationsStmt = db.prepare(`
+      SELECT watcher.*, child.finished_at AS child_finished_at
+      FROM durable_runs AS child
+      JOIN durable_child_watchers AS watcher ON watcher.child_run_id = child.run_id
+      JOIN chat_session_meta AS child_session ON child_session.session_id = ${childSessionId}
+      WHERE child.status = 'completed'
+        AND child.updated_at >= ?
+        AND child.finished_at >= ?
+        AND watcher.source = 'chat_delegation'
+        AND child_session.workspace_id = ?
+      ORDER BY child.updated_at DESC, child.run_id DESC
       LIMIT ?
     `);
     this.getScanCursorStmt = db.prepare(
@@ -270,6 +296,13 @@ export class DurableChildWatcherRepository {
     assertDurableChildWatcherRunIdBounds(parentRunId);
     const safeLimit = clampLimit(limit, 500);
     return this.listByParentStmt.all<DurableChildWatcherRow>(parentRunId, safeLimit).map(mapWatcherRow);
+  }
+
+  /** Scope candidates before the cap. Callers must still verify both runs and both sessions. */
+  public listRecentCompletedDelegations(workspaceId: string, since: string, limit = 50): RecentCompletedDelegationWatcher[] {
+    const safeLimit = Number.isFinite(limit) ? clampLimit(limit, 200) : 50;
+    const rows = this.listRecentCompletedDelegationsStmt.all<RecentCompletedDelegationRow>(since, since, workspaceId, safeLimit);
+    return rows.map((row) => ({ watcher: mapWatcherRow(row), finishedAt: row.child_finished_at }));
   }
 
   public detach(watcherId: string, detachedAt = new Date().toISOString()): DurableChildWatcherRecord {

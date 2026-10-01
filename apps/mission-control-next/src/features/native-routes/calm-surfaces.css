@@ -1,13 +1,7 @@
-/* Shared hierarchy and disclosure; substantive data remains in its owning view. */
+/* Shared hierarchy; substantive data remains in its owning view. */
 .mc-next-shell .mc-next-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .mc-next-shell .mc-next-directory-header { align-items: flex-start; border: 0; background: transparent; box-shadow: none; }
 .mc-next-shell .mc-next-directory-copy .mc-next-directory-title-row h1 { font-size: var(--text-2xl); }
-.mc-next-shell .mc-next-page-explanation, .mc-next-shell .mc-next-card-explanation { color: var(--fg-muted); font-size: var(--text-xs); }
-.mc-next-shell .mc-next-page-explanation summary, .mc-next-shell .mc-next-card-explanation summary { display: flex; align-items: center; gap: 6px; width: fit-content; cursor: pointer; padding: 6px 0; }
-.mc-next-shell .mc-next-page-explanation p, .mc-next-shell .mc-next-card-explanation p { max-width: 72ch; line-height: 1.6; }
-.mc-next-shell .mc-next-page-explanation dl, .mc-next-shell .mc-next-card-explanation dl { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 8px 0; }
-.mc-next-shell .mc-next-page-explanation dt, .mc-next-shell .mc-next-card-explanation dt { font-size: var(--text-xs); color: var(--fg-muted); }
-.mc-next-shell .mc-next-page-explanation dd, .mc-next-shell .mc-next-card-explanation dd { margin: 3px 0 0; color: var(--fg-primary); }
 .mc-next-shell .mc-next-directory-card { box-shadow: none; border: 0; background: transparent; }
 .mc-next-shell .mc-next-directory-card-head { border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px; }
 /* Card status stats read as compact chips under the title; a lone stat no longer stretches across the card. */
@@ -23,7 +17,7 @@
 .mc-next-shell .mc-next-project-intake-panel > summary, .mc-next-shell .mc-next-project-evidence > summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
 .mc-next-shell .mc-next-project-recent-item { width: 100%; text-align: left; color: var(--fg-primary); background: transparent; border: 0; border-bottom: 1px solid var(--border-subtle); cursor: pointer; }
 .mc-next-shell .mc-next-project-controls { grid-template-columns: minmax(0, 1fr); max-width: 780px; }
-@media (max-width: 1179px) { .mc-next-directory-header { gap: 12px; } .mc-next-directory-head-actions { flex-wrap: wrap; } }
+@media (max-width: 1279px) { .mc-next-directory-header { gap: 12px; } .mc-next-directory-head-actions { flex-wrap: wrap; } }
 
 .mc-next-shell .mc-next-view-tabs { display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px; }
 .mc-next-shell .mc-next-directory-grid-native:empty { display: none; }
@@ -87,7 +81,7 @@
 .mc-next-ops-runtime-page .mc-next-directory-list-item > .mc-next-directory-list-head, .mc-next-ops-runtime-page .mc-next-directory-list-item > p { grid-column: 1; }
 .mc-next-ops-runtime-page .mc-next-directory-list-item > .mc-next-runtime-actions { grid-column: 2; grid-row: 1 / span 2; align-self: center; margin: 0; }
 .mc-next-shell .mc-next-directory-lead:has(> .mc-next-ops-posture-summary) { border: 0; padding: 0; background: transparent; box-shadow: none; }
-@media (max-width: 599px) { .mc-next-ops-runtime-page .mc-next-directory-list-item:has(> .mc-next-runtime-actions) { grid-template-columns: minmax(0, 1fr); } .mc-next-ops-runtime-page .mc-next-directory-list-item > .mc-next-runtime-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; } }
+@media (max-width: 639px) { .mc-next-ops-runtime-page .mc-next-directory-list-item:has(> .mc-next-runtime-actions) { grid-template-columns: minmax(0, 1fr); } .mc-next-ops-runtime-page .mc-next-directory-list-item > .mc-next-runtime-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; } }
 
 .mc-next-shell .mc-next-remote-workers { display: block; }
 .mc-next-shell .mc-next-remote-workers__detail { display: block; border: 0; }
@@ -96,7 +90,7 @@
 .mc-next-worker-runtime .mc-next-remote-workers__fact-grid > div { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: .75rem; padding: .4rem 0; }
 .mc-next-worker-runtime small { display: block; color: var(--fg-muted); }
 
-.mc-next-worker-record { display: block; margin: .5rem 0; font-size: var(--type-small); }
+.mc-next-worker-record { display: block; margin: .5rem 0; font-size: var(--text-xs); }
 .mc-next-worker-record > div { padding: .3rem 0; }
 .mc-next-worker-record dt { color: var(--text-muted); }
 .mc-next-worker-record dd { margin-inline-start: .75rem; overflow-wrap: anywhere; }

@@ -27,7 +27,7 @@ export function UnifiedSidebarProvider({ children, mobile, navOpen, openNav, clo
   const [activeInspectorId, setActiveInspectorId] = useState<string | null>(null);
   const inspectorClosers = useRef(new Map<string, () => void>());
   const [pendingInspector, setPendingInspector] = useState<{ id: string; keys: readonly string[]; previous: Array<() => void>; closeNew?: () => void } | null>(null);
-  const narrowDesktop = useMediaQuery("(min-width: 1180px) and (max-width: 1279px)");
+  const narrowDesktop = useMediaQuery("(min-width: 1024px) and (max-width: 1279px)");
   const registerInspector = useCallback((id: string, open: boolean, onClose?: () => void) => {
     if (open) {
       const previous = [...inspectorClosers.current].filter(([other]) => other !== id);

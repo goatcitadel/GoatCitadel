@@ -186,7 +186,7 @@
   color: var(--area-library);
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1023px) {
   .mc-next-mason-progress {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -404,7 +404,7 @@
   font-size: var(--text-xs);
 }
 
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .mc-next-ward-effect-picker > div,
   .mc-next-ward-detail dl {
     grid-template-columns: minmax(0, 1fr);

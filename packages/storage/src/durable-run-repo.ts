@@ -6,6 +6,8 @@ import type {
   DurableDeadLetterRecord,
   DurableRetryRecord,
   DurableRunRecord,
+  DurableRunHistoryPage,
+  DurableRunHistoryQuery,
   DurableRunStatus,
 } from "@goatcitadel/contracts";
 import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
@@ -13,6 +15,7 @@ import { safeJsonParse } from "./safe-json.js";
 import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
 import { parseJsonObject } from "./state-validators.js";
 import { synchronizeRemoteWorkerChatTaskStatus } from "./remote-worker-chat-task-repo.js";
+import { listDurableRunHistoryRows } from "./durable-run-history-query.js";
 import {
   toCountRow,
   toDurableCheckpointRows,
@@ -885,6 +888,11 @@ export class DurableRunRepository {
     const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
     const rows = toDurableRunRows(this.listRunsStmt.all(safeLimit));
     return rows.map((row) => this.mapRunRow(row));
+  }
+
+  public listRunHistory(query: DurableRunHistoryQuery): DurableRunHistoryPage {
+    const { rows, nextCursor } = listDurableRunHistoryRows(this.db, query);
+    return { items: rows.map((row) => this.mapRunRow(row)), ...(nextCursor ? { nextCursor } : {}) };
   }
 
   public listRunIdsByStatus(status: DurableRunStatus, limit = 500): string[] {

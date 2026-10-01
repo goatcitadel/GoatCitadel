@@ -1,18 +1,39 @@
+import { __resetPermissionManagementForTests } from "./settings/use-permission-management";
+import { __resetAuthAttemptsForTests } from "./settings/gateway-auth-state";
+import { __resetToolGrantActionsForTests } from "./settings/use-tool-grant-actions";
 import { __resetSettingsChangesForTests } from "./settings/use-settings-change";
+import { __resetProviderMutationStateForTests } from "./settings/sections/provider-mutation-state";
+import { __resetIntegrationConnectionMutationsForTests } from "./settings/integration-connection-mutation";
+import { __resetDeviceAccessRevocationsForTests } from "./settings/use-device-access-revocation";
+import { __resetPersonalityDefaultForTests } from "./settings/use-personality-default";
+import { __resetPersonalityEditorMutationForTests } from "./settings/personality-editor-mutation";
 import { __resetSessionViewStateForTests } from "../../hooks/use-session-view-state";
 import { __resetSessionDraftsForTests } from "./library/session-drafts";
+import { __resetOnboardingAttemptsForTests } from "./settings/onboarding-completion-state";
+import { __resetDemoReceiptsForTests } from "./settings/demo-bootstrap-state";
+import { onboardingFixture } from "./settings/onboarding.test-support";
+import { GCModal } from "@goatcitadel/mission-control-shared/components/ui/GCModal";
 import { act, create as createRenderer, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DeviceAccessGrantListResponse,
+  DeviceAccessGrantRevokeResponse,
   LocalOperatorOverrideRecord,
+  PermissionProfileSnapshotRecord,
+  PermissionProfileSelectionReview,
+  PermissionProfileSelectionReviewRequest,
   PersonalityCatalogResponse,
+  PersonalityCatalogMutationInput,
+  OnboardingBootstrapInput,
 } from "@goatcitadel/contracts";
 import { SettingsNativePage } from "./SettingsNativePage";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 import { ChatChangePlanActionDialog } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog";
 import { __resetFormDirtyRegistryForTests } from "./library/use-form-dirty";
+import { respondedFixture } from "./settings/mcp-elicitation.test-support";
+import { __resetMcpResponsesForTests } from "./settings/mcp-elicitation-response";
+import type { McpElicitationRequest } from "@goatcitadel/contracts";
 
 const mountedSettingsRenderers: ReactTestRenderer[] = [];
 function create(...args: Parameters<typeof createRenderer>): ReactTestRenderer {
@@ -50,6 +71,8 @@ const mocks = vi.hoisted(() => ({
     },
   })),
   fetchLlmConfig: vi.fn(),
+  updateProviderTransport: vi.fn(),
+  fetchChangePlan: vi.fn(),
   fetchLlmProviderAdvice: vi.fn(async () => ({
     generatedAt: "2026-05-22T00:00:00.000Z",
     preference: "low_cost",
@@ -212,16 +235,20 @@ const mocks = vi.hoisted(() => ({
     ...input,
   })),
   revokeToolGrant: vi.fn(async (grantId: string) => ({ revoked: true, grantId, revokedBy: "operator" })),
-  fetchPermissionProfiles: vi.fn(async () => ({
+  fetchPermissionProfiles: vi.fn(async (): Promise<{ items: PermissionProfileSnapshotRecord[] }> => ({
     items: [
       {
         revision: "a".repeat(64),
         profileId: "safe",
         label: "Safe",
         scope: "global",
+        status: "active",
         builtin: true,
         approvalMode: "approve_all",
         toolPatterns: ["*"],
+        allow: [],
+        deny: [],
+        createdBy: "system",
         createdAt: "2026-05-02T18:00:00.000Z",
         updatedAt: "2026-05-02T18:00:00.000Z",
       },
@@ -231,11 +258,13 @@ const mocks = vi.hoisted(() => ({
         label: "Trusted Local Power",
         description: "Run allowed local tools without normal prompts.",
         scope: "global",
+        status: "active",
         builtin: true,
         approvalMode: "bypass",
         toolPatterns: ["*"],
         allow: ["*"],
         deny: [],
+        createdBy: "system",
         createdAt: "2026-05-02T18:00:00.000Z",
         updatedAt: "2026-05-02T18:00:00.000Z",
       },
@@ -250,7 +279,7 @@ const mocks = vi.hoisted(() => ({
     permissionProfileLabel: "Safe",
     permissionProfileApprovalMode: "approve_all",
   })),
-  createLocalOperatorOverride: vi.fn(async () => ({
+  createLocalOperatorOverride: vi.fn(async (): Promise<LocalOperatorOverrideRecord> => ({
     overrideId: "override-session-1",
     operatorId: "operator",
     scope: "session",
@@ -261,7 +290,7 @@ const mocks = vi.hoisted(() => ({
     createdAt: "2026-05-02T18:00:00.000Z",
     expiresAt: "2099-05-02T18:10:00.000Z",
   })),
-  createPermissionProfile: vi.fn(async (input) => ({
+  createPermissionProfile: vi.fn(async (input: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").createPermissionProfile>[0]): Promise<PermissionProfileSnapshotRecord> => ({
     revision: "a".repeat(64),
     profileId: "profile-created",
     scope: "workspace",
@@ -271,8 +300,12 @@ const mocks = vi.hoisted(() => ({
     createdAt: "2026-05-02T18:00:00.000Z",
     updatedAt: "2026-05-02T18:00:00.000Z",
     ...input,
+    status: "active",
+    toolPatterns: input.toolPatterns ?? [],
+    allow: input.allow ?? [],
+    deny: input.deny ?? [],
   })),
-  updatePermissionProfile: vi.fn(async (profileId: string, input) => ({
+  updatePermissionProfile: vi.fn(async (profileId: string, input: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").updatePermissionProfile>[1]): Promise<PermissionProfileSnapshotRecord> => ({
     revision: "a".repeat(64),
     profileId,
     label: input.label ?? "Updated profile",
@@ -281,13 +314,17 @@ const mocks = vi.hoisted(() => ({
     builtin: false,
     approvalMode: input.approvalMode ?? "approve_all",
     toolPatterns: input.toolPatterns ?? ["session.status"],
+    allow: input.allow ?? [],
+    deny: input.deny ?? [],
+    status: "active",
+    createdBy: "operator",
     createdAt: "2026-05-02T18:00:00.000Z",
     updatedAt: "2026-05-02T18:10:00.000Z",
   })),
-  reviewPermissionProfileSelection: vi.fn(async (input) => ({
+  reviewPermissionProfileSelection: vi.fn(async (input: PermissionProfileSelectionReviewRequest): Promise<PermissionProfileSelectionReview> => ({
     revision: "d".repeat(64),
     input,
-    target: { workspaceId: input.workspaceId ?? input.scopeRef },
+    target: { workspaceId: input.operation === "activate" ? input.workspaceId : input.scopeRef, operatorId: input.operation === "activate" ? "operator" : undefined },
     activeProfiles: [],
     profile:
       input.operation === "activate"
@@ -310,7 +347,11 @@ const mocks = vi.hoisted(() => ({
   })),
   activatePermissionProfile: vi.fn(async (input) => ({
     activationId: "activation-1",
+    active: true,
+    operatorId: "operator",
+    createdBy: "operator",
     createdAt: "2026-05-02T18:00:00.000Z",
+    updatedAt: "2026-05-02T18:00:00.000Z",
     ...input,
   })),
   archivePermissionProfile: vi.fn(async (profileId: string) => ({ archived: true, profileId })),
@@ -327,7 +368,7 @@ const mocks = vi.hoisted(() => ({
     revokedAt: "2026-05-02T18:05:00.000Z",
     ...input,
   })),
-  revokeDeviceAccessGrant: vi.fn(async (grantId: string) => ({
+  revokeDeviceAccessGrant: vi.fn(async (grantId: string): Promise<DeviceAccessGrantRevokeResponse> => ({
     grant: {
       grantId,
       requestId: "request-1",
@@ -339,11 +380,14 @@ const mocks = vi.hoisted(() => ({
       createdAt: "2026-05-02T18:00:00.000Z",
       metadata: {},
       revokedAt: "2026-05-02T19:00:00.000Z",
+      principalPurpose: "general_companion",
     },
   })),
   resolveGatewayInstallToken: vi.fn(async () => ({
     token: "install-token-1",
     source: "generated",
+    persistedToEnv: false,
+    warnings: [] as string[],
   })),
   patchSettings: vi.fn(async () => ({})),
   patchGatewayAuthSettings: vi.fn(async (input: any) => ({
@@ -392,30 +436,30 @@ const mocks = vi.hoisted(() => ({
     }),
   ),
   createPersonality: vi.fn(
-    async (): Promise<PersonalityCatalogResponse> => ({
+    async (_input: PersonalityCatalogMutationInput): Promise<PersonalityCatalogResponse> => ({
       revision: "e".repeat(64),
       defaultPersonalityId: "operator",
       items: [],
     }),
   ),
   updatePersonality: vi.fn(
-    async (): Promise<PersonalityCatalogResponse> => ({
+    async (_id: string, _input: PersonalityCatalogMutationInput): Promise<PersonalityCatalogResponse> => ({
       revision: "e".repeat(64),
       defaultPersonalityId: "operator",
       items: [],
     }),
   ),
   deletePersonality: vi.fn(
-    async (): Promise<PersonalityCatalogResponse> => ({
+    async (_id: string, _expectedRevision: string): Promise<PersonalityCatalogResponse> => ({
       revision: "e".repeat(64),
       defaultPersonalityId: "default",
       items: [],
     }),
   ),
   setDefaultPersonality: vi.fn(
-    async (): Promise<PersonalityCatalogResponse> => ({
+    async (personalityId: string, _expectedRevision: string): Promise<PersonalityCatalogResponse> => ({
       revision: "e".repeat(64),
-      defaultPersonalityId: "operator",
+      defaultPersonalityId: personalityId,
       items: [],
     }),
   ),
@@ -486,7 +530,7 @@ const mocks = vi.hoisted(() => ({
     status: "staged",
     proposalId: "proposal-1",
   })),
-  createExternalSideEffectReplayAuditRun: vi.fn(async () => ({
+  createExternalSideEffectReplayAuditRun: vi.fn(async (_input: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").createExternalSideEffectReplayAuditRun>[0]) => ({
     runId: "durable-replay-audit-1",
     workflowKey: "external_side_effect.replay",
     status: "queued",
@@ -495,6 +539,7 @@ const mocks = vi.hoisted(() => ({
     createdAt: "2026-05-31T20:00:00.000Z",
     updatedAt: "2026-05-31T20:00:00.000Z",
   })),
+  fetchDurableRun: vi.fn(),
   fetchIntegrationFormSchema: vi.fn(async () => ({
     catalogId: "github",
     title: "GitHub setup",
@@ -752,6 +797,8 @@ const mocks = vi.hoisted(() => ({
       },
     ],
     settings: {
+      revision: 41,
+      toolApprovalMode: "approve_risky",
       budgetMode: "balanced",
       networkAllowlist: ["api.openai.com"],
       auth: {
@@ -808,7 +855,7 @@ const mocks = vi.hoisted(() => ({
     nextRoute: "/chat",
     notes: [],
   })),
-  bootstrapOnboarding: vi.fn(async () => ({
+  bootstrapOnboarding: vi.fn(async (_input: OnboardingBootstrapInput) => ({
     state: await mocks.fetchOnboardingState(),
     appliedAt: "2026-05-02T19:00:00.000Z",
   })),
@@ -864,10 +911,10 @@ const mocks = vi.hoisted(() => ({
     readOnly: true,
     mutationSemantics: "none",
     experimentalRemoteRecordsAllowed: false,
-    runtimeSupport: "internal_approval_inbox_only",
+    runtimeSupport: "remote_http_sse_bridge",
     summary: {
       remoteServers: 1,
-      remoteTemplates: 1,
+      remoteTemplates: 0,
       runtimeSupported: 1,
       blocked: 0,
       configuredOnly: 0,
@@ -884,6 +931,7 @@ const mocks = vi.hoisted(() => ({
         transport: "http",
         url: "https://mcp.example.test",
         authType: "none",
+        authReadiness: "not_required",
         trustTier: "restricted",
         status: "connected",
         enabled: true,
@@ -978,7 +1026,7 @@ const mocks = vi.hoisted(() => ({
       catalogSnapshot: [{ capabilityId: "tool:fs.read", kind: "tool", callable: true }],
     },
   })),
-  fetchMcpElicitations: vi.fn(async () => ({
+  fetchMcpElicitations: vi.fn(async (): Promise<{ items: McpElicitationRequest[] }> => ({
     items: [
       {
         elicitationId: "mcp-elicit-1",
@@ -1016,8 +1064,8 @@ const mocks = vi.hoisted(() => ({
           transportBoundary: "gateway_local_mcp",
           remoteTransportSupport: "unchanged",
           limits: {
-            promptMaxChars: 4000,
-            schemaMaxBytes: 8192,
+            promptMaxChars: 4096,
+            requestedSchemaMaxBytes: 8192,
             responseContentMaxBytes: 16384,
             listMaxItems: 200,
           },
@@ -1052,7 +1100,7 @@ const mocks = vi.hoisted(() => ({
       },
     ],
   })),
-  respondMcpElicitation: vi.fn(async (elicitationId: string, input: any) => ({
+  respondMcpElicitation: vi.fn(async (elicitationId: string, input: any): Promise<McpElicitationRequest> => ({
     elicitationId,
     method: "elicitation/create",
     status: input.action === "accept" ? "accepted" : input.action === "decline" ? "declined" : "cancelled",
@@ -1084,8 +1132,8 @@ const mocks = vi.hoisted(() => ({
       transportBoundary: "gateway_local_mcp",
       remoteTransportSupport: "unchanged",
       limits: {
-        promptMaxChars: 4000,
-        schemaMaxBytes: 8192,
+        promptMaxChars: 4096,
+        requestedSchemaMaxBytes: 8192,
         responseContentMaxBytes: 16384,
         listMaxItems: 200,
       },
@@ -1220,6 +1268,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchProviderSecretStatus: mocks.fetchProviderSecretStatus,
     fetchOpenAICodexOAuthStatus: mocks.fetchOpenAICodexOAuthStatus,
     fetchLlmConfig: mocks.fetchLlmConfig,
+    updateProviderTransport: mocks.updateProviderTransport,
+    fetchChangePlan: mocks.fetchChangePlan,
     fetchLlmProviderAdvice: mocks.fetchLlmProviderAdvice,
     fetchSettings: mocks.fetchSettings,
     fetchToolCatalog: mocks.fetchToolCatalog,
@@ -1259,6 +1309,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     updateExternalConnectorActionReviewState: mocks.updateExternalConnectorActionReviewState,
     stageExternalConnectorAction: mocks.stageExternalConnectorAction,
     createExternalSideEffectReplayAuditRun: mocks.createExternalSideEffectReplayAuditRun,
+    fetchDurableRun: mocks.fetchDurableRun,
     fetchIntegrationFormSchema: mocks.fetchIntegrationFormSchema,
     createIntegrationConnection: mocks.createIntegrationConnection,
     updateIntegrationConnection: mocks.updateIntegrationConnection,
@@ -1372,17 +1423,6 @@ function findInputByPlaceholder(root: ReactTestInstance, placeholder: string): R
     throw new Error(`Unable to find input: ${placeholder}`);
   }
   return match;
-}
-
-function findInputsByPlaceholder(root: ReactTestInstance, placeholder: string): ReactTestInstance[] {
-  const matches = root.findAll(
-    (node) =>
-      node.type === "input" && typeof node.props?.placeholder === "string" && node.props.placeholder === placeholder,
-  );
-  if (!matches.length) {
-    throw new Error(`Unable to find inputs: ${placeholder}`);
-  }
-  return matches;
 }
 
 function findFirstSelect(root: ReactTestInstance): ReactTestInstance {
@@ -1550,9 +1590,20 @@ const resetSettingsUnitMocks = Object.values(mocks).flatMap((mock) => {
   ];
 });
 beforeEach(async () => {
+  __resetOnboardingAttemptsForTests();
+  __resetDemoReceiptsForTests();
+  __resetPermissionManagementForTests();
+  __resetIntegrationConnectionMutationsForTests();
+  __resetToolGrantActionsForTests();
+  __resetDeviceAccessRevocationsForTests();
+  __resetPersonalityDefaultForTests();
+  __resetPersonalityEditorMutationForTests();
   __resetSettingsChangesForTests();
+  __resetAuthAttemptsForTests();
+  __resetProviderMutationStateForTests();
   vi.clearAllMocks();
   for (const reset of resetSettingsUnitMocks) reset();
+  mocks.fetchLlmConfig.mockImplementation(async () => mocks.providerCatalogState.config);
   __resetSessionDraftsForTests();
   __resetSessionViewStateForTests();
   mocks.fetchSettings.mockResolvedValue({
@@ -1624,18 +1675,36 @@ beforeEach(async () => {
       },
     ],
   });
-  mocks.createPersonality.mockResolvedValue({ revision: "e".repeat(64), defaultPersonalityId: "operator", items: [] });
-  mocks.updatePersonality.mockResolvedValue({ revision: "e".repeat(64), defaultPersonalityId: "operator", items: [] });
-  mocks.deletePersonality.mockResolvedValue({ revision: "e".repeat(64), defaultPersonalityId: "default", items: [] });
-  mocks.setDefaultPersonality.mockResolvedValue({
-    revision: "e".repeat(64),
-    defaultPersonalityId: "operator",
-    items: [],
+  let personalityRevision = 0;
+  const saveCatalog = (catalog: PersonalityCatalogResponse) => {
+    const saved = { ...catalog, revision: String(++personalityRevision).padStart(64, "0") };
+    mocks.fetchPersonalities.mockResolvedValue(saved); return saved;
+  };
+  mocks.createPersonality.mockImplementation(async (input) => {
+    const catalog = await mocks.fetchPersonalities();
+    return saveCatalog({ ...catalog, items: [...catalog.items, { ...input, id: input.id ?? input.label ?? "custom-personality", label: input.label ?? "Custom personality",
+      category: input.category ?? "core", description: input.description ?? "", tone: input.tone ?? "", style: input.style ?? "",
+      systemOverlay: input.systemOverlay ?? "", safetyNotes: input.safetyNotes ?? [], soulFile: "", builtin: false, visibility: "custom", editable: true, modified: true }] });
   });
+  mocks.updatePersonality.mockImplementation(async (id, input) => {
+    const catalog = await mocks.fetchPersonalities();
+    return saveCatalog({ ...catalog, items: catalog.items.map((item) => item.id === id ? { ...item, ...input } : item) });
+  });
+  mocks.deletePersonality.mockImplementation(async (id) => {
+    const catalog = await mocks.fetchPersonalities();
+    return saveCatalog({ ...catalog, defaultPersonalityId: catalog.defaultPersonalityId === id ? "default" : catalog.defaultPersonalityId,
+      items: catalog.items.filter((item) => item.id !== id || item.builtin).map((item) => item.id === id ? { ...item, modified: false } : item) });
+  });
+  mocks.setDefaultPersonality.mockImplementation(async (personalityId: string) => ({
+    ...await mocks.fetchPersonalities(),
+    revision: "f".repeat(64),
+    defaultPersonalityId: personalityId,
+  }));
   mocks.fetchDeviceAccessGrants.mockResolvedValue({ items: [] });
   mocks.fetchPermissionProfiles.mockResolvedValue({
     items: [
       {
+        status: "active",
         revision: "a".repeat(64),
         profileId: "safe",
         label: "Safe",
@@ -1643,6 +1712,9 @@ beforeEach(async () => {
         builtin: true,
         approvalMode: "approve_all",
         toolPatterns: ["*"],
+        allow: [],
+        deny: [],
+        createdBy: "system",
         createdAt: "2026-05-02T18:00:00.000Z",
         updatedAt: "2026-05-02T18:00:00.000Z",
       },
@@ -1652,11 +1724,13 @@ beforeEach(async () => {
         label: "Trusted Local Power",
         description: "Run allowed local tools without normal prompts.",
         scope: "global",
+        status: "active",
         builtin: true,
         approvalMode: "bypass",
         toolPatterns: ["*"],
         allow: ["*"],
         deny: [],
+        createdBy: "system",
         createdAt: "2026-05-02T18:00:00.000Z",
         updatedAt: "2026-05-02T18:00:00.000Z",
       },
@@ -1715,6 +1789,8 @@ beforeEach(async () => {
       },
     ],
     settings: {
+      revision: 41,
+      toolApprovalMode: "approve_risky",
       budgetMode: "balanced",
       networkAllowlist: ["api.openai.com"],
       auth: {
@@ -1810,11 +1886,14 @@ beforeEach(async () => {
       createdAt: "2026-05-02T18:00:00.000Z",
       metadata: {},
       revokedAt: "2026-05-02T19:00:00.000Z",
+      principalPurpose: "general_companion",
     },
   });
   mocks.resolveGatewayInstallToken.mockResolvedValue({
     token: "install-token-1",
     source: "generated",
+    persistedToEnv: false,
+    warnings: [],
   });
   globalThis.localStorage?.clear();
   globalThis.sessionStorage?.clear();
@@ -1927,7 +2006,8 @@ describe("SettingsNativePage personalities", () => {
       await act(async () => {
         name().props.onChange({ target: { value: "Newer typing" } });
       });
-      const savedPreset = { ...custom, id: "retained-key", label: "Submitted name" };
+      const submitted = operation === "creation" ? mocks.createPersonality.mock.calls[0]![0] : mocks.updatePersonality.mock.calls[0]![1];
+      const savedPreset = { ...custom, ...submitted, id: "retained-key", label: "Submitted name" };
       const saved = { ...before, revision: "f".repeat(64), items: [...catalog.items, savedPreset] };
       mocks.fetchPersonalities.mockResolvedValue(saved);
       await act(async () => {
@@ -1989,6 +2069,7 @@ describe("SettingsNativePage personalities", () => {
         method: "PATCH",
         path: "/api/v1/personalities/removed-draft",
         status: 409,
+        body: { code: "WRITE_CONFLICT", details: { reason: "PERSONALITY_CATALOG_REVISION_CONFLICT" } },
       }),
     );
     mocks.fetchPersonalities.mockResolvedValue({ ...catalog, revision: "f".repeat(64) });
@@ -2012,6 +2093,7 @@ describe("SettingsNativePage personalities", () => {
         method: "PATCH",
         path: "/api/v1/personalities/operator",
         status: 409,
+        body: { code: "WRITE_CONFLICT", details: { reason: "PERSONALITY_CATALOG_REVISION_CONFLICT" } },
       }),
     );
     let renderer: ReactTestRenderer | undefined;
@@ -2162,6 +2244,7 @@ describe("SettingsNativePage personalities", () => {
         }),
       );
 
+      const defaultRevision = (await mocks.fetchPersonalities()).revision;
       await act(async () => {
         findButton(renderer!.root, "Set as Work default").props.onClick();
       });
@@ -2172,7 +2255,7 @@ describe("SettingsNativePage personalities", () => {
           .find((modal) => modal.props.title === "Change Work default?")!
           .props.onConfirm();
       });
-      expect(mocks.setDefaultPersonality).toHaveBeenCalledWith("operator", "e".repeat(64));
+      expect(mocks.setDefaultPersonality).toHaveBeenCalledWith("operator", defaultRevision);
 
       await act(async () => {
         findButton(renderer!.root, "Reset built-in").props.onClick();
@@ -2183,8 +2266,9 @@ describe("SettingsNativePage personalities", () => {
       await act(async () => {
         await personalityRemoveModal?.props.onConfirm();
       });
-      expect(mocks.deletePersonality).toHaveBeenCalledWith("operator", "e".repeat(64));
+      expect(mocks.deletePersonality).toHaveBeenCalledWith("operator", defaultRevision);
 
+      const removeRevision = (await mocks.fetchPersonalities()).revision;
       await act(async () => {
         findButton(renderer!.root, "Direct Custom").props.onClick();
       });
@@ -2197,7 +2281,7 @@ describe("SettingsNativePage personalities", () => {
       await act(async () => {
         await personalityRemoveModal?.props.onConfirm();
       });
-      expect(mocks.deletePersonality).toHaveBeenCalledWith("direct-custom", "e".repeat(64));
+      expect(mocks.deletePersonality).toHaveBeenCalledWith("direct-custom", removeRevision);
 
       await act(async () => {
         findButton(renderer!.root, "Add custom personality").props.onClick();
@@ -2303,6 +2387,8 @@ describe("SettingsNativePage personalities", () => {
         findButton(renderer!.root, "Save edits").props.onClick();
       });
       expect(collectText(renderer!.root)).toContain("save failed");
+      expect(collectText(renderer!.root)).toContain("Outcome uncertain");
+      __resetPersonalityEditorMutationForTests();
 
       await act(async () => {
         findButton(renderer!.root, "Default").props.onClick();
@@ -2325,7 +2411,7 @@ describe("SettingsNativePage personalities", () => {
           .props.onConfirm();
       });
       expect(mocks.setDefaultPersonality).toHaveBeenCalledWith("default", "e".repeat(64));
-      expect(collectText(renderer!.root)).toContain("Work personality cleared.");
+      expect(collectText(renderer!.root)).toContain("Global Work personality cleared and confirmed by the Gateway.");
 
       await act(async () => {
         findButton(renderer!.root, "Direct Custom").props.onClick();
@@ -2525,7 +2611,9 @@ describe("SettingsNativePage permissions", () => {
   });
 
   it("retains a rejected profile draft until a different server revision is explicitly reviewed", async () => {
-    const before = {
+    const settings = await mocks.fetchSettings();
+    mocks.fetchSettings.mockImplementation(async () => ({ ...settings, deploymentProfile: "local_dev" }));
+    const before: PermissionProfileSnapshotRecord = {
       profileId: "revision-profile",
       label: "Revision profile",
       description: "Initial profile",
@@ -2535,6 +2623,7 @@ describe("SettingsNativePage permissions", () => {
       status: "active",
       approvalMode: "approve_all",
       toolPatterns: ["session.status"],
+      allow: [],
       deny: ["shell.exec"],
       defaultForSurfaces: [],
       createdBy: "operator",
@@ -2543,7 +2632,7 @@ describe("SettingsNativePage permissions", () => {
       revision: "a".repeat(64),
     };
     mocks.fetchPermissionProfiles.mockResolvedValue({ items: [before] } as any);
-    mocks.updatePermissionProfile.mockRejectedValueOnce(Object.assign(new Error("Profile changed"), { status: 409 }));
+    mocks.updatePermissionProfile.mockRejectedValueOnce(Object.assign(new Error("Profile changed"), { status: 409, body: { code: "WRITE_CONFLICT", details: { reason: "PERMISSION_PROFILE_REVISION_CONFLICT" } } }));
     let renderer: ReactTestRenderer | undefined;
     await act(async () => {
       renderer = renderPage("permissions");
@@ -2563,6 +2652,8 @@ describe("SettingsNativePage permissions", () => {
     await act(async () => {
       findButton(renderer!.root, "Save profile").props.onClick();
     });
+    await flushAsyncUpdates();
+    await act(async () => { await findButton(renderer!.root, "Apply reviewed permission change").props.onClick(); });
     await flushAsyncUpdates();
     expect(mocks.updatePermissionProfile).toHaveBeenCalledWith(
       "revision-profile",
@@ -2593,11 +2684,15 @@ describe("SettingsNativePage permissions", () => {
       findButton(renderer!.root, "Apply draft to current profile").props.onClick();
     });
     const accepted = { ...current, label: "Retained draft", revision: "c".repeat(64) };
-    mocks.updatePermissionProfile.mockResolvedValueOnce(accepted as any);
-    mocks.fetchPermissionProfiles.mockResolvedValue({ items: [accepted] } as any);
+    mocks.updatePermissionProfile.mockImplementationOnce(async () => {
+      mocks.fetchPermissionProfiles.mockResolvedValue({ items: [accepted] } as any);
+      return accepted;
+    });
     await act(async () => {
       findButton(renderer!.root, "Save profile").props.onClick();
     });
+    await flushAsyncUpdates();
+    await act(async () => { await findButton(renderer!.root, "Apply reviewed permission change").props.onClick(); });
     await flushAsyncUpdates();
     expect(mocks.updatePermissionProfile).toHaveBeenLastCalledWith(
       "revision-profile",
@@ -2607,43 +2702,40 @@ describe("SettingsNativePage permissions", () => {
       }),
     );
     expect(mocks.updatePermissionProfile).toHaveBeenCalledTimes(2);
-    expect(collectText(renderer!.root)).toContain("Permission profile updated.");
+    expect(collectText(renderer!.root)).toContain("The Gateway confirmed this permission change");
   });
 
   it("edits and archives custom permission profiles", async () => {
-    mocks.fetchPermissionProfiles.mockResolvedValue({
-      items: [
-        {
-          revision: "a".repeat(64),
-          profileId: "safe",
-          label: "Safe",
-          scope: "global",
-          builtin: true,
-          approvalMode: "approve_all",
-          toolPatterns: ["*"],
-          createdAt: "2026-05-02T18:00:00.000Z",
-          updatedAt: "2026-05-02T18:00:00.000Z",
-        },
-        {
-          revision: "a".repeat(64),
-          profileId: "profile-review",
-          label: "Review profile",
-          description: "Initial profile",
-          scope: "workspace",
-          scopeRef: "default",
-          builtin: false,
-          approvalMode: "approve_risky",
-          toolPatterns: ["session.status", "browser.search"],
-          allow: ["browser.search"],
-          deny: ["shell.exec"],
-          readAccessMode: "roots_only",
-          defaultForSurfaces: ["code"],
-          createdBy: "operator",
-          createdAt: "2026-05-02T18:00:00.000Z",
-          updatedAt: "2026-05-02T18:00:00.000Z",
-        },
-      ],
-    } as any);
+    const settings = await mocks.fetchSettings();
+    mocks.fetchSettings.mockImplementation(async () => ({ ...settings, deploymentProfile: "local_dev" }));
+    const base: PermissionProfileSnapshotRecord = {
+      revision: "a".repeat(64), profileId: "profile-review", label: "Review profile", description: "Initial profile",
+      scope: "workspace", scopeRef: "default", builtin: false, status: "active", approvalMode: "approve_risky",
+      toolPatterns: ["session.status", "browser.search"], allow: ["browser.search"], deny: ["shell.exec"],
+      readAccessMode: "roots_only", defaultForSurfaces: ["code"], createdBy: "operator",
+      createdAt: "2026-05-02T18:00:00.000Z", updatedAt: "2026-05-02T18:00:00.000Z",
+    };
+    let ownerProfiles = [base];
+    mocks.fetchPermissionProfiles.mockImplementation(async () => ({ items: ownerProfiles }));
+    mocks.reviewPermissionProfileSelection.mockImplementation(async (input) => {
+      const profile = ownerProfiles.find((item) => item.profileId === input.profileId);
+      return { revision: "d".repeat(64), input: { ...input, scope: "workspace", scopeRef: "default" },
+        profile, target: { workspaceId: "default", operatorId: undefined }, activeProfiles: [] };
+    });
+    mocks.createPermissionProfile.mockImplementation(async (input) => {
+      const { expectedSelectionRevision: _selection, ...fields } = input;
+      const created = { ...base, ...fields, profileId: "profile-created", revision: "c".repeat(64) };
+      ownerProfiles = [...ownerProfiles, created]; return created;
+    });
+    mocks.updatePermissionProfile.mockImplementation(async (profileId, input) => {
+      const { expectedSelectionRevision: _selection, expectedRevision: _revision, ...fields } = input;
+      const updated = { ...base, ...fields, profileId, revision: "b".repeat(64) };
+      ownerProfiles = ownerProfiles.map((item) => item.profileId === profileId ? updated : item); return updated;
+    });
+    mocks.archivePermissionProfile.mockImplementation(async (profileId) => {
+      ownerProfiles = ownerProfiles.map((item) => item.profileId === profileId ? { ...item, status: "archived", revision: "e".repeat(64), archivedAt: "2026-09-30T00:00:00.000Z", updatedAt: "2026-09-30T00:00:00.000Z" } : item);
+      return { archived: true, profileId };
+    });
     let renderer: ReactTestRenderer | undefined;
     await act(async () => {
       renderer = renderPage("permissions");
@@ -2685,6 +2777,8 @@ describe("SettingsNativePage permissions", () => {
     await act(async () => {
       findButton(renderer!.root, "Create profile").props.onClick();
     });
+    await flushAsyncUpdates();
+    await act(async () => { await findButton(renderer!.root, "Apply reviewed permission change").props.onClick(); });
     await flushAsyncUpdates();
     expect(mocks.createPermissionProfile).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2754,6 +2848,8 @@ describe("SettingsNativePage permissions", () => {
     });
     await flushAsyncUpdates();
 
+    await act(async () => { await findButton(renderer!.root, "Apply reviewed permission change").props.onClick(); });
+    await flushAsyncUpdates();
     expect(mocks.updatePermissionProfile).toHaveBeenCalledWith(
       "profile-review",
       expect.objectContaining({
@@ -2770,25 +2866,17 @@ describe("SettingsNativePage permissions", () => {
     await act(async () => {
       findButton(renderer!.root, "Archive profile").props.onClick();
     });
-    let archiveModal = renderer!.root
-      .findAllByType(ConfirmModal)
-      .find((modal) => modal.props.title === "Archive permission profile?");
-    await act(async () => {
-      archiveModal?.props.onCancel();
-    });
+    await flushAsyncUpdates();
+    await act(async () => { findButton(renderer!.root, "Cancel permission change").props.onClick(); });
     expect(mocks.archivePermissionProfile).not.toHaveBeenCalled();
 
     await act(async () => {
       findButton(renderer!.root, "Archive profile").props.onClick();
     });
-    archiveModal = renderer!.root
-      .findAllByType(ConfirmModal)
-      .find((modal) => modal.props.title === "Archive permission profile?");
-    await act(async () => {
-      await archiveModal?.props.onConfirm();
-    });
     await flushAsyncUpdates();
-    expect(mocks.archivePermissionProfile).toHaveBeenCalledWith("profile-review", { expectedRevision: "a".repeat(64) });
+    await act(async () => { await findButton(renderer!.root, "Apply reviewed permission change").props.onClick(); });
+    await flushAsyncUpdates();
+    expect(mocks.archivePermissionProfile).toHaveBeenCalledWith("profile-review", { expectedRevision: "b".repeat(64) });
   });
 
   it("keeps skip-routine custom profiles unavailable in Remote Hardened mode", async () => {
@@ -2952,6 +3040,15 @@ describe("SettingsNativePage permissions", () => {
   });
 
   it("keeps session-scoped Local Operator Override evidence visible after effective-state reloads", async () => {
+    const settings = await mocks.fetchSettings();
+    mocks.fetchSettings.mockImplementation(async () => ({ ...settings, deploymentProfile: "local_dev" }));
+    const savedOverride: LocalOperatorOverrideRecord = {
+      overrideId: "override-session-1", operatorId: "operator", createdBy: "operator", scope: "session", scopeRef: "session-1",
+      reason: "Run local tools for this session", status: "active", createdAt: "2099-05-02T18:00:00.000Z", expiresAt: "2099-05-02T18:10:00.000Z",
+    };
+    let canonicalOverrides: LocalOperatorOverrideRecord[] = [];
+    mocks.fetchActiveLocalOperatorOverrides.mockImplementation(async () => ({ items: canonicalOverrides }));
+    mocks.createLocalOperatorOverride.mockImplementation(async () => { canonicalOverrides = [savedOverride]; return savedOverride; });
     let renderer: ReactTestRenderer | undefined;
     await act(async () => {
       renderer = renderPage("permissions");
@@ -2991,6 +3088,8 @@ describe("SettingsNativePage permissions", () => {
     });
     await flushAsyncUpdates();
 
+    await act(async () => { await findButton(renderer!.root, "Apply reviewed permission change").props.onClick(); });
+    await flushAsyncUpdates();
     expect(mocks.createLocalOperatorOverride).toHaveBeenCalledWith(
       expect.objectContaining({
         scope: "session",
@@ -3305,16 +3404,10 @@ describe("SettingsNativePage tools", () => {
     await act(async () => {
       findButton(renderer!.root, "Create grant").props.onClick();
     });
-    await act(async () => {
-      await renderer!.root
-        .findAllByType(ConfirmModal)
-        .find((modal) => modal.props.open && modal.props.title === "Confirm tool grant")!
-        .props.onConfirm();
-      await flushAsyncUpdates();
-    });
+    expect(renderer!.root.findAllByType(ConfirmModal).some((modal) => modal.props.open && modal.props.title === "Confirm tool grant")).toBe(false);
     await flushAsyncUpdates();
     expect(mocks.createToolGrant).not.toHaveBeenCalled();
-    expect(collectText(renderer!.root)).toContain("Add a session id before creating this tool grant.");
+    expect(collectText(renderer!.root)).toContain("Add the exact session ID.");
 
     await act(async () => {
       scopeRefInput!.props.onChange({ target: { value: "session-1" } });
@@ -3371,6 +3464,25 @@ describe("SettingsNativePage providers", () => {
 
   it("renders onboarding, budget, and unknown sections without silently falling through to General", async () => {
     let renderer: ReactTestRenderer | null = null;
+    const original = await mocks.fetchOnboardingState();
+    let onboarding = { ...original, setupReadiness: onboardingFixture().setupReadiness };
+    const runtime = await mocks.fetchSettings();
+    mocks.fetchOnboardingState.mockImplementation(async () => structuredClone(onboarding));
+    mocks.fetchSettings.mockImplementation(async () => ({
+      ...runtime,
+      ...onboarding.settings,
+      llm: { ...runtime.llm, ...onboarding.settings.llm },
+    }));
+    mocks.bootstrapOnboarding.mockImplementation(async (input) => {
+      onboarding = { ...onboarding, settings: { ...onboarding.settings, revision: input.expectedRevision + 1,
+        toolApprovalMode: input.toolApprovalMode!, budgetMode: input.budgetMode!, networkAllowlist: input.networkAllowlist!,
+        auth: { ...onboarding.settings.auth, allowLoopbackBypass: false } } };
+      return { state: structuredClone(onboarding), appliedAt: "2026-09-30T00:00:00.000Z" };
+    });
+    mocks.completeOnboarding.mockImplementation(async () => {
+      Object.assign(onboarding, { completed: true, completedAt: "2026-09-30T00:00:01.000Z", completedBy: "operator" });
+      return { completed: true, completedAt: "2026-09-30T00:00:01.000Z", state: structuredClone(onboarding) };
+    });
 
     await act(async () => {
       renderer = renderPage("onboarding");
@@ -3419,8 +3531,12 @@ describe("SettingsNativePage providers", () => {
     ]);
 
     await act(async () => {
-      findButton(renderer!.root, "Apply defaults").props.onClick();
+      findButton(renderer!.root, "Review defaults").props.onClick();
     });
+    expect(mocks.bootstrapOnboarding).not.toHaveBeenCalled();
+    const defaultsReview = renderer!.root.findAllByType(GCModal).find((modal) => modal.props.open && modal.props.title === "Apply first-run defaults");
+    expect(defaultsReview).toBeDefined();
+    await act(async () => { await defaultsReview!.props.onConfirm!(); });
     expect(mocks.bootstrapOnboarding).toHaveBeenCalledWith({
       expectedRevision: 41,
       toolApprovalMode: "approve_risky",
@@ -3456,7 +3572,7 @@ describe("SettingsNativePage providers", () => {
       findButton(renderer!.root, "Save budget mode").props.onClick();
     });
     await flushAsyncUpdates();
-    expect(mocks.patchSettings).toHaveBeenCalledWith({ expectedRevision: 41, budgetMode: "power" });
+    expect(mocks.patchSettings).toHaveBeenCalledWith({ expectedRevision: 42, budgetMode: "power" });
 
     await act(async () => {
       renderer = renderPage("not-real");
@@ -3478,6 +3594,8 @@ describe("SettingsNativePage providers", () => {
       ],
       firstRunChecklist: [],
       settings: {
+        revision: 41,
+        toolApprovalMode: "approve_risky",
         budgetMode: "balanced",
         networkAllowlist: [],
         auth: {
@@ -3764,6 +3882,7 @@ describe("SettingsNativePage providers", () => {
         },
       ],
       settings: {
+        revision: 41,
         toolApprovalMode: "bypass",
         budgetMode: "balanced",
         networkAllowlist: ["api.openai.com"],
@@ -3799,18 +3918,14 @@ describe("SettingsNativePage providers", () => {
     await act(async () => findButton(renderer!.root, "First-run defaults").props.onClick());
     const bypassOption = renderer!.root.findAll((node) => node.type === "option" && node.props.value === "bypass")[0];
     expect(bypassOption?.props.disabled).toBe(true);
-    expect(collectText(renderer!.root)).toContain(
-      "Remote Hardened keeps first-run defaults that skip normal prompts unavailable.",
-    );
-
     await act(async () => {
-      findButton(renderer!.root, "Apply defaults").props.onClick();
+      findButton(renderer!.root, "Review defaults").props.onClick();
     });
     await flushAsyncUpdates();
 
     expect(mocks.bootstrapOnboarding).not.toHaveBeenCalled();
     expect(collectText(renderer!.root)).toContain(
-      "Remote Hardened keeps first-run defaults that skip normal prompts unavailable.",
+      "This deployment keeps prompt-skipping defaults unavailable.",
     );
   });
 
@@ -3917,7 +4032,7 @@ describe("SettingsNativePage providers", () => {
   });
 
   it("can add the ChatGPT OAuth provider from Settings when it is not already configured", async () => {
-    mocks.fetchLlmConfig.mockResolvedValueOnce({
+    mocks.fetchLlmConfig.mockResolvedValueOnce(mocks.providerCatalogState.config).mockResolvedValueOnce({
       revision: 44,
       activeProviderId: "openai",
       activeModel: "gpt-5.4-mini",
@@ -3962,6 +4077,7 @@ describe("SettingsNativePage providers", () => {
   });
 
   it("supports forced model probes and secure secret save/delete flows", async () => {
+    mocks.fetchSettings.mockResolvedValue({ ...(await mocks.fetchSettings()), revision: 43 });
     let renderer: ReactTestRenderer | null = null;
     const previousWindow = globalThis.window;
     const confirmSpy = vi.fn(() => true);
@@ -4354,6 +4470,8 @@ describe("SettingsNativePage providers", () => {
     expect(collectText(renderer!.root)).toContain("OpenAI Codex OAuth start returned an invalid login flow.");
     renderer!.unmount();
 
+    // Independent expired-flow fixture; real app-session uncertainty survives remount.
+    __resetProviderMutationStateForTests();
     mocks.startOpenAICodexOAuthDeviceFlow.mockResolvedValueOnce({
       providerId: "openai-codex",
       flowId: "expired-flow",
@@ -4417,6 +4535,7 @@ describe("SettingsNativePage providers", () => {
       .findAllByType(ChatChangePlanActionDialog)
       .find((candidate) => candidate.props.plan?.status === "awaiting_confirmation");
     expect(dialog).toBeDefined();
+    mocks.fetchChangePlan.mockResolvedValueOnce(dialog!.props.plan);
     await act(async () => {
       await dialog!.props.onConfirm(dialog!.props.plan);
     });
@@ -4825,6 +4944,7 @@ describe("SettingsNativePage providers", () => {
   });
 
   it("covers provider secret failure, routing save errors, and delete cancellation", async () => {
+    mocks.fetchSettings.mockResolvedValue({ ...(await mocks.fetchSettings()), revision: 43 });
     mocks.fetchProviderSecretStatus.mockRejectedValueOnce(new Error("secret status offline"));
     mocks.patchSettings.mockRejectedValueOnce(new Error("routing save failed"));
     mocks.saveProviderSecret.mockRejectedValueOnce(new Error("secret save failed"));
@@ -4861,6 +4981,9 @@ describe("SettingsNativePage providers", () => {
       });
       await flushAsyncUpdates();
       expect(collectText(renderer!.root)).toContain("routing save failed");
+      expect(collectText(renderer!.root)).toContain("Outcome uncertain");
+      // The following independent failure branch starts a fresh app-session fixture.
+      await act(async () => __resetProviderMutationStateForTests());
 
       await openProviderPanel(renderer!, "trust");
       await act(async () => {
@@ -4878,6 +5001,8 @@ describe("SettingsNativePage providers", () => {
       });
       await flushAsyncUpdates();
       expect(collectText(renderer!.root)).toContain("secret save failed");
+      expect(collectText(renderer!.root)).toContain("Outcome uncertain");
+      await act(async () => __resetProviderMutationStateForTests());
 
       await act(async () => {
         findButton(renderer!.root, "Refresh models").props.onClick();
@@ -4925,7 +5050,7 @@ describe("SettingsNativePage access", () => {
       findButton(renderer!.root, "Configure access").props.onClick();
     });
     expect(findLoopbackCheckbox(renderer!.root).props.checked).toBe(false);
-    expect(collectText(renderer!.root)).toContain("trusted single-machine development");
+    expect(collectText(renderer!.root)).toContain("every local process should be trusted");
     expect(collectText(renderer!.root)).toContain("Disabled");
 
     mockSettingsLoopback(true);
@@ -4940,6 +5065,12 @@ describe("SettingsNativePage access", () => {
   });
 
   it("saves edited access credentials, resolves install tokens, and revokes device grants", async () => {
+    mocks.revokeDeviceAccessGrant.mockImplementation(async (grantId: string) => ({
+      grant: {
+        ...(await mocks.fetchDeviceAccessGrants()).items.find((grant) => grant.grantId === grantId)!,
+        revokedAt: "2026-09-30T12:00:00.000Z",
+      },
+    }));
     mocks.fetchDeviceAccessGrants.mockResolvedValue({
       items: [
         {
@@ -4956,13 +5087,14 @@ describe("SettingsNativePage access", () => {
         },
       ],
     });
-    const previousWindow = globalThis.window;
-    const confirmSpy = vi.fn(() => true);
-    Object.assign(globalThis, {
-      window: {
-        confirm: confirmSpy,
-      },
+    const baseSettings = await mocks.fetchSettings();
+    let authOwner = { ...baseSettings, revision: 41, auth: { mode: "token", allowLoopbackBypass: false, tokenConfigured: true, basicConfigured: false } };
+    mocks.fetchSettings.mockImplementation(async () => authOwner);
+    mocks.patchGatewayAuthSettings.mockImplementation(async (input: any) => {
+      authOwner = { ...authOwner, revision: authOwner.revision + 1, auth: { ...authOwner.auth, mode: input.mode, allowLoopbackBypass: input.allowLoopbackBypass, basicConfigured: Boolean(input.basicPassword) || authOwner.auth.basicConfigured } };
+      return { ...authOwner.auth, revision: authOwner.revision };
     });
+    mocks.resolveGatewayInstallToken.mockResolvedValue({ token: "install-token-1", source: "generated", persistedToEnv: false, warnings: [] });
     let renderer: ReactTestRenderer | null = null;
 
     try {
@@ -4975,41 +5107,28 @@ describe("SettingsNativePage access", () => {
       expect(collectText(renderer!.root)).toContain("Desktop runtime anchor");
       expect(collectText(renderer!.root)).toContain("Operator tablet");
 
+      await act(async () => { findFirstSelect(renderer!.root).props.onChange({ target: { value: "basic" } }); });
       await act(async () => {
-        findFirstSelect(renderer!.root).props.onChange({ target: { value: "basic" } });
-        findLoopbackCheckbox(renderer!.root).props.onChange({ target: { checked: false } });
-        findInputByPlaceholder(renderer!.root, "New token (only when rotating)").props.onChange({
-          target: { value: "rotated-token" },
-        });
-        const optionalInputs = findInputsByPlaceholder(renderer!.root, "Optional");
-        optionalInputs[0]!.props.onChange({ target: { value: "goat-admin" } });
-        optionalInputs[1]!.props.onChange({ target: { value: "basic-secret" } });
+        findInputByPlaceholder(renderer!.root, "Leave blank to keep the current username").props.onChange({ target: { value: "goat-admin" } });
+        findInputByPlaceholder(renderer!.root, "New credential (only when replacing)").props.onChange({ target: { value: "basic-secret" } });
       });
-
-      await act(async () => {
-        findButton(renderer!.root, "Save access settings").props.onClick();
-      });
+      await act(async () => { findButton(renderer!.root, "Save access settings").props.onClick(); });
+      expect(mocks.patchGatewayAuthSettings).not.toHaveBeenCalled();
+      await act(async () => { renderer!.root.findAllByType(ConfirmModal).find(modal => modal.props.title === "Apply Gateway authentication changes?")!.props.onConfirm(); });
       await flushAsyncUpdates();
-
-      expect(mocks.patchGatewayAuthSettings).toHaveBeenCalledWith({
-        expectedRevision: 41,
-        mode: "basic",
-        allowLoopbackBypass: false,
-        token: "rotated-token",
-        basicUsername: "goat-admin",
-        basicPassword: "basic-secret",
-      });
-      expect(collectText(renderer!.root)).toContain("Access posture updated.");
-
-      await act(async () => {
-        findButton(renderer!.root, "Generate install token").props.onClick();
-      });
+      expect(mocks.patchGatewayAuthSettings).toHaveBeenCalledWith({ expectedRevision: 41, mode: "basic", allowLoopbackBypass: false, basicUsername: "goat-admin", basicPassword: "basic-secret" });
+      expect(collectText(renderer!.root)).toContain("Authentication posture saved and confirmed.");
+      expect(findButton(renderer!.root, "Generate install token").props.disabled).toBe(true);
+      await act(async () => { findFirstSelect(renderer!.root).props.onChange({ target: { value: "token" } }); });
+      await act(async () => { findButton(renderer!.root, "Save access settings").props.onClick(); });
+      await act(async () => { renderer!.root.findAllByType(ConfirmModal).find(modal => modal.props.title === "Apply Gateway authentication changes?")!.props.onConfirm(); });
       await flushAsyncUpdates();
-      expect(mocks.resolveGatewayInstallToken).toHaveBeenCalledWith({
-        generateWhenMissing: true,
-        persistToEnv: false,
-      });
-      expect(collectText(renderer!.root)).toContain("install-token-1");
+      await act(async () => { findButton(renderer!.root, "Generate install token").props.onClick(); });
+      expect(mocks.resolveGatewayInstallToken).not.toHaveBeenCalled();
+      await act(async () => { renderer!.root.findAllByType(ConfirmModal).find(modal => modal.props.title === "Resolve Gateway install token?")!.props.onConfirm(); });
+      await flushAsyncUpdates();
+      expect(mocks.resolveGatewayInstallToken).toHaveBeenCalledWith({ generateWhenMissing: true, persistToEnv: false });
+      expect(renderer!.root.findByProps({ readOnly: true, type: "text" }).props.value).toBe("install-token-1");
 
       await act(async () => {
         findButton(renderer!.root, "Revoke").props.onClick();
@@ -5027,7 +5146,7 @@ describe("SettingsNativePage access", () => {
       expect(mocks.revokeDeviceAccessGrant).toHaveBeenCalledWith("grant-active");
       expect(collectText(renderer!.root)).toContain("Device access revoked.");
     } finally {
-      Object.assign(globalThis, { window: previousWindow });
+      await act(async () => renderer?.unmount());
     }
   });
 });
@@ -5081,7 +5200,7 @@ describe("SettingsNativePage Trust & Policy", () => {
     expect(text).not.toContain("Browser search");
   });
 
-  it("fails closed into warnings and an empty dashboard when the snapshot API is absent", async () => {
+  it("fails closed without an empty dashboard when the snapshot owner is unavailable", async () => {
     mocks.fetchTrustPolicySnapshot.mockRejectedValueOnce(new Error("snapshot route missing"));
     let renderer: ReactTestRenderer | null = null;
 
@@ -5091,9 +5210,10 @@ describe("SettingsNativePage Trust & Policy", () => {
     await act(async () => undefined);
 
     const text = collectText(renderer!.root);
-    expect(text).toContain("Some data could not load");
+    expect(text).toContain("This section could not load");
     expect(text).toContain("snapshot route missing");
-    expect(text).toContain("Trust & Policy snapshot is unavailable");
+    expect(renderer!.root.findAllByType("table")).toHaveLength(0);
+    expect(renderer!.root.findAllByProps({ placeholder: "Search trust, grants, blockers, or source" })).toHaveLength(0);
   });
 });
 
@@ -5232,6 +5352,12 @@ describe("SettingsNativePage integrations", () => {
 
   it("starts a durable replay audit for eligible pre-boundary side-effect runs", async () => {
     const navigate = vi.fn();
+    let audit: import("@goatcitadel/contracts").DurableRunRecord;
+    mocks.createExternalSideEffectReplayAuditRun.mockImplementationOnce(async (input) => {
+      audit = { runId: "durable-replay-audit-1", workflowKey: "external_side_effect.replay", status: "queued", version: 1, attemptCount: 0, maxAttempts: 3,
+        payload: { version: "external_side_effect.replay.v1", ...input }, metadata: { posture: "replay_audit", sideEffectPosture: "eligibility_check" }, createdAt: "2026-05-31T20:00:00.000Z", updatedAt: "2026-05-31T20:00:00.000Z" }; return audit;
+    });
+    mocks.fetchDurableRun.mockImplementation(async () => audit);
     mocks.fetchIntegrationConnections.mockResolvedValueOnce({
       items: [
         {
@@ -5290,14 +5416,18 @@ describe("SettingsNativePage integrations", () => {
     });
     await flushAsyncUpdates();
 
+    expect(mocks.createExternalSideEffectReplayAuditRun).not.toHaveBeenCalled();
+    await act(async () => renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.title === "Create replay eligibility audit?")!.props.onConfirm());
+    await flushAsyncUpdates();
     expect(mocks.createExternalSideEffectReplayAuditRun).toHaveBeenCalledWith({
       workspaceId: "default",
       requestedBy: "operator",
       runIds: ["extfx_failed_before_boundary"],
       connectionId: "11111111-1111-1111-1111-111111111111",
       limit: 1,
+      requestedAt: expect.any(String),
     });
-    expect(collectText(renderer!.root)).toContain("Replay audit durable run durable-replay-audit-1 created.");
+    expect(collectText(renderer!.root)).toContain("Replay audit durable-replay-audit-1 was created and confirmed.");
 
     await act(async () => {
       findButton(renderer!.root, "Open replay audit").props.onClick();
@@ -5411,7 +5541,7 @@ describe("SettingsNativePage integrations", () => {
         },
       ],
     } as any;
-    mocks.fetchIntegrationCatalog.mockResolvedValueOnce(activepiecesCatalog).mockResolvedValueOnce(activepiecesCatalog);
+    mocks.fetchIntegrationCatalog.mockResolvedValueOnce(activepiecesCatalog).mockResolvedValueOnce(activepiecesCatalog).mockResolvedValueOnce(activepiecesCatalog);
     const activepiecesConnections = {
       items: [
         {
@@ -5428,9 +5558,11 @@ describe("SettingsNativePage integrations", () => {
         },
       ],
     } as any;
+    activepiecesConnections.items[0].revision = "a".repeat(64);
     mocks.fetchIntegrationConnections
       .mockResolvedValueOnce(activepiecesConnections)
       .mockResolvedValueOnce(activepiecesConnections);
+    mocks.fetchIntegrationConnection.mockResolvedValueOnce(activepiecesConnections.items[0]);
     const activepiecesSchema = {
       catalogId: "automation.activepieces",
       title: "Activepieces setup",
@@ -5494,6 +5626,9 @@ describe("SettingsNativePage integrations", () => {
     });
     await flushAsyncUpdates();
 
+    expect(mocks.invokeIntegrationConnectionAction).not.toHaveBeenCalled();
+    await act(async () => renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.title === "Run reviewed integration action?")!.props.onConfirm());
+    await flushAsyncUpdates();
     expect(mocks.invokeIntegrationConnectionAction).toHaveBeenCalledWith("conn-activepieces", "trigger_webhook", {
       input: {
         payload: '{"message":"Operator approved flow trigger"}',
@@ -5537,7 +5672,7 @@ describe("SettingsNativePage integrations", () => {
         },
       ],
     } as any;
-    mocks.fetchIntegrationCatalog.mockResolvedValueOnce(activepiecesCatalog);
+    mocks.fetchIntegrationCatalog.mockResolvedValueOnce(activepiecesCatalog).mockResolvedValueOnce(activepiecesCatalog).mockResolvedValueOnce(activepiecesCatalog);
     const activepiecesConnections = {
       items: [
         {
@@ -5558,9 +5693,11 @@ describe("SettingsNativePage integrations", () => {
         },
       ],
     } as any;
+    activepiecesConnections.items[0].revision = "a".repeat(64);
     mocks.fetchIntegrationConnections
       .mockResolvedValueOnce(activepiecesConnections)
       .mockResolvedValueOnce(activepiecesConnections);
+    mocks.fetchIntegrationConnection.mockResolvedValueOnce(activepiecesConnections.items[0]);
     mocks.invokeIntegrationConnectionAction.mockResolvedValueOnce({
       connectionId: "conn-activepieces",
       catalogId: "automation.activepieces",
@@ -5600,6 +5737,9 @@ describe("SettingsNativePage integrations", () => {
     });
     await flushAsyncUpdates();
 
+    expect(mocks.invokeIntegrationConnectionAction).not.toHaveBeenCalled();
+    await act(async () => renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.title === "Run reviewed integration action?")!.props.onConfirm());
+    await flushAsyncUpdates();
     expect(mocks.invokeIntegrationConnectionAction).toHaveBeenCalledWith("conn-activepieces", "check_run_status", {
       input: {
         workflowRunId: "run-123",
@@ -5647,6 +5787,14 @@ describe("SettingsNativePage integrations", () => {
 describe("SettingsNativePage MCP", () => {
   it("surfaces governed remote MCP runtime support without exposing transport creation controls", async () => {
     let renderer: ReactTestRenderer | null = null;
+    __resetMcpResponsesForTests();
+    let request = structuredClone((await mocks.fetchMcpElicitations()).items[0]!);
+    request.protocol.requestedSchema = request.requestedSchema.value;
+    mocks.fetchMcpElicitations.mockImplementation(async () => ({ items: [structuredClone(request)] }));
+    mocks.respondMcpElicitation.mockImplementation(async (_id, input) => {
+      request = respondedFixture(request, input.action, input.content);
+      return structuredClone(request);
+    });
 
     await act(async () => {
       renderer = renderPage("mcp");
@@ -5661,9 +5809,9 @@ describe("SettingsNativePage MCP", () => {
     await act(async () => findButton(renderer!.root, "Back to list").props.onClick());
     await act(async () => findButton(renderer!.root, "Remote HTTP").props.onClick());
     expect(
-      renderer!.root.findAllByType("button").find((node) => collectText(node).trim() === "Connect")!.props.disabled,
+      renderer!.root.findAllByType("button").find((node) => collectText(node).trim() === "Review connection")!.props.disabled,
     ).toBe(false);
-    expect(findButton(renderer!.root, "Health check").props.disabled).toBe(false);
+    expect(findButton(renderer!.root, "Configuration report").props.disabled).toBeUndefined();
     await act(async () => findButton(renderer!.root, "Edit server").props.onClick());
     text += collectText(renderer!.root);
     await act(async () => findButton(renderer!.root, "Back to list").props.onClick());
@@ -5676,35 +5824,38 @@ describe("SettingsNativePage MCP", () => {
     expect(text).toContain("Server can be used by the operator.");
     expect(text).toContain("governed remote http/sse servers");
     expect(text).toContain("Remote MCP preview");
-    expect(text).toContain("Remote http/sse MCP can invoke through the governed Gateway bridge");
+    expect(text).toContain("Eligibility is not a connection check, grant or successful tool invocation.");
     expect(text).toContain("Remote HTTP");
     expect(text).toContain("runtime invokable");
-    expect(text).toContain("Runtime path");
+    expect(text).toContain("Installation-wide Gateway projections");
     expect(text).toContain("Connect and invoke through the governed MCP runtime path");
     expect(text).toContain("Server mode preview");
-    expect(text).toContain("Read-only, closed-world descriptors can re-enter Gateway policy");
+    expect(text).toContain("Calls require Gateway authentication and an agent and session context");
     expect(text).toContain("goatcitadel.fs.read");
     expect(text).toContain("MCP elicitation inbox");
     expect(text).toContain("Choose the repository to inspect.");
     expect(text).toContain("repo.inspect");
     expect(text).toContain("Pending prompts need an explicit operator response.");
-    expect(findButton(renderer!.root, "Accept")).toBeDefined();
-    expect(findButton(renderer!.root, "Decline")).toBeDefined();
-    expect(findButton(renderer!.root, "Cancel")).toBeDefined();
+    expect(findButton(renderer!.root, "Review accept response")).toBeDefined();
+    expect(findButton(renderer!.root, "Review decline response")).toBeDefined();
+    expect(findButton(renderer!.root, "Review cancel response")).toBeDefined();
 
-    const responseInput = renderer!.root.findByType("textarea");
+    const responseInput = renderer!.root.findByType("fieldset").findByType("input");
     await act(async () => {
-      responseInput.props.onChange({ target: { value: '{ "repository": "GoatCitadel" }' } });
+      responseInput.props.onChange({ target: { value: "GoatCitadel" } });
     });
     await act(async () => {
-      findButton(renderer!.root, "Accept").props.onClick();
+      findButton(renderer!.root, "Review accept response").props.onClick();
     });
+    expect(mocks.respondMcpElicitation).not.toHaveBeenCalled();
+    await act(async () => findButton(renderer!.root, "Confirm response").props.onClick());
 
     expect(mocks.respondMcpElicitation).toHaveBeenCalledWith("mcp-elicit-1", {
       action: "accept",
       content: { repository: "GoatCitadel" },
-      owner: { surface: "mcp" },
+      owner: { workspaceId: "default", sessionId: "session-1", surface: "mcp" },
     });
+    expect(collectText(renderer!.root)).toContain("MCP response confirmed in the Gateway elicitation owner");
   });
 });
 

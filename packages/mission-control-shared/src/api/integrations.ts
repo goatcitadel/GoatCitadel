@@ -102,9 +102,14 @@ export async function fetchChannelSetupDraft(draftId: string): Promise<ChannelSe
   return request<ChannelSetupDraft>(`/api/v1/channels/drafts/${encodeURIComponent(draftId)}`, { cache: "no-store" });
 }
 
-export async function reviewChannelSetupConnection(draftId: string, input: ChannelSetupConnectionReviewInput): Promise<ChannelSetupDraft> {
+export async function reviewChannelSetupConnection(
+  draftId: string,
+  input: ChannelSetupConnectionReviewInput,
+): Promise<ChannelSetupDraft> {
   return request<ChannelSetupDraft>(`/api/v1/channels/drafts/${encodeURIComponent(draftId)}/connection-review`, {
-    method: "POST", cache: "no-store", body: JSON.stringify(input),
+    method: "POST",
+    cache: "no-store",
+    body: JSON.stringify(input),
   });
 }
 
@@ -303,8 +308,13 @@ export async function sendTestNotification(workspaceId: string, targetId: string
   });
 }
 
-export async function fetchNotificationRules(workspaceId: string): Promise<{ items: NotificationRule[] }> {
-  return request(`/api/v1/notifications/rules?workspaceId=${encodeURIComponent(workspaceId)}`);
+export async function fetchNotificationRules(
+  workspaceId: string,
+  includeArchived = false,
+): Promise<{ items: NotificationRule[] }> {
+  const params = new URLSearchParams({ workspaceId });
+  if (includeArchived) params.set("includeArchived", "true");
+  return request(`/api/v1/notifications/rules?${params.toString()}`);
 }
 
 export async function createNotificationRule(
@@ -347,9 +357,13 @@ export async function upsertNotificationPresence(input: {
 export async function fetchNotificationDeliveries(
   workspaceId: string,
   limit = 50,
+  options: { signal?: AbortSignal } = {},
 ): Promise<{ items: NotificationDeliveryRecord[] }> {
   const params = new URLSearchParams({ workspaceId, limit: String(limit) });
-  return request(`/api/v1/notifications/deliveries?${params.toString()}`);
+  return request(
+    `/api/v1/notifications/deliveries?${params.toString()}`,
+    options.signal ? { signal: options.signal, cache: "no-store" } : undefined,
+  );
 }
 
 export async function fetchExternalConnectorSources(): Promise<{ items: ExternalConnectorSourceSnapshot[] }> {
@@ -498,7 +512,10 @@ export async function fetchIntegrationConnection(connectionId: string): Promise<
   return request(`/api/v1/integrations/connections/${encodeURIComponent(connectionId)}`);
 }
 
-export async function deleteIntegrationConnection(connectionId: string, expectedRevision: string): Promise<{ deleted: boolean }> {
+export async function deleteIntegrationConnection(
+  connectionId: string,
+  expectedRevision: string,
+): Promise<{ deleted: boolean }> {
   return request(`/api/v1/integrations/connections/${encodeURIComponent(connectionId)}`, {
     method: "DELETE",
     body: JSON.stringify({ expectedRevision }),

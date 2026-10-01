@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { publishOpsSavedBoardRealtimeEvent } from "@next/app/ops-saved-board-realtime";
 import { NativeRoutePages } from "../NativeRoutePages";
 import type { NativeRoutePagesProps } from "../types";
+import { __resetBoardMutationsForTests } from "./board-mutation-state";
 
 const apiMocks = vi.hoisted(() => ({
   archiveOpsSavedBoard: vi.fn(),
@@ -67,6 +68,7 @@ const FIVE_PLACEMENTS: OpsSavedBoardRecord["placements"] = [
 let canonicalBoards: OpsSavedBoardRecord[];
 
 beforeEach(() => {
+  __resetBoardMutationsForTests();
   __resetSessionDraftsForTests();
   vi.resetAllMocks();
   canonicalBoards = [makeBoard()];
@@ -117,6 +119,7 @@ beforeEach(() => {
       revision: input.expectedRevision + 1,
       archivedAt: "2026-07-14T20:05:00.000Z",
       archivedByActorId: "operator",
+      updatedAt: "2026-07-14T20:05:00.000Z",
     });
     canonicalBoards = canonicalBoards.map((board) => (board.boardId === boardId ? archived : board));
     return archived;
@@ -127,9 +130,10 @@ beforeEach(() => {
       ...current,
       status: "active",
       revision: input.expectedRevision + 1,
-      archivedAt: undefined,
-      archivedByActorId: undefined,
+      updatedAt: "2026-07-14T20:06:00.000Z",
     });
+    delete restored.archivedAt;
+    delete restored.archivedByActorId;
     canonicalBoards = canonicalBoards.map((board) => (board.boardId === boardId ? restored : board));
     return restored;
   });
@@ -303,9 +307,14 @@ describe("OpsSavedBoardsRoutePage", () => {
     await click(renderer, "Edit layout");
     expect(findTextInput(renderer).props.value).toBe("Retained board edit");
     await click(renderer, "Save changes");
+    expect(apiMocks.updateOpsSavedBoard).not.toHaveBeenCalled();
+    expect(collectText(renderer.root)).toContain("Canonical revision 2 is now current");
+    await click(renderer, "Use revision 2");
+    expect(apiMocks.updateOpsSavedBoard).not.toHaveBeenCalled();
+    await click(renderer, "Save changes");
     expect(apiMocks.updateOpsSavedBoard).toHaveBeenCalledWith(
       "board-1",
-      expect.objectContaining({ expectedRevision: 1, name: "Retained board edit" }),
+      expect.objectContaining({ expectedRevision: 2, name: "Retained board edit" }),
     );
     await act(async () => renderer.unmount());
   });
@@ -350,7 +359,10 @@ describe("OpsSavedBoardsRoutePage", () => {
         idempotencyKey: expect.stringMatching(/^ops-board-/),
       }),
     );
-    expect(apiMocks.fetchOpsSavedBoards).toHaveBeenCalledTimes(2);
+    expect(apiMocks.fetchOpsSavedBoards).toHaveBeenCalledTimes(3);
+    expect(apiMocks.fetchOpsSavedBoards).toHaveBeenNthCalledWith(
+      2, { workspaceId: "ws-1", includeArchived: true }, expect.any(AbortSignal),
+    );
     expect(apiMocks.fetchOpsSavedBoard).toHaveBeenLastCalledWith("ws-1", "board-created");
     expect(collectText(renderer.root)).toContain("Incident watch");
 
@@ -375,11 +387,16 @@ describe("OpsSavedBoardsRoutePage", () => {
 
   it("preserves an edit draft on CAS conflict and never replays it automatically", async () => {
     const canonicalRevisionTwo = makeBoard({ revision: 2, name: "Canonical revision two" });
-    apiMocks.updateOpsSavedBoard.mockRejectedValueOnce(Object.assign(new Error("conflict"), { status: 409 }));
-    apiMocks.fetchOpsSavedBoard
-      .mockResolvedValueOnce(makeBoard())
-      .mockResolvedValueOnce(canonicalRevisionTwo)
-      .mockImplementation(async () => canonicalBoards[0]);
+    apiMocks.updateOpsSavedBoard.mockImplementationOnce(async (boardId: string, input: { expectedRevision: number }) => {
+      canonicalBoards = [canonicalRevisionTwo];
+      throw Object.assign(new Error("conflict"), {
+        status: 409,
+        body: { code: "WRITE_CONFLICT", details: {
+          resourceKind: "ops_saved_board", resourceId: boardId,
+          expectedRevision: input.expectedRevision, currentRevision: 2,
+        } },
+      });
+    });
     const renderer = await renderBoards();
 
     await click(renderer, "Edit layout");
@@ -427,7 +444,14 @@ describe("OpsSavedBoardsRoutePage", () => {
   });
 
   it("synchronizes the archived filter when a create identity conflicts", async () => {
-    apiMocks.createOpsSavedBoard.mockRejectedValueOnce(Object.assign(new Error("conflict"), { status: 409 }));
+    apiMocks.createOpsSavedBoard.mockImplementationOnce(async (input: { workspaceId: string; idempotencyKey: string }) => {
+      throw Object.assign(new Error("conflict"), {
+        status: 409,
+        body: { code: "STATE_CONFLICT", details: {
+          workspaceId: input.workspaceId, idempotencyKey: input.idempotencyKey,
+        } },
+      });
+    });
     const renderer = await renderBoards();
     canonicalBoards = [
       makeBoard({
@@ -453,10 +477,14 @@ describe("OpsSavedBoardsRoutePage", () => {
   it("cannot strand a new workspace behind a late editor mutation", async () => {
     const lateUpdate = deferred<OpsSavedBoardRecord>();
     apiMocks.updateOpsSavedBoard.mockReturnValueOnce(lateUpdate.promise);
-    bindBoardsToRequestedWorkspace();
+    canonicalBoards = [
+      makeBoard({ boardId: "board-ws-1", name: "Board ws-1" }),
+      makeBoard({ workspaceId: "ws-2", boardId: "board-ws-2", name: "Board ws-2" }),
+    ];
     const renderer = await renderBoards();
 
     await click(renderer, "Edit layout");
+    await change(findTextInput(renderer), "Stale saved board");
     await click(renderer, "Save changes");
     expect(collectText(renderer.root)).toContain("Saving");
 
@@ -468,9 +496,12 @@ describe("OpsSavedBoardsRoutePage", () => {
     expect(buttonContaining(renderer, "New board").props.disabled).toBe(false);
 
     await act(async () => {
-      lateUpdate.resolve(makeBoard({ name: "Stale saved board" }));
+      const saved = makeBoard({ boardId: "board-ws-1", name: "Stale saved board", revision: 2 });
+      canonicalBoards = [saved, canonicalBoards[1]!];
+      lateUpdate.resolve(saved);
       await flushPromises();
     });
+    expect(apiMocks.fetchOpsSavedBoard).toHaveBeenLastCalledWith("ws-1", "board-ws-1", expect.any(AbortSignal));
     expect(buttonContaining(renderer, "New board").props.disabled).toBe(false);
     expect(collectText(renderer.root)).not.toContain("Stale saved board");
   });
@@ -487,15 +518,22 @@ describe("OpsSavedBoardsRoutePage", () => {
         return Promise.resolve(makeBoard({ workspaceId, boardId: "board-ws-2", name: "Board ws-2" }));
       }
       workspaceOneDetailCalls += 1;
-      return workspaceOneDetailCalls === 1
+      return workspaceOneDetailCalls <= 2
         ? Promise.resolve(makeBoard({ boardId: "board-ws-1", name: "Board ws-1" }))
         : staleConflictRefresh.promise;
     });
-    apiMocks.archiveOpsSavedBoard.mockRejectedValueOnce(Object.assign(new Error("conflict"), { status: 409 }));
+    apiMocks.archiveOpsSavedBoard.mockRejectedValueOnce(Object.assign(new Error("conflict"), {
+      status: 409,
+      body: { code: "WRITE_CONFLICT", details: {
+        resourceKind: "ops_saved_board", resourceId: "board-ws-1", expectedRevision: 1, currentRevision: 2,
+      } },
+    }));
     const renderer = await renderBoards();
 
     await click(renderer, "Archive");
     await click(renderer, "Archive board");
+    expect(apiMocks.archiveOpsSavedBoard).toHaveBeenCalledTimes(1);
+    expect(workspaceOneDetailCalls).toBe(3);
 
     await act(async () => {
       renderer.update(<NativeRoutePages {...makeProps({ activeWorkspaceId: "ws-2", activeWorkspaceName: "Two" })} />);
@@ -713,16 +751,6 @@ async function renderBoards(props = makeProps()): Promise<ReactTestRenderer> {
     await flushPromises();
   });
   return renderer!;
-}
-
-function bindBoardsToRequestedWorkspace(): void {
-  apiMocks.fetchOpsSavedBoards.mockImplementation(async ({ workspaceId }: { workspaceId: string }) => ({
-    workspaceId,
-    items: [makeBoard({ workspaceId, boardId: `board-${workspaceId}`, name: `Board ${workspaceId}` })],
-  }));
-  apiMocks.fetchOpsSavedBoard.mockImplementation(async (workspaceId: string) =>
-    makeBoard({ workspaceId, boardId: `board-${workspaceId}`, name: `Board ${workspaceId}` }),
-  );
 }
 
 async function click(renderer: ReactTestRenderer, label: string): Promise<void> {

@@ -1,15 +1,25 @@
 import { __resetSessionDraftsForTests } from "./session-drafts";
+import { __resetCitadelStructureAttemptsForTests } from "./citadel-structure-state";
+import { __resetWorkspaceAttemptsForTests, setWorkspaceAttempt, workspaceAttemptLocked } from "../settings/workspace-editor-state";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { act, create as createRenderer, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CitadelCharter, CitadelRecord, CitadelStructureSnapshot } from "@goatcitadel/contracts";
 
 import { CitadelOverviewRoutePage } from "./CitadelOverviewRoutePage";
 import type { NativeRoutePagesProps } from "../types";
 
+const mounted: ReactTestRenderer[] = [];
+function create(...args: Parameters<typeof createRenderer>) { const renderer = createRenderer(...args); mounted.push(renderer); return renderer; }
+afterEach(async () => { await act(async () => { for (const renderer of mounted.splice(0)) renderer.unmount(); }); });
+function lifecycleModal(renderer: ReactTestRenderer) { return renderer.root.findAllByType(ConfirmModal).find(modal => /^(Archive|Restore) Citadel/.test(modal.props.title))!; }
+function structureModal(renderer: ReactTestRenderer) { return renderer.root.findAllByType(ConfirmModal).find(modal => /^(Save this Charter|Apply this Citadel template)/.test(modal.props.title))!; }
+
 const apiMocks = vi.hoisted(() => ({
   archiveCitadel: vi.fn(),
   createCitadelFromTemplate: vi.fn(),
+  fetchWorkspaces: vi.fn(),
   getCitadel: vi.fn(),
   getCitadelStructureSnapshot: vi.fn(),
   getCitadelGatehouse: vi.fn(),
@@ -23,6 +33,7 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   archiveCitadel: apiMocks.archiveCitadel,
   createCitadelFromTemplate: apiMocks.createCitadelFromTemplate,
+  fetchWorkspaces: apiMocks.fetchWorkspaces,
   getCitadel: apiMocks.getCitadel,
   getCitadelStructureSnapshot: apiMocks.getCitadelStructureSnapshot,
   getCitadelGatehouse: apiMocks.getCitadelGatehouse,
@@ -66,7 +77,7 @@ function readNodeText(node: { children?: unknown[] } | string | number | null | 
   return node.children.map((child) => readNodeText(child as never)).join("");
 }
 
-const CITADEL = {
+const CITADEL: CitadelStructureSnapshot & { record: CitadelRecord; charter: CitadelCharter } = {
   citadelId: "default",
   revision: "1".repeat(64),
   record: {
@@ -77,8 +88,8 @@ const CITADEL = {
     kind: "company",
     lifecycleStatus: "active",
     hasCharter: true,
-    createdAt: "t",
-    updatedAt: "t",
+    createdAt: "2026-09-30T00:00:00.000Z",
+    updatedAt: "2026-09-30T00:00:00.000Z",
   },
   charter: {
     citadelId: "default",
@@ -118,15 +129,6 @@ const GATEHOUSE = {
   wardCount: 2,
 };
 
-const PERSONAL_CITADEL = {
-  ...CITADEL,
-  charter: {
-    ...CITADEL.charter,
-    purpose: "Run personal life",
-    kind: "personal",
-  },
-};
-
 const TEMPLATES = [
   {
     id: "personal-chief-of-staff",
@@ -153,37 +155,54 @@ const TEMPLATES = [
     chambers: [{ name: "General" }],
   },
 ];
+let directoryRecord: typeof CITADEL.record & { archivedAt?: string };
+let structureOwner: CitadelStructureSnapshot;
+const revisionConflict = { status: 409, body: { code: "WRITE_CONFLICT", details: { reason: "CITADEL_RECORD_REVISION_CONFLICT" } } };
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((yes) => { resolve = yes; });
+  return { promise, resolve };
+}
 
 describe("CitadelOverviewRoutePage", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     __resetSessionDraftsForTests();
+    __resetCitadelStructureAttemptsForTests();
+    __resetWorkspaceAttemptsForTests();
+    directoryRecord = { ...CITADEL.record };
+    structureOwner = structuredClone(CITADEL);
     apiMocks.isApiRequestError.mockImplementation(
       (error: unknown) => typeof error === "object" && error !== null && "status" in error,
     );
     apiMocks.listCitadelTemplates.mockResolvedValue(TEMPLATES);
-    apiMocks.getCitadelStructureSnapshot.mockReset().mockResolvedValue(CITADEL);
-    apiMocks.listCitadels.mockResolvedValue({
-      items: [CITADEL.record],
+    apiMocks.getCitadelStructureSnapshot.mockImplementation(async () => ({ ...structureOwner, record: directoryRecord }));
+    apiMocks.listCitadels.mockImplementation(async () => ({ items: [directoryRecord] }));
+    apiMocks.createCitadelFromTemplate.mockImplementation(async (_citadelId: string, templateId: string) => {
+      const template = TEMPLATES.find(item => item.id === templateId)!;
+      structureOwner = { ...structureOwner, revision: "4".repeat(64), charter: { ...CITADEL.charter, ...template, citadelId: "default", kind: template.kind as CitadelCharter["kind"], defaultChamberId: undefined, updatedAt: "t2" },
+        chambers: [...structureOwner.chambers, ...template.chambers.map((chamber, index) => ({ ...CITADEL.chambers[0]!, chamberId: `template-${index}`, name: chamber.name, sensitivity: "private" as const, sealed: false }))] };
+      return { ...structureOwner, record: directoryRecord };
     });
-    apiMocks.createCitadelFromTemplate.mockResolvedValue(PERSONAL_CITADEL);
-    apiMocks.upsertCitadelCharter.mockImplementation(async (_citadelId: string, input: object) => ({
-      ...CITADEL,
-      revision: "4".repeat(64),
-      charter: { ...CITADEL.charter, ...input, updatedAt: "t2" },
-    }));
-    apiMocks.archiveCitadel.mockResolvedValue({
-      ...CITADEL.record,
+    apiMocks.upsertCitadelCharter.mockImplementation(async (_citadelId: string, input: { expectedRevision: string } & Partial<CitadelCharter>) => {
+      const { expectedRevision: _revision, ...fields } = input;
+      structureOwner = { ...structureOwner, revision: "4".repeat(64), charter: { ...structureOwner.charter!, ...fields, updatedAt: "t2" } };
+      return { ...structureOwner, record: directoryRecord };
+    });
+    apiMocks.archiveCitadel.mockImplementation(async () => (directoryRecord = {
+      ...directoryRecord,
       revision: "b".repeat(64),
       lifecycleStatus: "archived",
-      archivedAt: "t2",
-      updatedAt: "t2",
-    });
-    apiMocks.restoreCitadel.mockResolvedValue({
-      ...CITADEL.record,
+      archivedAt: "2026-09-30T01:00:00.000Z",
+      updatedAt: "2026-09-30T01:00:00.000Z",
+    }));
+    apiMocks.restoreCitadel.mockImplementation(async () => (directoryRecord = {
+      ...directoryRecord,
       revision: "c".repeat(64),
-      updatedAt: "t3",
-    });
+      lifecycleStatus: "active",
+      archivedAt: undefined,
+      updatedAt: "2026-09-30T02:00:00.000Z",
+    }));
   });
 
   it("renders the Citadel header while loading", () => {
@@ -229,6 +248,8 @@ describe("CitadelOverviewRoutePage", () => {
       buttonContaining(renderer!, "Save charter").props.onClick();
       await Promise.resolve();
     });
+    expect(apiMocks.upsertCitadelCharter).not.toHaveBeenCalled();
+    await act(async () => { await structureModal(renderer!).props.onConfirm(); });
     expect(apiMocks.upsertCitadelCharter).toHaveBeenCalledWith(
       "default",
       expect.objectContaining({
@@ -246,17 +267,19 @@ describe("CitadelOverviewRoutePage", () => {
       await Promise.resolve();
     });
     expect(apiMocks.archiveCitadel).not.toHaveBeenCalled();
-    await act(async () => { renderer!.root.findByType(ConfirmModal).props.onConfirm(); });
+    await act(async () => { lifecycleModal(renderer!).props.onConfirm(); });
     expect(apiMocks.archiveCitadel).toHaveBeenCalledWith("default", CITADEL.record.revision);
-    expect(treeString(renderer!)).toContain("Citadel archived");
+    expect(treeString(renderer!)).toContain("Acme archived");
     expect(buttonContaining(renderer!, "Restore Citadel")).toBeDefined();
 
     await act(async () => {
       buttonContaining(renderer!, "Restore Citadel").props.onClick();
       await Promise.resolve();
     });
+    expect(apiMocks.restoreCitadel).not.toHaveBeenCalled();
+    await act(async () => { lifecycleModal(renderer!).props.onConfirm(); });
     expect(apiMocks.restoreCitadel).toHaveBeenCalledWith("default", "b".repeat(64));
-    expect(treeString(renderer!)).toContain("Citadel restored");
+    expect(treeString(renderer!)).toContain("Acme restored");
   });
 
   it("retains a Charter draft after an archive conflict and requires a new confirmation of the current profile", async () => {
@@ -267,39 +290,108 @@ describe("CitadelOverviewRoutePage", () => {
     await act(async () => { buttonContaining(renderer!, "Edit Charter").props.onClick(); });
     await act(async () => { renderer!.root.findByType("textarea").props.onChange({ target: { value: "Unsaved Charter purpose" } }); });
     await act(async () => { buttonContaining(renderer!, "Archive Citadel").props.onClick(); });
-    expect(renderer!.root.findByType(ConfirmModal).props.message).toContain("Acme");
+    expect(lifecycleModal(renderer!).props.message).toContain("Acme");
     const winner = { ...CITADEL, record: { ...CITADEL.record, name: "Peer Citadel", revision: "d".repeat(64) } };
-    apiMocks.archiveCitadel.mockRejectedValueOnce({ status: 409 });
-    apiMocks.getCitadel.mockResolvedValueOnce(winner);
-    await act(async () => { await renderer!.root.findByType(ConfirmModal).props.onConfirm(); });
+    apiMocks.archiveCitadel.mockImplementationOnce(async () => { directoryRecord = winner.record; throw revisionConflict; });
+    await act(async () => { await lifecycleModal(renderer!).props.onConfirm(); });
     expect(apiMocks.archiveCitadel).toHaveBeenCalledExactlyOnceWith("default", CITADEL.record.revision);
-    expect(renderer!.root.findByType(ConfirmModal).props.open).toBe(false);
+    expect(lifecycleModal(renderer!).props.open).toBe(false);
     expect(renderer!.root.findByType("textarea").props.value).toBe("Unsaved Charter purpose");
-    expect(treeString(renderer!)).toContain("open a new archive confirmation");
+    expect(treeString(renderer!)).toContain("Refresh and review its current revision");
     await act(async () => { buttonContaining(renderer!, "Archive Citadel").props.onClick(); });
-    expect(renderer!.root.findByType(ConfirmModal).props.message).toContain("Peer Citadel");
-    await act(async () => { await renderer!.root.findByType(ConfirmModal).props.onConfirm(); });
+    expect(lifecycleModal(renderer!).props.message).toContain("Peer Citadel");
+    await act(async () => { await lifecycleModal(renderer!).props.onConfirm(); });
     expect(apiMocks.archiveCitadel).toHaveBeenNthCalledWith(2, "default", winner.record.revision);
     await act(async () => { renderer!.unmount(); });
   });
 
   it("refreshes a rejected restore without retrying it automatically", async () => {
-    const archived = { ...CITADEL, record: { ...CITADEL.record, lifecycleStatus: "archived" } };
-    apiMocks.getCitadelStructureSnapshot.mockResolvedValue(archived);
+    const archived = { ...CITADEL, record: { ...CITADEL.record, lifecycleStatus: "archived" as const } };
+    directoryRecord = archived.record;
     apiMocks.getCitadel.mockResolvedValue(archived);
     apiMocks.getCitadelGatehouse.mockResolvedValue(GATEHOUSE);
     let renderer: ReactTestRenderer | null = null;
     await act(async () => { renderer = create(<CitadelOverviewRoutePage {...makeProps()} />); });
     await act(async () => { buttonContaining(renderer!, "Edit Charter").props.onClick(); });
-    apiMocks.restoreCitadel.mockRejectedValueOnce({ status: 409 });
     const winner = { ...archived, record: { ...archived.record, revision: "e".repeat(64) } };
-    apiMocks.getCitadel.mockResolvedValueOnce(winner);
+    apiMocks.restoreCitadel.mockImplementationOnce(async () => { directoryRecord = winner.record; throw revisionConflict; });
     await act(async () => { await buttonContaining(renderer!, "Restore Citadel").props.onClick(); });
+    await act(async () => { lifecycleModal(renderer!).props.onConfirm(); });
     expect(apiMocks.restoreCitadel).toHaveBeenCalledExactlyOnceWith("default", archived.record.revision);
-    expect(treeString(renderer!)).toContain("before restoring it again");
+    expect(treeString(renderer!)).toContain("Refresh and review its current revision");
     await act(async () => { await buttonContaining(renderer!, "Restore Citadel").props.onClick(); });
+    await act(async () => { lifecycleModal(renderer!).props.onConfirm(); });
     expect(apiMocks.restoreCitadel).toHaveBeenNthCalledWith(2, "default", winner.record.revision);
     await act(async () => { renderer!.unmount(); });
+  });
+
+  it.each(["saving", "uncertain"] as const)("honors the shared Citadel metadata %s lock after mounting", async (phase) => {
+    setWorkspaceAttempt("citadel:default:edit", { phase, message: "Profile change awaiting its owner." });
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<CitadelOverviewRoutePage {...makeProps()} />); });
+    await act(async () => { buttonContaining(renderer, "Edit Charter").props.onClick(); });
+    expect(buttonContaining(renderer, "Archive Citadel").props.disabled).toBe(true);
+    await act(async () => { buttonContaining(renderer, "Archive Citadel").props.onClick(); });
+    expect(lifecycleModal(renderer).props.open).toBe(false);
+    expect(apiMocks.archiveCitadel).not.toHaveBeenCalled();
+    expect(treeString(renderer)).toContain("Profile change awaiting its owner");
+    await act(async () => { renderer.unmount(); });
+  });
+
+  it("retains an unconfirmed lifecycle lock across remount while preserving the Charter draft", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<CitadelOverviewRoutePage {...makeProps()} />); });
+    await act(async () => { buttonContaining(renderer, "Edit Charter").props.onClick(); });
+    await act(async () => { renderer.root.findByType("textarea").props.onChange({ target: { value: "Retain Charter input" } }); });
+    await act(async () => { buttonContaining(renderer, "Archive Citadel").props.onClick(); });
+    expect(lifecycleModal(renderer).props.message).toContain(CITADEL.record.revision);
+    expect(lifecycleModal(renderer).props.message).toContain("Charter draft are retained");
+    apiMocks.archiveCitadel.mockRejectedValueOnce(new Error("Response lost"));
+    await act(async () => { lifecycleModal(renderer).props.onConfirm(); });
+    expect(workspaceAttemptLocked("citadel:default:edit")).toBe(true);
+    await act(async () => { renderer.unmount(); });
+    await act(async () => { renderer = create(<CitadelOverviewRoutePage {...makeProps()} />); });
+    await act(async () => { buttonContaining(renderer, "Edit Charter").props.onClick(); });
+    expect(renderer.root.findByType("textarea").props.value).toBe("Retain Charter input");
+    expect(buttonContaining(renderer, "Archive Citadel").props.disabled).toBe(true);
+    expect(apiMocks.archiveCitadel).toHaveBeenCalledTimes(1);
+    await act(async () => { renderer.unmount(); });
+  });
+
+  it("cancels an overview lifecycle preflight after leaving and returning to its Citadel", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<CitadelOverviewRoutePage {...makeProps()} />); });
+    await act(async () => { buttonContaining(renderer, "Edit Charter").props.onClick(); });
+    await act(async () => { buttonContaining(renderer, "Archive Citadel").props.onClick(); });
+    const read = deferred<{ items: typeof CITADEL.record[] }>();
+    apiMocks.listCitadels.mockReturnValueOnce(read.promise);
+    await act(async () => { lifecycleModal(renderer).props.onConfirm(); });
+    await act(async () => { renderer.update(<CitadelOverviewRoutePage {...makeProps()} activeCitadelId="other" />); });
+    await act(async () => { renderer.update(<CitadelOverviewRoutePage {...makeProps()} />); });
+    await act(async () => { read.resolve({ items: [CITADEL.record] }); });
+    expect(apiMocks.archiveCitadel).not.toHaveBeenCalled();
+    expect(lifecycleModal(renderer).props.open).toBe(false);
+    expect(workspaceAttemptLocked("citadel:default:edit")).toBe(false);
+    await act(async () => { renderer.unmount(); });
+  });
+
+  it("withholds a late lifecycle refresh after a Citadel round trip", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<CitadelOverviewRoutePage {...makeProps()} />); });
+    await act(async () => { buttonContaining(renderer, "Edit Charter").props.onClick(); });
+    await act(async () => { buttonContaining(renderer, "Archive Citadel").props.onClick(); });
+    const read = deferred<typeof CITADEL>();
+    apiMocks.getCitadelStructureSnapshot.mockReturnValueOnce(read.promise);
+    await act(async () => { lifecycleModal(renderer).props.onConfirm(); });
+    expect(directoryRecord.lifecycleStatus).toBe("archived");
+    await act(async () => { renderer.update(<CitadelOverviewRoutePage {...makeProps()} activeCitadelId="other" />); });
+    apiMocks.getCitadelStructureSnapshot.mockResolvedValueOnce({ ...CITADEL, record: directoryRecord,
+      charter: { ...CITADEL.charter, purpose: "Current Charter after reload" } });
+    await act(async () => { renderer.update(<CitadelOverviewRoutePage {...makeProps()} />); });
+    await act(async () => { read.resolve({ ...CITADEL, charter: { ...CITADEL.charter, purpose: "Stale lifecycle projection" } }); });
+    expect(treeString(renderer)).toContain("Current Charter after reload");
+    expect(treeString(renderer)).not.toContain("Stale lifecycle projection");
+    await act(async () => { renderer.unmount(); });
   });
 
   it("shows the staged setup state without fetching detail when the active Citadel has no Charter", async () => {
@@ -346,9 +438,9 @@ describe("CitadelOverviewRoutePage", () => {
     await act(async () => { buttonContaining(renderer, "Edit Charter").props.onClick(); });
     await act(async () => { renderer.root.findByType("textarea").props.onChange({ target: { value: "My retained draft" } }); });
     const winner = { ...CITADEL, revision: "8".repeat(64), charter: { ...CITADEL.charter, purpose: "Peer purpose" }, chambers: [] };
-    apiMocks.upsertCitadelCharter.mockRejectedValueOnce({ status: 409 });
-    apiMocks.getCitadelStructureSnapshot.mockResolvedValueOnce(winner);
+    apiMocks.upsertCitadelCharter.mockImplementationOnce(async () => { structureOwner = winner; throw { status: 409, body: { code: "WRITE_CONFLICT", details: { reason: "CITADEL_STRUCTURE_REVISION_CONFLICT" } } }; });
     await act(async () => { await buttonContaining(renderer, "Save charter").props.onClick(); });
+    await act(async () => { await structureModal(renderer).props.onConfirm(); });
     expect(apiMocks.upsertCitadelCharter).toHaveBeenCalledExactlyOnceWith("default", expect.objectContaining({ purpose: "My retained draft", expectedRevision: CITADEL.revision }));
     expect(renderer.root.findByType("textarea").props.value).toBe("My retained draft");
     expect(treeString(renderer)).toContain("Peer purpose");
@@ -356,39 +448,43 @@ describe("CitadelOverviewRoutePage", () => {
     await act(async () => { buttonContaining(renderer, "Apply draft to current Charter").props.onClick(); });
     expect(apiMocks.upsertCitadelCharter).toHaveBeenCalledTimes(1);
     await act(async () => { await buttonContaining(renderer, "Save charter").props.onClick(); });
+    await act(async () => { await structureModal(renderer).props.onConfirm(); });
     expect(apiMocks.upsertCitadelCharter).toHaveBeenNthCalledWith(2, "default", expect.objectContaining({ purpose: "My retained draft", expectedRevision: winner.revision }));
     await act(async () => { renderer.unmount(); });
   });
 
   it("refreshes changed template contents without applying them automatically", async () => {
     const empty = { citadelId: "default", revision: "0".repeat(64), charter: null, chambers: [] };
-    apiMocks.getCitadelStructureSnapshot.mockResolvedValue(empty);
-    apiMocks.createCitadelFromTemplate.mockRejectedValueOnce({ status: 409 });
+    structureOwner = empty;
     let renderer!: ReactTestRenderer;
     await act(async () => { renderer = create(<CitadelOverviewRoutePage {...makeProps()} />); });
     apiMocks.listCitadelTemplates.mockResolvedValueOnce(TEMPLATES.map((template) => ({ ...template, revision: "9".repeat(64) })));
     await act(async () => { await buttonContaining(renderer, "Use template").props.onClick(); });
-    expect(apiMocks.createCitadelFromTemplate).toHaveBeenCalledExactlyOnceWith("default", TEMPLATES[0]!.id, empty.revision, TEMPLATES[0]!.revision);
-    expect(treeString(renderer)).toContain("Citadel or template changed");
+    await act(async () => { await structureModal(renderer).props.onConfirm(); });
+    expect(apiMocks.createCitadelFromTemplate).not.toHaveBeenCalled();
+    expect(treeString(renderer)).toContain("The template changed");
+    apiMocks.listCitadelTemplates.mockResolvedValue(TEMPLATES.map((template) => ({ ...template, revision: "9".repeat(64) })));
     await act(async () => { await buttonContaining(renderer, "Use template").props.onClick(); });
-    expect(apiMocks.createCitadelFromTemplate).toHaveBeenNthCalledWith(2, "default", TEMPLATES[0]!.id, empty.revision, "9".repeat(64));
+    await act(async () => { await structureModal(renderer).props.onConfirm(); });
+    expect(apiMocks.createCitadelFromTemplate).toHaveBeenCalledExactlyOnceWith("default", TEMPLATES[0]!.id, empty.revision, "9".repeat(64));
     await act(async () => { renderer.unmount(); });
   });
 
   it("keeps a committed setup when its Gatehouse follow-up fails", async () => {
-    apiMocks.getCitadelStructureSnapshot.mockResolvedValue({ citadelId: "default", revision: "0".repeat(64), charter: null, chambers: [] });
+    structureOwner = { citadelId: "default", revision: "0".repeat(64), charter: null, chambers: [] };
     apiMocks.getCitadelGatehouse.mockRejectedValue(new Error("Summary offline"));
     let renderer!: ReactTestRenderer;
     await act(async () => { renderer = create(<CitadelOverviewRoutePage {...makeProps()} />); });
     await act(async () => { await buttonContaining(renderer, "Use template").props.onClick(); });
-    expect(treeString(renderer)).toContain("Run personal life");
-    expect(treeString(renderer)).toContain("Template applied. Gatehouse summary unavailable");
+    await act(async () => { await structureModal(renderer).props.onConfirm(); });
+    expect(treeString(renderer)).toContain(TEMPLATES[0]!.purpose);
+    expect(treeString(renderer)).toContain("Charter loaded. Gatehouse summary unavailable");
     expect(apiMocks.createCitadelFromTemplate).toHaveBeenCalledTimes(1);
     await act(async () => { renderer.unmount(); });
   });
 
   it("creates the active Citadel from the Personal default template", async () => {
-    apiMocks.getCitadelStructureSnapshot.mockResolvedValue({ citadelId: "default", revision: "0".repeat(64), charter: null, chambers: [] });
+    structureOwner = { citadelId: "default", revision: "0".repeat(64), charter: null, chambers: [] };
     apiMocks.getCitadel.mockRejectedValue({ status: 404 });
     apiMocks.getCitadelGatehouse.mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce(GATEHOUSE);
     let renderer: ReactTestRenderer | null = null;
@@ -399,8 +495,10 @@ describe("CitadelOverviewRoutePage", () => {
     await act(async () => {
       buttonContaining(renderer!, "Use template").props.onClick();
     });
+    expect(apiMocks.createCitadelFromTemplate).not.toHaveBeenCalled();
+    await act(async () => { await structureModal(renderer!).props.onConfirm(); });
 
     expect(apiMocks.createCitadelFromTemplate).toHaveBeenCalledWith("default", "personal-chief-of-staff", "0".repeat(64), "2".repeat(64));
-    expect(treeString(renderer!)).toContain("Run personal life");
+    expect(treeString(renderer!)).toContain(TEMPLATES[0]!.purpose);
   });
 });

@@ -11,6 +11,11 @@ export interface McpEnvironmentBindingRecord {
   credentialRef: string;
 }
 
+/** Guarded operator admission stays bound to its original generation through transport preparation. */
+export interface McpConnectionFence {
+  expectedConnectionRevision: string;
+}
+
 export const MCP_SAFE_ENV_KEYS = [
   "PATH",
   "HOME",
@@ -119,13 +124,17 @@ export class McpStaticEnvironmentService {
   }
 
   /** Operator connect/reconnect is the only path that accepts changed ambient credentials. */
-  public async enroll(server: McpServerRecord): Promise<McpServerRecord> {
+  public async enroll(server: McpServerRecord, reviewedFence?: McpConnectionFence): Promise<McpServerRecord> {
+    const fence = reviewedFence ? Object.freeze({ ...reviewedFence }) : undefined;
     assertStatic(server);
-    const configuration = structuredClone(server);
+    const registry = this.options.registry;
+    let configuration = structuredClone(server);
+    const previous = await registry.readEnvironmentBinding(server.serverId);
+    // Fence before preparing/staging ambient credential material. Publication below repeats the fence.
+    if (fence) configuration = await registry.writeEnvironmentBinding(configuration, previous, previous, fence);
     const environment = effectiveEnvironment(configuration, this.env);
-    const previous = await this.options.registry.readEnvironmentBinding(server.serverId);
     if (Object.keys(environment).length === 0) {
-      const current = await this.options.registry.writeEnvironmentBinding(configuration, previous, undefined);
+      const current = await registry.writeEnvironmentBinding(configuration, previous, undefined, fence);
       await this.retirePublished(server.serverId, previous);
       return current;
     }
@@ -138,7 +147,7 @@ export class McpStaticEnvironmentService {
         if (!(error instanceof McpEnvironmentChangedError)) throw error;
       }
       if (proof && matchesProof(proof, environment)) {
-        return this.options.registry.writeEnvironmentBinding(configuration, previous, previous);
+        return registry.writeEnvironmentBinding(configuration, previous, previous, fence);
       }
     }
     if (!this.options.secretStore.isWriteCustodySafe())
@@ -165,13 +174,14 @@ export class McpStaticEnvironmentService {
       throw error;
     }
     // An uncertain database acknowledgment retains both immutable proof versions.
-    const current = await this.options.registry.writeEnvironmentBinding(configuration, previous, next);
+    const current = await registry.writeEnvironmentBinding(configuration, previous, next, fence);
     await this.retirePublished(server.serverId, previous);
     return current;
   }
 
   /** Capture only already-enrolled authority; drift never silently enrolls another Gateway's environment. */
-  public async capture(server: McpServerRecord): Promise<McpStaticEnvironmentHandle> {
+  public async capture(server: McpServerRecord, reviewedFence?: McpConnectionFence): Promise<McpStaticEnvironmentHandle> {
+    const fence = reviewedFence ? Object.freeze({ ...reviewedFence }) : undefined;
     assertStatic(server);
     const configuration = structuredClone(server);
     if (!configuration.configurationBindingId) throw changedEnvironment();
@@ -179,7 +189,7 @@ export class McpStaticEnvironmentService {
     const binding = await this.options.registry.readEnvironmentBinding(server.serverId);
     this.assertMatches(configuration, environment, binding);
     // Also fence the canonical configuration and binding; no change is requested here.
-    const current = await this.options.registry.writeEnvironmentBinding(configuration, binding, binding);
+    const current = await this.options.registry.writeEnvironmentBinding(configuration, binding, binding, fence);
     const handle = Object.freeze({}) as McpStaticEnvironmentHandle;
     captured.set(handle, {
       server: structuredClone(current),
@@ -188,7 +198,7 @@ export class McpStaticEnvironmentService {
         const latestEnvironment = effectiveEnvironment(current, this.env);
         if (!isDeepStrictEqual(material(environment), material(latestEnvironment))) throw changedEnvironment();
         this.assertMatches(current, environment, binding);
-        await this.options.registry.writeEnvironmentBinding(current, binding, binding);
+        await this.options.registry.writeEnvironmentBinding(current, binding, binding, fence);
       },
     });
     return handle;

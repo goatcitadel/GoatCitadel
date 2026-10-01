@@ -81,6 +81,17 @@ function toHeaderRecord(headers: HeadersInit | undefined): Record<string, string
 const CHAT_API_TEST_TIMEOUT_MS = 30_000;
 
 describe("chat API origin surface headers", () => {
+  it("encodes exact scoped session reads and forwards their cancellation signal", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ items: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { fetchChatSessions } = await import("./chat");
+    const controller = new AbortController();
+    await fetchChatSessions({ sessionId: "older/chat", workspaceId: "workspace-a", limit: 1 }, { signal: controller.signal });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("sessionId=older%2Fchat");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("workspaceId=workspace-a");
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ signal: controller.signal, cache: "no-store" });
+  });
+
   it("reviews a scoped file action separately and forwards its unchanged revision on apply", async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ revision: "a".repeat(64) }));
     vi.stubGlobal("fetch", fetchMock);

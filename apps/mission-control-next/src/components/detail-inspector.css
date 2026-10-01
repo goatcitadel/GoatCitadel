@@ -45,12 +45,12 @@
   background: var(--bg-scrim);
   z-index: var(--z-scrim);
 }
-@media (min-width: 1180px) {
+@media (min-width: 1280px) {
   .mc-next-shell.has-shell-inspector .mc-next-app-frame[data-unified-sidebar] .mc-next-stage {
     padding-right: var(--shell-inspector-gutter);
   }
 }
-@media (max-width: 1179px) {
+@media (max-width: 1279px) {
   .mc-next-detail-inspector {
     inset: 0;
     width: 100vw;

@@ -53,14 +53,14 @@ export function turnHasRepairedAssistantOutput(turn: ChatThreadTurnRecord): bool
 }
 
 /**
- * A finished turn is retryable when it produced assistant output, or when it failed
- * with a retryable failure (e.g. interrupted_by_restart) — those turns have no
- * assistant message at all, yet retry is exactly the recovery they need.
+ * A finished turn is retryable when it produced assistant output, was cancelled,
+ * or failed with a retryable failure. Cancelled and interrupted turns can have
+ * no assistant message at all.
  */
 export function canRetryTurn(turn: Pick<ChatThreadTurnRecord, "assistantMessage" | "trace">): boolean {
   return (
     isChatTurnTerminalStatus(turn.trace.status) &&
-    (Boolean(turn.assistantMessage) || turn.trace.failure?.retryable === true)
+    (Boolean(turn.assistantMessage) || turn.trace.status === "cancelled" || turn.trace.failure?.retryable === true)
   );
 }
 

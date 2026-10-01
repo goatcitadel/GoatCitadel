@@ -632,6 +632,10 @@ describe("shared API wrappers", () => {
       }),
       "/api/v1/tasks?limit=50&view=active&cursor=cursor-1&citadelId=company&workspaceId=engineering",
     );
+    await expectCall(
+      tasks.fetchTask("task/1", "engineering", "company"),
+      "/api/v1/tasks/task%2F1?citadelId=company&workspaceId=engineering",
+    );
     await expectCall(tasks.createTask({ title: "Task" }), "/api/v1/tasks", { method: "POST" });
     await expectCall(
       tasks.createTask({ citadelId: "company", workspaceId: "engineering", title: "Scoped task" }),

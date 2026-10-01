@@ -7,6 +7,27 @@ afterEach(() => {
 });
 
 describe("coalesceStreamingDeltas", () => {
+  it("flushes a lone persisted delta while the upstream stream stays open", async () => {
+    vi.useFakeTimers();
+    let releaseIdle!: () => void;
+    async function* source() {
+      yield { type: "message_start", eventId: "e1", sequence: 1 };
+      yield { type: "delta", delta: "partial answer", eventId: "e2", sequence: 2 };
+      await new Promise<void>((resolve) => {
+        releaseIdle = resolve;
+      });
+      yield { type: "done", eventId: "e3", sequence: 3 };
+    }
+    const stream = coalesceStreamingDeltas(source(), { windowMs: 25 });
+    expect((await stream.next()).value).toMatchObject({ type: "message_start" });
+    const partial = stream.next();
+    await vi.advanceTimersByTimeAsync(26);
+    expect((await partial).value).toMatchObject({ type: "delta", delta: "partial answer", eventId: "e2" });
+    releaseIdle();
+    expect((await stream.next()).value).toMatchObject({ type: "done" });
+    expect((await stream.next()).done).toBe(true);
+  });
+
   it("merges adjacent same-type deltas into one combined chunk within window", async () => {
     async function* source() {
       yield { type: "assistant.delta", delta: "hello " };

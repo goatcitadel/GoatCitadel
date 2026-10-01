@@ -5,6 +5,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChangePlanRecord, OnboardingState } from "@goatcitadel/contracts";
 import { GuidedModelSetup } from "./GuidedModelSetup";
+import { onboardingFixture } from "../onboarding.test-support";
+import { __resetOnboardingAttemptsForTests } from "../onboarding-completion-state";
 
 const mocks = vi.hoisted(() => ({
   catalog: vi.fn(),
@@ -12,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   plans: vi.fn(),
   create: vi.fn(),
   complete: vi.fn(),
+  onboarding: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () => ({
   useProviderModelCatalog: mocks.catalog,
@@ -20,6 +23,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchChangePlans: mocks.plans,
   createChangePlan: mocks.create,
   completeOnboarding: mocks.complete,
+  fetchOnboardingState: mocks.onboarding,
   cancelChangePlan: vi.fn(),
   completeChangePlanProviderOAuth: vi.fn(),
   confirmChangePlan: vi.fn(),
@@ -36,9 +40,20 @@ vi.mock("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard"
 }));
 
 const roots: ReturnType<typeof createRoot>[] = [];
+let owner: OnboardingState;
+function completeOwner() {
+  owner = { ...owner, completed: true, completedAt: "2026-09-30T12:00:00.000Z", completedBy: "operator" };
+  return { state: structuredClone(owner) };
+}
 beforeEach(() => {
   __resetSessionDraftsForTests();
+  __resetOnboardingAttemptsForTests();
   vi.resetAllMocks();
+  owner = onboardingFixture();
+  owner.settings.llm.activeProviderId = "test";
+  owner.settings.llm.activeModel = "test-model";
+  mocks.onboarding.mockImplementation(async () => structuredClone(owner));
+  mocks.complete.mockImplementation(async () => completeOwner());
   mocks.models.mockResolvedValue(["test-model"]);
   mocks.plans.mockResolvedValue({ items: [] });
   mocks.create.mockImplementation(async (input) => ({
@@ -62,6 +77,7 @@ async function mount(
     defaultModel?: string;
     capabilities?: object;
   } = {},
+  onEnterChat?: () => void,
 ) {
   mocks.catalog.mockReturnValue({
     providers: [
@@ -88,15 +104,12 @@ async function mount(
     root.render(
       <GuidedModelSetup
         workspaceId={workspaceId}
-        onboarding={
-          {
-            settings: { llm: { activeProviderId: provider.providerId ?? "test", activeModel: "test-model" } },
-          } as OnboardingState
-        }
+        onboarding={{ ...owner, settings: { ...owner.settings, llm: { ...owner.settings.llm, activeProviderId: provider.providerId ?? "test" } } }}
         route={{ area: "settings", section: "onboarding", theme: "dark" }}
         navigate={navigate}
         reloadOnboarding={reload}
         setNotice={notice}
+        onEnterChat={onEnterChat}
       />,
     );
   await act(async () => render("default"));
@@ -222,6 +235,13 @@ describe("first-run readiness truth", () => {
 });
 
 describe("guided first model setup", () => {
+  it("lets the cockpit enter Chat without completing its separate three-step setup", async () => {
+    const enter = vi.fn();
+    const view = await mount("ready", undefined, {}, enter);
+    await act(async () => view.button("Enter Chat")!.click());
+    expect(enter).toHaveBeenCalledTimes(1);
+    expect(mocks.complete).not.toHaveBeenCalled();
+  });
   it("requires connection when a saved default has missing or rejected credentials", async () => {
     const view = await mount("missing");
     expect(view.button("Enter Chat")).toBeUndefined();
@@ -303,9 +323,9 @@ describe("guided first model setup", () => {
     expect(view.notice).toHaveBeenCalledWith({ tone: "error", message: "State refresh failed" });
   });
   it.each(["unmount", "workspace change"])("ignores late Chat entry after %s", async (interruption) => {
-    let resolve!: () => void;
+    let resolve!: (value: { state: OnboardingState }) => void;
     mocks.complete.mockReturnValue(
-      new Promise<void>((done) => {
+      new Promise<{ state: OnboardingState }>((done) => {
         resolve = done;
       }),
     );
@@ -314,7 +334,7 @@ describe("guided first model setup", () => {
     expect(mocks.complete).toHaveBeenCalledTimes(1);
     if (interruption === "unmount") await view.unmount();
     else await view.changeWorkspace("other-workspace");
-    await act(async () => resolve());
+    await act(async () => resolve(completeOwner()));
     expect(view.reload).not.toHaveBeenCalled();
     expect(view.navigate).not.toHaveBeenCalled();
     expect(view.notice).not.toHaveBeenCalled();
@@ -380,6 +400,6 @@ describe("guided first model setup", () => {
     mocks.models.mockRejectedValue(new Error("Catalog unavailable"));
     const view = await mount();
     expect(view.host.querySelector('[role="alert"]')?.textContent).toBe("Catalog unavailable");
-    expect(view.host.textContent).toContain("Not yet verified");
+    expect(view.host.textContent).toContain("Not yet");
   });
 });

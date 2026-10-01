@@ -72,6 +72,7 @@ export async function projectDurableBackgroundTaskRail(
     unknowns.push(`Parent signal coverage reached the ${PARENT_SIGNAL_READ_LIMIT} event read boundary.`);
   }
   const delegationRuns = new Map<string, ChatDelegationRunRecord>();
+  const unsettledDelegationRunIds = new Set<string>();
 
   const tasks: DurableBackgroundTaskItem[] = [];
   for (const watcher of watchers) {
@@ -83,6 +84,7 @@ export async function projectDurableBackgroundTaskRail(
       workspaceId,
       sessionId,
       delegationRuns,
+      unsettledDelegationRunIds,
     );
     if (!task.scope.verified) {
       unknowns.push(`Scope could not be verified for child ${watcher.childRunId}.`);
@@ -135,10 +137,10 @@ export async function projectDurableBackgroundTaskRail(
       `${uncoveredStepIds.length} delegation step(s) have no verified watched child in the selected synthesis.`,
     );
   }
-  const synthesisSummary = publicPreviewText(
-    synthesisRun?.finalSummary ?? synthesisRun?.stitchedOutput,
-    OUTPUT_PREVIEW_BYTES,
-  );
+  const synthesisSettlementPending = Boolean(synthesisRun && unsettledDelegationRunIds.has(synthesisRun.runId));
+  const synthesisSummary = synthesisSettlementPending
+    ? undefined
+    : publicPreviewText(synthesisRun?.finalSummary ?? synthesisRun?.stitchedOutput, OUTPUT_PREVIEW_BYTES);
   const parentTerminal = isDurableRunTerminal(parent.status);
   const synthesisComplete =
     watchersComplete &&
@@ -158,13 +160,15 @@ export async function projectDurableBackgroundTaskRail(
     uncoveredChildRunIds.length === 0 &&
     uncoveredStepIds.length === 0 &&
     missingTerminalChildRunIds.length === 0;
-  const synthesisAvailability = synthesisSummary
-    ? synthesisComplete
-      ? "available"
-      : "partial"
-    : parentTerminal
-      ? "missing"
-      : "not_terminal";
+  const synthesisAvailability = synthesisSettlementPending
+    ? "partial"
+    : synthesisSummary
+      ? synthesisComplete
+        ? "available"
+        : "partial"
+      : parentTerminal
+        ? "missing"
+        : "not_terminal";
 
   return {
     version: "durable.background_task_rail.v1",
@@ -272,6 +276,7 @@ async function projectTask(
   workspaceId: string,
   parentSessionId: string,
   delegationRuns: Map<string, ChatDelegationRunRecord>,
+  unsettledDelegationRunIds: Set<string>,
 ): Promise<DurableBackgroundTaskItem> {
   const child = await readOptional(() => storage.durableRuns.getRun(watcher.childRunId));
   const metadata = watcher.metadata ?? {};
@@ -313,6 +318,24 @@ async function projectTask(
   const delegationScopeVerified =
     !delegationRunId || Boolean(delegationRun && delegationRun.sessionId === parentSessionId);
   const step = stepId ? await readOptional(() => storage.chatDelegationSteps.get(stepId)) : undefined;
+  const delegationSettlementPending = Boolean(
+    child && step && isDurableRunTerminal(child.status) && !isTerminalDelegationStepStatus(step.status),
+  );
+  // Durable cancellation commits before the delegation runner materializes its
+  // terminal step. Preserve that canonical status only with complete exact linkage;
+  // the runner still owns step settlement and its output.
+  const unsettledStepExactlyBound = Boolean(
+    child &&
+    step &&
+    delegationRun?.runId === delegationRunId &&
+    step.stepId === stepId &&
+    child.runId === watcher.childRunId &&
+    childPayloadSessionId &&
+    childPayloadTurnId &&
+    step.durableRunId === child.runId &&
+    step.childSessionId === childPayloadSessionId &&
+    step.childTurnId === childPayloadTurnId,
+  );
   const stepLinkVerified =
     !stepId ||
     (step !== undefined &&
@@ -321,7 +344,7 @@ async function projectTask(
       (!step.durableRunId || step.durableRunId === watcher.childRunId) &&
       (!step.childSessionId || step.childSessionId === childSessionId) &&
       (!step.childTurnId || step.childTurnId === childTurnId) &&
-      (!child || !isDurableRunTerminal(child.status) || isTerminalDelegationStepStatus(step.status)));
+      (!delegationSettlementPending || unsettledStepExactlyBound));
   const lineageVerified =
     Boolean(child) && scopeVerified && delegationMetadataComplete && delegationScopeVerified && stepLinkVerified;
   const rawTools = lineageVerified && childTurnId ? await storage.chatToolRuns.listByTurn(childTurnId) : [];
@@ -335,6 +358,7 @@ async function projectTask(
   );
   const verified = lineageVerified && toolRecordsValid;
   if (verified && delegationRun) delegationRuns.set(delegationRun.runId, delegationRun);
+  if (verified && delegationSettlementPending && delegationRun) unsettledDelegationRunIds.add(delegationRun.runId);
   const tools = rawTools
     .filter(
       (tool) =>
@@ -352,10 +376,26 @@ async function projectTask(
     limit: TOOL_READ_LIMIT,
   };
   const approvals = verified ? await projectApprovals(storage, tools, childSessionId) : [];
-  const output = await projectOutput(storage, child, step, childSessionId, childTurnId, verified);
+  const output = await projectOutput(
+    storage,
+    child,
+    step,
+    childSessionId,
+    childTurnId,
+    verified && !delegationSettlementPending,
+  );
   const canonicalStatus = verified ? (child?.status ?? "missing") : child ? "unknown" : "missing";
   const signalIntegrity = normalizeDurableBackgroundTaskSignals(parentEvents, watcher.watcherId, parentSignalsComplete);
-  const blockers = buildBlockers({ watcher, child, approvals, output, verified, signalIntegrity, toolCoverage });
+  const blockers = buildBlockers({
+    watcher,
+    child,
+    approvals,
+    output,
+    verified,
+    signalIntegrity,
+    toolCoverage,
+    delegationSettlementPending,
+  });
   const attention = projectAttention(watcher, blockers);
   const terminal = child ? isDurableRunTerminal(child.status) : false;
   const label =
@@ -531,6 +571,7 @@ function buildBlockers(input: {
   verified: boolean;
   signalIntegrity: DurableBackgroundTaskSignalIntegrity;
   toolCoverage: DurableBackgroundTaskItem["toolCoverage"];
+  delegationSettlementPending: boolean;
 }): DurableBackgroundTaskBlocker[] {
   const blockers: DurableBackgroundTaskBlocker[] = [];
   if (!input.child) blockers.push({ kind: "missing_child", message: "Canonical child run is missing." });
@@ -547,6 +588,12 @@ function buildBlockers(input: {
   if (input.verified && input.child?.status === "dead_lettered") {
     blockers.push({ kind: "dead_lettered", message: "Child run exhausted recovery and is dead-lettered." });
   }
+  if (input.verified && input.delegationSettlementPending) {
+    blockers.push({
+      kind: "projection_incomplete",
+      message: "The canonical child ended; its delegation step has not settled. Output and synthesis are withheld.",
+    });
+  }
   const childTerminal = Boolean(input.verified && input.child && isDurableRunTerminal(input.child.status));
   for (const approval of input.approvals.filter((item) => item.status === "pending" || item.status === "missing")) {
     blockers.push({
@@ -561,6 +608,7 @@ function buildBlockers(input: {
   }
   if (
     input.verified &&
+    !input.delegationSettlementPending &&
     input.child &&
     isDurableRunTerminal(input.child.status) &&
     input.output.availability !== "available"

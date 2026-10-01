@@ -46,6 +46,22 @@ describe("chat routes additional coverage", () => {
     app = null;
   });
 
+  it("validates and forwards exact-session reads through the existing scoped list owner", async () => {
+    const listChatSessions = vi.fn(() => []);
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.decorate("services", { chatSessions: { listChatSessions } } as never);
+    await app.register(chatRoutes);
+    const response = await app.inject({ method: "GET", url: "/api/v1/chat/sessions?workspaceId=workspace-a&sessionId=older%2Fchat&scope=mission&limit=1" });
+    expect(response.statusCode).toBe(200);
+    expect(listChatSessions).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "workspace-a", sessionId: "older/chat", scope: "mission", limit: 1 }));
+    listChatSessions.mockClear();
+    for (const value of ["", "x".repeat(257)]) {
+      expect((await app.inject({ method: "GET", url: "/api/v1/chat/sessions?sessionId=" + encodeURIComponent(value) })).statusCode).toBe(400);
+    }
+    expect(listChatSessions).not.toHaveBeenCalled();
+  });
+
   it("creates sessions and returns pagination cursors", async () => {
     const listChatSessions = vi.fn(() => [
       {
@@ -507,6 +523,15 @@ describe("chat routes additional coverage", () => {
     });
     expect(fileResponse.statusCode).toBe(200);
     expect(getChatSessionWorkbenchFile).toHaveBeenCalledWith("sess-1", "index.ts");
+
+    for (const suffix of ["", "/tree", "/file?path=index.ts"]) {
+      const previewUrl = `/api/v1/chat/sessions/sess-1/workbench${suffix}${suffix.includes("?") ? "&" : "?"}preview=`;
+      expect((await app.inject({ method: "GET", url: `${previewUrl}true` })).statusCode).toBe(200);
+      expect((await app.inject({ method: "GET", url: `${previewUrl}invalid` })).statusCode).toBe(400);
+    }
+    expect(getChatSessionWorkbench).toHaveBeenCalledWith("sess-1", { preview: true });
+    expect(getChatSessionWorkbenchTree).toHaveBeenCalledWith("sess-1", { preview: true });
+    expect(getChatSessionWorkbenchFile).toHaveBeenCalledWith("sess-1", "index.ts", { preview: true });
 
     const saveFileResponse = await app.inject({
       method: "PUT",

@@ -116,7 +116,9 @@ export const FAST_LANE_COMMANDS = Object.freeze([
   {
     id: "fast.test.policy-engine",
     title: "Policy engine tests",
-    args: ["--filter", "@goatcitadel/policy-engine", "test:coverage"],
+    // Match the Gateway worker budget: policy coverage also performs real
+    // filesystem and Git operations on high-core Windows hosts.
+    args: ["--filter", "@goatcitadel/policy-engine", "test:coverage", `--maxWorkers=${FAST_LANE_VITEST_MAX_WORKERS}`],
   },
   {
     id: "fast.test.libraries",

@@ -1,10 +1,11 @@
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
+import { presentToolEffectOutcome } from "../../content/status-vocabulary.js";
 
 export interface ChatToolEffectTruthProjection {
   facts: string;
   guidance?: string;
-  /** Operator-facing wording for an uncertain effect; the machine facts stay in `summary`. */
-  plainSummary?: string;
+  /** Operator-facing wording; the machine facts stay in `summary`. */
+  plainSummary: string;
   summary: string;
   tone: "none" | "uncertain" | "concrete";
 }
@@ -40,7 +41,9 @@ export function projectChatToolEffectTruth(
   return {
     facts,
     guidance,
-    ...(guidance ? { plainSummary: `Outcome uncertain. ${guidance}` } : {}),
+    plainSummary: guidance
+      ? `${presentToolEffectOutcome(outcome)} Automatic replay is suppressed.`
+      : presentToolEffectOutcome(outcome),
     summary: [`Effect truth: ${facts}.`, guidance, concreteNote].filter(Boolean).join(" "),
     tone: outcome === "concrete" ? "concrete" : outcome === "uncertain" ? "uncertain" : "none",
   };

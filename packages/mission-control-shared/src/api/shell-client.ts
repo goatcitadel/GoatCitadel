@@ -7,7 +7,7 @@ import type {
   WorkspaceRecord,
 } from "@goatcitadel/contracts";
 import type { RealtimeEvent } from "@goatcitadel/contracts";
-import type { EventStreamConnectionState, EventStreamStatus } from "./client.js";
+import type { EventStreamConnectionState, EventStreamStatus, RealtimeEventDelivery } from "./client.js";
 import type {
   GatewayAccessPreflightResult,
   GatewayAccessPreflightStatus,
@@ -45,7 +45,7 @@ export type {
   GatewayStartupTiming,
   GatewayAuthRejection,
 };
-export type { EventStreamConnectionState, EventStreamStatus };
+export type { EventStreamConnectionState, EventStreamStatus, RealtimeEventDelivery };
 export {
   clearGatewayAuthState,
   connectEventStream,

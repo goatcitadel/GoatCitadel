@@ -467,7 +467,6 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
               `runtime-truth expected one of ${durableTruth.acceptableStatuses.join(", ")} in the approvals recovery panel`,
             );
           }
-          const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, NEXT_UI_PACKAGE);
           const artifacts = await captureBrowserArtifacts(context, {
             slug: "runtime-truth-canonical-next-shell-consistency",
             page,
@@ -476,6 +475,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
             correlationId,
             logCursor: browserLogCursor,
           });
+          const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, NEXT_UI_PACKAGE);
           return {
             status: "passed",
             metrics: {

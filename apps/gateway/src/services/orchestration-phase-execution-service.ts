@@ -3,7 +3,6 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  isChatTurnTerminalStatus,
   type ChatSendMessageRequest,
   type ChatSendMessageResponse,
   type ChatSessionCreateInput,
@@ -20,12 +19,11 @@ import {
   type OrchestrationRunPolicyContext,
 } from "@goatcitadel/contracts";
 import { renderVersionedTextPrompt } from "../orchestration/prompt-registry.js";
+import { harvestOrchestrationPhase } from "./orchestration-phase-harvest-service.js";
+import { isChildTurnSettled, settledChildResponseResult } from "./orchestration-phase-output.js";
 
 const DEFAULT_WORKSPACE_ID = "default";
 const PHASE_SPEC_MAX_CHARACTERS = 24000;
-
-const UNSUPPORTED_USER_INPUT_WAIT =
-  "Phase child turn is waiting for user input, but durable orchestration can only pause/resume approval waits. Refactor this phase to: (1) detect where input is needed, (2) emit an approval-required tool/action and return waiting_for_approval, and (3) resume the run after approval to continue execution.";
 
 /** Stable child turn identity for one orchestration phase, so a re-dispatch converges on the same turn. */
 export interface OrchestrationPhaseTurnIdentity {
@@ -249,46 +247,7 @@ export class OrchestrationPhaseExecutionService {
    * fails the phase, because orchestration cannot answer it.
    */
   public async harvest(input: OrchestrationPhaseHarvestInput): Promise<OrchestrationPhaseExecutionResult | undefined> {
-    if (!input.childTurnId || !this.deps.readChatTurnTrace) {
-      return undefined;
-    }
-    const trace = await this.deps.readChatTurnTrace(input.childTurnId);
-    if (!trace || !isChildTurnSettled(trace.status)) {
-      return undefined;
-    }
-    const assistantText = trace.assistantMessageId
-      ? ((await this.deps.readChatMessageContent?.(trace.assistantMessageId)) ?? "").trim()
-      : "";
-    const usage =
-      input.childSessionId && this.deps.readChatTurnUsage
-        ? await this.deps.readChatTurnUsage({ sessionId: input.childSessionId, turnId: input.childTurnId })
-        : undefined;
-    const { completed, error } = describeSettledChildTurn(
-      trace.status,
-      assistantText,
-      trace.failure?.message ?? trace.failure?.failureClass,
-    );
-    const outputText = assistantText || error;
-    return {
-      phaseId: input.phaseId,
-      ownerAgentId: input.ownerAgentId,
-      status: completed ? "completed" : "failed",
-      startedAt: input.startedAt ?? trace.startedAt,
-      finishedAt: trace.finishedAt ?? new Date().toISOString(),
-      outputSummary: summarizePhaseOutput(outputText),
-      outputText,
-      childSessionId: input.childSessionId,
-      childTurnId: input.childTurnId,
-      childRunId: input.childRunId,
-      model: trace.model,
-      ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
-      ...(!usage?.costComplete ? { costUnreported: true } : {}),
-      ...(usage?.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
-      ...(usage?.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
-      citations: trace.citations,
-      prompt: input.prompt,
-      error,
-    };
+    return harvestOrchestrationPhase(this.deps, input);
   }
 
   private async readPhaseSpec(run: OrchestrationRun, phase: OrchestrationPhase): Promise<string> {
@@ -364,77 +323,6 @@ function buildStableOrchestrationId(prefix: string, ...parts: string[]): string 
   return `${prefix}-${digest}`;
 }
 
-/**
- * A child turn has settled for its phase once it finished or stopped to ask for
- * user input. Running turns and approval waits are still the child's to finish.
- */
-function isChildTurnSettled(status: ChatTurnTraceRecord["status"] | undefined): boolean {
-  return status !== undefined && (status === "waiting_for_user_input" || isChatTurnTerminalStatus(status));
-}
-
-/**
- * Maps a settled child turn onto its phase. Only a finished turn with assistant
- * output completes the phase; a wait for user input fails it, because
- * orchestration cannot answer the question.
- */
-function describeSettledChildTurn(
-  status: ChatTurnTraceRecord["status"] | undefined,
-  assistantText: string,
-  failure: string | undefined,
-): { completed: boolean; error?: string } {
-  const finished = status === "completed" || status === "partial";
-  if (status === "waiting_for_user_input") {
-    return { completed: false, error: UNSUPPORTED_USER_INPUT_WAIT };
-  }
-  if (finished && assistantText) {
-    return { completed: true };
-  }
-  return {
-    completed: false,
-    error:
-      failure ??
-      (finished
-        ? "Phase child turn finished without assistant output."
-        : `Phase child turn ended as ${status ?? "unknown"}.`),
-  };
-}
-
-/** Maps a settled child response when its canonical records cannot be read. */
-function settledChildResponseResult(
-  phase: Pick<OrchestrationPhase, "phaseId" | "ownerAgentId">,
-  startedAt: string,
-  response: ChatSendMessageResponse,
-  prompt: OrchestrationPhaseExecutionResult["prompt"],
-): OrchestrationPhaseExecutionResult {
-  const assistantText = response.assistantMessage?.content?.trim() ?? "";
-  const { completed, error } = describeSettledChildTurn(
-    response.trace?.status,
-    assistantText,
-    response.trace?.failure?.message ?? response.trace?.failure?.failureClass,
-  );
-  const costUsd = response.assistantMessage?.costUsd;
-  return {
-    phaseId: phase.phaseId,
-    ownerAgentId: phase.ownerAgentId,
-    status: completed ? "completed" : "failed",
-    startedAt,
-    finishedAt: new Date().toISOString(),
-    outputSummary: summarizePhaseOutput(assistantText || error),
-    outputText: assistantText || error,
-    childSessionId: response.sessionId,
-    childTurnId: response.turnId,
-    childRunId: response.trace?.durable?.runId,
-    model: response.model ?? response.trace?.model,
-    costUsd,
-    ...(costUsd === undefined ? { costUnreported: true } : {}),
-    inputTokens: response.assistantMessage?.tokenInput,
-    outputTokens: response.assistantMessage?.tokenOutput,
-    citations: response.citations,
-    prompt,
-    error,
-  };
-}
-
 /** True when `target` is inside `base` (and not `base` itself). */
 function isStrictlyWithin(base: string, target: string): boolean {
   const relative = path.relative(base, target);
@@ -456,12 +344,4 @@ function isPhaseAbortError(error: unknown, signal?: AbortSignal): boolean {
     return false;
   }
   return error.name === "AbortError" || error.name === "OrchestrationPhaseAbortedError";
-}
-
-function summarizePhaseOutput(value: string | undefined): string | undefined {
-  const normalized = value?.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized.length > 320 ? `${normalized.slice(0, 317)}...` : normalized;
 }

@@ -1017,6 +1017,51 @@ describe("ChatTurnCapabilityProfileRepository", () => {
     db.close();
   });
 
+  it("round-trips shared acyclic schema references with the same hashes as an expanded JSON tree", () => {
+    const { db, repo } = createStore();
+    const modes = ["auto", "plain"];
+    const design = { type: "object", properties: { mode: { type: "string", enum: modes } }, required: modes };
+    const definition = { type: "function", function: {
+      name: "shared_schema", parameters: { type: "object", properties: { design, alternateDesign: design } },
+    } };
+    const draft = buildDraftWithProviderDefinition(definition, "shared-schema", {
+      canonicalName: "shared.schema", modelName: "shared_schema",
+    });
+    const profile = sealChatTurnCapabilityProfile(draft);
+    const expanded = sealChatTurnCapabilityProfile(JSON.parse(JSON.stringify(draft)) as ChatTurnCapabilityProfileDraft);
+    assert.deepEqual(profile.hashes, expanded.hashes);
+    assert.equal(canonicalJsonString(profile), canonicalJsonString(expanded));
+    assert.deepEqual(createWithFrozenIncarnation(db, repo, profile), expanded);
+    assert.deepEqual(repo.get(profile.profileId), expanded);
+    db.close();
+  });
+
+  it("rejects real object and array ancestor cycles before hashing or persistence", () => {
+    const { db, repo } = createStore();
+    for (const kind of ["object", "array"] as const) {
+      const profile = sealChatTurnCapabilityProfile(buildDraft());
+      const source = profile.source as unknown as Record<string, unknown>;
+      if (kind === "object") {
+        source.child = { ancestor: source };
+      } else {
+        const cycle: unknown[] = [];
+        cycle.push(cycle);
+        source.child = cycle;
+      }
+      assert.throws(() => verifyChatTurnCapabilityProfile(profile), /contains a cycle at \$profile\.source\.child/);
+      assert.throws(() => repo.create(profile), /contains a cycle/);
+      assert.equal(repo.findByTurn(profile.identity.turnId), undefined);
+    }
+    db.close();
+  });
+
+  it("counts every expanded reference against the JSON node bound", () => {
+    const profile = sealChatTurnCapabilityProfile(buildDraft());
+    const shared = Object.fromEntries(Array.from({ length: 50 }, (_, index) => [`field${index}`, index]));
+    (profile.source as unknown as Record<string, unknown>).expanded = Array.from({ length: 1_024 }, () => shared);
+    assert.throws(() => verifyChatTurnCapabilityProfile(profile), /exceeds the 50000 JSON node limit/);
+  });
+
   it("fails closed on deep, oversized, secret-bearing, and hash-corrupt profiles", () => {
     const { db, repo } = createStore();
 

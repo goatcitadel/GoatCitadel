@@ -51,10 +51,12 @@ vi.mock("@goatcitadel/mission-control-shared/state/realtime-derived", () => ({
     signalEventType: "test",
   })),
   deriveRealtimeNotification: vi.fn(() => ({
-    tone: "info" as const,
-    message: "Realtime event",
-    groupKey: "g",
-    soundCue: "ping" as const,
+    tone: "warning" as const,
+    message: "Approval needs a decision",
+    groupKey: "approval-waiting",
+    truthMode: "authoritative" as const,
+    attentionKind: "approval_waiting" as const,
+    soundCue: "waiting" as const,
   })),
 }));
 vi.mock("./ops-saved-board-realtime", () => ({

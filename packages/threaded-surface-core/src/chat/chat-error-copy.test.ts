@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { describeChatUiError, formatChatUiError } from "./chat-error-copy";
+import { describeChatUiError, formatChatUiError, isChatErrorAlreadyShownByTurn } from "./chat-error-copy";
+
+describe("recorded Chat failure copy", () => {
+  it("hides only a matching host error already visible in a failed turn", () => {
+    const answer = "This turn failed before completion. Retry once, or narrow the request.";
+    const error = `${answer} More detail follows.`;
+    expect(isChatErrorAlreadyShownByTurn({ error, turnStatus: "failed", assistantContent: answer })).toBe(true);
+    expect(isChatErrorAlreadyShownByTurn({ error: "A different error", turnStatus: "failed", assistantContent: answer })).toBe(false);
+    expect(isChatErrorAlreadyShownByTurn({ error, turnStatus: "completed", assistantContent: answer })).toBe(false);
+    expect(isChatErrorAlreadyShownByTurn({ error, turnStatus: "failed", assistantContent: "Failed" })).toBe(false);
+  });
+});
 
 describe("describeChatUiError", () => {
   it("surfaces nested provider messages from API errors", () => {

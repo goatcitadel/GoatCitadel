@@ -5,7 +5,8 @@ import type { McpAuthStateRecord, McpAuthStateUpdate, McpOAuthRequestReservation
 import { callerOwnedServers, assertUniqueServers, sameConfiguration, assertConfigurationSnapshot } from "./mcp-server-state-helpers.js";
 import { buildGatewayOwnedInternalMcpServers } from "./mcp-server-read-service.js";
 import { buildPublicMcpAuthState } from "./mcp-oauth-token-service.js";
-import { assertMcpServerReview, mcpServerRevision, mcpServerReviewConflict, newMcpServerRevision, type McpServerWriteReview } from "./mcp-server-revision.js";
+import { assertMcpServerReview, assertMcpConnectionReview, mcpServerRevision, mcpServerReviewConflict, newMcpServerRevision, type McpServerWriteReview } from "./mcp-server-revision.js";
+import type { McpConnectionFence } from "./mcp-static-environment-service.js";
 interface McpConfigurationWritePort {
   mutateServers(update: (current: McpServerRecord[]) => McpServerRecord[]): Promise<McpServerRecord[]>;
   removeServerState(ids: string[]): Promise<void>;
@@ -87,11 +88,13 @@ export async function reserveMcpOAuthRequest(ctx: McpServerStoreCtx, port: McpOA
     server: McpServerRecord,
     expected: McpAuthStateRecord | undefined,
     kind: McpOAuthTokenRequest["kind"],
+    fence?: McpConnectionFence,
   ): Promise<McpOAuthRequestReservation> {
-    const input = structuredClone({ server, expected, kind });
+    const input = structuredClone({ server, expected, kind, fence });
     return ctx.runImmediateTransaction(async () => {
       const current = await port.requireServer(input.server.serverId);
       assertConfigurationSnapshot([current], [input.server]);
+      if (input.fence) assertMcpConnectionReview(current, { expectedRevision: mcpServerRevision(input.server), expectedConnectionRevision: input.fence.expectedConnectionRevision });
       const configuration = current.configurationBindingId
         ? current
         : await port.ensureStaticConfigurationBinding(current.serverId);
@@ -115,7 +118,7 @@ export async function reserveMcpOAuthRequest(ctx: McpServerStoreCtx, port: McpOA
           reservedAt: now,
         },
       };
-      await port.writeAuthState({ server: configuration, expected: input.expected, next: auth });
+      await port.writeAuthState({ server: configuration, expected: input.expected, next: auth, ...(input.fence ? { fence: input.fence } : {}) });
       return { server: configuration, auth };
     });
   }

@@ -1,5 +1,6 @@
 import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 import { installVisualLocalAiFixture } from "./visual-host-fixture.mjs";
+import { installCockpitVisualPreferences } from "./cockpit-visual-readiness.mjs";
 
 const VISUAL_STUB_KEY = "verification-visual-regression-stub-key";
 const VISUAL_STUB_REPLY = "# Verification artifact\n\nDeterministic visual-regression content.";
@@ -108,6 +109,9 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
           colorScheme: variant.colorScheme,
           timezoneId: "UTC",
         });
+        if (visualRoutes.some(route => route.shell === "cockpit")) {
+          await installCockpitVisualPreferences(browserContext, variant);
+        }
         if (fixture && verificationTarget.isNext) {
           await installMissionControlNextBrowserState(browserContext, fixture.workspaceId, fixture.citadelId);
         }
@@ -210,6 +214,7 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
                     updateBaselines,
                     packageName: verificationTarget.packageName,
                   });
+                  await assertMobileBlockingActionsReachable(page, route, variant);
                   const thresholdExceeded = comparison.diffRatio > VISUAL_DIFF_RATIO_THRESHOLD;
                   const failed = thresholdExceeded || traceRetentionProbe;
                   const comparisonArtifacts = {
@@ -367,7 +372,7 @@ export async function assertMobileVisualGeometry(page, route, variant) {
   const pendingInputSelectors =
     route?.slug === "chat-pending-user-input"
       ? [
-          '.mc-next-composer-blocking-prompt[data-blocker-kind="user-input"] .chat-user-input-card',
+          '.mc-next-thread-blocking-prompt[data-blocker-kind="user-input"] .chat-user-input-card',
           ".mc-next-composer-primary",
         ]
       : [];
@@ -375,10 +380,13 @@ export async function assertMobileVisualGeometry(page, route, variant) {
     const viewportWidth = window.innerWidth;
     const doc = document.documentElement;
     const body = document.body;
+    const sectionTabs = document.querySelector(".mc-next-section-tabs");
+    const topbar = document.querySelector(".mc-next-topbar");
     return {
       viewportWidth,
       documentOverflow: doc ? doc.scrollWidth - viewportWidth : 0,
       bodyOverflow: body ? body.scrollWidth - viewportWidth : 0,
+      sectionTabsGap: sectionTabs ? (topbar ? sectionTabs.getBoundingClientRect().top - topbar.getBoundingClientRect().bottom : null) : undefined,
       targets: selectors.map((selector) => {
         const element = document.querySelector(selector);
         if (!(element instanceof HTMLElement)) {
@@ -417,6 +425,9 @@ export async function assertMobileVisualGeometry(page, route, variant) {
       `${route.slug} ${variant.slug} overflowed horizontally (document=${geometry.documentOverflow}, body=${geometry.bodyOverflow})`,
     );
   }
+  if (geometry.sectionTabsGap === null || (geometry.sectionTabsGap !== undefined && (geometry.sectionTabsGap < -1 || geometry.sectionTabsGap > 64))) {
+    throw new Error(`${route.slug} ${variant.slug} placed section tabs away from the topbar (gap=${geometry.sectionTabsGap})`);
+  }
   for (const target of geometry.targets) {
     if (target.missing) {
       throw new Error(
@@ -427,6 +438,52 @@ export async function assertMobileVisualGeometry(page, route, variant) {
       throw new Error(
         `${route.slug} ${variant.slug} clipped ${target.selector} horizontally (left=${target.left}, right=${target.right}, viewport=${geometry.viewportWidth}, ancestors=${JSON.stringify(target.ancestors)})`,
       );
+    }
+  }
+}
+
+export async function assertMobileBlockingActionsReachable(page, route, variant) {
+  if (!variant?.viewport || variant.viewport.width > 840) {
+    return;
+  }
+  const selector = route?.slug === "chat-pending-approval"
+    ? '.mc-next-thread-blocking-prompt[data-blocker-kind="approval"] .chat-approval-actions > button'
+    : route?.slug === "chat-pending-user-input"
+      ? '.mc-next-thread-blocking-prompt[data-blocker-kind="user-input"] .chat-approval-actions > button'
+      : null;
+  if (!selector) return;
+  const buttons = page.locator(selector);
+  const count = await buttons.count();
+  if (count < (route.slug === "chat-pending-approval" ? 2 : 1)) {
+    throw new Error(`${route.slug} ${variant.slug} did not render blocking decision buttons`);
+  }
+  for (let index = 0; index < count; index += 1) {
+    const button = buttons.nth(index);
+    await button.scrollIntoViewIfNeeded();
+    const geometry = await button.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return {
+        label: element.textContent?.trim() ?? "",
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        hit: hit === element || element.contains(hit),
+      };
+    });
+    if (
+      geometry.left < 0 ||
+      geometry.right > geometry.viewportWidth ||
+      geometry.top < 0 ||
+      geometry.bottom > geometry.viewportHeight ||
+      !geometry.hit
+    ) {
+      throw new Error(`${route.slug} ${variant.slug} could not reach ${geometry.label}: ${JSON.stringify(geometry)}`);
     }
   }
 }

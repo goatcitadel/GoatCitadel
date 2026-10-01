@@ -510,6 +510,12 @@ describe("orchestration-lifecycle-service", () => {
         operatorId: "operator-1",
       }),
     );
+    expect(vi.mocked(host.storage.orchestration.upsertPlan).mock.contexts).toEqual([
+      host.storage.orchestration,
+    ]);
+    expect(vi.mocked(host.storage.orchestration.createRun).mock.contexts).toEqual([
+      host.storage.orchestration,
+    ]);
 
     const activeRun: OrchestrationRun = {
       ...buildRun(),
@@ -536,6 +542,9 @@ describe("orchestration-lifecycle-service", () => {
     expect(scopedHost.storage.orchestration.getPlan).toHaveBeenCalledWith("plan-1", "workspace-a");
     expect(scopedHost.storage.orchestration.findActiveRunByPlan).toHaveBeenCalledWith("plan-1", "workspace-a");
     expect(scopedHost.storage.orchestration.createRun).not.toHaveBeenCalled();
+    expect(vi.mocked(scopedHost.storage.orchestration.findActiveRunByPlan).mock.contexts).toEqual([
+      scopedHost.storage.orchestration,
+    ]);
   });
 
   it("returns the active run for a plan instead of creating duplicate active orchestration runs", async () => {
@@ -789,6 +798,9 @@ describe("orchestration-lifecycle-service", () => {
       { status: "paused", executionState: "paused_for_approval" },
     );
     expect(host.resumeDurableRun).toHaveBeenCalledWith("durable-run-1", "orchestration");
+    expect(vi.mocked(host.storage.orchestration.updateRunIfCurrentState).mock.contexts).toEqual([
+      host.storage.orchestration,
+    ]);
     expect(host.requestDurableRunProcessing).toHaveBeenCalledWith("durable-run-1");
     expect(host.createCheckpoint).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -923,6 +935,16 @@ describe("orchestration-lifecycle-service", () => {
       code: "STATE_CONFLICT",
       httpStatus: 409,
     });
+    expect(vi.mocked(host.storage.orchestration.updateRunIfCurrentState).mock.contexts).toEqual([
+      host.storage.orchestration,
+    ]);
+    expect(host.createCheckpoint).not.toHaveBeenCalled();
+    expect(host.publishRealtime).not.toHaveBeenCalledWith(
+      "orchestration_event",
+      "orchestration",
+      expect.objectContaining({ event: "phase_approved" }),
+      expect.anything(),
+    );
     expect(host.resumeDurableRun).not.toHaveBeenCalled();
     expect(host.requestDurableRunProcessing).not.toHaveBeenCalled();
   });

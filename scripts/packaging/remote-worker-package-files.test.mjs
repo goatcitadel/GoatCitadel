@@ -80,10 +80,27 @@ test("worker package rejects schema dependency, version and peer drift", () => {
   assert.ok(Object.isFrozen(pins));
   const ajvRequire = createRequire(require.resolve("ajv/package.json"));
   const uri = ajvRequire("fast-uri/package.json");
-  assert.equal(uri.version, "3.1.6");
-  for (const version of ["3.1.5", "3.1.7"]) {
+  assert.equal(uri.version, "3.1.7");
+  for (const version of ["3.1.5", "3.1.6"]) {
     assert.throws(() => resolveWorkerDependencyPins({ ...uri, version }), /reviewed graph/);
   }
+});
+
+test("worker schema URI parser rejects malformed bracketed hosts", () => {
+  const require = createRequire(new URL("../../packages/contracts/package.json", import.meta.url));
+  const ajvRequire = createRequire(require.resolve("ajv/package.json"));
+  const uri = ajvRequire("fast-uri");
+  for (const malformed of [
+    "http://[not-an-ip",
+    "http://[fe80",
+    "http://user@[@127.0.0.1:8123/admin",
+  ]) {
+    assert.match(uri.parse(malformed).error, /host is malformed/i);
+  }
+  const valid = uri.parse("http://[::1]:8080/path");
+  assert.equal(valid.error, undefined);
+  assert.equal(valid.host, "::1");
+  assert.equal(valid.port, 8080);
 });
 
 function fixture() {

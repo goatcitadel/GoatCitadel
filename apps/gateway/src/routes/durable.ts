@@ -5,6 +5,7 @@ import {
   assertDurableChildWatcherIdBounds,
   assertDurableChildWatcherRunIdBounds,
   DURABLE_CHILD_WATCHER_LIMITS,
+  ValidationError,
 } from "@goatcitadel/contracts";
 import { resolveApprovalActorId } from "./approvals.js";
 import { withRouteAccess } from "./route-access.js";
@@ -15,6 +16,15 @@ import { markMutationCommitted, markMutationCommittedFromError } from "../plugin
 
 const listQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(500).default(50),
+});
+
+const runListQuerySchema = listQuerySchema.extend({
+  workspaceId: z.string().min(1).max(200).refine(isBoundedScopeId, "Invalid workspace scope").optional(),
+  cursor: z.string().min(1).max(1024).optional(),
+}).superRefine((value, context) => {
+  if (value.cursor !== undefined && value.workspaceId === undefined) {
+    context.addIssue({ code: "custom", path: ["workspaceId"], message: "workspaceId is required for history pagination" });
+  }
 });
 
 const durableRunIdSchema = z
@@ -202,13 +212,18 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/api/v1/durable/runs", operatorOnly, async (request, reply) => {
-    const parsed = listQuerySchema.safeParse(request.query);
+    const parsed = runListQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send(projectDurableRouteResponse({ error: parsed.error.flatten() }));
     }
-    return projectDurableRouteResponse({
-      items: await durable.listRuns(parsed.data.limit),
-    });
+    try {
+      return projectDurableRouteResponse(parsed.data.workspaceId === undefined
+        ? { items: await durable.listRuns(parsed.data.limit) }
+        : await durable.listRunHistory({ ...parsed.data, workspaceId: parsed.data.workspaceId }));
+    } catch (error) {
+      if (error instanceof ValidationError) return reply.code(400).send(projectDurableRouteResponse(error.toJSON()));
+      throw error;
+    }
   });
 
   fastify.get("/api/v1/durable/dead-letters", operatorOnly, async (request, reply) => {

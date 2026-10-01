@@ -49,11 +49,13 @@ export class RemoteWorkerChatToolRuntime {
       inferenceRequestId: submission.inferenceRequestId,
       attempt: submission.attempt,
     };
-    const check = async () => {
+    type ResultReadFence = NonNullable<Parameters<AsyncStorage["remoteWorkerAssignments"]["resolveActiveChatExecution"]>[0]["continuingToolResult"]>;
+    const check = async (continuingToolResult?: ResultReadFence) => {
       input.signal?.throwIfAborted();
       if (!fence.protectedAuthority) throw new Error("Worker model tools require protected native authority.");
       const execution = await storage.remoteWorkerAssignments.resolveActiveChatExecution(
-        fence,
+        continuingToolResult ? { registryWorkspaceId: key.registryWorkspaceId, assignmentId: key.assignmentId,
+          assignmentGeneration: key.assignmentGeneration, continuingToolResult } : fence,
         fence.protectedAuthority,
       );
       if (!execution.authority.assignment.manifest.requiredCapabilityClasses.includes("governed_tool"))
@@ -95,7 +97,7 @@ export class RemoteWorkerChatToolRuntime {
         )
       )
         throw new Error("Worker model tool selection is outside its frozen allow map.");
-      return { profile, record, call, selected, calls: output.toolCalls! };
+      return { execution, profile, record, call, selected, calls: output.toolCalls! };
     };
     const admitted = await check();
     // Ordering is canonical: a later call cannot skip an unresolved earlier one.
@@ -104,9 +106,9 @@ export class RemoteWorkerChatToolRuntime {
       if (previous?.status !== "completed") throw new Error("An earlier worker model tool call is unresolved.");
     }
     const intentKey = modelToolIntentKey(admitted.record, admitted.call);
-    const intent = await storage.runImmediateTransaction(async () => {
+    const { intent, resultReadFence } = await storage.runImmediateTransaction(async () => {
       const current = await check();
-      return await storage.remoteWorkerEffects.recordNextIntent({
+      const intent = await storage.remoteWorkerEffects.recordNextIntent({
         registryWorkspaceId: key.registryWorkspaceId,
         assignmentId: key.assignmentId,
         assignmentGeneration: key.assignmentGeneration,
@@ -115,6 +117,12 @@ export class RemoteWorkerChatToolRuntime {
         workerIdempotencyKey: intentKey,
         idempotencyKey: intentKey,
       });
+      return { intent, resultReadFence: {
+        intentId: intent.intentId, intentSha256: intent.intentSha256,
+        leaseRevision: current.execution.authority.lease.leaseRevision,
+        parentDispatchAuthority: current.execution.authority.lease.parentDispatchAuthority,
+        durableRunPayloadSha256: current.execution.workload.durableRunPayloadSha256,
+      } };
     });
     await this.dependencies.effects.dispatchEffect({
       fence,
@@ -126,7 +134,7 @@ export class RemoteWorkerChatToolRuntime {
       signal: input.signal,
     });
     // Replaying an immutable effect receipt does not bypass current authority.
-    await check();
+    await check(resultReadFence);
     const result = await readCanonicalWorkerModelToolResult(storage, admitted.record, admitted.profile, admitted.call);
     if (!result) throw new Error("Worker tool result is unavailable for continuation.");
     return {

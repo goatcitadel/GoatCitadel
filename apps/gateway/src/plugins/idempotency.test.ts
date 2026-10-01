@@ -450,7 +450,7 @@ describe("idempotencyHeaderPlugin", () => {
     } finally { await built.app.close(); }
   });
 
-  it.each(["/api/v1/mcp/servers/:serverId", "/api/v1/mcp/servers/:serverId/policy", "/api/v1/mcp/servers/:serverId/oauth/complete"])("keeps MCP bodies out of retained retry fingerprints at %s", async route => {
+  it.each(["/api/v1/mcp/servers/:serverId", "/api/v1/mcp/servers/:serverId/policy", "/api/v1/mcp/servers/:serverId/oauth/complete", "/api/v1/mcp/servers/:serverId/oauth/start-reviewed", "/api/v1/mcp/servers/:serverId/oauth/complete-reviewed"])("keeps MCP bodies out of retained retry fingerprints at %s", async route => {
     const built = await buildApp(fastify => { fastify.post(route, async () => ({ ok: true })); });
     const claim = vi.spyOn(built.store, "claim");
     try {

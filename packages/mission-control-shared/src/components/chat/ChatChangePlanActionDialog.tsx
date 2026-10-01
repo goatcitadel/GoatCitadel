@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ChangePlanPublicFormField, ChangePlanRecord, ChangePlanRequiredAction } from "@goatcitadel/contracts";
 import { GCModal } from "../ui";
 import { fetchCandidateSkillArtifactReview, fetchCapabilityCandidate } from "../../api/capabilities";
@@ -20,7 +20,9 @@ export interface ChatChangePlanActionDialogProps {
     values: Readonly<Record<string, string>>,
   ) => void | Promise<void>;
   readonly onContinueOAuth: (plan: ChangePlanRecord) => void | Promise<void>;
-  readonly onOpenApproval: (plan: ChangePlanRecord) => void | Promise<void>;
+  readonly onOpenApproval?: (plan: ChangePlanRecord) => void | Promise<void>;
+  /** A host can supply its guarded owner link; Classic callback behavior remains the default. */
+  readonly renderApprovalAction?: (plan: ChangePlanRecord, pending: boolean) => ReactNode;
   readonly onReviewArtifacts: (plan: ChangePlanRecord) => void | Promise<void>;
   readonly onOpenNativePathPicker: (plan: ChangePlanRecord) => void | Promise<void>;
 }
@@ -42,6 +44,7 @@ export function ChatChangePlanActionDialog({
   onSubmitSecureInput,
   onContinueOAuth,
   onOpenApproval,
+  renderApprovalAction,
   onReviewArtifacts,
   onOpenNativePathPicker,
 }: ChatChangePlanActionDialogProps) {
@@ -131,7 +134,7 @@ export function ChatChangePlanActionDialog({
         await onContinueOAuth(plan);
         return;
       case "approval":
-        await onOpenApproval(plan);
+        if (!renderApprovalAction) await onOpenApproval?.(plan);
         return;
       case "artifact_review":
         await onReviewArtifacts(plan);
@@ -165,9 +168,10 @@ export function ChatChangePlanActionDialog({
         Boolean(linkedPlan && linkedPlan.requiredAction?.kind !== "confirmation")
       }
       dismissDisabled={pending}
-      onConfirm={submit}
+      onConfirm={action.kind === "approval" && (renderApprovalAction || !onOpenApproval) ? undefined : submit}
     >
       <div className="chat-change-plan-action-dialog" data-action-kind={action.kind}>
+        {action.kind === "approval" && renderApprovalAction ? renderApprovalAction(plan, pending) : null}
         <dl>
           <div>
             <dt>Scope</dt>

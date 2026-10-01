@@ -165,7 +165,7 @@
   min-height: 44px;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1023px) {
   .mc-next-remote-workers {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -183,7 +183,7 @@
   }
 }
 
-@media (max-width: 560px) {
+@media (max-width: 639px) {
   .mc-next-remote-workers__fact-grid {
     grid-template-columns: minmax(0, 1fr);
   }

@@ -1,41 +1,14 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { Hammer, RefreshCw, Send, Sparkles } from "lucide-react";
-import type { BlueprintReviewSummary, MasonAnswers, MasonSession } from "@goatcitadel/contracts";
-import {
-  createMasonSession,
-  draftBlueprintFromMasonSession,
-  getMasonSetupQuestions,
-  getMasonSession,
-  reviewMasonBlueprint,
-  sendMasonMessage,
-} from "@goatcitadel/mission-control-shared/api/client";
+import type { MasonAnswers } from "@goatcitadel/contracts";
+import { useMasonEditor } from "./use-mason-editor";
+import { useMasonStaging } from "./use-mason-staging";
+import { MasonAnswerFields } from "./MasonAnswerFields";
 import { NativeCard, NativeDisclosureCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
-import { getErrorMessage } from "../shared/native-helpers";
 import { DetailInspector } from "../../../components/DetailInspector";
-import { useSessionViewState } from "../../../hooks/use-session-view-state";
-import { useSessionDraft } from "./session-drafts";
-import { useDraftLeave } from "./DraftLeaveDialog";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
-
-interface QuestionsState {
-  loading: boolean;
-  error: string | null;
-  items: string[];
-}
-
-interface SessionState {
-  session: MasonSession | null;
-  busy: boolean;
-  error: string | null;
-}
-
-interface ReviewState {
-  loading: boolean;
-  error: string | null;
-  summary: BlueprintReviewSummary | null;
-}
 
 type MasonStageState = "complete" | "active" | "pending";
 
@@ -99,100 +72,18 @@ export function CitadelMasonRoutePage({
   activeCitadelName = activeWorkspaceName,
 }: NativeRoutePagesProps) {
   const messageInputId = useId();
-  const [questions, setQuestions] = useState<QuestionsState>({ loading: true, error: null, items: [] });
-  const [sessionState, setSessionState] = useState<SessionState>({ session: null, busy: false, error: null });
-  const [sessionId, setSessionId] = useSessionViewState<string | null>(`mason:${activeCitadelId}:session`, null);
-  const [questionIndex, setQuestionIndex] = useSessionViewState(`mason:${activeCitadelId}:question`, 0);
+  const control = useMasonEditor(activeCitadelId);
+  const stage = useMasonStaging(activeCitadelId, control.review, control.identity);
   const [reviewOpen, setReviewOpen] = useState(false);
-  const leave = useDraftLeave();
-  const messageDraft = useSessionDraft(`mason:${activeCitadelId}:${sessionId ?? "new"}:question:${questionIndex}`, "", undefined, { label: "Mason answer", onSave: (): Promise<boolean> => submitMessage() });
+  const { session, questionIndex, leave, messageDraft, startSession } = control;
   const message = messageDraft.value;
-  const setMessage = messageDraft.setValue;
-  const acceptSavedMessage = messageDraft.acceptSaved;
-  const [review, setReview] = useState<ReviewState>({ loading: false, error: null, summary: null });
-
-  useEffect(() => {
-    let cancelled = false;
-    setQuestions((current) => ({ ...current, loading: true, error: null }));
-    void getMasonSetupQuestions()
-      .then((items) => {
-        if (!cancelled) {
-          setQuestions({ loading: false, error: null, items });
-        }
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setQuestions({ loading: false, error: getErrorMessage(error), items: [] });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!sessionId || sessionState.session?.sessionId === sessionId) return;
-    let cancelled = false;
-    setSessionState((current) => ({ ...current, busy: true, error: null }));
-    void getMasonSession(sessionId).then((session) => { if (!cancelled) setSessionState({ session, busy: false, error: null }); }).catch((error) => { if (!cancelled) setSessionState((current) => ({ ...current, busy: false, error: getErrorMessage(error) })); });
-    return () => { cancelled = true; };
-  }, [sessionId, sessionState.session?.sessionId]);
-
-  const startSession = useCallback(async () => {
-    setSessionState((current) => ({ ...current, busy: true, error: null }));
-    try {
-      const session = await createMasonSession();
-      setSessionState({ session, busy: false, error: null });
-      setSessionId(session.sessionId);
-      setQuestionIndex(0);
-      setReview({ loading: false, error: null, summary: null });
-    } catch (error) {
-      setSessionState((current) => ({ ...current, busy: false, error: getErrorMessage(error) }));
-    }
-  }, [setQuestionIndex, setSessionId]);
-
-  const submitMessage = useCallback(async (): Promise<boolean> => {
-    const session = sessionState.session;
-    const trimmed = message.trim();
-    if (!session || !trimmed) {
-      return false;
-    }
-    setSessionState((current) => ({ ...current, busy: true, error: null }));
-    try {
-      const updated = await sendMasonMessage(session.sessionId, trimmed);
-      setSessionState({ session: updated, busy: false, error: null });
-      if (acceptSavedMessage("", undefined, message)) setQuestionIndex((current) => Math.min(current + 1, Math.max(0, questions.items.length - 1)));
-      return true;
-    } catch (error) {
-      setSessionState((current) => ({ ...current, busy: false, error: getErrorMessage(error) }));
-      return false;
-    }
-  }, [message, sessionState.session, acceptSavedMessage, questions.items.length, setQuestionIndex]);
-
-  const draftAndReview = useCallback(async () => {
-    const session = sessionState.session;
-    if (!session) {
-      return;
-    }
-    setReviewOpen(true);
-    setReview({ loading: true, error: null, summary: null });
-    try {
-      const blueprint = await draftBlueprintFromMasonSession(session.sessionId);
-      const summary = await reviewMasonBlueprint(blueprint);
-      setReview({ loading: false, error: null, summary });
-    } catch (error) {
-      setReview({ loading: false, error: getErrorMessage(error), summary: null });
-    }
-  }, [sessionState.session]);
-
-  const session = sessionState.session;
+  const questions = { items: control.questions, loading: control.loading, error: control.error };
+  const sessionState = { busy: control.locked, error: control.attempt.message ?? control.error };
+  const review = { loading: control.locked, summary: control.review?.summary, error: control.error };
+  const submitMessage = control.sendMessage;
+  const draftAndReview = () => { setReviewOpen(true); void control.draftAndReview(); };
   const answerRows = session ? describeAnswers(session.answers) : [];
-  // Mirrors contracts' masonSessionCanDraft (kind + non-empty purpose). Inlined so
-  // this browser surface never value-imports the contracts barrel, which pulls in
-  // the Node-only `node:crypto` Vault primitives and crashes in the browser.
-  const canDraft = session
-    ? typeof session.answers.kind === "string" && (session.answers.purpose ?? "").trim().length > 0
-    : false;
+  const canDraft = control.canDraft;
   const masonStages = buildMasonStages(session?.answers ?? {}, Boolean(session), Boolean(review.summary));
 
   return (
@@ -283,8 +174,15 @@ export function CitadelMasonRoutePage({
                 emptyLabel="No answers captured yet — tell the Mason about your Citadel below."
                 density="compact"
               /></NativeDisclosureCard>
+              <NativeDisclosureCard id="mason-structured-answers" title="Structured answers without a model">
+                <MasonAnswerFields value={control.answersDraft.value} disabled={control.locked} onChange={control.changeAnswer} />
+                {control.answersDraft.hasRemoteChanges ? <NoticeBanner tone="warning" message="Saved answers changed. Your draft is preserved; refresh and compare before saving." /> : null}
+                {control.cannotClearName ? <NoticeBanner tone="warning" message="A captured Blueprint name cannot be cleared. Enter its new name." /> : null}
+                <NativeButton disabled={control.locked || !control.answersDraft.isDirty || control.answersDraft.hasRemoteChanges || control.messageDraft.isDirty || control.cannotClearName} onClick={() => void control.saveAnswers()}>Save structured answers</NativeButton>
+                <NativeButton disabled={control.locked} onClick={control.answersDraft.discard}>Discard answer changes</NativeButton>
+              </NativeDisclosureCard>
               <p className="mc-next-settings-copy">Question {Math.min(questionIndex + 1, questions.items.length)} of {questions.items.length} · The Mason</p>
-              <div className="mc-next-settings-button-row"><NativeButton variant="ghost" disabled={questionIndex === 0} onClick={() => leave.request(() => setQuestionIndex((current) => Math.max(0, current - 1)), [messageDraft.key])}>Previous question</NativeButton><NativeButton variant="ghost" disabled={questionIndex >= questions.items.length - 1} onClick={() => leave.request(() => setQuestionIndex((current) => Math.min(questions.items.length - 1, current + 1)), [messageDraft.key])}>Next question</NativeButton></div>
+              <div className="mc-next-settings-button-row"><NativeButton variant="ghost" disabled={questionIndex === 0} onClick={() => control.changeQuestion(Math.max(0, questionIndex - 1))}>Previous question</NativeButton><NativeButton variant="ghost" disabled={questionIndex >= questions.items.length - 1} onClick={() => control.changeQuestion(Math.min(questions.items.length - 1, questionIndex + 1))}>Next question</NativeButton></div>
               <label className="mc-next-mason-field" htmlFor={messageInputId}>
                 <span>Message the Mason</span>
                 <textarea
@@ -293,12 +191,12 @@ export function CitadelMasonRoutePage({
                   value={message}
                   rows={3}
                   placeholder="e.g. I run a small startup; keep finances and legal sealed and prefer local models for sensitive work."
-                  onChange={(event) => setMessage(event.target.value)}
+                  onChange={(event) => control.changeMessage(event.target.value)}
                 />
               </label>
               <NativeButton
                 variant="default"
-                disabled={sessionState.busy || message.trim().length === 0}
+                disabled={sessionState.busy || message.trim().length === 0 || control.answersDraft.isDirty}
                 onClick={() => void submitMessage()}
               >
                 <Send size={16} />
@@ -308,7 +206,7 @@ export function CitadelMasonRoutePage({
           )}
         </NativeCard>
 
-        <DetailInspector open={reviewOpen} title="Blueprint review" onClose={() => setReviewOpen(false)}>{review.loading ? <p role="status">Drafting Blueprint…</p> : null}
+        <DetailInspector open={reviewOpen} title="Blueprint review" onClose={() => { stage.cancel(); setReviewOpen(false); }}>{review.loading ? <p role="status">Drafting Blueprint…</p> : null}
         {review.summary ? (
           <NativeCard
             title="Blueprint review"
@@ -323,6 +221,23 @@ export function CitadelMasonRoutePage({
                 <li key={line}>{line}</li>
               ))}
             </ul>
+            {control.review ? <dl>
+              <dt>Risk posture</dt><dd>{control.review.blueprint.charter.riskPosture}</dd>
+              <dt>Model policy</dt><dd>{control.review.blueprint.charter.modelPolicyDefault}</dd>
+              <dt>Goals</dt><dd>{control.review.blueprint.charter.goals.join("; ") || "None specified"}</dd>
+              <dt>Success criteria</dt><dd>{control.review.blueprint.charter.successDefinition.join("; ") || "None specified"}</dd>
+              <dt>Chambers to add</dt><dd>{control.review.blueprint.chambers.map(chamber => `${chamber.name}: ${chamber.sensitivity}, ${chamber.sealed ? "sealed" : "not sealed"}`).join("; ")}</dd>
+            </dl> : null}
+            <NativeButton disabled={stage.locked || stage.checking || control.locked} onClick={() => void stage.prepare()}>Review staging</NativeButton>
+            {stage.review ? <section aria-label="Confirm Blueprint staging">
+              <p>Replace the Charter and add {stage.review.candidate.blueprint.chambers.length} Chambers in {stage.review.target.record?.name}. Existing Chambers are retained, and the default Chamber is cleared. No accounts are connected and no Gates are opened.</p>
+              <p>Current purpose: {stage.review.target.charter?.purpose ?? "No Charter yet"}</p>
+              <p>Reviewed purpose: {stage.review.candidate.blueprint.charter.purpose}</p>
+              <NativeButton disabled={stage.locked} onClick={() => void stage.confirm()}>Stage reviewed Blueprint</NativeButton>
+              <NativeButton disabled={stage.attempt.phase === "saving"} onClick={stage.cancel}>Cancel staging</NativeButton>
+            </section> : null}
+            {stage.notice ? <p role="status">{stage.notice}</p> : null}
+            {stage.attempt.message ? <NoticeBanner tone="warning" message={stage.attempt.message} /> : null}
           </NativeCard>
         ) : review.error ? (
           <NativeCard title="Blueprint review" subtitle="The draft could not be reviewed.">
@@ -332,10 +247,11 @@ export function CitadelMasonRoutePage({
         </DetailInspector>
       </NativeGrid>
 
+      <NativeButton disabled={["checking", "saving"].includes(control.attempt.phase)} onClick={() => void control.refresh()}>Refresh Mason session</NativeButton>
       {leave.dialog}
       <p className="mc-next-mason-footnote">
         <RefreshCw size={12} aria-hidden="true" />
-        The Mason runs on your configured model. With no model set, structured answers still draft a Blueprint.
+        Mason sessions are global setup records with no atomic revision guard. Sending a message calls your configured model. Structured answers and Blueprint drafting do not call a model. Staging uses the selected Citadel structure revision.
       </p>
     </NativePageFrame>
   );
