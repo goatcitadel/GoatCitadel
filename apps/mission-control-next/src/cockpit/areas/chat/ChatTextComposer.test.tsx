@@ -93,6 +93,43 @@ describe("cockpit text composer", () => {
     expect(props.onSend).toHaveBeenCalledOnce();
   });
 
+  it("passes an immediate Enter to the controller while the display preflight is pending", async () => {
+    const props = composerProps({ canSend: false, routePreflightLoading: true });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    expect(sendButton().disabled).toBe(false);
+    expect(container.textContent).toContain("Send will wait for the Gateway check");
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(props.onSend).toHaveBeenCalledOnce();
+  });
+
+  it("does not send through a pending decision while the route is checking", async () => {
+    const props = composerProps({
+      canSend: false,
+      routePreflightLoading: true,
+      pendingApproval: {} as MissionThreadedActiveSessionSurfaceProps["pendingApproval"],
+    });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(props.onSend).not.toHaveBeenCalled();
+  });
+
+  it("preserves the draft and blocks Enter while the Gateway is unavailable", async () => {
+    const props = composerProps({ canSend: false, routePreflightLoading: true });
+    await act(async () => root.render(<ChatTextComposer props={props} gatewayUnavailable />));
+    expect(sendButton().disabled).toBe(true);
+    expect(container.querySelector("textarea")?.value).toBe("Hello");
+    expect(container.textContent).toContain("Gateway unavailable");
+    await act(async () =>
+      container.querySelector("textarea")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
+    expect(props.onSend).not.toHaveBeenCalled();
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    expect(sendButton().disabled).toBe(false);
+    expect(container.querySelector("textarea")?.value).toBe("Hello");
+  });
+
   it("opens personality settings when no presence record is attached", async () => {
     const props = composerProps();
     await act(async () => root.render(<ChatTextComposer props={props} />));
@@ -100,31 +137,58 @@ describe("cockpit text composer", () => {
     expect(button.textContent?.trim()).toBe("Personality");
     await act(async () => button.click());
     expect(props.onOpenPersonalitiesSettings).toHaveBeenCalledOnce();
-    await act(async () => root.render(<ChatTextComposer props={composerProps({ onOpenPersonalitiesSettings: undefined })} />));
-    expect((container.querySelector('button[aria-label="Open personality settings"]') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () =>
+      root.render(<ChatTextComposer props={composerProps({ onOpenPersonalitiesSettings: undefined })} />),
+    );
+    expect(
+      (container.querySelector('button[aria-label="Open personality settings"]') as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   it("keeps attached files sendable and blocks unresolved decisions or route changes", async () => {
-    expect(cockpitSendBlockReason(composerProps({ pendingAttachments: [{ attachmentId: "a", fileName: "a", mimeType: "text/plain", sizeBytes: 1 }] }))).toBeNull();
-    expect(cockpitSendBlockReason(composerProps({ pendingApproval: {} as MissionThreadedActiveSessionSurfaceProps["pendingApproval"] }))).toContain("decision");
+    expect(
+      cockpitSendBlockReason(
+        composerProps({
+          pendingAttachments: [{ attachmentId: "a", fileName: "a", mimeType: "text/plain", sizeBytes: 1 }],
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      cockpitSendBlockReason(
+        composerProps({ pendingApproval: {} as MissionThreadedActiveSessionSurfaceProps["pendingApproval"] }),
+      ),
+    ).toContain("decision");
     expect(cockpitSendBlockReason(composerProps({ routeBoundaryAckRequired: true }))).toContain("Acknowledge");
-    expect(cockpitSendBlockReason(composerProps({ canSend: false, providerOptions: [] }))).toBe("No model is connected yet.");
-    const props = composerProps({ draft: "$skill", commandSuggestions: [{ key: "one", command: "Skill", description: "Choose a skill", applyValue: "$skill" }] });
+    expect(cockpitSendBlockReason(composerProps({ canSend: false, providerOptions: [] }))).toBe(
+      "No model is connected yet.",
+    );
+    const props = composerProps({
+      draft: "$skill",
+      commandSuggestions: [{ key: "one", command: "Skill", description: "Choose a skill", applyValue: "$skill" }],
+    });
     await act(async () => root.render(<ChatTextComposer props={props} />));
     expect(sendButton().disabled).toBe(true);
     expect(props.onSend).not.toHaveBeenCalled();
   });
 
   it("uses the controller for attached-file send and model selection", async () => {
-    const props = composerProps({ draft: "", pendingAttachments: [{ attachmentId: "a", fileName: "a.txt", mimeType: "text/plain", sizeBytes: 1 }],
-      providerOptions: [{ providerId: "local", label: "Local", models: ["model-a", "model-b"] }], selectedProviderId: "local", selectedModel: "model-a" });
+    const props = composerProps({
+      draft: "",
+      pendingAttachments: [{ attachmentId: "a", fileName: "a.txt", mimeType: "text/plain", sizeBytes: 1 }],
+      providerOptions: [{ providerId: "local", label: "Local", models: ["model-a", "model-b"] }],
+      selectedProviderId: "local",
+      selectedModel: "model-a",
+    });
     await act(async () => root.render(<ChatTextComposer props={props} />));
     await act(async () => sendButton().click());
     expect(props.onSend).toHaveBeenCalledOnce();
     await act(async () => (container.querySelector('button[aria-label="Remove a.txt"]') as HTMLButtonElement).click());
     expect(props.onRemoveAttachment).toHaveBeenCalledWith("a");
     const select = container.querySelector('select[aria-label="Model"]') as HTMLSelectElement;
-    await act(async () => { select.value = "model-b"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    await act(async () => {
+      select.value = "model-b";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
     expect(props.onRequestModelChange).toHaveBeenCalledWith("model-b");
   });
 
@@ -132,17 +196,24 @@ describe("cockpit text composer", () => {
     const props = composerProps({ draft: "Revised message", editingTurnId: "turn-1" });
     await act(async () => root.render(<ChatTextComposer props={props} />));
     expect(container.textContent).toContain("Editing a new branch from this turn.");
-    const send = [...container.querySelectorAll("button")].find((element) => element.textContent?.trim() === "Send branch") as HTMLButtonElement;
+    const send = [...container.querySelectorAll("button")].find(
+      (element) => element.textContent?.trim() === "Send branch",
+    ) as HTMLButtonElement;
     expect(send.disabled).toBe(false);
     await act(async () => send.click());
     expect(props.onSend).toHaveBeenCalledOnce();
-    const cancel = [...container.querySelectorAll("button")].find((element) => element.textContent?.trim() === "Cancel branch") as HTMLButtonElement;
+    const cancel = [...container.querySelectorAll("button")].find(
+      (element) => element.textContent?.trim() === "Cancel branch",
+    ) as HTMLButtonElement;
     await act(async () => cancel.click());
     expect(props.onCancelEdit).toHaveBeenCalledOnce();
   });
 
   it("selects a command suggestion without sending its text as a message", async () => {
-    const props = composerProps({ draft: "/status", commandSuggestions: [{ key: "status", command: "/status", description: "Show status", applyValue: "/status" }] });
+    const props = composerProps({
+      draft: "/status",
+      commandSuggestions: [{ key: "status", command: "/status", description: "Show status", applyValue: "/status" }],
+    });
     await act(async () => root.render(<ChatTextComposer props={props} />));
     const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
     await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
@@ -154,7 +225,9 @@ describe("cockpit text composer", () => {
     const props = composerProps({ draft: "/schedule", canSend: false });
     const onOpenSchedules = vi.fn();
     await act(async () => root.render(<ChatTextComposer props={props} onOpenSchedules={onOpenSchedules} />));
-    const button = [...container.querySelectorAll("button")].find((element) => element.textContent?.trim() === "Open schedules") as HTMLButtonElement;
+    const button = [...container.querySelectorAll("button")].find(
+      (element) => element.textContent?.trim() === "Open schedules",
+    ) as HTMLButtonElement;
     expect(button.disabled).toBe(false);
     await act(async () => button.click());
     expect(props.onDraftChange).toHaveBeenCalledWith("");
@@ -166,12 +239,14 @@ describe("cockpit text composer", () => {
     const props = composerProps({
       draft: command,
       canSend: false,
-      chatTimerPanel: command === "/timer" ? { open: false } as ComposerProps["chatTimerPanel"] : undefined,
-      sessionStatusPanel: command === "/status" ? { open: false } as ComposerProps["sessionStatusPanel"] : undefined,
+      chatTimerPanel: command === "/timer" ? ({ open: false } as ComposerProps["chatTimerPanel"]) : undefined,
+      sessionStatusPanel: command === "/status" ? ({ open: false } as ComposerProps["sessionStatusPanel"]) : undefined,
       commandSuggestions: [{ key: command, command, description: "Local command", applyValue: command }],
     });
     await act(async () => root.render(<ChatTextComposer props={props} />));
-    const button = [...container.querySelectorAll("button")].find((element) => element.textContent?.trim() === (command === "/timer" ? "Open timer" : "Show status")) as HTMLButtonElement;
+    const button = [...container.querySelectorAll("button")].find(
+      (element) => element.textContent?.trim() === (command === "/timer" ? "Open timer" : "Show status"),
+    ) as HTMLButtonElement;
     expect(button.disabled).toBe(false);
     await act(async () => button.click());
     expect(props.onSend).toHaveBeenCalledOnce();
@@ -179,12 +254,25 @@ describe("cockpit text composer", () => {
   });
 
   it("keeps local commands blocked in a historical view or when an attachment is pending", async () => {
-    const props = composerProps({ draft: "/timer", canSend: false, historicalReadOnly: true,
-      chatTimerPanel: { open: false } as ComposerProps["chatTimerPanel"] });
+    const props = composerProps({
+      draft: "/timer",
+      canSend: false,
+      historicalReadOnly: true,
+      chatTimerPanel: { open: false } as ComposerProps["chatTimerPanel"],
+    });
     await act(async () => root.render(<ChatTextComposer props={props} />));
     expect(sendButton().disabled).toBe(true);
-    await act(async () => root.render(<ChatTextComposer props={{ ...props, historicalReadOnly: false,
-      pendingAttachments: [{ attachmentId: "a", fileName: "a.txt", mimeType: "text/plain", sizeBytes: 1 }] }} />));
+    await act(async () =>
+      root.render(
+        <ChatTextComposer
+          props={{
+            ...props,
+            historicalReadOnly: false,
+            pendingAttachments: [{ attachmentId: "a", fileName: "a.txt", mimeType: "text/plain", sizeBytes: 1 }],
+          }}
+        />,
+      ),
+    );
     expect(sendButton().disabled).toBe(true);
   });
 });

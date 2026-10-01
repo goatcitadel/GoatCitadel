@@ -164,6 +164,7 @@ function ApprovalDecisionReview({
               reason: approval.explanation?.riskExplanation,
               expiresAt: approval.expiresAt,
             }}
+            reviewedApproval={approval}
             pending={Boolean(attempt)}
             onApprove={() => void decide("approve")}
           />

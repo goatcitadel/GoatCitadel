@@ -89,6 +89,10 @@ export async function searchPaletteObjects(scope: PaletteScope, query: string): 
         if (!inboxMatchesWorkspace(result, scope.workspaceId))
           throw new Error("The Inbox projection does not match this workspace.");
         const count = inboxKnownCount(result);
+        const hasReadGap = result.coverage.some(
+          (source) => source.state === "partial" || source.state === "unavailable",
+        );
+        const hasDefinedLimit = result.coverage.some((source) => source.state === "limited");
         return {
           items: result.items
             .filter((item) => `${item.title} ${item.summary}`.toLocaleLowerCase().includes(text.toLocaleLowerCase()))
@@ -100,7 +104,13 @@ export async function searchPaletteObjects(scope: PaletteScope, query: string): 
                 href: `/inbox?${new URLSearchParams({ shell: "cockpit", workspaceId: scope.workspaceId, item: item.id })}`,
               },
             })),
-          coverage: `${count.known} known workspace items. ${count.complete ? "Current projection; resolved items may disappear." : "Coverage is incomplete; more items may be missing."}`,
+          coverage: `${count.known} known workspace items. ${
+            count.complete
+              ? "Current projection; resolved items may disappear."
+              : hasReadGap || !hasDefinedLimit
+                ? "Coverage is incomplete; more items may be missing."
+                : "Inbox has a defined scope; other work stays in its owner."
+          }`,
         };
       },
     },

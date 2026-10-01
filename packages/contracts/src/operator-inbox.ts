@@ -49,7 +49,8 @@ export interface OperatorInboxItem {
   href: string;
 }
 
-export type OperatorInboxSourceState = "current" | "partial" | "unavailable";
+/** Limited is a declared scope or freshness limit; partial means an expected read was incomplete. */
+export type OperatorInboxSourceState = "current" | "limited" | "not_enabled" | "partial" | "unavailable";
 
 export interface OperatorInboxSourceCoverage {
   source: string;

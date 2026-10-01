@@ -27,7 +27,14 @@ export function composeSystemRouteDependencies(
   | "workspaces"
 > {
   // Capture each route owner once; retain its receiver when calling methods.
-  const { storage, assemblyService, autonomyControlService, personalityCatalogService, mediaVoiceService, taskLifecycleService } = gateway;
+  const {
+    storage,
+    assemblyService,
+    autonomyControlService,
+    personalityCatalogService,
+    mediaVoiceService,
+    taskLifecycleService,
+  } = gateway;
   const settingsRuntimeDeps = createSettingsRuntimeDependenciesForGateway(gateway);
 
   return {
@@ -56,8 +63,7 @@ export function composeSystemRouteDependencies(
       getStatus: (recentLimit) => autonomyControlService.getStatus(recentLimit),
       revertAutonomousChangesSince: (sinceIso, opts) =>
         autonomyControlService.revertAutonomousChangesSince(sinceIso, opts),
-      setKillSwitch: (disabled, expectedRevision) =>
-        autonomyControlService.setKillSwitch(disabled, expectedRevision),
+      setKillSwitch: (disabled, expectedRevision) => autonomyControlService.setKillSwitch(disabled, expectedRevision),
     },
     costs: createCostsRoutePort({
       storage,
@@ -65,13 +71,13 @@ export function composeSystemRouteDependencies(
     inbox: {
       storage,
       memory: gateway.memoryLifecycleService,
+      memoryProposalsEnabled: () => gateway.isFeatureEnabled("memoryLifecycleAdminV1Enabled"),
       improvement: gateway.improvementService,
       durable: gateway.durableOperatorService,
       runtimeHealth: {
         getDatabaseHealthSnapshot: () => gateway.databaseCutoverService.getHealthSnapshot(),
         getDaemonStatus: () => createDaemonRouteService({ systemSettings: storage.systemSettings }).getDaemonStatus(),
         inspectLatestBackupTrust: () => gateway.backupRetentionService.inspectLatestBackupTrust(),
-        costUsageAvailability: (from, to) => storage.costLedger.usageAvailability(from, to),
       },
     },
     media: mediaVoiceService,
@@ -85,7 +91,8 @@ export function composeSystemRouteDependencies(
       },
       getPersonalityCatalog: () => personalityCatalogService.getCatalog(),
       getSettings: async () => await settingsAuthService.getSettings(settingsRuntimeDeps),
-      setDefaultPersonality: (id, expectedRevision) => personalityCatalogService.setDefaultPersonality(id, expectedRevision),
+      setDefaultPersonality: (id, expectedRevision) =>
+        personalityCatalogService.setDefaultPersonality(id, expectedRevision),
       updatePersonality: (id, input) => personalityCatalogService.updatePersonality(id, input),
       updateSettings: (input) => gateway.updateSettings(input),
     },

@@ -17,20 +17,32 @@ import { MobileTabBar } from "./MobileTabBar";
 import { COCKPIT_AREAS } from "./routes";
 import { Sidebar } from "./Sidebar";
 import { useCockpitRoute } from "./use-cockpit-route";
+import type { GatewayReachability } from "./use-gateway-reachability";
 
 const SettingsArea = lazy(async () => ({ default: (await import("../areas/settings/SettingsArea")).SettingsArea }));
 
 interface CockpitShellProps {
   streamState?: EventStreamConnectionState;
+  gatewayReachability?: GatewayReachability;
   onVisibleSessionChange?: (sessionId: string | undefined) => void;
 }
 
 export function CockpitShell(props: CockpitShellProps) {
   const navigation = useContext(CockpitNavigationContext);
-  return navigation ? <CockpitShellContent {...props} /> : <CockpitNavigationProvider><CockpitShellContent {...props} /></CockpitNavigationProvider>;
+  return navigation ? (
+    <CockpitShellContent {...props} />
+  ) : (
+    <CockpitNavigationProvider>
+      <CockpitShellContent {...props} />
+    </CockpitNavigationProvider>
+  );
 }
 
-function CockpitShellContent({ streamState = "closed", onVisibleSessionChange }: CockpitShellProps) {
+function CockpitShellContent({
+  streamState = "closed",
+  gatewayReachability,
+  onVisibleSessionChange,
+}: CockpitShellProps) {
   const { isTransitionPending } = useCockpitNavigation();
   const { area, rest, navigate } = useCockpitRoute();
   const firstRun = area === "settings" && rest[0] === "first-run";
@@ -58,9 +70,16 @@ function CockpitShellContent({ streamState = "closed", onVisibleSessionChange }:
         if (!isTransitionPending()) setPaletteOpen(true);
         return;
       }
-      if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable=true]")) return;
-      if (event.key.toLowerCase() === "b" && !event.shiftKey && !document.querySelector('[role="dialog"][data-state="open"]')) {
-        event.preventDefault(); setCollapseOverride(!sidebarCollapsed); return;
+      if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable=true]"))
+        return;
+      if (
+        event.key.toLowerCase() === "b" &&
+        !event.shiftKey &&
+        !document.querySelector('[role="dialog"][data-state="open"]')
+      ) {
+        event.preventDefault();
+        setCollapseOverride(!sidebarCollapsed);
+        return;
       }
       const target = COCKPIT_AREAS.find((entry) => entry.shortcut === event.key);
       if (target) {
@@ -72,17 +91,79 @@ function CockpitShellContent({ streamState = "closed", onVisibleSessionChange }:
     return () => document.removeEventListener("keydown", onKey);
   }, [navigate, sidebarCollapsed, isTransitionPending]);
 
-  return <InspectorProvider>
-    <div className="flex h-dvh flex-col bg-canvas text-fg">
-      <div className="flex min-h-0 flex-1">
-        {!firstRun ? <Sidebar onOpenPalette={() => { if (!isTransitionPending()) setPaletteOpen(true); }} streamState={streamState} collapsed={sidebarCollapsed} onToggleCollapsed={() => setCollapseOverride(!sidebarCollapsed)} /> : null}
-        <main id="main-content" className={area === "chat" ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" : "min-w-0 flex-1 overflow-y-auto"}>
-          {area === "gallery" ? <Gallery /> : area === "chat" ? <ChatArea onVisibleSessionChange={onVisibleSessionChange} /> : area === "inbox" ? <InboxArea /> : area === "library" ? <LibraryArea /> : area === "system" ? <SystemArea /> : area === "work" ? <WorkArea /> : area === "settings" ? <Suspense fallback={<p role="status" className="p-4 text-sm text-fg-muted">Loading Settings…</p>}><SettingsArea /></Suspense> : <AreaPlaceholder area={area} />}
-        </main>
-        <InspectorPanel />
+  return (
+    <InspectorProvider>
+      <div className="flex h-dvh flex-col bg-canvas text-fg">
+        <div className="flex min-h-0 flex-1">
+          {!firstRun ? (
+            <Sidebar
+              onOpenPalette={() => {
+                if (!isTransitionPending()) setPaletteOpen(true);
+              }}
+              streamState={streamState}
+              collapsed={sidebarCollapsed}
+              onToggleCollapsed={() => setCollapseOverride(!sidebarCollapsed)}
+            />
+          ) : null}
+          <main
+            id="main-content"
+            className={
+              area === "chat"
+                ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+                : "min-w-0 flex-1 overflow-y-auto"
+            }
+          >
+            {gatewayReachability?.unavailable ? (
+              <div
+                role="alert"
+                className="border-b border-status-failed bg-sunken px-4 py-3 text-sm font-medium text-status-failed"
+              >
+                Gateway unavailable. Sending is paused; your draft is preserved.{" "}
+                {gatewayReachability.lastConfirmedAt
+                  ? `Last connection confirmed at ${new Date(gatewayReachability.lastConfirmedAt).toLocaleTimeString()}.`
+                  : "Reconnecting…"}
+              </div>
+            ) : null}
+            {area === "gallery" ? (
+              <Gallery />
+            ) : area === "chat" ? (
+              <ChatArea
+                gatewayUnavailable={gatewayReachability?.unavailable}
+                onVisibleSessionChange={onVisibleSessionChange}
+              />
+            ) : area === "inbox" ? (
+              <InboxArea />
+            ) : area === "library" ? (
+              <LibraryArea />
+            ) : area === "system" ? (
+              <SystemArea />
+            ) : area === "work" ? (
+              <WorkArea />
+            ) : area === "settings" ? (
+              <Suspense
+                fallback={
+                  <p role="status" className="p-4 text-sm text-fg-muted">
+                    Loading Settings…
+                  </p>
+                }
+              >
+                <SettingsArea />
+              </Suspense>
+            ) : (
+              <AreaPlaceholder area={area} />
+            )}
+          </main>
+          <InspectorPanel />
+        </div>
+        {!firstRun ? (
+          <MobileTabBar
+            onOpenPalette={() => {
+              if (!isTransitionPending()) setPaletteOpen(true);
+            }}
+          />
+        ) : null}
       </div>
-      {!firstRun ? <MobileTabBar onOpenPalette={() => { if (!isTransitionPending()) setPaletteOpen(true); }} /> : null}
-    </div>
-    <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
-  </InspectorProvider>;
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+    </InspectorProvider>
+  );
 }

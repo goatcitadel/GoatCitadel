@@ -109,4 +109,16 @@ describe("palette Gateway object search", () => {
     expect(inbox?.items[0]?.target).toEqual({ href: "/inbox?shell=cockpit&workspaceId=workspace-a&item=approval%3A0" });
     expect(inbox?.coverage).toContain("Coverage is incomplete");
   });
+
+  it("describes a defined Inbox scope without presenting it as a failed read", async () => {
+    api.inbox.mockResolvedValue({
+      workspaceId: scope.workspaceId,
+      items: [],
+      counts: { needs_decision: { known: 0, complete: false } },
+      coverage: [{ source: "runtime_health", state: "limited", detail: "Other checks remain in System." }],
+    });
+    const inbox = (await searchPaletteObjects(scope, "needle")).find((group) => group.id === "inbox");
+    expect(inbox?.coverage).toContain("Inbox has a defined scope");
+    expect(inbox?.coverage).not.toContain("Coverage is incomplete");
+  });
 });
