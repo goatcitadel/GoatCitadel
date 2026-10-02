@@ -1,3 +1,4 @@
+import "./native-route-pages.test-support";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
 import type { OpsQualitySnapshotResponse } from "@goatcitadel/contracts";

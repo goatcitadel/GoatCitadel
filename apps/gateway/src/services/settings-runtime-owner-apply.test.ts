@@ -2,12 +2,13 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayService } from "./gateway-service.js";
 import { LlmService } from "./llm-service.js";
 import { buildSettingsCandidate, type SettingsConfigCandidate } from "./settings-auth-service.js";
 import { updateLlmConfigWithTransportReceipt } from "./provider-transport-receipt.js";
 import { projectLlmConfigPublicValue } from "./provider-settings-public-projection.js";
+import { SecretStoreService } from "./secret-store-service.js";
 import {
   ConfigGenerationApplyError,
   ConfigGenerationCommitDecisionError,
@@ -19,7 +20,13 @@ import {
 
 const tempRoots: string[] = [];
 
+beforeEach(() => {
+  // These owner-transaction fixtures must not consult the operator's OS vault.
+  vi.spyOn(SecretStoreService.prototype, "getSecret").mockReturnValue(undefined);
+});
+
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tempRoots.splice(0).map((root) => fsPromises.rm(root, { recursive: true, force: true })));
 });
 

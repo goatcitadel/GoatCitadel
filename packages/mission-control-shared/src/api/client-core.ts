@@ -160,6 +160,7 @@ export function buildGatewayHeaders(
 }
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  init?.signal?.throwIfAborted();
   const method = normalizeHttpMethod(init?.method);
   const coalescingKey = buildGetRequestCoalescingKey(path, method, init);
   if (coalescingKey) {
@@ -192,6 +193,7 @@ async function requestUncoalesced<T>(path: string, init: RequestInit | undefined
   const maxAttempts = SAFE_RETRY_METHODS.has(method) ? SAFE_REQUEST_RETRY_DELAYS_MS.length + 1 : 1;
   let lastError: ApiRequestError | null = null;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    init?.signal?.throwIfAborted();
     try {
       const res = await fetch(buildGatewayUrl(path), {
         ...init,
@@ -200,6 +202,7 @@ async function requestUncoalesced<T>(path: string, init: RequestInit | undefined
         },
         method,
       });
+      init?.signal?.throwIfAborted();
       const responseCorrelationId = res.headers.get("x-goatcitadel-correlation-id") ?? correlationId;
       setDevDiagnosticsActiveCorrelationId(responseCorrelationId);
       setDevDiagnosticsGatewayReachable(true);
@@ -230,7 +233,7 @@ async function requestUncoalesced<T>(path: string, init: RequestInit | undefined
               status: res.status,
             },
           });
-          await sleep(SAFE_REQUEST_RETRY_DELAYS_MS[attempt] ?? 250);
+          await sleep(SAFE_REQUEST_RETRY_DELAYS_MS[attempt] ?? 250, init?.signal);
           continue;
         }
         setDevDiagnosticsLastRequestError(`${method} ${path}: ${res.status}`);
@@ -285,6 +288,10 @@ async function requestUncoalesced<T>(path: string, init: RequestInit | undefined
       }
       return unwrapApiResponse<T>(payload);
     } catch (error) {
+      // Navigation cancellation is expected and says nothing about Gateway
+      // health. Preserve it without retrying an already-aborted fetch.
+      init?.signal?.throwIfAborted();
+      if (error instanceof Error && error.name === "AbortError") throw error;
       lastError =
         error instanceof ApiRequestError
           ? error
@@ -307,7 +314,7 @@ async function requestUncoalesced<T>(path: string, init: RequestInit | undefined
             error: lastError.message,
           },
         });
-        await sleep(SAFE_REQUEST_RETRY_DELAYS_MS[attempt] ?? 250);
+        await sleep(SAFE_REQUEST_RETRY_DELAYS_MS[attempt] ?? 250, init?.signal);
         continue;
       }
       if (lastError.kind === "network") {

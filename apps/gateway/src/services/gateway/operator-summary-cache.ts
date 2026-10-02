@@ -22,15 +22,18 @@ export class OperatorSummaryCache {
       return this.cached;
     }
     if (this.inFlight) return this.inFlight;
-    this.inFlight = loader().then((loaded) => {
-      this.cached = loaded;
-      this.cachedAt = now;
+    const pending = loader().then((loaded) => {
+      if (this.inFlight === pending) {
+        this.cached = loaded;
+        this.cachedAt = now;
+      }
       return loaded;
     });
+    this.inFlight = pending;
     try {
-      return await this.inFlight;
+      return await pending;
     } finally {
-      this.inFlight = undefined;
+      if (this.inFlight === pending) this.inFlight = undefined;
     }
   }
 

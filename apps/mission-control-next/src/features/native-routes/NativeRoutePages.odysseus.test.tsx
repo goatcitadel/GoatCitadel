@@ -1,3 +1,4 @@
+import "./native-route-pages.test-support";
 import { act, create as createRenderer, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

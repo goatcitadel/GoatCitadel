@@ -224,24 +224,24 @@ export function createDashboardRoutePort(deps: DashboardRoutePortDependencies): 
     costSummary: async (scope, from, to) => await deps.storage.costLedger.summary(scope, from, to),
     costUsageAvailability: async (from, to) => await deps.storage.costLedger.usageAvailability(from, to),
     getDashboardState: async () => {
-      const sessions = await deps.storage.sessions.list(200);
       const now = new Date();
-      const pendingApprovals = (
-        await (
-          await deps.storage.approvals.list("pending", 10000)
-        ).filter((approval) => !approval.expiresAt || Date.parse(approval.expiresAt) > now.getTime())
+      const from = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+      const to = now.toISOString();
+      const [sessions, approvals, activeSubagents, taskStatusCounts, events, byDay] = await Promise.all([
+        deps.storage.sessions.list(200),
+        deps.storage.approvals.list("pending", 10000),
+        deps.storage.taskSubagents.activeCount(),
+        deps.storage.tasks.statusCounts(),
+        deps.storage.realtimeEvents.list(100),
+        deps.storage.costLedger.summary("day", from, to),
+      ]);
+      const pendingApprovals = approvals.filter(
+        (approval) => !approval.expiresAt || Date.parse(approval.expiresAt) > now.getTime(),
       ).length;
-      const activeSubagents = await deps.storage.taskSubagents.activeCount();
-      const taskStatusCounts = await deps.storage.tasks.statusCounts();
-      const recentEvents = await (
-        await deps.storage.realtimeEvents.list(100)
-      ).map((event) => ({
+      const recentEvents = events.map((event) => ({
         ...event,
         payload: redactStructuredSecrets(event.payload).value,
       }));
-      const from = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
-      const to = now.toISOString();
-      const byDay = await deps.storage.costLedger.summary("day", from, to);
       const dailyCostUsd = byDay.reduce((sum, row) => sum + row.costUsd, 0);
 
       return {

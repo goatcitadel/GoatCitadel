@@ -1157,7 +1157,7 @@ describe("MissionControlNextApp", () => {
     expect(rendered).not.toContain("Serving");
   });
 
-  it("ignores older daemon health responses that settle after a newer failed refresh", async () => {
+  it("waits for slow daemon health before polling again and preserves a subsequent failure", async () => {
     let resolveInitialHealth!: (value: { daemonStatus: { running: boolean } }) => void;
     const initialHealth = new Promise<{ daemonStatus: { running: boolean } }>((resolve) => {
       resolveInitialHealth = resolve;
@@ -1177,11 +1177,18 @@ describe("MissionControlNextApp", () => {
       await Promise.resolve();
     });
     await flush();
-    expect(JSON.stringify(renderer.toJSON())).toContain("Unavailable");
+    expect(appMocks.fetchHealthSummary).toHaveBeenCalledOnce();
+    expect(JSON.stringify(renderer.toJSON())).toContain("Checking");
 
     await act(async () => {
       resolveInitialHealth({ daemonStatus: { running: true } });
       await initialHealth;
+    });
+    await flush();
+
+    await act(async () => {
+      intervalCallback?.();
+      await Promise.resolve();
     });
     await flush();
 

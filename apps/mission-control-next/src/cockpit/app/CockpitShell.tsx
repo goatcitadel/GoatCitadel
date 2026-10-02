@@ -2,16 +2,11 @@ import { lazy, Suspense, useContext, useEffect, useLayoutEffect, useState } from
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
-import { LibraryArea } from "../areas/library/LibraryArea";
 import { ChatArea } from "../areas/chat/ChatArea";
-import { InboxArea } from "../areas/inbox/InboxArea";
-import { SystemArea } from "../areas/system/SystemArea";
-import { WorkArea } from "../areas/work/WorkArea";
 import { AreaPlaceholder } from "./AreaPlaceholder";
 import { CommandPalette } from "./CommandPalette";
 import { CockpitNavigationContext, useCockpitNavigation } from "./cockpit-navigation-context";
 import { CockpitNavigationProvider } from "./CockpitNavigationProvider";
-import { Gallery } from "./Gallery";
 import { InspectorPanel, InspectorProvider } from "./inspector";
 import { MobileTabBar } from "./MobileTabBar";
 import { COCKPIT_AREAS } from "./routes";
@@ -20,6 +15,11 @@ import { useCockpitRoute } from "./use-cockpit-route";
 import type { GatewayReachability } from "./use-gateway-reachability";
 
 const SettingsArea = lazy(async () => ({ default: (await import("../areas/settings/SettingsArea")).SettingsArea }));
+const InboxArea = lazy(async () => ({ default: (await import("../areas/inbox/InboxArea")).InboxArea }));
+const WorkArea = lazy(async () => ({ default: (await import("../areas/work/WorkArea")).WorkArea }));
+const LibraryArea = lazy(async () => ({ default: (await import("../areas/library/LibraryArea")).LibraryArea }));
+const SystemArea = lazy(async () => ({ default: (await import("../areas/system/SystemArea")).SystemArea }));
+const Gallery = lazy(async () => ({ default: (await import("./Gallery")).Gallery }));
 
 interface CockpitShellProps {
   streamState?: EventStreamConnectionState;
@@ -45,6 +45,8 @@ function CockpitShellContent({
 }: CockpitShellProps) {
   const { isTransitionPending } = useCockpitNavigation();
   const { area, rest, navigate } = useCockpitRoute();
+  const areaLabel =
+    COCKPIT_AREAS.find((entry) => entry.area === area)?.label ?? (area === "gallery" ? "Gallery" : "Settings");
   const firstRun = area === "settings" && rest[0] === "first-run";
   const { theme, density } = useUiPreferences();
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -124,34 +126,35 @@ function CockpitShellContent({
                   : "Reconnecting…"}
               </div>
             ) : null}
-            {area === "gallery" ? (
-              <Gallery />
-            ) : area === "chat" ? (
-              <ChatArea
-                gatewayUnavailable={gatewayReachability?.unavailable}
-                onVisibleSessionChange={onVisibleSessionChange}
-              />
-            ) : area === "inbox" ? (
-              <InboxArea />
-            ) : area === "library" ? (
-              <LibraryArea />
-            ) : area === "system" ? (
-              <SystemArea />
-            ) : area === "work" ? (
-              <WorkArea />
-            ) : area === "settings" ? (
-              <Suspense
-                fallback={
-                  <p role="status" className="p-4 text-sm text-fg-muted">
-                    Loading Settings…
-                  </p>
-                }
-              >
+            <Suspense
+              key={area}
+              fallback={
+                <p role="status" className="p-4 text-sm text-fg-muted">
+                  Loading {areaLabel}…
+                </p>
+              }
+            >
+              {area === "gallery" ? (
+                <Gallery />
+              ) : area === "chat" ? (
+                <ChatArea
+                  gatewayUnavailable={gatewayReachability?.unavailable}
+                  onVisibleSessionChange={onVisibleSessionChange}
+                />
+              ) : area === "inbox" ? (
+                <InboxArea />
+              ) : area === "library" ? (
+                <LibraryArea />
+              ) : area === "system" ? (
+                <SystemArea />
+              ) : area === "work" ? (
+                <WorkArea />
+              ) : area === "settings" ? (
                 <SettingsArea />
-              </Suspense>
-            ) : (
-              <AreaPlaceholder area={area} />
-            )}
+              ) : (
+                <AreaPlaceholder area={area} />
+              )}
+            </Suspense>
           </main>
           <InspectorPanel />
         </div>

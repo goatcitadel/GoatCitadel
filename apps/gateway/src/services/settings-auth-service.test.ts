@@ -341,6 +341,13 @@ function buildAuthHarness(options: { storage?: Storage; rootDir?: string } = {})
   return harness;
 }
 
+function readAuthFixtureDatabaseTime(harness: AuthHarness): number {
+  const row = harness.storage.db
+    .prepare("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS timestamp")
+    .get() as { timestamp: string };
+  return Date.parse(row.timestamp);
+}
+
 function readPersistedTokenPlaintext(harness: AuthHarness, requestId: string): string | null {
   const row = harness.storage.gatewaySql
     .prepare("SELECT approved_token_plaintext FROM auth_device_requests WHERE request_id = @requestId")
@@ -1634,16 +1641,17 @@ describe("settings-auth-service device access lifecycle", () => {
   it.each(["2099-01-01T00:00:00.000Z", "2000-01-01T00:00:00.000Z"])(
     "issues device-request TTLs from database time under a %s host clock",
     async (hostClock) => {
-      const databaseNowBefore = Date.now();
       vi.useFakeTimers();
       vi.setSystemTime(new Date(hostClock));
       try {
         const harness = buildAuthHarness();
+        const databaseNowBefore = readAuthFixtureDatabaseTime(harness);
         const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
         const stored = await getAuthDeviceRequestById(harness.deps, request.requestId);
 
         expect(stored).toBeDefined();
-        expect(Math.abs(Date.parse(stored!.createdAt) - databaseNowBefore)).toBeLessThan(5_000);
+        expect(Date.parse(stored!.createdAt)).toBeGreaterThanOrEqual(databaseNowBefore);
+        expect(Date.parse(stored!.createdAt)).toBeLessThanOrEqual(readAuthFixtureDatabaseTime(harness));
         expect(Date.parse(stored!.expiresAt) - Date.parse(stored!.createdAt)).toBe(DEVICE_ACCESS_REQUEST_TTL_MS);
         expect(request.expiresAt).toBe(stored!.expiresAt);
 
@@ -1707,15 +1715,16 @@ describe("settings-auth-service device access lifecycle", () => {
   it.each(["2099-01-01T00:00:00.000Z", "2000-01-01T00:00:00.000Z"])(
     "issues device grants and secure handoff TTLs from database time under a %s host clock",
     async (hostClock) => {
-      const databaseNowBefore = Date.now();
       const harness = buildAuthHarness();
       const request = await createDeviceAccessRequest(harness.deps, { deviceType: "desktop" }, {});
       vi.useFakeTimers();
       vi.setSystemTime(new Date(hostClock));
       try {
+        const databaseNowBefore = readAuthFixtureDatabaseTime(harness);
         await approveDeviceRequest(harness, request.approvalId);
         const grant = (await listDeviceAccessGrants(harness.deps))[0]!;
-        expect(Math.abs(Date.parse(grant.createdAt) - databaseNowBefore)).toBeLessThan(5_000);
+        expect(Date.parse(grant.createdAt)).toBeGreaterThanOrEqual(databaseNowBefore);
+        expect(Date.parse(grant.createdAt)).toBeLessThanOrEqual(readAuthFixtureDatabaseTime(harness));
         expect(Date.parse(grant.expiresAt!) - Date.parse(grant.createdAt)).toBe(DEVICE_ACCESS_TOKEN_TTL_MS);
 
         const delivered = await getDeviceAccessRequestStatus(harness.deps, request.requestId, request.requestSecret);

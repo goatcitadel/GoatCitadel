@@ -105,6 +105,8 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
   // stale value can never authorize a mutation on the wrong session.
   const [listSessionIncarnationId, setListSessionIncarnationId] = useState<string | null>(null);
   const loadSequenceRef = useRef(0);
+  const scopeGenerationRef = useRef(0);
+  const mutationSequenceRef = useRef(0);
 
   const reload = useCallback(async () => {
     if (!sessionId) {
@@ -171,6 +173,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
   }, [sessionId, workspaceId]);
 
   useEffect(() => {
+    scopeGenerationRef.current += 1;
     loadSequenceRef.current += 1;
     setSupported(null);
     setError(null);
@@ -180,11 +183,15 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
     setSelectedAttachmentIds([]);
     setBusyAttachmentId(null);
     setListSessionIncarnationId(null);
-    if (!sessionId) {
+    if (sessionId) {
+      void reload();
+    } else {
       setLoading(false);
-      return;
     }
-    void reload();
+    return () => {
+      scopeGenerationRef.current += 1;
+      loadSequenceRef.current += 1;
+    };
   }, [reload, sessionId]);
 
   const toggleSelection = useCallback(
@@ -214,13 +221,21 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
   const canMutate = supported === true && Boolean(sessionId) && Boolean(sessionIncarnationId);
 
   const runMutation = useCallback(
-    async (busyKey: string, operation: () => Promise<void>, failureNotice: string): Promise<boolean> => {
+    async (
+      busyKey: string,
+      operation: (isCurrent: () => boolean) => Promise<void>,
+      failureNotice: string,
+    ): Promise<boolean> => {
+      const scope = scopeGenerationRef.current;
+      const mutation = ++mutationSequenceRef.current;
+      const isCurrent = () => scopeGenerationRef.current === scope;
       setBusyAttachmentId(busyKey);
       try {
-        await operation();
-        await reload();
+        await operation(isCurrent);
+        if (isCurrent()) await reload();
         return true;
       } catch (mutationError) {
+        if (!isCurrent()) return false;
         if (isExternalSourceCapabilityAbsent(mutationError)) {
           setSupported(false);
           setAttachments([]);
@@ -230,7 +245,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
         pushLocalNotice?.(failureNotice, "warning");
         return false;
       } finally {
-        setBusyAttachmentId(null);
+        if (isCurrent() && mutationSequenceRef.current === mutation) setBusyAttachmentId(null);
       }
     },
     [pushLocalNotice, reload],
@@ -243,7 +258,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       }
       return runMutation(
         `attach:${seed.itemId}`,
-        async () => {
+        async (isCurrent) => {
           await attachExternalSourceToSession({
             workspaceId,
             sessionId,
@@ -252,7 +267,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
             importId: seed.importId,
             itemId: seed.itemId,
           });
-          pushLocalNotice?.("Attached the imported item read-only.", "success");
+          if (isCurrent()) pushLocalNotice?.("Attached the imported item read-only.", "success");
         },
         "The external source attach was rejected. Reload and retry.",
       );
@@ -268,7 +283,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       }
       return runMutation(
         attachmentId,
-        async () => {
+        async (isCurrent) => {
           await detachExternalSourceAttachment({
             workspaceId,
             sessionId,
@@ -276,7 +291,8 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
             expectedRevision: attachment.revision,
             expectedSessionIncarnationId: sessionIncarnationId,
           });
-          pushLocalNotice?.("Detached the external source. Imported evidence remains immutable.", "neutral");
+          if (isCurrent())
+            pushLocalNotice?.("Detached the external source. Imported evidence remains immutable.", "neutral");
         },
         "The external source detach was rejected. Reload and retry.",
       );
@@ -292,7 +308,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       }
       return runMutation(
         `knowledge:${attachmentId}`,
-        async () => {
+        async (isCurrent) => {
           const receipt = await requestExternalSourceKnowledgeSnapshot({
             workspaceId,
             sessionId,
@@ -302,12 +318,13 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
             itemId: attachment.itemId,
             expectedAttachmentRevision: attachment.revision,
           });
-          pushLocalNotice?.(
-            receipt.approvalId
-              ? `Knowledge copy requested. Resolve approval ${receipt.approvalId.slice(-8)} in the approvals inbox.`
-              : "Knowledge copy requested. Resolve it in the approvals inbox.",
-            "success",
-          );
+          if (isCurrent())
+            pushLocalNotice?.(
+              receipt.approvalId
+                ? `Knowledge copy requested. Resolve approval ${receipt.approvalId.slice(-8)} in the approvals inbox.`
+                : "Knowledge copy requested. Resolve it in the approvals inbox.",
+              "success",
+            );
         },
         "The knowledge copy request was rejected. Reload and retry.",
       );

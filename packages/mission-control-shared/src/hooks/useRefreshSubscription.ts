@@ -30,6 +30,7 @@ export function useRefreshSubscription(
   const lastSignalAtRef = useRef<number>(Date.now());
   const fallbackActiveRef = useRef(false);
   const fallbackPollLastRanAtRef = useRef<number>(0);
+  const generationRef = useRef(0);
 
   const enabled = options.enabled ?? true;
   const coalesceMs = options.coalesceMs ?? 900;
@@ -44,6 +45,9 @@ export function useRefreshSubscription(
   }, [callback, options.onFallbackStateChange, options.signalPriority]);
 
   useEffect(() => {
+    const generation = ++generationRef.current;
+    lastSignalAtRef.current = Date.now();
+    fallbackPollLastRanAtRef.current = 0;
     const timers = getTimerApi();
     const setFallbackActive = (active: boolean) => {
       if (fallbackActiveRef.current === active) {
@@ -59,7 +63,11 @@ export function useRefreshSubscription(
     }
 
     const runLatest = async (source: "event" | "fallback") => {
+      if (generationRef.current !== generation) return;
       if (inFlightRef.current) {
+        // A periodic tick carries no new invalidation. Wait for the active
+        // request rather than immediately polling again when it settles.
+        if (source === "fallback") return;
         pendingRef.current = true;
         recordClientDiagnostic({
           level: "debug",
@@ -103,27 +111,33 @@ export function useRefreshSubscription(
           message: `Refresh callback failed for ${topic}`,
           context: {
             topic,
-            error: (error as Error).message,
+            error: error instanceof Error ? error.message : String(error),
           },
         });
       } finally {
-        if (source === "fallback") {
-          fallbackPollLastRanAtRef.current = Date.now();
-        }
-        inFlightRef.current = false;
-        recordClientDiagnostic({
-          level: "debug",
-          category: "refresh",
-          event: "completed",
-          message: `Refresh completed for ${topic}`,
-          context: { topic, source },
-        });
-        if (pendingRef.current) {
-          pendingRef.current = false;
-          timerRef.current = timers.setTimeout(() => {
-            timerRef.current = null;
-            void runLatest("event");
-          }, coalesceMs);
+        // A completion from an old page must not unlock or schedule work for
+        // its replacement subscription.
+        if (generationRef.current === generation) {
+          if (source === "fallback") {
+            fallbackPollLastRanAtRef.current = Date.now();
+          }
+          inFlightRef.current = false;
+          recordClientDiagnostic({
+            level: "debug",
+            category: "refresh",
+            event: "completed",
+            message: `Refresh completed for ${topic}`,
+            context: { topic, source },
+          });
+          if (pendingRef.current) {
+            pendingRef.current = false;
+            if (timerRef.current === null) {
+              timerRef.current = timers.setTimeout(() => {
+                timerRef.current = null;
+                void runLatest("event");
+              }, coalesceMs);
+            }
+          }
         }
       }
     };
@@ -179,6 +193,7 @@ export function useRefreshSubscription(
     }
 
     return () => {
+      generationRef.current += 1;
       unsubscribe();
       if (timerRef.current !== null) {
         timers.clearTimeout(timerRef.current);

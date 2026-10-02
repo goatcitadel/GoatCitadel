@@ -7,15 +7,18 @@ export function useAction() {
   // Guard against setState-after-unmount: actions are frequently button-triggered
   // and may resolve after the consuming component has unmounted.
   const mountedRef = useRef(true);
+  const actionIdRef = useRef(0);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      actionIdRef.current += 1;
     };
   }, []);
 
   const run = useCallback(async <T>(operation: () => Promise<T>): Promise<T> => {
+    const actionId = ++actionIdRef.current;
     const startedAt = new Date().toISOString();
     setActionState({
       state: "pending",
@@ -24,7 +27,7 @@ export function useAction() {
 
     try {
       const data = await operation();
-      if (mountedRef.current) {
+      if (mountedRef.current && actionIdRef.current === actionId) {
         setActionState({
           state: "success",
           startedAt,
@@ -33,12 +36,12 @@ export function useAction() {
       }
       return data;
     } catch (error) {
-      if (mountedRef.current) {
+      if (mountedRef.current && actionIdRef.current === actionId) {
         setActionState({
           state: "error",
           startedAt,
           finishedAt: new Date().toISOString(),
-          error: (error as Error).message,
+          error: error instanceof Error ? error.message : String(error),
         });
       }
       throw error;
@@ -46,6 +49,7 @@ export function useAction() {
   }, []);
 
   const reset = useCallback(() => {
+    actionIdRef.current += 1;
     setActionState(IDLE_ACTION_STATE);
   }, []);
 

@@ -1,3 +1,4 @@
+import "./OpsSavedBoardsRoutePage";
 import { __resetSessionDraftsForTests } from "../library/session-drafts";
 import { StrictMode, type ReactNode } from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";

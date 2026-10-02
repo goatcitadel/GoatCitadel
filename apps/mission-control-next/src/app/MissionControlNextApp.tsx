@@ -1007,6 +1007,7 @@ export function MissionControlNextApp() {
                 fallback={<RouteSurfaceFallback label={currentRouteLabel} description={currentRouteDescription} />}
                 onReturnToChat={() => navigate({ area: "chat", theme: route.theme })}
                 pageErrorResetKey={pageErrorResetKey}
+                surfaceKey={route.area === "chat" ? "chat" : `${route.area}:${route.section ?? ""}:${route.view ?? ""}`}
                 usesFullStageLayout={usesFullStageLayout}
               >
                 {routeContent}

@@ -110,6 +110,89 @@ beforeEach(() => {
 });
 
 describe("useExternalSourceAttachments", () => {
+  it("refreshes a successful overlapping mutation without clearing the newer busy state", async () => {
+    apiMocks.fetchExternalSessionAttachments.mockResolvedValue(listResponse([], "incarnation-1"));
+    let resolveFirst!: () => void;
+    let rejectSecond!: (error: Error) => void;
+    apiMocks.attachExternalSourceToSession
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectSecond = reject;
+          }),
+      );
+    const renderer = await renderHarness();
+    let first!: Promise<boolean>;
+    let second!: Promise<boolean>;
+    act(() => {
+      first = latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "first" });
+      second = latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "second" });
+    });
+    await act(async () => {
+      resolveFirst();
+      expect(await first).toBe(true);
+    });
+    expect(apiMocks.fetchExternalSessionAttachments).toHaveBeenCalledTimes(2);
+    expect(latest!.busyAttachmentId).toBe("attach:second");
+    await act(async () => {
+      rejectSecond(new Error("rejected"));
+      expect(await second).toBe(false);
+    });
+    expect(latest!.busyAttachmentId).toBeNull();
+    act(() => renderer.unmount());
+  });
+
+  it("does not request candidates after an outstanding list finishes following unmount", async () => {
+    let resolve!: (value: ReturnType<typeof listResponse>) => void;
+    apiMocks.fetchExternalSessionAttachments.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    const renderer = await renderHarness();
+    act(() => renderer.unmount());
+    await act(async () => {
+      resolve(listResponse([attachment("old")]));
+    });
+    expect(apiMocks.fetchExternalSourceAttachmentCandidates).not.toHaveBeenCalled();
+  });
+
+  it("does not reload the previous session or show its mutation notice after switching sessions", async () => {
+    apiMocks.fetchExternalSessionAttachments
+      .mockResolvedValueOnce(listResponse([attachment("old")], "incarnation-1"))
+      .mockResolvedValue(listResponse([attachment("new")], "incarnation-2"));
+    let resolve!: () => void;
+    apiMocks.attachExternalSourceToSession.mockImplementationOnce(
+      () =>
+        new Promise<void>((done) => {
+          resolve = done;
+        }),
+    );
+    const renderer = await renderHarness();
+    let pending!: Promise<boolean>;
+    act(() => {
+      pending = latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "item-old" });
+    });
+    await act(async () => {
+      renderer.update(<Harness sessionId="session-2" />);
+    });
+    await act(async () => {
+      resolve();
+      await pending;
+    });
+    expect(apiMocks.fetchExternalSessionAttachments).toHaveBeenCalledTimes(2);
+    expect(latest!.attachments.map((item) => item.attachmentId)).toEqual(["new"]);
+    expect(pushLocalNotice).not.toHaveBeenCalled();
+    act(() => renderer.unmount());
+  });
+
   it("loads server-filtered picker candidates and degrades only that picker on an older Gateway", async () => {
     apiMocks.fetchExternalSessionAttachments.mockResolvedValue(
       listResponse([attachment("attachment-1")], "incarnation-1"),

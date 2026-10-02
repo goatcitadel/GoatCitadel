@@ -53,12 +53,14 @@ export function useShellStatus(options: UseShellStatusOptions): UseShellStatusRe
   const { gatewayReady, refreshIntervalMs = 15000 } = options;
   const [status, setStatus] = useState<ShellStatusState>(EMPTY_STATUS);
   const refreshIdRef = useRef(0);
+  const pendingRefreshRef = useRef<number | null>(null);
 
   const refreshStatus = useCallback(async () => {
     const refreshId = refreshIdRef.current + 1;
     refreshIdRef.current = refreshId;
+    pendingRefreshRef.current = refreshId;
     const isCurrentRefresh = () => refreshIdRef.current === refreshId;
-    void fetchDashboardState()
+    const dashboardRequest = fetchDashboardState()
       .then((dashboard) => {
         if (!isCurrentRefresh()) {
           return;
@@ -80,7 +82,7 @@ export function useShellStatus(options: UseShellStatusOptions): UseShellStatusRe
           dashboardError: error instanceof Error ? error.message : "Unable to refresh dashboard status.",
         }));
       });
-    void fetchHealthSummary()
+    const healthRequest = fetchHealthSummary()
       .then((health) => {
         if (!isCurrentRefresh()) {
           return;
@@ -102,7 +104,7 @@ export function useShellStatus(options: UseShellStatusOptions): UseShellStatusRe
           healthError: error instanceof Error ? error.message : "Unable to refresh daemon health.",
         }));
       });
-    void fetchRuntimeBuildIdentity()
+    const identityRequest = fetchRuntimeBuildIdentity()
       .then((runtimeIdentity) => {
         if (!isCurrentRefresh()) {
           return;
@@ -124,17 +126,26 @@ export function useShellStatus(options: UseShellStatusOptions): UseShellStatusRe
           runtimeIdentityError: error instanceof Error ? error.message : "Unable to refresh build identity.",
         }));
       });
+    try {
+      await Promise.all([dashboardRequest, healthRequest, identityRequest]);
+    } finally {
+      if (pendingRefreshRef.current === refreshId) pendingRefreshRef.current = null;
+    }
   }, []);
 
   // Reset state whenever the gateway becomes unavailable so stale dashboards
   // do not leak across reconnect attempts. The ref bump prevents an in-flight
   // response from racing in after the reset.
   useEffect(() => {
-    if (gatewayReady) {
-      return;
+    if (!gatewayReady) {
+      refreshIdRef.current += 1;
+      pendingRefreshRef.current = null;
+      setStatus(EMPTY_STATUS);
     }
-    refreshIdRef.current += 1;
-    setStatus(EMPTY_STATUS);
+    return () => {
+      refreshIdRef.current += 1;
+      pendingRefreshRef.current = null;
+    };
   }, [gatewayReady]);
 
   // Background refresh while the gateway is ready. First load is the caller's
@@ -151,14 +162,14 @@ export function useShellStatus(options: UseShellStatusOptions): UseShellStatusRe
     const doc = typeof document === "undefined" ? undefined : document;
     const isHidden = () => doc?.hidden === true;
     const intervalId = window.setInterval(() => {
-      if (isHidden()) {
+      if (isHidden() || pendingRefreshRef.current !== null) {
         return;
       }
       void refreshStatus();
     }, refreshIntervalMs);
 
     const handleVisibilityChange = () => {
-      if (!isHidden()) {
+      if (!isHidden() && pendingRefreshRef.current === null) {
         void refreshStatus();
       }
     };

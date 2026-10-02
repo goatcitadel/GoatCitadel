@@ -47,4 +47,48 @@ describe("OperatorSummaryCache", () => {
       }),
     ]);
   });
+
+  it("does not cache a load that was invalidated while in flight", async () => {
+    const cache = new OperatorSummaryCache();
+    let resolve!: (value: OperatorSummary[]) => void;
+    const pending = cache.getAsync(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    cache.invalidate();
+    resolve(summaries);
+    await pending;
+    const freshLoader = vi.fn(async () => [summaries[1]!]);
+    expect(await cache.getAsync(freshLoader)).toEqual([summaries[1]!]);
+    expect(freshLoader).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the replacement load coalesced when an invalidated load completes", async () => {
+    const cache = new OperatorSummaryCache();
+    let resolveOld!: (value: OperatorSummary[]) => void;
+    let resolveNew!: (value: OperatorSummary[]) => void;
+    const oldLoad = cache.getAsync(
+      () =>
+        new Promise((done) => {
+          resolveOld = done;
+        }),
+    );
+    cache.invalidate();
+    const newLoad = cache.getAsync(
+      () =>
+        new Promise((done) => {
+          resolveNew = done;
+        }),
+    );
+    resolveOld(summaries);
+    await oldLoad;
+    const duplicateLoader = vi.fn(async () => summaries);
+    const duplicate = cache.getAsync(duplicateLoader);
+    expect(duplicateLoader).not.toHaveBeenCalled();
+    resolveNew([summaries[1]!]);
+    expect(await newLoad).toEqual([summaries[1]!]);
+    expect(await duplicate).toEqual([summaries[1]!]);
+  });
 });

@@ -90,8 +90,20 @@ export function shouldRetrySafeRequest(method: string, error?: ApiRequestError):
   return error.status !== undefined && RETRYABLE_HTTP_STATUS_CODES.has(error.status);
 }
 
-export async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+export async function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+  signal?.throwIfAborted();
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      globalThis.clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(signal?.reason);
+    };
+    const timer = globalThis.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export function unwrapApiResponse<T>(payload: unknown): T {

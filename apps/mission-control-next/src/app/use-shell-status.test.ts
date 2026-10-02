@@ -249,6 +249,45 @@ describe("useShellStatus visibility-aware polling", () => {
     });
   });
 
+  it("waits for status requests and avoids overlapping background polls", async () => {
+    installEnvironment(false);
+    const pending = createDeferred<Record<string, unknown>>();
+    apiMocks.fetchDashboardState.mockImplementationOnce(() => pending.promise);
+    let latest!: UseShellStatusResult;
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        createElement(Harness, {
+          gatewayReady: true,
+          refreshIntervalMs: REFRESH_INTERVAL_MS,
+          onResult: (result) => {
+            latest = result;
+          },
+        }),
+      );
+    });
+    let completed = false;
+    let refresh!: Promise<void>;
+    await act(async () => {
+      refresh = latest.refreshStatus().then(() => {
+        completed = true;
+      });
+      await vi.advanceTimersByTimeAsync(REFRESH_INTERVAL_MS * 3);
+    });
+    expect(completed).toBe(false);
+    expect(apiMocks.fetchDashboardState).toHaveBeenCalledOnce();
+    await act(async () => {
+      pending.resolve({});
+      await refresh;
+    });
+    expect(completed).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REFRESH_INTERVAL_MS);
+    });
+    expect(apiMocks.fetchDashboardState).toHaveBeenCalledTimes(2);
+    act(() => renderer.unmount());
+  });
+
   it("clears identity state and ignores an in-flight response when the gateway disconnects", async () => {
     installEnvironment(true);
     const pending = createDeferred<Record<string, unknown>>();
@@ -268,7 +307,7 @@ describe("useShellStatus visibility-aware polling", () => {
     });
 
     await act(async () => {
-      await latest.refreshStatus();
+      void latest.refreshStatus();
     });
     act(() => {
       renderer!.update(

@@ -344,6 +344,48 @@ describe("client-core", () => {
     expect(headers.Authorization).toBeUndefined();
   });
 
+  it("does not dispatch a request whose caller already canceled it", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("Navigation canceled", "AbortError");
+    controller.abort(reason);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(request("/api/v1/canceled", { signal: controller.signal })).rejects.toBe(reason);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a canceled request or replace its cancellation reason", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("Navigation canceled", "AbortError");
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      controller.abort(reason);
+      throw reason;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(request("/api/v1/canceled-in-flight", { signal: controller.signal })).rejects.toBe(reason);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("cancels the retry delay immediately without issuing another request", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const reason = new DOMException("Navigation canceled", "AbortError");
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: "busy" }, { status: 503 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const pending = request("/api/v1/canceled-retry", { signal: controller.signal });
+      const rejected = expect(pending).rejects.toBe(reason);
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort(reason);
+      await vi.advanceTimersByTimeAsync(250);
+      await rejected;
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retries safe requests after transient HTTP and network failures", async () => {
     const fetchMock = vi
       .fn()

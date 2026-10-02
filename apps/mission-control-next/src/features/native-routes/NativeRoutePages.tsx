@@ -1,37 +1,85 @@
 import { Suspense, lazy } from "react";
 import { routeKicker, type AppRoute } from "@next/app/route-model";
 import { NativePageFrame } from "./NativeRoutePageLayout";
-import { CitadelBlueprintRoutePage } from "./library/CitadelBlueprintRoutePage";
-import { CitadelCouncilRoutePage } from "./library/CitadelCouncilRoutePage";
-import { CitadelMasonRoutePage } from "./library/CitadelMasonRoutePage";
-import { CitadelOverviewRoutePage } from "./library/CitadelOverviewRoutePage";
-import { CitadelVaultRoutePage } from "./library/CitadelVaultRoutePage";
-import { CitadelWardsRoutePage } from "./library/CitadelWardsRoutePage";
-import { CuratorRoutePage } from "./library/CuratorRoutePage";
-import { MemoryRoutePage } from "./library/MemoryRoutePage";
-import { JourneyTimelineRoutePage } from "./library/JourneyTimelineRoutePage";
-import { ApprovalsRoutePage } from "./ops/ApprovalsRoutePage";
-import { BrowserSessionsRoutePage } from "./ops/BrowserSessionsRoutePage";
-import { KanbanRoutePage } from "./ops/KanbanRoutePage";
-import { OpsSavedBoardsRoutePage } from "./ops/OpsSavedBoardsRoutePage";
-import { QualityDashboardRoutePage } from "./ops/QualityDashboardRoutePage";
-import { RemoteWorkersRoutePage } from "./ops/RemoteWorkersRoutePage";
-import { RunDetailRoutePage } from "./ops/RunDetailRoutePage";
-import { RuntimeRoutePage } from "./ops/RuntimeRoutePage";
-import { ProjectsRoutePage } from "./projects/ProjectsRoutePage";
-import { CoworkNativePage } from "./cowork/CoworkNativePage";
-import { LibraryAgentsSection } from "./library/LibraryAgentsSection";
-import { LibraryArtifactsSection } from "./library/LibraryArtifactsSection";
-import { LibraryCapabilitiesSection } from "./library/LibraryCapabilitiesSection";
-import { LibraryCommunicationsSection } from "./library/LibraryCommunicationsSection";
-import { LibraryFilesSection } from "./library/LibraryFilesSection";
-import { LibraryKnowledgeSection } from "./library/LibraryKnowledgeSection";
-import { LibraryNotesSection } from "./library/LibraryNotesSection";
-import { LibraryPromptPacksSection } from "./library/LibraryPromptPacksSection";
-import { LibrarySkillsSection } from "./library/LibrarySkillsSection";
 import { routeSectionWithDefault } from "./shared/native-helpers";
 import type { NativeRoutePagesProps } from "./types";
 import "./native-routes.css";
+
+// Load only the requested page instead of parsing every Library and Ops surface.
+const CitadelBlueprintRoutePage = lazy(async () => ({
+  default: (await import("./library/CitadelBlueprintRoutePage")).CitadelBlueprintRoutePage,
+}));
+const CitadelCouncilRoutePage = lazy(async () => ({
+  default: (await import("./library/CitadelCouncilRoutePage")).CitadelCouncilRoutePage,
+}));
+const CitadelMasonRoutePage = lazy(async () => ({
+  default: (await import("./library/CitadelMasonRoutePage")).CitadelMasonRoutePage,
+}));
+const CitadelOverviewRoutePage = lazy(async () => ({
+  default: (await import("./library/CitadelOverviewRoutePage")).CitadelOverviewRoutePage,
+}));
+const CitadelVaultRoutePage = lazy(async () => ({
+  default: (await import("./library/CitadelVaultRoutePage")).CitadelVaultRoutePage,
+}));
+const CitadelWardsRoutePage = lazy(async () => ({
+  default: (await import("./library/CitadelWardsRoutePage")).CitadelWardsRoutePage,
+}));
+const CuratorRoutePage = lazy(async () => ({ default: (await import("./library/CuratorRoutePage")).CuratorRoutePage }));
+const MemoryRoutePage = lazy(async () => ({ default: (await import("./library/MemoryRoutePage")).MemoryRoutePage }));
+const JourneyTimelineRoutePage = lazy(async () => ({
+  default: (await import("./library/JourneyTimelineRoutePage")).JourneyTimelineRoutePage,
+}));
+const ApprovalsRoutePage = lazy(async () => ({
+  default: (await import("./ops/ApprovalsRoutePage")).ApprovalsRoutePage,
+}));
+const BrowserSessionsRoutePage = lazy(async () => ({
+  default: (await import("./ops/BrowserSessionsRoutePage")).BrowserSessionsRoutePage,
+}));
+const KanbanRoutePage = lazy(async () => ({ default: (await import("./ops/KanbanRoutePage")).KanbanRoutePage }));
+const OpsSavedBoardsRoutePage = lazy(async () => ({
+  default: (await import("./ops/OpsSavedBoardsRoutePage")).OpsSavedBoardsRoutePage,
+}));
+const QualityDashboardRoutePage = lazy(async () => ({
+  default: (await import("./ops/QualityDashboardRoutePage")).QualityDashboardRoutePage,
+}));
+const RemoteWorkersRoutePage = lazy(async () => ({
+  default: (await import("./ops/RemoteWorkersRoutePage")).RemoteWorkersRoutePage,
+}));
+const RunDetailRoutePage = lazy(async () => ({
+  default: (await import("./ops/RunDetailRoutePage")).RunDetailRoutePage,
+}));
+const RuntimeRoutePage = lazy(async () => ({ default: (await import("./ops/RuntimeRoutePage")).RuntimeRoutePage }));
+const ProjectsRoutePage = lazy(async () => ({
+  default: (await import("./projects/ProjectsRoutePage")).ProjectsRoutePage,
+}));
+const CoworkNativePage = lazy(async () => ({ default: (await import("./cowork/CoworkNativePage")).CoworkNativePage }));
+const LibraryAgentsSection = lazy(async () => ({
+  default: (await import("./library/LibraryAgentsSection")).LibraryAgentsSection,
+}));
+const LibraryArtifactsSection = lazy(async () => ({
+  default: (await import("./library/LibraryArtifactsSection")).LibraryArtifactsSection,
+}));
+const LibraryCapabilitiesSection = lazy(async () => ({
+  default: (await import("./library/LibraryCapabilitiesSection")).LibraryCapabilitiesSection,
+}));
+const LibraryCommunicationsSection = lazy(async () => ({
+  default: (await import("./library/LibraryCommunicationsSection")).LibraryCommunicationsSection,
+}));
+const LibraryFilesSection = lazy(async () => ({
+  default: (await import("./library/LibraryFilesSection")).LibraryFilesSection,
+}));
+const LibraryKnowledgeSection = lazy(async () => ({
+  default: (await import("./library/LibraryKnowledgeSection")).LibraryKnowledgeSection,
+}));
+const LibraryNotesSection = lazy(async () => ({
+  default: (await import("./library/LibraryNotesSection")).LibraryNotesSection,
+}));
+const LibraryPromptPacksSection = lazy(async () => ({
+  default: (await import("./library/LibraryPromptPacksSection")).LibraryPromptPacksSection,
+}));
+const LibrarySkillsSection = lazy(async () => ({
+  default: (await import("./library/LibrarySkillsSection")).LibrarySkillsSection,
+}));
 
 const NextSettingsNativePage = lazy(async () => ({
   default: (await import("./SettingsNativePage")).SettingsNativePage,

@@ -140,6 +140,29 @@ describe("useRefreshSubscription", () => {
     expect(callback.mock.calls[1]?.[0]).toMatchObject({ reason: "queued" });
   });
 
+  it("does not queue redundant fallback polls while a slow refresh is outstanding", async () => {
+    let release!: () => void;
+    const callback = vi.fn().mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const renderer = create(
+      <Harness callback={callback} options={{ coalesceMs: 25, staleMs: 100, pollIntervalMs: 1000 }} />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(callback).toHaveBeenCalledOnce();
+    await act(async () => {
+      release();
+      await vi.advanceTimersByTimeAsync(25);
+    });
+    expect(callback).toHaveBeenCalledOnce();
+    renderer.unmount();
+  });
+
   it("runs fallback polling only when stale and visible unless explicitly allowed", async () => {
     const fallbackStates: boolean[] = [];
     const callback = vi.fn();
@@ -217,6 +240,79 @@ describe("useRefreshSubscription", () => {
     expect(callback.mock.calls[0]?.[0]).toMatchObject({ reason: "pending" });
 
     renderer.unmount();
+  });
+
+  it("does not let a previous topic's completion unlock the current refresh", async () => {
+    let releaseOld!: () => void;
+    let releaseCurrent!: () => void;
+    const callback = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseOld = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseCurrent = resolve;
+          }),
+      );
+    const renderer = create(<Harness callback={callback} options={{ coalesceMs: 25 }} />);
+    emitRefresh("chat", { reason: "old" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(25);
+    });
+    renderer.update(<Harness topic="system" callback={callback} options={{ coalesceMs: 25 }} />);
+    emitRefresh("system", { reason: "current" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(25);
+    });
+    await act(async () => {
+      releaseOld();
+      await Promise.resolve();
+    });
+    emitRefresh("system", { reason: "queued" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(25);
+    });
+    expect(callback).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      releaseCurrent();
+      await vi.advanceTimersByTimeAsync(25);
+    });
+    expect(callback).toHaveBeenCalledTimes(3);
+    expect(callback).toHaveBeenLastCalledWith(expect.objectContaining({ topic: "system", reason: "queued" }));
+    renderer.unmount();
+  });
+
+  it("does not create a second timer when an event arrives just before a refresh settles", async () => {
+    let release!: () => void;
+    const callback = vi.fn().mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const renderer = create(<Harness callback={callback} options={{ coalesceMs: 25 }} />);
+    emitRefresh("chat", { reason: "first" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(25);
+    });
+    emitRefresh("chat", { reason: "queued" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(25);
+    });
+    emitRefresh("chat", { reason: "latest" });
+    await act(async () => {
+      release();
+      await vi.advanceTimersByTimeAsync(25);
+    });
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(callback).toHaveBeenLastCalledWith(expect.objectContaining({ reason: "latest" }));
+    renderer.unmount();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("handles disabled subscriptions and callback failures without leaking timers", async () => {

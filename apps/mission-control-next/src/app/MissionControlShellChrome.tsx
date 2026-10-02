@@ -606,6 +606,7 @@ export function ShellRouteStage({
   fallback,
   onReturnToChat,
   pageErrorResetKey,
+  surfaceKey,
   usesFullStageLayout,
 }: {
   children: ReactNode;
@@ -615,6 +616,7 @@ export function ShellRouteStage({
   fallback: ReactNode;
   onReturnToChat: () => void;
   pageErrorResetKey: string;
+  surfaceKey?: string;
   usesFullStageLayout: boolean;
 }) {
   return (
@@ -625,7 +627,7 @@ export function ShellRouteStage({
       aria-label={`${currentRouteLabel}: ${currentRouteDescription}`}
     >
       <PageErrorBoundary resetKey={pageErrorResetKey} pageLabel={currentRouteLabel} onReturnToChat={onReturnToChat}>
-        <Suspense fallback={fallback}>
+        <Suspense key={surfaceKey} fallback={fallback}>
           <div className="mc-next-stage-scroll">
             {sectionTabs}
             <section

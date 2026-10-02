@@ -243,6 +243,40 @@ describe("dashboard route service", () => {
     });
   });
 
+  it("starts independent dashboard reads without waiting for each repository", async () => {
+    const deps = createDeps();
+    const reads = [
+      deps.storage.sessions.list,
+      deps.storage.approvals.list,
+      deps.storage.taskSubagents.activeCount,
+      deps.storage.tasks.statusCounts,
+      deps.storage.realtimeEvents.list,
+      deps.storage.costLedger.summary,
+    ];
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = 0;
+    for (const read of reads) {
+      const value = read("day");
+      read.mockClear();
+      read.mockImplementation((() => {
+        started += 1;
+        return barrier.then(() => value);
+      }) as never);
+    }
+    const service = createDashboardRouteService(createDashboardRoutePort(deps as never));
+    const pending = service.getDashboardState();
+    try {
+      await Promise.resolve();
+      expect(started).toBe(reads.length);
+    } finally {
+      release();
+      await pending;
+    }
+  });
+
   it("projects secret-bearing retained realtime events without mutating dashboard storage truth", async () => {
     const deps = createDeps();
     const rawEvent = {

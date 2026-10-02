@@ -100,6 +100,49 @@ describe("useAction", () => {
     expect(stateUpdateWarnings).toEqual([]);
   });
 
+  it("keeps the latest action pending when an older action settles", async () => {
+    let latest!: HookValue;
+    await act(async () => {
+      renderer = create(<Harness onValue={(value) => (latest = value)} />);
+    });
+    const older = createDeferred<string>();
+    const newer = createDeferred<string>();
+    let oldRun!: Promise<string>;
+    let newRun!: Promise<string>;
+    act(() => {
+      oldRun = latest.run(() => older.promise);
+      newRun = latest.run(() => newer.promise);
+    });
+    await act(async () => {
+      older.resolve("old");
+      await expect(oldRun).resolves.toBe("old");
+    });
+    expect(latest.pending).toBe(true);
+    await act(async () => {
+      newer.resolve("new");
+      await expect(newRun).resolves.toBe("new");
+    });
+    expect(latest.actionState.state).toBe("success");
+  });
+
+  it("does not undo a reset when an outstanding action settles", async () => {
+    let latest!: HookValue;
+    await act(async () => {
+      renderer = create(<Harness onValue={(value) => (latest = value)} />);
+    });
+    const deferred = createDeferred<string>();
+    let run!: Promise<string>;
+    act(() => {
+      run = latest.run(() => deferred.promise);
+      latest.reset();
+    });
+    await act(async () => {
+      deferred.resolve("done");
+      await run;
+    });
+    expect(latest.actionState.state).toBe("idle");
+  });
+
   it("reset returns the action to idle", async () => {
     let latest!: HookValue;
     await act(async () => {

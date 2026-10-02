@@ -30,7 +30,7 @@ import {
   sealExternalSourceScanRecord,
   sealWorkspacePathBridgeSnapshot,
 } from "@goatcitadel/storage";
-import { ExternalSourceArtifactStore } from "./external-source-artifact-store.js";
+import { ExternalSourceArtifactStore, NodeExternalSourceArtifactFilesystem } from "./external-source-artifact-store.js";
 import { ExternalSourceAttachmentService } from "./external-source-attachment-service.js";
 import { buildExternalSourceKnowledgeSnapshotJourneyEvent } from "./external-source-journey-producer.js";
 import {
@@ -102,7 +102,16 @@ async function createHarness(): Promise<Harness> {
   cleanups.push(() => storage.close());
   const artifactsDir = fs.mkdtempSync(path.join(os.tmpdir(), "gc-hx407-knowledge-effect-"));
   cleanups.push(() => fs.rmSync(artifactsDir, { recursive: true, force: true }));
-  const artifacts = new ExternalSourceArtifactStore(artifactsDir);
+  // This suite proves knowledge effects over real bytes, independently of OS
+  // helper startup. Native ACL and reparse checks have their own adapter suite.
+  const artifacts = new ExternalSourceArtifactStore(artifactsDir, {
+    filesystem: new NodeExternalSourceArtifactFilesystem({
+      windowsSecurity: {
+        inspectReparsePoint: async () => false,
+        applyOwnerOnlyAcl: async () => ({ ownerSid: "S-1-5-18" }),
+      },
+    }),
+  });
 
   const sourceId = "source-1";
   const scanId = "scan-1";
