@@ -1,6 +1,6 @@
 # AGENTS.md - GoatCitadel
 
-Last updated: 2026-08-15
+Last updated: 2026-10-02
 
 ## Scope and Instruction Precedence
 
@@ -27,6 +27,7 @@ It is not just a chat UI. It is a chat-first, multi-provider, skill-aware worksp
 ## Current Product Truth
 
 - `apps/mission-control-next` is the canonical `1.0` Mission Control shell.
+- Cockpit is the default layout. Explicit saved shell preferences and `?shell=classic` retain the Classic rollback surface; this default change does not certify the remaining release gates.
 - `apps/mission-control` source is archived from disk; generated build/runtime residue may still exist locally but is not a shipped compatibility source.
 - The Fastify gateway owns orchestration, approvals, memory, integrations, audit trails, policy enforcement, durable execution, and runtime APIs.
 - Chat is the only primary conversation surface. Planning, research, agentic orchestration, approvals, and code-capability work happen inside Chat.

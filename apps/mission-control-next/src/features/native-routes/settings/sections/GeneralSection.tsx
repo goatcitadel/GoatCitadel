@@ -60,7 +60,8 @@ export function GeneralSection(props: SettingsSectionProps) {
     setNotificationSoundMode,
     setNotificationToastsEnabled,
   } = useUiPreferences();
-  const { desktopPermission, notificationFeedback, checkingPermission, checkDesktopPermission, sendTestNotification } = useDesktopNotifications();
+  const { desktopPermission, notificationFeedback, checkingPermission, checkDesktopPermission, sendTestNotification } =
+    useDesktopNotifications();
 
   return (
     <SettingsStack className="mc-next-preference-stack">
@@ -91,12 +92,12 @@ export function GeneralSection(props: SettingsSectionProps) {
               Comfortable enlarges type and controls; Compact tightens them for dense, evidence-heavy work.
             </p>
           </SettingsField>
-          <SettingsField label="New Mission Control (preview)">
+          <SettingsField label="Mission Control layout">
             <NativeButton variant="outline" onClick={() => shellSwitch.request("cockpit")}>
-              Try the new Mission Control
+              Open cockpit
             </NativeButton>
             <p className="mc-next-settings-field-note">
-              Opens the redesigned layout. Switch back any time from its settings menu.
+              Opens the default Mission Control layout. Return to Classic any time from its settings menu.
             </p>
           </SettingsField>
         </SettingsFieldGrid>
@@ -151,13 +152,23 @@ export function GeneralSection(props: SettingsSectionProps) {
               <span>Use system notifications when permission is granted</span>
             </label>
             <p className="mc-next-settings-field-note">
-              Saved preference: <strong>{notifications.desktopEnabled ? "On" : "Off"}</strong>. This preference is separate from host permission.
+              Saved preference: <strong>{notifications.desktopEnabled ? "On" : "Off"}</strong>. This preference is
+              separate from host permission.
             </p>
           </SettingsField>
           <SettingsField label="Browser or host permission" group>
             <p className="mc-next-settings-field-note" role="status" aria-live="polite">
-              <strong>{desktopPermission === "granted" ? "Granted" : desktopPermission === "denied" ? "Blocked" : desktopPermission === "unsupported" ? "Unsupported" : "Not requested"}</strong>
-              {" · "}{describeDesktopPermission(desktopPermission)}
+              <strong>
+                {desktopPermission === "granted"
+                  ? "Granted"
+                  : desktopPermission === "denied"
+                    ? "Blocked"
+                    : desktopPermission === "unsupported"
+                      ? "Unsupported"
+                      : "Not requested"}
+              </strong>
+              {" · "}
+              {describeDesktopPermission(desktopPermission)}
             </p>
           </SettingsField>
           <SettingsField label="Attention scope" group>
@@ -190,7 +201,11 @@ export function GeneralSection(props: SettingsSectionProps) {
             {notifications.soundMode === "off" ? "Enable subtle sound" : "Mute sound"}
           </NativeButton>
         </SettingsButtonRow>
-        {notificationFeedback ? <p className="mc-next-settings-field-note" role="status" aria-live="polite">{notificationFeedback}</p> : null}
+        {notificationFeedback ? (
+          <p className="mc-next-settings-field-note" role="status" aria-live="polite">
+            {notificationFeedback}
+          </p>
+        ) : null}
       </NativeCard>
       <SettingsButtonRow>
         <NativeButton

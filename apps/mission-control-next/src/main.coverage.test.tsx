@@ -38,20 +38,35 @@ describe("Mission Control Next main entrypoint", () => {
     vi.unstubAllGlobals();
   });
 
-  it("mounts classic by default and retires stale service workers", async () => {
+  it("mounts only cockpit by default and retires stale service workers", async () => {
     await import("./main");
 
-    await vi.waitFor(() => expect(entryMocks.mountClassic).toHaveBeenCalledWith(expect.objectContaining({ id: "root" })));
+    await vi.waitFor(() =>
+      expect(entryMocks.mountCockpit).toHaveBeenCalledWith(expect.objectContaining({ id: "root" })),
+    );
+    expect(entryMocks.mountClassic).not.toHaveBeenCalled();
+    expect(document.documentElement.dataset.shell).toBe("cockpit");
+    expect(navigator.serviceWorker.getRegistrations).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads only classic for an explicit rollback override", async () => {
+    vi.stubGlobal("location", { origin: "http://127.0.0.1:5173", search: "?shell=classic" });
+    await import("./main");
+
+    await vi.waitFor(() =>
+      expect(entryMocks.mountClassic).toHaveBeenCalledWith(expect.objectContaining({ id: "root" })),
+    );
     expect(entryMocks.mountCockpit).not.toHaveBeenCalled();
     expect(document.documentElement.dataset.shell).toBe("classic");
-    expect(navigator.serviceWorker.getRegistrations).toHaveBeenCalledTimes(1);
   });
 
   it("loads only the cockpit entry for a shell override", async () => {
     vi.stubGlobal("location", { origin: "http://127.0.0.1:5173", search: "?shell=cockpit" });
     await import("./main");
 
-    await vi.waitFor(() => expect(entryMocks.mountCockpit).toHaveBeenCalledWith(expect.objectContaining({ id: "root" })));
+    await vi.waitFor(() =>
+      expect(entryMocks.mountCockpit).toHaveBeenCalledWith(expect.objectContaining({ id: "root" })),
+    );
     expect(entryMocks.mountClassic).not.toHaveBeenCalled();
     expect(document.documentElement.dataset.shell).toBe("cockpit");
   });

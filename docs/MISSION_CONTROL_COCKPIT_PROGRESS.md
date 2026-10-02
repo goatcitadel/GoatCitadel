@@ -1,8 +1,16 @@
 # Mission Control cockpit rebuild status
 
-Updated 2026-10-01 UTC. This is an implementation checkpoint for the isolated cockpit checkout, not a release claim. The source in `apps/` and `packages/` remains authoritative. The phase table summarizes current work; the continuation below records proof and decisions in order. Later dated checkpoints supersede earlier pending or failed results only for the named scenarios.
+Updated 2026-10-02 UTC. This is an implementation checkpoint, not a release claim. The source in `apps/` and `packages/` remains authoritative. The phase table and continuation retain historical proof and decisions. Later dated checkpoints supersede earlier pending or failed results only for the named scenarios.
 
-The requested brighter direction is implemented in the opt-in cockpit theme: a light sky canvas with vivid teal, plus a lifted navy dark theme with cyan accents. Both themes must retain readable text and status contrast. The classic shell remains the default.
+The requested brighter direction is implemented in the default cockpit theme: a light sky canvas with vivid teal, plus a lifted navy dark theme with cyan accents. Both themes retain readable text and status contrast. Classic remains available through an explicit saved choice, `?shell=classic`, and existing owner handoffs.
+
+## October 2 UTC: operator-authorized default cutover
+
+The operator requested publishing the responsiveness/reliability review first, then making cockpit the default. Review commit `a9c434bd30fb1cb168389d9124edd963401b9d5d` is verified on GitHub main. The default resolver now selects cockpit for missing, invalid, or unavailable browser preferences. Explicit saved Classic choices and URL overrides remain respected; no Gateway state or user data is migrated.
+
+The preceding review's selected final run passed workspace typecheck, 3,279 Mission Control tests, 3,519 library tests, 994 policy tests, documentation, and Gateway async-boundary checks. Production build and all ten performance contracts passed. Full Gateway/storage coverage, live providers, approved Linux visual baselines, installed-profile first-run, and complete release acceptance remain separate verification boundaries. Earlier entries below that say Classic is default record the pre-cutover checkpoint.
+
+Cutover validation passes workspace typecheck, all 386 Mission Control files / 3,283 tests, documentation checks, strict lint, the production build, and all ten performance contracts. A fresh built-browser profile opened cockpit without a shell query or saved preference. Explicit Classic rollback persisted across reload, cockpit remained available through its override, and the 390px mobile Library view had no page overflow or console errors. The local source checkout was synchronized with the published review while preserving all 54 backed-up files byte-for-byte.
 
 ## October 1 UTC: publication boundary
 

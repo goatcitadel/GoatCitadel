@@ -1,19 +1,46 @@
 import { describe, expect, it } from "vitest";
-import { buildShellSwitchUrl, classicFallbackPath, SHELL_PREFERENCE_KEY, resolveShellPreference, writeShellPreference } from "./shell-preference";
+import {
+  buildShellSwitchUrl,
+  classicFallbackPath,
+  SHELL_PREFERENCE_KEY,
+  resolveShellPreference,
+  writeShellPreference,
+} from "./shell-preference";
 
 function memoryStorage(initial: Record<string, string> = {}) {
   const values = new Map(Object.entries(initial));
   return {
     getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => { values.set(key, value); },
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
     values,
   };
 }
 
 describe("shell preference", () => {
-  it("defaults to classic and rejects unknown stored values", () => {
-    expect(resolveShellPreference({ search: "", storage: null })).toBe("classic");
-    expect(resolveShellPreference({ search: "", storage: memoryStorage({ [SHELL_PREFERENCE_KEY]: "unknown" }) })).toBe("classic");
+  it("defaults to cockpit and rejects unknown stored values", () => {
+    expect(resolveShellPreference({ search: "", storage: null })).toBe("cockpit");
+    expect(resolveShellPreference({ search: "", storage: memoryStorage() })).toBe("cockpit");
+    expect(
+      resolveShellPreference({
+        search: "?shell=unknown",
+        storage: memoryStorage({ [SHELL_PREFERENCE_KEY]: "unknown" }),
+      }),
+    ).toBe("cockpit");
+  });
+
+  it.each(["classic", "cockpit"] as const)("preserves an explicit stored %s choice", (shell) => {
+    expect(resolveShellPreference({ search: "", storage: memoryStorage({ [SHELL_PREFERENCE_KEY]: shell }) })).toBe(
+      shell,
+    );
+  });
+
+  it("persists an explicit classic rollback override", () => {
+    const storage = memoryStorage({ [SHELL_PREFERENCE_KEY]: "cockpit" });
+    expect(resolveShellPreference({ search: "?shell=classic", storage })).toBe("classic");
+    expect(storage.values.get(SHELL_PREFERENCE_KEY)).toBe("classic");
+    expect(resolveShellPreference({ search: "", storage })).toBe("classic");
   });
 
   it("uses and persists a valid URL override", () => {
@@ -24,13 +51,20 @@ describe("shell preference", () => {
   });
 
   it("works when storage is unavailable", () => {
-    const broken = { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } };
+    const broken = {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("blocked");
+      },
+    };
     expect(resolveShellPreference({ search: "?shell=cockpit", storage: broken })).toBe("cockpit");
-    expect(resolveShellPreference({ search: "", storage: broken })).toBe("classic");
+    expect(resolveShellPreference({ search: "", storage: broken })).toBe("cockpit");
     expect(() => writeShellPreference("classic", broken)).not.toThrow();
   });
 
-  it("maps preview-only routes to current classic surfaces", () => {
+  it("maps cockpit-only routes to classic rollback surfaces", () => {
     expect(classicFallbackPath("/inbox")).toBe("/ops/approvals");
     expect(classicFallbackPath("/work/runs/example")).toBe("/ops/kanban");
     expect(classicFallbackPath("/system")).toBe("/ops/runtime");

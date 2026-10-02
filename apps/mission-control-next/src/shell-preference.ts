@@ -35,9 +35,9 @@ export function resolveShellPreference(input: {
     return override;
   }
   try {
-    return parseShell(input.storage?.getItem(SHELL_PREFERENCE_KEY)) ?? "classic";
+    return parseShell(input.storage?.getItem(SHELL_PREFERENCE_KEY)) ?? "cockpit";
   } catch {
-    return "classic";
+    return "cockpit";
   }
 }
 
@@ -69,14 +69,14 @@ export async function switchShell(
   return openApplicationShell(shell, target, options);
 }
 
-/** Routes owned only by the preview should return to the nearest current surface. */
+/** Cockpit-only routes return to the nearest Classic surface during rollback. */
 export function classicFallbackPath(pathname: string): string {
   const [, segment, detail] = pathname.split("/");
   if (segment === "inbox") return "/ops/approvals";
   if (segment === "work") return "/ops/kanban";
   if (segment === "system") return detail === "spend" ? "/ops/costs" : "/ops/runtime";
   if (segment === "settings") {
-    const previewOnlySettings: Record<string, string> = {
+    const cockpitOnlySettings: Record<string, string> = {
       models: "/settings/onboarding",
       connections: "/settings/channels",
       safety: "/settings/permissions",
@@ -84,7 +84,7 @@ export function classicFallbackPath(pathname: string): string {
       advanced: "/settings/runtime",
       "first-run": "/settings/onboarding",
     };
-    if (detail && previewOnlySettings[detail]) return previewOnlySettings[detail];
+    if (detail && cockpitOnlySettings[detail]) return cockpitOnlySettings[detail];
   }
   if (segment === "__gallery") return "/settings/general";
   return pathname;

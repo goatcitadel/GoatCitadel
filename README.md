@@ -30,11 +30,13 @@
   <a href="./docs/1_0_CONTRACT.md"><strong>1.0 contract</strong></a>
 </p>
 
-README last updated: 2026-09-24
+README last updated: 2026-10-02
 
 **GoatCitadel** is a local-first AI command center for operators who want more leverage than a chat box and more control than a hidden-state agent platform. You work in one unified surface — conversation, supervised agentic runs, and governed code execution — inside **Citadels**: protected AI operating spaces with their own charter, memory boundary, agents, approval rules, sealed secrets, and durable evidence.
 
 The Gateway and Mission Control run locally; models can run locally or through a configured cloud provider. A Fastify gateway owns runtime truth (policy, approvals, orchestration, memory, audit, realtime events), Mission Control gives you an operator console over it, and governed actions leave inspectable evidence. [goatcitadel.app](https://goatcitadel.app) is the public product site; this repository remains the implementation source of truth for runtime behavior, release evidence, installation details, and supported technical claims.
+
+Mission Control opens the cockpit layout by default, with Chat, Inbox, Work, Library, System, and Settings. Existing explicit layout preferences remain respected. Use `?shell=cockpit` to select cockpit or `?shell=classic` to return to Classic; either choice is saved in the browser. See [cockpit implementation status](./docs/MISSION_CONTROL_COCKPIT_PROGRESS.md) for remaining verification boundaries.
 
 ## What Is A Citadel
 

@@ -10,21 +10,33 @@ vi.mock("../../../desktop-updates/DesktopUpdatesPanel", () => ({ DesktopUpdatesP
 
 afterEach(() => vi.clearAllMocks());
 
-describe("GeneralSection cockpit preview", () => {
-  it("lets the operator opt into the new layout through a scoped async handoff", async () => {
+describe("GeneralSection cockpit handoff", () => {
+  it("opens the default layout through a scoped async handoff", async () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
-    act(() => root.render(<GeneralSection
-      route={{ area: "settings", section: "general" }} section="general"
-      activeWorkspaceId="default" activeWorkspaceName="Default workspace"
-      navigate={vi.fn()} setActiveWorkspaceId={vi.fn()}
-    />));
-    const button = [...container.querySelectorAll("button")].find((node) => node.textContent?.trim() === "Try the new Mission Control");
+    act(() =>
+      root.render(
+        <GeneralSection
+          route={{ area: "settings", section: "general" }}
+          section="general"
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default workspace"
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      ),
+    );
+    const button = [...container.querySelectorAll("button")].find(
+      (node) => node.textContent?.trim() === "Open cockpit",
+    );
     expect(button).toBeTruthy();
-    await act(async () => { button!.click(); });
+    await act(async () => {
+      button!.click();
+    });
     expect(switchShell).toHaveBeenCalledWith("cockpit", {
-      isCurrent: expect.any(Function), signal: expect.any(AbortSignal),
+      isCurrent: expect.any(Function),
+      signal: expect.any(AbortSignal),
     });
     const options = vi.mocked(switchShell).mock.calls[0]![1];
     expect(options.isCurrent()).toBe(true);

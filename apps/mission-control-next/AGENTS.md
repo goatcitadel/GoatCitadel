@@ -1,6 +1,6 @@
 # AGENTS.md - Mission Control Next
 
-Last updated: 2026-08-15
+Last updated: 2026-10-02
 
 ## Scope and Precedence
 
@@ -9,7 +9,8 @@ This file applies to `apps/mission-control-next/**`. The repository root `AGENTS
 ## Current Surface Truth
 
 - This is the canonical GoatCitadel `1.0` Mission Control shell.
-- Primary navigation is `Work / Projects / Library / Ops / Settings`. `Work` is the single Chat surface for conversation, planning, research, approvals, agentic work, artifacts, and governed code-capability context.
+- Cockpit is the default layout with `Chat / Inbox / Work / Library / System / Settings` navigation. Chat is the single conversation surface for planning, research, approvals, agentic work, artifacts, and governed code-capability context; Work projects operational tasks and runs.
+- Explicit saved shell preferences and `?shell=classic` retain Classic as a rollback surface. Classic navigation remains `Work / Projects / Library / Ops / Settings`, with Work representing Chat.
 - `cowork` and `code` route or mode values are compatibility inputs. Keep their normalization to Chat or Ops explicit; do not recreate separate primary Cowork or Code products.
 - `apps/mission-control` source is archived. Generated residue under that path is not an implementation reference or a parity target.
 

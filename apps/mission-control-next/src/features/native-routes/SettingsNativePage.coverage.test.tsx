@@ -2244,8 +2244,8 @@ describe("SettingsNativePage broad native sections", () => {
     expect(generalText).toContain("n/a");
     expect(generalText).toContain("No active provider");
 
-    const quickRouteButtons = buttons(general.root, "Open");
-    expect(quickRouteButtons).toHaveLength(18);
+    const quickRouteButtons = buttons(general.root, "Open").filter((node) => collectText(node).trim() === "Open");
+    expect(quickRouteButtons).toHaveLength(17);
     for (const button of quickRouteButtons) {
       await click(button);
     }
@@ -2294,7 +2294,7 @@ describe("SettingsNativePage broad native sections", () => {
     );
     expect(collectText(general.root)).not.toContain("Live status of providers");
     expect(collectText(general.root)).toContain("Quick routes");
-    await click(buttons(general.root, "Open")[0]!);
+    await click(findExactButton(general.root, "Open"));
     expect(generalNavigate).toHaveBeenCalledWith({ area: "settings", section: "providers", theme: "ops" });
 
     const priorSettingsRead = settingsMocks.fetchSettings.getMockImplementation()!;
