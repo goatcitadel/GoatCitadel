@@ -450,6 +450,105 @@ describe("useProviderModelCatalog", () => {
     hook.renderer.unmount();
   });
 
+  it.each(["stale", "fallback", "error"])("backs off %s refreshes while keeping live evidence stale", async (kind) => {
+    const hook = await renderCatalog();
+    await act(async () => {
+      await hook.result.loadModelsForProvider("openai");
+    });
+    if (kind === "error") {
+      apiMocks.fetchLlmModels.mockRejectedValueOnce(new Error("Discovery unavailable"));
+    } else {
+      apiMocks.fetchLlmModels.mockResolvedValueOnce({
+        source: kind === "stale" ? "live" : "error_fallback",
+        catalogStatus: "stale",
+        items: [{ id: kind === "stale" ? "last-known-model" : "template-model" }],
+      });
+    }
+    await act(async () => {
+      await hook.result.loadModelsForProvider("openai", { force: true });
+      for (let index = 0; index < 10; index += 1) await hook.result.loadModelsForProvider("openai");
+    });
+    expect(apiMocks.fetchLlmModels).toHaveBeenCalledTimes(2);
+    expect(hook.result.providers[0]?.modelRefreshStatus).toBe("stale");
+    expect(hook.result.getCachedModels("openai")).toEqual([]);
+
+    await act(async () => {
+      await hook.result.loadModelsForProvider("openai", { force: true });
+    });
+    expect(apiMocks.fetchLlmModels).toHaveBeenCalledTimes(3);
+    hook.renderer.unmount();
+  });
+
+  it("retries an initially stale catalog after the backoff and after a configuration change", async () => {
+    apiMocks.fetchLlmModels.mockResolvedValue({
+      source: "live",
+      catalogStatus: "stale",
+      items: [{ id: "last-known-model" }],
+    });
+    const hook = await renderCatalog();
+    await act(async () => {
+      await hook.result.loadModelsForProvider("openai");
+      await hook.result.loadModelsForProvider("openai");
+    });
+    expect(apiMocks.fetchLlmModels).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(30_001);
+    await act(async () => {
+      await hook.result.loadModelsForProvider("openai");
+    });
+    expect(apiMocks.fetchLlmModels).toHaveBeenCalledTimes(2);
+    apiMocks.fetchLlmConfig.mockResolvedValueOnce(runtimeConfig("openai", 2));
+    await act(async () => {
+      await hook.result.reload();
+      await hook.result.loadModelsForProvider("openai");
+    });
+    expect(apiMocks.fetchLlmModels).toHaveBeenCalledTimes(3);
+    hook.renderer.unmount();
+  });
+
+  it("skips known missing credentials automatically while allowing explicit and keyless local probes", async () => {
+    apiMocks.fetchLlmConfig.mockResolvedValue({
+      activeProviderId: "blocked",
+      activeModel: "suggested-model",
+      providers: [
+        {
+          providerId: "blocked",
+          label: "Blocked",
+          baseUrl: "https://example.com/v1",
+          defaultModel: "suggested-model",
+          hasApiKey: false,
+        },
+        {
+          providerId: "adc",
+          label: "ADC",
+          baseUrl: "https://example.com/vertex",
+          defaultModel: "adc-model",
+          hasApiKey: false,
+          authReadiness: { status: "ready", source: "adc_file", liveVerified: true, reasonCode: "resolved" },
+        },
+        {
+          providerId: "local",
+          label: "Local",
+          baseUrl: "http://localhost:8080",
+          defaultModel: "local-model",
+          hasApiKey: false,
+        },
+      ],
+    });
+    const hook = await renderCatalog();
+    await act(async () => {
+      await expect(hook.result.loadModelsForProvider("blocked")).resolves.toContain("suggested-model");
+    });
+    expect(apiMocks.fetchLlmModels).not.toHaveBeenCalled();
+    expect(hook.result.providers[0]?.modelProbeState).toBe("not_checked");
+    await act(async () => {
+      await hook.result.loadModelsForProvider("blocked", { force: true });
+      await hook.result.loadModelsForProvider("adc");
+      await hook.result.loadModelsForProvider("local");
+    });
+    expect(apiMocks.fetchLlmModels.mock.calls.map(([id]) => id)).toEqual(["blocked", "adc", "local"]);
+    hook.renderer.unmount();
+  });
+
   it("drops account model evidence when the provider configuration revision changes", async () => {
     const hook = await renderCatalog();
     await act(async () => {

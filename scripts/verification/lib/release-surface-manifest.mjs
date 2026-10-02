@@ -130,7 +130,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "projects",
     href: "/projects",
-    readySelector: ".mc-next-project-thread-groups",
+    readySelector: ".mc-next-native-projects-grid",
     expectedArea: "projects",
     expectedSection: "root",
     fixtureProjectKey: "primary",
@@ -331,7 +331,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "ops-approvals",
     href: "/ops/approvals",
-    readySelector: ".mc-next-approvals-inspector",
+    readySelector: ".mc-next-approvals-toolbar",
     expectedArea: "ops",
     expectedSection: "approvals",
     fixtureApprovalKey: "primary",

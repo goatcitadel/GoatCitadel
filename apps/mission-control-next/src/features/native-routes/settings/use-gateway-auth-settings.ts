@@ -207,7 +207,7 @@ export function useGatewayAuthSettings(options: {
         try {
           await options.reload();
         } catch {
-          /* The recorded owner receipt remains available. */
+          /* Preserve the recorded owner receipt when its follow-up read fails. */
         }
       }
       return saved;

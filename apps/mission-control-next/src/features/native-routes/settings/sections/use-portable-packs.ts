@@ -297,7 +297,7 @@ export function usePortablePacks(workspaceId: string) {
         try {
           await loaded.reload();
         } catch {
-          /* Confirmed evidence remains settled; read errors are separate. */
+          /* Preserve confirmed evidence; read errors are separate. */
         }
       }
       return true;

@@ -21,6 +21,7 @@ import {
   registerExternalSource,
   scanExternalSource,
 } from "@goatcitadel/mission-control-shared/api/external-sources";
+import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard } from "../NativeRoutePageLayout";
 import { EmptyState, NativeButton, NoticeBanner, StatusChip } from "../primitives";
 import { formatDateTime, useAsyncLoad } from "../shared/native-helpers";
@@ -116,6 +117,22 @@ export function LibraryExternalSourcesSection({
       if (isExternalSourceCapabilityAbsent(error)) {
         // Production-dark posture: absence is a state, never an error.
         return { supported: false, sources: null };
+      }
+      if (
+        isApiRequestError(error) &&
+        (error.status === 401 || error.status === 403) &&
+        error.body &&
+        typeof error.body === "object" &&
+        "error" in error.body &&
+        (error.body.error === "A specific authenticated operator route is required." ||
+          error.body.error === "A specific authenticated operator identity is required.")
+      ) {
+        // Keep the owner-specific recovery state through useAsyncLoad's safe
+        // error summary, which otherwise reduces every 403 to a permission error.
+        throw new Error(
+          "External knowledge sources require a specific authenticated operator identity. Configure operator access, then retry.",
+          { cause: error },
+        );
       }
       throw error;
     }

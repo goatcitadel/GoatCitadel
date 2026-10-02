@@ -87,7 +87,7 @@ function RuntimeStartReview({
       try {
         await onRefresh?.();
       } catch {
-        /* The health query presents its own read error. */
+        /* The health query already presents its own read error. */
       }
     } catch (cause) {
       if (generation.current === request) {
@@ -176,12 +176,15 @@ function RuntimeStartReview({
             <Button size="sm" disabled={pending} onClick={() => closeReview(false)}>
               Cancel
             </Button>
-            <a href="/settings/models?shell=cockpit#local-ai" className="text-sm text-accent underline"
+            <a
+              href="/settings/models?shell=cockpit#local-ai"
+              className="text-sm text-accent underline"
               onClick={(event) => {
                 if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                 event.preventDefault();
                 navigate("/settings/models?shell=cockpit#local-ai");
-              }}>
+              }}
+            >
               Open Local AI settings
             </a>
           </div>

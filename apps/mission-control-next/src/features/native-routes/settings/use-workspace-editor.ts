@@ -200,7 +200,7 @@ export function useWorkspaceEditor(options: WorkspaceEditorOptions) {
       try {
         await reload();
       } catch {
-        /* The directory owns its read error. */
+        /* The directory already owns its read error. */
       }
       if (isSameSelection() && kind === "create" && savedClean && acknowledged) onCreated?.(acknowledged);
     }

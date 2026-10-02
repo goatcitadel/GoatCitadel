@@ -93,13 +93,13 @@ test("Projects and Approvals visual proof target populated fixture records", () 
     approvals: { primary: "approval?1" },
   };
 
-  assert.equal(projectsRoute?.readySelector, ".mc-next-project-thread-groups");
+  assert.equal(projectsRoute?.readySelector, ".mc-next-native-projects-grid");
   assert.equal(projectsRoute?.fixtureProjectKey, "primary");
   assert.equal(
     resolveReleaseSurfaceHref(projectsRoute, { themeQuery: "theme=light" }, fixture),
     "/projects?theme=light&projectId=project%2F1",
   );
-  assert.equal(approvalsRoute?.readySelector, ".mc-next-approvals-inspector");
+  assert.equal(approvalsRoute?.readySelector, ".mc-next-approvals-toolbar");
   assert.equal(approvalsRoute?.fixtureApprovalKey, "primary");
   assert.equal(
     resolveReleaseSurfaceHref(approvalsRoute, { themeQuery: "" }, fixture),

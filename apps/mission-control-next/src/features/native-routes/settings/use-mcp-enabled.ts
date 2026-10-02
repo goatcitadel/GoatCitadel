@@ -102,7 +102,7 @@ export function useMcpEnabled({
       try {
         await reload();
       } catch {
-        /* Canonical acknowledgement remains valid when the directory refresh fails. */
+        /* Preserve canonical acknowledgement when the directory refresh fails. */
       }
     } finally {
       live.current.busy = false;

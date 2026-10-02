@@ -328,10 +328,12 @@ test("notification archive journey ends with an archive-bound canonical readback
   const notificationStep = BROWSER_ACTION_BUNDLES["ops-governance-reliability"].find(
     (step) => step.stepId === "route.ops-notifications.notification-test-and-operator-policy",
   );
-  assert.deepEqual(notificationStep?.operations.slice(-4), [
+  assert.deepEqual(notificationStep?.operations.slice(-6), [
     { kind: "click-pattern", namePattern: "Archive notification rule Usability notification rule" },
+    { kind: "confirm", name: "Apply reviewed notification action" },
     { kind: "api", probe: "notification-rule-archive-readback" },
     { kind: "click-pattern", namePattern: "Archive notification destination Usability notification destination" },
+    { kind: "confirm", name: "Apply reviewed notification action" },
     { kind: "api", probe: "notification-archive-and-non-operator-denial" },
   ]);
 });
@@ -707,6 +709,7 @@ test("skill lifecycle operations await an exact UI and canonical approval/state 
     })),
     [
       { kind: "fill", name: undefined, probe: undefined },
+      { kind: "click-pattern", name: undefined, probe: undefined },
       { kind: "api", name: undefined, probe: "skill-lifecycle-approval-baseline" },
       { kind: "click", name: "Enable", probe: undefined },
       { kind: "assert-text-pattern", name: undefined, probe: undefined },
@@ -834,7 +837,7 @@ test("desktop Chat edit choreography waits for the retried turn to settle before
     (step) => step.stepId === "route.chat.edit-and-branch",
   );
   assert.ok(editStep);
-  assert.deepEqual(editStep.operations.slice(0, 4), [
+  assert.deepEqual(editStep.operations.slice(0, 5), [
     {
       kind: "api",
       probe: "chat-retry-completed",
@@ -844,6 +847,7 @@ test("desktop Chat edit choreography waits for the retried turn to settle before
       name: "Open turn: Stop this deterministic usability turn.",
       exact: true,
     },
+    { kind: "click", name: "More", exact: true },
     {
       kind: "wait-enabled",
       name: "Edit and resend turn ",
@@ -866,7 +870,7 @@ test("Chat attachment journey proves URL, MIME-aware image/audio send, citation,
     { kind: "api", probe: "chat-branch-completed" },
     { kind: "api", probe: "chat-attachment-evidence-seed" },
     { kind: "reload" },
-    { kind: "click", name: "Work Record", exact: true },
+    { kind: "click", name: "Activity", exact: true },
   ]);
   assert.deepEqual(
     attachmentStep.operations
@@ -1260,8 +1264,7 @@ test("Library actions prove uncredentialed Communications and authored Prompt Pa
   assert.ok(catalogStep);
   assert.deepEqual(catalogStep.operations.slice(-2), [
     {
-      kind: "assert-value",
-      label: "Default tools",
+      kind: "assert-text",
       value: "fs.read, fs.list",
     },
     { kind: "api", probe: "agent-default-tools-persisted" },
@@ -1302,6 +1305,10 @@ test("Library actions prove uncredentialed Communications and authored Prompt Pa
   );
   assert.equal(promptPackSteps[0].operations.filter((operation) => operation.kind === "fill").length, 2);
   assert.deepEqual(promptPackSteps[1].operations.slice(0, 2), [
+    { kind: "select", label: "Prompt pack", optionLabel: "Usability Authored Prompt Pack (2)" },
+    { kind: "click-pattern", namePattern: "TEST-91" },
+  ]);
+  assert.deepEqual(promptPackSteps[1].operations.slice(2, 4), [
     { kind: "click", name: "Run selected", exact: true },
     { kind: "assert-text", value: "Ran TEST-91." },
   ]);
@@ -1328,10 +1335,14 @@ test("Library actions prove uncredentialed Communications and authored Prompt Pa
     { kind: "api", probe: "prompt-pack-run-all-canonical-settle" },
   ]);
   assert.deepEqual(promptPackSteps[2].operations.slice(0, 2), [
+    { kind: "select", label: "Prompt pack", optionLabel: "Usability Authored Prompt Pack (2)" },
     { kind: "click-pattern", namePattern: "Advanced quality ops" },
+  ]);
+  assert.deepEqual(promptPackSteps[2].operations.slice(2, 3), [
     { kind: "fill", label: "Test codes", value: "TEST-91, TEST-92" },
   ]);
-  assert.deepEqual(promptPackSteps[2].operations.slice(3, 7), [
+  const benchmarkStart = promptPackSteps[2].operations.findIndex((operation) => operation.probe === "prompt-pack-benchmark-provider-readiness");
+  assert.deepEqual(promptPackSteps[2].operations.slice(benchmarkStart, benchmarkStart + 4), [
     { kind: "api", probe: "prompt-pack-benchmark-provider-readiness" },
     {
       kind: "click",
@@ -1366,7 +1377,7 @@ test("Library actions prove uncredentialed Communications and authored Prompt Pa
     (step) => step.stepId === "route.library-citadel-vault.vault-secret-status-and-governance",
   );
   assert.ok(vaultStep);
-  assert.deepEqual(vaultStep.operations.slice(4, 6), [
+  assert.deepEqual(vaultStep.operations.filter((operation) => ["Reveal", "Hide"].includes(operation.name)), [
     { kind: "click", name: "Reveal", exact: true },
     { kind: "click", name: "Hide", exact: true },
   ]);
@@ -2153,15 +2164,11 @@ test("Settings bundles use live control names and execute the seeded MCP grant l
   assert.ok(oauthStatus);
   assert.deepEqual(
     oauthStatus.operations.map((operation) =>
-      operation.kind === "click"
-        ? `${operation.kind}:${operation.name}`
-        : operation.kind === "assert-text"
-          ? `${operation.kind}:${operation.value}`
-          : `${operation.kind}:${operation.probe}`,
+      `${operation.kind}:${operation.name ?? operation.namePattern ?? operation.value ?? operation.valuePattern ?? operation.probe}`,
     ),
     [
-      "click:Add ChatGPT setup",
-      "assert-text:ChatGPT provider added. Start ChatGPT login below.",
+      "click-pattern:ChatGPT setup",
+      "assert-text-pattern:(?:ChatGPT provider added\\. Start ChatGPT login below\\.|OpenAI Codex is already configured\\. Connect ChatGPT OAuth below\\.)",
       "assert-text:Not started",
       "api:invalid-provider-credential",
     ],
@@ -2237,7 +2244,7 @@ test("Ops approval recovery pauses the linked durable run after fixture-session 
   );
   assert.deepEqual(
     recovery.operations.map((operation) => (operation.kind === "api" ? operation.probe : operation.kind)),
-    ["fixture-session", "durable-run-pause", "click", "click", "click", "approval-durable-run-read"],
+    ["fixture-session", "durable-run-pause", "click", "click", "click", "click", "approval-durable-run-read"],
   );
 });
 

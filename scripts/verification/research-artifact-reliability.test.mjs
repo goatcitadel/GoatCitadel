@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   buildPresentationArgs,
+  createResearchArtifactPermissionProfile,
+  readResearchTurnCapabilityEvidence,
   deterministicEvidenceUrls,
   listZipEntryNames,
   RESEARCH_ARTIFACT_GAP_QUERIES,
@@ -18,6 +20,91 @@ import "./lib/scenarios/deterministic-firecrawl-stub.test.mjs";
 
 test("research artifact lane is the explicit prompt-budget receipt consumer", () => {
   assert.equal(RESEARCH_ARTIFACT_GATEWAY_ENV.GOATCITADEL_DEBUG_PROMPT_CONTEXT_BUDGET_RECEIPTS, "1");
+});
+
+test("research artifact fixture reviews the exact default selection before creating its permission profile", async (context) => {
+  const revision = "a".repeat(64);
+  const requests = [];
+  context.mock.method(globalThis, "fetch", async (url, init) => {
+    const body = JSON.parse(init.body);
+    requests.push({ route: new URL(url).pathname, body });
+    return Response.json(requests.length === 1 ? { revision } : { profileId: "fixture-profile" });
+  });
+  assert.equal(await createResearchArtifactPermissionProfile("http://127.0.0.1:1", "fixture-review"), "fixture-profile");
+  assert.deepEqual(requests[0], {
+    route: "/api/v1/tools/permission-profiles/selection-review",
+    body: { operation: "defaults", scope: "workspace", scopeRef: "default", defaultForSurfaces: ["chat"] },
+  });
+  assert.equal(requests[1].route, "/api/v1/tools/permission-profiles");
+  assert.equal(requests[1].body.expectedSelectionRevision, revision);
+  assert.deepEqual(requests[1].body.defaultForSurfaces, requests[0].body.defaultForSurfaces);
+});
+
+test("research artifact fixture does not create a profile when selection review fails or lacks a revision", async (context) => {
+  for (const response of [Response.json({ error: "Denied" }, { status: 403 }), Response.json({})]) {
+    const fetchMock = context.mock.method(globalThis, "fetch", async () => response);
+    await assert.rejects(() => createResearchArtifactPermissionProfile("http://127.0.0.1:1", "fixture-review"), /permission selection/);
+    assert.equal(fetchMock.mock.callCount(), 1);
+    fetchMock.mock.restore();
+  }
+});
+
+function liveResearchPolicyFixture() {
+  return { permissionProfile: { profileId: "fixture-profile", approvalMode: "bypass",
+    toolPatterns: ["browser.search", "presentations.create"], allow: ["browser.search", "presentations.create"] } };
+}
+
+test("research proof checks live scoped policy and denial without executing an unrelated tool", async (context) => {
+  const requests = [];
+  context.mock.method(globalThis, "fetch", async (url, init) => {
+    const body = init.body ? JSON.parse(init.body) : undefined;
+    requests.push({ url: new URL(url), body });
+    if (requests.length === 1) return Response.json({ state: "legacy_missing" });
+    if (requests.length === 2) return Response.json(liveResearchPolicyFixture());
+    return Response.json({ allowed: body.toolName !== "fs.write", requiresApproval: false });
+  });
+  const evidence = await readResearchTurnCapabilityEvidence("http://127.0.0.1:1", "session-fixture",
+    { turnId: "turn-fixture", trace: {} }, "fixture-proof", "fixture-profile");
+  assert.equal(evidence.mode, "live_catalog");
+  assert.equal(requests[1].url.searchParams.get("workspaceId"), "default");
+  assert.equal(requests[1].url.searchParams.get("sessionId"), "session-fixture");
+  assert.deepEqual(requests.slice(2).map(({url,body}) => ({path: url.pathname, tool: body.toolName,
+    workspace: body.workspaceId, profile: body.permissionProfileId})),
+    ["browser.search", "presentations.create", "fs.write"].map(tool => ({path: "/api/v1/tools/access/evaluate",
+      tool, workspace: "default", profile: "fixture-profile"})));
+});
+
+test("research proof rejects frozen or invalid capability evidence", async (context) => {
+  const fetchMock = context.mock.method(globalThis, "fetch", async () => Response.json({ state: "available", profile: {} }));
+  await assert.rejects(() => readResearchTurnCapabilityEvidence("http://127.0.0.1:1", "session-fixture",
+    { turnId: "turn-fixture", trace: {capabilityProfileId: "unexpected-profile"} }, "proof", "fixture-profile"),
+    /unexpectedly froze/);
+  assert.equal(fetchMock.mock.callCount(), 0);
+  for (const state of ["available", "invalid"]) {
+    fetchMock.mock.mockImplementation(async () => Response.json({state}));
+    await assert.rejects(() => readResearchTurnCapabilityEvidence("http://127.0.0.1:1", "session-fixture",
+      { turnId: "turn-fixture", trace: {} }, "proof", "fixture-profile"), /live callable catalog/);
+  }
+});
+
+test("research proof rejects a broader default profile and an allowed unrelated write", async (context) => {
+  for (const mismatch of ["default-profile", "write-allowed"]) {
+    let calls = 0;
+    const fetchMock = context.mock.method(globalThis, "fetch", async () => {
+      calls += 1;
+      if (calls === 1) return Response.json({state: "legacy_missing"});
+      if (calls === 2) {
+        const policy = liveResearchPolicyFixture();
+        if (mismatch === "default-profile") policy.permissionProfile.profileId = "safe";
+        return Response.json(policy);
+      }
+      return Response.json({allowed: true, requiresApproval: false});
+    });
+    await assert.rejects(() => readResearchTurnCapabilityEvidence("http://127.0.0.1:1", "session-fixture",
+      {turnId: "turn-fixture", trace: {}}, "proof", "fixture-profile"),
+      mismatch === "default-profile" ? /narrow verification permission profile/ : /unexpected fs.write/);
+    fetchMock.mock.restore();
+  }
 });
 
 test("ZIP central-directory parser fails closed on non-archives", () => {

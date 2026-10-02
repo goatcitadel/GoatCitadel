@@ -185,15 +185,16 @@ export async function runThreeTaskReplay(context, correlationId) {
               downloadPath: packagedChatDownloadPath,
             })
           : await sendResearchTurn(stack.gatewayUrl, sessionId, taskCorrelationId, permissionProfileId);
-      const capabilityProfile = await readResearchTurnCapabilityProfile(
+      const capabilityEvidence = await readResearchTurnCapabilityEvidence(
         stack.gatewayUrl,
         sessionId,
-        turn.turnId,
+        turn,
         taskCorrelationId,
+        permissionProfileId,
       );
       const validated = await validateResearchTurn({
         turn,
-        capabilityProfile,
+        capabilityEvidence,
         runtimeRoot,
         deckDir,
         index,
@@ -257,9 +258,7 @@ export async function runThreeTaskReplay(context, correlationId) {
         presentationModuleBytes,
         maximumFirstProviderInputTokens: Math.max(...results.map((result) => result.firstProviderInputTokens)),
         maximumPromptContextEstimatedTokens: Math.max(...results.map((result) => result.promptContextEstimatedTokens)),
-        maximumActivatedSkillInstructionBytes: Math.max(
-          ...results.map((result) => result.activatedSkillInstructionBytes),
-        ),
+        capabilityMode: "live_catalog",
       },
       artifacts: {
         diagnostics: [
@@ -505,6 +504,19 @@ export async function sendResearchTurnThroughPackagedChat({ stack, sessionId, sc
 }
 
 export async function createResearchArtifactPermissionProfile(gatewayUrl, correlationId) {
+  const review = await requestJson(gatewayUrl, "/api/v1/tools/permission-profiles/selection-review", {
+    method: "POST",
+    headers: correlationHeaders(correlationId),
+    body: {
+      operation: "defaults",
+      scope: "workspace",
+      scopeRef: "default",
+      defaultForSurfaces: ["chat"],
+    },
+  });
+  assertResponseOk(review, "review research-artifact permission selection");
+  const selectionRevision = requireText(review.body?.revision, "research-artifact permission selection revision");
+  assert.match(selectionRevision, /^[a-f0-9]{64}$/u, "permission selection review returned an invalid revision");
   const created = await requestJson(gatewayUrl, "/api/v1/tools/permission-profiles", {
     method: "POST",
     headers: {
@@ -512,6 +524,7 @@ export async function createResearchArtifactPermissionProfile(gatewayUrl, correl
       "Idempotency-Key": randomUUID(),
     },
     body: {
+      expectedSelectionRevision: selectionRevision,
       label: "Research artifact reliability fixture",
       description: "Disposable exact-tool bypass used only by the isolated three-task verification runtime.",
       scope: "workspace",
@@ -528,28 +541,50 @@ export async function createResearchArtifactPermissionProfile(gatewayUrl, correl
   return requireText(created.body?.profileId, "research-artifact permission profile id");
 }
 
-export async function readResearchTurnCapabilityProfile(gatewayUrl, sessionId, turnId, correlationId) {
+export async function readResearchTurnCapabilityEvidence(gatewayUrl, sessionId, turn, correlationId, permissionProfileId) {
+  assert.equal(turn.trace?.capabilityProfileId, undefined, "new Chat turn unexpectedly froze a capability profile");
+  assert.equal(turn.trace?.capabilityProfileHash, undefined, "new Chat turn unexpectedly retained a profile hash");
   const response = await requestJson(
     gatewayUrl,
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/capability-profile`,
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turn.turnId)}/capability-profile`,
     { headers: correlationHeaders(correlationId) },
   );
   assertResponseOk(response, "read research-artifact capability profile");
-  assert.equal(response.body?.state, "available", "research-artifact capability profile is unavailable");
-  assert.ok(response.body?.profile, "research-artifact capability profile payload is missing");
-  return response.body.profile;
+  assert.deepEqual(response.body, { state: "legacy_missing" }, "new Chat must use the live callable catalog");
+  const effective = await requestJson(gatewayUrl,
+    `/api/v1/tools/permission-profiles/effective?workspaceId=default&sessionId=${encodeURIComponent(sessionId)}&surface=chat`,
+    { headers: correlationHeaders(correlationId) });
+  assertResponseOk(effective, "read research-artifact live tool policy");
+  const profile = effective.body?.permissionProfile;
+  assert.equal(profile?.profileId, requireText(permissionProfileId, "expected research permission profile"),
+    "research turn did not select the narrow verification permission profile");
+  assert.equal(profile.approvalMode, "bypass");
+  assert.deepEqual([...profile.toolPatterns].sort(), ["browser.search", "presentations.create"]);
+  assert.deepEqual([...profile.allow].sort(), ["browser.search", "presentations.create"]);
+  const policyDecisions = [];
+  for (const toolName of ["browser.search", "presentations.create", "fs.write"]) {
+    const decision = await requestJson(gatewayUrl, "/api/v1/tools/access/evaluate", {
+      method: "POST", headers: correlationHeaders(correlationId),
+      body: { toolName, sessionId, workspaceId: "default", agentId: "assistant", surface: "chat", permissionProfileId },
+    });
+    assertResponseOk(decision, `evaluate research-artifact ${toolName} access`);
+    assert.equal(decision.body?.allowed, toolName !== "fs.write", `unexpected ${toolName} policy decision`);
+    if (toolName !== "fs.write") assert.equal(decision.body?.requiresApproval, false);
+    policyDecisions.push({ toolName, allowed: decision.body.allowed });
+  }
+  return { mode: "live_catalog", permissionProfileId, policyDecisions };
 }
 
 export async function validateResearchTurn({
   turn,
-  capabilityProfile,
+  capabilityEvidence,
   runtimeRoot,
   deckDir,
   index,
   expectedPermissionProfileId,
   acquiredEvidenceUrls = deterministicEvidenceUrls(),
 }) {
-  assert.equal(turn.trace?.status, "completed");
+  assert.equal(turn.trace?.status, "completed", `research turn failed: ${JSON.stringify(turn.trace?.failure ?? {})}`);
   assert.equal(turn.trace?.completion?.repaired, false);
   assert.equal(turn.trace?.failure, undefined);
   assert.equal(turn.trace?.routing?.executionBudget?.profile, "research_artifact");
@@ -568,25 +603,13 @@ export async function validateResearchTurn({
       promptContextEstimatedTokens < PROMPT_CONTEXT_ESTIMATE_TOKEN_CEILING,
     `estimated first-provider context exceeded the ${PROMPT_CONTEXT_ESTIMATE_TOKEN_CEILING}-token ceiling (${promptContextEstimatedTokens})`,
   );
-  const activatedSkills = capabilityProfile?.selection?.activatedSkills ?? [];
-  const activatedSkillInstructionBytes = activatedSkills.reduce(
-    (total, skill) => total + Number(skill.instructionBytes ?? 0),
-    0,
-  );
-  assert.ok(activatedSkills.length > 0, "presentation turn activated no governed skill instructions");
-  assert.ok(
-    activatedSkillInstructionBytes < 10 * 1024,
-    `activated-skill instructions exceeded the 10 KiB ceiling (${activatedSkillInstructionBytes} bytes)`,
-  );
-  const frozenToolNames = new Set(
-    (capabilityProfile?.selection?.tools ?? []).map((tool) => String(tool.canonicalName ?? "")),
-  );
-  assert.ok(frozenToolNames.has("browser.search"), "capability profile omitted browser.search");
-  assert.ok(frozenToolNames.has("presentations.create"), "capability profile omitted presentations.create");
+  assert.equal(capabilityEvidence?.mode, "live_catalog");
+  assert.equal(turn.trace?.capabilityProfileId, undefined);
+  assert.equal(turn.trace?.capabilityProfileHash, undefined);
   assert.equal(
-    capabilityProfile?.governance?.permission?.profileId,
+    capabilityEvidence?.permissionProfileId,
     expectedPermissionProfileId,
-    "research turn did not use the narrow verification permission profile",
+    "research turn did not select the narrow verification permission profile",
   );
 
   const executedRuns = (turn.trace?.toolRuns ?? []).filter((run) => run.status === "executed");
@@ -651,7 +674,7 @@ export async function validateResearchTurn({
     status: turn.trace.status,
     firstProviderInputTokens,
     promptContextEstimatedTokens,
-    activatedSkillInstructionBytes,
+    capabilityMode: capabilityEvidence.mode,
     citations: turn.trace.citations.map((citation) => citation.url),
     searchQueries: searchRuns.map((run) => run.args.query),
     deckPath,

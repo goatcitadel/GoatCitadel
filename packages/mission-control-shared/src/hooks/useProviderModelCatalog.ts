@@ -81,6 +81,7 @@ export interface ProviderModelCacheEntry {
   reasoningEffortsByModel?: Record<string, ChatCompletionReasoningEffort[]>;
   fastModeByModel?: Record<string, boolean>;
   expiresAt: number;
+  retryAfter?: number;
   state: ProviderModelProbeState;
   source?: ProviderModelProbeSource;
   checkedAt?: string;
@@ -162,6 +163,7 @@ function preserveLiveCatalogAfterRefreshFailure(providerId: string, warning?: st
   sharedProviderModelCache.set(providerId, {
     ...previous,
     expiresAt: Date.now() - 1,
+    retryAfter: Date.now() + PROVIDER_MODELS_NEGATIVE_TTL_MS,
     state: "fallback",
     checkedAt: new Date().toISOString(),
     warning: warning ?? "Live model refresh failed; showing the last known catalog.",
@@ -521,8 +523,34 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
       const cached = !options.force
         ? getValidProviderModelCacheEntry(sharedProviderModelCache, normalized, now, { allowStale: true })
         : undefined;
-      if (cached && cached.expiresAt > now) {
+      // Evidence freshness and retry eligibility are separate: a stale result
+      // must stay stale without immediately triggering another render-driven read.
+      if (cached && (cached.expiresAt > now || (cached.retryAfter ?? 0) > now)) {
         return cached.items;
+      }
+
+      const currentConfig = configRef.current;
+      const provider = currentConfig?.providers.find((item) => item.providerId === normalized);
+      const authStatus = provider?.authReadiness?.status;
+      if (
+        !options.force &&
+        currentConfig &&
+        provider &&
+        (authStatus === "missing" ||
+          authStatus === "invalid" ||
+          authStatus === "unavailable" ||
+          (provider.hasApiKey === false &&
+            !isLocalProvider(provider.providerId, provider.baseUrl) &&
+            authStatus !== "ready" &&
+            authStatus !== "configured"))
+      ) {
+        // Automatic picker reads cannot resolve missing credentials. Explicit
+        // probes remain available, and keyless local endpoints still get checked.
+        return (
+          buildProviderCatalog(currentConfig, sharedProviderModelCache, now).find(
+            (item) => item.providerId === normalized,
+          )?.models ?? []
+        );
       }
 
       const inFlight = sharedProviderModelRequests.get(normalized);
@@ -560,6 +588,7 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
             ),
             expiresAt:
               response.catalogStatus === "stale" ? Date.now() - 1 : Date.now() + PROVIDER_MODELS_POSITIVE_TTL_MS,
+            retryAfter: response.catalogStatus === "stale" ? Date.now() + PROVIDER_MODELS_NEGATIVE_TTL_MS : undefined,
             state,
             source: response.source,
             checkedAt: new Date().toISOString(),

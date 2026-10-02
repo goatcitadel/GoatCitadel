@@ -10,7 +10,8 @@ import {
 } from "./integration-connection-mutation";
 
 export const canToggleIntegration = (record: IntegrationConnection) =>
-  hasIntegrationConnectionBinding(record) && ["model_provider", "productivity", "automation", "platform"].includes(record.kind);
+  hasIntegrationConnectionBinding(record) &&
+  ["model_provider", "productivity", "automation", "platform"].includes(record.kind);
 
 export function useIntegrationEnabled({
   workspaceId,
@@ -111,7 +112,7 @@ export function useIntegrationEnabled({
       try {
         await reload();
       } catch {
-        /* The directory owns its read error; the mutation acknowledgement remains saved. */
+        /* Preserve the saved mutation acknowledgement; the directory owns its read error. */
       }
     } catch (error) {
       if (scopeCurrent(epoch)) setNotice(`Connection review unavailable: ${describeApiError(error).summary}`);

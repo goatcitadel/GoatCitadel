@@ -151,7 +151,7 @@ export function useAddonSettings() {
       try {
         await loaded.reload();
       } catch {
-        /* The loader exposes current read failures. */
+        /* The loader already exposes current read failures. */
       }
     } else setNotice({ tone: result.kind === "uncertain" ? "warning" : "error", message: result.message });
   }

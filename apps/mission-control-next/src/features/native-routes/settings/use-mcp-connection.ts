@@ -89,7 +89,7 @@ export function useMcpConnection({
         try {
           await onSettled();
         } catch {
-          /* The canonical receipt and independent readback remain recorded. */
+          /* Preserve the canonical receipt and independent readback. */
         }
       }
     } finally {

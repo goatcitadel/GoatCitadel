@@ -105,7 +105,7 @@ export function usePermissionProfileActivation(options: {
       try {
         await options.reload();
       } catch {
-        /* An unavailable reread does not change the mutation outcome. */
+        /* Preserve the mutation outcome when its reread is unavailable. */
       }
     }
   }

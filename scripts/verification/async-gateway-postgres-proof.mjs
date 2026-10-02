@@ -13,16 +13,19 @@ import {
   writeDeterministicLlmProviderConfig,
 } from "./lib/scenarios/deterministic-llm-stub.mjs";
 import { redactSensitiveEvidence } from "./lib/scenarios/gateway-chat-fault-recovery-lane.mjs";
+import { startDeterministicFirecrawlStub } from "./lib/scenarios/deterministic-firecrawl-stub.mjs";
 import {
   RESEARCH_ARTIFACT_PROVIDER_ID,
   RESEARCH_ARTIFACT_PROVIDER_MODEL,
   RESEARCH_ARTIFACT_PROMPT,
   RESEARCH_ARTIFACT_TASK_COUNT,
+  RESEARCH_ARTIFACT_GAP_QUERIES,
+  RESEARCH_ARTIFACT_GATEWAY_ENV,
   buildPresentationArgs,
   createResearchArtifactPermissionProfile,
   createResearchSession,
   ensureOnboardingComplete,
-  readResearchTurnCapabilityProfile,
+  readResearchTurnCapabilityEvidence,
   sendResearchTurn,
   validateResearchTurn,
 } from "./research-artifact-reliability.mjs";
@@ -120,9 +123,11 @@ export async function runAsyncGatewayPostgresProof(context, correlationId, optio
   let runtimeRoot;
   let stack;
   let database;
+  let firecrawlStub;
   let proofResult;
   let primaryError;
   try {
+    firecrawlStub = await startDeterministicFirecrawlStub();
     database = await createDisposablePostgresSchema(prerequisite.rawUrl);
     runtimeRoot = await prepareVerificationRuntime(`${context.runId}-async-gateway-postgres`);
     await writeDeterministicLlmProviderConfig(runtimeRoot, stub.baseUrl, {
@@ -150,6 +155,7 @@ export async function runAsyncGatewayPostgresProof(context, correlationId, optio
     const results = [];
     let checkpointResult;
     for (let index = 1; index <= RESEARCH_ARTIFACT_TASK_COUNT; index += 1) {
+      database.assertHealthy();
       const taskCorrelationId = `${correlationId}-task-${index}`;
       const sessionId = await createResearchSession(stack.gatewayUrl, taskCorrelationId, index);
       let turn;
@@ -165,13 +171,20 @@ export async function runAsyncGatewayPostgresProof(context, correlationId, optio
       } else {
         turn = await sendResearchTurn(stack.gatewayUrl, sessionId, taskCorrelationId, permissionProfileId);
       }
-      const capabilityProfile = await readResearchTurnCapabilityProfile(
+      await writeJson(
+        path.join(context.artifactRoot, "diagnostics", `async-gateway-research-turn-${index}.json`),
+        redactSensitiveEvidence(turn, prerequisite.sensitiveValues),
+      );
+      const capabilityEvidence = await readResearchTurnCapabilityEvidence(
         stack.gatewayUrl,
         sessionId,
-        turn.turnId,
+        turn,
         taskCorrelationId,
+        permissionProfileId,
       );
-      const validated = await validateResearchTurn({ turn, capabilityProfile, runtimeRoot, deckDir, index });
+      const validated = await validateResearchTurn({ turn, capabilityEvidence, runtimeRoot, deckDir, index,
+        expectedPermissionProfileId: permissionProfileId });
+      database.assertHealthy();
       results.push({
         sessionId,
         turnId: turn.turnId,
@@ -180,7 +193,10 @@ export async function runAsyncGatewayPostgresProof(context, correlationId, optio
       });
     }
 
-    assert.equal(stub.dispatchPlanDispatches(), RESEARCH_ARTIFACT_TASK_COUNT * 2);
+    assert.equal(stub.dispatchPlanDispatches(), RESEARCH_ARTIFACT_TASK_COUNT * (RESEARCH_ARTIFACT_GAP_QUERIES.length + 2));
+    const gapRequests = firecrawlStub.requests().filter((request) => RESEARCH_ARTIFACT_GAP_QUERIES.includes(request.query));
+    assert.equal(gapRequests.length, RESEARCH_ARTIFACT_TASK_COUNT * RESEARCH_ARTIFACT_GAP_QUERIES.length);
+    assert.ok(gapRequests.every((request) => request.matched));
     assert.ok(checkpointResult?.durationMs >= 0, "the controlled PostgreSQL CHECKPOINT did not execute");
     await writeJson(checkpointPath, {
       schemaVersion: 1,
@@ -218,6 +234,7 @@ export async function runAsyncGatewayPostgresProof(context, correlationId, optio
       checkpointDurationMs: checkpointResult.durationMs,
       presentationModuleBytes,
       providerDispatches: stub.dispatchPlanDispatches(),
+      firecrawlRequests: firecrawlStub.requests(),
       eventLoop: metricEvaluation.metrics,
       runtimeLogMatches: runtimeLogEvaluation.matches,
       results: results.map((item) => ({
@@ -227,9 +244,9 @@ export async function runAsyncGatewayPostgresProof(context, correlationId, optio
         status: item.status,
         firstProviderInputTokens: item.firstProviderInputTokens,
         promptContextEstimatedTokens: item.promptContextEstimatedTokens,
-        activatedSkillInstructionBytes: item.activatedSkillInstructionBytes,
+        capabilityMode: item.capabilityMode,
         citations: item.citations,
-        searchQuery: item.searchQuery,
+        searchQueries: item.searchQueries,
         copiedDeckPath: item.copiedDeckPath,
         deckBytes: item.deckBytes,
         slideCount: item.slideCount,
@@ -255,7 +272,7 @@ export async function runAsyncGatewayPostgresProof(context, correlationId, optio
         atomicsWaitCalls: metricEvaluation.metrics.atomicsWaitCalls,
         maximumFirstProviderInputTokens: Math.max(...results.map((item) => item.firstProviderInputTokens)),
         maximumPromptContextEstimatedTokens: Math.max(...results.map((item) => item.promptContextEstimatedTokens)),
-        maximumActivatedSkillInstructionBytes: Math.max(...results.map((item) => item.activatedSkillInstructionBytes)),
+        capabilityMode: "live_catalog",
       },
       artifacts: {
         diagnostics: [
@@ -263,6 +280,7 @@ export async function runAsyncGatewayPostgresProof(context, correlationId, optio
           relativeArtifact(context, checkpointPath),
           relativeArtifact(context, gatewayStdoutPath),
           relativeArtifact(context, gatewayStderrPath),
+          ...results.map((_, index) => `diagnostics/async-gateway-research-turn-${index + 1}.json`),
           ...results.map((item) => relativeArtifact(context, item.copiedDeckPath)),
         ],
         screenshots: [],
@@ -278,7 +296,7 @@ export async function runAsyncGatewayPostgresProof(context, correlationId, optio
 
   let cleanupError;
   try {
-    await cleanupProofResources({ stack, runtimeRoot, stub, database });
+    await cleanupProofResources({ stack, runtimeRoot, stub, database, firecrawlStub });
   } catch (error) {
     cleanupError = sanitizeAsyncGatewayProofError(error, prerequisite.sensitiveValues);
   }
@@ -326,11 +344,8 @@ export function buildAsyncGatewayProofEnv({
   existingNodeOptions,
 }) {
   return {
-    GOATCITADEL_AUTH_MODE: "none",
-    GOATCITADEL_RATE_LIMIT_ENABLED: "false",
-    GOATCITADEL_DISABLE_SECRET_STORE: "true",
-    GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "true",
-    GOATCITADEL_DISABLE_RICH_PRESENTATION_VISUALS: "true",
+    ...RESEARCH_ARTIFACT_GATEWAY_ENV,
+    GOATCITADEL_DISABLE_RICH_PRESENTATION_VISUALS: "false",
     GOATCITADEL_DATABASE_DRIVER: "postgres",
     GOATCITADEL_POSTGRES_MODE: "managed",
     GOATCITADEL_POSTGRES_CONNECTION_STRING: scopedConnectionString,
@@ -349,17 +364,27 @@ export async function createDisposablePostgresSchema(rawUrl, options = {}) {
   const quotedSchema = `"${schemaName}"`;
   const poolFactory = options.poolFactory ?? defaultPostgresPoolFactory;
   const pool = await poolFactory(rawUrl);
+  let idleError;
+  // Preserve idle connection failures as proof failures without bypassing resource cleanup.
+  pool.on?.("error", (error) => { idleError ??= error; });
+  const assertHealthy = () => {
+    if (idleError) throw new Error(`PostgreSQL proof idle connection failed: ${idleError.message ?? String(idleError)}`);
+  };
   let created = false;
   try {
     await pool.query(`CREATE SCHEMA ${quotedSchema}`);
     created = true;
+    assertHealthy();
     return {
       schemaName,
       scopedConnectionString: buildScopedPostgresConnectionString(rawUrl, schemaName),
+      assertHealthy,
       async runCheckpoint() {
+        assertHealthy();
         const startedAt = new Date().toISOString();
         const startedMs = Date.now();
         await pool.query("CHECKPOINT");
+        assertHealthy();
         return {
           startedAt,
           finishedAt: new Date().toISOString(),
@@ -369,6 +394,7 @@ export async function createDisposablePostgresSchema(rawUrl, options = {}) {
       async cleanup() {
         try {
           await pool.query(`DROP SCHEMA IF EXISTS ${quotedSchema} CASCADE`);
+          assertHealthy();
         } finally {
           await pool.end();
         }
@@ -434,32 +460,38 @@ export function evaluateRuntimeLogs(rawLog) {
   };
 }
 
-function buildDispatchPlan() {
+export function buildDispatchPlan() {
   const plan = [];
   for (let index = 1; index <= RESEARCH_ARTIFACT_TASK_COUNT; index += 1) {
     plan.push(
+      ...RESEARCH_ARTIFACT_GAP_QUERIES.map((query, queryIndex) => ({
+        type: "tool_call",
+        name: "browser_search",
+        callId: `call_async_gateway_gap_${index}_${queryIndex + 1}`,
+        arguments: { query, maxResults: 20, backend: "firecrawl", firecrawlFallbackToNative: false },
+        ...(index === CHECKPOINT_TASK_INDEX && queryIndex === 0 ? { delayMs: CHECKPOINT_PROVIDER_DELAY_MS } : {}),
+      })),
       {
         type: "tool_call",
         name: "presentations_create",
         callId: `call_async_gateway_deck_${index}`,
         arguments: buildPresentationArgs(index),
-        ...(index === CHECKPOINT_TASK_INDEX ? { delayMs: CHECKPOINT_PROVIDER_DELAY_MS } : {}),
       },
       {
         type: "success",
-        replyText: `Research complete. I preserved the source citations and created funny-jokes-reliability-${index}.pptx.`,
+        replyText: `Research complete. I preserved the source citations and created ccg-market-reliability-${index}.pptx.`,
       },
     );
   }
   return plan;
 }
 
-async function cleanupProofResources({ stack, runtimeRoot, stub, database }) {
+async function cleanupProofResources({ stack, runtimeRoot, stub, database, firecrawlStub }) {
   try {
     await stopVerificationStack(stack ?? (runtimeRoot ? { runtimeRoot } : undefined));
   } finally {
     try {
-      await stub.close();
+      try { await stub.close(); } finally { await firecrawlStub?.close(); }
     } finally {
       await database?.cleanup();
     }
@@ -469,9 +501,7 @@ async function cleanupProofResources({ stack, runtimeRoot, stub, database }) {
 async function defaultPostgresPoolFactory(connectionString) {
   const requireFromStorage = createRequire(path.join(repoRoot, "packages", "storage", "package.json"));
   const { Pool } = requireFromStorage("pg");
-  const pool = new Pool({ connectionString, max: 2, connectionTimeoutMillis: 10_000 });
-  await pool.query("SELECT 1");
-  return pool;
+  return new Pool({ connectionString, max: 2, connectionTimeoutMillis: 10_000 });
 }
 
 async function readGuardMetrics(filePath) {

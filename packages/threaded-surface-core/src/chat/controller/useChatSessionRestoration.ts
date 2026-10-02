@@ -266,7 +266,7 @@ export function useChatSessionRestoration({
       if (remaining.length !== previousQueue.length)
         window.localStorage.setItem(previousKey, JSON.stringify(remaining));
     } catch {
-      // Browser persistence may be disabled; the in-memory owner remains authoritative for this session.
+      // Keep the in-memory owner authoritative when browser persistence is disabled.
     }
   }, [queueStorageKey, workspaceId]);
 

@@ -21,7 +21,7 @@ export function writeShellPreference(
   try {
     storage?.setItem(SHELL_PREFERENCE_KEY, shell);
   } catch {
-    // A URL override still works when browser storage is unavailable.
+    // Fall back to the URL override when browser storage is unavailable.
   }
 }
 

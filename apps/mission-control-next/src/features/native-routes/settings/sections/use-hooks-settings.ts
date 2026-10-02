@@ -292,7 +292,7 @@ export function useHooksSettings(workspaceId: string) {
         try {
           await loaded.reload();
         } catch {
-          /* The confirmed receipt remains settled; the loader exposes read failure. */
+          /* Preserve the confirmed receipt; the loader exposes read failure. */
         }
       }
       return true;

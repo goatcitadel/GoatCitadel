@@ -85,7 +85,7 @@ export function useScheduleOperations(identity: string) {
       try {
         onRecorded?.(receipt);
       } catch {
-        /* The known owner result remains confirmed. */
+        /* Preserve the confirmed owner result when the follow-up read fails. */
       }
       return isCurrent() ? receipt : undefined;
     } catch (error) {

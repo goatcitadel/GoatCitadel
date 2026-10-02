@@ -143,7 +143,7 @@ export function useManagedRuntimeSettings(options: {
       try {
         await reload();
       } catch {
-        /* The acknowledged owner result survives a failed follow-up read. */
+        /* Preserve the acknowledged owner result across a failed follow-up read. */
       }
       return saved;
     } catch (error) {
@@ -152,7 +152,7 @@ export function useManagedRuntimeSettings(options: {
         try {
           await reload();
         } catch {
-          /* The fresh owner read remains unavailable. */
+          /* Keep the fresh owner read unavailable instead of inventing a confirmed result. */
         }
       } else if (attempted && !acknowledged) {
         retainManagedRuntimeUncertainty(

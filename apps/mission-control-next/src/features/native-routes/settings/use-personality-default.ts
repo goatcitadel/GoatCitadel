@@ -105,7 +105,7 @@ export function usePersonalityDefault({
     try {
       await reload();
     } catch {
-      /* Refresh failure cannot change an acknowledged or uncertain mutation outcome. */
+      /* Preserve an acknowledged or uncertain mutation outcome across refresh failure. */
     }
   }
   async function confirm(): Promise<boolean> {

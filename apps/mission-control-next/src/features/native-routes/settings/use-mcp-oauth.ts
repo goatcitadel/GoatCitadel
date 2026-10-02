@@ -111,7 +111,7 @@ export function useMcpOAuth({
         try {
           await onSettled();
         } catch {
-          /* Receipt and independent readback remain recorded. */
+          /* Preserve the receipt and independent readback. */
         }
       }
     } finally {

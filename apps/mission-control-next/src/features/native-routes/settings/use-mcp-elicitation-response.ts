@@ -61,7 +61,7 @@ export function useMcpElicitationResponse({
       try {
         await onRecorded?.();
       } catch {
-        /* Confirmed response remains recorded; the read owner presents refresh failures. */
+        /* Preserve the confirmed response; the read owner presents refresh failures. */
       }
     }
   }

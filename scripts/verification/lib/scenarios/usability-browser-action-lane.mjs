@@ -209,6 +209,7 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
     stack = await deps.startVerificationStack(context, {
       runtimeRoot,
       includeUi: true,
+      uiMode: options.uiMode,
       processLogPrefix: "usability-browser-actions",
       gatewayEnvOmit: options.secretEnvKeys,
       uiEnvOmit: options.secretEnvKeys,
@@ -388,6 +389,7 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
         deps,
         fixture,
         registeredSteps: localSteps,
+        recordVideo: options.recordVideo !== false,
         sessionId: session.sessionId,
         stack,
         stub,
@@ -670,10 +672,12 @@ async function runBrowserActionBundle(context, input) {
         viewport: input.viewport ?? { width: 1440, height: 1024 },
         colorScheme: "dark",
         permissions: ["clipboard-read", "clipboard-write"],
-        recordVideo: {
-          dir: path.join(context.artifactRoot, "playwright"),
-          size: input.viewport ?? { width: 1440, height: 1024 },
-        },
+        ...(input.recordVideo !== false
+          ? { recordVideo: {
+            dir: path.join(context.artifactRoot, "playwright"),
+            size: input.viewport ?? { width: 1440, height: 1024 },
+          } }
+          : {}),
       });
       await input.deps.installMissionControlNextBrowserState(
         browserContext,
@@ -1629,6 +1633,8 @@ async function executeOperation(page, operation, state) {
         throw new Error(`fixture session is unavailable: ${operation.sessionKey}`);
       }
       const params = new URLSearchParams({ theme: "dark", sessionId: fixtureSessionId });
+      if (state.route.slug === "ops-approvals" && operation.sessionKey === "opsApproval")
+        params.set("approvalId", requireText(state.fixture.approvals?.ops, "Ops approval ID"));
       if (state.cockpit) params.set("shell", "cockpit");
       const routeHref = `${state.route.href}${state.route.href.includes("?") ? "&" : "?"}${params.toString()}`;
       await page.goto(state.deps.buildVerificationUiUrl(state.uiUrl, routeHref), { waitUntil: "domcontentloaded" });
@@ -1637,6 +1643,18 @@ async function executeOperation(page, operation, state) {
       await state.deps.setBrowserCorrelation(page, state.correlationId, fixtureSessionId);
       state.sessionId = fixtureSessionId;
       return { kind: "fixture-session", sessionKey: operation.sessionKey, sessionId: fixtureSessionId };
+    }
+    case "pending-approval": {
+      if (!Number.isInteger(operation.index) || operation.index < 0 || operation.index > 1)
+        throw new Error("pending approval selection requires an exact baseline index");
+      const approvalId = requireText(Object.keys(state.approvalDecisionBaseline ?? {})[operation.index], "pending approval identity");
+      const params = new URLSearchParams({ theme: "dark", approvalId });
+      await page.goto(state.deps.buildVerificationUiUrl(state.uiUrl, `/ops/approvals?${params.toString()}`), {
+        waitUntil: "domcontentloaded",
+      });
+      await page.waitForSelector(".mc-next-approvals-inspector", { timeout: ACTION_TIMEOUT_MS });
+      await state.deps.setBrowserCorrelation(page, state.correlationId, state.sessionId);
+      return { kind: "open-pending-approval", approvalId };
     }
     case "reload": {
       await page.reload({ waitUntil: "domcontentloaded" });
@@ -3423,7 +3441,7 @@ async function apiProbe(probe, state) {
       const archived = await checkedRequest(
         state.gatewayUrl,
         `/api/v1/citadels/${encodeURIComponent(isolatedId)}/archive`,
-        { method: "POST", body: {} },
+        { method: "POST", body: { expectedRevision: after.body.items.find((item) => item.citadelId === isolatedId)?.revision } },
         probe,
       );
       if (archived.body?.lifecycleStatus !== "archived") {
@@ -4289,6 +4307,7 @@ async function seedSettingsBrowserActionFixture(gatewayUrl, fixtureBaseUrl, work
     {
       method: "PATCH",
       body: {
+        expectedRevision: channelDraft.body.revision,
         label: "Verification sandbox channel",
         enabled: true,
         draft: {
@@ -4437,14 +4456,17 @@ export async function startSettingsBrowserFixtureServer() {
   };
 }
 
-async function interactiveLocator(page, name, exact) {
+export async function interactiveLocator(page, name, exact) {
   const pattern = exact ? name : new RegExp(escapeRegExp(name), "iu");
+  const summary = page.locator("summary");
   const locator = [
     ...["button", "link", "tab", "menuitem", "option", "radio"].map((role) =>
       page.getByRole(role, { name: pattern, exact }),
     ),
-    page.locator("summary").filter({ hasText: pattern }),
-    page.locator("summary").and(page.getByLabel(name, { exact })),
+    ...(exact
+      ? [summary.filter({ has: page.getByText(name, { exact: true }) }), summary.and(page.getByText(name, { exact: true }))]
+      : [summary.filter({ hasText: pattern })]),
+    summary.and(page.getByLabel(name, { exact })),
   ].reduce((combined, candidate) => combined.or(candidate));
   return await firstVisibleLocator(page, locator, `interactive control not found: ${name}`);
 }

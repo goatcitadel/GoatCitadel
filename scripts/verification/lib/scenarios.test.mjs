@@ -581,6 +581,7 @@ test("fast verification split tests preserve recursive package coverage", () => 
     "--filter",
     "@goatcitadel/policy-engine",
     "test:coverage",
+    "--maxWorkers=4",
   ]);
 
   const libraryArgs = commandById.get("fast.test.libraries")?.args ?? [];

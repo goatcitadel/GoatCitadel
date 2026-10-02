@@ -28,7 +28,11 @@ export function readDismissedChangePlanReceiptKeys(storage?: Storage | null): Se
   if (!target) return new Set();
   try {
     const parsed: unknown = JSON.parse(target.getItem(DISMISSED_CHANGE_PLAN_RECEIPTS_KEY) ?? "[]");
-    return new Set(Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string").slice(-MAX_DISMISSED_KEYS) : []);
+    return new Set(
+      Array.isArray(parsed)
+        ? parsed.filter((value): value is string => typeof value === "string").slice(-MAX_DISMISSED_KEYS)
+        : [],
+    );
   } catch {
     return new Set();
   }
@@ -40,6 +44,6 @@ export function writeDismissedChangePlanReceiptKeys(keys: ReadonlySet<string>, s
   try {
     target.setItem(DISMISSED_CHANGE_PLAN_RECEIPTS_KEY, JSON.stringify([...keys].slice(-MAX_DISMISSED_KEYS)));
   } catch {
-    // A blocked or full preference store only affects persistence of dismissal.
+    // Keep the dismissal in memory when its optional preference store is blocked or full.
   }
 }

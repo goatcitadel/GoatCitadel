@@ -1,5 +1,6 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 import { LibraryExternalSourcesSection } from "./LibraryExternalSourcesSection";
 
 const apiMocks = vi.hoisted(() => ({
@@ -250,10 +251,12 @@ async function click(node: ReactTestInstance): Promise<void> {
   });
 }
 
-async function renderSection(): Promise<ReactTestRenderer> {
+async function renderSection(onConfigureAccess?: () => void): Promise<ReactTestRenderer> {
   let renderer: ReactTestRenderer | null = null;
   await act(async () => {
-    renderer = create(<LibraryExternalSourcesSection workspaceId="workspace-1" />);
+    renderer = create(
+      <LibraryExternalSourcesSection workspaceId="workspace-1" onConfigureAccess={onConfigureAccess} />,
+    );
   });
   return renderer!;
 }
@@ -279,6 +282,45 @@ describe("LibraryExternalSourcesSection", () => {
     expect(markup).toContain("The external-source runtime is not composed in this build.");
     expect(markup).not.toContain("Register source");
     expect(markup).not.toContain("Retry");
+    renderer.unmount();
+  });
+
+  it.each([
+    [403, "A specific authenticated operator route is required."],
+    [401, "A specific authenticated operator identity is required."],
+  ])("offers operator access setup for the owner-specific %s denial", async (status, message) => {
+    apiMocks.fetchExternalSources.mockRejectedValue(
+      new ApiRequestError(message, {
+        kind: "http",
+        method: "GET",
+        path: "/api/v1/library/external-sources",
+        status,
+        body: { error: message },
+      }),
+    );
+    const onConfigureAccess = vi.fn();
+    const renderer = await renderSection(onConfigureAccess);
+    expect(markupOf(renderer)).toContain("Operator authentication required");
+    expect(markupOf(renderer)).toContain("Configure operator access, then retry.");
+    await click(findButton(renderer.root, "Configure access"));
+    expect(onConfigureAccess).toHaveBeenCalledOnce();
+    expect(apiMocks.registerExternalSource).not.toHaveBeenCalled();
+    renderer.unmount();
+  });
+
+  it("keeps ordinary permission denials distinct from missing operator authentication", async () => {
+    apiMocks.fetchExternalSources.mockRejectedValue(
+      new ApiRequestError("Policy denied", {
+        kind: "http",
+        method: "GET",
+        path: "/api/v1/library/external-sources",
+        status: 403,
+        body: { error: "Workspace policy denied this read." },
+      }),
+    );
+    const renderer = await renderSection(vi.fn());
+    expect(markupOf(renderer)).toContain("You don't have permission to do that.");
+    expect(markupOf(renderer)).not.toContain("Configure access");
     renderer.unmount();
   });
 

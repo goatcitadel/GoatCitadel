@@ -147,7 +147,11 @@ export function getDirtySectionKeys(): readonly string[] {
 export function withDraftLeaveDecision(keys: readonly string[], proceed: () => void): void {
   const previous = leavingDraftKeys;
   leavingDraftKeys = new Set([...previous, ...keys]);
-  try { proceed(); } finally { leavingDraftKeys = previous; }
+  try {
+    proceed();
+  } finally {
+    leavingDraftKeys = previous;
+  }
 }
 
 /**
@@ -159,7 +163,11 @@ export function hasDirtySections(): boolean {
 
 export function setRetainedDraftDirty(key: string, dirty: boolean): void {
   if (dirty) retainedDraftKeys.add(key);
-  else retainedDraftKeys.delete(key);
+  else {
+    retainedDraftKeys.delete(key);
+    // Acknowledged saves can navigate before the owner's next React effect.
+    setSectionDirty(key, false);
+  }
 }
 
 export function getDirtySectionActions(key: string): UseFormDirtyOptions | undefined {

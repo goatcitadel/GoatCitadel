@@ -144,7 +144,7 @@ export function usePermissionManagement(options: {
         try {
           await options.reload();
         } catch {
-          /* Receipt remains confirmed; render the read error separately. */
+          /* Preserve the confirmed receipt; render the read error separately. */
         }
       }
       return true;
