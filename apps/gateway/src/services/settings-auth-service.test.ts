@@ -574,9 +574,11 @@ describe("settings-auth-service durable settings", () => {
 
   it("rejects named tool profile mutations instead of reporting false success", async () => {
     const host = buildHost();
-    await expect(updateSettings(host, {
-      defaultToolProfile: "minimal",
-    } as never)).rejects.toThrow("Named tool profiles are retired");
+    await expect(
+      updateSettings(host, {
+        defaultToolProfile: "minimal",
+      } as never),
+    ).rejects.toThrow("Named tool profiles are retired");
     expect(host.persistToolPolicyConfig).not.toHaveBeenCalled();
     expect(host.persistAssistantConfig).not.toHaveBeenCalled();
   });
@@ -2650,10 +2652,10 @@ describe("settings-auth-service companion session lifecycle", () => {
       const session = await exchangeCompanionSessionFromDeviceGrant(harness.deps, grant.grantId, {
         signingPublicKeyPem: keys.publicKeyPem,
       });
-      // Bound issuance by the real clock around the call, allowing SQLite's
-      // second precision without imposing a CPU-speed limit on the fixture.
+      // Bound issuance by the real clock around the call without a CPU-speed limit.
+      // SQLite and JavaScript can round to adjacent milliseconds on Windows.
       expect(Date.parse(session.issuedAt)).toBeGreaterThanOrEqual(databaseNowBefore - 1_000);
-      expect(Date.parse(session.issuedAt)).toBeLessThanOrEqual(vi.getRealSystemTime());
+      expect(Date.parse(session.issuedAt)).toBeLessThanOrEqual(vi.getRealSystemTime() + 1);
       expect(Date.parse(session.accessTokenExpiresAt) - Date.parse(session.issuedAt)).toBe(
         COMPANION_ACCESS_TOKEN_TTL_MS,
       );
