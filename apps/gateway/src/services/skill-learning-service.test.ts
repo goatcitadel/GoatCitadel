@@ -726,6 +726,8 @@ describe("SkillLearningService HX-401", () => {
     ).toEqual([]);
   });
 
+  // Four independent migrated stores exercise the cursor, selection and both
+  // commit fences. Coverage on hosted runners can exceed the default 15s budget.
   it("binds workspace and effective config revisions independently in cursors, selections, and commit CAS", async () => {
     const cursorHarness = await createHarness();
     seedMessage(cursorHarness.storage, "session-config-cursor", "old-1", "system", "system", "system", 1);
@@ -804,7 +806,7 @@ describe("SkillLearningService HX-401", () => {
     expect(writeWorkspaceHarness.storage.governanceJourneyEvents.listPage({ workspaceId: "default" }).items).toEqual(
       [],
     );
-  });
+  }, 30_000);
 
   it("accepts production Chat operator projections through immutable auth receipts across normal auth sources", async () => {
     const harness = await createHarness();

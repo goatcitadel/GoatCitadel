@@ -5,6 +5,8 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
+import { readDurableChatTurnExecutionPayloadAuthority } from "../../../../packages/contracts/dist/index.js";
+
 import { NEXT_RELEASE_SURFACE_MANIFEST } from "../release-surface-manifest.mjs";
 import { prepareVerificationRuntime, requestJson, stopVerificationStack } from "../runtime.mjs";
 import {
@@ -22,6 +24,7 @@ import {
   retainFailedBrowserVideo,
 } from "./usability-browser-evidence.mjs";
 import { BROWSER_ACTION_BUNDLES } from "./usability-browser-action-registry.mjs";
+import { assertManagedRuntimeSaved } from "./cockpit-managed-runtime-proof.mjs";
 
 const PACKAGE_NAME = "@goatcitadel/mission-control-next";
 const OPERATOR_TOKEN = "verification-usability-browser-actions-operator-token";
@@ -37,23 +40,21 @@ const PROMPT_PACK_BENCHMARK_JUDGE_RULE_ID = "prompt-pack-benchmark-judge";
 const PROMPT_PACK_MEMORY_DISTILLER_RULE_ID = "prompt-pack-benchmark-memory-context-distillation";
 // Exact provider-visible request shape for each streamed benchmark execution of
 // the authored fixture pack, keyed by the user prompt each test sends verbatim.
-// Every execution carries the base chat system prompt, the server-owned
-// capability profile, and the memory-context system message. TEST-92
-// additionally activates governed runtime skill instructions (its prompt
-// matches trusted bundled-skill keywords), which inject one extra hash-verified
-// server-owned system message before the user prompt.
+// Profile-free Chat carries the base chat system prompt and the memory-context
+// system message before the exact authored user prompt. Preserve the role order
+// as well as the count so an unexpected injected message cannot pass this proof.
 const PROMPT_PACK_BENCHMARK_EXECUTION_SIGNATURES = Object.freeze([
   Object.freeze({
     testCode: "TEST-91",
     userContentSha256: createHash("sha256").update("Reply with exactly: PROMPT_PACK_AUTHORED_OK", "utf8").digest("hex"),
-    messageCount: 4,
+    messageCount: 3,
   }),
   Object.freeze({
     testCode: "TEST-92",
     userContentSha256: createHash("sha256")
       .update("Compare the deterministic fixture response and report the final result.", "utf8")
       .digest("hex"),
-    messageCount: 5,
+    messageCount: 3,
   }),
 ]);
 const DEV_VERIFICATION_VAULT_KEY_ENV = "GOATCITADEL_VERIFY_VAULT_KEY_BASE64";
@@ -73,7 +74,8 @@ const CODE_MODE_HELPER_REPLY = ["Deterministic governed helper:", "", "```ts", C
   "\n",
 );
 const STREAM_RELOAD_PARTIAL_TEXT = Array.from({ length: 20 }, (_, index) =>
-  `Paragraph ${index + 1}: saved.`).join("\n\n");
+  `Paragraph ${index + 1}: saved.`).join("\n\n",
+);
 const DELEGATION_OUTPUTS = Object.freeze([
   "Deterministic research handoff.",
   "Deterministic review handoff.",
@@ -139,9 +141,9 @@ export const USABILITY_BROWSER_ACTION_GATEWAY_ENV = Object.freeze({
 });
 
 export const USABILITY_LOCAL_MCP_POLICY = Object.freeze({
-  // The fixture starts GoatCitadel's own Gateway-backed stdio proxy. MCP child
-  // env remains deny-by-default; this one operator credential is explicit.
-  allowedEnvKeys: Object.freeze(["GOATCITADEL_AUTH_TOKEN"]),
+  // The isolated HTTP fixture needs no ambient credentials. Stdio environment
+  // enrollment requires OS keychain custody, which this browser runtime disables.
+  allowedEnvKeys: Object.freeze([]),
 });
 
 /**
@@ -160,7 +162,8 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
   const cockpitStreamReloadOnly = options.cockpitStreamReloadOnly === true;
   const cockpitDocumentsOnly = options.cockpitDocumentsOnly === true;
   if ([cockpitCodeModeOnly, cockpitStopOnly, cockpitErrorOnly, cockpitPersistenceOnly, cockpitInlineDecisionsOnly,
-    cockpitStreamReloadOnly, cockpitDocumentsOnly].filter(Boolean).length > 1) {
+    cockpitStreamReloadOnly, cockpitDocumentsOnly,
+    ].filter(Boolean).length > 1) {
     throw new Error("select one dedicated cockpit browser proof");
   }
   if (cockpitCodeModeOnly && (requestedBundleIds?.size !== 1 || !requestedBundleIds.has("chat-agentic-durable-code"))) {
@@ -204,8 +207,36 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
   try {
     if (needsSettingsFixture) settingsFixtureServer = await startSettingsBrowserFixtureServer();
     runtimeRoot = await prepareVerificationRuntime(`${context.runId}-browser-actions`);
+    if (requestedBundleIds === null || requestedBundleIds.has("library-catalog-memory")) {
+      const skillRoot = path.join(runtimeRoot, "skills", "extra", "usability-browser-curator-fixture");
+      await fs.mkdir(skillRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(skillRoot, "SKILL.md"),
+        "---\nname: usability-browser-curator-fixture\ndescription: Disposable verification skill for a reviewed Curator archive.\n---\n# Verification fixture\nReturn only deterministic fixture evidence.\n",
+        "utf8",
+      );
+    }
     const codeModeProject = needsChatCodeFixture ? await prepareCodeModeVerificationProject(runtimeRoot) : undefined;
     await writeDeterministicLlmProviderConfig(runtimeRoot, stub.baseUrl);
+    if (needsSettingsFixture) {
+      // Only the disposable fixture is configured for the managed editor. It
+      // must remain disabled, without auto-start, throughout the alias review.
+      const configPath = path.join(runtimeRoot, "config", "goatcitadel.json");
+      const config = JSON.parse(await fs.readFile(configPath, "utf8"));
+      config.assistant.llamaCpp = {
+        ...config.assistant.llamaCpp,
+        enabled: false,
+        autoStart: false,
+        managementMode: "managed",
+      };
+      delete config.generation;
+      await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+      await fs.writeFile(
+        path.join(runtimeRoot, "config", "assistant.config.json"),
+        `${JSON.stringify(config.assistant, null, 2)}\n`,
+        "utf8",
+      );
+    }
     stack = await deps.startVerificationStack(context, {
       runtimeRoot,
       includeUi: true,
@@ -218,7 +249,7 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
     await deps.ensureOnboardingComplete(stack.gatewayUrl, "verification-usability-browser-actions");
     const fixture = await deps.seedMissionControlNextFixture(stack.gatewayUrl, { runtimeRoot: stack.runtimeRoot });
     fixture.settings = needsSettingsFixture
-      ? await seedSettingsBrowserActionFixture(stack.gatewayUrl, settingsFixtureServer.baseUrl, fixture.workspaceId)
+      ? await seedSettingsBrowserActionFixture(stack.gatewayUrl, settingsFixtureServer.baseUrl)
       : {};
     fixture.settings.llmStubBaseUrl = stub.baseUrl;
     fixture.library = needsLibraryContentFixture
@@ -245,6 +276,7 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
         sessionId: session.sessionId,
         stack,
         stub,
+        viewport: options.viewport,
       });
       const phoneSession = await createActionSession(stack.gatewayUrl, fixture.workspaceId);
       await runBrowserActionBundle(context, {
@@ -326,14 +358,17 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
       const phoneUserInput = await createActionSession(stack.gatewayUrl, fixture.workspaceId);
       await checkedRequest(stack.gatewayUrl, "/api/v1/dev/verification/chat-approval-scenario", {
         method: "POST", body: { sessionId: phoneApproval.sessionId, workspaceId: fixture.workspaceId },
-      }, "seed phone Chat approval");
+      }, "seed phone Chat approval",
+      );
       await checkedRequest(stack.gatewayUrl, "/api/v1/dev/verification/chat-user-input-scenario", {
         method: "POST", body: { sessionId: phoneUserInput.sessionId, workspaceId: fixture.workspaceId },
-      }, "seed phone Chat user input");
+      }, "seed phone Chat user input",
+      );
       await runBrowserActionBundle(context, {
         baseSha, browser, bundleId: "cockpit-chat-inline-decisions-phone", cockpit: true, deps,
         fixture: { ...fixture, sessions: { ...fixture.sessions, approval: phoneApproval.sessionId,
-          userInput: phoneUserInput.sessionId } },
+          userInput: phoneUserInput.sessionId },
+        },
         registeredSteps, sessionId: phoneApproval.sessionId, stack, stub,
         viewport: { width: 390, height: 844 },
       });
@@ -393,6 +428,7 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
         sessionId: session.sessionId,
         stack,
         stub,
+        viewport: options.viewport,
       });
     }
   } finally {
@@ -409,6 +445,12 @@ export function adaptCodeModeStepForCockpit(sourceStep) {
     throw new Error("cockpit Code Mode proof requires the governed Chat browser step");
   }
   const operations = sourceStep.operations.flatMap((operation) => {
+    if (operation.kind === "open-code-turn-activity") return [];
+    if (operation.kind === "click" && operation.name === "Activity") return [];
+    if (operation.kind === "click" && operation.name === "Open build editor")
+      return [{ ...operation, name: "Build editor" }];
+    if (operation.kind === "click-pattern" && operation.namePattern === "Selected turn")
+      return [{ kind: "click", name: "Back to conversation", exact: true }];
     if (operation.kind === "fill" && operation.label === "Message composer") {
       return [{ ...operation, label: "Message" }];
     }
@@ -422,11 +464,11 @@ export function adaptCodeModeStepForCockpit(sourceStep) {
       return [{ kind: "return-to-cockpit-chat" }];
     }
     if (operation.kind === "click-pattern" && operation.namePattern === "Open durable run trace ") {
-      return [{ kind: "click", name: "Run details", exact: true }, { kind: "click", name: "Open durable evidence", exact: true }];
+      return [{ kind: "click", name: "Run details", exact: true }, { kind: "click", name: "Open durable evidence", exact: true },
+      ];
     }
     if (operation.kind === "assert-text" && operation.value === "Signed evidence receipt") {
-      return [operation, { kind: "click", name: "Inspect signed receipt", exact: true },
-        { kind: "assert-text", value: "OS keychain is unavailable" }];
+      return [operation];
     }
     if (operation.kind === "assert-text" && operation.value === "Timeline") {
       return [{ ...operation, value: "Run completed" }];
@@ -454,7 +496,8 @@ export function adaptStopStepForCockpit(sourceStep) {
     operations: sourceStep.operations.flatMap((operation) => {
       if (operation.kind === "fill" && operation.label === "Message composer") return [{ ...operation, label: "Message" }];
       if (operation.kind === "click" && operation.name === "Stop turn") {
-        return [{ ...operation, name: "Stop response" }, { kind: "api", probe: "chat-stop-cancelled" }];
+        return [{ ...operation, name: "Stop response" }, { kind: "api", probe: "chat-stop-cancelled" },
+        ];
       }
       if (operation.kind === "click" && operation.name === "Retry turn") return [{ ...operation, name: "Retry" }];
       if (operation.kind === "assert-text" && operation.value === DETERMINISTIC_LLM_DEFAULT_REPLY) {
@@ -498,7 +541,8 @@ export function cockpitChatPersistenceStep({ phone = false } = {}) {
       { kind: "api", probe: "chat-persistence-readback" },
       { kind: "click", name: "Conversation actions", exact: true },
       { kind: "download", name: "Export conversation", exact: true,
-        expectedFileNamePattern: "^[a-zA-Z0-9_-]+-snapshot\\.json$", contentContract: "chat-conversation-v1" },
+        expectedFileNamePattern: "^[a-zA-Z0-9_-]+-snapshot\\.json$", contentContract: "chat-conversation-v1",
+      },
       { kind: "click", name: "Conversation actions", exact: true },
       { kind: "click", name: "Archive conversation", exact: true },
       { kind: "confirm", name: "Archive" },
@@ -569,7 +613,8 @@ export function cockpitChatStreamReloadStep() {
 async function seedCockpitDocumentNote(gatewayUrl, workspaceId, target) {
   const created = await checkedRequest(gatewayUrl, "/api/v1/notes", {
     method: "POST", body: { workspaceId, title: `Cockpit ${target} document note`, body: "Original document body." },
-  }, `seed ${target} cockpit note`);
+  }, `seed ${target} cockpit note`,
+  );
   if (!created.body?.noteId || created.body.workspaceId !== workspaceId || created.body.revision !== 1) {
     throw new Error(`seeded ${target} note lacks exact Gateway identity, scope, or revision`);
   }
@@ -582,7 +627,8 @@ async function readCockpitDocumentNote(state) {
     throw new Error("cockpit document note fixture lacks exact workspace scope");
   }
   const listed = await checkedRequest(state.gatewayUrl,
-    `/api/v1/notes?workspaceId=${encodeURIComponent(expected.workspaceId)}`, {}, "cockpit note readback");
+    `/api/v1/notes?workspaceId=${encodeURIComponent(expected.workspaceId)}`, {}, "cockpit note readback",
+  );
   const matches = (listed.body?.items ?? []).filter((note) => note.noteId === expected.noteId);
   if (matches.length !== 1 || matches[0].workspaceId !== expected.workspaceId ||
       matches[0].title !== expected.title) {
@@ -593,7 +639,7 @@ async function readCockpitDocumentNote(state) {
 
 export async function pollCockpitDocumentNote(loadNote, revision, body, options = {}) {
   const deadline = Date.now() + (options.timeoutMs ?? ACTION_TIMEOUT_MS);
-  const wait = options.wait ?? (delayMs => new Promise(resolve => setTimeout(resolve, delayMs)));
+  const wait = options.wait ?? ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)));
   let note;
   do {
     note = await loadNote();
@@ -602,7 +648,8 @@ export async function pollCockpitDocumentNote(loadNote, revision, body, options 
     if (Date.now() >= deadline) break;
     await wait(options.pollIntervalMs ?? 50);
   } while (Date.now() < deadline);
-  throw new Error(`cockpit document has revision ${note?.revision} and body ${JSON.stringify(note?.body)}; expected revision ${revision}`);
+  throw new Error(`cockpit document has revision ${note?.revision} and body ${JSON.stringify(note?.body)}; expected revision ${revision}`,
+  );
 }
 
 async function proveCockpitDocumentNote(state, revision, body) {
@@ -614,7 +661,8 @@ export function cockpitChatDocumentsStep({ phone = false } = {}) {
   const noteTitle = `Cockpit ${phone ? "phone" : "desktop"} document note`;
   const openInspector = phone
     ? [{ kind: "click", name: "Conversation actions", exact: true },
-      { kind: "click", name: "Inspect conversation", exact: true }]
+      { kind: "click", name: "Inspect conversation", exact: true },
+      ]
     : [{ kind: "click", name: "Inspect", exact: true }];
   return {
     bundleId: "cockpit-chat-documents",
@@ -676,7 +724,8 @@ async function runBrowserActionBundle(context, input) {
           ? { recordVideo: {
             dir: path.join(context.artifactRoot, "playwright"),
             size: input.viewport ?? { width: 1440, height: 1024 },
-          } }
+          },
+            }
           : {}),
       });
       await input.deps.installMissionControlNextBrowserState(
@@ -836,7 +885,8 @@ export function filterExpectedBrowserConsoleMessages(snapshot, browserActionStep
     .flatMap((step) => step.operatorActions ?? [])
     .filter((action) => action.kind === "browser-mutation-rejection" &&
       action.probe === "cockpit-document-stale-save" && action.status === 409 &&
-      action.method === "PATCH" && /^\/api\/v1\/notes\/[^/]+$/u.test(action.requestPath ?? ""));
+      action.method === "PATCH" && /^\/api\/v1\/notes\/[^/]+$/u.test(action.requestPath ?? ""),
+    );
   const expectedConflictCount = expectedProbeConflictCount + expectedBrowserConflicts.length;
   let remainingExpected = expectedConflictCount;
   let acknowledgedRevisionConflictCount = 0;
@@ -850,19 +900,63 @@ export function filterExpectedBrowserConsoleMessages(snapshot, browserActionStep
   });
 
   const keychainUnavailableShown = browserActionSteps.some((step) =>
-    step.stepId === "cockpit.chat.code-mode-artifacts" &&
+      ["cockpit.chat.code-mode-artifacts", "route.chat.code-mode-artifacts"].includes(step.stepId) &&
+      step.status === "passed" &&
     step.operatorActions?.some((action) => action.kind === "terminal-ui-readback" &&
-      action.value === "OS keychain is unavailable"));
+      action.value === "OS keychain is unavailable",
+      ),
+  );
   const receiptFailures = (snapshot.networkRecords ?? []).filter((record) =>
     record.kind === "response" && record.method === "POST" && record.status === 503 &&
-    /^\/api\/v1\/runs\/[^/]+\/evidence-receipt$/u.test(record.path ?? ""));
+    /^\/api\/v1\/runs\/[^/]+\/evidence-receipt$/u.test(record.path ?? ""),
+  );
   const receiptConsoleErrors = consoleMessages.filter((message) => message.type === "error" &&
-    message.text === "Failed to load resource: the server responded with a status of 503 (Service Unavailable)");
+    message.text === "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  );
   const acknowledgeReceiptUnavailable = keychainUnavailableShown &&
     receiptFailures.length === 1 && receiptConsoleErrors.length === 1;
   if (acknowledgeReceiptUnavailable) {
     consoleMessages = consoleMessages.filter((message) => message !== receiptConsoleErrors[0]);
   }
+
+  const cancellation = browserActionSteps
+    .flatMap((step) =>
+      step.status === "passed" && step.stepId === "route.ops-schedules.schedule-create-list-cancel-and-run"
+        ? (step.operatorActions ?? [])
+        : [],
+    )
+    .filter(
+      (action) =>
+        action.kind === "canonical-api-probe" &&
+        action.probe === "schedule-cancellation-readback" &&
+        action.status === 200 &&
+        /^manual-usability-browser-schedule-[a-z0-9]+$/u.test(action.jobId ?? ""),
+    );
+  const cancelledPath =
+    cancellation.length === 1 ? `/api/v1/cron/jobs/${encodeURIComponent(cancellation[0].jobId)}` : undefined;
+  const cancelledReads = (snapshot.networkRecords ?? []).filter(
+    (record) =>
+      record.kind === "response" && record.method === "GET" && record.status === 404 && record.path === cancelledPath,
+  );
+  const cancelledDeletes = (snapshot.networkRecords ?? []).filter(
+    (record) =>
+      record.kind === "response" &&
+      record.method === "DELETE" &&
+      record.status === 200 &&
+      record.path === cancelledPath,
+  );
+  const notFoundErrors = consoleMessages.filter(
+    (message) =>
+      message.type === "error" &&
+      message.text === "Failed to load resource: the server responded with a status of 404 (Not Found)",
+  );
+  const acknowledgeScheduleAbsence =
+    cancelledPath !== undefined &&
+    cancelledReads.length === 1 &&
+    cancelledDeletes.length === 1 &&
+    cancelledDeletes[0].sequence < cancelledReads[0].sequence &&
+    notFoundErrors.length === 1;
+  if (acknowledgeScheduleAbsence) consoleMessages = consoleMessages.filter((message) => message !== notFoundErrors[0]);
 
   const sseRecovery =
     options.sseRecovery ??
@@ -884,10 +978,12 @@ export function filterExpectedBrowserConsoleMessages(snapshot, browserActionStep
   const acknowledgedReceiptUnavailableCount = acknowledgeReceiptUnavailable ? 1 : 0;
   return {
     snapshot: { ...snapshot, consoleMessages },
-    acknowledgedCount: acknowledgedRevisionConflictCount + acknowledgedSseRecoveryCount + acknowledgedReceiptUnavailableCount,
+    acknowledgedCount: acknowledgedRevisionConflictCount + acknowledgedSseRecoveryCount + acknowledgedReceiptUnavailableCount +
+      (acknowledgeScheduleAbsence ? 1 : 0),
     acknowledgedRevisionConflictCount,
     acknowledgedSseRecoveryCount,
     acknowledgedReceiptUnavailableCount,
+    acknowledgedScheduleAbsenceCount: acknowledgeScheduleAbsence ? 1 : 0,
     sseRecovery,
   };
 }
@@ -1351,6 +1447,7 @@ function emptyBrowserConsoleEvidence() {
   return {
     acknowledgedCount: 0,
     acknowledgedRevisionConflictCount: 0,
+    acknowledgedScheduleAbsenceCount: 0,
     acknowledgedSseRecoveryCount: 0,
     eventStreamRequestFailureCount: 0,
     eventStreamResponseCount: 0,
@@ -1367,6 +1464,7 @@ function buildBrowserConsoleEvidence(filteredConsole, snapshot, clientSseDiagnos
   return {
     acknowledgedCount: filteredConsole.acknowledgedCount,
     acknowledgedRevisionConflictCount: filteredConsole.acknowledgedRevisionConflictCount,
+    acknowledgedScheduleAbsenceCount: filteredConsole.acknowledgedScheduleAbsenceCount,
     acknowledgedSseRecoveryCount: filteredConsole.acknowledgedSseRecoveryCount,
     eventStreamRequestFailureCount: (snapshot.eventStreamRequestFailures ?? []).length,
     eventStreamResponseCount: (snapshot.eventStreamResponses ?? []).length,
@@ -1432,12 +1530,20 @@ async function executeBrowserActionStep(input) {
 
 async function executeOperation(page, operation, state) {
   switch (operation.kind) {
-    case "click": {
-      const locator = await interactiveLocator(page, operation.name, operation.exact === true);
+    case "click":
+    case "confirm": {
+      const locator =
+        operation.kind === "confirm"
+          ? await firstVisibleLocator(
+              page,
+              page.getByRole("dialog").last().getByRole("button", { name: operation.name, exact: true }),
+              `modal confirmation control not found: ${operation.name}`,
+            )
+          : await interactiveLocator(page, operation.name, operation.exact === true);
       const capture = operation.captureJsonResponse;
       if (!capture) {
         await locator.click();
-        return { kind: "click", accessibleName: operation.name };
+        return { kind: operation.kind, accessibleName: operation.name };
       }
       const pathPattern = compileBrowserEvidencePattern(capture.pathPattern, "captured response path");
       const matchesResponse = (candidate) => {
@@ -1480,7 +1586,7 @@ async function executeOperation(page, operation, state) {
           { cause: error },
         );
       }
-      const value = payload?.[capture.field];
+      const value = (capture.fieldPath ?? [capture.field]).reduce((item, field) => item?.[field], payload);
       const valuePattern = compileBrowserEvidencePattern(capture.valuePattern, "captured response value");
       if (typeof value !== "string" || !valuePattern.test(value)) {
         page.off("response", responseListener);
@@ -1517,7 +1623,7 @@ async function executeOperation(page, operation, state) {
         dispose: () => page.off("response", responseListener),
       };
       return {
-        kind: "click",
+        kind: operation.kind,
         accessibleName: operation.name,
         capturedResponse: { status: response.status(), field: capture.field, value, requestPath, requestBody },
       };
@@ -1527,11 +1633,47 @@ async function executeOperation(page, operation, state) {
       await locator.click();
       return { kind: "click", accessibleNamePattern: operation.namePattern };
     }
+    case "revoke-created-tool-grant": {
+      const captured = state.capturedJsonResponses?.createdToolGrant;
+      const grants = await checkedRequest(
+        state.gatewayUrl,
+        "/api/v1/tools/grants?limit=400",
+        {},
+        "read exact created tool grant",
+      );
+      const grant = validateCreatedToolGrant(
+        captured,
+        grants.body?.items,
+        state.fixture.workspaceId,
+        operation.toolPattern,
+      );
+      state.createdToolGrant = structuredClone(grant);
+      const description = `${grant.scope}:${grant.scopeRef} · ${grant.decision} · ${grant.grantType}`;
+      const row = page
+        .locator(".mc-next-settings-action-row")
+        .filter({ has: page.getByText(grant.toolPattern, { exact: true }) })
+        .filter({ has: page.getByText(description, { exact: true }) });
+      await row.waitFor({ state: "visible", timeout: ACTION_TIMEOUT_MS });
+      if ((await row.count()) !== 1) throw new Error("Created tool grant has no unique visible review row");
+      await row.getByRole("button", { name: "Revoke", exact: true }).click();
+      return { kind: "click", accessibleName: "Revoke exact created tool grant", grantId: grant.grantId };
+    }
+    case "open-code-turn-activity": {
+      const runId = requireText(state.fixture.codeMode?.chatTurn?.runId, "exact Code Mode Chat run");
+      const name = `Open durable run trace ${runId}`;
+      const trace = page.getByRole("button", { name, exact: true, includeHidden: true });
+      if ((await trace.count()) !== 1) throw new Error("Code Mode turn has no unique exact durable trace control");
+      const details = trace.locator("xpath=ancestor::details[1]");
+      if ((await details.count()) !== 1) throw new Error("Code Mode trace is not inside its turn Activity disclosure");
+      if ((await details.getAttribute("open")) === null) await details.locator("summary").click();
+      return { kind: "click", accessibleName: `Activity for exact Code Mode Chat run ${runId}` };
+    }
     case "click-inspector": {
       const inspector = page.getByLabel("Inspector: Conversation", { exact: true });
       const locator = await firstVisibleLocator(page,
         inspector.getByRole("button", { name: operation.name, exact: true }),
-        `inspector control not found: ${operation.name}`);
+        `inspector control not found: ${operation.name}`,
+      );
       if (operation.expectStaleNoteConflict) {
         const note = state.fixture.cockpitDocumentNote;
         if (!note?.noteId || note.workspaceId !== state.fixture.workspaceId) {
@@ -1540,7 +1682,8 @@ async function executeOperation(page, operation, state) {
         const requestPath = `/api/v1/notes/${encodeURIComponent(note.noteId)}`;
         const [response] = await Promise.all([
           page.waitForResponse((candidate) => candidate.request().method() === "PATCH" &&
-            new URL(candidate.url()).pathname === requestPath, { timeout: ACTION_TIMEOUT_MS }),
+            new URL(candidate.url()).pathname === requestPath, { timeout: ACTION_TIMEOUT_MS },
+          ),
           locator.click(),
         ]);
         const requestBody = response.request().postDataJSON();
@@ -1550,7 +1693,8 @@ async function executeOperation(page, operation, state) {
           throw new Error("browser stale note save did not receive the exact revision-2 Gateway rejection");
         }
         return { kind: "browser-mutation-rejection", probe: "cockpit-document-stale-save",
-          status: response.status(), method: "PATCH", requestPath };
+          status: response.status(), method: "PATCH", requestPath,
+        };
       }
       await locator.click();
       return { kind: "click", scope: "conversation-inspector", accessibleName: operation.name };
@@ -1578,23 +1722,13 @@ async function executeOperation(page, operation, state) {
       }
       throw new Error(`interactive control did not become enabled: ${operation.name}`);
     }
-    case "confirm": {
-      const dialog = page.getByRole("dialog").last();
-      const locator = await firstVisibleLocator(
-        page,
-        dialog.getByRole("button", { name: operation.name, exact: true }),
-        `modal confirmation control not found: ${operation.name}`,
-      );
-      await locator.click();
-      return { kind: "confirm", accessibleName: operation.name };
-    }
     case "fill": {
       const locator = await editableLocator(page, operation.label);
       await locator.fill(operation.value);
       return { kind: "fill", accessibleName: operation.label, value: redactFixtureValue(operation.value) };
     }
     case "select": {
-      const locator = await editableLocator(page, operation.label);
+      const locator = await editableLocator(page, operation.label, { role: "combobox" });
       const options = await locator
         .locator("option")
         .evaluateAll((nodes) =>
@@ -1647,7 +1781,8 @@ async function executeOperation(page, operation, state) {
     case "pending-approval": {
       if (!Number.isInteger(operation.index) || operation.index < 0 || operation.index > 1)
         throw new Error("pending approval selection requires an exact baseline index");
-      const approvalId = requireText(Object.keys(state.approvalDecisionBaseline ?? {})[operation.index], "pending approval identity");
+      const approvalId = requireText(Object.keys(state.approvalDecisionBaseline ?? {})[operation.index], "pending approval identity",
+      );
       const params = new URLSearchParams({ theme: "dark", approvalId });
       await page.goto(state.deps.buildVerificationUiUrl(state.uiUrl, `/ops/approvals?${params.toString()}`), {
         waitUntil: "domcontentloaded",
@@ -1807,8 +1942,10 @@ async function executeOperation(page, operation, state) {
           tag: node.tagName, classes: node.className, parentTag: node.parentElement?.tagName,
           parentClasses: node.parentElement?.className, grandparentTag: node.parentElement?.parentElement?.tagName,
           grandparentClasses: node.parentElement?.parentElement?.className,
-        })));
-        throw new Error(`Chat failure repeated or lost recovery actions: messages=${messageCopies}, badges=${failedBadges}, retry=${retryControls}, run=${runControls}, alerts=${duplicateAlerts}, owners=${JSON.stringify(owners)}`);
+        })),
+        );
+        throw new Error(`Chat failure repeated or lost recovery actions: messages=${messageCopies}, badges=${failedBadges}, retry=${retryControls}, run=${runControls}, alerts=${duplicateAlerts}, owners=${JSON.stringify(owners)}`,
+        );
       }
       if (await turn.getByRole("button", { name: "Save answer", exact: true }).count()) {
         throw new Error("failed answer still offers artifact saving");
@@ -2005,7 +2142,8 @@ function validateBrowserDownloadContentContract(operation, buffer, context) {
         turn?.trace?.sessionId === correlation.sessionId && turn?.trace?.durable?.runId === correlation.runId &&
         turn?.trace?.status === "completed" &&
         turn?.userMessage?.content === "Persist this deterministic cockpit conversation." &&
-        turn?.assistantMessage?.content === DETERMINISTIC_LLM_DEFAULT_REPLY);
+        turn?.assistantMessage?.content === DETERMINISTIC_LLM_DEFAULT_REPLY,
+      );
       if (matches.length !== 1) throw new Error("browser Chat snapshot lost or changed the exact completed durable turn");
       return;
     }
@@ -2054,7 +2192,7 @@ function validateBrowserDownloadContentContract(operation, buffer, context) {
         !isJsonObject(payload.sourceStatus.health) ||
         (payload.sourceStatus.health.status !== "ok" && payload.sourceStatus.health.status !== "error") ||
         Object.values(payload.sourceStatus).some(
-          (entry) => !isJsonObject(entry) || (entry.status !== "ok" && entry.status !== "error"),
+          (entry) => !isJsonObject(entry) || !["ok", "error", "not_requested"].includes(entry.status),
         ) ||
         !Array.isArray(payload.daemonLogs) ||
         !Array.isArray(payload.daemonDiagnostics)
@@ -2259,8 +2397,10 @@ async function apiProbe(probe, state) {
       }
       const updated = await checkedRequest(state.gatewayUrl, `/api/v1/notes/${encodeURIComponent(note.noteId)}`, {
         method: "PATCH", body: { workspaceId: state.fixture.workspaceId, expectedRevision: note.revision,
-          body: "Concurrent Gateway update." },
-      }, "cockpit document concurrent edit");
+          body: "Concurrent Gateway update.",
+          },
+      }, "cockpit document concurrent edit",
+      );
       if (updated.body?.revision !== 3 || updated.body?.body !== "Concurrent Gateway update.") {
         throw new Error("concurrent Gateway edit did not advance the exact note to revision 3");
       }
@@ -2283,7 +2423,8 @@ async function apiProbe(probe, state) {
         userContent: "Keep this deterministic response visible after reload.", status: "running",
       });
       state.fixture.streamReloadCorrelation = { runId: running.runId, turnId: running.turnId,
-        sessionId: running.sessionId };
+        sessionId: running.sessionId,
+      };
       return running;
     }
     case "chat-stream-persisted-prefix": {
@@ -2297,7 +2438,8 @@ async function apiProbe(probe, state) {
         const path = `/api/v1/chat/sessions/${encodeURIComponent(expected.sessionId)}/turns/${encodeURIComponent(expected.turnId)}/stream`;
         const response = await fetch(`${state.gatewayUrl}${path}`, withOperatorAuth({
           signal: controller.signal, headers: { Accept: "text/event-stream" },
-        }));
+        }),
+        );
         if (!response.ok || !response.body) throw new Error(`retained stream returned ${response.status}`);
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -2314,7 +2456,8 @@ async function apiProbe(probe, state) {
               const chunk = JSON.parse(data.slice(6));
               chunkTypes.push(chunk.type);
               if (chunk.type === "delta" && typeof chunk.delta === "string" && chunk.delta.length > 0) {
-                return { status: response.status, outcome: `retained stream includes ${chunk.delta.length} safe text characters after ${chunkTypes.length} events` };
+                return { status: response.status, outcome: `retained stream includes ${chunk.delta.length} safe text characters after ${chunkTypes.length} events`,
+                };
               }
             }
             boundary = buffered.search(/\r?\n\r?\n/u);
@@ -2341,7 +2484,8 @@ async function apiProbe(probe, state) {
       if (dispatches !== state.fixture.streamReloadDispatchStart + 1) {
         throw new Error(`reload redispatched the provider stream: ${dispatches} requests`);
       }
-      return { status: running.status, outcome: `exact running turn ${running.turnId} and durable run ${running.runId} retained after reload without redispatch` };
+      return { status: running.status, outcome: `exact running turn ${running.turnId} and durable run ${running.runId} retained after reload without redispatch`,
+      };
     }
     case "chat-stream-cancelled": {
       const expected = state.fixture.streamReloadCorrelation;
@@ -2360,7 +2504,8 @@ async function apiProbe(probe, state) {
       }
       state.stub.replaceDispatchPlan(Array.from({ length: 12 }, () => ({
         type: "provider_error", code: "synthetic_provider_failure", message: "Synthetic provider failure.",
-      })));
+      })),
+      );
       return { status: 200, outcome: "provider completion armed to return a deterministic in-band failure" };
     }
     case "chat-error-failed":
@@ -2401,18 +2546,22 @@ async function apiProbe(probe, state) {
       const expected = state.fixture.persistenceCorrelation;
       if (!expected || expected.sessionId !== state.sessionId) throw new Error("Chat persistence proof has no exact original turn");
       const response = await checkedRequest(state.gatewayUrl,
-        `/api/v1/chat/sessions/${encodeURIComponent(state.sessionId)}/thread?includeDecisionTrace=true`, {}, probe);
+        `/api/v1/chat/sessions/${encodeURIComponent(state.sessionId)}/thread?includeDecisionTrace=true`, {}, probe,
+      );
       const matches = (Array.isArray(response.body?.turns) ? response.body.turns : []).filter((turn) =>
         turn?.turnId === expected.turnId && turn?.trace?.sessionId === expected.sessionId &&
         turn?.trace?.durable?.runId === expected.runId && turn?.trace?.status === "completed" &&
         turn?.userMessage?.content === "Persist this deterministic cockpit conversation." &&
-        turn?.assistantMessage?.content === DETERMINISTIC_LLM_DEFAULT_REPLY);
+        turn?.assistantMessage?.content === DETERMINISTIC_LLM_DEFAULT_REPLY,
+      );
       if (matches.length !== 1) throw new Error("Chat reload did not preserve the exact completed turn");
       const run = await checkedRequest(state.gatewayUrl,
-        `/api/v1/durable/runs/${encodeURIComponent(expected.runId)}`, {}, probe);
+        `/api/v1/durable/runs/${encodeURIComponent(expected.runId)}`, {}, probe,
+      );
       validateDurableRunCorrelation(run.body, expected);
       if (run.body?.status !== "completed") throw new Error("Chat reload's exact durable run is not completed");
-      return { status: response.status, outcome: `reloaded exact Chat turn ${expected.turnId} and durable run ${expected.runId}` };
+      return { status: response.status, outcome: `reloaded exact Chat turn ${expected.turnId} and durable run ${expected.runId}`,
+      };
     }
     case "chat-persistence-archived":
       return await waitForExactChatSessionView(state, "archived");
@@ -2487,7 +2636,9 @@ async function apiProbe(probe, state) {
       };
     }
     case "planning-turn-completed":
-      return await waitForExactCompletedChatTurn(state, "Plan this deterministic usability turn.");
+      return await waitForExactCompletedChatTurn(state, "Plan this deterministic usability turn.", (turn) =>
+        validateCanonicalPlanningTurn(turn, state.sessionId, "Plan this deterministic usability turn."),
+      );
     case "delegate-suggest-accept": {
       const objective = "Produce two independent deterministic analyses and synthesize both.";
       const parentThread = await checkedRequest(
@@ -2629,21 +2780,68 @@ async function apiProbe(probe, state) {
         outcome: `delegation ${delegationRunId} completed three verified child runs with two-way fan-in and synthesized parent evidence`,
       };
     }
+    case "blocker-authority-baseline": {
+      state.fixture.blockerActors = {};
+      for (const [key, status] of [
+        ["approval", "waiting_for_approval"],
+        ["userInput", "waiting_for_user_input"],
+      ]) {
+        const sessionId = requireText(state.fixture.sessions?.[key], `${key} fixture session`);
+        const thread = await checkedRequest(
+          state.gatewayUrl,
+          `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread?includeDecisionTrace=true`,
+          {},
+          probe,
+        );
+        const pending = (thread.body?.turns ?? []).filter(
+          (turn) => turn.trace?.status === status && turn.trace?.sessionId === sessionId,
+        );
+        if (pending.length !== 1) throw new Error(`blocker baseline requires one exact ${status} turn`);
+        const runId = requireText(pending[0].trace?.durable?.runId, "waiting blocker run ID");
+        const run = await checkedRequest(
+          state.gatewayUrl,
+          `/api/v1/durable/runs/${encodeURIComponent(runId)}`,
+          {},
+          probe,
+        );
+        validateDurableRunCorrelation(run.body, { runId, sessionId, turnId: pending[0].turnId });
+        const actor = run.body?.payload?.requestActor;
+        const expectedId =
+          actor?.authActorSource === "loopback"
+            ? "loopback:127.0.0.1"
+            : `token:${createHash("sha256").update(OPERATOR_TOKEN).digest("hex").slice(0, 16)}`;
+        if (
+          actor?.actorKind !== "operator" ||
+          actor.actorId !== expectedId ||
+          actor.operatorId !== expectedId ||
+          actor.authActorId !== expectedId ||
+          !["loopback", "token"].includes(actor.authActorSource)
+        )
+          throw new Error(`blocker fixture has a different admitted operator: ${JSON.stringify(actor)}`);
+        state.fixture.blockerActors[key] = { ...actor };
+      }
+      return { status: 200, outcome: "captured exact admitted fixture operators before either blocker was resolved" };
+    }
+    case "inline-approval-settled":
     case "cockpit-inline-approval-settled": {
       const approvalSessionId = requireText(state.fixture.sessions?.approval, "approval fixture session");
       const resolved = await pollResolvedBlockerEvidence(async () => {
         const [approvals, thread] = await Promise.all([
           checkedRequest(state.gatewayUrl, "/api/v1/approvals?limit=100", {}, probe),
           checkedRequest(state.gatewayUrl,
-            `/api/v1/chat/sessions/${encodeURIComponent(approvalSessionId)}/thread?includeDecisionTrace=true`, {}, probe),
+            `/api/v1/chat/sessions/${encodeURIComponent(approvalSessionId)}/thread?includeDecisionTrace=true`, {}, probe,
+            ),
         ]);
         return { approvalSessionId, approvals: approvals.body?.items, approvalTurns: thread.body?.turns };
-      }, { validateSnapshot: validateResolvedApprovalEvidence });
-      const turn = resolved.snapshot.approvalTurns.find(item => item.turnId === resolved.evidence.approvalTurnId);
+      }, { validateSnapshot: validateResolvedApprovalEvidence },
+      );
+      const turn = resolved.snapshot.approvalTurns.find((item) => item.turnId === resolved.evidence.approvalTurnId);
       const runId = requireText(turn.trace.durable.runId, "approval blocker durable run ID");
-      const run = await checkedRequest(state.gatewayUrl, `/api/v1/durable/runs/${encodeURIComponent(runId)}`, {}, probe);
+      const run = await checkedRequest(state.gatewayUrl, `/api/v1/durable/runs/${encodeURIComponent(runId)}`, {}, probe,
+      );
       validateDurableRunCorrelation(run.body, { runId, sessionId: approvalSessionId, turnId: turn.turnId });
-      return { status: 200, outcome: `exact approval ${resolved.evidence.approvalId} and bound durable turn settled before leaving its conversation` };
+      return { status: 200, outcome: `exact approval ${resolved.evidence.approvalId} and bound durable turn settled before leaving its conversation`,
+      };
     }
     case "cockpit-inline-decisions": {
       const approvalSessionId = requireText(state.fixture.sessions?.approval, "approval fixture session");
@@ -2652,9 +2850,11 @@ async function apiProbe(probe, state) {
         const [approvals, approvalThread, userInputThread] = await Promise.all([
           checkedRequest(state.gatewayUrl, "/api/v1/approvals?limit=100", {}, probe),
           checkedRequest(state.gatewayUrl,
-            `/api/v1/chat/sessions/${encodeURIComponent(approvalSessionId)}/thread?includeDecisionTrace=true`, {}, probe),
+            `/api/v1/chat/sessions/${encodeURIComponent(approvalSessionId)}/thread?includeDecisionTrace=true`, {}, probe,
+          ),
           checkedRequest(state.gatewayUrl,
-            `/api/v1/chat/sessions/${encodeURIComponent(userInputSessionId)}/thread?includeDecisionTrace=true`, {}, probe),
+            `/api/v1/chat/sessions/${encodeURIComponent(userInputSessionId)}/thread?includeDecisionTrace=true`, {}, probe,
+          ),
         ]);
         return {
           status: approvals.status,
@@ -2672,7 +2872,8 @@ async function apiProbe(probe, state) {
       const [approvalRun, userInputRun] = await Promise.all([
         checkedRequest(state.gatewayUrl, `/api/v1/durable/runs/${encodeURIComponent(approvalRunId)}`, {}, probe),
         checkedRequest(state.gatewayUrl,
-          `/api/v1/durable/runs/${encodeURIComponent(resolved.evidence.userInputRunId)}`, {}, probe),
+          `/api/v1/durable/runs/${encodeURIComponent(resolved.evidence.userInputRunId)}`, {}, probe,
+        ),
       ]);
       validateDurableRunCorrelation(approvalRun.body, {
         runId: approvalRunId, sessionId: approvalSessionId, turnId: resolved.evidence.approvalTurnId,
@@ -2754,14 +2955,14 @@ async function apiProbe(probe, state) {
         sessionId: userInputSessionId,
         turnId: evidence.userInputTurnId,
       });
-      validateResolvedBlockerCapabilityProfile(approvalProfile.body, {
-        requestActor: approvalRun.body?.payload?.requestActor,
+      validateResolvedBlockerAuthority(approvalProfile.body, approvalRun.body, {
+        requestActor: state.fixture.blockerActors?.approval,
         sessionId: approvalSessionId,
         turn: approvalTurn,
         workspaceId: state.fixture.workspaceId,
       });
-      validateResolvedBlockerCapabilityProfile(userInputProfile.body, {
-        requestActor: userInputRun.body?.payload?.requestActor,
+      validateResolvedBlockerAuthority(userInputProfile.body, userInputRun.body, {
+        requestActor: state.fixture.blockerActors?.userInput,
         sessionId: userInputSessionId,
         turn: userInputTurn,
         workspaceId: state.fixture.workspaceId,
@@ -2769,8 +2970,216 @@ async function apiProbe(probe, state) {
       validateSelectedUserInputResponse(userInputRun.body?.payload?.userInputResponses);
       return {
         status: resolved.snapshot.status,
-        outcome: "approval and user-input blockers resolved with exact actor-bound capability profiles",
+        outcome: "approval and user-input blockers resolved with exact operator-bound durable admission authority",
       };
+    }
+    case "seed-active-background-child": {
+      const parent = state.fixture.durableWatcher?.parent;
+      if (!parent || parent.sessionId !== state.sessionId)
+        throw new Error("active watcher fixture requires the exact completed planning parent");
+      const session = await createActionSession(state.gatewayUrl, state.fixture.workspaceId);
+      const seeded = await checkedRequest(
+        state.gatewayUrl,
+        "/api/v1/dev/verification/chat-user-input-scenario",
+        {
+          method: "POST",
+          body: { sessionId: session.sessionId, workspaceId: state.fixture.workspaceId },
+        },
+        probe,
+      );
+      const child = {
+        runId: requireText(seeded.body?.chatTurnDurableRunId, "waiting child run"),
+        sessionId: session.sessionId,
+        turnId: requireText(seeded.body?.turnId, "waiting child turn"),
+      };
+      const run = await checkedRequest(
+        state.gatewayUrl,
+        `/api/v1/durable/runs/${encodeURIComponent(child.runId)}`,
+        {},
+        probe,
+      );
+      validateDurableRunCorrelation(run.body, child);
+      if (run.body.status !== "waiting") throw new Error("background fixture child is not durably waiting");
+      const watcher = await checkedRequest(
+        state.gatewayUrl,
+        `/api/v1/durable/runs/${encodeURIComponent(parent.runId)}/children/${encodeURIComponent(child.runId)}/watch`,
+        {
+          method: "POST",
+          body: {
+            source: "verification_browser",
+            metadata: {
+              childSessionId: child.sessionId,
+              childTurnId: child.turnId,
+              label: "Verification live background task",
+            },
+          },
+        },
+        probe,
+      );
+      state.fixture.durableWatcher = {
+        parent,
+        child,
+        watcherId: requireText(watcher.body?.watcherId, "waiting child watcher"),
+      };
+      return {
+        status: watcher.status,
+        outcome: `attached exact waiting child ${child.runId} to planning parent ${parent.runId}`,
+      };
+    }
+    case "channel-draft-baseline": {
+      const draftId = requireText(state.fixture.settings?.channelDraftId, "fixture channel draft");
+      const draft = await checkedRequest(
+        state.gatewayUrl,
+        `/api/v1/channels/drafts/${encodeURIComponent(draftId)}`,
+        {},
+        probe,
+      );
+      if (
+        draft.body?.draftId !== draftId ||
+        draft.body.label !== "Verification sandbox channel" ||
+        draft.body.catalogId !== "channel.ntfy" ||
+        !Number.isSafeInteger(draft.body.revision)
+      )
+        throw new Error("channel review does not identify the exact fixture draft");
+      state.channelDraftBefore = draft.body;
+      return { status: draft.status, outcome: `reviewed fixture draft ${draftId} revision ${draft.body.revision}` };
+    }
+    case "channel-plan-bound":
+    case "channel-plan-approve":
+    case "channel-plan-finalize-settle": {
+      const captured = state.capturedJsonResponses?.channelPlan;
+      const before = state.channelDraftBefore;
+      if (
+        !captured ||
+        !before ||
+        captured.matchingResponses.length !== 1 ||
+        captured.requestBody?.workspaceId !== state.fixture.workspaceId ||
+        captured.requestBody?.surface !== "settings" ||
+        !isDeepStrictEqual(captured.requestBody.request, {
+          kind: "channel_connection",
+          channelKind: "channel.ntfy",
+          draftId: before.draftId,
+        })
+      )
+        throw new Error("channel Change Plan was not created from the exact reviewed fixture draft");
+      const readPlan = async () =>
+        (
+          await checkedRequest(
+            state.gatewayUrl,
+            `/api/v1/change-plans/${encodeURIComponent(captured.value)}?workspaceId=${encodeURIComponent(state.fixture.workspaceId)}`,
+            {},
+            probe,
+          )
+        ).body;
+      let plan = await readPlan();
+      const assertPlan = () => {
+        if (
+          plan.planId !== captured.value ||
+          plan.kind !== "channel_connection" ||
+          plan.origin.workspaceId !== state.fixture.workspaceId ||
+          plan.origin.surface !== "settings" ||
+          plan.target.ownerId !== "channel_setup_draft" ||
+          plan.target.resourceId !== before.draftId ||
+          !isDeepStrictEqual(plan.request, captured.requestBody.request)
+        )
+          throw new Error("channel plan lost its exact draft, kind or workspace owner binding");
+      };
+      assertPlan();
+      if (probe === "channel-plan-bound") {
+        if (
+          plan.target.expectedRevision !== before.revision ||
+          plan.status !== "awaiting_input" ||
+          plan.requiredAction?.kind !== "public_form"
+        )
+          throw new Error("channel handoff did not preserve the exact reviewed revision and public form gate");
+        return { status: 200, outcome: `exact channel plan ${plan.planId} awaits field review` };
+      }
+      if (probe === "channel-plan-approve") {
+        if (
+          plan.status !== "awaiting_approval" ||
+          plan.requiredAction?.kind !== "approval" ||
+          !plan.requiredAction.approvalId ||
+          plan.target.expectedRevision <= before.revision
+        )
+          throw new Error("channel confirmation did not enter its required approval gate after reviewed fields");
+        const approvalId = plan.requiredAction.approvalId;
+        const resolved = await checkedRequest(
+          state.gatewayUrl,
+          `/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`,
+          {
+            method: "POST",
+            body: {
+              decision: "approve",
+              resolutionNote: "Approve only the reviewed loopback verification channel fixture.",
+            },
+          },
+          probe,
+        );
+        if (resolved.body?.approval?.approvalId !== approvalId || resolved.body?.approval?.status !== "approved")
+          throw new Error("channel approval resolved a different owner or decision");
+        state.channelApprovalId = approvalId;
+        return {
+          status: resolved.status,
+          outcome: `approved exact channel gate ${approvalId}; Chat must resume its bound plan`,
+        };
+      }
+      if (!state.channelApprovalId || !plan.approvalRefs.includes(state.channelApprovalId))
+        throw new Error("channel resume lost its exact approved gate");
+      for (let attempt = 0; attempt < 100 && plan.status !== "completed"; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        plan = await readPlan();
+        assertPlan();
+        if (["failed", "manual_required", "cancelled"].includes(plan.status)) break;
+      }
+      const connectionRefs = plan.evidenceRefs?.filter((ref) => ref.startsWith("channel-connection:")) ?? [];
+      if (
+        plan.status !== "completed" ||
+        connectionRefs.length !== 1 ||
+        !plan.evidenceRefs.some((ref) => ref.startsWith(`channel-test:${before.draftId}:`))
+      )
+        throw new Error(`channel finalization has no completed live-test and connection evidence: ${plan.status}`);
+      const connectionId = connectionRefs[0].slice("channel-connection:".length);
+      const connection = await checkedRequest(
+        state.gatewayUrl,
+        `/api/v1/integrations/connections/${encodeURIComponent(connectionId)}`,
+        {},
+        probe,
+      );
+      if (
+        connection.body?.connectionId !== connectionId ||
+        connection.body.label !== before.label ||
+        connection.body.status !== "connected" ||
+        connection.body.enabled !== before.enabled
+      )
+        throw new Error("channel canonical readback differs from the approved fixture connection");
+      captured.dispose();
+      return {
+        status: connection.status,
+        outcome: `reviewed channel plan ${plan.planId} approved, live-tested and verified connection ${connectionId}`,
+      };
+    }
+    case "durable-watcher-detached": {
+      const expected = state.fixture.durableWatcher;
+      if (!expected) throw new Error("detached watcher fixture is absent");
+      const rail = await checkedRequest(
+        state.gatewayUrl,
+        durableBackgroundTaskRailRoute(expected.parent.runId, state.fixture.workspaceId, state.sessionId),
+        {},
+        probe,
+      );
+      const tasks = rail.body?.tasks?.filter(
+        (task) => task.watcherId === expected.watcherId && task.childRunId === expected.child.runId,
+      );
+      if (
+        tasks?.length !== 1 ||
+        tasks[0].watcherState !== "detached" ||
+        tasks[0].canonicalStatus !== "waiting" ||
+        tasks[0].attention.state !== "background" ||
+        !tasks[0].scope.verified
+      )
+        throw new Error("background control did not detach the exact waiting, scope-verified child");
+      validateDurableTaskLinks(tasks[0], expected.child);
+      return { status: rail.status, outcome: `exact waiting watcher ${expected.watcherId} continued in background` };
     }
     case "durable-run-read": {
       const thread = await checkedRequest(
@@ -3393,6 +3802,39 @@ async function apiProbe(probe, state) {
       return await proveNoteRevisionConflict(state.gatewayUrl, state.fixture.workspaceId);
     case "settings-revision-conflict":
       return await proveSettingsRevisionConflict(state.gatewayUrl);
+    case "runtime-settings-save-baseline": {
+      const before = await checkedRequest(state.gatewayUrl, "/api/v1/settings", {}, probe);
+      if (
+        before.body?.llamaCpp?.enabled !== false ||
+        before.body?.llamaCpp?.autoStart !== false ||
+        before.body?.llamaCpp?.managementMode !== "managed"
+      )
+        throw new Error("runtime settings proof requires the disabled managed fixture");
+      state.runtimeSettingsBefore = before.body;
+      return { status: before.status, outcome: `disabled runtime settings baseline revision ${before.body.revision}` };
+    }
+    case "runtime-settings-save-settle":
+      return await settleBrowserRuntimeSettings(state);
+    case "schedule-cancellation-readback": {
+      const captured = state.capturedJsonResponses?.createdScheduleId;
+      if (
+        !captured ||
+        captured.matchingResponses.length !== 1 ||
+        captured.requestPath !== "/api/v1/cron/jobs" ||
+        captured.requestBody?.jobId !== captured.value ||
+        captured.requestBody?.name !== "Usability browser schedule" ||
+        captured.requestBody?.schedule !== "0 9 * * *"
+      )
+        throw new Error("schedule cancellation has no exact creation identity");
+      const listed = await checkedRequest(state.gatewayUrl, "/api/v1/cron/jobs", {}, probe);
+      if (!Array.isArray(listed.body?.items) || listed.body.items.some((job) => job.jobId === captured.value))
+        throw new Error("cancelled schedule remains in the canonical job list");
+      return {
+        status: listed.status,
+        jobId: captured.value,
+        outcome: `exact created schedule ${captured.value} is absent after reviewed cancellation`,
+      };
+    }
     case "workspace-isolation": {
       const response = await checkedRequest(state.gatewayUrl, "/api/v1/workspaces?view=all&limit=500", {}, probe);
       if (!Array.isArray(response.body?.items) || response.body.items.length < 2) {
@@ -3441,7 +3883,8 @@ async function apiProbe(probe, state) {
       const archived = await checkedRequest(
         state.gatewayUrl,
         `/api/v1/citadels/${encodeURIComponent(isolatedId)}/archive`,
-        { method: "POST", body: { expectedRevision: after.body.items.find((item) => item.citadelId === isolatedId)?.revision } },
+        { method: "POST", body: { expectedRevision: after.body.items.find((item) => item.citadelId === isolatedId)?.revision },
+        },
         probe,
       );
       if (archived.body?.lifecycleStatus !== "archived") {
@@ -3595,6 +4038,37 @@ async function apiProbe(probe, state) {
       }
       return { status: response.status, outcome: `profile ${profile.profileId} denied fs.write despite fs.* allow` };
     }
+    case "tool-approval-mode-baseline": {
+      const settings = await checkedRequest(state.gatewayUrl, "/api/v1/settings", {}, probe);
+      state.toolApprovalSettingsBefore = structuredClone(settings.body);
+      return { status: settings.status, outcome: "captured exact tool approval settings revision before review" };
+    }
+    case "tool-approval-mode-approve":
+      return await settleBrowserRuntimeSettings(state, { modeOnly: true, approvalPhase: "resolve" });
+    case "tool-approval-mode-settle":
+      return await settleBrowserRuntimeSettings(state, { modeOnly: true, approvalPhase: "settle" });
+    case "tool-grant-revoked": {
+      const captured = state.capturedJsonResponses?.revokedToolGrant;
+      const before = state.createdToolGrant;
+      if (
+        !before ||
+        captured?.value !== before.grantId ||
+        captured.matchingResponses.length !== 1 ||
+        captured.requestPath !== `/api/v1/tools/grants/${encodeURIComponent(before.grantId)}/revoke`
+      )
+        throw new Error("Revocation did not identify the exact grant created in this browser step");
+      const grants = await checkedRequest(state.gatewayUrl, "/api/v1/tools/grants?limit=400", {}, probe);
+      const matching = grants.body?.items?.filter((grant) => grant.grantId === before.grantId);
+      const saved = matching?.[0];
+      if (
+        matching?.length !== 1 ||
+        !Number.isFinite(Date.parse(saved.revokedAt ?? "")) ||
+        saved.revokedBy !== before.createdBy ||
+        !isDeepStrictEqual(saved, { ...before, revokedAt: saved.revokedAt, revokedBy: saved.revokedBy })
+      )
+        throw new Error("Canonical grant owner did not retain the exact grant identity and operator revocation");
+      return { status: grants.status, outcome: `operator revoked exact created grant ${before.grantId}` };
+    }
     case "tool-approval-boundary": {
       const response = await checkedRequest(
         state.gatewayUrl,
@@ -3719,6 +4193,137 @@ async function proveSettingsRevisionConflict(gatewayUrl) {
   );
   if (stale.status !== 409) throw new Error(`settings stale revision returned ${stale.status}, expected 409`);
   return { status: stale.status, outcome: "stale settings revision rejected" };
+}
+
+async function settleBrowserRuntimeSettings(state, { modeOnly = false, approvalPhase = "resolve-and-settle" } = {}) {
+  const captured = state.capturedJsonResponses?.[modeOnly ? "toolApprovalModePlan" : "runtimeSettingsPlan"];
+  const before = modeOnly ? state.toolApprovalSettingsBefore : state.runtimeSettingsBefore;
+  const expectedConfig = {
+    enabled: false,
+    autoStart: false,
+    alias: "usability-llama-runtime",
+    baseUrl: before?.llamaCpp?.baseUrl,
+  };
+  if (
+    !captured ||
+    !before ||
+    captured.matchingResponses.length !== 1 ||
+    captured.requestPath !== "/api/v1/settings" ||
+    !isDeepStrictEqual(
+      captured.requestBody,
+      modeOnly
+        ? { expectedRevision: before.revision, toolApprovalMode: "approve_risky" }
+        : { expectedRevision: before.revision, llamaCpp: expectedConfig },
+    )
+  )
+    throw new Error("runtime settings save has no exact reviewed fixture request");
+  const planPath = `/api/v1/change-plans/${encodeURIComponent(captured.value)}?workspaceId=default`;
+  const readPlan = async () => (await checkedRequest(state.gatewayUrl, planPath, {}, "runtime settings plan")).body;
+  let plan = await readPlan();
+  if (modeOnly)
+    validateBrowserSettingsPlan(plan, captured.value, before.revision, {
+      kind: "runtime_configuration",
+      change: { operation: "tool_approval_mode", mode: "approve_risky" },
+    });
+  else validateBrowserRuntimeSettingsPlan(plan, captured.value, before.revision, expectedConfig);
+  let approvalId;
+  if (approvalPhase === "settle") {
+    const approved = state.toolApprovalModeApproval;
+    if (!modeOnly || approved?.planId !== captured.value || approved.revision !== before.revision)
+      throw new Error("runtime settings settlement has no exact reviewed approval decision");
+    approvalId = approved.approvalId;
+  } else {
+    if (
+      plan.status !== "awaiting_approval" ||
+      plan.requiredAction?.kind !== "approval" ||
+      !plan.requiredAction.approvalId
+    )
+      throw new Error("reviewed runtime fixture did not enter the required approval gate");
+    approvalId = plan.requiredAction.approvalId;
+    const resolved = await checkedRequest(
+      state.gatewayUrl,
+      `/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`,
+      {
+        method: "POST",
+        body: {
+          decision: "approve",
+          resolutionNote: modeOnly
+            ? "Approve only the exact reviewed risky-tool prompt mode in the disposable fixture."
+            : "Approve only the exact reviewed disabled usability runtime fixture.",
+        },
+      },
+      "runtime settings fixture approval",
+    );
+    if (resolved.body?.approval?.approvalId !== approvalId || resolved.body?.approval?.status !== "approved")
+      throw new Error("runtime settings approval resolved a different owner or decision");
+    if (approvalPhase === "resolve") {
+      state.toolApprovalModeApproval = { planId: captured.value, revision: before.revision, approvalId };
+      return {
+        status: resolved.status,
+        planId: captured.value,
+        approvalId,
+        outcome: "exact reviewed tool approval decision recorded; UI continuation is still required",
+      };
+    }
+  }
+  for (let attempt = 0; attempt < 80 && !["completed", "applied"].includes(plan.status); attempt += 1) {
+    plan = await readPlan();
+    if (["failed", "manual_required", "cancelled", "rollback_failed"].includes(plan.status)) break;
+    if (!["completed", "applied"].includes(plan.status)) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (!["completed", "applied"].includes(plan.status))
+    throw new Error(`runtime settings plan did not settle: ${plan.status}`);
+  validateBrowserSettingsPlan(
+    plan,
+    captured.value,
+    before.revision,
+    modeOnly
+      ? { kind: "runtime_configuration", change: { operation: "tool_approval_mode", mode: "approve_risky" } }
+      : { kind: "runtime_configuration", change: { operation: "llama_cpp_configuration", config: expectedConfig } },
+  );
+  if (!Array.isArray(plan.approvalRefs) || !plan.approvalRefs.includes(approvalId))
+    throw new Error("completed runtime settings plan lost the exact reviewed approval linkage");
+  const saved = await checkedRequest(state.gatewayUrl, "/api/v1/settings", {}, "runtime settings canonical readback");
+  if (modeOnly) {
+    if (saved.body?.toolApprovalMode !== "approve_risky" || saved.body.revision !== before.revision + 1)
+      throw new Error("Tool approval mode did not retain the exact reviewed setting and revision");
+  } else
+    assertManagedRuntimeSaved({
+      before,
+      after: saved.body,
+      alias: expectedConfig.alias,
+      request: captured.requestBody,
+    });
+  captured.dispose();
+  return {
+    status: saved.status,
+    planId: captured.value,
+    approvalId,
+    outcome: modeOnly
+      ? "exact reviewed tool approval mode approved, completed and read back from its owner"
+      : "exact reviewed disabled runtime configuration approved, completed and read back from its owner",
+  };
+}
+
+export function validateBrowserRuntimeSettingsPlan(plan, planId, revision, config) {
+  validateBrowserSettingsPlan(plan, planId, revision, {
+    kind: "runtime_configuration",
+    change: { operation: "llama_cpp_configuration", config },
+  });
+}
+
+export function validateBrowserSettingsPlan(plan, planId, revision, request) {
+  if (
+    plan?.planId !== planId ||
+    plan.kind !== "runtime_configuration" ||
+    plan.origin?.workspaceId !== "default" ||
+    plan.origin?.surface !== "settings" ||
+    plan.target?.ownerId !== "runtime_settings" ||
+    plan.target?.resourceId !== request.change.operation ||
+    plan.target?.expectedRevision !== revision ||
+    !isDeepStrictEqual(plan.request, request)
+  )
+    throw new Error("runtime settings plan does not match the exact reviewed fixture request");
 }
 
 export function resolveNotificationArchiveFixture(targetItems, ruleItems, workspaceId, expected = {}) {
@@ -3952,9 +4557,10 @@ export function validatePromptPackBenchmarkDispatchRecords(records, baselineCoun
       matches.length !== 2 ||
       !isDeepStrictEqual(
         matches.map((record) => record?.model).sort(),
-        [...PROMPT_PACK_BENCHMARK_MODELS].sort(),
-      ) ||
-      matches.some((record) => record?.messageCount !== signature.messageCount || record?.behavior !== undefined)
+        [...PROMPT_PACK_BENCHMARK_MODELS].sort()) ||
+      matches.some((record) => record?.messageCount !== signature.messageCount || record?.behavior !== undefined ||
+          !isDeepStrictEqual(record?.promptMetadata?.roles, ["system", "system", "user"]),
+      )
     ) {
       throw new Error(
         `prompt-pack benchmark streamed execution signature drifted for ${signature.testCode}: ${JSON.stringify(
@@ -4220,7 +4826,7 @@ async function seedLibraryBrowserActionFixture(gatewayUrl, workspaceId) {
   };
 }
 
-async function seedSettingsBrowserActionFixture(gatewayUrl, fixtureBaseUrl, workspaceId) {
+async function seedSettingsBrowserActionFixture(gatewayUrl, fixtureBaseUrl) {
   const deviceRequest = await requestJson(gatewayUrl, "/api/v1/auth/device-requests", {
     method: "POST",
     body: {
@@ -4331,20 +4937,8 @@ async function seedSettingsBrowserActionFixture(gatewayUrl, fixtureBaseUrl, work
       method: "POST",
       body: {
         label: "Verification local MCP",
-        transport: "stdio",
-        command: process.execPath,
-        args: [
-          path.resolve("bin/goatcitadel.mjs"),
-          "mcp-server",
-          "--gateway-url",
-          gatewayUrl,
-          "--agent-id",
-          "verification-usability-browser",
-          "--session-id",
-          "verification-usability-mcp-session",
-          "--workspace-id",
-          workspaceId,
-        ],
+        transport: "http",
+        url: `${fixtureBaseUrl}/mcp`,
         authType: "none",
         enabled: true,
         category: "other",
@@ -4403,6 +4997,42 @@ async function waitForApprovedDeviceRequest(gatewayUrl, requestId, requestSecret
   throw new Error(`Settings device request did not resolve: ${JSON.stringify(latest?.body)}`);
 }
 
+export function validateCreatedToolGrant(captured, grants, workspaceId, toolPattern) {
+  const expected = {
+    toolPattern,
+    decision: "deny",
+    scope: "workspace",
+    scopeRef: workspaceId,
+    grantType: "persistent",
+  };
+  if (
+    !captured ||
+    captured.requestPath !== "/api/v1/tools/grants" ||
+    captured.matchingResponses.length !== 1 ||
+    !isDeepStrictEqual(captured.requestBody, expected)
+  )
+    throw new Error("Tool grant creation did not bind the exact reviewed request");
+  const matches = Array.isArray(grants) ? grants.filter((grant) => grant.grantId === captured.value) : [];
+  const grant = matches[0];
+  const actors = [
+    "loopback:127.0.0.1",
+    `token:${createHash("sha256").update(OPERATOR_TOKEN).digest("hex").slice(0, 16)}`,
+  ];
+  if (
+    matches.length !== 1 ||
+    Object.entries(expected).some(([key, value]) => grant[key] !== value) ||
+    !actors.includes(grant.createdBy) ||
+    !Number.isFinite(Date.parse(grant.createdAt ?? "")) ||
+    grant.revokedAt ||
+    grant.revokedBy ||
+    grant.expiresAt ||
+    grant.constraints ||
+    grant.usesRemaining !== undefined
+  )
+    throw new Error("Canonical tool grant does not identify the exact active reviewed policy and fixture operator");
+  return grant;
+}
+
 export async function startSettingsBrowserFixtureServer() {
   const sockets = new Set();
   const server = createServer(async (request, response) => {
@@ -4416,6 +5046,40 @@ export async function startSettingsBrowserFixtureServer() {
       body = rawBody.trim() ? JSON.parse(rawBody) : {};
     } catch {
       body = {};
+    }
+    if (method === "POST" && url.pathname === "/mcp") {
+      if (body.jsonrpc === "2.0" && body.method === "notifications/initialized" && body.id === undefined) {
+        response.writeHead(202);
+        response.end();
+        return;
+      }
+      const result =
+        body.method === "initialize"
+          ? {
+              protocolVersion: "2025-06-18",
+              capabilities: { tools: {} },
+              serverInfo: { name: "verification-loopback-mcp", version: "1.0.0" },
+            }
+          : body.method === "tools/list"
+            ? {
+                tools: [
+                  {
+                    name: "goatcitadel.context.list",
+                    description: "Disposable discovery fixture.",
+                    inputSchema: { type: "object", properties: {} },
+                  },
+                ],
+              }
+            : undefined;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: body.id ?? null,
+          ...(result ? { result } : { error: { code: -32601, message: "Fixture supports discovery only." } }),
+        }),
+      );
+      return;
     }
     if (method === "POST" && url.pathname === "/v1/integrations/actions") {
       response.writeHead(200, { "content-type": "application/json" });
@@ -4464,15 +5128,16 @@ export async function interactiveLocator(page, name, exact) {
       page.getByRole(role, { name: pattern, exact }),
     ),
     ...(exact
-      ? [summary.filter({ has: page.getByText(name, { exact: true }) }), summary.and(page.getByText(name, { exact: true }))]
+      ? [summary.filter({ has: page.getByText(name, { exact: true }) }), summary.and(page.getByText(name, { exact: true })),
+        ]
       : [summary.filter({ hasText: pattern })]),
     summary.and(page.getByLabel(name, { exact })),
   ].reduce((combined, candidate) => combined.or(candidate));
   return await firstVisibleLocator(page, locator, `interactive control not found: ${name}`);
 }
 
-export async function editableLocator(page, label, { timeoutMs = ACTION_TIMEOUT_MS, pollIntervalMs = 50 } = {}) {
-  const candidate = page.getByLabel(label, { exact: true });
+export async function editableLocator(page, label, { timeoutMs = ACTION_TIMEOUT_MS, pollIntervalMs = 50, role } = {}) {
+  const candidate = role ? page.getByRole(role, { name: label, exact: true }) : page.getByLabel(label, { exact: true });
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
     const locator = await resolveUniqueEditableLocatorCandidate(candidate, label);
@@ -4660,6 +5325,48 @@ export function validateResolvedBlockerEvidence(input) {
   };
 }
 
+export function validateResolvedBlockerAuthority(envelope, run, expected) {
+  const actor = run?.payload?.requestActor;
+  if (!expected.requestActor || actor?.actorKind !== "operator" || !isDeepStrictEqual(actor, expected.requestActor))
+    throw new Error("resolved blocker does not retain the exact authenticated fixture operator");
+  if (run?.payload?.version !== "chat.turn.execute.v2" || run.payload.capabilityProfileId) {
+    return validateResolvedBlockerCapabilityProfile(envelope, { ...expected, requestActor: actor });
+  }
+  const authority = readDurableChatTurnExecutionPayloadAuthority({
+    workflowKey: run.workflowKey,
+    durableRunId: run.runId,
+    payload: run.payload,
+  });
+  const turn = expected.turn;
+  const mismatches = [];
+  if (!authority) mismatches.push("cryptographic admission");
+  if (!turn) mismatches.push("resolved turn");
+  if (authority && turn) {
+    for (const [label, actual, wanted] of [
+      ["workspace", authority.workspaceId, expected.workspaceId],
+      ["session", authority.sessionId, expected.sessionId],
+      ["turn", authority.turnId, turn.turnId],
+      ["user message", authority.userMessageId, turn.userMessage?.messageId],
+      ["assistant message", authority.assistantMessageId, turn.assistantMessage?.messageId],
+      ["durable run", turn.trace?.durable?.runId, run.runId],
+    ])
+      if (actual !== wanted) mismatches.push(label);
+    if (
+      authority.capabilityProfileId !== undefined ||
+      authority.capabilityProfileHash !== undefined ||
+      turn.trace.capabilityProfileId !== undefined ||
+      turn.trace.capabilityProfileHash !== undefined
+    )
+      mismatches.push("profile-free authority");
+  }
+  if (!isDeepStrictEqual(envelope, { state: "legacy_missing" })) mismatches.push("profile-free envelope");
+  if (mismatches.length)
+    throw new Error(
+      `resolved blocker lost its exact profile-free cryptographic admission and message bindings: ${mismatches.join(", ")}`,
+    );
+  return true;
+}
+
 export function validateResolvedBlockerCapabilityProfile(envelope, expected) {
   const profile = envelope?.profile;
   const turn = expected.turn;
@@ -4696,7 +5403,8 @@ export function validateSelectedUserInputResponse(responses) {
     item?.response?.optionId === "option-a" &&
     item?.selectedOption?.optionId === "option-a" &&
     item?.selectedOption?.label === "Continue with the current plan" &&
-    typeof item?.answeredAt === "string" && item.answeredAt.length > 0)) {
+    typeof item?.answeredAt === "string" && item.answeredAt.length > 0,
+    )) {
     throw new Error("user-input answer was not durably recorded with the selected fixture option");
   }
   return true;
@@ -5165,6 +5873,57 @@ export function validateUniversalRunDetailTrace(trace, expected) {
   return true;
 }
 
+export function validateCanonicalPlanningTurn(turn, sessionId, objective) {
+  const plan = turn?.trace?.executionPlan;
+  if (
+    !plan ||
+    plan.sessionId !== sessionId ||
+    plan.turnId !== turn.turnId ||
+    plan.planId !== turn.trace.executionPlanId ||
+    plan.mode !== "chat" ||
+    plan.planningMode !== "advisory" ||
+    plan.advisoryOnly !== true ||
+    plan.objective !== objective ||
+    !Array.isArray(plan.steps) ||
+    plan.steps.length === 0
+  )
+    throw new Error("planning turn lost the exact advisory plan and Chat correlation");
+  const ids = new Set(plan.steps.map((step) => step.stepId));
+  if (
+    ids.size !== plan.steps.length ||
+    plan.steps.some(
+      (step, index) =>
+        step.index !== index || !step.objective || (step.dependsOnStepIds ?? []).some((id) => !ids.has(id)),
+    )
+  )
+    throw new Error("planning turn has invalid ordered steps or dependencies");
+  const lines = plan.steps.map((step) =>
+    [
+      `${step.index + 1}. ${step.objective}`,
+      step.successCriteria ? `Success: ${step.successCriteria}` : undefined,
+      step.expectedOutput ? `Output: ${step.expectedOutput}` : undefined,
+      step.suggestedTools?.length ? `Suggested tools: ${step.suggestedTools.join(", ")}` : undefined,
+      step.dependsOnStepIds?.length ? `Depends on: ${step.dependsOnStepIds.join(", ")}` : undefined,
+      step.delegatedRole ? `Delegated role: ${step.delegatedRole}` : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n   "),
+  );
+  const expected = [
+    "## Chat plan",
+    "",
+    `Objective: ${objective}`,
+    "",
+    plan.summary,
+    "",
+    "Planned steps:",
+    ...lines,
+  ].join("\n");
+  if (turn.assistantMessage?.content !== expected)
+    throw new Error("planning response differs from its persisted exact plan");
+  return true;
+}
+
 async function waitForExactCompletedChatTurn(
   state,
   expectedUserContent,
@@ -5188,7 +5947,11 @@ async function waitForExactCompletedChatTurn(
         )
       : undefined;
     latestStatus = turn?.trace?.status ?? "missing";
-    if (turn?.trace?.status === "completed" && turn?.assistantMessage?.content === expectedAssistantContent) {
+    if (turn?.trace?.status === "completed" &&
+      (typeof expectedAssistantContent === "function"
+        ? expectedAssistantContent(turn)
+        : turn?.assistantMessage?.content === expectedAssistantContent)
+    ) {
       const correlation = {
         runId: requireText(turn.trace?.durable?.runId, "completed Chat durable run ID"),
         sessionId: state.sessionId,
@@ -5228,7 +5991,8 @@ async function waitForExactChatTurnStatus(state, expected) {
       candidate?.turnId !== expected.excludingTurnId &&
       candidate?.trace?.status === expected.status &&
       (expected.failureRequired !== true || typeof candidate?.trace?.failure?.failureClass === "string") &&
-      (expected.assistantContent === undefined || candidate?.assistantMessage?.content === expected.assistantContent));
+      (expected.assistantContent === undefined || candidate?.assistantMessage?.content === expected.assistantContent),
+    );
     if (turn) {
       const correlation = {
         runId: requireText(turn.trace?.durable?.runId, `${expected.status} Chat durable run ID`),
@@ -5275,9 +6039,11 @@ async function waitForExactChatSessionView(state, expectedView) {
       checkedRequest(state.gatewayUrl, query(otherView), {}, `Chat ${otherView} readback`),
     ]);
     const exact = (Array.isArray(target.body?.items) ? target.body.items : [])
-      .filter((item) => item?.sessionId === state.sessionId);
+      .filter((item) => item?.sessionId === state.sessionId,
+    );
     const wrongView = (Array.isArray(other.body?.items) ? other.body.items : [])
-      .filter((item) => item?.sessionId === state.sessionId);
+      .filter((item) => item?.sessionId === state.sessionId,
+    );
     if (exact.length === 1 && wrongView.length === 0 &&
         exact[0].workspaceId === state.fixture.workspaceId &&
         exact[0].lifecycleStatus === expectedView &&
@@ -5512,6 +6278,9 @@ function assertResolvedTurn(turn, sessionId, blockerLabel) {
   }
   if (turn.trace.status === "waiting_for_approval" || turn.trace.status === "waiting_for_user_input") {
     throw new Error(`${blockerLabel} turn ${turn.turnId} is still blocked as ${turn.trace.status}`);
+  }
+  if (turn.trace.status !== "completed") {
+    throw new Error(`${blockerLabel} turn ${turn.turnId} has not completed as ${turn.trace.status}`);
   }
   if (typeof turn.trace?.durable?.runId !== "string" || !turn.trace.durable.runId) {
     throw new Error(`${blockerLabel} turn ${turn.turnId} has no durable run linkage`);

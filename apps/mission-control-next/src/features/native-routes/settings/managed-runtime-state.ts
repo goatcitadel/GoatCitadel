@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import type { ChangePlanRecord } from "@goatcitadel/contracts";
+import { isChangePlanRequest, type ChangePlanRecord } from "@goatcitadel/contracts";
 import { isApiRequestError, type RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/client";
 
 export const MANAGED_RUNTIME_DRAFT_KEY = "runtime:system:llama:configuration";
@@ -26,6 +26,16 @@ export function normalizeManagedRuntime(values: ManagedRuntimeValues): ManagedRu
 export function managedRuntimeInputError(values: ManagedRuntimeValues): string | undefined {
   const normalized = normalizeManagedRuntime(values);
   if (!normalized.alias) return "Enter a model alias.";
+  if (
+    !isChangePlanRequest({
+      kind: "runtime_configuration",
+      change: {
+        operation: "llama_cpp_configuration",
+        config: { alias: normalized.alias },
+      },
+    })
+  )
+    return "Use a supported model alias without spaces or parent path segments (up to 256 characters).";
   try {
     const url = new URL(normalized.baseUrl);
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash)

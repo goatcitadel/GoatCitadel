@@ -187,7 +187,9 @@ describe("shared managed runtime configuration owner", () => {
     const plan = await api.fetchChangePlan();
     api.fetchChangePlan.mockResolvedValue({ ...plan, status: "completed", revision: 3 });
     owner = { ...owner, revision: 42, llamaCpp: { ...owner.llamaCpp, alias: "reviewed-model" } };
-    await act(async () => { await hook.change.refresh(); });
+    await act(async () => {
+      await hook.change.refresh();
+    });
     expect(hook.change.change?.message).toBe("Change saved and confirmed.");
     expect(hook.notice).toBeNull();
     expect(hook.locked).toBe(false);
@@ -283,4 +285,20 @@ describe("shared managed runtime configuration owner", () => {
     expect(hook.inputError).toContain("without credentials");
     expect(api.patchSettings).not.toHaveBeenCalled();
   });
+  it.each(["model with spaces", "../private", "C:/models/private.gguf", "a".repeat(257)])(
+    "rejects an unsupported alias before review and allows a corrected draft: %s",
+    async (alias) => {
+      act(() => hook.draft.setValue((value) => ({ ...value, alias })));
+      await act(async () => {
+        await hook.requestReview();
+      });
+      expect(hook.inputError).toContain("model alias");
+      expect(hook.review).toBeNull();
+      expect(api.patchSettings).not.toHaveBeenCalled();
+      expect(hook.uncertain).toBeUndefined();
+      await review();
+      await confirm();
+      expect(hook.notice).toContain("configuration saved and confirmed");
+    },
+  );
 });

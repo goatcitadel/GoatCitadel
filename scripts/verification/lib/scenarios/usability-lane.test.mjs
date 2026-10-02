@@ -410,17 +410,21 @@ test("Chat and Projects Chromium contracts retain exact fixture sessions and com
   };
 
   assert.deepEqual(operations("route.chat.planning-delegation-synthesis"), [
+    { kind: "click", name: "Chat options", exact: true },
     { kind: "click", name: "Plan", exact: true },
+    { kind: "click", name: "Close Chat options", exact: true },
     { kind: "assert-text", value: "Planning mode is on" },
     { kind: "fill", label: "Message composer", value: "Plan this deterministic usability turn." },
     { kind: "click", name: "Send", exact: true },
-    { kind: "assert-text", value: "Verification stub reply." },
+    { kind: "assert-text", value: "Chat plan" },
     { kind: "api", probe: "planning-turn-completed" },
+    { kind: "click", name: "Turn planning off", exact: true },
     { kind: "api", probe: "delegate-suggest-accept" },
   ]);
   assert.deepEqual(operations("route.chat.edit-and-branch"), [
     { kind: "api", probe: "chat-retry-completed" },
     { kind: "click", name: "Open turn: Stop this deterministic usability turn.", exact: true },
+    { kind: "click", name: "More", exact: true },
     { kind: "wait-enabled", name: "Edit and resend turn ", exact: false },
     { kind: "click-pattern", namePattern: "Edit and resend turn " },
     { kind: "assert-text", value: "Branching from turn" },
@@ -429,10 +433,11 @@ test("Chat and Projects Chromium contracts retain exact fixture sessions and com
     { kind: "api", probe: "chat-branch-completed" },
   ]);
   assert.deepEqual(operations("route.chat.approval-and-user-input-resume"), [
+    { kind: "api", probe: "blocker-authority-baseline" },
     { kind: "fixture-session", sessionKey: "approval" },
     { kind: "assert-text", value: "Approval required" },
     { kind: "click", name: "Allow once", exact: true },
-    { kind: "assert-text", value: "Approved once." },
+    { kind: "api", probe: "inline-approval-settled" },
     { kind: "fixture-session", sessionKey: "userInput" },
     { kind: "assert-text", value: "Answer required" },
     { kind: "click-pattern", namePattern: "Continue with the current plan" },
@@ -440,18 +445,20 @@ test("Chat and Projects Chromium contracts retain exact fixture sessions and com
     { kind: "api", probe: "approval-and-user-input" },
   ]);
   assert.deepEqual(operations("route.chat.durable-restart-resume"), [
-    { kind: "click", name: "Work Record", exact: true },
-    { kind: "click", name: "Background tasks", exact: true },
+    { kind: "api", probe: "seed-active-background-child" },
+    { kind: "click", name: "Activity", exact: true },
     { kind: "click", name: "Refresh background tasks", exact: true },
-    { kind: "click-pattern", namePattern: "Detach background task " },
-    { kind: "assert-text", value: "detached" },
-    { kind: "click-pattern", namePattern: "Reattach background task " },
-    { kind: "assert-text", value: "attached" },
+    { kind: "click-pattern", namePattern: "Continue background task" },
+    { kind: "api", probe: "durable-watcher-detached" },
+    { kind: "assert-text", value: "Continuing in background" },
+    { kind: "click-pattern", namePattern: "Bring background task" },
+    { kind: "assert-text", value: "Foreground updates" },
     { kind: "api", probe: "durable-run-read" },
   ]);
 
   const crud = operations("route.projects.workspace-project-crud");
-  assert.deepEqual(crud.slice(0, 3), [
+  assert.deepEqual(crud.slice(0, 4), [
+    { kind: "click", name: "New project", exact: true },
     { kind: "fill", label: "New project name", value: "Usability browser project" },
     {
       kind: "fill",
@@ -467,8 +474,12 @@ test("Chat and Projects Chromium contracts retain exact fixture sessions and com
   assert.deepEqual(
     crud.filter((operation) => operation.kind === "click").map((operation) => operation.name),
     [
+      "New project",
       "Create project from form",
+      "Edit project",
       "Save project",
+      "Close editor",
+      "Project actions",
       "Archive project Usability browser project",
       "Unarchive project Usability browser project",
     ],
@@ -497,16 +508,19 @@ test("Chat and Projects Chromium contracts retain exact fixture sessions and com
   assert.deepEqual(conflict.at(-1), { kind: "api", probe: "project-revision-persisted" });
 
   assert.deepEqual(operations("route.settings-workspaces.workspace-create-select-archive-restore"), [
+    { kind: "click", name: "New workspace", exact: true },
     { kind: "fill", label: "New workspace name", value: "Usability browser workspace" },
     { kind: "click", name: "Create workspace", exact: true },
     { kind: "click-pattern", namePattern: "Make active workspace Usability browser workspace" },
+    { kind: "click-pattern", namePattern: "Usability browser workspace" },
     { kind: "click-pattern", namePattern: "Archive workspace Usability browser workspace" },
     { kind: "click", name: "Confirm archive workspace", exact: true },
-    { kind: "assert-text", value: "Workspace Usability browser workspace archived." },
+    { kind: "assert-text", value: "Usability browser workspace archived." },
     { kind: "click", name: "Archived workspaces", exact: true },
     { kind: "click-pattern", namePattern: "Usability browser workspace" },
     { kind: "click-pattern", namePattern: "Restore workspace Usability browser workspace" },
-    { kind: "assert-text", value: "Workspace Usability browser workspace restored." },
+    { kind: "confirm", name: "Confirm restore workspace" },
+    { kind: "assert-text", value: "Usability browser workspace restored." },
     { kind: "click", name: "Active workspaces", exact: true },
     { kind: "click-pattern", namePattern: "Usability browser workspace" },
     { kind: "api", probe: "workspace-lifecycle-active" },

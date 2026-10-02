@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { canonicalJsonString } from "../../../../packages/contracts/dist/index.js";
+
 import {
   BROWSER_ACTION_BUNDLES,
   BROWSER_ACTION_STEP_REGISTRY,
@@ -37,12 +39,16 @@ import {
   USABILITY_BROWSER_ACTION_GATEWAY_ENV,
   USABILITY_LOCAL_MCP_POLICY,
   validatePersistedAgentDefaultTools,
+  validateCreatedToolGrant,
   validateSelectedUserInputResponse,
   validatePromptPackBenchmarkDispatchRecords,
   validatePromptPackBenchmarkStatus,
   validatePromptPackRunAllStatus,
   validateAttachedDurableWatcher,
   validateBrowserDownloadEvidence,
+  validateBrowserRuntimeSettingsPlan,
+  validateBrowserSettingsPlan,
+  validateCanonicalPlanningTurn,
   validateCanonicalChatAttachmentProjection,
   validateCanonicalChatAttachmentRecords,
   validateCanonicalChatUrlSource,
@@ -51,11 +57,152 @@ import {
   validateCompletedDelegationFanIn,
   validateDurableRunCorrelation,
   validateResolvedBlockerCapabilityProfile,
+  validateResolvedBlockerAuthority,
   validateResolvedBlockerEvidence,
   validateUniversalRunDetailTrace,
   validateVerifiedCodeModeNamedProof,
   withOperatorAuth,
 } from "./usability-browser-action-lane.mjs";
+
+test("profile-free blocker proof retains authenticated actor, cryptographic admission and message bindings", () => {
+  const request = { content: "Resume the fixture." };
+  const digest = (value) => createHash("sha256").update(canonicalJsonString(value)).digest("hex");
+  const admissionMaterialSha256 = digest({ version: 2, request });
+  const payload = {
+    version: "chat.turn.execute.v2",
+    admissionId: "admission-1",
+    sessionIncarnationId: "incarnation-1",
+    admissionMaterialSha256,
+    effectiveRequestMaterialSha256: digest({ version: 1, admissionMaterialSha256, request }),
+    workspaceId: "workspace-1",
+    admissionAggregateRevision: 1,
+    admissionControllerGeneration: 1,
+    policyRunIdDerivation: { version: 1, kind: "durable_run_id", runId: "run-1" },
+    sessionId: "session-1",
+    turnId: "turn-1",
+    userMessageId: "user-1",
+    assistantMessageId: "assistant-1",
+    requestActor: {
+      actorKind: "operator",
+      actorId: "operator-1",
+      operatorId: "operator-1",
+      authActorId: "operator-1",
+      authActorSource: "token",
+    },
+    branchKind: "append",
+    threadEventType: "chat_thread_turn_appended",
+    request,
+  };
+  const run = { workflowKey: "chat.turn.execute", runId: "run-1", payload };
+  const expected = {
+    workspaceId: "workspace-1",
+    sessionId: "session-1",
+    requestActor: payload.requestActor,
+    turn: {
+      turnId: "turn-1",
+      userMessage: { messageId: "user-1" },
+      assistantMessage: { messageId: "assistant-1" },
+      trace: { durable: { runId: "run-1" } },
+    },
+  };
+  const envelope = { state: "legacy_missing" };
+  validateResolvedBlockerAuthority(envelope, run, expected);
+  for (const changed of [
+    { ...payload, requestActor: { ...payload.requestActor, authActorId: "foreign" } },
+    { ...payload, admissionMaterialSha256: "0".repeat(64) },
+    { ...payload, workspaceId: "other" },
+    { ...payload, sessionId: "other" },
+    { ...payload, userMessageId: "other" },
+    { ...payload, assistantMessageId: "other" },
+    { ...payload, request: { content: "Tampered request." } },
+  ])
+    assert.throws(
+      () => validateResolvedBlockerAuthority(envelope, { ...run, payload: changed }, expected),
+      /exact authenticated|exact profile-free/u,
+    );
+  assert.throws(
+    () => validateResolvedBlockerAuthority({ state: "available", profile: {} }, run, expected),
+    /exact profile-free/u,
+  );
+});
+
+test("planning completion requires the exact persisted advisory response and ordered dependencies", () => {
+  const plan = {
+    planId: "plan-1",
+    sessionId: "session-1",
+    turnId: "turn-1",
+    mode: "chat",
+    planningMode: "advisory",
+    advisoryOnly: true,
+    objective: "Plan the fixture.",
+    summary: "Deterministic plan.",
+    steps: [{ stepId: "step-1", index: 0, objective: "Inspect fixture." }],
+  };
+  const turn = {
+    turnId: "turn-1",
+    trace: { executionPlanId: "plan-1", executionPlan: plan },
+    assistantMessage: {
+      content:
+        "## Chat plan\n\nObjective: Plan the fixture.\n\nDeterministic plan.\n\nPlanned steps:\n1. Inspect fixture.",
+    },
+  };
+  validateCanonicalPlanningTurn(turn, "session-1", "Plan the fixture.");
+  assert.throws(() => validateCanonicalPlanningTurn(turn, "other", "Plan the fixture."), /exact advisory plan/u);
+  assert.throws(() => validateCanonicalPlanningTurn(turn, "session-1", "Different objective."), /exact advisory plan/u);
+  assert.throws(
+    () =>
+      validateCanonicalPlanningTurn(
+        { ...turn, assistantMessage: { content: "Verification stub reply." } },
+        "session-1",
+        "Plan the fixture.",
+      ),
+    /differs from its persisted exact plan/u,
+  );
+  assert.throws(
+    () =>
+      validateCanonicalPlanningTurn(
+        {
+          ...turn,
+          trace: {
+            ...turn.trace,
+            executionPlan: { ...plan, steps: [{ ...plan.steps[0], dependsOnStepIds: ["foreign"] }] },
+          },
+        },
+        "session-1",
+        "Plan the fixture.",
+      ),
+    /dependencies/u,
+  );
+});
+
+test("runtime fixture approval binds the exact Settings owner, revision and reviewed request", () => {
+  const config = {
+    enabled: false,
+    autoStart: false,
+    alias: "usability-llama-runtime",
+    baseUrl: "http://127.0.0.1:8080/v1",
+  };
+  const plan = {
+    planId: "plan-1",
+    kind: "runtime_configuration",
+    origin: { workspaceId: "default", surface: "settings" },
+    target: { ownerId: "runtime_settings", resourceId: "llama_cpp_configuration", expectedRevision: 7 },
+    request: { kind: "runtime_configuration", change: { operation: "llama_cpp_configuration", config } },
+  };
+  validateBrowserRuntimeSettingsPlan(plan, "plan-1", 7, config);
+  for (const changed of [
+    { ...plan, planId: "other" },
+    { ...plan, origin: { ...plan.origin, workspaceId: "other" } },
+    { ...plan, target: { ...plan.target, ownerId: "provider_settings" } },
+    { ...plan, target: { ...plan.target, resourceId: "tool_approval_mode" } },
+    { ...plan, target: { ...plan.target, expectedRevision: 8 } },
+    { ...plan, request: { ...plan.request, change: { ...plan.request.change, config: { ...config, enabled: true } } } },
+  ])
+    assert.throws(
+      () => validateBrowserRuntimeSettingsPlan(changed, "plan-1", 7, config),
+      /exact reviewed fixture request/u,
+    );
+});
 
 function strictEditableCandidate(states) {
   let stateIndex = 0;
@@ -108,6 +255,24 @@ function strictEditableCandidate(states) {
     },
   };
 }
+
+test("native selects use their exact combobox name without matching option text or duplicate controls", async () => {
+  const model = strictEditableCandidate([{ count: 1, tagName: "SELECT" }]);
+  const calls = [];
+  const page = {
+    getByRole: (role, options) => {
+      calls.push({ role, options });
+      return model.candidate;
+    },
+  };
+  assert.equal(await editableLocator(page, "Auth mode", { role: "combobox", timeoutMs: 5 }), model.candidate);
+  assert.deepEqual(calls, [{ role: "combobox", options: { name: "Auth mode", exact: true } }]);
+  model.replaceState({ count: 2, tagName: "SELECT" });
+  await assert.rejects(
+    editableLocator(page, "Auth mode", { role: "combobox", timeoutMs: 5 }),
+    /ambiguous editable control/u,
+  );
+});
 
 function strictEditablePage(model) {
   const labelCalls = [];
@@ -354,7 +519,7 @@ test("verified browser downloads bind safe filenames, nonempty bytes, and SHA-25
       schemaVersion: 1,
       generatedAt: "2026-07-30T09:00:00.000Z",
       workspaceId: "workspace-1",
-      sourceStatus: { health: { status: "ok" }, daemon: { status: "ok" } },
+      sourceStatus: { health: { status: "ok" }, daemon: { status: "ok" }, mcpServers: { status: "not_requested" } },
       daemonLogs: [],
       daemonDiagnostics: [],
     })}\n`,
@@ -500,10 +665,9 @@ test("notification archive readback binds canonical IDs, lifecycleState, and the
 test("prompt-pack compare proof classifies exact execution, memory-distiller, and score-judge dispatches", () => {
   const prior = { model: "verification-stub-chat", outcome: "success", status: 200 };
   const executionSignatures = [
-    // TEST-91: base + capability-profile + memory-context system messages + user prompt.
-    { prompt: "Reply with exactly: PROMPT_PACK_AUTHORED_OK", messageCount: 4 },
-    // TEST-92 additionally activates governed runtime skill instructions (+1 system message).
-    { prompt: "Compare the deterministic fixture response and report the final result.", messageCount: 5 },
+    // Profile-free Chat: base + memory-context system messages + exact user prompt.
+    { prompt: "Reply with exactly: PROMPT_PACK_AUTHORED_OK", messageCount: 3 },
+    { prompt: "Compare the deterministic fixture response and report the final result.", messageCount: 3 },
   ];
   const executions = ["verification-stub-chat", "verification-stub-chat-alt"].flatMap((model) =>
     executionSignatures.map((signature) => ({
@@ -511,6 +675,7 @@ test("prompt-pack compare proof classifies exact execution, memory-distiller, an
       stream: true,
       messageCount: signature.messageCount,
       promptMetadata: {
+        roles: ["system", "system", "user"],
         userContentSha256: createHash("sha256").update(signature.prompt, "utf8").digest("hex"),
       },
       outcome: "success",
@@ -538,6 +703,18 @@ test("prompt-pack compare proof classifies exact execution, memory-distiller, an
     status: 200,
   }));
   const benchmarkRecords = [...executions, ...memoryDistillers, ...judges];
+  assert.throws(
+    () =>
+      validatePromptPackBenchmarkDispatchRecords(
+        benchmarkRecords.map((record, index) =>
+          index === 0
+            ? { ...record, promptMetadata: { ...record.promptMetadata, roles: ["system", "assistant", "user"] } }
+            : record,
+        ),
+        0,
+      ),
+    /streamed execution signature drifted for TEST-91/u,
+  );
   assert.deepEqual(validatePromptPackBenchmarkDispatchRecords([prior, ...benchmarkRecords], 1), {
     dispatchCount: 10,
     executionDispatches: 4,
@@ -724,7 +901,7 @@ test("skill lifecycle operations await an exact UI and canonical approval/state 
   );
 });
 
-test("Settings browser fixtures exercise loopback integration and ntfy sandbox destinations", async () => {
+test("Settings browser fixtures exercise loopback integration, ntfy and credential-free MCP discovery", async () => {
   const fixture = await startSettingsBrowserFixtureServer();
   try {
     const integration = await fetch(`${fixture.baseUrl}/v1/integrations/actions`, {
@@ -744,6 +921,46 @@ test("Settings browser fixtures exercise loopback integration and ntfy sandbox d
     });
     assert.equal(ntfy.status, 200);
     assert.deepEqual(await ntfy.json(), { id: "verification-ntfy-message", accepted: true });
+
+    const rpc = async (body) =>
+      fetch(`${fixture.baseUrl}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const initialized = await rpc({ jsonrpc: "2.0", id: 17, method: "initialize" });
+    assert.equal(initialized.status, 200);
+    assert.deepEqual(await initialized.json(), {
+      jsonrpc: "2.0",
+      id: 17,
+      result: {
+        protocolVersion: "2025-06-18",
+        capabilities: { tools: {} },
+        serverInfo: { name: "verification-loopback-mcp", version: "1.0.0" },
+      },
+    });
+    const notification = await rpc({ jsonrpc: "2.0", method: "notifications/initialized" });
+    assert.equal(notification.status, 202);
+    const discovery = await rpc({ jsonrpc: "2.0", id: 18, method: "tools/list" });
+    assert.deepEqual(await discovery.json(), {
+      jsonrpc: "2.0",
+      id: 18,
+      result: {
+        tools: [
+          {
+            name: "goatcitadel.context.list",
+            description: "Disposable discovery fixture.",
+            inputSchema: { type: "object", properties: {} },
+          },
+        ],
+      },
+    });
+    const invocation = await rpc({ jsonrpc: "2.0", id: 19, method: "tools/call" });
+    assert.deepEqual(await invocation.json(), {
+      jsonrpc: "2.0",
+      id: 19,
+      error: { code: -32601, message: "Fixture supports discovery only." },
+    });
 
     const unknown = await fetch(`${fixture.baseUrl}/not-a-fixture-route`);
     assert.equal(unknown.status, 404);
@@ -938,9 +1155,11 @@ test("Chat-native Build editor journey proves governed launch, approval, artifac
       (operation) => operation.kind === "assert-text" && operation.value === "Artifact integrity: hashes matched",
     ),
   );
-  assert.deepEqual(codeStep.operations.slice(-4), [
+  assert.deepEqual(codeStep.operations.slice(-6), [
     { kind: "click-pattern", namePattern: "Open durable run trace " },
+    { kind: "click", name: "Inspect signed receipt", exact: true },
     { kind: "assert-text", value: "Signed evidence receipt" },
+    { kind: "assert-text", value: "OS keychain is unavailable" },
     { kind: "assert-text", value: "Timeline" },
     { kind: "api", probe: "code-mode-helper-run-detail" },
   ]);
@@ -957,13 +1176,16 @@ test("cockpit Code Mode journey keeps owner probes while using cockpit controls"
     source.operations.filter((operation) => operation.kind === "api").map((operation) => operation.probe),
   );
   assert.ok(cockpit.operations.some((operation) => operation.kind === "fill" && operation.label === "Message"));
-  assert.ok(cockpit.operations.some((operation) => operation.kind === "click" && operation.name === "Back to conversation"));
+  assert.ok(cockpit.operations.some((operation) => operation.kind === "click" && operation.name === "Back to conversation"),
+  );
   assert.ok(cockpit.operations.some((operation) => operation.kind === "return-to-cockpit-chat"));
-  assert.ok(cockpit.operations.some((operation) => operation.kind === "click" && operation.name === "Open durable evidence"));
-  assert.ok(!cockpit.operations.some((operation) => operation.kind === "click" && operation.name.startsWith("Open turn:")));
+  assert.ok(cockpit.operations.some((operation) => operation.kind === "click" && operation.name === "Open durable evidence"),
+  );
+  assert.ok(!cockpit.operations.some((operation) => operation.kind === "click" && operation.name.startsWith("Open turn:")),
+  );
   assert.deepEqual(cockpit.operations.slice(-5), [
-    { kind: "assert-text", value: "Signed evidence receipt" },
     { kind: "click", name: "Inspect signed receipt", exact: true },
+    { kind: "assert-text", value: "Signed evidence receipt" },
     { kind: "assert-text", value: "OS keychain is unavailable" },
     { kind: "assert-text", value: "Run completed" },
     { kind: "api", probe: "code-mode-helper-run-detail" },
@@ -972,8 +1194,7 @@ test("cockpit Code Mode journey keeps owner probes while using cockpit controls"
 
 test("cockpit Chat stop journey proves cancellation and a distinct completed retry", () => {
   const source = BROWSER_ACTION_BUNDLES["chat-lifecycle"].find(
-    (step) => step.stepId === "route.chat.stop-and-retry",
-  );
+    (step) => step.stepId === "route.chat.stop-and-retry");
   const cockpit = adaptStopStepForCockpit(source);
   assert.equal(cockpit.stepId, "cockpit.chat.stop-and-retry");
   assert.deepEqual(cockpit.operations, [
@@ -992,13 +1213,13 @@ test("cockpit Chat stop journey proves cancellation and a distinct completed ret
 test("cockpit Chat persistence journey reloads, exports, archives, and restores on desktop and phone", () => {
   const operations = cockpitChatPersistenceStep().operations;
   assert.deepEqual(operations.slice(0, 9).map((operation) => operation.kind), [
-    "fill", "click", "api", "reload", "assert-text", "assert-text", "api", "click", "download",
-  ]);
+    "fill", "click", "api", "reload", "assert-text", "assert-text", "api", "click", "download"],
+  );
   assert.equal(operations[8].contentContract, "chat-conversation-v1");
   assert.equal(operations[8].name, "Export conversation");
   assert.deepEqual(operations.slice(-6).map((operation) => operation.kind), [
-    "click", "confirm", "api", "assert-text", "click", "assert-control",
-  ]);
+    "click", "confirm", "api", "assert-text", "click", "assert-control"],
+  );
   const phone = cockpitChatPersistenceStep({ phone: true }).operations;
   assert.deepEqual(phone.slice(13, 15), [
     { kind: "select", label: "Choose conversation", value: "history:archived" },
@@ -1013,32 +1234,38 @@ test("cockpit inline decisions keep the exact durable approval and user-input re
   const cockpit = adaptInlineDecisionsStepForCockpit(source);
   assert.equal(cockpit.stepId, "cockpit.chat.inline-approval-and-user-input");
   assert.deepEqual(cockpit.operations.filter((operation) => operation.kind === "fixture-session").map((operation) => operation.sessionKey), [
-    "approval", "userInput",
-  ]);
+    "approval", "userInput"],
+  );
   assert.ok(cockpit.operations.some((operation) => operation.kind === "confirm" && operation.name === "Approve once"));
   assert.deepEqual(cockpit.operations.at(-1), { kind: "api", probe: "cockpit-inline-decisions" });
-  const leave = cockpit.operations.findIndex(operation => operation.kind === "fixture-session" && operation.sessionKey === "userInput");
+  const leave = cockpit.operations.findIndex(
+    (operation) => operation.kind === "fixture-session" && operation.sessionKey === "userInput",
+  );
   assert.deepEqual(cockpit.operations[leave - 1], { kind: "api", probe: "cockpit-inline-approval-settled" });
 });
 
 test("cockpit inline readback requires the exact durable choice and timestamp", () => {
   const answer = [{ kind: "single_select", response: { optionId: "option-a" },
     selectedOption: { optionId: "option-a", label: "Continue with the current plan" },
-    answeredAt: "2026-09-30T00:00:00.000Z" }];
+    answeredAt: "2026-09-30T00:00:00.000Z",
+    },
+  ];
   assert.equal(validateSelectedUserInputResponse(answer), true);
   assert.throws(() => validateSelectedUserInputResponse([{ ...answer[0], selectedOption: { optionId: "option-b" } }]),
-    /durably recorded/u);
+    /durably recorded/u,
+  );
 });
 
 test("cockpit streaming reload checks one exact running turn before stopping it", () => {
   const operations = cockpitChatStreamReloadStep().operations;
   assert.deepEqual(operations.map((operation) => operation.kind), [
-    "api", "fill", "click", "assert-text", "api", "api", "reload", "assert-text", "api", "click", "api",
-  ]);
+    "api", "fill", "click", "assert-text", "api", "api", "reload", "assert-text", "api", "click", "api"],
+  );
   assert.deepEqual(operations.filter((operation) => operation.kind === "api").map((operation) => operation.probe), [
     "arm-reload-provider", "chat-stream-running", "chat-stream-persisted-prefix", "chat-stream-reloaded",
     "chat-stream-cancelled",
-  ]);
+  ],
+  );
 });
 
 test("cockpit document journey preserves a stale draft and saves only after rebase on desktop and phone", () => {
@@ -1047,11 +1274,15 @@ test("cockpit document journey preserves a stale draft and saves only after reba
     assert.deepEqual(operations.filter((operation) => operation.kind === "api").map((operation) => operation.probe), [
       "cockpit-document-saved", "cockpit-document-concurrent-edit", "cockpit-document-stale-rejected",
       "cockpit-document-rebased-saved", "cockpit-document-rebased-saved",
-    ]);
-    assert.ok(operations.some((operation) => operation.kind === "click-inspector" && operation.name === "Use this revision and keep my draft"));
+    ],
+    );
+    assert.ok(operations.some((operation) => operation.kind === "click-inspector" && operation.name === "Use this revision and keep my draft",
+      ),
+    );
     assert.ok(operations.some((operation) => operation.kind === "reload"));
     assert.equal(operations.filter((operation) => operation.kind === "click" && operation.name === "Files").length, 2);
-    assert.equal(operations.some((operation) => operation.name === "Inspect conversation"), phone);
+    assert.equal(operations.some((operation) => operation.name === "Inspect conversation"), phone,
+    );
   }
 });
 
@@ -1059,20 +1290,29 @@ test("Chat snapshot download binds the exact canonical session, turn, and durabl
   const operation = { expectedFileName: "Cockpit-snapshot.json", contentContract: "chat-conversation-v1" };
   const context = { sessionId: "session-1", persistenceCorrelation: {
     sessionId: "session-1", turnId: "turn-1", runId: "run-1",
-  } };
+  },
+  };
   const snapshot = { exportedAt: "2026-09-30T00:00:00.000Z", session: { sessionId: "session-1" },
     thread: { sessionId: "session-1", turns: [{ turnId: "turn-1",
       trace: { sessionId: "session-1", status: "completed", durable: { runId: "run-1" } },
       userMessage: { content: "Persist this deterministic cockpit conversation." },
       assistantMessage: { content: "Verification stub reply." },
-    }] } };
+    },
+      ],
+    },
+  };
   const downloaded = (value) => validateBrowserDownloadEvidence(operation, "Cockpit-snapshot.json",
-    Buffer.from(JSON.stringify(value), "utf8"), context);
+    Buffer.from(JSON.stringify(value), "utf8"), context,
+    );
   assert.equal(downloaded(snapshot).contentContract, "chat-conversation-v1");
   assert.throws(() => downloaded({ ...snapshot, session: { sessionId: "session-2" } }), /exact session/u);
   assert.throws(() => downloaded({ ...snapshot, thread: { ...snapshot.thread,
     turns: [{ ...snapshot.thread.turns[0], trace: { ...snapshot.thread.turns[0].trace,
-      durable: { runId: "run-2" } } }] } }), /exact completed durable turn/u);
+      durable: { runId: "run-2" } } },
+          ],
+        },
+      }), /exact completed durable turn/u,
+  );
 });
 
 test("browser fixture files decode strict UTF-8 and canonical base64 without MIME loss", () => {
@@ -1341,7 +1581,8 @@ test("Library actions prove uncredentialed Communications and authored Prompt Pa
   assert.deepEqual(promptPackSteps[2].operations.slice(2, 3), [
     { kind: "fill", label: "Test codes", value: "TEST-91, TEST-92" },
   ]);
-  const benchmarkStart = promptPackSteps[2].operations.findIndex((operation) => operation.probe === "prompt-pack-benchmark-provider-readiness");
+  const benchmarkStart = promptPackSteps[2].operations.findIndex((operation) => operation.probe === "prompt-pack-benchmark-provider-readiness",
+  );
   assert.deepEqual(promptPackSteps[2].operations.slice(benchmarkStart, benchmarkStart + 4), [
     { kind: "api", probe: "prompt-pack-benchmark-provider-readiness" },
     {
@@ -1380,7 +1621,8 @@ test("Library actions prove uncredentialed Communications and authored Prompt Pa
   assert.deepEqual(vaultStep.operations.filter((operation) => ["Reveal", "Hide"].includes(operation.name)), [
     { kind: "click", name: "Reveal", exact: true },
     { kind: "click", name: "Hide", exact: true },
-  ]);
+  ],
+  );
 });
 
 test("canonical agent persistence proof requires exact identity and default tools", () => {
@@ -1469,19 +1711,61 @@ test("exact revision-conflict probes acknowledge only their expected Chromium 40
   );
 });
 
+test("schedule absence acknowledges only a completed exact deletion and its independent 404 readback", () => {
+  const missing = {
+    type: "error",
+    text: "Failed to load resource: the server responded with a status of 404 (Not Found)",
+  };
+  const action = {
+    kind: "canonical-api-probe",
+    probe: "schedule-cancellation-readback",
+    status: 200,
+    jobId: "manual-usability-browser-schedule-fixture",
+  };
+  const step = {
+    status: "passed",
+    stepId: "route.ops-schedules.schedule-create-list-cancel-and-run",
+    operatorActions: [action],
+  };
+  const records = [
+    { kind: "response", method: "DELETE", status: 200, sequence: 1, path: `/api/v1/cron/jobs/${action.jobId}` },
+    { kind: "response", method: "GET", status: 404, sequence: 2, path: `/api/v1/cron/jobs/${action.jobId}` },
+  ];
+  const snapshot = { consoleMessages: [missing], networkRecords: records, pageErrors: [] };
+  assert.equal(filterExpectedBrowserConsoleMessages(snapshot, [step]).acknowledgedScheduleAbsenceCount, 1);
+  for (const input of [
+    { snapshot, steps: [{ ...step, status: "failed" }] },
+    { snapshot, steps: [{ ...step, operatorActions: [{ ...action, jobId: "foreign-job" }] }] },
+    { snapshot: { ...snapshot, networkRecords: [records[1]] }, steps: [step] },
+    {
+      snapshot: { ...snapshot, networkRecords: [records[0], { ...records[1], path: "/api/v1/cron/jobs/other" }] },
+      steps: [step],
+    },
+    { snapshot: { ...snapshot, networkRecords: [records[0], { ...records[1], sequence: 0 }] }, steps: [step] },
+    { snapshot: { ...snapshot, consoleMessages: [missing, missing] }, steps: [step] },
+  ]) {
+    const result = filterExpectedBrowserConsoleMessages(input.snapshot, input.steps);
+    assert.equal(result.acknowledgedScheduleAbsenceCount, 0);
+    assert.deepEqual(result.snapshot.consoleMessages, input.snapshot.consoleMessages);
+  }
+});
+
 test("cockpit document conflict acknowledges only the exact browser PATCH rejection", () => {
-  const conflict = { type: "error", text: "Failed to load resource: the server responded with a status of 409 (Conflict)" };
+  const conflict = { type: "error", text: "Failed to load resource: the server responded with a status of 409 (Conflict)",
+  };
   const action = { kind: "browser-mutation-rejection", probe: "cockpit-document-stale-save",
-    status: 409, method: "PATCH", requestPath: "/api/v1/notes/note-1" };
+    status: 409, method: "PATCH", requestPath: "/api/v1/notes/note-1",
+  };
   const step = { operatorActions: [action] };
   const snapshot = { consoleMessages: [conflict], pageErrors: [] };
   assert.equal(filterExpectedBrowserConsoleMessages(snapshot, [step]).acknowledgedRevisionConflictCount, 1);
   assert.deepEqual(filterExpectedBrowserConsoleMessages(snapshot, [
     { operatorActions: [{ ...action, requestPath: "/api/v1/sessions/session-1" }] },
-  ]).snapshot.consoleMessages, [conflict]);
+  ]).snapshot.consoleMessages, [conflict],
+  );
   assert.deepEqual(filterExpectedBrowserConsoleMessages(snapshot, [
-    { operatorActions: [{ ...action, probe: "unrelated" }] },
-  ]).snapshot.consoleMessages, [conflict]);
+    { operatorActions: [{ ...action, probe: "unrelated" }] }]).snapshot.consoleMessages, [conflict],
+  );
 });
 
 test("cockpit receipt signing unavailability acknowledges only its exact 503 after UI readback", () => {
@@ -1495,14 +1779,21 @@ test("cockpit receipt signing unavailability acknowledges only its exact 503 aft
   };
   const step = {
     stepId: "cockpit.chat.code-mode-artifacts",
+    status: "passed",
     operatorActions: [{ kind: "terminal-ui-readback", value: "OS keychain is unavailable" }],
   };
   const snapshot = { consoleMessages: [expectedError], networkRecords: [receiptResponse] };
   const accepted = filterExpectedBrowserConsoleMessages(snapshot, [step]);
   assert.equal(accepted.acknowledgedReceiptUnavailableCount, 1);
   assert.deepEqual(accepted.snapshot.consoleMessages, []);
+  const classic = filterExpectedBrowserConsoleMessages(snapshot, [
+    { ...step, stepId: "route.chat.code-mode-artifacts" },
+  ]);
+  assert.equal(classic.acknowledgedReceiptUnavailableCount, 1);
+  assert.deepEqual(classic.snapshot.consoleMessages, []);
   for (const input of [
     { snapshot, steps: [] },
+    { snapshot, steps: [{ ...step, status: "failed" }] },
     { snapshot: { ...snapshot, networkRecords: [{ ...receiptResponse, status: 502 }] }, steps: [step] },
     { snapshot: { ...snapshot, networkRecords: [{ ...receiptResponse, path: "/api/v1/health" }] }, steps: [step] },
     { snapshot: { ...snapshot, consoleMessages: [expectedError, expectedError] }, steps: [step] },
@@ -2167,9 +2458,13 @@ test("Settings bundles use live control names and execute the seeded MCP grant l
       `${operation.kind}:${operation.name ?? operation.namePattern ?? operation.value ?? operation.valuePattern ?? operation.probe}`,
     ),
     [
+      "click:Add provider",
       "click-pattern:ChatGPT setup",
-      "assert-text-pattern:(?:ChatGPT provider added\\. Start ChatGPT login below\\.|OpenAI Codex is already configured\\. Connect ChatGPT OAuth below\\.)",
       "assert-text:Not started",
+      "click:Add provider and continue",
+      "assert-text:awaiting input",
+      "assert-text-absent:Change evidence does not match this Settings save",
+      "assert-control:Start ChatGPT login",
       "api:invalid-provider-credential",
     ],
   );
@@ -2184,13 +2479,21 @@ test("Settings bundles use live control names and execute the seeded MCP grant l
       .filter((operation) => operation.kind === "click" || operation.kind === "confirm")
       .map((operation) => `${operation.kind}:${operation.name}`),
     [
+      "click:Edit server",
       "click:Save changes",
-      "click:Connect",
-      "click:Health check",
-      "click:Disconnect",
+      "click:Back to list",
+      "click:Review connection",
+      "click:Connect reviewed server",
+      "click:Tools",
+      "click:Connection",
+      "click:Review disconnect",
+      "click:Disconnect reviewed server",
       "click:Manage tool grants",
+      "click:Create tool grant",
       "click:Create grant",
-      "click:Revoke",
+      "confirm:Create grant",
+      "click:Close details",
+      "click:All grants",
       "confirm:Revoke",
     ],
   );
@@ -2235,7 +2538,7 @@ test("operator-authenticated request options preserve caller options and headers
 
 test("the Settings action runtime enables the connector diagnostics capability it exercises", () => {
   assert.equal(USABILITY_BROWSER_ACTION_GATEWAY_ENV.GOATCITADEL_FEATURE_CONNECTOR_DIAGNOSTICS_V1_ENABLED, "true");
-  assert.deepEqual(USABILITY_LOCAL_MCP_POLICY.allowedEnvKeys, ["GOATCITADEL_AUTH_TOKEN"]);
+  assert.deepEqual(USABILITY_LOCAL_MCP_POLICY.allowedEnvKeys, []);
 });
 
 test("Ops approval recovery pauses the linked durable run after fixture-session hydration", () => {
@@ -2286,6 +2589,34 @@ test("resolved blocker evidence requires exact approval and user-input session l
       }),
     /approved decision not found/u,
   );
+});
+
+test("blocker settlement waits for completed turns instead of racing resumed message persistence", () => {
+  const completed = resolvedTurn("session-approval", "turn-approval", "run-approval");
+  const input = {
+    approvalSessionId: "session-approval",
+    approvals: [
+      {
+        approvalId: "approval-1",
+        status: "approved",
+        linkage: { sessionId: "session-approval", turnId: "turn-approval" },
+      },
+    ],
+    approvalTurns: [completed],
+    userInputSessionId: "session-input",
+    userInputTurns: [resolvedTurn("session-input", "turn-input", "run-input")],
+  };
+  for (const status of ["running", "failed", "cancelled"]) {
+    assert.throws(
+      () =>
+        validateResolvedBlockerEvidence({
+          ...input,
+          userInputTurns: [{ ...input.userInputTurns[0], trace: { ...input.userInputTurns[0].trace, status } }],
+        }),
+      /has not completed/u,
+    );
+  }
+  assert.equal(validateResolvedBlockerEvidence(input).userInputRunId, "run-input");
 });
 
 test("resolved blocker capability profiles require exact actor, durable, and trace bindings", () => {
@@ -2772,20 +3103,91 @@ test("document readback waits for the submitted exact revision and rejects a sub
   let reads = 0;
   const note = await pollCockpitDocumentNote(async () => ++reads === 1
     ? { noteId: "note-1", revision: 1, body: "Original" } : { noteId: "note-1", revision: 2, body: "Reviewed" },
-  2, "Reviewed", { timeoutMs: 100, wait: async () => undefined });
+  2, "Reviewed", { timeoutMs: 100, wait: async () => undefined },
+  );
   assert.equal(reads, 2);
   assert.equal(note.revision, 2);
-  for (const changed of [{ revision: 2, body: "Substituted" }, { revision: 3, body: "Reviewed" }]) {
-    await assert.rejects(() => pollCockpitDocumentNote(async () => changed, 2, "Reviewed", { timeoutMs: 100 }), /expected revision 2/);
+  for (const changed of [{ revision: 2, body: "Substituted" }, { revision: 3, body: "Reviewed" },
+  ]) {
+    await assert.rejects(() => pollCockpitDocumentNote(async () => changed, 2, "Reviewed", { timeoutMs: 100 }), /expected revision 2/,
+    );
   }
-  await assert.rejects(() => pollCockpitDocumentNote(async () => ({ revision: 1, body: "Original" }), 2, "Reviewed", { timeoutMs: 0 }), /expected revision 2/);
+  await assert.rejects(() => pollCockpitDocumentNote(async () => ({ revision: 1, body: "Original" }), 2, "Reviewed", { timeoutMs: 0 }), /expected revision 2/,
+  );
 });
 
 test("the pre-navigation approval barrier requires the exact approved decision and settled linked turn", () => {
-  const snapshot = { approvalSessionId: "approval-session", approvals: [{ approvalId: "approval-1", status: "approved", linkage: { sessionId: "approval-session", turnId: "turn-1" } }],
-    approvalTurns: [resolvedTurn("approval-session", "turn-1", "run-1")] };
+  const snapshot = { approvalSessionId: "approval-session", approvals: [{ approvalId: "approval-1", status: "approved", linkage: { sessionId: "approval-session", turnId: "turn-1" } },
+    ],
+    approvalTurns: [resolvedTurn("approval-session", "turn-1", "run-1")],
+  };
   assert.deepEqual(validateResolvedApprovalEvidence(snapshot), { approvalId: "approval-1", approvalTurnId: "turn-1" });
-  assert.throws(() => validateResolvedApprovalEvidence({ ...snapshot, approvalSessionId: "foreign" }), /approved decision not found/);
-  assert.throws(() => validateResolvedApprovalEvidence({ ...snapshot, approvals: [{ ...snapshot.approvals[0], status: "pending" }] }), /approved decision not found/);
-  assert.throws(() => validateResolvedApprovalEvidence({ ...snapshot, approvalTurns: [resolvedTurn("foreign", "turn-1", "run-1")] }), /cross-session/);
+  assert.throws(() => validateResolvedApprovalEvidence({ ...snapshot, approvalSessionId: "foreign" }), /approved decision not found/,
+  );
+  assert.throws(() => validateResolvedApprovalEvidence({ ...snapshot, approvals: [{ ...snapshot.approvals[0], status: "pending" }] }), /approved decision not found/,
+  );
+  assert.throws(() => validateResolvedApprovalEvidence({ ...snapshot, approvalTurns: [resolvedTurn("foreign", "turn-1", "run-1")] }), /cross-session/,
+  );
+});
+
+test("grant browser proof binds the captured creation, workspace policy and exact active operator record", () => {
+  const requestBody = {
+    toolPattern: "mcp.*",
+    decision: "deny",
+    scope: "workspace",
+    scopeRef: "workspace-1",
+    grantType: "persistent",
+  };
+  const captured = { value: "grant-1", requestPath: "/api/v1/tools/grants", requestBody, matchingResponses: [{}] };
+  const grant = {
+    ...requestBody,
+    grantId: "grant-1",
+    createdBy: "loopback:127.0.0.1",
+    createdAt: "2026-10-02T00:00:00.000Z",
+  };
+  assert.equal(validateCreatedToolGrant(captured, [grant], "workspace-1", "mcp.*"), grant);
+  for (const changed of [
+    { ...grant, grantId: "foreign" },
+    { ...grant, scopeRef: "foreign" },
+    { ...grant, decision: "allow" },
+    { ...grant, toolPattern: "*" },
+    { ...grant, createdBy: "foreign" },
+    { ...grant, revokedAt: grant.createdAt },
+    { ...grant, expiresAt: grant.createdAt },
+    { ...grant, constraints: { mutationAllowed: true } },
+  ])
+    assert.throws(() => validateCreatedToolGrant(captured, [changed], "workspace-1", "mcp.*"), /exact active reviewed/);
+  assert.throws(
+    () => validateCreatedToolGrant(captured, [grant, grant], "workspace-1", "mcp.*"),
+    /exact active reviewed/,
+  );
+  for (const changed of [
+    { ...captured, matchingResponses: [{}, {}] },
+    { ...captured, requestPath: "/foreign" },
+    { ...captured, requestBody: { ...requestBody, decision: "allow" } },
+  ])
+    assert.throws(() => validateCreatedToolGrant(changed, [grant], "workspace-1", "mcp.*"), /exact reviewed request/);
+});
+
+test("tool prompt-mode approval proof rejects cross-owner, stale and substituted requests", () => {
+  const request = { kind: "runtime_configuration", change: { operation: "tool_approval_mode", mode: "approve_risky" } };
+  const plan = {
+    planId: "plan-1",
+    kind: "runtime_configuration",
+    origin: { workspaceId: "default", surface: "settings" },
+    target: { ownerId: "runtime_settings", resourceId: "tool_approval_mode", expectedRevision: 12 },
+    request,
+  };
+  validateBrowserSettingsPlan(plan, "plan-1", 12, request);
+  for (const changed of [
+    { ...plan, planId: "foreign" },
+    { ...plan, kind: "channel_connection" },
+    { ...plan, origin: { ...plan.origin, workspaceId: "foreign" } },
+    { ...plan, origin: { ...plan.origin, surface: "chat" } },
+    { ...plan, target: { ...plan.target, ownerId: "foreign" } },
+    { ...plan, target: { ...plan.target, resourceId: "llama_cpp_configuration" } },
+    { ...plan, target: { ...plan.target, expectedRevision: 13 } },
+    { ...plan, request: { ...request, change: { ...request.change, mode: "bypass" } } },
+  ])
+    assert.throws(() => validateBrowserSettingsPlan(changed, "plan-1", 12, request), /exact reviewed fixture request/);
 });

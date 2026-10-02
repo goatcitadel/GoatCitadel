@@ -3,7 +3,12 @@ import { createEmptyLlmTransportDraft } from "@goatcitadel/mission-control-share
 import { buildChatGptOAuthProviderDraft } from "../helpers/provider-drafts";
 import { getErrorMessage } from "../SettingsShared";
 import { useSettingsChange } from "../use-settings-change";
-import { matchesProviderSave, matchesProviderSavePlan, providerSaveInput } from "./provider-save-contract";
+import {
+  matchesProviderSave,
+  matchesProviderSavePlan,
+  matchesProviderTargetRevision,
+  providerSaveInput,
+} from "./provider-save-contract";
 import {
   beginProviderMutation,
   finishProviderMutation,
@@ -32,6 +37,7 @@ export function useProviderCodexSetup({
     key: "provider-setup:system:openai-codex",
     read: fetchLlmConfig,
     matchesPlan: matchesProviderSavePlan,
+    matchesTargetRevision: matchesProviderTargetRevision,
     matches: matchesProviderSave,
     acceptSaved: () => true,
     reload,
