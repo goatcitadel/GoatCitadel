@@ -5,8 +5,6 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
-import { readDurableChatTurnExecutionPayloadAuthority } from "../../../../packages/contracts/dist/index.js";
-
 import { NEXT_RELEASE_SURFACE_MANIFEST } from "../release-surface-manifest.mjs";
 import { prepareVerificationRuntime, requestJson, stopVerificationStack } from "../runtime.mjs";
 import {
@@ -2955,13 +2953,13 @@ async function apiProbe(probe, state) {
         sessionId: userInputSessionId,
         turnId: evidence.userInputTurnId,
       });
-      validateResolvedBlockerAuthority(approvalProfile.body, approvalRun.body, {
+      await validateResolvedBlockerAuthority(approvalProfile.body, approvalRun.body, {
         requestActor: state.fixture.blockerActors?.approval,
         sessionId: approvalSessionId,
         turn: approvalTurn,
         workspaceId: state.fixture.workspaceId,
       });
-      validateResolvedBlockerAuthority(userInputProfile.body, userInputRun.body, {
+      await validateResolvedBlockerAuthority(userInputProfile.body, userInputRun.body, {
         requestActor: state.fixture.blockerActors?.userInput,
         sessionId: userInputSessionId,
         turn: userInputTurn,
@@ -5325,13 +5323,16 @@ export function validateResolvedBlockerEvidence(input) {
   };
 }
 
-export function validateResolvedBlockerAuthority(envelope, run, expected) {
+export async function validateResolvedBlockerAuthority(envelope, run, expected) {
   const actor = run?.payload?.requestActor;
   if (!expected.requestActor || actor?.actorKind !== "operator" || !isDeepStrictEqual(actor, expected.requestActor))
     throw new Error("resolved blocker does not retain the exact authenticated fixture operator");
   if (run?.payload?.version !== "chat.turn.execute.v2" || run.payload.capabilityProfileId) {
     return validateResolvedBlockerCapabilityProfile(envelope, { ...expected, requestActor: actor });
   }
+  // Verification entrypoints load before their prerequisite build. Read the
+  // compiled authority owner only when this built-runtime proof executes.
+  const { readDurableChatTurnExecutionPayloadAuthority } = await import("../../../../packages/contracts/dist/index.js");
   const authority = readDurableChatTurnExecutionPayloadAuthority({
     workflowKey: run.workflowKey,
     durableRunId: run.runId,

@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { pathToFileURL } from "node:url";
+
 import { canonicalJsonString } from "../../../../packages/contracts/dist/index.js";
 
 import {
@@ -64,7 +66,57 @@ import {
   withOperatorAuth,
 } from "./usability-browser-action-lane.mjs";
 
-test("profile-free blocker proof retains authenticated actor, cryptographic admission and message bindings", () => {
+test("verification entrypoints load before contracts build output exists", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-verification-bootstrap-"));
+  const loader = path.join(root, "without-built-contracts.mjs");
+  try {
+    await fs.writeFile(
+      loader,
+      [
+        "export async function resolve(specifier, context, nextResolve) {",
+        "  const result = await nextResolve(specifier, context);",
+        "  if (result.url.includes('/packages/contracts/dist/'))",
+        "    throw new Error('Contracts build output is unavailable during verification startup.');",
+        "  return result;",
+        "}",
+      ].join("\n"),
+      "utf8",
+    );
+    const blocked = new URL("../../../../packages/contracts/dist/index.js", import.meta.url).href;
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            "--experimental-loader",
+            pathToFileURL(loader).href,
+            "--input-type=module",
+            "-e",
+            `await import(${JSON.stringify(blocked)});`,
+          ],
+          { encoding: "utf8", timeout: 30_000 },
+        ),
+      (error) => error.status === 1 && error.stderr.includes("Contracts build output is unavailable"),
+    );
+    const entry = new URL("../scenarios.mjs", import.meta.url).href;
+    const output = execFileSync(
+      process.execPath,
+      [
+        "--experimental-loader",
+        pathToFileURL(loader).href,
+        "--input-type=module",
+        "-e",
+        `await import(${JSON.stringify(entry)}); process.stdout.write('VERIFICATION_BOOTSTRAP_OK');`,
+      ],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    assert.equal(output, "VERIFICATION_BOOTSTRAP_OK");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("profile-free blocker proof retains authenticated actor, cryptographic admission and message bindings", async () => {
   const request = { content: "Resume the fixture." };
   const digest = (value) => createHash("sha256").update(canonicalJsonString(value)).digest("hex");
   const admissionMaterialSha256 = digest({ version: 2, request });
@@ -106,7 +158,7 @@ test("profile-free blocker proof retains authenticated actor, cryptographic admi
     },
   };
   const envelope = { state: "legacy_missing" };
-  validateResolvedBlockerAuthority(envelope, run, expected);
+  await validateResolvedBlockerAuthority(envelope, run, expected);
   for (const changed of [
     { ...payload, requestActor: { ...payload.requestActor, authActorId: "foreign" } },
     { ...payload, admissionMaterialSha256: "0".repeat(64) },
@@ -116,11 +168,11 @@ test("profile-free blocker proof retains authenticated actor, cryptographic admi
     { ...payload, assistantMessageId: "other" },
     { ...payload, request: { content: "Tampered request." } },
   ])
-    assert.throws(
+    await assert.rejects(
       () => validateResolvedBlockerAuthority(envelope, { ...run, payload: changed }, expected),
       /exact authenticated|exact profile-free/u,
     );
-  assert.throws(
+  await assert.rejects(
     () => validateResolvedBlockerAuthority({ state: "available", profile: {} }, run, expected),
     /exact profile-free/u,
   );
