@@ -53,7 +53,7 @@ describe("durable Work history", () => {
     await vi.waitFor(() => expect(container.textContent).toContain("latest"));
     await click("Load older runs");
     await vi.waitFor(() => expect(container.textContent).toContain("older/run"));
-    expect(fetchDurableRunHistory).toHaveBeenLastCalledWith({ workspaceId: "workspace-a", limit: 100, cursor: "older-page" });
+    expect(fetchDurableRunHistory).toHaveBeenLastCalledWith({ workspaceId: "workspace-a", limit: 100, cursor: "older-page" }, { signal: expect.any(AbortSignal) });
     expect(container.querySelector('a[href="/work/runs/older%2Frun?shell=cockpit"]')).not.toBeNull();
     expect(container.textContent).toContain("End of saved run history.");
     expect(container.querySelectorAll("li")).toHaveLength(2);
@@ -78,7 +78,7 @@ describe("durable Work history", () => {
     await render("workspace-b");
     expect(container.textContent).not.toContain("private-a");
     await vi.waitFor(() => expect(container.textContent).toContain("private-b"));
-    expect(fetchDurableRunHistory).toHaveBeenLastCalledWith({ workspaceId: "workspace-b", limit: 100, cursor: undefined });
+    expect(fetchDurableRunHistory).toHaveBeenLastCalledWith({ workspaceId: "workspace-b", limit: 100, cursor: undefined }, { signal: expect.any(AbortSignal) });
   });
 
   it("keeps loaded records with a stale notice after a page failure and retries that page", async () => {
@@ -93,7 +93,7 @@ describe("durable Work history", () => {
     expect(container.textContent).toContain("saved");
     await click("Try runs again");
     await vi.waitFor(() => expect(container.textContent).toContain("recovered"));
-    expect(fetchDurableRunHistory).toHaveBeenLastCalledWith({ workspaceId: "workspace-a", limit: 100, cursor: "retry-page" });
+    expect(fetchDurableRunHistory).toHaveBeenLastCalledWith({ workspaceId: "workspace-a", limit: 100, cursor: "retry-page" }, { signal: expect.any(AbortSignal) });
     expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 

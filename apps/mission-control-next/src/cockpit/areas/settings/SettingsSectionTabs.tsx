@@ -1,6 +1,7 @@
-import { useSyncExternalStore, type ReactNode } from "react";
+import { Suspense, useRef, useSyncExternalStore, type ReactNode } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/Tabs";
 import type { SettingsIndexEntry, SettingsIndexPage } from "./settings-index";
+import { preloadSettingsSection } from "./settings-controls";
 
 const DEFAULT_SECTIONS: Record<string, string> = {
   models: "providers",
@@ -47,6 +48,9 @@ export function SettingsSectionTabs({
   onChange: (entry: SettingsIndexEntry) => void;
   children: (entry: SettingsIndexEntry) => ReactNode;
 }) {
+  // Keep visited controls (and unsaved input) without mounting every hidden owner.
+  const visited = useRef(new Set<string>());
+  visited.current.add(value);
   return (
     <Tabs
       value={value}
@@ -59,7 +63,10 @@ export function SettingsSectionTabs({
     >
       <TabsList aria-label={`${page.label} sections`} className="mt-3 max-w-full overflow-x-auto pb-px">
         {page.entries.map((entry) => (
-          <TabsTrigger key={entry.section} value={entry.section} className="min-h-11 shrink-0 whitespace-nowrap">
+          <TabsTrigger key={entry.section} value={entry.section} className="min-h-11 shrink-0 whitespace-nowrap"
+            onPointerEnter={() => preloadSettingsSection(entry.section)}
+            onFocus={() => preloadSettingsSection(entry.section)}
+            onPointerDown={() => preloadSettingsSection(entry.section)}>
             {entry.tabLabel ?? entry.label}
           </TabsTrigger>
         ))}
@@ -72,7 +79,9 @@ export function SettingsSectionTabs({
           hidden={value !== entry.section}
           className="min-w-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
         >
-          {children(entry)}
+          {visited.current.has(entry.section) ? <Suspense fallback={<p role="status" className="py-3 text-sm text-fg-muted">Loading {entry.tabLabel ?? entry.label}…</p>}>
+            {children(entry)}
+          </Suspense> : null}
         </TabsContent>
       ))}
     </Tabs>

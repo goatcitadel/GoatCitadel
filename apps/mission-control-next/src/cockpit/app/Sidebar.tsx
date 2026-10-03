@@ -29,6 +29,7 @@ import { Kbd } from "../ui/Kbd";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/Menu";
 import { COCKPIT_AREAS } from "./routes";
 import { useCockpitRoute } from "./use-cockpit-route";
+import { useCockpitPreload } from "./use-cockpit-preload";
 
 const AREA_ICONS = { chat: MessageSquare, inbox: Inbox, work: LayoutGrid, library: Library, system: Activity } as const;
 
@@ -61,6 +62,7 @@ export function Sidebar({
 }) {
   const shellSwitch = useCockpitShellSwitch();
   const { area: current, navigate } = useCockpitRoute();
+  const preload = useCockpitPreload();
   const { activeCitadelId, activeWorkspaceId, theme, setTheme } = useUiPreferences();
   const workspaces = useQuery({
     queryKey: queryKeys.workspaces(activeCitadelId),
@@ -130,6 +132,9 @@ export function Sidebar({
               aria-current={current === entry.area ? "page" : undefined}
               aria-describedby={entry.area === "work" ? "cockpit-work-running-summary" : undefined}
               onClick={() => navigate(entry.path)}
+              onPointerEnter={() => preload(entry.area)}
+              onFocus={() => preload(entry.area)}
+              onPointerDown={() => preload(entry.area)}
               className="flex h-8 items-center gap-2 rounded-md px-2 text-sm text-fg-secondary hover:bg-sunken aria-[current=page]:bg-sunken aria-[current=page]:text-fg"
             >
               <Icon aria-hidden="true" className="size-4" />
@@ -154,6 +159,8 @@ export function Sidebar({
       <div className="flex-1" />
       <a
         href="/system"
+        onPointerEnter={() => preload("system")}
+        onFocus={() => preload("system")}
         onClick={(event) => {
           event.preventDefault();
           navigate("/system");
@@ -167,7 +174,9 @@ export function Sidebar({
         <span aria-hidden="true" className={`size-2 rounded-full ${stream.tone}`} />
         <span className={collapsed ? "sr-only" : "flex-1"}>{stream.label}</span>
         <Menu>
-          <MenuTrigger aria-label="Settings and account" className="rounded-md p-1 text-fg-muted hover:bg-sunken">
+          <MenuTrigger aria-label="Settings and account" className="rounded-md p-1 text-fg-muted hover:bg-sunken"
+            onPointerEnter={() => preload("settings")} onFocus={() => preload("settings")}
+            onPointerDown={() => preload("settings")}>
             <Settings aria-hidden="true" className="size-4" />
           </MenuTrigger>
           <MenuContent align="end">

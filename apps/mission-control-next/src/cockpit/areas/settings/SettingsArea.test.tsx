@@ -83,6 +83,8 @@ describe("Settings section tabs", () => {
   it("routes capability selections and hooks to the actual active scope owners", async () => {
     await render("/settings/citadel?shell=cockpit#citadel-capabilities");
     expect(container.querySelector('[aria-label="citadel capabilities citadel-a retained draft"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="workspace capabilities workspace-a retained draft"]')).toBeNull();
+    await activate("Workspace capabilities");
     expect(container.querySelector('[aria-label="workspace capabilities workspace-a retained draft"]')).not.toBeNull();
     const entries = buildSettingsIndex().flatMap((page) => page.entries);
     expect(entries.find((entry) => entry.section === "citadel-capabilities")?.href).toBe("/settings/citadel#citadel-capabilities");
@@ -95,8 +97,11 @@ describe("Settings section tabs", () => {
     await render();
     expect(active()).toBe("Appearance");
     expect(container.querySelector('a[href="/settings/general?shell=classic"]')).toBeNull();
+    expect(owner.mounted.mock.calls.map(([name]) => name)).toEqual(["Appearance owner"]);
+    expect(container.querySelector('[aria-label="Personality owner retained draft"]')).toBeNull();
+    await activate("Personalities");
     const draft = container.querySelector<HTMLInputElement>('[aria-label="Personality owner retained draft"]')!;
-    await activate("Personalities"); await fill(draft, "Unsaved voice");
+    await fill(draft, "Unsaved voice");
     expect(window.location.hash).toBe("#work-personality"); expect(window.location.search).toBe("?shell=cockpit");
     await activate("Appearance");
     expect(draft.closest('[role="tabpanel"]')?.hasAttribute("hidden")).toBe(true);
@@ -113,6 +118,7 @@ describe("Settings section tabs", () => {
     await act(async () => { tab("Appearance").focus(); tab("Appearance").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
     await vi.waitFor(() => expect(document.activeElement).toBe(tab("Personalities")));
     expect(active()).toBe("Appearance");
+    expect(owner.mounted.mock.calls.map(([name]) => name)).toEqual(["Appearance owner"]);
     await activate("Personalities");
     const panel = document.getElementById(tab("Personalities").getAttribute("aria-controls")!)!;
     expect(panel.getAttribute("role")).toBe("tabpanel"); expect(panel.hasAttribute("hidden")).toBe(false);

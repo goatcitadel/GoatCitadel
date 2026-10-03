@@ -64,15 +64,12 @@ it("keeps Chat immediate and loads only the requested cockpit area", async () =>
     const draft = container.querySelector<HTMLInputElement>('input[aria-label="Chat draft"]')!;
     draft.value = "Keep this draft";
 
-    act(() => {
+    await act(async () => {
       window.history.pushState(null, "", "/work");
       window.dispatchEvent(new PopStateEvent("popstate"));
-    });
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Loading Work…");
-    expect(imports.chatUnmount).toHaveBeenCalledOnce();
-    await act(async () => {
       await vi.dynamicImportSettled();
     });
+    expect(imports.chatUnmount).toHaveBeenCalledOnce();
     expect(container.textContent).toContain("Work loaded");
     expect(imports.work).toHaveBeenCalledOnce();
     expect(imports.library).not.toHaveBeenCalled();

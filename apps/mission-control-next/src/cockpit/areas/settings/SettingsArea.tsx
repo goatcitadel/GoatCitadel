@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { ArrowRight, ArrowUpRight, Search } from "lucide-react";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
@@ -6,36 +6,39 @@ import { EmptyState } from "../../ui/EmptyState";
 import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { buildSettingsIndex, searchSettingsPages, type SettingsIndexEntry } from "./settings-index";
 import { SettingsSectionTabs, selectedSettingsSection, useSettingsSectionHash } from "./SettingsSectionTabs";
-import { FirstRunArea } from "./FirstRunArea";
-import { AppearanceSettings } from "./AppearanceSettings";
-import { DeviceAccessSettings } from "./DeviceAccessSettings";
-import { PersonalitySettings } from "./PersonalitySettings";
-import { WorkspaceSettings } from "./WorkspaceSettings";
-import { IntegrationConnectionsSettings } from "./IntegrationConnectionsSettings";
-import { ManagedRuntimeSettings } from "./ManagedRuntimeSettings";
-import { McpServersSettings } from "./McpServersSettings";
-import { BudgetModeControl } from "./BudgetModeControl";
-import { ApprovalModeControl } from "./ApprovalModeControl";
-import { ModelsSettings } from "./ModelsSettings";
-import { ToolGrantSettings } from "./ToolGrantSettings";
-import { SafetyCatalogSummary } from "./SafetyCatalogSummary";
-import { PermissionProfileSettings } from "./PermissionProfileSettings";
-import { TrustPolicySettings } from "./TrustPolicySettings";
-import { LocalAiSettings } from "./LocalAiSettings";
-import { CitadelBlueprintSettings } from "./CitadelBlueprintSettings";
-import { ChannelsSettings } from "./ChannelsSettings";
-import { CitadelOverviewSettings } from "./CitadelOverviewSettings";
-import { CitadelMasonSettings } from "./CitadelMasonSettings";
-import { CitadelWardsSettings } from "./CitadelWardsSettings";
-import { CitadelCouncilSettings } from "./CitadelCouncilSettings";
-import { CitadelVaultSettings } from "./CitadelVaultSettings";
-import { DaemonDiagnostics } from "./DaemonDiagnostics";
-import { VoiceRuntimeSettings } from "./VoiceRuntimeSettings";
-import { LlamaSetupSettings } from "./LlamaSetupSettings";
-import { CapabilityScopesSettings } from "./CapabilityScopesSettings";
-import { HooksSettings } from "./HooksSettings";
-import { AddonsSettings } from "./AddonsSettings";
-import { PortablePacksSettings } from "./PortablePacksSettings";
+import {
+  FirstRunArea,
+  AppearanceSettings,
+  DeviceAccessSettings,
+  PersonalitySettings,
+  WorkspaceSettings,
+  IntegrationConnectionsSettings,
+  ManagedRuntimeSettings,
+  McpServersSettings,
+  BudgetModeControl,
+  ApprovalModeControl,
+  ModelsSettings,
+  ToolGrantSettings,
+  SafetyCatalogSummary,
+  PermissionProfileSettings,
+  TrustPolicySettings,
+  LocalAiSettings,
+  CitadelBlueprintSettings,
+  ChannelsSettings,
+  CitadelOverviewSettings,
+  CitadelMasonSettings,
+  CitadelWardsSettings,
+  CitadelCouncilSettings,
+  CitadelVaultSettings,
+  DaemonDiagnostics,
+  VoiceRuntimeSettings,
+  LlamaSetupSettings,
+  CapabilityScopesSettings,
+  HooksSettings,
+  AddonsSettings,
+  PortablePacksSettings,
+  preloadSettingsSection,
+} from "./settings-controls";
 
 const PAGES = buildSettingsIndex();
 
@@ -120,7 +123,7 @@ export function SettingsArea() {
     }
   };
 
-  if (rest[0] === "first-run") return <FirstRunArea />;
+  if (rest[0] === "first-run") return <Suspense fallback={<p role="status" className="p-4 text-sm text-fg-muted">Loading setup…</p>}><FirstRunArea /></Suspense>;
 
   return (
     <section className="mx-auto flex w-full min-w-0 max-w-5xl flex-col gap-5 p-4 sm:p-6">
@@ -158,6 +161,9 @@ export function SettingsArea() {
           <a
             key={page.id}
             href={`/settings/${page.id}`}
+            onPointerEnter={() => preloadSettingsSection(selectedSettingsSection(page, page.id, ""))}
+            onFocus={() => preloadSettingsSection(selectedSettingsSection(page, page.id, ""))}
+            onPointerDown={() => preloadSettingsSection(selectedSettingsSection(page, page.id, ""))}
             aria-current={!query.trim() && selectedId === page.id ? "page" : undefined}
             onClick={(event) => {
               event.preventDefault();
@@ -174,7 +180,7 @@ export function SettingsArea() {
         <EmptyState title="No matching settings" description="Try a different name or topic." />
       ) : null}
       <section
-        key={page.id}
+        key={JSON.stringify([page.id, activeCitadelId, activeWorkspaceId])}
         hidden={searching}
         aria-label={page.label}
         className="min-w-0 rounded-lg border border-line bg-raised p-4"
@@ -235,6 +241,9 @@ function SettingsDestinations({
           {entry.href.includes("shell=classic") ? <ClassicOwnerLink href={entry.href} scope={scope} label={entry.label}
             className="flex min-h-20 items-start gap-3 p-3 hover:bg-canvas"><SettingsDestinationContent entry={entry} /></ClassicOwnerLink> : <a
             href={entry.href}
+            onPointerEnter={() => preloadSettingsSection(entry.section)}
+            onFocus={() => preloadSettingsSection(entry.section)}
+            onPointerDown={() => preloadSettingsSection(entry.section)}
             className="flex min-h-20 items-start gap-3 p-3 hover:bg-canvas"
             onClick={(event) => {
               if (

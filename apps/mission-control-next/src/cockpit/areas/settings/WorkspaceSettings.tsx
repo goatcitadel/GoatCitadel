@@ -13,7 +13,7 @@ import { Button } from "../../ui/Button";
 
 const PAGE_SIZE = 20;
 const inputClass = "mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-fg";
-interface WorkspaceSettingsProps {
+export interface WorkspaceSettingsProps {
   citadelId: string;
   citadelName?: string;
   activeWorkspaceId?: string;

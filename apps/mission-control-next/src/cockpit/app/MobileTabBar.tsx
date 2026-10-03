@@ -8,6 +8,7 @@ import { useCockpitNavigation } from "./cockpit-navigation-context";
 import { ScopeSwitcher } from "./ScopeSwitcher";
 import { Sheet } from "../ui/Sheet";
 import { useCockpitRoute } from "./use-cockpit-route";
+import { useCockpitPreload } from "./use-cockpit-preload";
 
 const TABS = [
   { area: "chat", label: "Chat", path: "/chat", Icon: MessageSquare },
@@ -20,6 +21,7 @@ export function MobileTabBar({ onOpenPalette }: { onOpenPalette: () => void }) {
   const { isTransitionPending } = useCockpitNavigation();
   const shellSwitch = useCockpitShellSwitch();
   const { area: current, navigate } = useCockpitRoute();
+  const preload = useCockpitPreload();
   const { activeWorkspaceId, theme, setTheme } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
   const inbox = useOperatorInbox(workspaceId);
@@ -41,6 +43,9 @@ export function MobileTabBar({ onOpenPalette }: { onOpenPalette: () => void }) {
           ? `Inbox, ${inboxCount === "?" ? "count unknown" : inboxCount.endsWith("+") ? `at least ${inboxCount.slice(0, -1)} items` : `${inboxCount} items`}`
           : undefined}
         onClick={() => navigate(path)}
+        onPointerEnter={() => preload(area)}
+        onFocus={() => preload(area)}
+        onPointerDown={() => preload(area)}
         className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 py-1 text-xs text-fg-muted aria-[current=page]:text-fg"
       >
         <span className="relative">
@@ -58,8 +63,8 @@ export function MobileTabBar({ onOpenPalette }: { onOpenPalette: () => void }) {
     <Sheet open={moreOpen} onOpenChange={setMoreOpen} title="More">
       <div className="grid gap-1">
         <button type="button" onClick={() => { if (isTransitionPending()) return; setMoreOpen(false); setScopeOpen(true); }} className="flex min-h-11 items-center rounded-md px-3 text-left text-fg hover:bg-sunken">Change Citadel and workspace</button>
-        <button type="button" onClick={() => openArea("/system")} className="flex min-h-11 items-center gap-3 rounded-md px-3 text-left text-fg hover:bg-sunken"><Activity aria-hidden="true" className="size-4" />System</button>
-        <button type="button" onClick={() => openArea("/settings/general")} className="flex min-h-11 items-center gap-3 rounded-md px-3 text-left text-fg hover:bg-sunken"><Settings aria-hidden="true" className="size-4" />Settings</button>
+        <button type="button" onPointerEnter={() => preload("system")} onFocus={() => preload("system")} onPointerDown={() => preload("system")} onClick={() => openArea("/system")} className="flex min-h-11 items-center gap-3 rounded-md px-3 text-left text-fg hover:bg-sunken"><Activity aria-hidden="true" className="size-4" />System</button>
+        <button type="button" onPointerEnter={() => preload("settings")} onFocus={() => preload("settings")} onPointerDown={() => preload("settings")} onClick={() => openArea("/settings/general")} className="flex min-h-11 items-center gap-3 rounded-md px-3 text-left text-fg hover:bg-sunken"><Settings aria-hidden="true" className="size-4" />Settings</button>
         <button type="button" onClick={() => { setMoreOpen(false); onOpenPalette(); }} className="flex min-h-11 items-center gap-3 rounded-md px-3 text-left text-fg hover:bg-sunken"><Search aria-hidden="true" className="size-4" />Search</button>
         <button type="button" onClick={() => { setTheme(theme === "dark" ? "light" : "dark"); setMoreOpen(false); }} className="flex min-h-11 items-center rounded-md px-3 text-left text-fg hover:bg-sunken">Switch to {theme === "dark" ? "light" : "dark"} theme</button>
         <button type="button" onClick={() => { setMoreOpen(false); shellSwitch.request(); }} className="flex min-h-11 items-center rounded-md px-3 text-left text-fg hover:bg-sunken">Switch to classic Mission Control</button>

@@ -5,7 +5,6 @@ import { useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import { fetchObserveRunTrace } from "@goatcitadel/mission-control-shared/api/durable";
-import { fetchTasks } from "@goatcitadel/mission-control-shared/api/tasks";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { formatCostUsd } from "@goatcitadel/mission-control-shared/content/cost-summary";
@@ -29,6 +28,7 @@ import { useWorkspaceDurableRuns } from "./useWorkspaceDurableRuns";
 import { RunArtifacts } from "./RunArtifacts";
 import { RunWorkspaceContext } from "./RunWorkspaceContext";
 import { RunLineage } from "./RunLineage";
+import { workspaceTasksOptions } from "./work-queries";
 
 const COLUMNS: readonly { id: WorkBoardGroup; title: string; description: string }[] = [
   { id: "running", title: "Running", description: "Queued or executing" },
@@ -50,9 +50,7 @@ function WorkBoard() {
   const { activeWorkspaceId } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
   const runs = useWorkspaceDurableRuns(workspaceId);
-  const tasks = useInfiniteQuery({ queryKey: queryKeys.workTasks(workspaceId), initialPageParam: "",
-    queryFn: ({ pageParam }) => fetchTasks(undefined, workspaceId, { limit: 200, cursor: pageParam || undefined }),
-    getNextPageParam: (last) => last.nextCursor, refetchInterval: 30_000 });
+  const tasks = useInfiniteQuery(workspaceTasksOptions(workspaceId));
   const board = runs.data ? projectWorkBoard(runs.data.pages.flatMap((page) => page.items), workspaceId) : null;
   const taskBoard = !tasks.isError && tasks.data ? projectWorkTasks(tasks.data.pages.flatMap((page) => page.items), workspaceId) : null;
   return <section className="flex min-h-full flex-col gap-5 p-4 sm:p-6">

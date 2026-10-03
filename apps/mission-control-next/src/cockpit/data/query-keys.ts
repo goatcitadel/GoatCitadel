@@ -1,4 +1,5 @@
 import type { RefreshTopic } from "@goatcitadel/mission-control-shared/state/refresh-bus";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 
 type TopicKey = readonly [RefreshTopic, ...unknown[]];
 
@@ -12,8 +13,8 @@ export const queryKeys = {
   health: (workspaceId: string): TopicKey => ["system", "health", workspaceId],
   costs: (): TopicKey => ["system", "costs", "day"],
   durableRuns: (): TopicKey => ["tasks", "durable-runs"],
-  durableRunHistory: (workspaceId: string): TopicKey => ["tasks", "durable-runs", "history", workspaceId],
-  workTasks: (workspaceId: string): TopicKey => ["tasks", "work-tasks", workspaceId],
+  durableRunHistory: (workspaceId: string): TopicKey => ["tasks", "durable-runs", "history", workspaceId, getGatewayApiBaseUrl()],
+  workTasks: (workspaceId: string): TopicKey => ["tasks", "work-tasks", workspaceId, getGatewayApiBaseUrl()],
   runTrace: (runId: string): TopicKey => ["tasks", "durable-run", runId],
   workSessions: (workspaceId: string): TopicKey => ["chat", "work-history", workspaceId],
   workActivity: (workspaceId: string): TopicKey => ["system", "work-activity", workspaceId],

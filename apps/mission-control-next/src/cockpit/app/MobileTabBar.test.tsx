@@ -12,6 +12,8 @@ vi.mock("../ui/Sheet", () => ({
     open ? <section role="dialog" aria-label={title}>{children}</section> : null,
 }));
 vi.mock("../../shell-preference", () => ({ switchShell: vi.fn() }));
+const preload = vi.hoisted(() => vi.fn());
+vi.mock("./use-cockpit-preload", () => ({ useCockpitPreload: () => preload }));
 vi.mock("../data/use-operator-inbox", () => ({
   useOperatorInbox: () => ({ data: {
     workspaceId: "default",
@@ -29,6 +31,7 @@ let root: Root;
 let container: HTMLDivElement;
 
 beforeEach(() => {
+  preload.mockClear();
   window.history.replaceState(null, "", "/chat");
   window.localStorage.setItem("goatcitadel.ui.theme.v1", "dark");
   container = document.createElement("div");
@@ -48,6 +51,16 @@ function button(label: string): HTMLButtonElement {
 }
 
 describe("MobileTabBar", () => {
+  it("warms touch and keyboard destinations without navigating until activation", async () => {
+    await act(async () => root.render(<QueryClientProvider client={new QueryClient()}><UiPreferencesProvider><CockpitNavigationProvider><MobileTabBar onOpenPalette={vi.fn()} /></CockpitNavigationProvider></UiPreferencesProvider></QueryClientProvider>));
+    act(() => button("Work").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })));
+    expect(preload).toHaveBeenLastCalledWith("work");
+    act(() => button("Library").focus());
+    expect(preload).toHaveBeenLastCalledWith("library");
+    expect(window.location.pathname).toBe("/chat");
+    await act(async () => button("Work").click());
+    expect(window.location.pathname).toBe("/work");
+  });
   it("opens More as a sheet with System and appearance controls", async () => {
     await act(async () => root.render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><UiPreferencesProvider><CockpitNavigationProvider><MobileTabBar onOpenPalette={vi.fn()} /></CockpitNavigationProvider></UiPreferencesProvider></QueryClientProvider>));
     expect(container.querySelector('[title="At least this many Inbox items"]')?.textContent).toBe("2+");

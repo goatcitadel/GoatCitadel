@@ -1,4 +1,4 @@
-import { Activity, lazy, Suspense, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Activity, Suspense, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -14,13 +14,7 @@ import { COCKPIT_AREAS } from "./routes";
 import { Sidebar } from "./Sidebar";
 import { useCockpitRoute } from "./use-cockpit-route";
 import type { GatewayReachability } from "./use-gateway-reachability";
-
-const SettingsArea = lazy(async () => ({ default: (await import("../areas/settings/SettingsArea")).SettingsArea }));
-const InboxArea = lazy(async () => ({ default: (await import("../areas/inbox/InboxArea")).InboxArea }));
-const WorkArea = lazy(async () => ({ default: (await import("../areas/work/WorkArea")).WorkArea }));
-const LibraryArea = lazy(async () => ({ default: (await import("../areas/library/LibraryArea")).LibraryArea }));
-const SystemArea = lazy(async () => ({ default: (await import("../areas/system/SystemArea")).SystemArea }));
-const Gallery = lazy(async () => ({ default: (await import("./Gallery")).Gallery }));
+import { SettingsArea, InboxArea, WorkArea, LibraryArea, SystemArea, Gallery } from "./area-loaders";
 
 interface CockpitShellProps {
   streamState?: EventStreamConnectionState;
