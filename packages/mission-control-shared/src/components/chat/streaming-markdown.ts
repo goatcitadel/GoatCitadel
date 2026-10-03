@@ -47,6 +47,19 @@ function walk(node: Root | RootContent, visit: (node: Root | RootContent) => voi
   if ("children" in node) for (const child of node.children) walk(child as RootContent, visit);
 }
 
+/** Source ranges of CommonMark inline code, including its backtick delimiters. */
+export function readInlineCodeRanges(source: string): Array<{ start: number; end: number }> {
+  if (!source.includes("`")) return [];
+  const ranges: Array<{ start: number; end: number }> = [];
+  walk(parser.parse(source), (node) => {
+    if (node.type !== "inlineCode") return;
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (start !== undefined && end !== undefined) ranges.push({ start, end });
+  });
+  return ranges;
+}
+
 // These are candidate labels, not Markdown syntax decisions. The installed parser
 // validates every candidate and tells us which reference identifiers this block
 // really depends on (including presently unresolved, collapsed and shortcut links).

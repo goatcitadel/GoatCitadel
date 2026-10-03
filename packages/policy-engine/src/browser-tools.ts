@@ -743,18 +743,32 @@ async function executeBrowserScreenshot(
   });
 }
 
-async function executeBrowserInteract(
-  args: Record<string, unknown>,
-  config: ToolPolicyConfig,
-  executionContext?: BrowserExecutionContext,
-): Promise<Record<string, unknown>> {
-  const url = asNonEmptyString(args.url, "url");
+/** Validate the full sequence before approval or any browser action. */
+export function parseBrowserInteractionSteps(args: Record<string, unknown>): BrowserStepInput[] {
   const rawSteps = Array.isArray(args.steps) ? args.steps : [];
   if (rawSteps.length === 0) {
     throw new Error("browser.interact requires a non-empty steps array");
   }
 
   const steps = rawSteps.map(parseStep);
+  for (const step of steps) {
+    if (step.action === "click" || step.action === "type" || step.action === "wait_for_selector") {
+      ensureSelector(step.selector, step.action);
+    }
+    if (step.action === "type") {
+      asNonEmptyString(step.text, "type.text");
+    }
+  }
+  return steps;
+}
+
+async function executeBrowserInteract(
+  args: Record<string, unknown>,
+  config: ToolPolicyConfig,
+  executionContext?: BrowserExecutionContext,
+): Promise<Record<string, unknown>> {
+  const url = asNonEmptyString(args.url, "url");
+  const steps = parseBrowserInteractionSteps(args);
   const finalSelector = asString(args.finalSelector) ?? "body";
   const maxChars = clampInt(args.maxChars, 6000, 200, 30000);
   const outputPath = asString(args.outputPath) ?? asString(args.path);
@@ -2104,7 +2118,9 @@ function parseStep(value: unknown): BrowserStepInput {
   const step = value as Record<string, unknown>;
   const action = asString(step.action) as BrowserStepInput["action"] | undefined;
   if (!action || !["click", "type", "press", "wait_for_selector", "wait"].includes(action)) {
-    throw new Error(`Unsupported browser.interact step action: ${String(step.action ?? "")}`);
+    throw new Error(
+      `Unsupported browser.interact step action: ${String(step.action ?? "")}. Supported actions: click, type, press, wait_for_selector, wait. Use browser.extract or browser.navigate for read-only page text.`,
+    );
   }
   return {
     action,

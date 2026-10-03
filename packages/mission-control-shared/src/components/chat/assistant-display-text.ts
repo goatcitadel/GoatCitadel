@@ -1,4 +1,5 @@
 import type { ChatCitationRecord, MemoryCitationProvenance, MemoryRetrievalMatchSignals } from "@goatcitadel/contracts";
+import { readInlineCodeRanges } from "./streaming-markdown";
 
 const RAW_HTML_BLOCK_RE = /<(script|style|svg|math|canvas)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
 const RAW_HTML_TAG_RE = /<\/?[A-Za-z][^>\n]{0,1000}>/g;
@@ -120,6 +121,31 @@ function stripHtmlNoiseOutsideCode(content: string): string {
 }
 
 function stripHtmlNoise(content: string): string {
+  const ranges = readInlineCodeRanges(content);
+  if (ranges.length === 0) return stripHtmlNoiseProse(content);
+
+  // Shield literal code before the prose-only HTML cleanup. Whole HTML blocks
+  // surrounding a span still disappear, and collision checks include decoded
+  // and stripped prose so user text cannot impersonate a shield token.
+  let marker = "\u0000goat-code";
+  const proseProbe = stripHtmlNoiseProse(content);
+  while (content.includes(marker) || proseProbe.includes(marker)) marker += "_";
+  const code: string[] = [];
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const range of ranges) {
+    parts.push(content.slice(cursor, range.start), `${marker}:${code.length}\u0000`);
+    code.push(content.slice(range.start, range.end));
+    cursor = range.end;
+  }
+  parts.push(content.slice(cursor));
+  return stripHtmlNoiseProse(parts.join("")).replace(
+    new RegExp(`${marker}:(\\d+)\\x00`, "g"),
+    (token, index: string) => code[Number(index)] ?? token,
+  );
+}
+
+function stripHtmlNoiseProse(content: string): string {
   return stripRawHtmlComments(decodeBasicHtmlEntities(content))
     .replace(RAW_HTML_BLOCK_RE, " ")
     .replace(HTML_LINE_BREAK_RE, "\n")
@@ -334,8 +360,8 @@ function looksLikeHtml(content: string): boolean {
 //     the result is exact by construction.
 //   * Within the still-growing final text segment, a prefix is finalized only
 //     while it contains NO `<!--` and NO raw-HTML block-element opener
-//     (`<script|style|svg|math|canvas`). Those are the only constructs whose
-//     match can extend forward across lines and retroactively re-interpret
+//     (`<script|style|svg|math|canvas`) or unresolved inline-code delimiters.
+//     Those constructs can extend across lines and retroactively re-interpret
 //     earlier text (comment stripping and RAW_HTML_BLOCK_RE); with none
 //     present, `stripHtmlNoise` distributes over the cut. When one appears,
 //     finalization simply stops until the segment completes — equivalence is
@@ -361,7 +387,7 @@ const TEXT_FINALIZE_BLOCKER_RE = /<(?:script|style|svg|math|canvas)\b|<!--/i;
  * test stays first as the cheap fast path (decoding cannot remove a raw `<`).
  */
 function lineBlocksTextFinalization(line: string): boolean {
-  if (TEXT_FINALIZE_BLOCKER_RE.test(line)) {
+  if (line.includes("`") || TEXT_FINALIZE_BLOCKER_RE.test(line)) {
     return true;
   }
   return line.includes("&") && TEXT_FINALIZE_BLOCKER_RE.test(decodeBasicHtmlEntities(line));
@@ -374,7 +400,7 @@ const TEXT_FINALIZE_DANGLING_CLOSER_RE = /<\/(?:script|style|svg|math|canvas)\b[
 
 /** Cheap trigger: only lines that could complete a blocked construct pay the region re-check. */
 function lineMayCloseBlockedRegion(line: string): boolean {
-  if (TEXT_FINALIZE_CLOSER_CANDIDATE_RE.test(line)) {
+  if (line.includes("`") || TEXT_FINALIZE_CLOSER_CANDIDATE_RE.test(line)) {
     return true;
   }
   return line.includes("&") && TEXT_FINALIZE_CLOSER_CANDIDATE_RE.test(decodeBasicHtmlEntities(line));
@@ -412,8 +438,26 @@ function regionEndsWithDanglingCloser(decodedRegion: string): boolean {
  * O(delta) amortization is deferred.
  */
 function blockedRegionCanFinalize(region: string): boolean {
-  const residual = stripRawHtmlComments(decodeBasicHtmlEntities(region)).replace(RAW_HTML_BLOCK_RE, " ");
-  return !TEXT_FINALIZE_BLOCKER_RE.test(residual);
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const range of readInlineCodeRanges(region)) {
+    parts.push(region.slice(cursor, range.start), region.slice(range.start, range.end).replace(/[^\n]/g, " "));
+    cursor = range.end;
+  }
+  parts.push(region.slice(cursor));
+  const prose = decodeBasicHtmlEntities(parts.join(""));
+  // Backticks are also close candidates now. They must not finalize an HTML
+  // comment before its own closer arrives and expose the following lines.
+  if (prose.lastIndexOf("<!--") > prose.lastIndexOf("-->")) return false;
+  const residual = stripRawHtmlComments(prose).replace(RAW_HTML_BLOCK_RE, " ");
+  if (TEXT_FINALIZE_BLOCKER_RE.test(residual)) return false;
+  // An unmatched opener can pair with a later line. Do not finalize its HTML
+  // cleanup before the parser can classify that future code span.
+  for (let index = 0; index < residual.length; index++) {
+    if (residual[index] === "\\") index += 1;
+    else if (residual[index] === "`") return false;
+  }
+  return true;
 }
 
 export interface IncrementalDisplayTextState {

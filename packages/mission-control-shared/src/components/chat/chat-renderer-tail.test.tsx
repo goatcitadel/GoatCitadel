@@ -262,6 +262,30 @@ describe("chat rendering tail coverage", () => {
     expect(normalized).not.toContain("<aside>");
   });
 
+  it.each([false, true])(
+    "preserves HTML tag names inside inline code without rendering HTML (running=%s)",
+    async (running) => {
+      const content = "Use `<details>` and ``<script>`example</script>``.\n\n<aside>Note</aside>";
+      expect(normalizeAssistantDisplayText(content)).toBe("Use `<details>` and ``<script>`example</script>``.\n\nNote");
+      renderer = create(
+        <AssistantMessageRenderer
+          role="assistant"
+          content={content}
+          running={running}
+          streamTurnId="inline-html-code"
+        />,
+      );
+      await flush();
+      expect(renderer.root.findAllByType("code").map((code) => textOf(code))).toEqual([
+        "<details>",
+        "<script>`example</script>",
+      ]);
+      expect(renderer.root.findAllByType("script")).toHaveLength(0);
+      expect(renderer.root.findAllByType("details")).toHaveLength(0);
+      expect(renderer.root.findAllByType("aside")).toHaveLength(0);
+    },
+  );
+
   it("keeps single-line fences from swallowing later streaming paragraphs", () => {
     const split = splitStreamingMarkdown('intro\n\n```json {"ok":true}```\n\noutro tail');
 

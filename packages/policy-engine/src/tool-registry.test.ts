@@ -87,6 +87,32 @@ describe("tool registry", () => {
     expect(catalog.some((tool) => tool.toolName === "browser.context.configure")).toBe(true);
   });
 
+  it("advertises executable browser interaction steps and read-only alternatives", () => {
+    const tool = createDefaultToolRegistry()
+      .toCatalog()
+      .find((entry) => entry.toolName === "browser.interact");
+    expect(tool).toMatchObject({
+      requiresApproval: true,
+      riskLevel: "danger",
+      argSchema: {
+        required: ["url", "steps"],
+        properties: {
+          steps: {
+            minItems: 1,
+            items: {
+              required: ["action"],
+              properties: {
+                action: { enum: ["click", "type", "press", "wait_for_selector", "wait"] },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(tool?.description).toContain("browser.extract");
+    expect(tool?.description).toContain("snapshot is not a supported step");
+  });
+
   it("keeps browser.search as the single governed model-callable official search path", () => {
     const tool = createDefaultToolRegistry()
       .toCatalog()

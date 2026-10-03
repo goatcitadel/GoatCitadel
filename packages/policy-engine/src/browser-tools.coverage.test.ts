@@ -614,6 +614,17 @@ describe("browser tools coverage sweep", () => {
     await expect(
       executeBrowserTool("browser.interact", { url: "https://example.com/form", steps: [{ action: "click" }] }, config),
     ).rejects.toThrow(/click step requires selector/i);
+    await expect(
+      executeBrowserTool(
+        "browser.interact",
+        {
+          url: "https://example.com/form",
+          steps: [{ action: "click", selector: "button" }, { action: "snapshot" }],
+        },
+        config,
+      ),
+    ).rejects.toThrow(/Unsupported browser.interact step action: snapshot/);
+    expect(mocked.launch).not.toHaveBeenCalled();
   });
 
   it("uses fallback parsing when playwright is unavailable for browser.search", async () => {

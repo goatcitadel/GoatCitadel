@@ -110,7 +110,7 @@ export function detectToolLoopRisk(
   }
 
   if (state.config.detectors.ping_pong) {
-    const pingPongCount = measurePingPongPattern(recentHistory, toolName);
+    const pingPongCount = measurePingPongPattern(recentHistory, toolName, signature);
     const severity = classifyToolLoopSeverity(state.config, pingPongCount);
     if (severity) {
       const partnerTool = recentHistory.at(-1)?.toolName;
@@ -194,24 +194,35 @@ function compareLoopGuardEventsBySeverity(
   return rank[right.severity] - rank[left.severity] || right.repetitionCount - left.repetitionCount;
 }
 
-function measurePingPongPattern(history: ToolLoopHistoryEntry[], nextToolName: string): number {
+function measurePingPongPattern(history: ToolLoopHistoryEntry[], nextToolName: string, nextSignature: string): number {
   if (history.length < 3) {
     return 0;
   }
-  const names = [...history.map((entry) => entry.toolName), nextToolName];
-  const distinct = [...new Set(names.slice(-4))];
-  if (distinct.length !== 2) {
+  const partner = history.at(-1);
+  if (!partner || partner.toolName === nextToolName) {
     return 0;
   }
+  // Alternating tool names alone are normal discovery (list one directory,
+  // read a file, then inspect another directory). Only an exact pair of calls
+  // can oscillate; changed arguments or a third call reset the suffix.
   let count = 1;
-  let previous = names.at(-1);
-  for (let index = names.length - 2; index >= 0; index -= 1) {
-    const current = names[index];
-    if (!current || current === previous) {
+  const pollingResults = new Map<string, string>();
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const current = history[index];
+    const expectedSignature = count % 2 === 1 ? partner.signature : nextSignature;
+    if (!current || current.signature !== expectedSignature) {
       break;
     }
+    // Polls may legitimately repeat their arguments while the run advances.
+    // Do not let this detector undo the progress-aware polling exemption.
+    if (looksLikePollingTool(current.toolName) && current.resultSignature) {
+      const resultSignature = pollingResults.get(current.signature);
+      if (resultSignature && resultSignature !== current.resultSignature) {
+        break;
+      }
+      pollingResults.set(current.signature, current.resultSignature);
+    }
     count += 1;
-    previous = current;
   }
   return count >= 4 ? count : 0;
 }

@@ -237,6 +237,92 @@ describe("chat-tool-loop", () => {
     });
   });
 
+  it("allows the approval-resumed repository walk when each read inspects a new path", () => {
+    const state = initializeToolLoopGuardState();
+    const calls = [
+      { toolName: "fs.list", args: { path: "F:\\code\\personal-ai", limit: 60 } },
+      { toolName: "fs.read", args: { path: "F:\\code\\personal-ai\\AGENTS.md" } },
+      { toolName: "fs.list", args: { path: "F:\\code\\personal-ai\\apps" } },
+      { toolName: "fs.list", args: { path: "F:\\code\\personal-ai\\apps\\mission-control-next" } },
+      { toolName: "fs.read", args: { path: "F:\\code\\personal-ai\\apps\\mission-control-next\\AGENTS.md" } },
+      { toolName: "fs.list", args: { path: "F:\\code\\personal-ai\\apps\\mission-control-next\\src" } },
+      { toolName: "fs.read", args: { path: "F:\\code\\personal-ai\\apps\\mission-control-next\\src\\main.tsx" } },
+    ];
+
+    for (const call of calls) {
+      expect(detectToolLoopRisk(state, call.toolName, call.args)).toBeUndefined();
+      rememberToolLoopHistory(state, toolRun({ ...call, status: "executed" }));
+    }
+  });
+
+  it("allows alternating tools with refined arguments", () => {
+    const state = initializeToolLoopGuardState();
+    for (let step = 0; step < 8; step += 1) {
+      const toolName = step % 2 === 0 ? "fs.read" : "fs.list";
+      const args = { path: `source-${step}` };
+      expect(detectToolLoopRisk(state, toolName, args)).toBeUndefined();
+      rememberToolLoopHistory(state, toolRun({ toolName, args, status: "executed" }));
+    }
+  });
+
+  it("keeps ping-pong suppression for identical alternating calls", () => {
+    const state = initializeToolLoopGuardState({
+      detectors: { repeated_same_call: false, no_progress_polling: false, ping_pong: true },
+    });
+    rememberToolLoopHistory(state, toolRun({ toolName: "fs.read", args: { path: "a", encoding: "utf8" } }));
+    rememberToolLoopHistory(state, toolRun({ toolName: "fs.list", args: { path: "b" } }));
+    rememberToolLoopHistory(state, toolRun({ toolName: "fs.read", args: { encoding: "utf8", path: "a" } }));
+    expect(detectToolLoopRisk(state, "fs.list", { path: "b" })).toMatchObject({
+      detector: "ping_pong",
+      severity: "critical",
+      repetitionCount: 4,
+      suppressed: true,
+    });
+    rememberToolLoopHistory(state, toolRun({ toolName: "fs.list", args: { path: "b" } }));
+    rememberToolLoopHistory(state, toolRun({ toolName: "fs.read", args: { path: "a", encoding: "utf8" } }));
+    expect(detectToolLoopRisk(state, "fs.list", { path: "b" })).toMatchObject({
+      detector: "ping_pong",
+      severity: "global_circuit_breaker",
+      repetitionCount: 6,
+      suppressed: true,
+    });
+  });
+
+  it("starts a new alternating pattern after another tool or argument interrupts it", () => {
+    const state = initializeToolLoopGuardState({
+      warningThreshold: 5,
+      criticalThreshold: 6,
+      globalThreshold: 8,
+      detectors: { repeated_same_call: false, no_progress_polling: false, ping_pong: true },
+    });
+    rememberToolLoopHistory(state, toolRun({ toolName: "browser.search", args: { query: "source" } }));
+    rememberToolLoopHistory(state, toolRun({ toolName: "fs.read", args: { path: "old" } }));
+    rememberToolLoopHistory(state, toolRun({ toolName: "fs.list", args: { path: "b" } }));
+    rememberToolLoopHistory(state, toolRun({ toolName: "fs.read", args: { path: "a" } }));
+    rememberToolLoopHistory(state, toolRun({ toolName: "fs.list", args: { path: "b" } }));
+    expect(detectToolLoopRisk(state, "fs.read", { path: "a" })).toBeUndefined();
+  });
+
+  it("does not treat two argument variants of one tool as ping-pong", () => {
+    const state = initializeToolLoopGuardState({
+      detectors: { repeated_same_call: false, no_progress_polling: false, ping_pong: true },
+    });
+    for (const path of ["a", "b", "a", "b"]) {
+      expect(detectToolLoopRisk(state, "fs.read", { path })).toBeUndefined();
+      rememberToolLoopHistory(state, toolRun({ toolName: "fs.read", args: { path } }));
+    }
+  });
+
+  it("allows alternating polls while either result keeps progressing", () => {
+    const state = initializeToolLoopGuardState();
+    for (let step = 0; step < 8; step += 1) {
+      const toolName = step % 2 === 0 ? "session.status" : "run.status";
+      const args = { id: "active" };
+      expect(detectToolLoopRisk(state, toolName, args)).toBeUndefined();
+      rememberToolLoopHistory(state, toolRun({ toolName, args, result: { step }, status: "executed" }));
+    }
+  });
+
   it("normalizes failure signatures for retry and circuit-breaker grouping", () => {
     expect(normalizeFailureSignature("  Network   TIMEOUT  ")).toBe("network timeout");
     expect(normalizeFailureSignature(undefined)).toBe("unknown");

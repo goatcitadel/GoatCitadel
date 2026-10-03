@@ -1466,8 +1466,35 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     category: "research",
     riskLevel: "danger",
     requiresApproval: true,
-    description: "Perform interactive browser actions from step sequence.",
+    description:
+      "Perform approved click, type, press, wait_for_selector, or wait steps. Use browser.extract or browser.navigate for read-only page text; snapshot is not a supported step.",
     pack: "core",
+    argSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", format: "uri" },
+        steps: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            properties: {
+              action: { type: "string", enum: ["click", "type", "press", "wait_for_selector", "wait"] },
+              selector: { type: "string", description: "Required for click, type, and wait_for_selector." },
+              text: { type: "string", description: "Required non-empty text for type." },
+              key: { type: "string", description: "Key for press; defaults to Enter." },
+              timeoutMs: { type: "integer", minimum: 100, maximum: 60000 },
+            },
+            required: ["action"],
+          },
+        },
+        finalSelector: { type: "string" },
+        maxChars: { type: "integer", minimum: 200, maximum: 30000 },
+        outputPath: { type: "string", description: "Optional screenshot path inside the write jail." },
+        fullPage: { type: "boolean" },
+      },
+      required: ["url", "steps"],
+    },
   },
   {
     name: "browser.cookies.get",

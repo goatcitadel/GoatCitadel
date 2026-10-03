@@ -1113,6 +1113,44 @@ describe("ToolPolicyEngine citadel scope", () => {
 });
 
 describe("ToolPolicyEngine invocation coverage", () => {
+  it.each([
+    { steps: [{ action: "snapshot" }] },
+    { steps: [] },
+    { steps: [{ action: "click" }] },
+    { steps: [{ action: "type", selector: "input" }] },
+    { steps: [{ action: "click", selector: "button" }, { action: "snapshot" }] },
+  ])("rejects malformed browser steps before creating an approval: %j", async (args) => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+
+    const result = await engine.invoke({
+      toolName: "browser.interact",
+      args: { url: "http://localhost/app", ...args },
+      agentId: "assistant",
+      sessionId: "session-browser-validation",
+    });
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.policyReason).toMatch(/browser.interact|type.text/);
+    expect(storage.approvals.create).not.toHaveBeenCalled();
+    expect(storage.approvals.createWithTtlDuration).not.toHaveBeenCalled();
+    expect(storage.pendingApprovalActions.upsertPending).not.toHaveBeenCalled();
+  });
+
+  it("still requires approval for a valid browser interaction", async () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+    const result = await engine.invoke({
+      toolName: "browser.interact",
+      args: { url: "http://localhost/app", steps: [{ action: "wait_for_selector", selector: "main" }] },
+      agentId: "assistant",
+      sessionId: "session-browser-validation",
+    });
+
+    expect(result.outcome).toBe("approval_required");
+    expect(storage.approvals.createWithTtlDuration).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks an invoke whose resolved Citadel has a matching deny Ward (enforcement on the invoke path)", async () => {
     const storage = createStorageStub();
     Object.assign(storage, {

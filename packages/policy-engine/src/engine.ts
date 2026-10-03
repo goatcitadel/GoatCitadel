@@ -53,6 +53,7 @@ import {
   type IngestionSourceType,
 } from "./ingestion-source-type.js";
 import { resolveEffectivePolicy } from "./policy-resolver.js";
+import { parseBrowserInteractionSteps } from "./browser-tools.js";
 import {
   isOfficialResearchSearchInvocation,
   resolveOfficialSearchProviders,
@@ -1710,6 +1711,9 @@ export class ToolPolicyEngine {
         }
         if (request.toolName === "browser.search") {
           validateBrowserSearchHosts(request, this.config);
+        }
+        if (request.toolName === "browser.interact") {
+          parseBrowserInteractionSteps(request.args ?? {});
         }
       }
     } catch (error) {
