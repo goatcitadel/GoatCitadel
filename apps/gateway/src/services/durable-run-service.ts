@@ -52,11 +52,13 @@ import { projectDurableBackgroundTaskRail } from "./durable-background-task-proj
 import { verifySettledChatWaitingAuthority } from "./chat-durable-waiting-authority.js";
 import { commitDurableWakeTransition } from "./durable-wake-transition-service.js";
 import {
+  CHAT_TERMINAL_OUTPUT_METADATA_KEYS,
   CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY,
   HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY,
   HEARTBEAT_DECISION_RECEIPT_METADATA_KEY,
   buildHeartbeatDecisionReceipt,
   buildChatTurnRuntimeAuthoritySeal,
+  hasChatTurnTerminalOutputEvidence,
   hashChatTurnRuntimeAuthorityValue,
   readChatTurnRuntimeAuthoritySeal,
   readExactAutonomousChatPostCommitSettlement,
@@ -273,15 +275,6 @@ const COWORK_WORKFLOW_TIMEOUT_RESUME_EVENT = "cowork.turn.operator_resume";
 const AUTONOMY_KILL_SWITCH_RESUME_EVENT = "autonomy.v1.enabled";
 const RAW_REMOTE_APPROVAL_BEARER_PATTERN = /grat_[A-Za-z0-9_-]{43}/;
 const RAW_REMOTE_APPROVAL_BEARER_GLOBAL_PATTERN = /grat_[A-Za-z0-9_-]{43}/g;
-const CHAT_TERMINAL_OUTPUT_METADATA_KEYS = [
-  "outputText",
-  "finalOutput",
-  "outputSummary",
-  "finalSummary",
-  "outputMessageId",
-  "outputTraceStatus",
-] as const;
-const CHAT_TERMINAL_OUTPUT_CHECKPOINT_KEYS = ["assistantMessageId", "outputText", "outputSummary"] as const;
 const CHAT_RETRY_EXHAUSTION_DEAD_LETTER_PENDING_METADATA_KEY = "chatRetryExhaustionDeadLetterPending" as const;
 
 interface ChatRetryExhaustionDeadLetterPending {
@@ -1587,11 +1580,7 @@ export class DurableRunService {
   }
 
   private assertNoCanonicalChatTerminalOutput(run: DurableRunRecord, checkpointState?: Record<string, unknown>): void {
-    const metadata = run.metadata ?? {};
-    if (
-      CHAT_TERMINAL_OUTPUT_METADATA_KEYS.some((key) => metadata[key] !== undefined) ||
-      (checkpointState && CHAT_TERMINAL_OUTPUT_CHECKPOINT_KEYS.some((key) => checkpointState[key] !== undefined))
-    ) {
+    if (hasChatTurnTerminalOutputEvidence(run.metadata, checkpointState)) {
       throw new Error(`Durable Chat run ${run.runId} carries stale output evidence for a no-output transition.`);
     }
   }

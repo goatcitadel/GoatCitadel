@@ -16,7 +16,12 @@ import {
   type GeneralChatPostCommitEffectWorkflowPayload,
   type GeneralChatPostCommitProgress,
 } from "./chat-durable-run-service.js";
-import { isDurableWorkflowRecoverable, markDurableWorkflowUnrecoverable } from "./durable-execution-service.js";
+import {
+  executeGeneralChatPostCommit,
+  isDurableWorkflowRecoverable,
+  markDurableWorkflowUnrecoverable,
+  parseDurableChatTurnPayload,
+} from "./durable-execution-service.js";
 import { buildDurableLocalProcessLeaseOwnerId, DurableRunService } from "./durable-run-service.js";
 import { DURABLE_RETRY_POLICY_DEFAULT } from "./durable-retry-policy.js";
 import {
@@ -65,6 +70,113 @@ afterEach(() => {
 });
 
 describe("DurableRunService general Chat post-commit integration", () => {
+  it("releases a failed partial turn without saved output and admits the next turn without rewriting history", async () => {
+    const harness = createStorageHarness();
+    const parent = seedParent(harness.storage, "failed-partial-no-output", "failed");
+    const payload = parseDurableChatTurnPayload(parent);
+    if (!payload) throw new Error("Failed partial fixture must carry a valid admitted Chat payload.");
+    harness.storage.chatMessages.upsert({
+      messageId: payload.userMessageId,
+      sessionId: payload.sessionId,
+      role: "user",
+      sourceAuthority: "operator",
+      actorType: "user",
+      actorId: payload.requestActor.actorId,
+      content: payload.request.content,
+      timestamp: parent.createdAt,
+    });
+    const host = {
+      storage: getAsyncStorage(harness.storage),
+      hooksService: { enqueueAfterHooks: vi.fn(async () => undefined) },
+      recordCapabilityGapFromTrace: vi.fn(),
+      publishRealtime: vi.fn(),
+    };
+    const reportError = vi.fn();
+    const service = createService(
+      harness.storage,
+      (run, progress) => executeGeneralChatPostCommit(host as never, run, progress),
+      undefined,
+      reportError,
+    );
+    service.stopWorker();
+    const admission = harness.storage.sessionMutationAdmissions.require(String(parent.payload.admissionId));
+    const originalTrace = harness.storage.chatTurnTraces.get(admission.turnId!);
+    const recovery = await service.reconcileTerminalChatAdmission(admission);
+    expect(reportError.mock.calls).toEqual([]);
+    expect(recovery).toMatchObject({
+      recoveryOutcome: "released",
+      durableRunStatus: "failed",
+    });
+    await expect(service.reconcileTerminalChatAdmission(admission)).resolves.toMatchObject({
+      recoveryOutcome: "already_released",
+    });
+    expect(harness.storage.sessionMutationAdmissions.require(admission.admissionId)).toMatchObject({
+      status: "cancelled",
+      terminalAuthorityKind: "durable_terminal",
+      terminalDurableRunId: parent.runId,
+      terminalDurableRunStatus: "failed",
+    });
+    expect(harness.storage.chatTurnTraces.get(admission.turnId!)).toEqual(originalTrace);
+    expect(harness.storage.chatMessages.get(String(parent.payload.assistantMessageId))).toBeUndefined();
+    expect(listPostCommitChildren(harness.storage)).toHaveLength(0);
+    expect(host.recordCapabilityGapFromTrace).not.toHaveBeenCalled();
+    expect(host.publishRealtime).not.toHaveBeenCalled();
+    expect(
+      harness.storage.sessionMutationAdmissions.admit({
+        workspaceId: admission.workspaceId,
+        sessionId: admission.sessionId,
+        turnId: "turn-after-failed-partial",
+        runtimeOwnerId: "runtime-after-failed-partial",
+        admissionKind: "turn_write",
+        aggregateRevision: harness.storage.chatSessionMeta.get(admission.sessionId)!.revision,
+        controllerGeneration: admission.controllerGeneration,
+        actorKind: "operator",
+        actorId: admission.actorId,
+        operation: "chat_turn",
+        materialSha256: computeFrozenChatTurnAdmissionMaterialSha256({ content: "Retry the read-only audit." }),
+        idempotencyKey: "admit-after-failed-partial",
+        correlationId: "turn-after-failed-partial",
+      }).admission,
+    ).toMatchObject({ status: "active", turnId: "turn-after-failed-partial" });
+  });
+
+  it("keeps a failed partial admission active when storage finds output omitted from its authority", async () => {
+    const harness = createStorageHarness();
+    const parent = seedParent(harness.storage, "failed-partial-unsealed-output", "failed");
+    harness.storage.chatMessages.upsert({
+      messageId: String(parent.payload.assistantMessageId),
+      sessionId: String(parent.payload.sessionId),
+      role: "assistant",
+      sourceAuthority: "agent_proposed",
+      actorType: "agent",
+      actorId: "assistant",
+      content: "Output that is not bound by the failure checkpoint.",
+      timestamp: parent.createdAt,
+    });
+    const reportError = vi.fn();
+    const service = createService(
+      harness.storage,
+      async (_run, progress) => {
+        for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) await progress.runEffect(effect, () => undefined);
+        return { status: "partial" };
+      },
+      undefined,
+      reportError,
+    );
+    service.stopWorker();
+    await expect(service.reconcileGeneralChatPostCommit(parent.runId)).resolves.toBe(false);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.objectContaining({ error: expect.stringContaining("carries output evidence") }),
+      expect.any(String),
+    );
+    expect(harness.storage.sessionMutationAdmissions.require(String(parent.payload.admissionId)).status).toBe("active");
+    const metadata = harness.storage.durableRuns.getRun(parent.runId).metadata;
+    expect(metadata?.generalChatPostCommitPending).toBeDefined();
+    expect(metadata?.generalChatPostCommit).toBeUndefined();
+    expect(metadata?.chatTurnAdmissionHandoff).toBeUndefined();
+    expect(listPostCommitChildren(harness.storage)).toHaveLength(0);
+  });
+
   it.each(["frozen_disabled", "disabled_before_dispatch", "blocked_at_counter"] as const)(
     "releases the completed parent after %s post-commit stages and admits the next turn after restart",
     async (scenario) => {
@@ -527,8 +639,12 @@ describe("DurableRunService general Chat post-commit integration", () => {
     expect(await service.reconcileGeneralChatPostCommit(parent.runId)).toBe(true);
     expect(listener).toHaveBeenCalledTimes(2);
     const deliveries = listener.mock.calls.map(([event]) => event);
-    const originals = deliveries.filter((event) => event.eventType === "chat_thread_updated" && event.source === "chat");
-    const invalidations = deliveries.filter((event) => event.eventType === "inbox.changed" && event.source === "operator_inbox");
+    const originals = deliveries.filter(
+      (event) => event.eventType === "chat_thread_updated" && event.source === "chat",
+    );
+    const invalidations = deliveries.filter(
+      (event) => event.eventType === "inbox.changed" && event.source === "operator_inbox",
+    );
     expect(originals).toHaveLength(1);
     expect(invalidations).toHaveLength(1);
     const original = originals[0]!;
@@ -993,6 +1109,7 @@ function seedParent(
     admissionMaterialSha256,
     effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(admissionMaterialSha256, request),
     workspaceId,
+    policyRunIdDerivation: { version: 1, kind: "durable_run_id", runId },
     admissionAggregateRevision: admission.aggregateRevision,
     admissionControllerGeneration: admission.controllerGeneration,
     requestActor,
@@ -1036,7 +1153,7 @@ function seedParent(
   });
   storage.durableRuns.createCheckpoint({
     runId,
-    checkpointKind: status === "waiting" ? "run_waiting" : "run_completed",
+    checkpointKind: status === "waiting" ? "run_waiting" : status === "failed" ? "run_failed" : "run_completed",
     state: transition.checkpointState,
     createdAt: now,
   });
@@ -1057,7 +1174,7 @@ function seedParent(
     sessionId,
     userMessageId,
     assistantMessageId,
-    status: status === "waiting" ? "waiting_for_approval" : "completed",
+    status: status === "waiting" ? "waiting_for_approval" : status === "failed" ? "partial" : "completed",
     mode: "chat",
     webMode: "auto",
     memoryMode: "off",
@@ -1066,7 +1183,7 @@ function seedParent(
     durable: {
       runId,
       status,
-      checkpointKind: status === "waiting" ? "run_waiting" : "run_completed",
+      checkpointKind: status === "waiting" ? "run_waiting" : status === "failed" ? "run_failed" : "run_completed",
     },
     startedAt: now,
     ...(status === "completed"
@@ -1109,7 +1226,8 @@ function buildParentRuntimeTransition(
   autonomyEnabledAtParentSettlement = true,
 ): { metadata: Record<string, unknown>; checkpointState: Record<string, unknown>; outputText?: string } {
   const waiting = status === "waiting";
-  const traceStatus = waiting ? "waiting_for_approval" : "completed";
+  const noOutput = waiting || status === "failed";
+  const traceStatus = waiting ? "waiting_for_approval" : status === "failed" ? "partial" : "completed";
   const pending = pendingMetadata(generationId, traceStatus, autonomyEnabledAtParentSettlement);
   const marker = pending.generalChatPostCommitPending as Record<string, unknown>;
   const transitionAt = String(marker.requestedAt);
@@ -1120,13 +1238,13 @@ function buildParentRuntimeTransition(
     runId,
     turnId: "turn-post-commit",
     transitionKind: waiting ? "waiting" : "terminal",
-    durableStatus: waiting ? "waiting" : "completed",
+    durableStatus: waiting ? "waiting" : status === "failed" ? "failed" : "completed",
     traceStatus,
     transitionAt,
     postCommitGenerationId: generationId,
     postCommitEligibility,
     ...(waiting ? { waitForEvent } : {}),
-    ...(!waiting
+    ...(!noOutput
       ? {
           terminalOutput: {
             assistantMessageId: "assistant-post-commit",
@@ -1141,8 +1259,10 @@ function buildParentRuntimeTransition(
     {
       ...pending,
       retryPolicy: { ...DURABLE_RETRY_POLICY_DEFAULT },
-      ...(waiting
-        ? { waitForEvent }
+      ...(noOutput
+        ? waiting
+          ? { waitForEvent }
+          : {}
         : {
             outputText,
             finalOutput: outputText,
@@ -1153,8 +1273,10 @@ function buildParentRuntimeTransition(
     authority,
   );
   const checkpointState = withChatTurnRuntimeAuthorityCheckpoint(
-    waiting
-      ? { waitForEvent }
+    noOutput
+      ? waiting
+        ? { waitForEvent }
+        : {}
       : {
           assistantMessageId: "assistant-post-commit",
           outputText,
@@ -1162,7 +1284,7 @@ function buildParentRuntimeTransition(
         },
     authority,
   );
-  return { metadata, checkpointState, ...(waiting ? {} : { outputText }) };
+  return { metadata, checkpointState, ...(noOutput ? {} : { outputText }) };
 }
 
 function listPostCommitChildren(storage: Storage): DurableRunRecord[] {

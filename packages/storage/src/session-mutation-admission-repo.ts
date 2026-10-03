@@ -5603,7 +5603,9 @@ export class SessionMutationAdmissionRepository {
     const exactTraceStatus =
       terminalStatus === "completed"
         ? trace?.status === "completed" || trace?.status === "partial"
-        : trace?.status === terminalStatus;
+        : terminalStatus === "failed"
+          ? trace?.status === "failed" || trace?.status === "partial"
+          : trace?.status === terminalStatus;
     const autonomousAdmission = metadata.autonomousAdmission !== undefined;
     const expectedFinalizers: TerminalRuntimeFinalizer[] =
       authority?.material.transitionKind === "linked_finalization"
@@ -5807,8 +5809,18 @@ export class SessionMutationAdmissionRepository {
       );
     }
     if (run.status !== "completed") {
+      const unexpectedPartialOutput =
+        run.status === "failed" && authority.material.traceStatus === "partial"
+          ? this.db
+              .prepare(
+                `SELECT message_id FROM chat_messages
+                 WHERE message_id = @messageId${this.db.dialect === "postgres" ? " FOR UPDATE" : ""}`,
+              )
+              .get({ messageId: payload.assistantMessageId })
+          : undefined;
       if (
         output ||
+        unexpectedPartialOutput ||
         metadataOutputKeys.some((key) => metadata[key] !== undefined) ||
         checkpointOutputKeys.some((key) => checkpointState[key] !== undefined)
       ) {
@@ -7932,7 +7944,7 @@ function readExactTerminalRuntimeAuthoritySeal(value: unknown): TerminalRuntimeA
       (traceStatus === "completed" || traceStatus === "partial") &&
       heartbeatDecisionReceipt?.notify === false &&
       !terminalOutput) ||
-    (durableStatus === "failed" && traceStatus === "failed" && !terminalOutput) ||
+    (durableStatus === "failed" && (traceStatus === "failed" || traceStatus === "partial") && !terminalOutput) ||
     (durableStatus === "cancelled" && traceStatus === "cancelled" && !terminalOutput);
   if (
     (heartbeatDecisionReceipt && (durableStatus !== "completed" || traceStatus !== "completed")) ||

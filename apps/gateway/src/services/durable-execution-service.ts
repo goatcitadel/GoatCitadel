@@ -86,6 +86,8 @@ import {
   HEARTBEAT_DECISION_RAW_OUTPUT_METADATA_KEY,
   HEARTBEAT_DECISION_RECEIPT_METADATA_KEY,
   buildHeartbeatDecisionReceipt,
+  hasChatTurnTerminalOutputEvidence,
+  verifyCheckpointAnchoredChatTurnRuntimeAuthority,
   type ExactHeartbeatDecision,
   type HeartbeatDecisionReceipt,
 } from "./chat-durable-runtime-authority.js";
@@ -2693,7 +2695,16 @@ export async function executeGeneralChatPostCommit(
   if (heartbeatIdentity) {
     await repairIncompleteSystemHeartbeatFailedTrace(host, run, payload);
   }
-  const recoveryTrace = await validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId, userMessage, run);
+  const recoveryTrace = await validateCommittedDurableChatTurnRecoveryTrace(
+    host,
+    payload,
+    run.runId,
+    userMessage,
+    run,
+    {
+      allowFailedPartialWithoutOutput: true,
+    },
+  );
   if (recoveryTrace.outcome !== "valid") {
     throw new Error(
       recoveryTrace.outcome === "invalid"
@@ -2984,6 +2995,7 @@ async function validateCommittedDurableChatTurnRecoveryTrace(
   expectedRunId: string,
   observedUserMessage?: { role?: unknown; sessionId?: unknown },
   observedRun?: DurableRunRecord,
+  options: { allowFailedPartialWithoutOutput?: boolean } = {},
 ): Promise<DurableChatRecoveryTraceValidation> {
   let heartbeatIdentity: ExactSystemHeartbeatExecutionIdentity | undefined;
   let durableRun: DurableRunRecord;
@@ -3099,10 +3111,22 @@ async function validateCommittedDurableChatTurnRecoveryTrace(
     (trace.status === "completed" || trace.status === "partial") &&
     (!assistantMessage || trace.assistantMessageId !== payload.assistantMessageId)
   ) {
-    return {
-      outcome: "invalid",
-      reason: "Completed durable Chat trace is missing its linked assistant output.",
-    };
+    // Older partial-turn failures could commit the trace without an answer.
+    // Only the general finalizer may settle that exact no-output failure; the
+    // execution and autonomous recovery paths still require assistant output.
+    const noOutputFailure =
+      options.allowFailedPartialWithoutOutput &&
+      trace.status === "partial" &&
+      !assistantMessage &&
+      trace.assistantMessageId === payload.assistantMessageId &&
+      trace.durable?.runId === durableRun.runId &&
+      (await isCheckpointAnchoredFailedPartialWithoutOutput(host, payload, durableRun));
+    if (!noOutputFailure) {
+      return {
+        outcome: "invalid",
+        reason: "Completed durable Chat trace is missing its linked assistant output.",
+      };
+    }
   }
   if (isDurableChatWaitingStatus(trace.status)) {
     const toolRuns = await host.storage.chatToolRuns.listByTurn(payload.turnId);
@@ -3118,6 +3142,37 @@ async function validateCommittedDurableChatTurnRecoveryTrace(
     }
   }
   return { outcome: "valid", trace };
+}
+
+async function isCheckpointAnchoredFailedPartialWithoutOutput(
+  host: DurableChatTurnWorkflowHost,
+  payload: DurableChatTurnExecutionPayload,
+  run: DurableRunRecord,
+): Promise<boolean> {
+  if (payload.version !== "chat.turn.execute.v2" || run.status !== "failed") return false;
+  const checkpoint = await host.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_failed");
+  if (
+    !checkpoint ||
+    checkpoint.runId !== run.runId ||
+    checkpoint.checkpointKind !== "run_failed" ||
+    hasChatTurnTerminalOutputEvidence(run.metadata, checkpoint.state) ||
+    (await host.storage.chatMessages.get(payload.assistantMessageId))
+  ) {
+    return false;
+  }
+  try {
+    const { material } = verifyCheckpointAnchoredChatTurnRuntimeAuthority(run.metadata, checkpoint.state);
+    return (
+      material.runId === run.runId &&
+      material.turnId === payload.turnId &&
+      material.transitionKind === "terminal" &&
+      material.durableStatus === "failed" &&
+      material.traceStatus === "partial" &&
+      material.terminalOutput === null
+    );
+  } catch {
+    return false;
+  }
 }
 
 function validateDurableChatLinkedUserMessage(

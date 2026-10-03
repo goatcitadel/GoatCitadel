@@ -24,6 +24,15 @@ const GENERAL_POST_COMMIT_EFFECTS = [
   "agent_end",
 ] as const;
 const GENERAL_POST_COMMIT_DURABLE_EFFECTS = ["commitments", "background_review", "memory_maintenance"] as const;
+export const CHAT_TERMINAL_OUTPUT_METADATA_KEYS = [
+  "outputText",
+  "finalOutput",
+  "outputSummary",
+  "finalSummary",
+  "outputMessageId",
+  "outputTraceStatus",
+] as const;
+const CHAT_TERMINAL_OUTPUT_CHECKPOINT_KEYS = ["assistantMessageId", "outputText", "outputSummary"] as const;
 const TRACE_STATUSES = [
   "waiting_for_tool",
   "waiting_for_approval",
@@ -442,6 +451,16 @@ export function verifyCheckpointAnchoredChatTurnRuntimeAuthority(
   const metadataSeal = verifyChatTurnRuntimeAuthoritySeal(metadata?.[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY]);
   verifyChatTurnRuntimeAuthoritySeal(checkpointState[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY], metadataSeal);
   return metadataSeal;
+}
+
+export function hasChatTurnTerminalOutputEvidence(
+  metadata: Record<string, unknown> | undefined,
+  checkpointState?: Record<string, unknown>,
+): boolean {
+  return (
+    CHAT_TERMINAL_OUTPUT_METADATA_KEYS.some((key) => metadata?.[key] !== undefined) ||
+    Boolean(checkpointState && CHAT_TERMINAL_OUTPUT_CHECKPOINT_KEYS.some((key) => checkpointState[key] !== undefined))
+  );
 }
 
 export function buildAutonomousChatAdmissionMetadataMaterial(input: {
