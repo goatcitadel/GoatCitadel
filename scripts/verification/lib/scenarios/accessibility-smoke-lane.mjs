@@ -2,11 +2,13 @@ import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 const ACCESSIBILITY_STUB_REPLY = "KEYBOARD_OK";
 const ACCESSIBILITY_STUB_KEY = "verification-accessibility-smoke-stub-key";
 
+// These cases exercise Classic-owner drawers and controls. Pin the rollback
+// shell explicitly now that Cockpit is the default; SF6 audits Cockpit separately.
 const ACCESSIBILITY_SMOKE_SCENARIOS = [
   {
     id: "chat-activity",
     title: "Chat Activity accessibility",
-    href: "/chat",
+    href: "/chat?shell=classic",
     viewport: { width: 1440, height: 1024 },
     route: {
       readySelector: '.mc-next-threaded-surface[data-mode="chat"]',
@@ -24,7 +26,7 @@ const ACCESSIBILITY_SMOKE_SCENARIOS = [
   {
     id: "ops-approvals",
     title: "Ops Approvals accessibility",
-    href: "/ops/approvals",
+    href: "/ops/approvals?shell=classic",
     viewport: { width: 1440, height: 1024 },
     route: {
       readyText: "Approvals",
@@ -35,7 +37,7 @@ const ACCESSIBILITY_SMOKE_SCENARIOS = [
   {
     id: "settings-permissions",
     title: "Settings Permissions accessibility",
-    href: "/settings/permissions",
+    href: "/settings/permissions?shell=classic",
     viewport: { width: 1440, height: 1024 },
     route: {
       readyText: "Permission profiles",
@@ -46,7 +48,7 @@ const ACCESSIBILITY_SMOKE_SCENARIOS = [
   {
     id: "mobile-chat-navigation",
     title: "Mobile Chat navigation accessibility",
-    href: "/chat",
+    href: "/chat?shell=classic",
     viewport: { width: 390, height: 844 },
     route: {
       readySelector: '.mc-next-threaded-surface[data-mode="chat"]',
@@ -71,7 +73,7 @@ const ACCESSIBILITY_SMOKE_SCENARIOS = [
   {
     id: "mobile-chat-virtual-keyboard",
     title: "Mobile Chat virtual-keyboard geometry and composer focus",
-    href: "/chat",
+    href: "/chat?shell=classic",
     viewport: { width: 390, height: 844 },
     colorScheme: "light",
     hasTouch: true,
@@ -134,7 +136,7 @@ const ACCESSIBILITY_SMOKE_SCENARIOS = [
   {
     id: "tablet-landscape-memory-reduced-motion",
     title: "Tablet landscape Memory reflow and reduced-motion accessibility",
-    href: "/library/memory",
+    href: "/library/memory?shell=classic",
     viewport: { width: 1024, height: 768 },
     colorScheme: "light",
     reducedMotion: "reduce",
@@ -152,7 +154,7 @@ const ACCESSIBILITY_SMOKE_SCENARIOS = [
   {
     id: "mobile-landscape-access-touch",
     title: "Mobile landscape Access reflow and touch-target accessibility",
-    href: "/settings/access",
+    href: "/settings/access?shell=classic",
     viewport: { width: 844, height: 390 },
     colorScheme: "dark",
     reducedMotion: "reduce",
@@ -167,7 +169,7 @@ const ACCESSIBILITY_SMOKE_SCENARIOS = [
   {
     id: "chat-zoom-reflow",
     title: "Chat 200 percent zoom-equivalent reflow accessibility",
-    href: "/chat",
+    href: "/chat?shell=classic",
     viewport: { width: 640, height: 800 },
     colorScheme: "dark",
     reducedMotion: "reduce",

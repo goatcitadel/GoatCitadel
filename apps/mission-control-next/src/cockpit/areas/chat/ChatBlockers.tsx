@@ -25,13 +25,24 @@ type Blockers = Pick<
 export function ChatBlockers({ props }: { props: Blockers }) {
   const { activeWorkspaceId } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
-  const approval = props.pendingApproval;
+  const pendingApproval = props.pendingApproval;
   const reviewedApproval = useQuery({
-    queryKey: ["approvals", "cockpit-chat-danger", workspaceId, approval?.approvalId],
+    queryKey: ["approvals", "cockpit-chat-danger", workspaceId, pendingApproval?.approvalId],
     queryFn: () => fetchApprovals({ status: "pending", workspaceId, limit: 200 }),
-    enabled: approval?.riskLevel === "danger",
+    enabled: Boolean(pendingApproval && (!pendingApproval.riskLevel || pendingApproval.riskLevel === "danger")),
     staleTime: 0,
-  }).data?.items.find((record) => record.approvalId === approval?.approvalId);
+  }).data?.items.find((record) => record.approvalId === pendingApproval?.approvalId);
+  // Retained stream signals can omit risk metadata. Hydrate only from the
+  // matching pending canonical record; unavailable/settled records stay closed.
+  const approval =
+    pendingApproval && !pendingApproval.riskLevel && reviewedApproval?.status === "pending"
+      ? {
+          ...pendingApproval,
+          kind: reviewedApproval.kind,
+          riskLevel: reviewedApproval.riskLevel,
+          expiresAt: reviewedApproval.expiresAt,
+        }
+      : pendingApproval;
   const input = props.pendingUserInput;
   const expiry = approvalExpiryLabel(approval?.expiresAt);
   const approvalReviewKey = JSON.stringify([

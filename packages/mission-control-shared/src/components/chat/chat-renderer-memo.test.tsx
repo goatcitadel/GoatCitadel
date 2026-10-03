@@ -71,8 +71,8 @@ describe("AssistantMessageRenderer render-performance memoization", () => {
   });
 
   it("keeps the stable streaming prefix byte-identical so only the tail re-parses on a delta", () => {
-    const firstDelta = "First paragraph stays put.\n\nSecond paragraph is grow";
-    const secondDelta = "First paragraph stays put.\n\nSecond paragraph is growing now.";
+    const firstDelta = "First paragraph stays put.\n\nSecond paragraph\nis grow";
+    const secondDelta = "First paragraph stays put.\n\nSecond paragraph\nis growing now.";
 
     const first = splitStreamingMarkdown(firstDelta);
     const second = splitStreamingMarkdown(secondDelta);
@@ -82,7 +82,7 @@ describe("AssistantMessageRenderer render-performance memoization", () => {
     expect(second.stable).toBe(first.stable);
     // Only the tail differs, so only the tail block re-parses.
     expect(first.tail).not.toBe(second.tail);
-    expect(second.tail).toBe("Second paragraph is growing now.");
+    expect(second.tail).toBe("Second paragraph\nis growing now.");
   });
 
   it("renders identical markup for representative content across re-renders", () => {

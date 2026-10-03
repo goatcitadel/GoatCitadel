@@ -379,7 +379,18 @@ function appendOrReplaceToolRun(
   current: ChatThreadTurnRecord["toolRuns"],
   toolRun: ChatThreadTurnRecord["toolRuns"][number],
 ): ChatThreadTurnRecord["toolRuns"] {
-  return [...current.filter((item) => item.toolRunId !== toolRun.toolRunId), toolRun];
+  const index = current.findIndex((item) => item.toolRunId === toolRun.toolRunId);
+  if (index === -1) return [...current, toolRun];
+  const existing = current[index]!;
+  // A delayed/replayed start or approval wait cannot erase a recorded result.
+  // A retry receives its own Gateway-authored toolRunId.
+  if (
+    existing === toolRun ||
+    (["executed", "failed", "blocked"].includes(existing.status) &&
+      ["started", "approval_required"].includes(toolRun.status))
+  )
+    return current;
+  return current.map((item, i) => (i === index ? toolRun : item));
 }
 
 function appendOrReplaceCitation(

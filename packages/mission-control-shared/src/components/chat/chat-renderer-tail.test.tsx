@@ -265,8 +265,8 @@ describe("chat rendering tail coverage", () => {
   it("keeps single-line fences from swallowing later streaming paragraphs", () => {
     const split = splitStreamingMarkdown('intro\n\n```json {"ok":true}```\n\noutro tail');
 
-    expect(split.stable).toBe('intro\n\n```json {"ok":true}```\n\n');
-    expect(split.tail).toBe("outro tail");
+    expect(split.stable).toBe("intro\n\n");
+    expect(split.tail).toBe('```json {"ok":true}```\n\noutro tail');
   });
 
   it("renders empty fenced code blocks as block code, not inline ticks", () => {
@@ -276,7 +276,7 @@ describe("chat rendering tail coverage", () => {
     expect(normalizedTextOf(renderer.toJSON())).toContain("code");
   });
 
-  it("renders assistant markdown fallback and copies decoded content through clipboard APIs", async () => {
+  it("renders decoded assistant text and copies exact source through clipboard APIs", async () => {
     vi.useFakeTimers();
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("window", {
@@ -295,7 +295,7 @@ describe("chat rendering tail coverage", () => {
       renderer!.root.findByType("button").props.onClick();
       await Promise.resolve();
     });
-    expect(writeText).toHaveBeenCalledWith("Hello World");
+    expect(writeText).toHaveBeenCalledWith("Hello \\u0057orld");
     expect(renderer.root.findByType("button").props["aria-label"]).toBe("Response copied to clipboard");
 
     act(() => {
@@ -417,12 +417,12 @@ describe("chat rendering tail coverage", () => {
 
   it("keeps streaming markdown splits outside open fenced code blocks", () => {
     expect(splitStreamingMarkdown("foo\n```js\nbar\n```\n\nbaz")).toEqual({
-      stable: "foo\n```js\nbar\n```\n\n",
-      tail: "baz",
+      stable: "foo\n",
+      tail: "```js\nbar\n```\n\nbaz",
     });
     expect(splitStreamingMarkdown("foo\n   ```js\nbar\n   ```   \n\nbaz")).toEqual({
-      stable: "foo\n   ```js\nbar\n   ```   \n\n",
-      tail: "baz",
+      stable: "foo\n",
+      tail: "   ```js\nbar\n   ```   \n\nbaz",
     });
     expect(splitStreamingMarkdown("intro\n\n```js\nbar\n\nbaz")).toEqual({
       stable: "intro\n\n",

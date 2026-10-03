@@ -556,6 +556,47 @@ describe("chat-thread-reducer", () => {
     expect(noAssistantTrace.turns[0]?.trace.assistantMessageId).toBe("assistant-from-trace");
   });
 
+  it("retains tool identity and order through results, duplicates and delayed starts or approval waits", () => {
+    let current = baseThread() as never;
+    const first = {
+      toolRunId: "first",
+      turnId: "turn-2",
+      sessionId,
+      toolName: "session.status",
+      status: "started",
+      startedAt: "2026-10-02T00:00:00Z",
+    };
+    const second = { ...first, toolRunId: "second" };
+    const deliver = (type: string, toolRun: object) => {
+      current = updateThreadFromStreamChunk(
+        current,
+        { type, sessionId, turnId: "turn-2", toolRun } as never,
+        null,
+        sessionId,
+        null,
+      )! as never;
+      return current as unknown as ReturnType<typeof updateThreadFromStreamChunk>;
+    };
+    deliver("tool_start", first);
+    deliver("tool_start", second);
+    deliver("tool_result", { ...first, status: "executed", result: { message: "Recorded result" } });
+    deliver("tool_start", first);
+    const repeated = deliver("tool_result", { ...first, status: "executed", result: { message: "Recorded result" } })!;
+    expect(repeated.turns[1]!.toolRuns.map((run) => run.toolRunId)).toEqual(["first", "second"]);
+    expect(repeated.turns[1]!.toolRuns[0]!.status).toBe("executed");
+    expect(repeated.turns[1]!.toolRuns[0]!.result?.message).toBe("Recorded result");
+    for (const status of ["executed", "failed", "blocked"]) {
+      deliver("tool_result", { ...first, status, result: { message: "Recorded result" } });
+      deliver("tool_start", first);
+      const replayed = deliver("tool_result", { ...first, status: "approval_required", approvalId: "replayed-wait" })!;
+      expect(replayed.turns[1]!.toolRuns.map((run) => run.toolRunId)).toEqual(["first", "second"]);
+      expect(replayed.turns[1]!.toolRuns[0]!.status).toBe(status);
+      expect(replayed.turns[1]!.toolRuns[0]!.result?.message).toBe("Recorded result");
+    }
+    deliver("tool_result", { ...second, status: "approval_required" });
+    expect(deliver("tool_start", second)!.turns[1]!.toolRuns[1]!.status).toBe("started");
+  });
+
   it("preserves selection fields on in-place turn updates and skips no-op trace updates", () => {
     const base = baseThread();
     const current = base as never;

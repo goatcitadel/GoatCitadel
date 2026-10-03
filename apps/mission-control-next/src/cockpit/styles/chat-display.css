@@ -1,0 +1,16 @@
+/* This import can precede Cockpit's Tailwind CSS in the combined entry chunk. */
+@layer theme, base, components, utilities;
+
+@layer components {
+  .cockpit-chat-content .mc-assistant-renderer-body {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .cockpit-chat-content
+    .mc-assistant-streaming-markdown
+    > :is(.mc-assistant-markdown, .mc-assistant-streaming-tail)
+    + :is(.mc-assistant-markdown, .mc-assistant-streaming-tail) {
+    margin-top: 0.75rem;
+  }
+}

@@ -563,7 +563,7 @@ if (!/contractVerified/.test(backupVerifySource) || !/contractCoverage/.test(bac
 }
 
 const scenariosSource = await readFile(path.join(root, "scripts", "verification", "lib", "scenarios.mjs"), "utf8");
-if (!/release-surface-manifest\.mjs/.test(scenariosSource) || !/NEXT_RELEASE_SURFACE_MANIFEST/.test(scenariosSource)) {
+if (!/release-surface-manifest\.mjs/.test(scenariosSource) || !/resolveSurfaceRegressionManifest\(\)/.test(scenariosSource)) {
   errors.push("scripts/verification/lib/scenarios.mjs must derive release-bearing route coverage from the canonical Mission Control Next release-surface manifest.");
 }
 

@@ -11,6 +11,16 @@ import {
 import { Check, Copy, FileDown } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { Root } from "mdast";
+import type { Processor } from "unified";
+import { createIncrementalSplitState, splitIncremental, type IncrementalSplitState } from "./streaming-markdown";
+export {
+  createIncrementalSplitState,
+  splitIncremental,
+  splitStreamingMarkdown,
+  buildDefinitionSuffix,
+} from "./streaming-markdown";
+export type { IncrementalSplitState } from "./streaming-markdown";
 import { downloadFile } from "../../api/client";
 import { cn } from "../../lib/utils";
 import {
@@ -81,7 +91,7 @@ export function AssistantMessageRenderer({
         className,
       )}
     >
-      <AssistantMessageContainer role={role} content={displayContent} running={running}>
+      <AssistantMessageContainer role={role} content={content} running={running}>
         {role === "assistant" && running ? (
           <StreamingMarkdown
             content={displayContent}
@@ -403,11 +413,27 @@ const MemoizedMarkdownBlock = memo(function MemoizedMarkdownBlock({
   content,
   role,
   components,
+  tree,
 }: {
   content: string;
   role: "user" | "assistant";
   components: Components;
+  tree?: Root;
 }) {
+  const plugins = useMemo(
+    () =>
+      tree
+        ? [
+            remarkGfm,
+            function useParsedTree(this: Processor) {
+              // Reuse the AST already parsed for semantic boundaries. ReactMarkdown still
+              // owns GFM-to-HTML conversion, safe links and all existing code renderers.
+              this.parser = () => tree;
+            },
+          ]
+        : MARKDOWN_REMARK_PLUGINS,
+    [tree],
+  );
   return (
     <div
       className={cn(
@@ -415,7 +441,7 @@ const MemoizedMarkdownBlock = memo(function MemoizedMarkdownBlock({
         role === "user" ? "mc-assistant-markdown-user" : "mc-assistant-markdown-assistant",
       )}
     >
-      <ReactMarkdown remarkPlugins={MARKDOWN_REMARK_PLUGINS} components={components}>
+      <ReactMarkdown remarkPlugins={plugins} components={components}>
         {content}
       </ReactMarkdown>
     </div>
@@ -556,35 +582,28 @@ function StreamingMarkdown({
   // message starts (fence-state must never leak across messages).
   streamTurnId?: string;
 }) {
-  // Carry the forward-scan split state across tokens of the same streaming turn so each
-  // delta only scans the newly-appended characters (amortized O(delta) instead of an
-  // O(n) full rescan per token, i.e. O(n^2) cumulative). The state is reset when the turn
-  // id changes (fence-state must never leak across messages); splitIncremental also
-  // self-heals on any non-append delta. Output stays byte-identical to
-  // splitStreamingMarkdown(content) for every prefix.
   const splitStateRef = useRef<IncrementalSplitState | undefined>(undefined);
-  const splitTurnRef = useRef<string | undefined>(undefined);
-  const { stable, tail, stableSource, tailSource } = useMemo(() => {
-    if (splitStateRef.current === undefined || splitTurnRef.current !== streamTurnId) {
+  const splitIdentityRef = useRef<string | undefined>(undefined);
+  const identity = JSON.stringify([streamTurnId, streamPresentationMode, isGoatOpenUiRendererEnabled()]);
+  const { blocks, tail, tailTree } = useMemo(() => {
+    if (!splitStateRef.current || splitIdentityRef.current !== identity) {
       splitStateRef.current = createIncrementalSplitState();
-      splitTurnRef.current = streamTurnId;
+      splitIdentityRef.current = identity;
     }
     const split = splitIncremental(splitStateRef.current, content);
-    // Each chunk is its own Markdown document, so a reference link whose definition
-    // landed in the other chunk would render as raw [text][label] until the turn
-    // settled. Re-attach the definitions the message has produced so far.
-    const definitions = splitStateRef.current.definitions;
-    return {
-      ...split,
-      stableSource: split.stable + buildDefinitionSuffix(definitions, split.stable),
-      tailSource: split.tail + buildDefinitionSuffix(definitions, split.tail),
-    };
-  }, [content, streamTurnId]);
+    return { blocks: splitStateRef.current.blocks, tail: split.tail, tailTree: splitStateRef.current.tailTree };
+  }, [content, identity]);
   return (
     <div className="mc-assistant-streaming-markdown">
-      {stable ? (
-        <MemoizedMarkdownBlock content={stableSource} role="assistant" components={assistantMarkdownComponents} />
-      ) : null}
+      {blocks.map((block) => (
+        <MemoizedMarkdownBlock
+          key={identity + ":" + block.start + ":" + block.end}
+          content={block.source}
+          tree={block.tree}
+          role="assistant"
+          components={assistantMarkdownComponents}
+        />
+      ))}
       {tail ? (
         <div
           className={cn(
@@ -593,286 +612,18 @@ function StreamingMarkdown({
           )}
         >
           <AssistantStreamingTailContext.Provider value={true}>
-            <MemoizedMarkdownBlock content={tailSource} role="assistant" components={assistantMarkdownComponents} />
+            <MemoizedMarkdownBlock
+              content={tail}
+              tree={tailTree}
+              role="assistant"
+              components={assistantMarkdownComponents}
+            />
           </AssistantStreamingTailContext.Provider>
         </div>
       ) : null}
       <span className="mc-assistant-streaming-cursor" aria-hidden="true" />
     </div>
   );
-}
-
-export function splitStreamingMarkdown(content: string): { stable: string; tail: string } {
-  // Single forward pass: walk the content line by line, tracking whether we are
-  // inside a ``` / ~~~ fence, and record the index just past the most recent
-  // "\n\n" paragraph boundary that occurs while NOT inside a fence. This yields
-  // the same split point as scanning every boundary backward and testing fence
-  // balance of the prefix, but in O(n) instead of O(n^2).
-  let inFence = false;
-  let fenceChar: "`" | "~" | null = null;
-  let fenceLength = 0;
-  let bestSplitEnd = -1;
-  let lineStart = 0;
-
-  for (let index = 0; index <= content.length; index += 1) {
-    const atLineEnd = index === content.length || content[index] === "\n";
-    if (!atLineEnd) {
-      continue;
-    }
-    const line = content.slice(lineStart, index);
-    const marker = parseMarkdownFenceMarker(line);
-    if (marker) {
-      const markerChar = marker.char;
-      if (!inFence) {
-        if (!hasSameLineStreamingFenceClose(line, markerChar, marker.length, marker.start + marker.length)) {
-          inFence = true;
-          fenceChar = markerChar;
-          fenceLength = marker.length;
-        }
-      } else {
-        const markerTail = line.slice(marker.start + marker.length);
-        if (markerChar === fenceChar && marker.length >= fenceLength && markerTail.trim().length === 0) {
-          inFence = false;
-          fenceChar = null;
-          fenceLength = 0;
-        }
-      }
-    }
-    // A "\n\n" boundary exists when the current line is empty and preceded by a
-    // newline (i.e. content[index - 1] === "\n"). The boundary char index is
-    // index - 1; the split point includes both newlines (index - 1 + 2 === index + 1).
-    if (!inFence && index < content.length && content[index] === "\n" && index > 0 && content[index - 1] === "\n") {
-      const paragraphIndex = index - 1;
-      if (paragraphIndex > 0) {
-        bestSplitEnd = paragraphIndex + 2;
-      }
-    }
-    lineStart = index + 1;
-  }
-
-  if (bestSplitEnd <= 0) {
-    return { stable: "", tail: content };
-  }
-  return {
-    stable: content.slice(0, bestSplitEnd),
-    tail: content.slice(bestSplitEnd),
-  };
-}
-
-function parseMarkdownFenceMarker(line: string): { char: "`" | "~"; length: number; start: number } | null {
-  const match = /^( {0,3})(`{3,}|~{3,})/.exec(line);
-  if (!match) {
-    return null;
-  }
-  const marker = match[2]!;
-  return {
-    char: marker[0] as "`" | "~",
-    length: marker.length,
-    start: match[1]!.length,
-  };
-}
-
-function hasSameLineStreamingFenceClose(
-  line: string,
-  fenceChar: "`" | "~",
-  fenceLength: number,
-  searchStart: number,
-): boolean {
-  for (let index = searchStart; index <= line.length - fenceLength; index += 1) {
-    if (line[index] !== fenceChar) {
-      continue;
-    }
-    let markerLength = 0;
-    while (line[index + markerLength] === fenceChar) {
-      markerLength += 1;
-    }
-    if (markerLength >= fenceLength && line.slice(index + markerLength).trim().length === 0) {
-      return true;
-    }
-    index += Math.max(0, markerLength - 1);
-  }
-  return false;
-}
-
-// --- Incremental streaming split -------------------------------------------------
-//
-// `splitStreamingMarkdown` above is a single O(n) forward pass, but a streaming
-// message calls it once per token on the *whole* accumulated string, so the cost is
-// O(1) + O(2) + ... + O(n) = O(n^2) cumulative over a long answer. The engine below
-// carries the forward-scan state across tokens of the SAME message so each delta only
-// processes the characters appended since the last newline-terminated line — turning
-// the cumulative cost into O(n) (amortized O(delta) per token).
-//
-// Equivalence guarantee: `splitIncremental` returns a value byte-identical to
-// `splitStreamingMarkdown(content)` for every prefix of the stream. This is safe
-// because the from-scratch scan is backtrack-free for the split point:
-//   * `bestSplitEnd` only ever advances at an *interior* "\n\n" (the second newline at
-//     index < content.length, i.e. inside a completed, immutable line) and only while
-//     NOT inside a fence.
-//   * `inFence` at any completed newline is fully determined by the bytes before it,
-//     which never change under append — so a boundary finalized while outside a fence
-//     can never be retroactively re-interpreted as inside one.
-//   * The partial trailing line (processed at EOF) can flip fence state but, by the
-//     boundary condition, can NEVER update `bestSplitEnd`. So we never need to re-scan
-//     it to get the split; we only resume from the last newline.
-// If a delta is ever NOT a pure append of the previous content (prefix mismatch or a
-// shorter string), the engine resets and rescans from scratch, so it can never diverge.
-
-export interface IncrementalSplitState {
-  /** Full content seen on the previous push; used to detect non-append deltas. */
-  content: string;
-  /** Resume index: position just after the last newline-terminated line. Bytes before
-   *  this are finalized line-wise and are never re-scanned. */
-  resumeIndex: number;
-  /** Parser state captured at `resumeIndex` (after all complete lines before it). */
-  inFence: boolean;
-  fenceChar: "`" | "~" | null;
-  fenceLength: number;
-  /** Best split end locked in from completed lines so far (-1 if none). */
-  bestSplitEnd: number;
-  /** Index from which the most recent push began its scan (for perf instrumentation). */
-  lastScanStart: number;
-  /** Link reference definitions seen on completed, non-fenced lines, in order.
-   *  `stable` and `tail` are parsed as separate Markdown documents, so a definition
-   *  only resolves in the chunk that physically contains it. Carrying them lets both
-   *  chunks be re-parsed with the full definition map (see buildDefinitionSuffix).
-   *  Collected here rather than in a second pass so the scan stays O(delta).
-   *
-   *  Only newline-terminated lines qualify. A definition on the still-growing trailing
-   *  line is deliberately NOT carried: its destination is half-arrived, so carrying it
-   *  would turn the reference into a link pointing at a truncated URL. Leaving it out
-   *  keeps today's behaviour for that case — the raw [text][label] shows briefly and
-   *  resolves when the turn settles — which is wrong-looking but never wrong-going. */
-  definitions: string[];
-}
-
-export function createIncrementalSplitState(): IncrementalSplitState {
-  return {
-    content: "",
-    resumeIndex: 0,
-    inFence: false,
-    fenceChar: null,
-    fenceLength: 0,
-    bestSplitEnd: -1,
-    lastScanStart: 0,
-    definitions: [],
-  };
-}
-
-// CommonMark link reference definition: up to 3 leading spaces (4+ is an indented code
-// block), a label, a colon, then a destination. Deliberately conservative — an exotic
-// multi-line definition simply is not carried, which is today's behaviour.
-const MARKDOWN_LINK_DEFINITION = /^ {0,3}\[[^\]\n]+\]:\s*\S/;
-
-/**
- * Markdown to append to a chunk so it parses with the whole message's definition map.
- * Definitions render no output, so appending them is invisible and idempotent.
- */
-export function buildDefinitionSuffix(definitions: readonly string[], chunk: string): string {
-  if (definitions.length === 0 || chunk.length === 0) {
-    return "";
-  }
-  const missing = definitions.filter((definition) => !chunk.includes(definition));
-  if (missing.length === 0) {
-    return "";
-  }
-  return `${chunk.endsWith("\n\n") ? "" : "\n\n"}${missing.join("\n")}\n`;
-}
-
-/**
- * Advance the carried split state with the latest accumulated `content` and return the
- * same `{ stable, tail }` shape as `splitStreamingMarkdown`. Mutates `state` in place.
- */
-export function splitIncremental(state: IncrementalSplitState, content: string): { stable: string; tail: string } {
-  // Detect a non-append delta (new message, edit, retry, or any shrink) and reset.
-  if (content.length < state.content.length || !content.startsWith(state.content)) {
-    state.resumeIndex = 0;
-    state.inFence = false;
-    state.fenceChar = null;
-    state.fenceLength = 0;
-    state.bestSplitEnd = -1;
-    state.definitions = [];
-  }
-
-  let { inFence, fenceChar, fenceLength, bestSplitEnd } = state;
-  let lineStart = state.resumeIndex;
-  const scanStart = state.resumeIndex;
-  state.lastScanStart = scanStart;
-
-  // Resume point for the NEXT push: position after the last newline-terminated line.
-  let nextResumeIndex = state.resumeIndex;
-  let nextInFence = inFence;
-  let nextFenceChar = fenceChar;
-  let nextFenceLength = fenceLength;
-  let nextBestSplitEnd = bestSplitEnd;
-
-  for (let index = scanStart; index <= content.length; index += 1) {
-    const atLineEnd = index === content.length || content[index] === "\n";
-    if (!atLineEnd) {
-      continue;
-    }
-    const line = content.slice(lineStart, index);
-    const marker = parseMarkdownFenceMarker(line);
-    if (marker) {
-      const markerChar = marker.char;
-      if (!inFence) {
-        if (!hasSameLineStreamingFenceClose(line, markerChar, marker.length, marker.start + marker.length)) {
-          inFence = true;
-          fenceChar = markerChar;
-          fenceLength = marker.length;
-        }
-      } else {
-        const markerTail = line.slice(marker.start + marker.length);
-        if (markerChar === fenceChar && marker.length >= fenceLength && markerTail.trim().length === 0) {
-          inFence = false;
-          fenceChar = null;
-          fenceLength = 0;
-        }
-      }
-    }
-    if (!inFence && index < content.length && content[index] === "\n" && index > 0 && content[index - 1] === "\n") {
-      const paragraphIndex = index - 1;
-      if (paragraphIndex > 0) {
-        bestSplitEnd = paragraphIndex + 2;
-      }
-    }
-    lineStart = index + 1;
-    // Only newline-terminated lines (index < length) are immutable; the EOF "line" is a
-    // still-growing partial that the next token may extend, so we must NOT advance the
-    // resume point past it. Snapshot state strictly at completed newlines.
-    // Newline-terminated only: see the `definitions` field note on why a trailing
-    // partial definition must not be carried.
-    if (
-      !inFence &&
-      index < content.length &&
-      MARKDOWN_LINK_DEFINITION.test(line) &&
-      !state.definitions.includes(line)
-    ) {
-      state.definitions.push(line);
-    }
-    if (index < content.length) {
-      nextResumeIndex = index + 1;
-      nextInFence = inFence;
-      nextFenceChar = fenceChar;
-      nextFenceLength = fenceLength;
-      nextBestSplitEnd = bestSplitEnd;
-    }
-  }
-
-  state.content = content;
-  state.resumeIndex = nextResumeIndex;
-  state.inFence = nextInFence;
-  state.fenceChar = nextFenceChar;
-  state.fenceLength = nextFenceLength;
-  state.bestSplitEnd = nextBestSplitEnd;
-
-  if (bestSplitEnd <= 0) {
-    return { stable: "", tail: content };
-  }
-  return {
-    stable: content.slice(0, bestSplitEnd),
-    tail: content.slice(bestSplitEnd),
-  };
 }
 
 export async function copyTextToClipboard(content: string): Promise<void> {

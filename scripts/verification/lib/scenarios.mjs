@@ -24,7 +24,6 @@ import {
 import { readArchitectureServiceAllowances } from "./architecture-service-allowances.mjs";
 import {
   buildVisualBaselineFileName,
-  NEXT_RELEASE_SURFACE_MANIFEST,
   resolveDirectCompatibilityManifest,
   resolveLegacyRedirectManifest,
   resolveReleaseSurfaceHref,
@@ -87,6 +86,7 @@ import {
 } from "./scenarios/provider-reasoning-lanes.mjs";
 import { runSurfaceRegressionLane as runSurfaceRegressionLaneImpl } from "./scenarios/surface-regression-lane.mjs";
 import { runChatAsyncClarificationProof as runChatAsyncClarificationProofImpl } from "./scenarios/chat-async-clarification-proof.mjs";
+import { runChatStreamingDisplayProof as runChatStreamingDisplayProofImpl } from "./scenarios/chat-streaming-display-proof.mjs";
 import {
   runUsabilityCoreLane as runUsabilityCoreLaneImpl,
   runUsabilityLane as runUsabilityLaneImpl,
@@ -2427,6 +2427,10 @@ export async function runSurfaceRegressionLane(context, options = {}) {
 
 export async function runChatAsyncClarificationProof(context) {
   return await runChatAsyncClarificationProofImpl(context, verificationLaneDeps());
+}
+
+export async function runChatStreamingDisplayProof(context) {
+  return await runChatStreamingDisplayProofImpl(context, verificationLaneDeps());
 }
 
 export async function runUsabilityLane(context, options = {}) {

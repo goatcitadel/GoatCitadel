@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, type ComponentType, type ReactNode } from "react";
+import { act, type ComponentType, type ReactNode, type Ref } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ChangePlanRecord, ChatThreadTurnRecord } from "@goatcitadel/contracts";
@@ -10,6 +10,11 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InspectorPanel, InspectorProvider } from "../../app/inspector";
 import { ChatTranscript } from "./ChatTranscript";
+import { fetchApprovals } from "@goatcitadel/mission-control-shared/api/client";
+
+const viewport = vi.hoisted(() => ({
+  preview: null as { turnId: string; visibleText: string } | null,
+}));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client")>()),
@@ -22,18 +27,27 @@ vi.mock("react-virtuoso", () => ({
     itemContent,
     components,
     context,
+    computeItemKey,
+    followOutput,
+    scrollerRef,
   }: {
     data: ChatThreadTurnRecord[];
     itemContent: (index: number, turn: ChatThreadTurnRecord) => ReactNode;
     components: { Footer?: ComponentType<{ context?: unknown }>; EmptyPlaceholder?: ComponentType };
     context?: unknown;
+    computeItemKey?: (index: number, turn: ChatThreadTurnRecord) => string;
+    followOutput?: boolean | string | ((atBottom: boolean) => boolean | string);
+    scrollerRef?: Ref<HTMLDivElement>;
   }) => {
     const Footer = components.Footer;
     const EmptyPlaceholder = components.EmptyPlaceholder;
     return (
-      <div>
+      <div
+        ref={scrollerRef}
+        data-follow-output={String(typeof followOutput === "function" ? followOutput(true) : followOutput)}
+      >
         {data.map((turn, index) => (
-          <div key={turn.turnId}>{itemContent(index, turn)}</div>
+          <div key={computeItemKey?.(index, turn) ?? index}>{itemContent(index, turn)}</div>
         ))}
         {!data.length && EmptyPlaceholder ? <EmptyPlaceholder /> : null}
         {Footer ? <Footer context={context} /> : null}
@@ -45,7 +59,7 @@ vi.mock("@goatcitadel/mission-control-shared/components/chat/AssistantMessageRen
   AssistantMessageRenderer: ({ content }: { content: string }) => <span>{content}</span>,
 }));
 vi.mock("@goatcitadel/mission-control-shared/state/chat-streaming-preview-store", () => ({
-  useChatStreamingPreviewSnapshot: () => null,
+  useChatStreamingPreviewSnapshot: () => viewport.preview,
 }));
 
 function turn(turnId: string, selected: boolean, status: "completed" | "failed" = "completed"): ChatThreadTurnRecord {
@@ -76,6 +90,7 @@ function renderWithProviders(node: ReactNode) {
   root.render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
 }
 beforeEach(() => {
+  viewport.preview = null;
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -85,9 +100,266 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   client.clear();
+  vi.unstubAllGlobals();
 });
 
 describe("ChatTranscript", () => {
+  it("hydrates missing approval risk from the matching pending canonical record", async () => {
+    const onApprovePending = vi.fn();
+    vi.mocked(fetchApprovals).mockResolvedValueOnce({
+      items: [
+        {
+          approvalId: "hydrate-risk",
+          kind: "tool_invoke",
+          status: "pending",
+          riskLevel: "caution",
+          expiresAt: "2099-10-02T00:00:00Z",
+        },
+      ],
+    } as never);
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript
+            props={{
+              ...sessionProps([turn("approval-hydrate", true)]),
+              pendingApproval: { approvalId: "hydrate-risk", toolName: "fs.read" },
+              onApprovePending,
+            }}
+          />
+        </InspectorProvider>,
+      ),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    const allow = [...container.querySelectorAll("button")].find((button) => button.textContent === "Approve once");
+    expect(allow).toBeDefined();
+    await act(async () => allow!.click());
+    expect(onApprovePending).toHaveBeenCalledWith("once");
+  });
+
+  it.each([
+    { name: "missing", items: [] },
+    { name: "settled", items: [{ approvalId: "closed-risk", status: "approved", riskLevel: "caution" }] },
+    { name: "unrelated", items: [{ approvalId: "another-risk", status: "pending", riskLevel: "caution" }] },
+  ])("keeps an unclassified approval closed when its canonical record is $name", async ({ items }) => {
+    vi.mocked(fetchApprovals).mockResolvedValueOnce({ items } as never);
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript
+            props={{
+              ...sessionProps([turn("approval-closed", true)]),
+              pendingApproval: { approvalId: "closed-risk", toolName: "fs.read" },
+            }}
+          />
+        </InspectorProvider>,
+      ),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(container.textContent).toContain("Risk is unavailable");
+    expect(container.textContent).not.toContain("Approve once");
+  });
+  it("follows measured growth of the same streamed turn only while pinned and enabled", async () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (frame: FrameRequestCallback) => {
+      frames.push(frame);
+      return frames.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const scrollIntoView = vi.fn();
+    const onBottomStateChange = vi.fn();
+    const recorded = turn("growth", true);
+    const render = async (followOutput = true) =>
+      act(async () =>
+        renderWithProviders(
+          <InspectorProvider>
+            <ChatTranscript
+              props={{
+                ...sessionProps([{ ...recorded }]),
+                followOutput,
+                hasActiveStream: true,
+                activeStreamingTurnId: "growth",
+                onBottomStateChange: (atBottom) => onBottomStateChange(atBottom),
+              }}
+            />
+          </InspectorProvider>,
+        ),
+      );
+    const flushFrames = async () => {
+      container.querySelector<HTMLElement>('div[aria-hidden="true"].h-px')!.scrollIntoView = scrollIntoView;
+      await act(async () => {
+        for (const frame of frames.splice(0)) frame(0);
+      });
+    };
+    await render();
+    await flushFrames();
+    scrollIntoView.mockClear();
+    const scroller = container.querySelector<HTMLElement>("[data-follow-output]")!;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 200 },
+      scrollTop: { configurable: true, writable: true, value: 800 },
+    });
+    await act(async () => scroller.dispatchEvent(new Event("scroll")));
+    scrollIntoView.mockClear();
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 1200 });
+    await act(async () => scroller.dispatchEvent(new Event("scroll")));
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(onBottomStateChange).toHaveBeenLastCalledWith(true);
+    scrollIntoView.mockClear();
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 950 });
+    scroller.scrollTop = 0;
+    await act(async () => scroller.dispatchEvent(new Event("scroll")));
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(onBottomStateChange).toHaveBeenLastCalledWith(true);
+    scrollIntoView.mockClear();
+    scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+    // Owner refreshes can replace callback props between the gesture and its
+    // native scroll event. The DOM binding must keep the reader's intent.
+    await render();
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 1200 });
+    scroller.scrollTop = 100;
+    await act(async () => scroller.dispatchEvent(new Event("scroll")));
+    expect(onBottomStateChange).toHaveBeenLastCalledWith(false);
+    viewport.preview = { turnId: "growth", visibleText: "A growing answer" };
+    await render(false);
+    await flushFrames();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    scroller.scrollTop = 1000;
+    await act(async () => scroller.dispatchEvent(new Event("scroll")));
+    expect(onBottomStateChange).toHaveBeenLastCalledWith(true);
+    viewport.preview = { turnId: "growth", visibleText: "A growing answer at the bottom" };
+    await render();
+    await flushFrames();
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    scrollIntoView.mockClear();
+    viewport.preview = { turnId: "growth", visibleText: "A growing answer with follow disabled" };
+    await render(false);
+    await flushFrames();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+  it("retains disclosure and focus by turn and tool ID through insertion and canonical refresh", async () => {
+    const recorded = turn("retained", true);
+    const first = {
+      toolRunId: "first",
+      turnId: recorded.turnId,
+      sessionId: "session-1",
+      toolName: "session.status",
+      status: "started" as const,
+      startedAt: "2026-10-02T00:00:00Z",
+    };
+    const second = { ...first, toolRunId: "second", status: "blocked" as const, error: "Denied by policy" };
+    recorded.toolRuns = [first, second];
+    const render = async (turns: ChatThreadTurnRecord[]) =>
+      act(async () =>
+        renderWithProviders(
+          <InspectorProvider>
+            <ChatTranscript props={sessionProps(turns)} />
+          </InspectorProvider>,
+        ),
+      );
+    await render([recorded]);
+    const disclosure = container.querySelector<HTMLDetailsElement>(
+      'details[aria-label="Tool activity for this turn"]',
+    )!;
+    const summary = disclosure.querySelector("summary")!;
+    const row = disclosure.querySelector('[data-tool-run-id="first"]');
+    disclosure.open = true;
+    summary.focus();
+    expect(summary.textContent).toContain("1 running");
+    expect(summary.textContent).toContain("1 blocked");
+    await render([turn("inserted", true), { ...recorded, toolRuns: [second, { ...first, status: "executed" }] }]);
+    expect(container.querySelector('details[aria-label="Tool activity for this turn"]')).toBe(disclosure);
+    expect(disclosure.open).toBe(true);
+    expect(document.activeElement).toBe(summary);
+    expect(disclosure.querySelector('[data-tool-run-id="first"]')).toBe(row);
+    expect(disclosure.querySelectorAll("li")).toHaveLength(2);
+    expect(summary.textContent).toContain("1 done");
+    expect(disclosure.textContent).toContain("Denied by policy");
+  });
+
+  it("reports failed, approval and uncertain results without announcing each refresh", async () => {
+    const recorded = turn("activity", true);
+    const base = {
+      turnId: recorded.turnId,
+      sessionId: "session-1",
+      toolName: "session.status",
+      startedAt: "2026-10-02T00:00:00Z",
+    };
+    recorded.toolRuns = [
+      { ...base, toolRunId: "failed", status: "failed", failureGuidance: "Inspect before retrying" },
+      { ...base, toolRunId: "approval", status: "approval_required" },
+      { ...base, toolRunId: "uncertain", status: "executed", result: { exitCode: 1 }, effectOutcomeKind: "uncertain" },
+    ];
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript props={sessionProps([recorded])} />
+        </InspectorProvider>,
+      ),
+    );
+    const activity = container.querySelector('details[aria-label="Tool activity for this turn"]')!;
+    expect(activity.textContent).toContain("1 failed");
+    expect(activity.textContent).toContain("1 approval needed");
+    expect(activity.textContent).toContain("1 needs review");
+    expect(activity.textContent).toContain("Automatic replay is suppressed");
+    expect(activity.textContent).toContain("Inspect before retrying");
+    expect(activity.querySelector('[aria-live], [role="status"]')).toBeNull();
+  });
+
+  it("uses instant bottom-follow under reduced motion and honors disabled follow", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    const render = async (followOutput: boolean) =>
+      act(async () =>
+        renderWithProviders(
+          <InspectorProvider>
+            <ChatTranscript props={{ ...sessionProps([turn("motion", true)]), followOutput }} />
+          </InspectorProvider>,
+        ),
+      );
+    await render(true);
+    expect(container.querySelector('[data-follow-output="true"]')).not.toBeNull();
+    await render(false);
+    expect(container.querySelector('[data-follow-output="false"]')).not.toBeNull();
+  });
+
+  it("labels and copies exact partial source, then exact canonical final source", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const recorded = turn("copy", true);
+    recorded.assistantMessage!.content = "**Partial** source \\u0057";
+    const render = async (running: boolean) =>
+      act(async () =>
+        renderWithProviders(
+          <InspectorProvider>
+            <ChatTranscript
+              props={{
+                ...sessionProps([recorded]),
+                hasActiveStream: running,
+                activeStreamingTurnId: running ? recorded.turnId : null,
+              }}
+            />
+          </InspectorProvider>,
+        ),
+      );
+    await render(true);
+    await act(async () =>
+      [...container.querySelectorAll("button")].find((button) => button.textContent === "Copy answer so far")!.click(),
+    );
+    expect(writeText).toHaveBeenLastCalledWith("**Partial** source \\u0057");
+    expect(container.textContent).toContain("Partial answer copied.");
+    recorded.assistantMessage!.content += " final";
+    await render(false);
+    await act(async () =>
+      [...container.querySelectorAll("button")].find((button) => button.textContent === "Copy answer")!.click(),
+    );
+    expect(writeText).toHaveBeenLastCalledWith(recorded.assistantMessage!.content);
+  });
+
   it("retains an exact danger review across fresh transcript props and closes it when review content changes", async () => {
     const onApprovePending = vi.fn();
     const approval = {

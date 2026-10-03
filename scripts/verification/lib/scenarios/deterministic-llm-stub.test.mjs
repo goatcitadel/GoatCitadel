@@ -6,6 +6,43 @@ import test from "node:test";
 
 import { startDeterministicLlmStub, writeDeterministicLlmProviderConfig } from "./deterministic-llm-stub.mjs";
 
+test("controlled display streams hold, advance exact chunks, finish and release their controller", async () => {
+  const stub = await startDeterministicLlmStub({
+    dispatchPlan: [{ type: "stream_controlled", chunks: ["First\n\n", "\nSecond " + "fragment ".repeat(160)] }],
+  });
+  try {
+    const response = await fetch(`${stub.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: stub.model, stream: true, messages: [] }),
+    });
+    const reader = response.body.getReader(),
+      decoder = new TextDecoder();
+    let source = decoder.decode((await reader.read()).value);
+    assert.match(source, /First/);
+    assert.doesNotMatch(source, /Second|DONE/);
+    assert.equal(stub.advanceControlledStream(), true);
+    source += decoder.decode((await reader.read()).value);
+    assert.match(source, /Second/);
+    assert.equal(stub.advanceControlledStream(), false);
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      source += decoder.decode(part.value);
+    }
+    assert.match(source, /DONE/);
+    const deltas = source
+      .split("\n\n")
+      .filter((event) => event.startsWith("data: {"))
+      .map((event) => JSON.parse(event.slice(6)).choices[0].delta.content ?? "");
+    assert.ok(deltas.every((delta) => delta.length <= 128));
+    assert.equal(deltas.join(""), "First\n\n\nSecond " + "fragment ".repeat(160));
+    assert.throws(() => stub.advanceControlledStream(), /found 0/);
+  } finally {
+    await stub.close();
+  }
+});
+
 test("deterministic provider metadata supports Chat thinking off", async () => {
   const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-stub-reasoning-"));
   try {
@@ -14,11 +51,16 @@ test("deterministic provider metadata supports Chat thinking off", async () => {
     await fs.writeFile(path.join(configRoot, "llm-model-metadata.json"), '{"version":1,"entries":{}}\n');
     await writeDeterministicLlmProviderConfig(runtimeRoot, "http://127.0.0.1:12345/v1");
     const metadata = JSON.parse(await fs.readFile(path.join(configRoot, "llm-model-metadata.json"), "utf8"));
-    assert.deepEqual(metadata.entries["verification-stub/verification-stub-chat"].reasoning.supportedEfforts,
-      ["none", "low", "medium", "high"]);
+    assert.deepEqual(metadata.entries["verification-stub/verification-stub-chat"].reasoning.supportedEfforts, [
+      "none",
+      "low",
+      "medium",
+      "high",
+    ]);
     const config = JSON.parse(await fs.readFile(path.join(configRoot, "llm-providers.json"), "utf8"));
     assert.deepEqual(config.providers[0].capabilities, {
-      reasoning: true, reasoningEfforts: ["none", "low", "medium", "high"],
+      reasoning: true,
+      reasoningEfforts: ["none", "low", "medium", "high"],
     });
   } finally {
     await fs.rm(runtimeRoot, { recursive: true, force: true });
@@ -26,42 +68,69 @@ test("deterministic provider metadata supports Chat thinking off", async () => {
 });
 
 test("stream-only dispatch plans are not consumed by background non-stream requests", async () => {
-  const stub = await startDeterministicLlmStub({ replyText: "Background", dispatchPlanStreamOnly: true,
+  const stub = await startDeterministicLlmStub({
+    replyText: "Background",
+    dispatchPlanStreamOnly: true,
     dispatchPlan: [{ type: "success", replyText: "Visible answer" }],
   });
   try {
     for (const stream of [false, true]) {
       const response = await fetch(`${stub.baseUrl}/chat/completions`, {
-        method: "POST", headers: { "content-type": "application/json" },
+        method: "POST",
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: stub.model, stream, messages: [{ role: "user", content: "fixture" }] }),
       });
       const body = await response.text();
       const content = stream
-        ? body.split("\n").filter((line) => line.startsWith("data: {")).map((line) => JSON.parse(line.slice(6)).choices[0].delta.content ?? "").join("")
+        ? body
+            .split("\n")
+            .filter((line) => line.startsWith("data: {"))
+            .map((line) => JSON.parse(line.slice(6)).choices[0].delta.content ?? "")
+            .join("")
         : JSON.parse(body).choices[0].message.content;
       assert.equal(content, stream ? "Visible answer" : "Background");
     }
     assert.equal(stub.dispatchPlanDispatches(), 1);
-  } finally { await stub.close(); }
+  } finally {
+    await stub.close();
+  }
 });
 
 test("deterministic text and tool replies declare zero cached input for settled model cost", async () => {
   for (const route of ["responses", "chat/completions"]) {
     for (const stream of [false, true]) {
-      for (const behavior of [{ type: "success", replyText: "Reply" }, { type: "tool_call", name: "fixture_read", arguments: {} }]) {
+      for (const behavior of [
+        { type: "success", replyText: "Reply" },
+        { type: "tool_call", name: "fixture_read", arguments: {} },
+      ]) {
         const stub = await startDeterministicLlmStub({ dispatchPlan: [behavior] });
         try {
           const response = await fetch(`${stub.baseUrl}/${route}`, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ model: stub.model, stream, input: "fixture", messages: [{ role: "user", content: "fixture" }] }),
+            body: JSON.stringify({
+              model: stub.model,
+              stream,
+              input: "fixture",
+              messages: [{ role: "user", content: "fixture" }],
+            }),
           });
           assert.equal(response.status, 200);
           const body = await response.text();
-          const frames = stream ? body.split("\n").filter((line) => line.startsWith("data: {")).map((line) => JSON.parse(line.slice(6))) : [JSON.parse(body)];
-          const usages = frames.flatMap((frame) => frame.usage ? [frame.usage] : frame.response?.usage ? [frame.response.usage] : []);
+          const frames = stream
+            ? body
+                .split("\n")
+                .filter((line) => line.startsWith("data: {"))
+                .map((line) => JSON.parse(line.slice(6)))
+            : [JSON.parse(body)];
+          const usages = frames.flatMap((frame) =>
+            frame.usage ? [frame.usage] : frame.response?.usage ? [frame.response.usage] : [],
+          );
           assert.equal(usages.length, 1);
-          assert.equal(usages[0].input_tokens_details?.cached_tokens ?? usages[0].prompt_tokens_details?.cached_tokens, 0);
+          assert.equal(
+            usages[0].input_tokens_details?.cached_tokens ?? usages[0].prompt_tokens_details?.cached_tokens,
+            0,
+          );
           assert.equal(usages[0].input_tokens ?? usages[0].prompt_tokens, 12);
         } finally {
           await stub.close();

@@ -1,14 +1,14 @@
 # Codex-inspired Chat display follow-up
 
-Status: planned. The operator requested this addition from a side conversation on 2026-10-02. This document authorizes no source implementation, staging, commit, provider experiment, configuration change, or deployment by the side conversation. The main Chat may schedule this follow-up after completing the current SF1–SF5 continuation and its validation/reporting.
+Status: SD1–SD4 implemented and verified; SD0's pristine-checkpoint browser observations remain unfinished. The operator directly authorized starting SF6 in the main Chat on 2026-10-02 after committing all pending work. Checkpoint `67a32636f` contains those 25 pending files and passed its normal hooks, 393 focused Gateway tests, Gateway typecheck and docs checks. Direct commit and GitHub `main` publication were authorized on 2026-10-03. Current results, reproducible checkpoint/current parser-work counts, passing desktop/mobile lifecycle proof and broader lanes are tracked in the [implementation report](../reports/2026-10-02-sf6-chat-display-implementation.md).
 
 Parent plan: [Codex follow-up improvements](2026-10-02-codex-followup-improvements.md), slice SF6. O1, the optional Codex app-server adapter, remains excluded. This work adapts display patterns to the existing browser UI; it does not introduce a second runtime or port the Rust terminal UI.
 
 ## Existing owners and source evidence
 
-The repository already has the foundations. Reuse them and record existing source/test evidence for satisfied requirements:
+The checkpoint already had the following foundations. This owner inventory records the pre-change state; the implementation report describes the current fixes:
 
-- `packages/mission-control-shared/src/components/chat/AssistantMessageRenderer.tsx`: `StreamingMarkdown`, a memoized stable prefix and mutable tail, `splitIncremental`, fence tracking, reference-definition propagation, source-based copying, and the current safe link/code renderers. A new completed paragraph currently changes the single stable-prefix Markdown component's source; incremental boundary scanning alone does not establish that earlier Markdown blocks avoid reparsing.
+- `packages/mission-control-shared/src/components/chat/AssistantMessageRenderer.tsx`: `StreamingMarkdown`, a memoized stable prefix and mutable tail, `splitIncremental`, fence tracking, reference-definition propagation, source-based copying, and safe link/code renderers. At the checkpoint, a new completed paragraph changed the single stable-prefix Markdown component's source; incremental boundary scanning alone did not establish that earlier Markdown blocks avoided reparsing.
 - `AssistantMessageRenderer.incremental.test.tsx`: prefix equivalence, exact source reconstruction, turn/reset handling, streamed-versus-settled markup, fences, and reference links. Extend these tests instead of replacing them.
 - `packages/mission-control-shared/src/state/chat-streaming-preview-store.ts` and the existing threaded-surface streaming controller: transient preview ownership. Keep incoming runtime events, UI animation, and canonical completion distinct.
 - `apps/mission-control-next/src/cockpit/areas/chat/ChatTranscript.tsx`: selected-path turns, live preview, Virtuoso, follow-output behavior, canonical receipts, blockers, and existing source rendering.
@@ -17,12 +17,12 @@ The repository already has the foundations. Reuse them and record existing sourc
 
 Relevant upstream patterns inspected in the public Codex terminal UI:
 
-- [ChatWidget](https://github.com/openai/codex/blob/main/codex-rs/tui/src/chatwidget.rs): event-derived presentation state, committed history, and an active live cell.
-- [Streaming controller](https://github.com/openai/codex/blob/main/codex-rs/tui/src/streaming/controller.rs): stable/tail partitioning, table holdback, and explicit resize/finalization invariants.
-- [Incremental renderer](https://github.com/openai/codex/blob/main/codex-rs/tui/src/streaming/render.rs): retain completed top-level blocks and invalidate when references or other source-wide dependencies change.
-- [History cells](https://github.com/openai/codex/blob/main/codex-rs/tui/src/history_cell/mod.rs): compact/expanded activity, stable identity, source-based copying, and cache revision handling.
+- [ChatWidget](https://github.com/openai/codex/blob/86a54b051c08f34f373c507ae16a91915ab08700/codex-rs/tui/src/chatwidget.rs): event-derived presentation state, committed history, and an active live cell.
+- [Streaming controller](https://github.com/openai/codex/blob/86a54b051c08f34f373c507ae16a91915ab08700/codex-rs/tui/src/streaming/controller.rs): stable/tail partitioning, table holdback, and explicit resize/finalization invariants.
+- [Incremental renderer](https://github.com/openai/codex/blob/86a54b051c08f34f373c507ae16a91915ab08700/codex-rs/tui/src/streaming/render.rs): retain completed top-level blocks and invalidate when references or other source-wide dependencies change.
+- [History cells](https://github.com/openai/codex/blob/86a54b051c08f34f373c507ae16a91915ab08700/codex-rs/tui/src/history_cell/mod.rs): compact/expanded activity, stable identity, source-based copying, and cache revision handling.
 
-These links track upstream `main`; pin the relevant Codex commit and the GoatCitadel revision at SD0 before drawing implementation conclusions. The desktop app frontend is not established by these terminal sources. Similar architecture does not establish equivalent correctness or performance.
+These links pin Codex `86a54b051c08f34f373c507ae16a91915ab08700`; the GoatCitadel baseline is `67a32636f`. The desktop app frontend is not established by these terminal sources. Similar architecture does not establish equivalent correctness or performance.
 
 ## Delivery order and acceptance
 

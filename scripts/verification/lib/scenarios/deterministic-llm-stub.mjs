@@ -97,6 +97,7 @@ export async function startDeterministicLlmStub(options = {}) {
   const requestSummaries = [];
   const sockets = new Set();
   const dispatchWaiters = new Set();
+  const controlledStreams = new Set();
   let completionDispatches = 0;
   let dispatchPlanDispatches = 0;
   let imageGenerationDispatches = 0;
@@ -121,7 +122,8 @@ export async function startDeterministicLlmStub(options = {}) {
       stream: body?.stream === true,
       messageCount: Array.isArray(body?.messages) ? body.messages.length : undefined,
       toolNames: Array.isArray(body?.tools)
-        ? body.tools.slice(0, 256)
+        ? body.tools
+            .slice(0, 256)
             .map((tool) => tool?.function?.name ?? tool?.name)
             .filter((name) => typeof name === "string" && /^[a-zA-Z0-9_]{1,128}$/u.test(name))
         : undefined,
@@ -208,6 +210,7 @@ export async function startDeterministicLlmStub(options = {}) {
           requestPath: url.pathname,
           requestSummary,
           response,
+          controlledStreams,
         });
         return;
       }
@@ -272,6 +275,11 @@ export async function startDeterministicLlmStub(options = {}) {
     completionDispatches: () => completionDispatches,
     dispatchPlanDispatches: () => dispatchPlanDispatches,
     imageGenerationDispatches: () => imageGenerationDispatches,
+    advanceControlledStream: () => {
+      if (controlledStreams.size !== 1)
+        throw new Error(`Expected one controlled stream, found ${controlledStreams.size}`);
+      return [...controlledStreams][0]();
+    },
     completionDispatchRecords: () =>
       requestSummaries
         .filter(
@@ -304,7 +312,16 @@ export async function startDeterministicLlmStub(options = {}) {
   };
 }
 
-async function executePlannedDispatch({ behavior, body, model, request, requestPath, requestSummary, response }) {
+async function executePlannedDispatch({
+  behavior,
+  body,
+  model,
+  request,
+  requestPath,
+  requestSummary,
+  response,
+  controlledStreams,
+}) {
   if (behavior.delayMs > 0) {
     await abortableDelay(behavior.delayMs, request);
   }
@@ -314,6 +331,59 @@ async function executePlannedDispatch({ behavior, body, model, request, requestP
   }
 
   switch (behavior.type) {
+    case "stream_controlled": {
+      if (!body.stream || requestPath !== "/v1/chat/completions")
+        throw new Error("Controlled display fixture requires streaming chat completions");
+      response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
+      response.flushHeaders?.();
+      const closed = waitForRequestClose(request, response);
+      let index = 0;
+      let completed = false;
+      const advance = () => {
+        if (response.destroyed) throw new Error("Controlled stream is closed");
+        if (index < behavior.chunks.length) {
+          // A controlled phase can contain a large document fragment. Emit it
+          // in ordinary token-sized batches through the real secret projector.
+          // Keep phase boundaries deterministic without changing Gateway limits.
+          const content = behavior.chunks[index++];
+          for (let offset = 0; offset < content.length; offset += 128) {
+            response.write(
+              `data: ${JSON.stringify({
+                id: "controlled-display",
+                object: "chat.completion.chunk",
+                model,
+                choices: [{ index: 0, delta: { content: content.slice(offset, offset + 128) } }],
+              })}\n\n`,
+            );
+          }
+          return true;
+        }
+        completed = true;
+        response.write(
+          `data: ${JSON.stringify({
+            id: "controlled-display",
+            object: "chat.completion.chunk",
+            model,
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage: { prompt_tokens: 12, completion_tokens: 40, total_tokens: 52 },
+          })}\n\n`,
+        );
+        response.end("data: [DONE]\n\n");
+        return false;
+      };
+      controlledStreams.add(advance);
+      try {
+        advance();
+        await closed;
+      } finally {
+        controlledStreams.delete(advance);
+        completeRequestSummary(requestSummary, {
+          outcome: completed ? "success" : "controlled_stream_aborted",
+          status: 200,
+        });
+      }
+      return;
+    }
     case "provider_error":
       completeRequestSummary(requestSummary, { outcome: "provider_error", status: 200 });
       writeStreamingProviderError(response, model, behavior, requestPath);
@@ -412,6 +482,16 @@ function normalizeDispatchPlan(value, defaultReplyText) {
     }
     const delayMs = normalizeDelayMs(entry.delayMs, `dispatchPlan[${index}].delayMs`);
     switch (entry.type) {
+      case "stream_controlled":
+        if (!Array.isArray(entry.chunks) || entry.chunks.length < 2 || entry.chunks.length > 200)
+          throw new TypeError("Controlled stream requires 2-200 chunks");
+        return {
+          type: entry.type,
+          delayMs,
+          chunks: entry.chunks.map((chunk, chunkIndex) =>
+            normalizeBoundedText(chunk, `dispatchPlan[${index}].chunks[${chunkIndex}]`),
+          ),
+        };
       case "provider_error":
         return {
           type: "provider_error",

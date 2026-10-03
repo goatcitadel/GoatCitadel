@@ -9,7 +9,7 @@ import {
 
 // Feed `full` into the incremental engine one character at a time and assert the
 // incremental result is byte-identical to the from-scratch splitStreamingMarkdown at
-// EVERY prefix. This is the core equivalence proof for the O(n^2) -> O(delta) refactor.
+// EVERY prefix. Semantic equivalence to the settled parser has separate coverage.
 function assertEquivalentPerCharacter(full: string): void {
   const state = createIncrementalSplitState();
   for (let length = 0; length <= full.length; length += 1) {
@@ -103,22 +103,22 @@ describe("splitIncremental equivalence with splitStreamingMarkdown", () => {
     expect(incrementalB).toEqual(
       splitStreamingMarkdown("clean paragraph.\n\nsecond clean paragraph that should finalize.\n\n"),
     );
-    expect(incrementalB.stable).toBe("clean paragraph.\n\nsecond clean paragraph that should finalize.\n\n");
+    expect(incrementalB.stable).toBe("clean paragraph.\n\n");
   });
 
   it("does not rescan from index 0 once a stable boundary is locked (perf shape)", () => {
     const state = createIncrementalSplitState();
     // Lock a stable boundary by finalizing the first paragraph.
-    splitIncremental(state, "Locked paragraph one.\n\n");
+    splitIncremental(state, "Locked paragraph one.\n\nSecond paragraph\n");
     const resumeAfterLock = state.resumeIndex;
     expect(resumeAfterLock).toBeGreaterThan(0);
 
     // Subsequent deltas must resume from the carried boundary, not from 0.
-    splitIncremental(state, "Locked paragraph one.\n\nSecond paragraph growing");
+    splitIncremental(state, "Locked paragraph one.\n\nSecond paragraph\ngrowing");
     expect(state.lastScanStart).toBe(resumeAfterLock);
     expect(state.lastScanStart).toBeGreaterThan(0);
 
-    splitIncremental(state, "Locked paragraph one.\n\nSecond paragraph growing further still");
+    splitIncremental(state, "Locked paragraph one.\n\nSecond paragraph\ngrowing further still");
     // Resume index hasn't moved (no new newline-terminated line) so scan resumes there.
     expect(state.lastScanStart).toBe(resumeAfterLock);
   });
@@ -141,6 +141,61 @@ describe("StreamingMarkdown incremental wiring", () => {
   function renderedShape(r: ReactTestRenderer): string {
     return JSON.stringify(r.toJSON());
   }
+
+  it("matches settled DOM structure while still running, across semantic block boundaries", () => {
+    const tags = new Set([
+      "p",
+      "ul",
+      "ol",
+      "li",
+      "blockquote",
+      "h1",
+      "h2",
+      "h3",
+      "table",
+      "thead",
+      "tbody",
+      "tr",
+      "th",
+      "td",
+      "pre",
+      "a",
+    ]);
+    const text = (node: unknown): string =>
+      typeof node === "string"
+        ? node
+        : Array.isArray(node)
+          ? node.map(text).join("")
+          : node && typeof node === "object" && "children" in node
+            ? text(node.children)
+            : "";
+    const shape = (r: ReactTestRenderer) =>
+      r.root
+        .findAll((node) => typeof node.type === "string" && tags.has(node.type))
+        .map((node) => [node.type, node.props.href ?? null, text(node)]);
+    const documents = [
+      "- First\n\n- Second\n\n  Continued.\n\nAfter.",
+      "> First\n>\n> Second\n\n> Third\n\nAfter.",
+      "Heading\n---\n\n| A | B |\n| --- | --- |\n| Escaped \\| | Wide |\n\nAfter.",
+      "```md\n| A | B |\n| --- | --- |\n```\n\n~~~ts\nconst v = 1;\n~~~\n\nAfter.",
+      "See [the spec][spec].\n\n[spec]: https://example.com/spec\n\nAfter.",
+    ];
+    for (const full of documents) {
+      const streamed = create(<AssistantMessageRenderer role="assistant" content="" running streamTurnId="semantic" />);
+      const settled = create(<AssistantMessageRenderer role="assistant" content={full} />);
+      try {
+        for (let i = 1; i <= full.length; i += 3)
+          streamed.update(
+            <AssistantMessageRenderer role="assistant" content={full.slice(0, i)} running streamTurnId="semantic" />,
+          );
+        streamed.update(<AssistantMessageRenderer role="assistant" content={full} running streamTurnId="semantic" />);
+        expect(shape(streamed), full).toEqual(shape(settled));
+      } finally {
+        streamed.unmount();
+        settled.unmount();
+      }
+    }
+  });
 
   it("renders the same settled markup whether streamed incrementally or rendered whole", () => {
     const full =
@@ -189,7 +244,7 @@ describe("StreamingMarkdown incremental wiring", () => {
     const expected = splitStreamingMarkdown(turnBContent);
     // The stable prefix should be present in the rendered output as its own block.
     const shape = renderedShape(renderer);
-    expect(expected.stable).toBe("clean para.\n\nsecond clean para to finalize.\n\n");
+    expect(expected.stable).toBe("clean para.\n\n");
     // Stable text (sans markdown newlines) shows up in the rendered tree.
     expect(shape).toContain("second clean para to finalize.");
   });
