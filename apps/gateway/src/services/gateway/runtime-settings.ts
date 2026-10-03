@@ -115,6 +115,8 @@ export interface RuntimeSettings {
     autonomyV1Disabled?: boolean;
     /** Thinking-display skeleton. Absent/false (default) ⇒ no thinking_delta chunks are emitted; behavior is byte-identical to today. */
     chatThinkingStreamV1Enabled?: boolean;
+    /** On-demand context estimates in session.status. Absent/false disables enrichment. */
+    chatContextBudgetVisibilityV1Enabled?: boolean;
     /** Unified Chat composer palette. Absent uses the server-configured rollout default. */
     unifiedComposerPaletteV1Enabled?: boolean;
     /** Safe read-only tools over a turn's immutable attached-context snapshot. */

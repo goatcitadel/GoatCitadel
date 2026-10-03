@@ -948,70 +948,79 @@ function createHarness(options: { prefs?: ChatSessionPrefsRecord; projectId?: st
             return next;
           },
         ),
-        failUnownedPreAdmission: vi.fn((input: {
-          stepId: string;
-          runId: string;
-          summary: string;
-          error: string;
-          failureGuidance: string;
-          finishedAt: string;
-          durationMs: number;
-        }) => {
-          const current = steps.get(input.stepId);
-          const claim = dispatchClaims.get(input.stepId);
-          if (
-            !current || current.runId !== input.runId ||
-            (current.status !== "pending" && current.status !== "running") ||
-            current.childSessionId || current.childTurnId || current.durableRunId ||
-            (claim && Date.parse(claim.expiresAt) > Date.parse(databaseNowIso))
-          ) return undefined;
-          const next = {
-            ...current,
-            status: "failed" as const,
-            summary: input.summary,
-            error: input.error,
-            failureGuidance: input.failureGuidance,
-            finishedAt: input.finishedAt,
-            durationMs: input.durationMs,
-          };
-          steps.set(input.stepId, next);
-          dispatchClaims.delete(input.stepId);
-          return next;
-        }),
-        materializeDurableOutcome: vi.fn((input: {
-          stepId: string;
-          expectedChildSessionId: string;
-          expectedChildTurnId: string;
-          expectedDurableRunId: string;
-          status: "completed" | "failed" | "cancelled";
-          summary: string;
-          output?: string;
-          error?: string;
-          failureGuidance?: string;
-          citations: ChatCitationRecord[];
-          finishedAt: string;
-        }) => {
-          const current = steps.get(input.stepId)!;
-          if (
-            current.status !== "running" ||
-            current.childSessionId !== input.expectedChildSessionId ||
-            current.childTurnId !== input.expectedChildTurnId ||
-            current.durableRunId !== input.expectedDurableRunId ||
-            dispatchClaims.has(input.stepId)
-          ) return { outcome: "rejected" as const, step: current };
-          const next = {
-            ...current,
-            status: input.status,
-            summary: input.summary,
-            output: input.output,
-            error: input.error,
-            failureGuidance: input.failureGuidance,
-            citations: input.citations,
-            finishedAt: input.finishedAt,
-          };
-          steps.set(input.stepId, next);
-          return { outcome: "applied" as const, step: next };
-        }),
+        failUnownedPreAdmission: vi.fn(
+          (input: {
+            stepId: string;
+            runId: string;
+            summary: string;
+            error: string;
+            failureGuidance: string;
+            finishedAt: string;
+            durationMs: number;
+          }) => {
+            const current = steps.get(input.stepId);
+            const claim = dispatchClaims.get(input.stepId);
+            if (
+              !current ||
+              current.runId !== input.runId ||
+              (current.status !== "pending" && current.status !== "running") ||
+              current.childSessionId ||
+              current.childTurnId ||
+              current.durableRunId ||
+              (claim && Date.parse(claim.expiresAt) > Date.parse(databaseNowIso))
+            )
+              return undefined;
+            const next = {
+              ...current,
+              status: "failed" as const,
+              summary: input.summary,
+              error: input.error,
+              failureGuidance: input.failureGuidance,
+              finishedAt: input.finishedAt,
+              durationMs: input.durationMs,
+            };
+            steps.set(input.stepId, next);
+            dispatchClaims.delete(input.stepId);
+            return next;
+          },
+        ),
+        materializeDurableOutcome: vi.fn(
+          (input: {
+            stepId: string;
+            expectedChildSessionId: string;
+            expectedChildTurnId: string;
+            expectedDurableRunId: string;
+            status: "completed" | "failed" | "cancelled";
+            summary: string;
+            output?: string;
+            error?: string;
+            failureGuidance?: string;
+            citations: ChatCitationRecord[];
+            finishedAt: string;
+          }) => {
+            const current = steps.get(input.stepId)!;
+            if (
+              current.status !== "running" ||
+              current.childSessionId !== input.expectedChildSessionId ||
+              current.childTurnId !== input.expectedChildTurnId ||
+              current.durableRunId !== input.expectedDurableRunId ||
+              dispatchClaims.has(input.stepId)
+            )
+              return { outcome: "rejected" as const, step: current };
+            const next = {
+              ...current,
+              status: input.status,
+              summary: input.summary,
+              output: input.output,
+              error: input.error,
+              failureGuidance: input.failureGuidance,
+              citations: input.citations,
+              finishedAt: input.finishedAt,
+            };
+            steps.set(input.stepId, next);
+            return { outcome: "applied" as const, step: next };
+          },
+        ),
       },
       taskSubagents: {
         findByAgentSessionId: vi.fn(() => undefined),
@@ -1817,13 +1826,15 @@ describe("ChatDelegationService loop 20 coverage", () => {
       },
     };
     steps.set(scopeStep.stepId, secondApprovalStep);
-    await expect(service.resumePersistedChatDelegation({
-      delegationRunId: waiting.runId,
-      stepId: scopeStep.stepId,
-      durableRunId: "durable-child-scope-1",
-      approvalId: "approval-scope-1",
-      childTurnId: frozenIdentity!.turnId,
-    })).rejects.toBeInstanceOf(StaleDelegationScopeResumeError);
+    await expect(
+      service.resumePersistedChatDelegation({
+        delegationRunId: waiting.runId,
+        stepId: scopeStep.stepId,
+        durableRunId: "durable-child-scope-1",
+        approvalId: "approval-scope-1",
+        childTurnId: frozenIdentity!.turnId,
+      }),
+    ).rejects.toBeInstanceOf(StaleDelegationScopeResumeError);
     expect(steps.get(scopeStep.stepId)).toMatchObject({ status: "running", workResult: secondApprovalStep.workResult });
     expect(dispatchClaims.has(scopeStep.stepId)).toBe(false);
     expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
@@ -1832,16 +1843,19 @@ describe("ChatDelegationService loop 20 coverage", () => {
     const listForUpdate = deps.storage.chatDelegationSteps.listByRunForUpdate;
     listForUpdate.mockImplementationOnce((runId: string) => {
       steps.set(scopeStep.stepId, secondApprovalStep);
-      return [...steps.values()].filter((candidate) => candidate.runId === runId)
+      return [...steps.values()]
+        .filter((candidate) => candidate.runId === runId)
         .sort((left, right) => left.index - right.index);
     });
-    await expect(service.resumePersistedChatDelegation({
-      delegationRunId: waiting.runId,
-      stepId: scopeStep.stepId,
-      durableRunId: "durable-child-scope-1",
-      approvalId: "approval-scope-1",
-      childTurnId: frozenIdentity!.turnId,
-    })).rejects.toBeInstanceOf(StaleDelegationScopeResumeError);
+    await expect(
+      service.resumePersistedChatDelegation({
+        delegationRunId: waiting.runId,
+        stepId: scopeStep.stepId,
+        durableRunId: "durable-child-scope-1",
+        approvalId: "approval-scope-1",
+        childTurnId: frozenIdentity!.turnId,
+      }),
+    ).rejects.toBeInstanceOf(StaleDelegationScopeResumeError);
     expect(steps.get(scopeStep.stepId)).toMatchObject({ status: "running", workResult: secondApprovalStep.workResult });
     expect(dispatchClaims.has(scopeStep.stepId)).toBe(false);
     expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
@@ -1868,13 +1882,15 @@ describe("ChatDelegationService loop 20 coverage", () => {
       durable: { runId: "durable-child-scope-1", status: "completed" },
     });
     steps.set(scopeStep.stepId, { ...frozenScopeStep, instructionSnapshot: undefined });
-    await expect(service.resumePersistedChatDelegation({
-      delegationRunId: waiting.runId,
-      stepId: scopeStep.stepId,
-      durableRunId: "durable-child-scope-1",
-      approvalId: "approval-scope-1",
-      childTurnId: frozenIdentity!.turnId,
-    })).rejects.toBeInstanceOf(StaleDelegationScopeResumeError);
+    await expect(
+      service.resumePersistedChatDelegation({
+        delegationRunId: waiting.runId,
+        stepId: scopeStep.stepId,
+        durableRunId: "durable-child-scope-1",
+        approvalId: "approval-scope-1",
+        childTurnId: frozenIdentity!.turnId,
+      }),
+    ).rejects.toBeInstanceOf(StaleDelegationScopeResumeError);
     expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
     steps.set(scopeStep.stepId, frozenScopeStep);
 
@@ -1914,23 +1930,25 @@ describe("ChatDelegationService loop 20 coverage", () => {
     const { deps, durableRuns, runs, service, steps, tasks, traces } = createHarness();
     let identity: TestAgentTurnIdentity | undefined;
     let frozenRequest: ChatSendMessageRequest | undefined;
-    deps.agentSendChatMessage = vi.fn(async (
-      childSessionId: string,
-      request: ChatSendMessageRequest,
-      options?: { turnIdentity?: TestAgentTurnIdentity },
-    ): Promise<ChatSendMessageResponse> => {
-      identity = options?.turnIdentity;
-      frozenRequest = request;
-      const response = createIdentifiedChatResponse(childSessionId, identity!);
-      return {
-        ...response,
-        trace: {
-          ...response.trace!,
-          status: "waiting_for_approval",
-          durable: { runId: "durable-legacy-child", status: "waiting" },
-        },
-      };
-    }) as never;
+    deps.agentSendChatMessage = vi.fn(
+      async (
+        childSessionId: string,
+        request: ChatSendMessageRequest,
+        options?: { turnIdentity?: TestAgentTurnIdentity },
+      ): Promise<ChatSendMessageResponse> => {
+        identity = options?.turnIdentity;
+        frozenRequest = request;
+        const response = createIdentifiedChatResponse(childSessionId, identity!);
+        return {
+          ...response,
+          trace: {
+            ...response.trace!,
+            status: "waiting_for_approval",
+            durable: { runId: "durable-legacy-child", status: "waiting" },
+          },
+        };
+      },
+    ) as never;
     const request = {
       objective: "Implement and verify the scoped change",
       roles: ["coder", "qa"],
@@ -1966,13 +1984,16 @@ describe("ChatDelegationService loop 20 coverage", () => {
         },
       },
     });
-    durableRuns.set("durable-legacy-child", buildPersistedChildDurableRun({
-      runId: "durable-legacy-child",
-      sessionId: running.childSessionId!,
-      workspaceId: "default",
-      identity: identity!,
-      request: frozenRequest!,
-    }));
+    durableRuns.set(
+      "durable-legacy-child",
+      buildPersistedChildDurableRun({
+        runId: "durable-legacy-child",
+        sessionId: running.childSessionId!,
+        workspaceId: "default",
+        identity: identity!,
+        request: frozenRequest!,
+      }),
+    );
     traces.set(identity!.turnId, {
       ...createIdentifiedChatResponse(running.childSessionId!, identity!).trace!,
       durable: { runId: "durable-legacy-child", status: "completed" },
@@ -1999,13 +2020,15 @@ describe("ChatDelegationService loop 20 coverage", () => {
       childTurnId: identity!.turnId,
       approvalId: "scope-approval-1",
     };
-    await expect(persistedService.resumePersistedChatDelegation({ ...resume, approvalId: "another-approval" }))
-      .rejects.toBeInstanceOf(StaleDelegationScopeResumeError);
+    await expect(
+      persistedService.resumePersistedChatDelegation({ ...resume, approvalId: "another-approval" }),
+    ).rejects.toBeInstanceOf(StaleDelegationScopeResumeError);
     expect((await durableStorage.chatDelegationSteps.get(running.stepId)).status).toBe("running");
     expect((await durableStorage.chatDelegationSteps.get(waiting.steps[1]!.stepId)).status).toBe("pending");
 
-    await expect(persistedService.resumePersistedChatDelegation(resume))
-      .rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
+    await expect(persistedService.resumePersistedChatDelegation(resume)).rejects.toBeInstanceOf(
+      UnverifiableDelegationInstructionsError,
+    );
     expect((await durableStorage.chatDelegationSteps.get(running.stepId)).status).toBe("completed");
     expect((await durableStorage.chatDelegationSteps.get(running.stepId)).output).toBeUndefined();
     expect((await durableStorage.chatDelegationSteps.get(waiting.steps[1]!.stepId)).status).toBe("failed");
@@ -2049,14 +2072,17 @@ describe("ChatDelegationService loop 20 coverage", () => {
       startedAt: "2026-07-11T00:00:00.000Z",
     });
     tasks.set(taskId, { taskId, status: "in_progress" });
-    steps.set(stepId, createStepRecord({
+    steps.set(
       stepId,
-      runId,
-      role: "coder",
-      index: 0,
-      status: "running",
-      startedAt: "2026-07-11T00:00:00.000Z",
-    }));
+      createStepRecord({
+        stepId,
+        runId,
+        role: "coder",
+        index: 0,
+        status: "running",
+        startedAt: "2026-07-11T00:00:00.000Z",
+      }),
+    );
     dispatchClaims.set(stepId, { token: "active-owner", expiresAt: "2026-07-11T01:00:00.000Z" });
 
     await expect(service.runChatDelegation("sess-1", request)).rejects.toMatchObject(
@@ -2066,8 +2092,9 @@ describe("ChatDelegationService loop 20 coverage", () => {
     expect(runs.get(runId)?.status).toBe("running");
 
     dispatchClaims.set(stepId, { token: "expired-owner", expiresAt: "2026-07-10T23:00:00.000Z" });
-    await expect(service.runChatDelegation("sess-1", request))
-      .rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
+    await expect(service.runChatDelegation("sess-1", request)).rejects.toBeInstanceOf(
+      UnverifiableDelegationInstructionsError,
+    );
     expect(steps.get(stepId)?.status).toBe("failed");
     expect(runs.get(runId)?.status).toBe("failed");
     expect(tasks.get(taskId)?.status).toBe("blocked");
@@ -2982,7 +3009,14 @@ describe("ChatDelegationService loop 20 coverage", () => {
     deps.agentSendChatMessage = vi.fn(async (childSessionId: string): Promise<ChatSendMessageResponse> => {
       const response = createChatResponse(childSessionId);
       return deps.agentSendChatMessage.mock.calls.length === 1
-        ? { ...response, trace: { ...response.trace!, status: "waiting_for_approval", durable: { runId: `durable-${childSessionId}`, status: "waiting" } } }
+        ? {
+            ...response,
+            trace: {
+              ...response.trace!,
+              status: "waiting_for_approval",
+              durable: { runId: `durable-${childSessionId}`, status: "waiting" },
+            },
+          }
         : response;
     }) as never;
     const request = {
@@ -2992,16 +3026,24 @@ describe("ChatDelegationService loop 20 coverage", () => {
       policyRunId: "durable-parent-frozen-step-instructions",
       steps: [
         { stepId: "implementation", role: "coder", objective: "Patch the queue" },
-        { stepId: "review", role: "qa", dependsOnStepIds: ["implementation"], objective: "Review the patch", expectedOutput: "A test report" },
+        {
+          stepId: "review",
+          role: "qa",
+          dependsOnStepIds: ["implementation"],
+          objective: "Review the patch",
+          expectedOutput: "A test report",
+        },
       ],
     };
     const waiting = await service.runChatDelegation("sess-1", request);
     expect(waiting.steps.map((step) => step.status)).toEqual(["running", "pending"]);
 
-    await expect(new ChatDelegationService(deps).runChatDelegation("sess-1", {
-      ...request,
-      steps: [request.steps[0], { ...request.steps[1], objective: "Skip the review" }],
-    })).rejects.toMatchObject(conflictingPlan(/does not match the durable parent plan/));
+    await expect(
+      new ChatDelegationService(deps).runChatDelegation("sess-1", {
+        ...request,
+        steps: [request.steps[0], { ...request.steps[1], objective: "Skip the review" }],
+      }),
+    ).rejects.toMatchObject(conflictingPlan(/does not match the durable parent plan/));
     expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -3020,12 +3062,15 @@ describe("ChatDelegationService loop 20 coverage", () => {
     steps.set(step.stepId, { ...step, instructionSnapshot: undefined });
 
     const replayService = new ChatDelegationService(deps);
-    await expect(replayService.runChatDelegation("sess-1", request))
-      .rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
-    await expect(replayService.runChatDelegation("sess-1", {
-      ...request,
-      steps: [{ ...request.steps[0]!, objective: "Do unrelated work" }],
-    })).rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
+    await expect(replayService.runChatDelegation("sess-1", request)).rejects.toBeInstanceOf(
+      UnverifiableDelegationInstructionsError,
+    );
+    await expect(
+      replayService.runChatDelegation("sess-1", {
+        ...request,
+        steps: [{ ...request.steps[0]!, objective: "Do unrelated work" }],
+      }),
+    ).rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
     expect(runs.get(completed.runId)?.status).toBe("completed");
     expect(steps.get(step.stepId)?.output).toBe(step.output);
     expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
@@ -3051,15 +3096,17 @@ describe("ChatDelegationService loop 20 coverage", () => {
       roles: ["worker"],
       mode: "parallel" as const,
       policyRunId: "durable-parent-fanout-1",
-      steps: [{
-        stepId: "fanout-child-1",
-        index: 0,
-        role: "worker",
-        parallelizable: true,
-        objective: "Inspect retry behavior",
-        label: "Retry audit",
-        expectedOutput: "A concise risk list",
-      }],
+      steps: [
+        {
+          stepId: "fanout-child-1",
+          index: 0,
+          role: "worker",
+          parallelizable: true,
+          objective: "Inspect retry behavior",
+          label: "Retry audit",
+          expectedOutput: "A concise risk list",
+        },
+      ],
     };
     const options = {
       workflowTemplate: CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE,
@@ -3095,22 +3142,34 @@ describe("ChatDelegationService loop 20 coverage", () => {
     const recovered = await new ChatDelegationService(deps).runChatDelegation("sess-1", request, undefined, options);
     expect(recovered.runId).toBe(waiting.runId);
     const storageFailure = new Error("fan-out lookup unavailable");
-    deps.storage.chatFanoutInvocations.get.mockImplementationOnce(() => { throw storageFailure; });
+    deps.storage.chatFanoutInvocations.get.mockImplementationOnce(() => {
+      throw storageFailure;
+    });
     await expect(service.runChatDelegation("sess-1", request, undefined, options)).rejects.toBe(storageFailure);
     fanoutInvocations.delete(invocationId);
-    await expect(service.runChatDelegation("sess-1", request, undefined, options))
-      .rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
+    await expect(service.runChatDelegation("sess-1", request, undefined, options)).rejects.toBeInstanceOf(
+      UnverifiableDelegationInstructionsError,
+    );
     fanoutInvocations.set(invocationId, invocation);
-    await expect(service.runChatDelegation("sess-1", {
-      ...request,
-      steps: [{ ...request.steps[0]!, objective: "Do something different" }],
-    }, undefined, options)).rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
+    await expect(
+      service.runChatDelegation(
+        "sess-1",
+        {
+          ...request,
+          steps: [{ ...request.steps[0]!, objective: "Do something different" }],
+        },
+        undefined,
+        options,
+      ),
+    ).rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
     fanoutInvocations.set(invocationId, { ...invocation, delegationRunId: "another-delegation" });
-    await expect(service.runChatDelegation("sess-1", request, undefined, options))
-      .rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
+    await expect(service.runChatDelegation("sess-1", request, undefined, options)).rejects.toBeInstanceOf(
+      UnverifiableDelegationInstructionsError,
+    );
     fanoutInvocations.set(invocationId, { ...invocation, parentRunId: "another-parent" });
-    await expect(service.runChatDelegation("sess-1", request, undefined, options))
-      .rejects.toBeInstanceOf(UnverifiableDelegationInstructionsError);
+    await expect(service.runChatDelegation("sess-1", request, undefined, options)).rejects.toBeInstanceOf(
+      UnverifiableDelegationInstructionsError,
+    );
     fanoutInvocations.set(invocationId, invocation);
     const terminalStep = steps.get(persistedStep.stepId)!;
     steps.set(terminalStep.stepId, {
@@ -3542,8 +3601,14 @@ describe("ChatDelegationService loop 20 coverage", () => {
     expect(dispatchClaims.get(step.stepId)?.token).toBe("replacement-response-owner");
     expect(result.steps[0]).toEqual(expect.objectContaining({ status: "running" }));
     const repository = deps.storage.chatDelegationSteps;
-    for (const method of [repository.create, repository.listByRun, repository.get,
-      repository.readDatabaseNow, repository.linkClaimedDispatch, repository.finishOwnedDispatchWithResponse]) {
+    for (const method of [
+      repository.create,
+      repository.listByRun,
+      repository.get,
+      repository.readDatabaseNow,
+      repository.linkClaimedDispatch,
+      repository.finishOwnedDispatchWithResponse,
+    ]) {
       expect(method).toHaveBeenCalled();
       expect(method.mock.contexts.every((receiver) => receiver === repository)).toBe(true);
     }
@@ -4418,6 +4483,54 @@ describe("ChatDelegationService loop 20 coverage", () => {
     expect(deps.taskLifecycleService.appendTaskDeliverable).not.toHaveBeenCalled();
     expect(deps.taskLifecycleService.persistDelegationDeliverable).not.toHaveBeenCalled();
   });
+
+  it.each(["optional_question", "required_question", "approval"] as const)(
+    "continues independent branches while preserving the %s child wait",
+    async (waitKind) => {
+      const { deps, service } = createHarness();
+      deps.agentSendChatMessage = vi.fn(async (childSessionId: string) => {
+        const response = createChatResponse(childSessionId);
+        if (childSessionId !== "delegate-session-1") return response;
+        return {
+          ...response,
+          assistantMessage: undefined,
+          trace: {
+            ...response.trace!,
+            status: waitKind === "approval" ? "waiting_for_approval" : "waiting_for_user_input",
+            pendingUserInput:
+              waitKind === "approval"
+                ? undefined
+                : {
+                    promptId: "preference-1",
+                    turnId: response.turnId!,
+                    kind: "text",
+                    title: "Preference",
+                    question: "Which format do you prefer?",
+                    required: waitKind === "required_question",
+                  },
+          },
+        } as ChatSendMessageResponse;
+      }) as never;
+      const result = await service.runChatDelegation("sess-1", {
+        objective: "Continue independent analysis while the format branch waits",
+        roles: ["Researcher", "Coder", "QA", "Ops"],
+        mode: "parallel",
+        steps: [
+          { stepId: "ask", role: "Researcher", index: 0, parallelizable: true },
+          { stepId: "independent", role: "Coder", index: 1, parallelizable: true },
+          { stepId: "dependent", role: "QA", index: 2, dependsOnStepIds: ["ask"] },
+          { stepId: "independent-followup", role: "Ops", index: 3, dependsOnStepIds: ["independent"] },
+        ],
+      });
+      expect(result.status).toBe("running");
+      expect(result.steps.map((step) => step.status)).toEqual(["running", "completed", "pending", "completed"]);
+      expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(3);
+      expect(deps.taskLifecycleService.persistDelegationSubagentProjection).toHaveBeenCalledWith(
+        "delegate-session-1",
+        expect.objectContaining({ status: "paused" }),
+      );
+    },
+  );
 
   it("delivers the committed waiting projection in the final stream result without a stale step callback", async () => {
     const { deps, service } = createHarness();

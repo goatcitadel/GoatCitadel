@@ -113,6 +113,8 @@ export interface FeatureFlagsConfig {
    * detection site) so the client's collapsible ChatThinkingSection can render.
    */
   chatThinkingStreamV1Enabled?: boolean;
+  /** On-demand, read-only context estimates in session.status; default off. */
+  chatContextBudgetVisibilityV1Enabled?: boolean;
   /** Unified Chat composer palette for slash commands and contextual resources. */
   unifiedComposerPaletteV1Enabled?: boolean;
   /** Safe read-only tools over the immutable context snapshot attached to a Chat turn. */
@@ -787,6 +789,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ],
     ["autonomyV1Disabled", process.env.GOATCITADEL_FEATURE_AUTONOMY_V1_DISABLED],
     ["chatThinkingStreamV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_THINKING_STREAM_V1_ENABLED],
+    ["chatContextBudgetVisibilityV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_CONTEXT_BUDGET_VISIBILITY_V1_ENABLED],
     ["unifiedComposerPaletteV1Enabled", process.env.GOATCITADEL_FEATURE_UNIFIED_COMPOSER_PALETTE_V1_ENABLED],
     ["attachedContextToolsV1Enabled", process.env.GOATCITADEL_FEATURE_ATTACHED_CONTEXT_TOOLS_V1_ENABLED],
     ["chatSessionStatusV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_SESSION_STATUS_V1_ENABLED],
@@ -1378,6 +1381,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // constructs/emits a thinking_delta chunk unless an operator opts in — with
       // this flag left at its default, runtime behavior is byte-identical to today.
       chatThinkingStreamV1Enabled: featuresInput.chatThinkingStreamV1Enabled ?? false,
+      chatContextBudgetVisibilityV1Enabled: featuresInput.chatContextBudgetVisibilityV1Enabled ?? false,
       // Server-authored rollout gate. The focused palette proof is green; operators
       // can still disable the surface explicitly while retaining legacy paths.
       unifiedComposerPaletteV1Enabled: featuresInput.unifiedComposerPaletteV1Enabled ?? true,

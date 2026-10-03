@@ -574,6 +574,7 @@ export interface RuntimeSettingsResponse {
     orchestrationFinalStreamingV1Disabled?: boolean;
     autonomyV1Disabled?: boolean;
     chatThinkingStreamV1Enabled?: boolean;
+    chatContextBudgetVisibilityV1Enabled?: boolean;
     unifiedComposerPaletteV1Enabled?: boolean;
     chatSessionStatusV1Enabled?: boolean;
     chatTimersV1Enabled?: boolean;

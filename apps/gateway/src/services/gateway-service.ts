@@ -562,7 +562,11 @@ import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import type { McpRequesterScopePosture } from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
 import { McpOAuthTokenService } from "./mcp-oauth-token-service.js";
-import { McpStaticEnvironmentService, readMcpStaticEnvironment, type McpConnectionFence } from "./mcp-static-environment-service.js";
+import {
+  McpStaticEnvironmentService,
+  readMcpStaticEnvironment,
+  type McpConnectionFence,
+} from "./mcp-static-environment-service.js";
 import { McpStaticChatService } from "./mcp-static-chat-service.js";
 import { McpElicitationService } from "./mcp-elicitation-service.js";
 import { GatewayMcpOAuthService } from "./gateway-mcp-oauth-service.js";
@@ -662,7 +666,10 @@ import {
   ToolInvocationCoordinatorService,
   type ToolInvocationRuntimeOptions,
 } from "./tool-invocation-coordinator-service.js";
-import { createRemoteWorkerDispatchOwnerId, createRemoteWorkerExecutionOwners } from "./remote-worker-execution-owners.js";
+import {
+  createRemoteWorkerDispatchOwnerId,
+  createRemoteWorkerExecutionOwners,
+} from "./remote-worker-execution-owners.js";
 import { createRemoteWorkerNativeRuntimePolicy } from "./remote-worker-native-runtime-policy.js";
 import { createRemoteWorkerInstallationPolicy } from "./remote-worker-installation-policy.js";
 import type { RemoteWorkerChatOfferDependencies } from "./remote-worker-chat-offer-service.js";
@@ -1707,6 +1714,9 @@ export class GatewayService {
       attachedContextToolsV1Enabled: async () => await this.isFeatureEnabled("attachedContextToolsV1Enabled"),
       parallelToolExecutionV1Disabled: async () => await this.isFeatureEnabled("parallelToolExecutionV1Disabled"),
       promptContextBudgetReceiptEnabled: () => process.env.GOATCITADEL_DEBUG_PROMPT_CONTEXT_BUDGET_RECEIPTS === "1",
+      chatContextBudgetVisibilityV1Enabled: async () =>
+        await this.isFeatureEnabled("chatContextBudgetVisibilityV1Enabled"),
+      getModelContextWindow: (providerId, model) => this.llmService.getModelContextWindow(providerId, model),
       subagentFanoutV1Disabled: async () => await this.isFeatureEnabled("subagentFanoutV1Disabled"),
       durableChatFanoutV1Enabled: async () => await this.isFeatureEnabled("durableChatFanoutV1Enabled"),
       isDurableFanoutAvailable: async (input) => await this.isDurableFanoutAvailable(input),
@@ -2824,8 +2834,10 @@ export class GatewayService {
       captureMcpServerSessionCloser: (serverId) => this.mcpStdioSessions.captureServerCloser(serverId),
       prepareMcpStaticEnvironment: (server, fence) => this.prepareMcpStaticEnvironment(server, fence),
       resolveMcpOAuthClientId: (server, fence) => this.resolveMcpOAuthClientId(server, fence),
-      resolveConnectedMcpTools: (server, existing, fence) => this.resolveConnectedMcpTools(server, existing, undefined, fence),
-      exchangeMcpOAuthCode: (server, code, state, review) => this.mcpOAuth.exchangeAuthorizationCode(server, code, state, review),
+      resolveConnectedMcpTools: (server, existing, fence) =>
+        this.resolveConnectedMcpTools(server, existing, undefined, fence),
+      exchangeMcpOAuthCode: (server, code, state, review) =>
+        this.mcpOAuth.exchangeAuthorizationCode(server, code, state, review),
       publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
     });
     this.durableWorkflowRegistry = durableExecutionService.createDurableWorkflowExecutorRegistry(
@@ -12040,7 +12052,10 @@ export class GatewayService {
     return await this.mcpServerStore.requireServer(serverId);
   }
 
-  /** @internal */ public async prepareMcpStaticEnvironment(server: McpServerRecord, fence?: McpConnectionFence): Promise<McpServerRecord> {
+  /** @internal */ public async prepareMcpStaticEnvironment(
+    server: McpServerRecord,
+    fence?: McpConnectionFence,
+  ): Promise<McpServerRecord> {
     if (GATEWAY_OWNED_MCP_SERVER_IDS.has(server.serverId)) return server;
     return this.mcpStaticEnvironment.enroll(server, fence);
   }
@@ -12070,7 +12085,10 @@ export class GatewayService {
       throw new Error("Mesh Chat tool publication authority changed.");
   }
 
-  /** @internal */ public async resolveMcpOAuthClientId(server: McpServerRecord, fence?: McpConnectionFence): Promise<string | undefined> {
+  /** @internal */ public async resolveMcpOAuthClientId(
+    server: McpServerRecord,
+    fence?: McpConnectionFence,
+  ): Promise<string | undefined> {
     const environment = readMcpStaticEnvironment(await this.mcpStaticEnvironment.capture(server, fence), server);
     const key = server.oauth?.clientIdEnv?.trim();
     return key ? environment[key]?.trim() || undefined : undefined;
@@ -13060,12 +13078,8 @@ export class GatewayService {
     features: RuntimeSettings["features"],
     cronJobs: { jobs: ReturnType<typeof projectCanonicalCronSpec>[] },
   ): CompleteUnifiedConfigPayload {
-    return buildUnifiedConfigPayloadFromRuntime(
-      runtimeConfig,
-      llmConfig,
-      features,
-      cronJobs,
-      (fullPath) => this.serializeRootPath(fullPath),
+    return buildUnifiedConfigPayloadFromRuntime(runtimeConfig, llmConfig, features, cronJobs, (fullPath) =>
+      this.serializeRootPath(fullPath),
     );
   }
 

@@ -5,7 +5,46 @@ import type {
   ChatToolRunRecord,
   ChatTurnExecutionProfile,
 } from "@goatcitadel/contracts";
+import { canonicalJsonString } from "@goatcitadel/contracts";
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
+
+/** Shared estimator for missing provider usage and on-demand context visibility. */
+export function estimateFirstProviderRequestInputTokens(request: ChatCompletionRequest): number {
+  const serialized = canonicalJsonString({
+    messages: request.messages,
+    tools: request.tools ?? [],
+    toolChoice: request.tool_choice ?? null,
+    memory: request.memory ?? null,
+    reasoning: request.reasoning ?? null,
+    verbosity: request.verbosity ?? null,
+  });
+  const structuralOverhead = request.messages.length * 4 + (request.tools?.length ?? 0) * 8 + 3;
+  return Math.max(1, estimateTokensFromText(serialized) + structuralOverhead);
+}
+
+export function buildModelVisibleContextBudget(request: ChatCompletionRequest, contextWindow?: number) {
+  const contextWindowTokens = positiveIntegerOrNull(contextWindow);
+  const outputReservedTokens = positiveIntegerOrNull(request.max_tokens);
+  const estimatedInputTokens = estimateFirstProviderRequestInputTokens(request);
+  return {
+    basis: "next_provider_request_estimate" as const,
+    providerId: request.providerId ?? null,
+    model: request.model ?? null,
+    contextWindowTokens,
+    estimatedInputTokens,
+    outputReservedTokens,
+    remainingInputTokens:
+      contextWindowTokens === null || outputReservedTokens === null
+        ? null
+        : Math.max(0, contextWindowTokens - estimatedInputTokens - outputReservedTokens),
+    caveat:
+      "Estimate only. Provider-added context and tokenizer differences are not measured; this is not reported usage or execution authority.",
+  };
+}
+
+function positiveIntegerOrNull(value: number | undefined): number | null {
+  return value !== undefined && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
 
 export interface BuildPromptContextBudgetReceiptInput {
   readonly executionProfile: ChatTurnExecutionProfile;

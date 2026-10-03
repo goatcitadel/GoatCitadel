@@ -15,7 +15,7 @@ import {
   buildChatCompactionStateKey,
   type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
-import { buildConversationCompactionSummary } from "./chat-compaction.js";
+import { buildConversationCompactionSummary, renderConversationSummaryForModel } from "./chat-compaction.js";
 import type { LlmService } from "./llm-service.js";
 import type { ChatTurnSessionState } from "./chat-turn-prep-service.js";
 
@@ -587,7 +587,7 @@ async function compactBranchMappedMessages(
     }
     summaryMessages.push({
       role: "system",
-      content: summaryResult.summary,
+      content: renderConversationSummaryForModel(summaryResult.summary),
     });
     summaryDispositions.push(summaryResult.disposition);
     completedBoundaryCount += windowTurnIds.length;
@@ -923,11 +923,14 @@ function hashBranchTurnSource(turnIds: string[], grouped: Map<string, ChatMessag
 
 function serializeSummarySource(turnIds: string[], messages: ChatMessageRecord[]): string {
   return JSON.stringify({
-    version: 1,
+    version: 2,
     turnIds,
     messages: messages.map((message) => ({
       messageId: message.messageId,
       role: message.role,
+      actorType: message.actorType,
+      sourceAuthority: message.sourceAuthority ?? "unknown",
+      parentDelegationStepId: message.parentDelegationStepId ?? null,
       content: message.content,
       parts: message.parts ?? null,
       attachments: message.attachments ?? null,

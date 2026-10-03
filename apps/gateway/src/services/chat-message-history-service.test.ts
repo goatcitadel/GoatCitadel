@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { renderConversationSummaryForModel } from "./chat-compaction.js";
 import type { ChatMessageRecord, TranscriptEvent } from "@goatcitadel/contracts";
 import {
   buildLlmMessagesFromBranchPath,
@@ -324,6 +325,22 @@ describe("chat-message-history-service", () => {
     ).resolves.toEqual([{ role: "system", content: "Preserve the operator guidance." }]);
   });
 
+  it("changes the compaction source identity when authority changes without changing message text", async () => {
+    const sessionState = createBranchSessionState(14, "provenance");
+    const upsert = vi.fn((input) => input);
+    const deps = createDeps({ sessionState, upsertSummary: upsert });
+    const path = Array.from({ length: 14 }, (_, index) => `turn-${index + 1}`);
+    await buildLlmMessagesFromBranchPath(deps, "session-1", path);
+    const firstHash = upsert.mock.calls[0]?.[0].sourceHash;
+    const firstTrace = sessionState.tracesById.get("turn-1")!;
+    const original = sessionState.messagesById.get(firstTrace.userMessageId)!;
+    sessionState.messagesById.set(original.messageId, { ...original, sourceAuthority: "agent_proposed" });
+    await buildLlmMessagesFromBranchPath(deps, "session-1", path);
+    expect(firstHash).toBeDefined();
+    expect(upsert.mock.calls[1]?.[0].sourceHash).toBeDefined();
+    expect(upsert.mock.calls[1]?.[0].sourceHash).not.toBe(firstHash);
+  });
+
   it("reuses matching persisted branch compaction summaries before writing new ones", async () => {
     const sessionState = createBranchSessionState(14, "persisted");
     const turnIds = Array.from({ length: 8 }, (_, index) => `turn-${index + 1}`);
@@ -335,11 +352,14 @@ describe("chat-message-history-service", () => {
       ];
     });
     const source = JSON.stringify({
-      version: 1,
+      version: 2,
       turnIds,
       messages: sourceMessages.map((message) => ({
         messageId: message.messageId,
         role: message.role,
+        actorType: message.actorType,
+        sourceAuthority: message.sourceAuthority ?? "unknown",
+        parentDelegationStepId: message.parentDelegationStepId ?? null,
         content: message.content,
         parts: null,
         attachments: null,
@@ -373,7 +393,10 @@ describe("chat-message-history-service", () => {
       undefined,
     );
 
-    expect(messages[0]).toEqual({ role: "system", content: "Persisted summary for the first eight turns." });
+    expect(messages[0]).toEqual({
+      role: "system",
+      content: renderConversationSummaryForModel("Persisted summary for the first eight turns."),
+    });
     expect(upsert).not.toHaveBeenCalled();
   });
 
@@ -578,6 +601,7 @@ function createMessage(messageId: string, role: ChatMessageRecord["role"], conte
     role,
     actorType: role === "assistant" ? "agent" : "user",
     actorId: role === "assistant" ? "assistant" : "operator",
+    sourceAuthority: role === "assistant" ? "agent_proposed" : "operator",
     content,
     timestamp: "2026-05-14T00:00:00.000Z",
   };

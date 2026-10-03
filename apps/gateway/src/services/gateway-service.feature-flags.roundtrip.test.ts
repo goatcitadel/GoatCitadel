@@ -25,6 +25,7 @@ const ALL_FLAGS_SET: Required<FeatureFlagsConfig> = {
   orchestrationFinalStreamingV1Disabled: true,
   autonomyV1Disabled: true,
   chatThinkingStreamV1Enabled: true,
+  chatContextBudgetVisibilityV1Enabled: true,
   unifiedComposerPaletteV1Enabled: true,
   attachedContextToolsV1Enabled: true,
   chatSessionStatusV1Enabled: true,
@@ -71,6 +72,24 @@ function createFlagHarness(input: { configFeatures: FeatureFlagsConfig; stored?:
 }
 
 describe("GatewayService feature-flag round-trip", () => {
+  it("keeps context budget visibility off by default and preserves explicit opt-in across unrelated patches", async () => {
+    const harness = createFlagHarness({
+      configFeatures: { ...ALL_FLAGS_SET, chatContextBudgetVisibilityV1Enabled: undefined },
+    });
+    const readFlag = async () =>
+      (await GatewayService.prototype.readFeatureFlags.call(harness as never)).chatContextBudgetVisibilityV1Enabled;
+    expect(await readFlag()).toBe(false);
+    await GatewayService.prototype.updateFeatureFlags.call(harness as never, {
+      chatContextBudgetVisibilityV1Enabled: true,
+    });
+    await GatewayService.prototype.updateFeatureFlags.call(harness as never, { chatThinkingStreamV1Enabled: false });
+    expect(await readFlag()).toBe(true);
+    await GatewayService.prototype.updateFeatureFlags.call(harness as never, {
+      chatContextBudgetVisibilityV1Enabled: false,
+    });
+    expect(await readFlag()).toBe(false);
+  });
+
   it("carries every FeatureFlagsConfig key through readFeatureFlags", async () => {
     const harness = createFlagHarness({ configFeatures: { ...ALL_FLAGS_SET } });
     const flags = await GatewayService.prototype.readFeatureFlags.call(harness as never);

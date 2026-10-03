@@ -9,6 +9,7 @@ function createMessage(input: Pick<ChatMessageRecord, "role" | "content"> & { me
     role: input.role,
     actorType: input.role === "assistant" ? "agent" : "user",
     actorId: input.role === "assistant" ? "assistant" : "operator",
+    sourceAuthority: input.role === "assistant" ? "agent_proposed" : "operator",
     content: input.content,
     timestamp: "2026-03-12T10:00:00.000Z",
   };

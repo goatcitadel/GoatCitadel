@@ -4,19 +4,39 @@ import type {
   SkillActivationDecision,
   SkillResolveInput,
 } from "@goatcitadel/contracts";
-import { resolveSkillActivation } from "@goatcitadel/skills";
+import { rankSkillSelectionCandidates, resolveSkillActivation } from "@goatcitadel/skills";
+
+interface CallableSkillSelectionInput {
+  request: SkillResolveInput;
+  loadedSkills: LoadedSkill[];
+  inspectableCatalog: CapabilityCatalogEntry[];
+  callableCatalog: CapabilityCatalogEntry[];
+}
+
+/** Explicit evaluation entry point; never replaces the runtime decision or activates a skill. */
+export function evaluateCallableSkillSelection(input: CallableSkillSelectionInput, limit = 5) {
+  const entries = input.callableCatalog.filter((entry) => entry.kind === "skill" && entry.callable && entry.skillId);
+  const callableIds = new Set(entries.map((entry) => entry.skillId));
+  const aliases = buildAliasIndex(entries);
+  const explicitSkills = extractExplicitTokens(input.request)
+    .map((token) => aliases.get(normalizeAlias(token)))
+    .filter((name): name is string => Boolean(name));
+  return {
+    decision: resolveCallableSkillActivation(input),
+    shadow: rankSkillSelectionCandidates(
+      { ...input.request, explicitSkills },
+      input.loadedSkills.filter((skill) => callableIds.has(skill.skillId)),
+      limit,
+    ),
+  };
+}
 
 /**
  * Resolve skills exclusively from the capability system's canonical callable
  * catalog. Filesystem discovery remains an inspectable source, never an
  * implicit activation grant.
  */
-export function resolveCallableSkillActivation(input: {
-  request: SkillResolveInput;
-  loadedSkills: LoadedSkill[];
-  inspectableCatalog: CapabilityCatalogEntry[];
-  callableCatalog: CapabilityCatalogEntry[];
-}): SkillActivationDecision {
+export function resolveCallableSkillActivation(input: CallableSkillSelectionInput): SkillActivationDecision {
   const loadedBySkillId = new Map(input.loadedSkills.map((skill) => [skill.skillId, skill]));
   const callableEntries = input.callableCatalog.filter(
     (entry): entry is CapabilityCatalogEntry & { skillId: string } =>
