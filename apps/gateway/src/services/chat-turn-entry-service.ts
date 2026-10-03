@@ -1096,7 +1096,10 @@ async function runAgentSendChatMessageLlmPath(
     });
     const assistantEventId = prepared.assistantMessageId;
     const storage = host.storage;
-    const finalTraceStatus = turnResult.turnTrace.status === "failed" ? "failed" : "completed";
+    const finalTraceStatus =
+      turnResult.turnTrace.status === "failed" || turnResult.turnTrace.status === "partial"
+        ? turnResult.turnTrace.status
+        : "completed";
     const finalTracePatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
       assistantMessageId: assistantEventId,
       status: finalTraceStatus,

@@ -14,7 +14,10 @@ import {
 } from "@goatcitadel/mission-control-shared/api/cron";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkSchedules } from "./WorkSchedules";
-import { __resetSessionDraftsForTests, discardSessionDraft } from "../../../features/native-routes/library/session-drafts";
+import {
+  __resetSessionDraftsForTests,
+  discardSessionDraft,
+} from "../../../features/native-routes/library/session-drafts";
 import { scheduleCreateDraftKey } from "../../../features/native-routes/ops/work-form-drafts";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { resetScheduleOperationsForTests } from "../../../features/native-routes/ops/use-schedule-operations";
@@ -171,7 +174,9 @@ describe("Work schedules", () => {
     );
     expect(actionButtons).toHaveLength(3);
     expect(actionButtons.every((button) => button.disabled)).toBe(true);
-    expect(container.querySelector<HTMLAnchorElement>('a[href="/ops/schedules?shell=classic"]')).not.toBeNull();
+    expect(
+      container.querySelector<HTMLAnchorElement>('a[href="/ops/schedules?shell=classic&shellScope=visit"]'),
+    ).not.toBeNull();
   });
 
   it("creates a Gateway schedule and selects its confirmed record", async () => {
@@ -203,14 +208,17 @@ describe("Work schedules", () => {
 
 describe("retained schedule creation input", () => {
   it("keeps unsent input across unmount and discards without a Gateway request", async () => {
-    await render(); await click("New schedule");
+    await render();
+    await click("New schedule");
     const form = container.querySelector<HTMLFormElement>('form[aria-label="New schedule"]')!;
     const input = form.querySelector<HTMLInputElement>('input[maxlength="100"]')!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "Retained schedule");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    await act(async () => root.render(null)); await render(); await click("New schedule");
+    await act(async () => root.render(null));
+    await render();
+    await click("New schedule");
     expect(container.querySelector<HTMLInputElement>('input[maxlength="100"]')!.value).toBe("Retained schedule");
     await act(async () => discardSessionDraft(scheduleCreateDraftKey(getGatewayApiBaseUrl())));
     expect(container.querySelector<HTMLInputElement>('input[maxlength="100"]')!.value).toBe("");

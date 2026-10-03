@@ -151,7 +151,7 @@ describe("viewed Updates presentation", () => {
     const client = new QueryClient();
     await renderUpdates(client);
     const link = container.querySelector<HTMLAnchorElement>("a[data-inbox-owner]")!;
-    expect(link.getAttribute("href")).toBe(projection.items[0]!.href);
+    expect(link.getAttribute("href")).toBe(`${projection.items[0]!.href}&shellScope=visit`);
     expect(link.getAttribute("aria-label")).toBe("Open in Approvals");
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true })));
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true })));
@@ -163,7 +163,7 @@ describe("viewed Updates presentation", () => {
     expect(switchShellMock).toHaveBeenCalledExactlyOnceWith(
       "classic",
       expect.objectContaining({
-        href: projection.items[0]!.href,
+        href: `${projection.items[0]!.href}&shellScope=visit`,
         isCurrent: expect.any(Function),
         signal: expect.any(AbortSignal),
       }),
@@ -430,7 +430,7 @@ describe("InboxArea", () => {
     expect(container.textContent).toContain("Coverage is incomplete for 1 source");
     expect(container.textContent).toContain("Review file write");
     expect(container.textContent).toContain("No known items returned in this group.");
-    const link = container.querySelector('a[href="/ops/approvals?approvalId=test&shell=classic"]');
+    const link = container.querySelector('a[href="/ops/approvals?approvalId=test&shell=classic&shellScope=visit"]');
     expect(link?.textContent).toContain("Open in Approvals");
     const details = [...container.querySelectorAll("button")].find((button) => button.textContent === "Details");
     if (!details) throw new Error("Missing details control");
@@ -489,7 +489,9 @@ describe("InboxArea", () => {
     expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
 
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true })));
-    expect(document.activeElement?.getAttribute("href")).toBe("/ops/approvals?approvalId=test&shell=classic");
+    expect(document.activeElement?.getAttribute("href")).toBe(
+      "/ops/approvals?approvalId=test&shell=classic&shellScope=visit",
+    );
   });
 
   it("renders a task deliverable update as read-only owner evidence", async () => {
@@ -536,9 +538,9 @@ describe("InboxArea", () => {
     );
     expect(container.textContent).toContain("Task deliverable");
     expect(container.textContent).toContain("Report");
-    expect(container.querySelector('a[href="/ops/kanban?shell=classic&taskId=task-a"]')?.textContent).toContain(
-      "Open in Ops",
-    );
+    expect(
+      container.querySelector('a[href="/ops/kanban?shell=classic&taskId=task-a&shellScope=visit"]')?.textContent,
+    ).toContain("Open in Ops");
     const details = [...container.querySelectorAll("button")].find((button) => button.textContent === "Details");
     if (!details) throw new Error("Missing details control");
     await act(async () => details.click());
@@ -589,9 +591,9 @@ describe("InboxArea", () => {
       ),
     );
     expect(container.textContent).toContain("Background run completed");
-    expect(container.querySelector('a[href="/ops/runtime?runId=child-run-a&shell=classic"]')?.textContent).toContain(
-      "Open in Ops",
-    );
+    expect(
+      container.querySelector('a[href="/ops/runtime?runId=child-run-a&shell=classic&shellScope=visit"]')?.textContent,
+    ).toContain("Open in Ops");
     const details = [...container.querySelectorAll("button")].find((button) => button.textContent === "Details");
     if (!details) throw new Error("Missing details control");
     await act(async () => details.click());
@@ -637,7 +639,9 @@ it("keeps triage selection and owner focus beyond the window without resolving a
   await act(async () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true }));
   });
-  await vi.waitFor(() => expect(document.activeElement?.getAttribute("href")).toBe(items[124]!.href));
+  await vi.waitFor(() =>
+    expect(document.activeElement?.getAttribute("href")).toBe(`${items[124]!.href}&shellScope=visit`),
+  );
   expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
   expect(switchShellMock).not.toHaveBeenCalled();
   client.clear();

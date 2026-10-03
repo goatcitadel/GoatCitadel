@@ -7,7 +7,7 @@ import { __resetPermissionActivationsForTests } from "../../../features/native-r
 import { PermissionProfileSettings } from "./PermissionProfileSettings";
 const switchShellMock = vi.hoisted(() => vi.fn<typeof import("../../../shell-preference").switchShell>());
 vi.mock("../../../shell-preference", async (importOriginal) => ({
-  ...await importOriginal<typeof import("../../../shell-preference")>(),
+  ...(await importOriginal<typeof import("../../../shell-preference")>()),
   switchShell: switchShellMock,
 }));
 const api = vi.hoisted(() => ({
@@ -112,7 +112,7 @@ describe("native Chat permission profile", () => {
     await act(async () => anchor.props.onClick({ button: 0, preventDefault }));
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(switchShellMock).toHaveBeenCalledExactlyOnceWith("classic", {
-      href: "/settings/permissions?shell=classic",
+      href: "/settings/permissions?shell=classic&shellScope=visit",
       isCurrent: expect.any(Function),
       signal: expect.any(AbortSignal),
     });

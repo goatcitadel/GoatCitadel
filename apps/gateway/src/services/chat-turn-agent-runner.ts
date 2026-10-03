@@ -241,6 +241,7 @@ import {
   minimumRemainingBudgetForToolStart,
   CHAT_COMPLETION_TIMEOUT_MS_BY_MODE,
   resolveChatExecutionBudget,
+  hasRepositoryReviewIntent,
   SUSTAINED_LOCAL_CODING_ACTIVE_BUDGET_MS,
   SUSTAINED_LOCAL_CODING_TOOL_RUN_LIMIT,
   shouldUseConstrainedLocalAgentProfile,
@@ -2017,6 +2018,7 @@ export class ChatTurnAgentRunner {
       thinkingLevel: input.thinkingLevel,
       liveDataIntent: intents.webLookup,
       researchListIntent: intents.researchList,
+      repoReviewIntent: hasRepositoryReviewIntent(intentDetectionContent),
       artifactIntent: intents.presentationArtifact || intents.documentArtifact,
       promptLabExplicitTools: promptLabContract.explicitTools,
       // Profile-only: pasted contract text in live chat must not double the
@@ -5643,7 +5645,8 @@ export class ChatTurnAgentRunner {
       !toolUseClosed &&
       !durableFanoutWaiting &&
       toolRuns.length > 0 &&
-      (looksLikeDegradedAssistantFallbackContent(assistantContent) ||
+      ((!sustainedCoding && finalFailure?.failureClass === "tool_run_budget_exceeded") ||
+        looksLikeDegradedAssistantFallbackContent(assistantContent) ||
         looksLikeSerializedToolCallMarkupContent(assistantContent))
     ) {
       const repairedFallback = await this.synthesizeToolOutcomeFallback({

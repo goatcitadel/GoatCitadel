@@ -6,7 +6,10 @@ import type { TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { createTask, fetchTask } from "@goatcitadel/mission-control-shared/api/tasks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkTaskCreate } from "./WorkTaskCreate";
-import { __resetSessionDraftsForTests, discardSessionDraft } from "../../../features/native-routes/library/session-drafts";
+import {
+  __resetSessionDraftsForTests,
+  discardSessionDraft,
+} from "../../../features/native-routes/library/session-drafts";
 import { taskCreateDraftKey } from "../../../features/native-routes/ops/work-form-drafts";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { UiPreferencesProvider, useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -37,7 +40,10 @@ let container: HTMLDivElement;
 let root: Root;
 let client: QueryClient;
 let preferences: ReturnType<typeof useUiPreferences>;
-function ScopeProbe() { preferences = useUiPreferences(); return null; }
+function ScopeProbe() {
+  preferences = useUiPreferences();
+  return null;
+}
 const onCreated = vi.fn<(task: TaskRecord) => void>();
 
 beforeEach(() => {
@@ -62,9 +68,12 @@ afterEach(() => {
 async function render(workspaceId = "workspace-a"): Promise<void> {
   await act(async () =>
     root.render(
-      <UiPreferencesProvider><ScopeProbe /><QueryClientProvider client={client}>
-        <WorkTaskCreate workspaceId={workspaceId} onClose={vi.fn()} onCreated={onCreated} />
-      </QueryClientProvider></UiPreferencesProvider>,
+      <UiPreferencesProvider>
+        <ScopeProbe />
+        <QueryClientProvider client={client}>
+          <WorkTaskCreate workspaceId={workspaceId} onClose={vi.fn()} onCreated={onCreated} />
+        </QueryClientProvider>
+      </UiPreferencesProvider>,
     ),
   );
 }
@@ -127,13 +136,14 @@ describe("cockpit task creation", () => {
     await vi.waitFor(() => expect(container.textContent).toContain("create outcome is unconfirmed"));
     await click("Close");
     expect(createTask).toHaveBeenCalledTimes(1);
-    expect(container.querySelector('a[href="/ops/kanban?shell=classic"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/ops/kanban?shell=classic&shellScope=visit"]')).not.toBeNull();
   });
 });
 
 describe("retained task creation input", () => {
   it("keeps the same workspace's input separate between installations", async () => {
-    await render(); await fill("Installation A draft");
+    await render();
+    await fill("Installation A draft");
     await act(async () => root.render(null));
     gateway.base = "http://127.0.0.1:9787";
     await render();
@@ -151,7 +161,8 @@ describe("retained task creation input", () => {
   });
 
   it("keeps drafts across unmount and isolates workspace input without creating records", async () => {
-    await render(); await fill("Workspace A draft");
+    await render();
+    await fill("Workspace A draft");
     await act(async () => root.render(null));
     await render("workspace-b");
     expect(container.querySelector<HTMLInputElement>("input")!.value).toBe("");
@@ -164,11 +175,19 @@ describe("retained task creation input", () => {
   });
 
   it("shares the unsent creation draft with the Classic Kanban owner", async () => {
-    await render(); await fill("Shared task draft");
+    await render();
+    await fill("Shared task draft");
     const citadelId = preferences.activeCitadelId;
-    await act(async () => root.render(<UiPreferencesProvider><ScopeProbe /><QueryClientProvider client={client}>
-      <KanbanNewTask workspaceId="workspace-a" citadelId={citadelId} onCreated={onCreated} />
-    </QueryClientProvider></UiPreferencesProvider>));
+    await act(async () =>
+      root.render(
+        <UiPreferencesProvider>
+          <ScopeProbe />
+          <QueryClientProvider client={client}>
+            <KanbanNewTask workspaceId="workspace-a" citadelId={citadelId} onCreated={onCreated} />
+          </QueryClientProvider>
+        </UiPreferencesProvider>,
+      ),
+    );
     expect(container.querySelector<HTMLInputElement>("input")!.value).toBe("Shared task draft");
     await render();
     expect(container.querySelector<HTMLInputElement>("input")!.value).toBe("Shared task draft");
@@ -177,11 +196,16 @@ describe("retained task creation input", () => {
 
   it("discarding text retains an uncertain creation lock after remount", async () => {
     vi.mocked(createTask).mockRejectedValue(new Error("Response lost"));
-    await render(); await fill(); await click("Review task"); await click("Confirm create");
+    await render();
+    await fill();
+    await click("Review task");
+    await click("Confirm create");
     await vi.waitFor(() => expect(container.textContent).toContain("create outcome is unconfirmed"));
-    await act(async () => discardSessionDraft(taskCreateDraftKey(getGatewayApiBaseUrl(), "workspace-a",
-      preferences.activeCitadelId)));
-    await act(async () => root.render(null)); await render();
+    await act(async () =>
+      discardSessionDraft(taskCreateDraftKey(getGatewayApiBaseUrl(), "workspace-a", preferences.activeCitadelId)),
+    );
+    await act(async () => root.render(null));
+    await render();
     expect(container.querySelector<HTMLInputElement>("input")!.value).toBe("");
     expect(container.querySelector<HTMLInputElement>("input")!.disabled).toBe(true);
     expect(createTask).toHaveBeenCalledTimes(1);
@@ -189,13 +213,24 @@ describe("retained task creation input", () => {
 
   it("settles a verified origin draft after unmount without clearing another workspace", async () => {
     let resolve!: (value: TaskRecord) => void;
-    vi.mocked(createTask).mockImplementation(() => new Promise((done) => { resolve = done; }));
-    await render(); await fill(); await click("Review task");
-    const confirm = [...container.querySelectorAll<HTMLButtonElement>("button")]
-      .find((item) => item.textContent?.trim() === "Confirm create")!;
-    await act(async () => { confirm.click(); });
+    vi.mocked(createTask).mockImplementation(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    await render();
+    await fill();
+    await click("Review task");
+    const confirm = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (item) => item.textContent?.trim() === "Confirm create",
+    )!;
+    await act(async () => {
+      confirm.click();
+    });
     await vi.waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
-    await render("workspace-b"); await fill("Keep workspace B");
+    await render("workspace-b");
+    await fill("Keep workspace B");
     await act(async () => resolve(task()));
     expect(container.querySelector<HTMLInputElement>("input")!.value).toBe("Keep workspace B");
     expect(onCreated).not.toHaveBeenCalled();
@@ -208,27 +243,41 @@ describe("confirmed task draft acknowledgement", () => {
   it("opens its verified task after a delayed query refresh and clearing the submitted input", async () => {
     vi.mocked(createTask).mockResolvedValue(task());
     let release!: () => void;
-    const refreshed = new Promise<void>((resolve) => { release = resolve; });
+    const refreshed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const invalidate = vi.spyOn(client, "invalidateQueries").mockReturnValue(refreshed);
-    await render(); await fill(); await click("Review task"); await click("Confirm create");
+    await render();
+    await fill();
+    await click("Review task");
+    await click("Confirm create");
     await vi.waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
     expect(container.querySelector<HTMLInputElement>("input")!.value).toBe("");
     expect(onCreated).not.toHaveBeenCalled();
-    await act(async () => { release(); });
+    await act(async () => {
+      release();
+    });
     await vi.waitFor(() => expect(onCreated).toHaveBeenCalledExactlyOnceWith(task()));
     expect(createTask).toHaveBeenCalledTimes(1);
   });
 
   it.each(["input", "input-aba", "workspace-aba", "citadel", "citadel-aba"] as const)(
-    "withholds obsolete task navigation after %s during refresh", async (kind) => {
+    "withholds obsolete task navigation after %s during refresh",
+    async (kind) => {
       vi.mocked(createTask).mockResolvedValue(task());
       let release!: () => void;
-      const refreshed = new Promise<void>((resolve) => { release = resolve; });
+      const refreshed = new Promise<void>((resolve) => {
+        release = resolve;
+      });
       const invalidate = vi.spyOn(client, "invalidateQueries").mockReturnValue(refreshed);
-      await render(); await fill(); await click("Review task"); await click("Confirm create");
+      await render();
+      await fill();
+      await click("Review task");
+      await click("Confirm create");
       await vi.waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
       if (kind === "workspace-aba") {
-        await render("workspace-b"); await render();
+        await render("workspace-b");
+        await render();
       } else if (kind === "citadel" || kind === "citadel-aba") {
         const originCitadel = preferences.activeCitadelId;
         await act(async () => preferences.setActiveCitadelId("other-citadel"));
@@ -241,7 +290,9 @@ describe("confirmed task draft acknowledgement", () => {
           expect(container.querySelector<HTMLSelectElement>("select")!.value).toBe("normal");
         }
       }
-      await act(async () => { release(); });
+      await act(async () => {
+        release();
+      });
       expect(onCreated).not.toHaveBeenCalled();
       expect(container.querySelector<HTMLInputElement>("input")!.value).toBe(kind === "input" ? "Newer input" : "");
       expect(createTask).toHaveBeenCalledTimes(1);
@@ -253,12 +304,19 @@ describe("confirmed creation refresh feedback", () => {
   it("retains a failed refresh notice after acknowledging the submitted input", async () => {
     vi.mocked(createTask).mockResolvedValue(task());
     let reject!: (error: Error) => void;
-    const refreshed = new Promise<void>((_resolve, fail) => { reject = fail; });
+    const refreshed = new Promise<void>((_resolve, fail) => {
+      reject = fail;
+    });
     const invalidate = vi.spyOn(client, "invalidateQueries").mockReturnValue(refreshed);
-    await render(); await fill(); await click("Review task"); await click("Confirm create");
+    await render();
+    await fill();
+    await click("Review task");
+    await click("Confirm create");
     await vi.waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
     expect(container.querySelector<HTMLInputElement>("input")!.value).toBe("");
-    await act(async () => { reject(new Error("Refresh unavailable")); });
+    await act(async () => {
+      reject(new Error("Refresh unavailable"));
+    });
     await vi.waitFor(() => expect(container.textContent).toContain("task was created and confirmed"));
     expect(container.querySelector<HTMLInputElement>("input")!.disabled).toBe(false);
     expect(onCreated).not.toHaveBeenCalled();

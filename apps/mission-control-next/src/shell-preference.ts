@@ -31,7 +31,7 @@ export function resolveShellPreference(input: {
 }): ShellPreference {
   const override = parseShell(new URLSearchParams(input.search).get("shell"));
   if (override) {
-    writeShellPreference(override, input.storage);
+    if (new URLSearchParams(input.search).get("shellScope") !== "visit") writeShellPreference(override, input.storage);
     return override;
   }
   try {
@@ -43,6 +43,7 @@ export function resolveShellPreference(input: {
 
 export function buildShellSwitchUrl(href: string, shell: ShellPreference, sessionId?: string | null): string {
   const next = new URL(href);
+  next.searchParams.delete("shellScope");
   if (shell === "classic") next.pathname = classicFallbackPath(next.pathname);
   if (sessionId !== undefined) {
     if (sessionId) next.searchParams.set("sessionId", sessionId);

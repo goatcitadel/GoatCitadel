@@ -2000,67 +2000,200 @@ describe("streamPreparedAgentChatTurn", () => {
     expect(host.endActiveChatTurnExecution).toHaveBeenCalledWith("turn-1", controller);
   });
 
-  it("does not resurrect a turn cancelled after the provider's terminal chunk", async () => {
-    const host = createHost();
-    let controller: AbortController | undefined;
-    host.beginActiveChatTurnExecution = vi.fn(() => {
-      controller = new AbortController();
-      return controller;
-    }) as never;
-    host.turnRuntime.runStream = vi.fn(async function* () {
-      yield {
-        type: "message_done",
-        sessionId: "session-1",
+  it.each(["partial", "failed"] as const)(
+    "persists the runner's %s answer without relabeling it completed",
+    async (status) => {
+      const host = createHost();
+      const failure = {
+        failureClass: "tool_run_budget_exceeded",
+        message: "Bounded review stopped.",
+        retryable: true,
+      } as const;
+      const completion = { status: "complete", repaired: false } as const;
+      host.turnRuntime.runStream = vi.fn(async function* () {
+        const trace = host.storage.chatTurnTraces.patch("turn-1", { status, failure, completion });
+        yield {
+          type: "message_done",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          messageId: "assistant-1",
+          content: "Source findings; browser review remains incomplete.",
+        };
+        yield { type: "trace_update", sessionId: "session-1", turnId: "turn-1", trace };
+      }) as never;
+      const chunks = [];
+      for await (const chunk of streamPreparedAgentChatTurn(
+        host,
+        "session-1",
+        { content: "review" } as never,
+        createPreparedTurn(),
+        "chat_thread_turn_appended",
+      ))
+        chunks.push(chunk);
+
+      expect(host.ingestEvent).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          eventId: "assistant-1",
+          message: { role: "assistant", content: "Source findings; browser review remains incomplete." },
+        }),
+        expect.objectContaining({ onCommit: expect.any(Function) }),
+      );
+      expect(host.storage.chatTurnTraces.get("turn-1")).toMatchObject({
+        status,
+        failure,
+        completion,
+        assistantMessageId: "assistant-1",
+      });
+      expect(chunks.some((chunk) => chunk.type === "message_done")).toBe(true);
+    },
+  );
+
+  it.each(["missing", "wrong_turn", "wrong_session", "wrong_event_turn", "wrong_event_session", "wrong_assistant"])(
+    "rejects a partial completion with %s runner ownership evidence",
+    async (mismatch) => {
+      const host = createHost();
+      host.turnRuntime.runStream = vi.fn(async function* () {
+        const trace = host.storage.chatTurnTraces.patch("turn-1", { status: "partial" });
+        yield {
+          type: "message_done",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          messageId: "assistant-1",
+          content: "Unowned answer.",
+        };
+        if (mismatch !== "missing")
+          yield {
+            type: "trace_update",
+            sessionId: mismatch === "wrong_event_session" ? "other" : "session-1",
+            turnId: mismatch === "wrong_event_turn" ? "other" : "turn-1",
+            trace: {
+              ...trace,
+              ...(mismatch === "wrong_turn" ? { turnId: "other" } : {}),
+              ...(mismatch === "wrong_session" ? { sessionId: "other" } : {}),
+              ...(mismatch === "wrong_assistant" ? { assistantMessageId: "other" } : {}),
+            },
+          };
+      }) as never;
+      await expect(async () => {
+        for await (const _chunk of streamPreparedAgentChatTurn(
+          host,
+          "session-1",
+          { content: "review" } as never,
+          createPreparedTurn(),
+          "chat_thread_turn_appended",
+        )) {
+          /* Drain. */
+        }
+      }).rejects.toThrow("lost lifecycle ownership to partial");
+      expect(host.ingestEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["before_write", "during_commit"])(
+    "rejects a competing terminal owner %s after the runner's partial result",
+    async (timing) => {
+      const host = createHost();
+      host.turnRuntime.runStream = vi.fn(async function* () {
+        const trace = host.storage.chatTurnTraces.patch("turn-1", { status: "partial" });
+        yield {
+          type: "message_done",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          messageId: "assistant-1",
+          content: "Partial answer.",
+        };
+        yield { type: "trace_update", sessionId: "session-1", turnId: "turn-1", trace };
+        if (timing === "before_write") host.storage.chatTurnTraces.patch("turn-1", { status: "failed" });
+      }) as never;
+      if (timing === "during_commit")
+        host.ingestEvent = vi.fn(async (_key, _payload, options) => {
+          host.storage.chatTurnTraces.patch("turn-1", { status: "failed" });
+          await options?.onCommit?.();
+        }) as never;
+      await expect(async () => {
+        for await (const _chunk of streamPreparedAgentChatTurn(
+          host,
+          "session-1",
+          { content: "review" } as never,
+          createPreparedTurn(),
+          "chat_thread_turn_appended",
+        )) {
+          /* Drain. */
+        }
+      }).rejects.toThrow();
+      expect(host.storage.chatTurnTraces.get("turn-1").status).toBe("failed");
+      expect(host.updateActiveLeafOrThrow).not.toHaveBeenCalled();
+      if (timing === "before_write") expect(host.ingestEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["running", "partial", "failed"] as const)(
+    "does not resurrect a %s turn cancelled after the provider's terminal chunk",
+    async (status) => {
+      const host = createHost();
+      let controller: AbortController | undefined;
+      host.beginActiveChatTurnExecution = vi.fn(() => {
+        controller = new AbortController();
+        return controller;
+      }) as never;
+      host.turnRuntime.runStream = vi.fn(async function* () {
+        const trace = host.storage.chatTurnTraces.patch("turn-1", { status });
+        yield { type: "trace_update", sessionId: "session-1", turnId: "turn-1", trace };
+        yield {
+          type: "message_done",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          messageId: "assistant-1",
+          content: "Provider finished before cancellation.",
+        };
+        controller?.abort();
+      }) as never;
+      const cancelledTrace = {
+        ...createPreparedTurn().turnTrace,
         turnId: "turn-1",
-        messageId: "assistant-1",
-        content: "Provider finished before cancellation.",
-      };
-      controller?.abort();
-    }) as never;
-    const cancelledTrace = {
-      ...createPreparedTurn().turnTrace,
-      turnId: "turn-1",
-      sessionId: "session-1",
-      userMessageId: "user-1",
-      parentTurnId: "turn-0",
-      branchKind: "append",
-      status: "cancelled",
-      mode: "chat",
-      webMode: "off",
-      memoryMode: "off",
-      thinkingLevel: "standard",
-      startedAt: "2026-04-18T00:00:00.000Z",
-      toolRuns: [],
-      citations: [],
-      routing: {},
-    } as ChatTurnTraceRecord;
-    host.markChatTurnCancelled = vi.fn(() => cancelledTrace) as never;
+        sessionId: "session-1",
+        userMessageId: "user-1",
+        parentTurnId: "turn-0",
+        branchKind: "append",
+        status: "cancelled",
+        mode: "chat",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+        startedAt: "2026-04-18T00:00:00.000Z",
+        toolRuns: [],
+        citations: [],
+        routing: {},
+      } as ChatTurnTraceRecord;
+      host.markChatTurnCancelled = vi.fn(() => cancelledTrace) as never;
 
-    const chunks = [];
-    for await (const chunk of streamPreparedAgentChatTurn(
-      host,
-      "session-1",
-      { content: "cancel after terminal chunk", mode: "chat" } as never,
-      createPreparedTurn(),
-      "chat_thread_turn_appended",
-      undefined,
-      { skipMessageStart: true },
-    )) {
-      chunks.push(chunk);
-    }
+      const chunks = [];
+      for await (const chunk of streamPreparedAgentChatTurn(
+        host,
+        "session-1",
+        { content: "cancel after terminal chunk", mode: "chat" } as never,
+        createPreparedTurn(),
+        "chat_thread_turn_appended",
+        undefined,
+        { skipMessageStart: true },
+      )) {
+        chunks.push(chunk);
+      }
 
-    expect(host.markChatTurnCancelled).toHaveBeenCalledWith("session-1", "turn-1");
-    expect(host.ingestEvent).not.toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ actor: { type: "agent", id: "assistant" } }),
-    );
-    expect(host.storage.chatTurnTraces.patch).not.toHaveBeenCalledWith(
-      "turn-1",
-      expect.objectContaining({ status: "completed" }),
-    );
-    expect(chunks.some((chunk) => chunk.type === "done")).toBe(false);
-    expect(chunks.at(-1)).toEqual(expect.objectContaining({ type: "trace_update", trace: cancelledTrace }));
-  });
+      expect(host.markChatTurnCancelled).toHaveBeenCalledWith("session-1", "turn-1");
+      expect(host.ingestEvent).not.toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ actor: { type: "agent", id: "assistant" } }),
+      );
+      expect(host.storage.chatTurnTraces.patch).not.toHaveBeenCalledWith(
+        "turn-1",
+        expect.objectContaining({ status: "completed" }),
+      );
+      expect(chunks.some((chunk) => chunk.type === "done")).toBe(false);
+      expect(chunks.at(-1)).toEqual(expect.objectContaining({ type: "trace_update", trace: cancelledTrace }));
+    },
+  );
 });
 
 describe("isTerminalSynthesisStep", () => {

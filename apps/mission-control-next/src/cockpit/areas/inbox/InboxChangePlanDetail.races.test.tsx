@@ -264,7 +264,9 @@ describe("Inbox Settings continuation reuse", () => {
     await render();
     expect(api.respondToChangePlan).not.toHaveBeenCalled();
     expect(host.textContent).toContain("does not prove the settings were saved");
-    expect(host.querySelector('a[href="/ops/approvals?shell=classic&approvalId=approval-a"]')).not.toBeNull();
+    expect(
+      host.querySelector('a[href="/ops/approvals?shell=classic&approvalId=approval-a&shellScope=visit"]'),
+    ).not.toBeNull();
     await click("Continue approved change");
     expect(api.respondToChangePlan).toHaveBeenCalledExactlyOnceWith(
       "plan-a",

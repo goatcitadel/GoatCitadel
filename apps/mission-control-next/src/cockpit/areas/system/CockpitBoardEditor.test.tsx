@@ -141,7 +141,7 @@ describe("cockpit saved-board editor", () => {
       (item) => item.textContent?.trim() === "Review changes",
     );
     expect(review?.disabled).toBe(true);
-    expect(container.querySelector('a[href="/ops/boards?shell=classic"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/ops/boards?shell=classic&shellScope=visit"]')).not.toBeNull();
     expect(updateOpsSavedBoard).toHaveBeenCalledTimes(1);
   });
 

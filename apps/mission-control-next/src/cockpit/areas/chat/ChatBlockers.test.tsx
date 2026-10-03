@@ -87,8 +87,8 @@ describe("Chat blockers", () => {
     expect(container.textContent).toContain("Which path?");
     const hrefs = [...container.querySelectorAll("a")].map((anchor) => anchor.getAttribute("href"));
     expect(hrefs).toEqual([
-      "/ops/approvals?approvalId=approval%2F1&shell=classic",
-      "/chat?sessionId=session%2F1&shell=classic",
+      "/ops/approvals?approvalId=approval%2F1&shell=classic&shellScope=visit",
+      "/chat?sessionId=session%2F1&shell=classic&shellScope=visit",
     ]);
     const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval");
     await act(async () => review?.click());

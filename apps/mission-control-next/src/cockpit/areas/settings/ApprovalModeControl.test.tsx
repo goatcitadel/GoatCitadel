@@ -13,7 +13,7 @@ import { ApprovalModeControl } from "./ApprovalModeControl";
 const api = vi.hoisted(() => ({ fetchSettings: vi.fn(), patchSettings: vi.fn(), fetchChangePlan: vi.fn() }));
 const switchShellMock = vi.hoisted(() => vi.fn<typeof import("../../../shell-preference").switchShell>());
 vi.mock("../../../shell-preference", async (importOriginal) => ({
-  ...await importOriginal<typeof import("../../../shell-preference")>(),
+  ...(await importOriginal<typeof import("../../../shell-preference")>()),
   switchShell: switchShellMock,
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
@@ -122,19 +122,28 @@ describe("cockpit tool approval rule", () => {
     expect(container.textContent).toContain("draft remains unsaved");
     expect(container.textContent).not.toContain("Tool approval rule saved");
     expect(button("Save approval rule").disabled).toBe(true);
-    const link = container.querySelector<HTMLAnchorElement>('a[href="/ops/approvals?shell=classic&approvalId=approval-1"]')!;
+    const link = container.querySelector<HTMLAnchorElement>(
+      'a[href="/ops/approvals?shell=classic&approvalId=approval-1&shellScope=visit"]',
+    )!;
     expect(link).not.toBeNull();
     expect(container.querySelector('a[href^="/inbox?approvalId"]')).toBeNull();
-    await act(async () => { link.click(); });
+    await act(async () => {
+      link.click();
+    });
     expect(switchShellMock).not.toHaveBeenCalled();
     const keep = [...document.querySelectorAll("button")].find((item) => item.textContent === "Keep draft and close");
     expect(keep).toBeDefined();
-    await act(async () => { keep!.click(); });
-    expect(switchShellMock).toHaveBeenCalledExactlyOnceWith("classic", expect.objectContaining({
-      href: "/ops/approvals?shell=classic&approvalId=approval-1",
-      isCurrent: expect.any(Function),
-      signal: expect.any(AbortSignal),
-    }));
+    await act(async () => {
+      keep!.click();
+    });
+    expect(switchShellMock).toHaveBeenCalledExactlyOnceWith(
+      "classic",
+      expect.objectContaining({
+        href: "/ops/approvals?shell=classic&approvalId=approval-1&shellScope=visit",
+        isCurrent: expect.any(Function),
+        signal: expect.any(AbortSignal),
+      }),
+    );
     expect(switchShellMock.mock.calls[0]![1].isCurrent()).toBe(true);
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
     expect(button("Save approval rule").disabled).toBe(true);
@@ -159,7 +168,12 @@ describe("cockpit tool approval rule", () => {
     await click("Save approval rule");
     await vi.waitFor(() => expect(container.textContent).toContain("Change submitted."));
     owner = { ...owner, revision: 3, toolApprovalMode: "approve_risky" };
-    api.fetchChangePlan.mockResolvedValue({ ...canonical, status: "completed", revision: 4, requiredAction: undefined });
+    api.fetchChangePlan.mockResolvedValue({
+      ...canonical,
+      status: "completed",
+      revision: 4,
+      requiredAction: undefined,
+    });
     await click("Refresh approval change");
     await vi.waitFor(() => expect(container.textContent).toContain("Change saved and confirmed."));
     expect(container.textContent).not.toContain("Change submitted.");

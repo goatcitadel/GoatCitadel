@@ -80,9 +80,14 @@ async function render(record = task()): Promise<void> {
       </QueryClientProvider>,
     ),
   );
-  await act(async () => vi.waitFor(() => expect(
-    container.querySelector("select") !== null || container.textContent?.includes("task action outcome is unconfirmed"),
-  ).toBe(true)));
+  await act(async () =>
+    vi.waitFor(() =>
+      expect(
+        container.querySelector("select") !== null ||
+          container.textContent?.includes("task action outcome is unconfirmed"),
+      ).toBe(true),
+    ),
+  );
 }
 
 async function chooseAgent(): Promise<void> {
@@ -156,7 +161,9 @@ describe("cockpit task assignment", () => {
         (item) => item.textContent?.trim() === "Review assignment",
       ),
     ).toBe(false);
-    expect(container.querySelector('a[href="/ops/kanban?taskId=task-a&shell=classic"]')).not.toBeNull();
+    expect(
+      container.querySelector('a[href="/ops/kanban?taskId=task-a&shell=classic&shellScope=visit"]'),
+    ).not.toBeNull();
     await act(async () => root.render(null));
     await render();
     expect(container.textContent).toContain("task action outcome is unconfirmed");

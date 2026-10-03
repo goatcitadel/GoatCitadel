@@ -99,17 +99,26 @@ afterEach(() => {
 describe("native managed runtime configuration", () => {
   it("announces the initial owner read and withholds controls until it settles", async () => {
     let resolveRead!: (value: typeof owner) => void;
-    const pending = new Promise<typeof owner>((resolve) => { resolveRead = resolve; });
+    const pending = new Promise<typeof owner>((resolve) => {
+      resolveRead = resolve;
+    });
     api.fetchSettings.mockReturnValueOnce(pending);
     await act(async () => {
-      root.render(<QueryClientProvider client={client}><ManagedRuntimeSettings /></QueryClientProvider>);
+      root.render(
+        <QueryClientProvider client={client}>
+          <ManagedRuntimeSettings />
+        </QueryClientProvider>,
+      );
     });
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Loading runtime configuration…");
     expect(container.querySelectorAll("input")).toHaveLength(0);
     expect(button("Refresh runtime settings").disabled).toBe(true);
     expect(button("Review runtime changes")).toBeUndefined();
     expect(api.patchSettings).not.toHaveBeenCalled();
-    await act(async () => { resolveRead(structuredClone(owner)); await pending; });
+    await act(async () => {
+      resolveRead(structuredClone(owner));
+      await pending;
+    });
     await vi.waitFor(() => expect(container.querySelectorAll("input")).toHaveLength(4));
     expect(container.textContent).not.toContain("Loading runtime configuration");
     expect(container.textContent).toContain("settings revision 41");
@@ -119,10 +128,14 @@ describe("native managed runtime configuration", () => {
     await render();
     await changeAlias("retained-runtime-draft");
     let resolveRead!: (value: typeof owner) => void;
-    const pending = new Promise<typeof owner>((resolve) => { resolveRead = resolve; });
+    const pending = new Promise<typeof owner>((resolve) => {
+      resolveRead = resolve;
+    });
     api.fetchSettings.mockReturnValueOnce(pending);
     await act(async () => button("Refresh runtime settings").click());
-    await vi.waitFor(() => expect(container.querySelector('[role="status"]')?.textContent).toBe("Loading runtime configuration…"));
+    await vi.waitFor(() =>
+      expect(container.querySelector('[role="status"]')?.textContent).toBe("Loading runtime configuration…"),
+    );
     // The previous data still exists; this is a background fetch, not the initial loading state.
     expect(client.getQueryState(["system", "managed-runtime-settings"])?.status).toBe("success");
     expect(client.getQueryState(["system", "managed-runtime-settings"])?.fetchStatus).toBe("fetching");
@@ -131,7 +144,10 @@ describe("native managed runtime configuration", () => {
     expect(button("Review runtime changes")).toBeUndefined();
     expect(confirmation.open).toBe(false);
     expect(api.patchSettings).not.toHaveBeenCalled();
-    await act(async () => { resolveRead(structuredClone(owner)); await pending; });
+    await act(async () => {
+      resolveRead(structuredClone(owner));
+      await pending;
+    });
     await vi.waitFor(() => expect(container.querySelectorAll("input")).toHaveLength(4));
     expect(container.textContent).not.toContain("Loading runtime configuration");
     expect(container.textContent).toContain("settings revision 41");
@@ -163,7 +179,9 @@ describe("native managed runtime configuration", () => {
     await render();
     expect(container.textContent).toContain("observes this external server");
     expect(container.querySelectorAll("input")).toHaveLength(0);
-    expect(container.querySelector('a[href="/settings/onboarding?view=llamacpp&shell=classic"]')).not.toBeNull();
+    expect(
+      container.querySelector('a[href="/settings/onboarding?view=llamacpp&shell=classic&shellScope=visit"]'),
+    ).not.toBeNull();
     expect(api.patchSettings).not.toHaveBeenCalled();
   });
   it("explains a disabled stale review inside the dialog and allows cancellation without a mutation", async () => {
@@ -173,7 +191,7 @@ describe("native managed runtime configuration", () => {
     owner = { ...owner, revision: 42, llamaCpp: { ...owner.llamaCpp, alias: "remote-model" } };
     await act(async () => {
       await client.refetchQueries();
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(confirmation.open).toBe(true);
     expect(confirmation.confirmDisabled).toBe(true);

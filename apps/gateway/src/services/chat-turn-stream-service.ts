@@ -2208,6 +2208,7 @@ export async function* streamPreparedAgentChatTurn(
     }
 
     let finalText = "";
+    let runnerTerminalStatus: "completed" | "partial" | "failed" | undefined;
     let assistantUsage: ChatStreamUsageRecord | undefined;
     let assistantModelUsageEventIds: string[] | undefined;
     let hasStreamedDelta = false;
@@ -2390,6 +2391,18 @@ export async function* streamPreparedAgentChatTurn(
             },
           );
     for await (const chunk of directStream) {
+      if (
+        chunk.type === "trace_update" &&
+        chunk.sessionId === sessionId &&
+        chunk.turnId === turnId &&
+        chunk.trace.sessionId === sessionId &&
+        chunk.trace.turnId === turnId &&
+        (!chunk.trace.assistantMessageId || chunk.trace.assistantMessageId === assistantMessageId)
+      ) {
+        const status = chunk.trace.status;
+        runnerTerminalStatus =
+          status === "completed" || status === "partial" || status === "failed" ? status : undefined;
+      }
       if (chunk.type === "message_done" && chunk.content) {
         finalText = chunk.content;
       }
@@ -2457,7 +2470,11 @@ export async function* streamPreparedAgentChatTurn(
       }
     }
 
-    await assertChatStreamCompletionWritable(host, turnId, controller.signal);
+    // The runner persists its own terminal trace before emitting its answer.
+    // Admit only the terminal state emitted by this execution; cancellation,
+    // a competing terminal state, and stale durable generations still win.
+    const completionOwnerStatuses: ChatTurnTraceRecord["status"][] = ["running", runnerTerminalStatus ?? "completed"];
+    await assertChatStreamCompletionWritable(host, turnId, controller.signal, completionOwnerStatuses);
 
     const settledTrace = await chatTurnTraces.get(turnId);
     const delegationWaiting =
@@ -2490,7 +2507,7 @@ export async function* streamPreparedAgentChatTurn(
       }
     }
 
-    await assertChatStreamCompletionWritable(host, turnId, controller.signal);
+    await assertChatStreamCompletionWritable(host, turnId, controller.signal, completionOwnerStatuses);
 
     if (approvalRequired) {
       const traceWithMeta = await canonicalWriteFence(async () => {
@@ -2670,7 +2687,7 @@ export async function* streamPreparedAgentChatTurn(
     }
 
     if (finalText.trim()) {
-      await assertChatStreamCompletionWritable(host, turnId, controller.signal);
+      await assertChatStreamCompletionWritable(host, turnId, controller.signal, completionOwnerStatuses);
       const currentTraceBeforeWrite = await host.storage.chatTurnTraces.get(turnId);
       await observeBeforeAssistantMessageWrite(host, {
         workspaceId: prepared.workspaceId,
@@ -2684,10 +2701,10 @@ export async function* streamPreparedAgentChatTurn(
           currentTraceBeforeWrite.routing?.effectiveProviderId ?? currentTraceBeforeWrite.routing?.primaryProviderId,
         model: currentTraceBeforeWrite.routing?.effectiveModel ?? currentTraceBeforeWrite.model,
       });
-      await assertChatStreamCompletionWritable(host, turnId, controller.signal);
+      await assertChatStreamCompletionWritable(host, turnId, controller.signal, completionOwnerStatuses);
       const completionPatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
         assistantMessageId,
-        status: "completed",
+        status: runnerTerminalStatus ?? "completed",
         ...(options?.remoteWorkerExecution
           ? {
               usage: assistantUsage,
@@ -2729,7 +2746,6 @@ export async function* streamPreparedAgentChatTurn(
         },
         citations: dedupeChatCitations(streamCitations),
       };
-      const completionOwnerStatuses = ["running", "completed"] as const;
       let committedTrace: ChatTurnTraceRecord | undefined;
       await host.ingestEvent(
         randomUUID(),
@@ -2955,6 +2971,7 @@ async function assertChatStreamCompletionWritable(
   host: Pick<ChatTurnStreamHost, "storage">,
   turnId: string,
   signal: AbortSignal,
+  allowedTerminalStatuses: readonly ChatTurnTraceRecord["status"][] = ["completed"],
 ): Promise<void> {
   if (signal.aborted) {
     throw new ChatTurnCancelledError(turnId);
@@ -2973,7 +2990,7 @@ async function assertChatStreamCompletionWritable(
   if (status === "cancelled") {
     throw new ChatTurnCancelledError(turnId);
   }
-  if (isChatTurnTerminalStatus(status) && status !== "completed") {
+  if (isChatTurnTerminalStatus(status) && !allowedTerminalStatuses.includes(status)) {
     throw new Error(`Chat turn ${turnId} completion lost lifecycle ownership to ${status}.`);
   }
 }

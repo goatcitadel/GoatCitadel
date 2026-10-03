@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type {
   ChatCompletionResponse,
+  ChatCompletionRequest,
   ChatStreamChunkDraft,
   ChatTurnTraceRecord,
   ToolInvokeResult,
@@ -15,6 +16,60 @@ import {
 } from "./chat-turn-agent-runner-test-fixtures.js";
 
 describe("ChatTurnAgentRunner status and approval persistence coverage", () => {
+  it("reserves one tool-free synthesis after tool-budget exhaustion and preserves the partial failure", async () => {
+    const storage = createObservableStorage();
+    const answer =
+      "I inspected directory evidence only. The UI journeys remain unverified; source-file reads are still needed.";
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: Array.from({ length: 5 }, (_, index) => ({
+                id: `list-${index}`,
+                type: "function" as const,
+                function: { name: "fs_list", arguments: JSON.stringify({ path: `apps/owner-${index}` }) },
+              })),
+            },
+          },
+        ],
+      })
+      .mockResolvedValue({
+        model: "glm-5",
+        choices: [{ index: 0, message: { role: "assistant", content: answer }, finish_reason: "stop" }],
+      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "budget-evidence",
+      result: { entries: [{ name: "AGENTS.md", type: "file" }] },
+    });
+    const runner = new ChatTurnAgentRunner({
+      storage: storage.value as never,
+      listToolCatalog: () => createToolCatalog(["fs.list"]),
+      createChatCompletion,
+      invokeTool,
+    });
+    const result = await runner.run(
+      turnInput({ content: "Inspect these directories using fs.list.", thinkingLevel: "standard" }),
+    );
+    expect(invokeTool).toHaveBeenCalledTimes(4);
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+    expect(createChatCompletion.mock.calls[1]?.[0]).toMatchObject({ stream: false });
+    expect(createChatCompletion.mock.calls[1]?.[0]).not.toHaveProperty("tools");
+    expect(result.assistantContent).toContain(answer);
+    expect(result.turnTrace).toMatchObject({
+      status: "partial",
+      failure: { failureClass: "tool_run_budget_exceeded" },
+      completion: { repaired: true, degraded: { reason: "tool_run_budget_exceeded", recoveredByModel: true } },
+    });
+  });
+
   it("soft-fails approval-required tool runs on Prompt Lab eval turns and completes with the model's answer", async () => {
     const storage = createObservableStorage();
     const modelAnswer =

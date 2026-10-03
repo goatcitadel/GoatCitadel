@@ -60,7 +60,9 @@ export function InlineApprovalPrompt({
   onDeny: () => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
-  const [confirmWorkspaceAllow, setConfirmWorkspaceAllow] = useState(false);
+  const [workspaceAllowReview, setWorkspaceAllowReview] = useState<string | null>(null);
+  const confirmWorkspaceAllow = workspaceAllowReview === approvalId;
+  const workspaceAllowConfirmationId = useId();
   const [technicalDetailsOpen, setTechnicalDetailsOpen] = useState(false);
   const technicalDetailsId = useId();
 
@@ -107,7 +109,7 @@ export function InlineApprovalPrompt({
   const codeModeApproval = kind === "code_mode.run" || Boolean(codeHash || wrapperManifestHash || capabilitySnapshotId);
   useEffect(() => {
     if (actionsDisabled || !workspaceAllowAvailable || !persistentAllowAvailable || codeModeApproval) {
-      setConfirmWorkspaceAllow(false);
+      setWorkspaceAllowReview(null);
     }
   }, [actionsDisabled, codeModeApproval, persistentAllowAvailable, workspaceAllowAvailable]);
 
@@ -180,7 +182,9 @@ export function InlineApprovalPrompt({
               type="button"
               className="gc-button chat-approval-allow"
               disabled={actionsDisabled || !workspaceAllowAvailable}
-              onClick={() => setConfirmWorkspaceAllow(true)}
+              onClick={() => setWorkspaceAllowReview(approvalId)}
+              aria-expanded={confirmWorkspaceAllow}
+              aria-controls={confirmWorkspaceAllow ? workspaceAllowConfirmationId : undefined}
               title={
                 workspaceAllowAvailable
                   ? "Allow this exact tool for the current workspace."
@@ -195,10 +199,20 @@ export function InlineApprovalPrompt({
           Deny
         </button>
       </div>
+      {pending ? (
+        <p className="chat-approval-reason" role="status">
+          Submitting approval decision…
+        </p>
+      ) : null}
       {confirmWorkspaceAllow ? (
-        <div className="chat-approval-confirm">
-          <p className="chat-approval-reason">
-            Workspace allow is broader than session allow and stays active until you revoke it.
+        <div
+          id={workspaceAllowConfirmationId}
+          className="chat-approval-confirm"
+          role="group"
+          aria-label="Confirm workspace access"
+        >
+          <p className="chat-approval-reason" role="status">
+            Not approved yet. Confirm below to allow this tool in the current workspace until you revoke it.
           </p>
           <div className="chat-approval-actions">
             <button
@@ -213,7 +227,7 @@ export function InlineApprovalPrompt({
               type="button"
               className="gc-button chat-approval-deny"
               disabled={actionsDisabled}
-              onClick={() => setConfirmWorkspaceAllow(false)}
+              onClick={() => setWorkspaceAllowReview(null)}
             >
               Cancel
             </button>

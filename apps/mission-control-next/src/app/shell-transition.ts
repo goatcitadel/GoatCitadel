@@ -75,7 +75,7 @@ export async function openApplicationShell(
     window.history.replaceState(window.history.state, "", target.pathname + target.search + target.hash);
     document.documentElement.dataset.shell = shell;
     flushSync(() => mount(container));
-    writeShellPreference(shell);
+    if (target.searchParams.get("shellScope") !== "visit") writeShellPreference(shell);
     return "opened";
   } finally {
     for (const event of SHELL_NAVIGATION_EVENTS) window.removeEventListener(event, cancelForNavigation);

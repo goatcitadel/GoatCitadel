@@ -6,6 +6,7 @@ import {
   resolveShellPreference,
   writeShellPreference,
 } from "./shell-preference";
+import { buildClassicOwnerUrl } from "./app/classic-owner-url";
 
 function memoryStorage(initial: Record<string, string> = {}) {
   const values = new Map(Object.entries(initial));
@@ -19,6 +20,24 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 describe("shell preference", () => {
+  it("keeps the saved cockpit preference during a temporary Classic owner visit and reload", () => {
+    const storage = memoryStorage({ [SHELL_PREFERENCE_KEY]: "cockpit" });
+    const target = new URL(
+      buildClassicOwnerUrl("/ops/approvals?approvalId=exact&shell=classic#preview"),
+      "http://localhost:5173",
+    );
+    expect(target.searchParams.get("approvalId")).toBe("exact");
+    expect(target.hash).toBe("#preview");
+    expect(resolveShellPreference({ search: target.search, storage })).toBe("classic");
+    expect(resolveShellPreference({ search: target.search, storage })).toBe("classic");
+    expect(storage.values.get(SHELL_PREFERENCE_KEY)).toBe("cockpit");
+    expect(resolveShellPreference({ search: "", storage })).toBe("cockpit");
+    const explicitSwitch = new URL(buildShellSwitchUrl(target.href, "classic"));
+    expect(explicitSwitch.searchParams.has("shellScope")).toBe(false);
+    expect(resolveShellPreference({ search: explicitSwitch.search, storage })).toBe("classic");
+    expect(storage.values.get(SHELL_PREFERENCE_KEY)).toBe("classic");
+  });
+
   it("defaults to cockpit and rejects unknown stored values", () => {
     expect(resolveShellPreference({ search: "", storage: null })).toBe("cockpit");
     expect(resolveShellPreference({ search: "", storage: memoryStorage() })).toBe("cockpit");

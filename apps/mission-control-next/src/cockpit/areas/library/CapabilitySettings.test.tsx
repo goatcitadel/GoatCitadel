@@ -78,7 +78,11 @@ afterEach(() => {
 });
 
 function renderSettings(onRefresh = vi.fn<() => void>(), selectedItem = item, selectedSkill = skill, strict = false) {
-  const view = <CockpitNavigationProvider><CapabilitySettings item={selectedItem} skillsKnown skill={selectedSkill} onRefresh={onRefresh} /></CockpitNavigationProvider>;
+  const view = (
+    <CockpitNavigationProvider>
+      <CapabilitySettings item={selectedItem} skillsKnown skill={selectedSkill} onRefresh={onRefresh} />
+    </CockpitNavigationProvider>
+  );
   act(() => root.render(strict ? <StrictMode>{view}</StrictMode> : view));
   return onRefresh;
 }
@@ -112,13 +116,16 @@ describe("Library skill state requests", () => {
     await act(async () => button("Confirm request").click());
     renderSettings(vi.fn(), { ...item, kind: "proposal", proposalId: "proposal-a" });
     const link = container.querySelector<HTMLAnchorElement>("a")!;
-    expect(link.getAttribute("href")).toBe("/library/curator?shell=classic");
+    expect(link.getAttribute("href")).toBe("/library/curator?shell=classic&shellScope=visit");
     await act(async () => link.click());
-    expect(switchShell).toHaveBeenCalledExactlyOnceWith("classic", expect.objectContaining({
-      href: "/library/curator?shell=classic",
-      isCurrent: expect.any(Function),
-      signal: expect.any(AbortSignal),
-    }));
+    expect(switchShell).toHaveBeenCalledExactlyOnceWith(
+      "classic",
+      expect.objectContaining({
+        href: "/library/curator?shell=classic&shellScope=visit",
+        isCurrent: expect.any(Function),
+        signal: expect.any(AbortSignal),
+      }),
+    );
     const [, options] = switchShell.mock.calls[0]!;
     expect(options.isCurrent()).toBe(true);
     scope.activeCitadelId = "citadel-b";

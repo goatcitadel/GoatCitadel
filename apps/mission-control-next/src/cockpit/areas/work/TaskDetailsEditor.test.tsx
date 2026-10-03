@@ -7,7 +7,10 @@ import { fetchTask, updateTask } from "@goatcitadel/mission-control-shared/api/t
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetTaskMutationsForTests } from "../../../features/native-routes/ops/task-mutation-state";
 import { TaskDetailsEditor } from "./TaskDetailsEditor";
-import { __resetSessionDraftsForTests, discardSessionDraft } from "../../../features/native-routes/library/session-drafts";
+import {
+  __resetSessionDraftsForTests,
+  discardSessionDraft,
+} from "../../../features/native-routes/library/session-drafts";
 import { taskDetailsDraftKey } from "../../../features/native-routes/ops/work-form-drafts";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 
@@ -122,7 +125,9 @@ describe("cockpit task details editor", () => {
     await click("Confirm details");
     await vi.waitFor(() => expect(container.textContent).toContain("task action outcome is unconfirmed"));
     expect(container.querySelector<HTMLInputElement>("input")).toBeNull();
-    expect(container.querySelector('a[href="/ops/kanban?taskId=task-a&shell=classic"]')).not.toBeNull();
+    expect(
+      container.querySelector('a[href="/ops/kanban?taskId=task-a&shell=classic&shellScope=visit"]'),
+    ).not.toBeNull();
     await act(async () => root.render(null));
     await render();
     expect(container.textContent).toContain("task action outcome is unconfirmed");
@@ -158,7 +163,8 @@ describe("cockpit task details editor", () => {
 
 describe("retained task detail input", () => {
   it("preserves the original comparison record across unmount and blocks a changed owner", async () => {
-    await render(); await changeTitle("Unsent detail draft");
+    await render();
+    await changeTitle("Unsent detail draft");
     await act(async () => root.render(null));
     const updated = task({ revision: 3, title: "Owner changed title" });
     await render(updated);
@@ -171,9 +177,11 @@ describe("retained task detail input", () => {
   });
 
   it("isolates record drafts and discards only the exact task input", async () => {
-    await render(); await changeTitle("Task A draft");
+    await render();
+    await changeTitle("Task A draft");
     const other = task({ taskId: "task-b", title: "Other task" });
-    await render(other); await changeTitle("Task B draft");
+    await render(other);
+    await changeTitle("Task B draft");
     await render();
     expect(container.querySelector<HTMLInputElement>("input")!.value).toBe("Task A draft");
     await act(async () => discardSessionDraft(taskDetailsDraftKey(getGatewayApiBaseUrl(), "workspace-a", "task-a")));

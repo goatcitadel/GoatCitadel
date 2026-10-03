@@ -81,6 +81,7 @@ export interface ChatExecutionBudget {
     // Read compatibility for traces emitted before the one-Chat migration.
     | "cowork_research_list"
     | "research_artifact"
+    | "repo_review"
     | "sustained_local_coding"
     | "default";
   readonly promotionReason?: "explicit_research_artifact";
@@ -102,6 +103,7 @@ export interface ResolveChatExecutionBudgetInput {
   readonly liveDataIntent?: boolean;
   readonly researchListIntent?: boolean;
   readonly artifactIntent?: boolean;
+  readonly repoReviewIntent?: boolean;
   readonly promptLabExplicitTools?: boolean;
   readonly promptLabHarness?: boolean;
   readonly providerId?: string;
@@ -148,9 +150,10 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
       loopLimitBehavior: "checkpoint_continue",
       maxToolRunsPerTurn: 12,
       searchMaxResults: input.webMode === "off" ? 0 : 4,
-      maxTokens: input.modelOutputTokenLimit && input.modelOutputTokenLimit > 0
-        ? Math.min(4096, Math.floor(input.modelOutputTokenLimit))
-        : 4096,
+      maxTokens:
+        input.modelOutputTokenLimit && input.modelOutputTokenLimit > 0
+          ? Math.min(4096, Math.floor(input.modelOutputTokenLimit))
+          : 4096,
       minSynthesisReserveMs: 30_000,
       expensiveToolMinimumRemainingMs: 45_000,
     };
@@ -166,6 +169,24 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
       maxTokens: Math.min(defaultMaxTokens ?? 500, 600),
       minSynthesisReserveMs: 5000,
       expensiveToolMinimumRemainingMs: 8000,
+    };
+  } else if (
+    input.repoReviewIntent &&
+    !input.promptLabHarness &&
+    !input.promptLabExplicitTools &&
+    input.webMode !== "quick"
+  ) {
+    budget = {
+      profile: "repo_review",
+      turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.deep,
+      completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.deep,
+      maxToolLoops: 8,
+      loopLimitBehavior: "terminal",
+      maxToolRunsPerTurn: 20,
+      searchMaxResults: input.webMode === "off" ? 0 : 5,
+      maxTokens: Math.max(defaultMaxTokens ?? 900, 1800),
+      minSynthesisReserveMs: 30000,
+      expensiveToolMinimumRemainingMs: 30000,
     };
   } else if (shouldUseResearchListBudget(input)) {
     budget = applyPromptLabExplicitToolBudget(
@@ -300,6 +321,16 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
     maxTokens: Math.max(budget.maxTokens ?? 900, 1400),
     minSynthesisReserveMs: Math.max(budget.minSynthesisReserveMs, 12000),
   };
+}
+
+/** Promote explicit source audits, never ordinary response or web reviews. */
+export function hasRepositoryReviewIntent(content: string): boolean {
+  const sourceContext =
+    /\b(?:repo(?:sitory)?|codebase|checkout|source (?:code|files)|project files)\b|\b(?:apps|packages)[/\\]|\bAGENTS\.md\b/i.test(
+      content,
+    );
+  const localUiAudit = /\bUI[ /-]?UX\b/i.test(content) && /\b[A-Z]:[/\\]/i.test(content);
+  return /\b(?:review|audit)\b/i.test(content) && (sourceContext || localUiAudit);
 }
 
 function applyResearchListExtendedBudget(

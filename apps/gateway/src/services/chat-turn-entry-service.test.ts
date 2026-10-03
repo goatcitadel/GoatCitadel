@@ -798,6 +798,22 @@ describe("agentSendChatMessage", () => {
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves partial status and failure when persisting a buffered answer", async () => {
+    const failure = {
+      failureClass: "tool_run_budget_exceeded",
+      message: "Review budget reached.",
+      retryable: false,
+    } as const;
+    const host = createHost({
+      assistantContent: "Some source evidence; audit incomplete.",
+      assistantModel: "primary-model",
+      turnTrace: createTrace({ status: "partial", failure }),
+    });
+    const result = await agentSendChatMessage(host, "session-1", { content: "review sources", mode: "chat" });
+    expect(result.assistantMessage?.content).toBe("Some source evidence; audit incomplete.");
+    expect(result.trace).toMatchObject({ status: "partial", failure });
+  });
+
   it("runs the synchronous LLM path, persists the assistant turn, and emits trace/realtime evidence", async () => {
     const host = createHost({
       assistantContent: "Completed answer.",

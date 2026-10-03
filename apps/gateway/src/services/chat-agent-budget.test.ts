@@ -14,6 +14,7 @@ import {
   isExpensiveChatTool,
   minimumRemainingBudgetForToolStart,
   resolveChatExecutionBudget,
+  hasRepositoryReviewIntent,
   CHAT_COMPLETION_TIMEOUT_MS_BY_MODE,
   CHAT_TURN_BUDGET_MS_BY_MODE,
   toolRunBudgetCostForToolCall,
@@ -23,6 +24,45 @@ import {
 } from "./chat-agent-budget.js";
 
 describe("chat-agent-budget", () => {
+  it("gives explicit repository audits bounded capacity while retaining quick, harness, and local-model limits", () => {
+    expect(
+      hasRepositoryReviewIntent("Read-only UI/UX audit of F:\\code\\personal-ai; inspect three user journeys."),
+    ).toBe(true);
+    expect(hasRepositoryReviewIntent("Review the source code in this repository.")).toBe(true);
+    expect(hasRepositoryReviewIntent("Look at the response; it's not good.")).toBe(false);
+    expect(hasRepositoryReviewIntent("Review nearby restaurant websites.")).toBe(false);
+    expect(hasRepositoryReviewIntent("Review C:\\documents\\report.pdf.")).toBe(false);
+    const input = { mode: "chat", webMode: "auto", thinkingLevel: "standard", repoReviewIntent: true } as const;
+    expect(resolveChatExecutionBudget(input)).toMatchObject({
+      profile: "repo_review",
+      maxToolLoops: 8,
+      maxToolRunsPerTurn: 20,
+      turnBudgetMs: 480000,
+      maxTokens: 1800,
+      loopLimitBehavior: "terminal",
+    });
+    expect(resolveChatExecutionBudget({ ...input, webMode: "off" })).toMatchObject({
+      profile: "repo_review",
+      searchMaxResults: 0,
+    });
+    expect(resolveChatExecutionBudget({ ...input, repoReviewIntent: false })).toMatchObject({
+      profile: "default",
+      maxToolRunsPerTurn: 7,
+    });
+    expect(resolveChatExecutionBudget({ ...input, executionProfile: "quick_web" })).toMatchObject({
+      profile: "quick_web",
+      maxToolRunsPerTurn: 2,
+    });
+    expect(resolveChatExecutionBudget({ ...input, webMode: "quick" })).toMatchObject({
+      profile: "quick",
+      maxToolRunsPerTurn: 3,
+    });
+    expect(resolveChatExecutionBudget({ ...input, promptLabHarness: true }).profile).not.toBe("repo_review");
+    expect(
+      resolveChatExecutionBudget({ ...input, providerId: "llamacpp", model: "qwen3:8b" }).maxToolRunsPerTurn,
+    ).toBeLessThanOrEqual(5);
+  });
+
   it("resolves mode, web, prompt-lab, and constrained local budgets", () => {
     expect(defaultThinkingTokens("off")).toBe(300);
     expect(defaultThinkingTokens("minimal")).toBe(300);

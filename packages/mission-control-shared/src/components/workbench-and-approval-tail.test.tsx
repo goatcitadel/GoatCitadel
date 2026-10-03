@@ -327,13 +327,19 @@ describe("workbench tree, inspector drawer, and approval prompt tails", () => {
     expect(callbacks.onApproveInSession).toHaveBeenCalled();
     expect(callbacks.onDeny).toHaveBeenCalled();
 
-    act(() => {
-      renderer!.root
-        .findAllByType("button")
-        .find((button) => textOf(button.props.children).includes("Allow in workspace"))!
-        .props.onClick();
-    });
+    const workspaceButton = renderer!.root
+      .findAllByType("button")
+      .find((button) => textOf(button.props.children).includes("Allow in workspace"))!;
+    expect(workspaceButton.props["aria-expanded"]).toBe(false);
+    expect(workspaceButton.props["aria-controls"]).toBeUndefined();
+    act(() => workspaceButton.props.onClick());
+    expect(workspaceButton.props["aria-expanded"]).toBe(true);
+    expect(workspaceButton.props["aria-controls"]).toBe(
+      renderer!.root.findByProps({ role: "group", "aria-label": "Confirm workspace access" }).props.id,
+    );
     expect(textOf(renderer.toJSON())).toContain("Confirm workspace allow");
+    expect(textOf(renderer.toJSON())).toContain("Not approved yet.");
+    expect(callbacks.onApproveInWorkspace).not.toHaveBeenCalled();
     act(() => {
       renderer!.root
         .findAllByType("button")
@@ -341,6 +347,12 @@ describe("workbench tree, inspector drawer, and approval prompt tails", () => {
         .props.onClick();
     });
     expect(callbacks.onApproveInWorkspace).toHaveBeenCalled();
+
+    act(() =>
+      renderer!.update(<InlineApprovalPrompt approvalId="approval-next" workspaceAllowAvailable {...callbacks} />),
+    );
+    expect(textOf(renderer.toJSON())).not.toContain("Confirm workspace allow");
+    expect(callbacks.onApproveInWorkspace).toHaveBeenCalledTimes(1);
 
     renderer.update(
       <InlineApprovalPrompt

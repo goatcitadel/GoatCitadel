@@ -7,7 +7,12 @@ import { LlamaCppSetupFlow } from "./LlamaCppSetupFlow";
 import { LlamaSetupSettings } from "@next/cockpit/areas/settings/LlamaSetupSettings";
 import { __resetSessionDraftsForTests } from "../../library/session-drafts";
 import { __resetLlamaSetupForTests, type LlamaSetupChange } from "../llama-setup-state";
-import { awaitingLlamaApproval, deferredLlama, llamaPlanFixture, llamaProjectionFixture } from "../llama-setup.test-support";
+import {
+  awaitingLlamaApproval,
+  deferredLlama,
+  llamaPlanFixture,
+  llamaProjectionFixture,
+} from "../llama-setup.test-support";
 const api = vi.hoisted(() => ({
   fetchLlamaCppSetup: vi.fn(),
   previewLlmModels: vi.fn(),
@@ -108,11 +113,16 @@ describe("classic and native llama.cpp setup", () => {
       expect(view.button("Approve and apply")).toBeUndefined();
       if (native) {
         const link = view.host.querySelector<HTMLAnchorElement>('a[aria-label="Open approval details"]');
-        expect(link?.getAttribute("href")).toBe("/ops/approvals?approvalId=approval-1&shell=classic");
+        expect(link?.getAttribute("href")).toBe("/ops/approvals?approvalId=approval-1&shell=classic&shellScope=visit");
         expect(navigate).not.toHaveBeenCalled();
       } else {
         await view.click("Open approval details");
-        expect(navigate).toHaveBeenCalledWith({ area: "ops", section: "approvals", approvalId: "approval-1", theme: "dark" });
+        expect(navigate).toHaveBeenCalledWith({
+          area: "ops",
+          section: "approvals",
+          approvalId: "approval-1",
+          theme: "dark",
+        });
       }
       expect(api.respondToChangePlan).not.toHaveBeenCalled();
       if (native) expect(view.button("Check server").className).not.toContain("mc-next-button");
@@ -151,7 +161,9 @@ describe("classic and native llama.cpp setup", () => {
       expect(returned.host.textContent).not.toContain("Loading setup evidence");
       expect(select.value).toBe("served-model");
       expect(select.selectedOptions[0]?.disabled).toBe(true);
-      expect(returned.host.textContent).toContain("The selected model is retained but is not in the current verified catalog.");
+      expect(returned.host.textContent).toContain(
+        "The selected model is retained but is not in the current verified catalog.",
+      );
       expect(returned.host.textContent).toContain("Unsaved llama.cpp setup draft");
       expect(returned.button("Finish setup").disabled).toBe(true);
       expect(api.previewLlmModels).toHaveBeenCalledTimes(1);

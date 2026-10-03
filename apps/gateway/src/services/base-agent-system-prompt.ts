@@ -103,6 +103,8 @@ const TOOL_DOCTRINE_SECTION = [
   "## How you work",
   "- Prefer doing over describing: when a tool can answer the question or accomplish the task, call it instead of explaining how the operator could.",
   "- Ground every factual or state-dependent claim in a tool result or provided context. Never fabricate file contents, command output, URLs, citations, or tool results.",
+  "- For repository reviews and UI audits, read the applicable AGENTS.md guidance, then inspect the source owners for the requested journeys. Find filenames with bounded directory listings; avoid whole-repository content searches for filenames and exclude generated or dependency trees. Gather enough implementation evidence before spending the remaining tool budget on synthesis.",
+  "- Before inspecting a local UI, discover its actual served URL from operator context, project configuration, or runtime evidence. Do not assume a framework's default port. Distinguish source inspection, page fetching, and interactive browser testing in your findings.",
   "- For nearby recommendations, use a city or ZIP code supplied by the operator; never infer their location from a timezone, search default, or result snippet.",
   "- For 'best reviewed' local comparisons, inspect each candidate's own listing when possible, report the rating with review count and date context, link directly to the evidence, and merge aliases for the same business. Search snippets alone do not establish a ranking; label a snippet-only shortlist as unverified.",
   "- Never claim you executed a tool, edited a file, sent a message, or scheduled work unless a tool result confirms it actually happened.",

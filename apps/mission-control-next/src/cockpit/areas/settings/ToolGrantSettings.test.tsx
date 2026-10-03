@@ -4,13 +4,16 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ToolGrantSettings } from "./ToolGrantSettings";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
-import { awaitingLlamaApproval, llamaPlanFixture } from "../../../features/native-routes/settings/llama-setup.test-support";
+import {
+  awaitingLlamaApproval,
+  llamaPlanFixture,
+} from "../../../features/native-routes/settings/llama-setup.test-support";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetFormDirtyRegistryForTests } from "../../../features/native-routes/library/use-form-dirty";
 const viewState = vi.hoisted(() => ({ installation: "http://gateway-a", open: vi.fn() }));
 vi.mock("../../../shell-preference", () => ({ switchShell: viewState.open, writeShellPreference: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
-  ...await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>(),
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>()),
   getGatewayApiBaseUrl: () => viewState.installation,
 }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
@@ -48,8 +51,13 @@ async function render(withApproval = false) {
     view = create(
       <QueryClientProvider client={client}>
         <ToolGrantSettings workspaceId="workspace-a" />
-        {withApproval ? <SettingsApprovalOwnerAction owner="llama-setup" workspaceId="workspace-a"
-          plan={awaitingLlamaApproval(llamaPlanFixture())} /> : null}
+        {withApproval ? (
+          <SettingsApprovalOwnerAction
+            owner="llama-setup"
+            workspaceId="workspace-a"
+            plan={awaitingLlamaApproval(llamaPlanFixture())}
+          />
+        ) : null}
       </QueryClientProvider>,
     );
   });
@@ -60,8 +68,10 @@ async function render(withApproval = false) {
 beforeEach(() => {
   vi.resetAllMocks();
   __resetToolGrantActionsForTests();
-  __resetSessionDraftsForTests(); __resetFormDirtyRegistryForTests();
-  viewState.installation = "http://gateway-a"; viewState.open.mockResolvedValue("cancelled");
+  __resetSessionDraftsForTests();
+  __resetFormDirtyRegistryForTests();
+  viewState.installation = "http://gateway-a";
+  viewState.open.mockResolvedValue("cancelled");
   window.history.replaceState(null, "", "/settings/safety?shell=cockpit#tool-grants");
   api.fetchToolCatalog.mockResolvedValue({ items: [] });
   api.fetchToolGrants.mockResolvedValue({ items: [] });
@@ -69,7 +79,8 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => view?.unmount());
   view = undefined;
-  __resetSessionDraftsForTests(); __resetFormDirtyRegistryForTests();
+  __resetSessionDraftsForTests();
+  __resetFormDirtyRegistryForTests();
 });
 it("shows exact editable labels and reviews a global scope without sending a grant on cancel", async () => {
   await render();
@@ -107,26 +118,39 @@ it("keeps separate unsent drafts for the same workspace/tool across installation
   viewState.installation = "http://gateway-a";
   await render();
   expect(input("Tool pattern").props.value).toBe("installation-a.*");
-  expect(api.createToolGrant).not.toHaveBeenCalled(); expect(api.revokeToolGrant).not.toHaveBeenCalled();
+  expect(api.createToolGrant).not.toHaveBeenCalled();
+  expect(api.revokeToolGrant).not.toHaveBeenCalled();
 });
 
-it.each(["Keep draft and close", "Discard changes"])("guards the actual grant draft before an exact approval owner handoff: %s", async (decision) => {
-  await render(true);
-  await act(async () => input("Tool pattern").props.onChange({ target: { value: "session.status" } }));
-  const click = () => view!.root.findAllByType("a").find(item => item.props["aria-label"] === "Review required approval")!
-    .props.onClick({ button: 0, preventDefault: vi.fn() });
-  await act(async () => click());
-  expect(viewState.open).not.toHaveBeenCalled();
-  await act(async () => button("Cancel").props.onClick());
-  expect(input("Tool pattern").props.value).toBe("session.status");
-  await act(async () => click());
-  await act(async () => button(decision).props.onClick());
-  expect(viewState.open).toHaveBeenCalledExactlyOnceWith("classic", expect.objectContaining({
-    href: "/ops/approvals?approvalId=approval-1&shell=classic", isCurrent: expect.any(Function), signal: expect.any(AbortSignal),
-  }));
-  expect(input("Tool pattern").props.value).toBe(decision === "Discard changes" ? "" : "session.status");
-  expect(api.createToolGrant).not.toHaveBeenCalled(); expect(api.revokeToolGrant).not.toHaveBeenCalled();
-});
+it.each(["Keep draft and close", "Discard changes"])(
+  "guards the actual grant draft before an exact approval owner handoff: %s",
+  async (decision) => {
+    await render(true);
+    await act(async () => input("Tool pattern").props.onChange({ target: { value: "session.status" } }));
+    const click = () =>
+      view!.root
+        .findAllByType("a")
+        .find((item) => item.props["aria-label"] === "Review required approval")!
+        .props.onClick({ button: 0, preventDefault: vi.fn() });
+    await act(async () => click());
+    expect(viewState.open).not.toHaveBeenCalled();
+    await act(async () => button("Cancel").props.onClick());
+    expect(input("Tool pattern").props.value).toBe("session.status");
+    await act(async () => click());
+    await act(async () => button(decision).props.onClick());
+    expect(viewState.open).toHaveBeenCalledExactlyOnceWith(
+      "classic",
+      expect.objectContaining({
+        href: "/ops/approvals?approvalId=approval-1&shell=classic&shellScope=visit",
+        isCurrent: expect.any(Function),
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(input("Tool pattern").props.value).toBe(decision === "Discard changes" ? "" : "session.status");
+    expect(api.createToolGrant).not.toHaveBeenCalled();
+    expect(api.revokeToolGrant).not.toHaveBeenCalled();
+  },
+);
 
 it("retains an unconfirmed grant write and its input across the guarded handoff and remount", async () => {
   api.createToolGrant.mockRejectedValue(new Error("transport ended after dispatch"));
@@ -136,8 +160,12 @@ it("retains an unconfirmed grant write and its input across the guarded handoff 
   await act(async () => button("Create reviewed grant").props.onClick());
   expect(api.createToolGrant).toHaveBeenCalledOnce();
   expect(button("Review new grant").props.disabled).toBe(true);
-  await act(async () => view!.root.findAllByType("a").find(item => item.props["aria-label"] === "Review required approval")!
-    .props.onClick({ button: 0, preventDefault: vi.fn() }));
+  await act(async () =>
+    view!.root
+      .findAllByType("a")
+      .find((item) => item.props["aria-label"] === "Review required approval")!
+      .props.onClick({ button: 0, preventDefault: vi.fn() }),
+  );
   await act(async () => button("Keep draft and close").props.onClick());
   expect(viewState.open).toHaveBeenCalledOnce();
   await act(async () => view!.unmount());

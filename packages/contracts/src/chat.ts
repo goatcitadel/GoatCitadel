@@ -1563,6 +1563,7 @@ export interface ChatTurnTraceRecord {
         | "research_list"
         | "cowork_research_list"
         | "research_artifact"
+        | "repo_review"
         | "sustained_local_coding"
         | "default";
       promotionReason?: "explicit_research_artifact";

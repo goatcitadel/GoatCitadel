@@ -83,7 +83,9 @@ describe("native Local AI settings", () => {
     await click("Jobs and endpoints");
     expect(container.textContent).toContain("requires approval");
     expect(container.textContent).toContain("not a durable execution history");
-    expect(container.querySelector('a[href="/ops/approvals?shell=classic&approvalId=approval-1"]')).not.toBeNull();
+    expect(
+      container.querySelector('a[href="/ops/approvals?shell=classic&approvalId=approval-1&shellScope=visit"]'),
+    ).not.toBeNull();
   });
   it("does not claim empty jobs or permit requests when readiness is malformed", async () => {
     api.fetchLocalAiReadiness.mockResolvedValue({});

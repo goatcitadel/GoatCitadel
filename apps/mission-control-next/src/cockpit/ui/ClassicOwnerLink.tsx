@@ -1,5 +1,6 @@
 import { type MouseEvent, type ReactNode } from "react";
 import { useShellHandoff } from "../../app/use-shell-handoff";
+import { buildClassicOwnerUrl } from "../../app/classic-owner-url";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { useDraftLeaveDialogState } from "../../features/native-routes/library/DraftLeaveDialog";
 import { Button } from "./Button";
@@ -26,7 +27,8 @@ export function ClassicOwnerLink({
   inboxOwner?: boolean;
 }) {
   const installation = getGatewayApiBaseUrl();
-  const handoff = useShellHandoff([installation, scope, href]);
+  const ownerHref = buildClassicOwnerUrl(href);
+  const handoff = useShellHandoff([installation, scope, ownerHref]);
   const dialog = useDraftLeaveDialogState(handoff.dialogProps);
   const opening = handoff.opening;
 
@@ -41,13 +43,13 @@ export function ClassicOwnerLink({
     )
       return;
     event.preventDefault();
-    handoff.request("classic", { href });
+    handoff.request("classic", { href: ownerHref });
   }
 
   return (
     <>
       <a
-        href={href}
+        href={ownerHref}
         data-inbox-owner={inboxOwner ? "" : undefined}
         onClick={request}
         aria-disabled={opening || undefined}

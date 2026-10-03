@@ -32,6 +32,7 @@ import { SidebarChatSlot, useUnifiedSidebar } from "./UnifiedSidebar";
 import { TopbarOverflowMenu, type TopbarOverflowItem } from "./TopbarOverflowMenu";
 import { isRuntimeReleaseVerified } from "./runtime-build-identity";
 import { DesktopUpdateBadge } from "../features/desktop-updates/DesktopUpdateBadge";
+import { ClassicLayoutReturn } from "./ClassicLayoutReturn";
 import {
   AREA_META,
   navigationAreaForRoute,
@@ -178,6 +179,7 @@ export function ShellTopbar({
           <Menu size={18} />
         </button>
         <span className="mc-next-page-context">{AREA_META[navigationAreaForRoute(route)].label}</span>
+        <ClassicLayoutReturn sessionId={route.sessionId} />
       </div>
       <div className="mc-next-topbar-right">
         {statusSlot}
@@ -536,14 +538,23 @@ export function ShellStatusStrip({
         ? "Checking"
         : "Healthy";
   return (
-    <div className="mc-next-status-strip" data-placement="topbar" aria-label="Mission Control status" data-status={systemStatus}>
+    <div
+      className="mc-next-status-strip"
+      data-placement="topbar"
+      aria-label="Mission Control status"
+      data-status={systemStatus}
+    >
       <DesktopUpdateBadge />
       <details
         className="mc-next-status-details mc-next-status-system"
         open={systemDetailsOpen}
         onToggle={(event) => setSystemDetailsOpen(event.currentTarget.open)}
       >
-        <summary aria-expanded={systemDetailsOpen} aria-controls={systemDetailsId} aria-label={`System status: ${systemSummary}`}>
+        <summary
+          aria-expanded={systemDetailsOpen}
+          aria-controls={systemDetailsId}
+          aria-label={`System status: ${systemSummary}`}
+        >
           <ShieldCheck size={14} aria-hidden="true" />
           <span>System</span>
           <strong>{systemSummary}</strong>

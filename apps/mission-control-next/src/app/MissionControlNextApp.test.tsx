@@ -296,9 +296,17 @@ function installBrowser(href: string): void {
   vi.stubGlobal("window", {
     location,
     history: {
-      get state() { return historyState; },
-      pushState: vi.fn((state: unknown, _title: string, next: string) => { historyState = state; updateLocation(next); }),
-      replaceState: vi.fn((state: unknown, _title: string, next: string) => { historyState = state; updateLocation(next); }),
+      get state() {
+        return historyState;
+      },
+      pushState: vi.fn((state: unknown, _title: string, next: string) => {
+        historyState = state;
+        updateLocation(next);
+      }),
+      replaceState: vi.fn((state: unknown, _title: string, next: string) => {
+        historyState = state;
+        updateLocation(next);
+      }),
     },
     addEventListener: vi.fn(events.addEventListener.bind(events)),
     removeEventListener: vi.fn(events.removeEventListener.bind(events)),
@@ -308,6 +316,7 @@ function installBrowser(href: string): void {
   });
   vi.stubGlobal("document", {
     title: "",
+    querySelector: vi.fn(() => null),
     documentElement: { classList: classSet() },
     body: { classList: classSet() },
     activeElement: null,

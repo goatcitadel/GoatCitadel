@@ -23,7 +23,7 @@ const api = vi.hoisted(() => ({
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
 const switchShellMock = vi.hoisted(() => vi.fn<typeof import("../../../shell-preference").switchShell>());
 vi.mock("../../../shell-preference", async (importOriginal) => ({
-  ...await importOriginal<typeof import("../../../shell-preference")>(),
+  ...(await importOriginal<typeof import("../../../shell-preference")>()),
   switchShell: switchShellMock,
 }));
 vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () => ({
@@ -465,17 +465,24 @@ describe("cockpit provider connection editing", () => {
     await act(async () => dialog.onConfirm(dialog.plan!));
     const retained = readProviderConnectionAttempt("provider-a");
     await act(async () => {
-      container.querySelector<HTMLAnchorElement>('a[href="/settings/providers?shell=classic"]')!.click();
+      container
+        .querySelector<HTMLAnchorElement>('a[href="/settings/providers?shell=classic&shellScope=visit"]')!
+        .click();
     });
     expect(switchShellMock).not.toHaveBeenCalled();
     const keep = [...document.querySelectorAll("button")].find((item) => item.textContent === "Keep draft and close");
     expect(keep).toBeDefined();
-    await act(async () => { keep!.click(); });
-    expect(switchShellMock).toHaveBeenCalledExactlyOnceWith("classic", expect.objectContaining({
-      href: "/settings/providers?shell=classic",
-      isCurrent: expect.any(Function),
-      signal: expect.any(AbortSignal),
-    }));
+    await act(async () => {
+      keep!.click();
+    });
+    expect(switchShellMock).toHaveBeenCalledExactlyOnceWith(
+      "classic",
+      expect.objectContaining({
+        href: "/settings/providers?shell=classic&shellScope=visit",
+        isCurrent: expect.any(Function),
+        signal: expect.any(AbortSignal),
+      }),
+    );
     expect(switchShellMock.mock.calls[0]![1].isCurrent()).toBe(true);
     expect(readProviderConnectionAttempt("provider-a")).toBe(retained);
     act(() => root.unmount());
