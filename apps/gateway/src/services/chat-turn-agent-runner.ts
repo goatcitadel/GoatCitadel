@@ -337,6 +337,12 @@ import {
   resolveLocalBusinessSearchQuery,
 } from "./local-business-research-service.js";
 import {
+  buildUnverifiedLocalReviewAnswer,
+  buildVerifiedLocalReviewComparisonAnswer,
+  collectLocalReviewProfileEvidence,
+  isLocalReviewRankingTurn,
+} from "./chat-local-review-evidence.js";
+import {
   collectPromptLabConcreteReadEvidence,
   collectPromptLabConcreteReadPaths,
   extractPromptLabCitationQuote,
@@ -1139,17 +1145,20 @@ export class ChatTurnAgentRunner {
       !promptLabContractRequiresArtifactTools(promptLabContract);
     const intentDetectionContent =
       promptLabContract.userTask?.trim() || extractPrimaryUserTaskContent(input.content) || input.content;
+    const localResearchContinuation = resolveLocalResearchContinuation(input.content, input.historyMessages);
     const presentationArtifactIntent =
       !suppressPromptLabCodeArtifactTools && detectPresentationArtifactIntent(input.content);
     const intents = {
       liveData:
         detectLiveDataIntent(intentDetectionContent) ||
-        (intentDetectionContent !== input.content ? detectLiveDataIntent(input.content) : false),
+        (intentDetectionContent !== input.content ? detectLiveDataIntent(input.content) : false) ||
+        Boolean(localResearchContinuation),
       webLookup:
         detectWebLookupIntent(intentDetectionContent, input.historyMessages) ||
         (intentDetectionContent !== input.content
           ? detectWebLookupIntent(input.content, input.historyMessages)
-          : false),
+          : false) ||
+        Boolean(localResearchContinuation),
       localFile: detectLocalFileIntent(input.content),
       presentationArtifact: presentationArtifactIntent,
       documentArtifact:
@@ -1969,21 +1978,25 @@ export class ChatTurnAgentRunner {
       promptLabContract.userTask?.trim() ||
       extractPrimaryUserTaskContent(executionIntentContent) ||
       executionIntentContent;
+    const localResearchContinuation = resolveLocalResearchContinuation(input.content, input.historyMessages);
     const presentationArtifactIntent =
       !suppressPromptLabCodeArtifactTools && detectPresentationArtifactIntent(executionIntentContent);
     const intents = {
       liveData:
         detectLiveDataIntent(intentDetectionContent) ||
-        (intentDetectionContent !== executionIntentContent ? detectLiveDataIntent(executionIntentContent) : false),
+        (intentDetectionContent !== executionIntentContent ? detectLiveDataIntent(executionIntentContent) : false) ||
+        Boolean(localResearchContinuation),
       webLookup:
         !workflowSkillCapture &&
         (detectWebLookupIntent(intentDetectionContent, input.historyMessages) ||
           (intentDetectionContent !== executionIntentContent
             ? detectWebLookupIntent(executionIntentContent, input.historyMessages)
-            : false)),
+            : false) ||
+          Boolean(localResearchContinuation)),
       researchList:
         hasResearchListIntent(intentDetectionContent) ||
-        (intentDetectionContent !== executionIntentContent ? hasResearchListIntent(executionIntentContent) : false),
+        (intentDetectionContent !== executionIntentContent ? hasResearchListIntent(executionIntentContent) : false) ||
+        Boolean(localResearchContinuation),
       time: detectTimeIntent(executionIntentContent),
       localFile: detectLocalFileIntent(executionIntentContent),
       presentationArtifact: presentationArtifactIntent,
@@ -1994,6 +2007,10 @@ export class ChatTurnAgentRunner {
         detectDocumentArtifactIntent(executionIntentContent),
       missingLogPayload: detectMissingLogPayloadIntent(executionIntentContent),
     };
+    const localReviewRankingTurn = isLocalReviewRankingTurn(
+      localResearchContinuation ?? intentDetectionContent,
+      intents.researchList,
+    );
     const executionBudget = resolveChatExecutionBudget({
       mode: input.mode,
       webMode: input.webMode,
@@ -3728,6 +3745,7 @@ export class ChatTurnAgentRunner {
     const controllerWebLookupRequested =
       detectExplicitWebLookupIntent(input.content) ||
       hasLiveDataIntent(input.content) ||
+      Boolean(localResearchContinuation) ||
       Boolean(extractExternalResearchSubject(input.content)) ||
       Boolean(derivePromptSpecificWebQuery(input.content)) ||
       (detectDirectUrlIntent(input.content) &&
@@ -3758,7 +3776,7 @@ export class ChatTurnAgentRunner {
       ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
       const liveDataQuerySourceContent = promptLabHarnessTurn
         ? (extractPromptLabQuotedUserAsk(promptLabTaskForInspection) ?? promptLabTaskForInspection)
-        : input.content;
+        : (localResearchContinuation ?? input.content);
       const derivedLiveDataQuery = deriveLiveDataQuery(liveDataQuerySourceContent);
       const inferredLiveDataQuery = inferQueryFromPrompt(liveDataQuerySourceContent);
       const explicitResearchSubject = extractExternalResearchSubject(liveDataQuerySourceContent);
@@ -3821,6 +3839,7 @@ export class ChatTurnAgentRunner {
 
         if (
           (shouldProactivelyOpenGroundedNewsResult(liveDataQuerySourceContent) ||
+            localReviewRankingTurn ||
             shouldProactivelyOpenCoworkResearchResult({
               mode: input.mode,
               webMode: input.webMode,
@@ -3829,8 +3848,17 @@ export class ChatTurnAgentRunner {
           canUseNavigateTool &&
           toolRunCount < executionBudget.maxToolRunsPerTurn
         ) {
-          const promotedUrl = inferBrowserNavigateUrlFromRepeatedSearches(liveDataQuerySourceContent, toolRuns);
-          if (promotedUrl) {
+          const promotedUrls = localReviewRankingTurn
+            ? selectRecentBrowserResultUrls(liveDataQuerySourceContent, toolRuns, 0, 8)
+                .filter((url) => !isSearchPortalHost(new URL(url).hostname.toLowerCase()))
+                .slice(0, 2)
+            : [inferBrowserNavigateUrlFromRepeatedSearches(liveDataQuerySourceContent, toolRuns)].filter(
+                (url): url is string => Boolean(url),
+              );
+          for (const promotedUrl of promotedUrls) {
+            if (toolRunCount >= executionBudget.maxToolRunsPerTurn) {
+              break;
+            }
             ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
             const navigateRun = await this.executeToolCall({
               input,
@@ -3923,6 +3951,9 @@ export class ChatTurnAgentRunner {
                 expiresAt: navigateRun.approvalExpiresAt,
               });
             }
+            if (approvalPayload) {
+              break;
+            }
           }
         }
       }
@@ -3970,6 +4001,25 @@ export class ChatTurnAgentRunner {
         role: "system",
         content: buildEvidenceGroundingInstruction(),
       } as ChatCompletionMessage);
+    }
+    if (
+      localReviewRankingTurn &&
+      toolRuns.some((run) => run.toolName === "browser.search" && run.status === "executed")
+    ) {
+      conversationMessages.push({
+        role: "system",
+        content:
+          "Local review comparison: open at least two distinct candidate listing pages and check each rating and review count before ranking. Search snippets are unverified leads. If pages are unavailable, say the ranking cannot be verified and give only an unranked shortlist.",
+      } as ChatCompletionMessage);
+    }
+    if (
+      localReviewRankingTurn &&
+      !assistantContent &&
+      !approvalPayload &&
+      toolRuns.some((run) => run.toolName === "browser.search" && run.status === "executed") &&
+      collectLocalReviewProfileEvidence(toolRuns).length >= 2
+    ) {
+      assistantContent = buildVerifiedLocalReviewComparisonAnswer(toolRuns, localResearchContinuation ?? input.content);
     }
     const approvedResearchArtifactSearchSettled =
       intents.presentationArtifact && hasApprovedResearchArtifactSearchEvidence(toolRuns);
@@ -5830,6 +5880,40 @@ export class ChatTurnAgentRunner {
         assistantContent,
         projectToolRunsForModel(toolRuns),
         input.content,
+      );
+    }
+    if (
+      localReviewRankingTurn &&
+      finalStatus === "completed" &&
+      !approvalPayload &&
+      !pendingUserInput &&
+      !promptLabEvalIntegrityTurn &&
+      toolRuns.some((run) => run.toolName === "browser.search" && run.status === "executed")
+    ) {
+      const localReviewRequest = localResearchContinuation ?? input.content;
+      if (collectLocalReviewProfileEvidence(toolRuns).length < 2) {
+        assistantContent = buildUnverifiedLocalReviewAnswer(toolRuns, localReviewRequest);
+        finalStatus = "partial";
+        finalFailure = buildChatTurnFailureRecord(
+          "unknown",
+          "A local review ranking needs at least two directly opened candidate listings with ratings and review counts.",
+          "continue_from_partial",
+        );
+      } else {
+        assistantContent = buildVerifiedLocalReviewComparisonAnswer(toolRuns, localReviewRequest);
+        if (/\b(?:funny|funniest|humor|humour)\b/i.test(localReviewRequest)) {
+          finalStatus = "partial";
+          finalFailure = buildChatTurnFailureRecord(
+            "unknown",
+            "Ratings and review counts alone do not establish which candidate is funniest.",
+            "continue_from_partial",
+          );
+        }
+      }
+      citations.splice(
+        0,
+        citations.length,
+        ...citations.filter((citation) => citation.url && assistantContent.includes(`<${citation.url}>`)),
       );
     }
     // origin/main: record local-business research evidence on the pre-footer
@@ -10024,9 +10108,20 @@ function promptLabContractRequiresArtifactTools(input: { requiredNamedTools: str
   return input.requiredNamedTools.some((toolName) => PROMPT_LAB_ARTIFACT_TOOL_NAMES.has(toolName));
 }
 
+const LOCAL_RESEARCH_LOCATION_QUESTION = "What city or ZIP code should I use for nearby recommendations?";
+
 function buildClarificationPromptIfNeeded(userPrompt: string): string | undefined {
   const normalized = userPrompt.toLowerCase();
   const questions: string[] = [];
+
+  if (
+    hasResearchListIntent(userPrompt) &&
+    /\b(?:near me|nearby)\b/i.test(userPrompt) &&
+    !/\b\d{5}(?:-\d{4})?\b/.test(userPrompt) &&
+    !/\b(?:in|around)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\b/.test(userPrompt)
+  ) {
+    questions.push(LOCAL_RESEARCH_LOCATION_QUESTION);
+  }
 
   // Detect estimation prompts with ambiguous scope.
   const isEstimate = /\b(estimate|estimation|how many|count|number of|size of)\b/.test(normalized);
@@ -10094,6 +10189,58 @@ function buildClarificationFollowUpIfNeeded(
     ...remaining.map((question) => `- ${question}`),
     "Once you answer, I can give you a grounded response.",
   ].join("\n");
+}
+
+function parseLocalResearchLocationReply(userPrompt: string): string | undefined {
+  const location = userPrompt
+    .trim()
+    .replace(/^(?:i'm\s+in|i\s+live\s+in|in|near|around)\s+/i, "")
+    .replace(/[.!]\s*$/, "")
+    .trim();
+  if (looksLikeFreshStandalonePrompt(userPrompt) || location.length > 80) {
+    return undefined;
+  }
+  if (/^\d{5}(?:-\d{4})?$/.test(location)) {
+    return location;
+  }
+  if (
+    /^(?!yes$|no$|unknown$|not sure$)[\p{L}][\p{L} .'’-]{1,60}(?:,\s*[\p{L}]{2,20})?$/iu.test(location) &&
+    location.split(/\s+/).length <= 5
+  ) {
+    return location;
+  }
+  return undefined;
+}
+
+function resolveLocalResearchContinuation(
+  userPrompt: string,
+  historyMessages: ChatCompletionRequest["messages"],
+): string | undefined {
+  const location = parseLocalResearchLocationReply(userPrompt);
+  if (!location) {
+    return undefined;
+  }
+  for (let index = historyMessages.length - 1; index >= 0; index -= 1) {
+    const message = toPlainRecord(historyMessages[index]);
+    if (!message || message.role !== "assistant") {
+      continue;
+    }
+    if (!extractMessageContent(message).includes(LOCAL_RESEARCH_LOCATION_QUESTION)) {
+      return undefined;
+    }
+    for (let priorIndex = index - 1; priorIndex >= 0; priorIndex -= 1) {
+      const priorMessage = toPlainRecord(historyMessages[priorIndex]);
+      if (!priorMessage || priorMessage.role !== "user") {
+        continue;
+      }
+      const priorPrompt = extractMessageContent(priorMessage);
+      return hasResearchListIntent(priorPrompt) && /\b(?:near me|nearby)\b/i.test(priorPrompt)
+        ? priorPrompt.replace(/\b(?:near me|nearby)\b/gi, `near ${location}`)
+        : undefined;
+    }
+    return undefined;
+  }
+  return undefined;
 }
 
 function readPendingClarification(historyMessages: ChatCompletionRequest["messages"]): string[] | undefined {
@@ -10225,6 +10372,9 @@ function shouldExposeWebToolForTurn(input: {
 }
 
 function looksLikeClarificationAnswer(answer: string, question: string): boolean {
+  if (question === LOCAL_RESEARCH_LOCATION_QUESTION) {
+    return Boolean(parseLocalResearchLocationReply(answer));
+  }
   // Geography questions
   if (question.includes("geographic area")) {
     return (
@@ -14158,17 +14308,18 @@ function looksLikeFragmentaryStandaloneAnswer(input: {
   if (!lastLine) {
     return false;
   }
-  if (/[;:,([{\\/-]$/.test(lastLine)) {
+  const terminalLine = lastLine.replace(/(?:\s|\uFE0F|\u200D|\p{Extended_Pictographic}|\p{Emoji_Modifier})+$/gu, "");
+  if (/[;:,([{\\/-]$/.test(terminalLine)) {
     return true;
   }
-  if (looksLikeHangingMarkdownLine(lastLine)) {
+  if (looksLikeHangingMarkdownLine(terminalLine)) {
     return true;
   }
-  if (structureHits >= 3 && lastLine.length >= 36 && !/[.!?)"`\]]$/.test(lastLine)) {
+  if (structureHits >= 3 && terminalLine.length >= 36 && !/[.!?)"`\]]$/.test(terminalLine)) {
     return true;
   }
   return /\b(a|an|and|are|as|at|because|by|during|for|from|if|in|into|is|of|on|or|the|to|under|via|when|while|with|without)\s*$/i.test(
-    lastLine,
+    terminalLine,
   );
 }
 

@@ -25,7 +25,26 @@ export function isSuspiciousEncodedPath(rawUrl: string): boolean {
     (segment, index) =>
       !isOpaqueDurableWatcherIdSegment(segments, index) &&
       !isOpaqueDurableRunIdSegment(segments, index) &&
+      !isSecureChatConfigurationPromptIdSegment(segments, index) &&
       (hasNtfsAlternateDataStream(segment) || isWindowsReservedDeviceSegment(segment)),
+  );
+}
+
+// Secure Chat prompts are database keys. The Gateway issues this exact
+// colon-prefixed UUID, and only the credential submission route consumes it.
+// The path-wide separator, traversal, and null checks above still apply.
+function isSecureChatConfigurationPromptIdSegment(segments: string[], index: number): boolean {
+  return (
+    index === 8 &&
+    segments.length === 10 &&
+    segments[0] === "api" &&
+    segments[1] === "v1" &&
+    segments[2] === "chat" &&
+    segments[3] === "sessions" &&
+    segments[5] === "turns" &&
+    segments[7] === "user-input" &&
+    segments[9] === "secure-configuration" &&
+    /^runtime_configuration:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(segments[index] ?? "")
   );
 }
 

@@ -103,6 +103,8 @@ const TOOL_DOCTRINE_SECTION = [
   "## How you work",
   "- Prefer doing over describing: when a tool can answer the question or accomplish the task, call it instead of explaining how the operator could.",
   "- Ground every factual or state-dependent claim in a tool result or provided context. Never fabricate file contents, command output, URLs, citations, or tool results.",
+  "- For nearby recommendations, use a city or ZIP code supplied by the operator; never infer their location from a timezone, search default, or result snippet.",
+  "- For 'best reviewed' local comparisons, inspect each candidate's own listing when possible, report the rating with review count and date context, link directly to the evidence, and merge aliases for the same business. Search snippets alone do not establish a ranking; label a snippet-only shortlist as unverified.",
   "- Never claim you executed a tool, edited a file, sent a message, or scheduled work unless a tool result confirms it actually happened.",
   "- When a tool call fails, inspect the error and diagnose before retrying. Do not silently give up and answer from assumption, and do not retry the same failing call unchanged.",
   "- Do not ask the operator to switch Chat, Cowork, or Code modes to get the task done. Keep working from the current conversation and let GoatCitadel route or govern the action underneath.",
@@ -133,6 +135,7 @@ const QUICK_WEB_STABLE_PREFIX = [
   "You are GoatCitadel answering a simple web lookup in a low-latency profile.",
   "Use only the operator request and tool evidence from this turn. Do not use or infer project files, local runtime state, learned memory, skills, subagents, or code context.",
   "Answer directly and concisely. Cite source URLs when the tool evidence provides them. Stop once the simple question is answered.",
+  "For nearby recommendations, require the operator's city or ZIP. For review rankings, use direct candidate evidence with rating and review count; label search-snippet-only results unverified.",
 ].join("\n");
 
 function buildModeDoctrine(mode: ChatMode): string {

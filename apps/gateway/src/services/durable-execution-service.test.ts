@@ -3644,6 +3644,93 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(persistChatStreamChunk).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves a location answer and supplies verified configuration as server context on resume", async () => {
+    vi.mocked(executePreparedAgentChatTurnBackground).mockResolvedValue(undefined as never);
+    const configurationResponse = {
+      promptId: "runtime_configuration:11111111-1111-4111-8111-111111111111",
+      kind: "text" as const,
+      question: "Connect Brave Search?",
+      answeredAt: "2026-10-01T00:00:00.000Z",
+      response: { kind: "text" as const, text: "Secure runtime configuration passed its live probe." },
+      runtimeConfigurationReceipt: {
+        targetId: "search.brave",
+        provider: "brave",
+        revision: "a".repeat(64),
+        scopeRef: "installation-1",
+      },
+    };
+    const run = buildRunWithPayload("chat.turn.execute", {
+      version: "chat.turn.execute.v1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      userMessageId: "user-1",
+      assistantMessageId: "assistant-1",
+      branchKind: "new",
+      threadEventType: "chat_thread_turn_appended",
+      request: { content: "91303" },
+      userInputResponses: [configurationResponse],
+    });
+    const prepareAgentChatTurn = vi.fn(async (_sessionId: string, request: Record<string, unknown>) => ({
+      turnId: "turn-1",
+      branchKind: "new",
+      content: request.content,
+      userMessage: { messageId: "user-1", content: request.content },
+      assistantMessage: { messageId: "assistant-1", content: "" },
+      history: [
+        { role: "system", content: "Existing runtime instructions." },
+        { role: "assistant", content: "What city or ZIP code should I use for nearby recommendations?" },
+        { role: "user", content: request.content },
+      ],
+    }));
+    const host = {
+      storage: {
+        durableRuns: { getRun: vi.fn(() => run) },
+        chatMessages: {
+          get: vi.fn(() => ({
+            messageId: "user-1",
+            sessionId: "session-1",
+            role: "user",
+            content: "91303",
+          })),
+        },
+        chatTurnTraces: {
+          get: vi.fn(() => ({
+            turnId: "turn-1",
+            sessionId: "session-1",
+            userMessageId: "user-1",
+            status: "running",
+            durable: { runId: run.runId, status: "running" },
+          })),
+        },
+        chatToolRuns: { listByTurn: vi.fn(() => []) },
+        chatStreamEvents: { listByTurn: vi.fn(() => []) },
+      },
+      prepareAgentChatTurn,
+      registerActiveChatTurnStream: vi.fn(() => ({ registrationId: "configuration-resume" })),
+    };
+
+    await executeDurableChatTurnRun(withTestDurableAdmissionOwner(host) as never, run);
+
+    expect(prepareAgentChatTurn).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({ content: "91303" }),
+      expect.objectContaining({ existingUserMessage: expect.objectContaining({ content: "91303" }) }),
+    );
+    const [, , request, prepared] = vi.mocked(executePreparedAgentChatTurnBackground).mock.calls[0]!;
+    expect(request.content).toBe("91303");
+    expect(prepared.content).toBe("91303");
+    expect(prepared.userMessage.content).toBe("91303");
+    expect(prepared.history.filter((message) => message.role === "system")).toEqual([
+      { role: "system", content: "Existing runtime instructions." },
+      {
+        role: "system",
+        content: expect.stringMatching(/Runtime configuration verification.*search\.brave/s),
+      },
+    ]);
+    expect(prepared.history.at(-1)).toEqual({ role: "user", content: "91303" });
+    expect(JSON.stringify(prepared.history)).not.toContain(configurationResponse.response.text);
+  });
+
   it("preserves completed chat output while correcting failed durable linkage", async () => {
     const run = buildRunWithPayload("chat.turn.execute", {
       version: "chat.turn.execute.v1",
@@ -4502,6 +4589,36 @@ describe("durable-execution-service orchestration workflow", () => {
     ]);
     expect(malformed).toContain("Invalid runtime repair evidence was excluded");
     expect(malformed).not.toContain("Injected provider error or secret");
+  });
+
+  it("keeps secure configuration receipts out of user content while retaining ordinary answers", () => {
+    const configurationResponse = {
+      promptId: "prompt-configuration",
+      kind: "text" as const,
+      question: "Connect Brave Search?",
+      answeredAt: "2026-10-01T00:00:00.000Z",
+      response: { kind: "text" as const, text: "Secure runtime configuration passed its live probe." },
+      runtimeConfigurationReceipt: {
+        targetId: "search.brave",
+        provider: "brave",
+        revision: "a".repeat(64),
+        scopeRef: "installation-1",
+      },
+    };
+    expect(buildDurableChatTurnResumeContent("91303", [configurationResponse])).toBe("91303");
+    const mixedContent = buildDurableChatTurnResumeContent("Find a store", [
+      configurationResponse,
+      {
+        promptId: "prompt-location",
+        kind: "text",
+        question: "Which ZIP code?",
+        answeredAt: "2026-10-01T00:00:01.000Z",
+        response: { kind: "text", text: "91303" },
+      },
+    ]);
+    expect(mixedContent).toContain("Answer: 91303");
+    expect(mixedContent).not.toContain("Connect Brave Search?");
+    expect(mixedContent).not.toContain(configurationResponse.response.text);
   });
 
   it("merges answered user-input prompts into resumed chat content", () => {

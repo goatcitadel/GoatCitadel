@@ -5026,6 +5026,245 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(result.assistantContent).toContain("threshold");
   });
 
+  it("asks for a local search location and resumes the original research after a city reply", async () => {
+    const request = "please do some research into clowns near me and the funniest best reviewed clowns";
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValue({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          finish_reason: "stop",
+          message: { role: "assistant", content: "Clown listing is the funniest and best reviewed in Los Angeles." },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-clown-search",
+      result: { results: [{ title: "Clown listing", url: "https://example.com/clown", snippet: "Local listing" }] },
+    });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+    const input = {
+      sessionId: "sess-local-clowns",
+      mode: "chat" as const,
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto" as const,
+      memoryMode: "off" as const,
+      thinkingLevel: "standard" as const,
+      toolAutonomy: "safe_auto" as const,
+    };
+
+    const clarification = await orchestrator.run({
+      ...input,
+      turnId: randomUUID(),
+      userMessageId: "msg-local-clowns-1",
+      content: request,
+      historyMessages: [{ role: "user", content: request }],
+    });
+    expect(clarification.assistantContent).toContain("What city or ZIP code");
+    expect(createChatCompletion).not.toHaveBeenCalled();
+    expect(invokeTool).not.toHaveBeenCalled();
+
+    const resumed = await orchestrator.run({
+      ...input,
+      turnId: randomUUID(),
+      userMessageId: "msg-local-clowns-2",
+      content: "Los Angeles, CA",
+      historyMessages: [
+        { role: "user", content: request },
+        { role: "assistant", content: clarification.assistantContent },
+        { role: "user", content: "Los Angeles, CA" },
+      ],
+    });
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(invokeTool.mock.calls[0]?.[0]).toMatchObject({
+      toolName: "browser.search",
+      args: { query: expect.stringContaining("Los Angeles") },
+    });
+    expect(resumed.turnTrace.routing.liveDataIntent).toBe(true);
+    expect(resumed.turnTrace.status).toBe("partial");
+    expect(resumed.assistantContent).toContain("could not verify enough individual review profiles");
+    expect(resumed.assistantContent).toContain("Unranked search leads");
+    expect(resumed.assistantContent).not.toContain("is the funniest and best reviewed");
+  });
+
+  it("opens a local review result but keeps the shortlist unranked until another profile is verified", async () => {
+    const request = "Find the best reviewed clowns near 91303";
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValue({
+      model: "glm-5",
+      choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "Clown A is the best." } }],
+    });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-review-search",
+        result: {
+          results: [
+            {
+              title: "Clown A parties near 91303",
+              url: "https://example.com/clown-a",
+              snippet: "Best reviewed clown in 91303",
+            },
+            {
+              title: "Clown B parties near 91303",
+              url: "https://example.com/clown-b",
+              snippet: "Local clown reviews",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-review-open",
+        result: {
+          url: "https://example.com/clown-a",
+          finalUrl: "https://example.com/clown-a",
+          title: "Clown A",
+          contentText: "Clown A performs party shows near 91303. Rated 5.0 (12 reviews).",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-review-open-unverified",
+        result: {
+          url: "https://example.com/clown-b",
+          finalUrl: "https://example.com/clown-b",
+          title: "Clown B",
+          contentText: "Clown B performs party shows near 91303. No review count is shown here.",
+        },
+      });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-local-review-open",
+      turnId: randomUUID(),
+      userMessageId: "msg-local-review-open",
+      content: request,
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: request }],
+    });
+
+    expect(invokeTool.mock.calls.map((call) => call[0].toolName)).toEqual([
+      "browser.search",
+      "browser.navigate",
+      "browser.navigate",
+    ]);
+    expect(result.turnTrace.status).toBe("partial");
+    expect(result.assistantContent).toContain("5/5 from 12 reviews");
+    expect(result.assistantContent).toContain("Unranked search leads");
+    expect(result.assistantContent).not.toContain("Clown A is the best");
+    const completionCall = createChatCompletion.mock.calls[0]?.[0] as ChatCompletionRequest | undefined;
+    expect(
+      completionCall?.messages.some(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.includes("open at least two distinct candidate listing pages"),
+      ),
+    ).toBe(true);
+  });
+
+  it("uses opened review profiles for a local comparison instead of an unsupported model ranking", async () => {
+    const request = "Find the best reviewed clowns near 91303";
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("browser.navigate", { url: "https://example.com/clown-b" }))
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            finish_reason: "stop",
+            message: { role: "assistant", content: "Imaginary Clown is #1 with 500 reviews." },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockImplementation(async (request) => {
+        if (request.toolName === "browser.search") {
+          return {
+            outcome: "executed",
+            policyReason: "allowed",
+            auditEventId: "audit-two-profile-search",
+            result: {
+              results: [
+                { title: "Clown A 91303", url: "https://example.com/clown-a", snippet: "best reviewed clown 91303" },
+                { title: "Clown B", url: "https://example.com/clown-b", snippet: "clown reviews" },
+                { title: "Clown C", url: "https://example.com/clown-c", snippet: "another search lead" },
+              ],
+            },
+          };
+        }
+        const url = String(request.args?.url ?? "");
+        return {
+          outcome: "executed",
+          policyReason: "allowed",
+          auditEventId: `audit-open-${url}`,
+          result: {
+            url,
+            finalUrl: url,
+            title: url.endsWith("clown-a") ? "Clown A" : "Clown B",
+            contentText: url.endsWith("clown-a")
+              ? "Clown A performs parties. 5.0 (4 reviews)"
+              : "Clown B performs parties. 4.8 stars 41 reviews",
+          },
+        };
+      });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-local-review-two-profiles",
+      turnId: randomUUID(),
+      userMessageId: "msg-local-review-two-profiles",
+      content: request,
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: request }],
+    });
+
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.assistantContent).toContain("5/5 from 4 reviews");
+    expect(result.assistantContent).toContain("4.8/5 from 41 reviews");
+    expect(result.assistantContent).not.toContain("Imaginary Clown");
+    expect(createChatCompletion).not.toHaveBeenCalled();
+    expect((result.turnTrace.citations ?? []).map((citation) => citation.url)).not.toContain(
+      "https://example.com/clown-c",
+    );
+  });
+
   it("still asks about subjective qualifier when geography is named but definition is ambiguous", async () => {
     const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>();
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
@@ -7964,6 +8203,47 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(result.assistantContent).not.toContain("during parallel run;");
     expect(result.turnTrace.status).toBe("completed");
     expect(createChatCompletion).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts a complete structured answer that ends with an emoji", async () => {
+    const answer = [
+      "# Choosing a performer",
+      "",
+      "## What to compare",
+      "- Read the candidate's own reviews and compare both the rating and the number of reviews.",
+      "- Check recent feedback for comments about humor, punctuality, and age appropriateness.",
+      "",
+      "## Before booking",
+      "Ask each performer about availability, travel fees, and the format of the show before you decide. Just say the word. 🤡",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValue({
+      model: "glm-5",
+      choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: answer } }],
+    });
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+    const result = await orchestrator.run({
+      sessionId: "sess-complete-emoji",
+      turnId: randomUUID(),
+      userMessageId: "msg-complete-emoji",
+      content: "Explain how to compare performers before booking.",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "manual",
+      historyMessages: [{ role: "user", content: "Explain how to compare performers before booking." }],
+    });
+    expect(result.assistantContent).toBe(answer);
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.turnTrace.completion?.status).toBe("complete");
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
   });
 
   it("repairs structured answers that end on a hanging markdown bullet", async () => {

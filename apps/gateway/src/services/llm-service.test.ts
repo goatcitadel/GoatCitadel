@@ -107,6 +107,31 @@ describe("LlmService", () => {
     });
   });
 
+  it("preserves the default thinking level when replacing runtime config", () => {
+    const service = new LlmService(
+      {
+        activeProviderId: "llamacpp",
+        activeModel: "local-model",
+        defaultThinkingLevel: "standard",
+        providers: [
+          {
+            providerId: "llamacpp",
+            label: "llama.cpp",
+            baseUrl: "http://127.0.0.1:8080/v1",
+            apiStyle: "openai-chat-completions",
+            defaultModel: "local-model",
+          },
+        ],
+      },
+      process.env,
+      { secretStore: createNoopSecretStore() },
+    );
+
+    const next = { ...service.exportConfigFile(), defaultThinkingLevel: "off" as const };
+    expect(service.replaceRuntimeConfig(next).defaultThinkingLevel).toBe("off");
+    expect(service.exportConfigFile().defaultThinkingLevel).toBe("off");
+  });
+
   it("blocks private metadata endpoints as provider baseUrl", () => {
     const config: LlmConfigFile = {
       activeProviderId: "bad",
@@ -585,6 +610,78 @@ describe("LlmService", () => {
 
     expect(payloadBody?.max_completion_tokens).toBe(384);
     expect(payloadBody?.max_tokens).toBeUndefined();
+  });
+
+  it("forwards Off effort to llama.cpp for JSON and streamed completions", async () => {
+    const service = new LlmService(
+      {
+        activeProviderId: "llamacpp",
+        activeModel: "local-model",
+        providers: [
+          {
+            providerId: "llamacpp",
+            label: "llama.cpp",
+            baseUrl: "http://127.0.0.1:8080/v1",
+            apiStyle: "openai-chat-completions",
+            defaultModel: "local-model",
+            capabilities: { reasoning: false },
+          },
+        ],
+      },
+      process.env,
+      { secretStore: createNoopSecretStore() },
+    );
+    const originalFetch = globalThis.fetch;
+    const payloads: Record<string, unknown>[] = [];
+    globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      payloads.push(payload);
+      if (payload.stream) {
+        return new Response(
+          'data: {"id":"local_chunk","choices":[{"index":0,"delta":{"content":"LLAMA_OK"}}]}\n\ndata: {"id":"local_chunk","choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}\n\ndata: [DONE]\n\n',
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          id: "local_completion",
+          choices: [{ index: 0, message: { role: "assistant", content: "LLAMA_OK" } }],
+          usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const completion = await service.chatCompletions({
+        providerId: "llamacpp",
+        model: "local-model",
+        messages: [{ role: "user", content: "hello" }],
+        reasoning: { effort: "none" },
+        max_tokens: 64,
+      });
+      expect(completion.choices?.[0]?.message?.content).toBe("LLAMA_OK");
+      expect(completion.usage?.total_tokens).toBe(3);
+
+      const chunks: Record<string, unknown>[] = [];
+      for await (const chunk of service.chatCompletionsStream({
+        providerId: "llamacpp",
+        model: "local-model",
+        messages: [{ role: "user", content: "hello" }],
+        reasoning: { effort: "none" },
+        max_tokens: 64,
+      })) {
+        chunks.push(chunk);
+      }
+      expect(chunks.some((chunk) => JSON.stringify(chunk).includes("LLAMA_OK"))).toBe(true);
+      expect(chunks.some((chunk) => JSON.stringify(chunk).includes("total_tokens"))).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads.map((payload) => payload.reasoning_effort)).toEqual(["none", "none"]);
+    expect(payloads.map((payload) => payload.max_tokens)).toEqual([64, 64]);
   });
 
   it("preserves developer messages and forwards OpenAI GPT controls", async () => {

@@ -20,6 +20,7 @@ import {
   type ChatMessageRouteRuntimeHost,
 } from "./chat-message-route-runtime.js";
 import type { ChatTurnSessionState } from "./chat-turn-prep-service.js";
+import { RuntimeConfigurationService } from "./runtime-configuration-service.js";
 import {
   computeEffectiveChatTurnRequestMaterialSha256,
   computeFrozenChatTurnAdmissionMaterialSha256,
@@ -587,7 +588,26 @@ describe("chat-message-route-runtime", () => {
     expect(JSON.stringify(runtime.publishRealtime.mock.calls)).not.toContain("Continue with the safe path");
   });
 
-  it("configures through the Gateway boundary and persists only a non-secret continuation", async () => {
+  it("projects the real configuration result into an exact non-secret durable receipt", async () => {
+    const secrets = new Map<string, string>();
+    const probe = vi.fn(async () => ({ ok: true }));
+    const configuration = new RuntimeConfigurationService({
+      secretStore: {
+        isAvailable: () => true,
+        isWriteCustodySafe: () => true,
+        getSecret: (account) => secrets.get(account),
+        setSecret: (account, value) => {
+          secrets.set(account, value);
+        },
+        deleteSecret: (account) => {
+          secrets.delete(account);
+        },
+      },
+      networkAllowlist: ["api.search.brave.com"],
+      installationScopeId: "test-installation-01",
+      env: {},
+      probe,
+    });
     const runtime = createRuntime({
       trace: createTrace({
         status: "waiting_for_user_input",
@@ -616,13 +636,20 @@ describe("chat-message-route-runtime", () => {
       }),
       durableRun: createDurableRun("run-secure", "waiting"),
     });
+    vi.mocked(runtime.configureRuntimeTarget!).mockImplementation((input) => configuration.configureAndValidate(input));
+    vi.mocked(runtime.finalizeRuntimeConfiguration!).mockImplementation((requestId) =>
+      configuration.finalizeConfiguration(requestId),
+    );
+    vi.mocked(runtime.rollbackRuntimeConfiguration!).mockImplementation((requestId) =>
+      configuration.rollbackConfiguration(requestId),
+    );
 
-    await expect(
-      answerChatUserInputPrompt(runtime, "sess-1", "turn-1", "prompt-secure", {
-        kind: "secure_configuration",
-        secret: "raw-brave-secret",
-      }),
-    ).resolves.toMatchObject({ resumed: true, resumedRunId: "run-secure" });
+    const result = await answerChatUserInputPrompt(runtime, "sess-1", "turn-1", "prompt-secure", {
+      kind: "secure_configuration",
+      secret: "raw-brave-secret",
+    });
+    expect(result).toMatchObject({ resumed: true, resumedRunId: "run-secure" });
+    expect(probe).toHaveBeenCalledWith("brave", "raw-brave-secret", ["api.search.brave.com"]);
 
     expect(runtime.configureRuntimeTarget).toHaveBeenCalledWith({
       targetId: "search.brave",
@@ -658,20 +685,21 @@ describe("chat-message-route-runtime", () => {
       kind: "text",
       text: expect.stringContaining("excluded from Chat context"),
     });
-    expect(admissionRequest).toMatchObject({
-      expectedWaitingRunVersion: 4,
-      runtimeConfigurationReceipt: {
-        targetId: "search.brave",
-        provider: "brave",
-        revision: "runtime-revision-1",
-        scopeRef: "test-installation-01",
-      },
+    expect(admissionRequest?.expectedWaitingRunVersion).toBe(4);
+    expect(admissionRequest?.runtimeConfigurationReceipt).toEqual({
+      targetId: "search.brave",
+      provider: "brave",
+      revision: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      scopeRef: "test-installation-01",
     });
+    expect(result.runtimeConfigurationReceipt).toEqual(admissionRequest?.runtimeConfigurationReceipt);
     expect(JSON.stringify(admissionRequest)).not.toContain("raw-brave-secret");
     expect(JSON.stringify(runtime.recordDevDiagnostic.mock.calls)).not.toContain("raw-brave-secret");
     expect(JSON.stringify(runtime.publishRealtime.mock.calls)).not.toContain("raw-brave-secret");
     expect(runtime.finalizeRuntimeConfiguration).toHaveBeenCalledWith("prompt-secure");
     expect(runtime.rollbackRuntimeConfiguration).not.toHaveBeenCalled();
+    expect(runtime.durableRunService.requestRunProcessing).toHaveBeenCalledWith("run-secure");
+    expect(await configuration.resolveOfficialSearchCredential("brave")).toBe("raw-brave-secret");
   });
 
   it("rolls back an applied secure configuration when durable prompt settlement fails", async () => {

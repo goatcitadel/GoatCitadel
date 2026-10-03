@@ -14,14 +14,19 @@ const PRICE_LOOKUP_REGEX =
 const LOCAL_RESEARCH_LOCATION_REGEX =
   /\b(?:near\s+me|nearby|within\s+\d+(?:\.\d+)?\s*(?:mi|mile|miles|km|kilometers?)|around\s+(?:zip\s+)?\d{5}(?:-\d{4})?|(?:zip|postal)\s+code\s+\d{5}(?:-\d{4})?|\b\d{5}(?:-\d{4})?\b)\b/i;
 
+const LOCAL_RESEARCH_NAMED_LOCATION_REGEX =
+  /\b(?:in|around|near)\s+[A-Z][\p{L}.'-]*(?:\s+[A-Z][\p{L}.'-]*){0,3}(?:,\s*[A-Z]{2})?\b/u;
+
 const LOCAL_RESEARCH_ENTITY_REGEX =
-  /\b(?:stores?|shops?|retailers?|restaurants?|cafes?|coffee\s+shops?|bars?|venues?|locations?|business(?:es)?|clinics?|offices?|dealers?|tabletop|board\s*games?|game\s+stores?)\b/i;
+  /\b(?:stores?|shops?|retailers?|restaurants?|cafes?|coffee\s+shops?|bars?|venues?|locations?|business(?:es)?|clinics?|offices?|dealers?|tabletop|board\s*games?|game\s+stores?|clowns?|entertainers?|performers?)\b/i;
 
 const LOCAL_RESEARCH_DETAIL_REGEX =
   /\b(?:addresses?|hours?|open\s+hours?|email(?:\s+addresses?)?|phone(?:\s+numbers?)?|websites?|official\s+sites?|contact(?:\s+info(?:rmation)?)?)\b/i;
 
 const LOCAL_RESEARCH_LIST_REGEX =
   /\b(?:find|list|directory|put\s+(?:a\s+)?list\s+together|near|nearby|within|around|closest|local)\b/i;
+
+const LOCAL_RESEARCH_REVIEW_REGEX = /\b(?:best|top|highest|most)\s+(?:reviewed|rated)|\b(?:reviews?|ratings?)\b/i;
 
 // Temporal phrases like "this week" only indicate live-data intent when
 // paired with event/schedule context — "events this weekend" should match,
@@ -77,11 +82,17 @@ export function hasResearchListIntent(objective: string): boolean {
   if (!normalized) {
     return false;
   }
-  const hasLocation = LOCAL_RESEARCH_LOCATION_REGEX.test(normalized);
   const hasEntity = LOCAL_RESEARCH_ENTITY_REGEX.test(normalized);
   const hasDetailFields = LOCAL_RESEARCH_DETAIL_REGEX.test(normalized);
   const hasListShape = LOCAL_RESEARCH_LIST_REGEX.test(normalized);
-  return hasLocation && hasEntity && (hasDetailFields || hasListShape);
+  const hasReviewComparison = LOCAL_RESEARCH_REVIEW_REGEX.test(normalized);
+  const hasLocation =
+    LOCAL_RESEARCH_LOCATION_REGEX.test(normalized) ||
+    (hasEntity && hasReviewComparison && LOCAL_RESEARCH_NAMED_LOCATION_REGEX.test(normalized));
+  return (
+    hasLocation &&
+    ((hasEntity && (hasDetailFields || hasListShape || hasReviewComparison)) || (hasReviewComparison && hasListShape))
+  );
 }
 
 export function extractExternalResearchSubject(objective: string): string | undefined {

@@ -3415,8 +3415,11 @@ export function matchesAppliedProviderTransport(
   actual: LlmProviderRequestConfig | undefined,
   requested: LlmProviderRequestConfig,
 ): boolean {
-  return canonicalJsonString(actual ?? null) === canonicalJsonString(
-    normalizeProviderRequestConfig(mergeProviderRequestConfig(actual, requested), undefined) ?? null,
+  return (
+    canonicalJsonString(actual ?? null) ===
+    canonicalJsonString(
+      normalizeProviderRequestConfig(mergeProviderRequestConfig(actual, requested), undefined) ?? null,
+    )
   );
 }
 
@@ -6356,6 +6359,12 @@ function applyProviderSpecificChatOptions(input: {
   request: ChatCompletionRequest;
 }): void {
   const providerId = input.providerId.trim().toLowerCase();
+  if (providerId === "llamacpp") {
+    if (input.request.reasoning?.effort === "none") {
+      input.payload.reasoning_effort = "none";
+    }
+    return;
+  }
   if (providerId !== "openai" && providerId !== "vertex" && providerId !== "fireworks") {
     return;
   }

@@ -337,7 +337,7 @@ export async function answerChatUserInputPrompt(
         });
       }
       try {
-        runtimeConfigurationReceipt = await runtime.configureRuntimeTarget({
+        const configurationResult = await runtime.configureRuntimeTarget({
           targetId: secureConfiguration.targetId,
           secret: response.secret,
           requestId: promptId,
@@ -358,6 +358,14 @@ export async function answerChatUserInputPrompt(
             : {}),
           ...(secureConfiguration.approvedAction ? { approvedAction: secureConfiguration.approvedAction } : {}),
         });
+        // The configuration owner returns readiness metadata alongside these
+        // fields. Storage seals an exact receipt, so project it explicitly.
+        runtimeConfigurationReceipt = {
+          targetId: configurationResult.targetId,
+          provider: configurationResult.provider,
+          revision: configurationResult.revision,
+          scopeRef: configurationResult.scopeRef,
+        };
       } catch (error) {
         if (isSafeToReleaseSecureReservation(secureReservation, error)) {
           await releaseSecureConfigurationReservation(

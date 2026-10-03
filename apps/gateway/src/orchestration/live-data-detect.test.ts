@@ -54,6 +54,17 @@ describe("live data detection", () => {
     expect(hasLiveDataKeywords(request)).toBe(true);
   });
 
+  it("treats reviewed nearby performers and services as live research", () => {
+    const request = "please do some research into clowns near me and the funniest best reviewed clowns";
+    expect(hasResearchListIntent(request)).toBe(true);
+    expect(hasLiveDataIntent(request)).toBe(true);
+    expect(hasResearchListIntent("Find the best reviewed plumbers near me.")).toBe(true);
+    expect(hasResearchListIntent("Best reviewed clowns in Los Angeles, CA")).toBe(true);
+    expect(hasResearchListIntent("Best reviewed clowns near San Francisco")).toBe(true);
+    expect(hasResearchListIntent("Best reviewed practices in React")).toBe(false);
+    expect(hasResearchListIntent("Explain how review ratings work.")).toBe(false);
+  });
+
   it("detects delegated Cowork prompts from parent and current-step objectives", () => {
     expect(
       hasLiveDataIntent(

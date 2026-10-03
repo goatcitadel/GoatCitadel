@@ -1,6 +1,6 @@
 # Codex follow-up improvements
 
-Scope: the five recommendations authorized in this chat, delivered sequentially. The missing W0–W6 specification and optional Codex adapter are not part of this plan. Upstream patterns were reviewed at Codex `09bced5ad95069494aa5a2da49c77a50a317a9b1`.
+Scope: SF1–SF5 are the five implementation recommendations authorized in this chat, delivered sequentially. SF6 is the planned Chat display follow-up requested from the side conversation on 2026-10-02; its implementation and evidence are not included in the completed results below. The missing W0–W6 specification and optional Codex adapter are not part of this plan. Upstream runtime patterns were reviewed at Codex `09bced5ad95069494aa5a2da49c77a50a317a9b1`.
 
 ## Delivery and acceptance
 
@@ -9,6 +9,7 @@ Scope: the five recommendations authorized in this chat, delivered sequentially.
 3. **SF3 — Async clarification.** Reuse Gateway-owned pending-input, durable execution, and Chat projections. Optional questions allow independent work to continue; required input and approvals retain blocking semantics. Prove reply binding, restart behavior, cancellation, and continued enforcement. Run targeted Gateway/shared UI tests, durable recovery, and browser proof where practical.
 4. **SF4 — Context visibility.** Extend existing budget accounting with a read-only model-visible estimate. Preserve unknown limits and distinguish estimates from reported usage. Do not add unconditional full-prompt serialization to the hot path. Prove scope, bounded output, provider uncertainty, and accounting against current context.
 5. **SF5 — Original user authority.** Strengthen existing context/provenance composition and regression coverage so summaries and copied child context cannot become original user authorization. Preserve existing canonical grants, approvals, secure setup receipts, and frozen routed context. Run targeted composition/delegation/compaction tests and relevant truth lanes.
+6. **SF6 — Chat display follow-up, planned.** After completing the current continuation and validation, use the [slice-by-slice display plan](2026-10-02-codex-chat-display-layer-followup.md). Reuse existing renderer, preview, transcript, activity, and reconciliation owners. Deliver a pinned crosswalk/baseline, semantic block and table-tail correctness, retained completed-block rendering, stable compact activity/disclosure, and combined lifecycle/viewport proof (SD0–SD4). Existing stable/tail rendering and expandable tool details are already present; record their evidence and implement only justified gaps. No SF6 implementation or validation is claimed yet.
 
 ## Constraints
 

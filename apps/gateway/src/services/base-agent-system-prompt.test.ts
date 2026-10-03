@@ -82,6 +82,14 @@ describe("buildBaseAgentSystemPrompt", () => {
     expect(prompt.stablePrefix).toContain("Do not tell the operator to paste/apply work in Code Mode");
   });
 
+  it("requires grounded location and candidate-level evidence for local rankings", () => {
+    const prompt = buildBaseAgentSystemPrompt(input({ mode: "chat" as ChatMode }));
+    expect(prompt.stablePrefix).toContain("use a city or ZIP code supplied by the operator");
+    expect(prompt.stablePrefix).toContain("Search snippets alone do not establish a ranking");
+    const quickWeb = buildBaseAgentSystemPrompt(input({ mode: "chat" as ChatMode, normalizationProfile: "quick_web" }));
+    expect(quickWeb.stablePrefix).toContain("label search-snippet-only results unverified");
+  });
+
   it("puts runtime grounding (date/tz/model/provider/channel/mode/cwd/project) in the volatile tail", () => {
     const prompt = buildBaseAgentSystemPrompt(
       input({

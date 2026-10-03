@@ -722,11 +722,37 @@ export function buildDurableChatTurnResumeContent(
   responses?: DurableChatTurnUserInputResumeRecord[],
 ): string {
   const normalizedBase = baseContent.trim();
-  if (!responses || responses.length === 0) {
+  // Secure setup is a server outcome, not part of the operator's answer.
+  // Appending its receipt here breaks short clarification answers such as ZIPs.
+  const operatorResponses = responses?.filter((response) => response.runtimeConfigurationReceipt === undefined);
+  if (!operatorResponses || operatorResponses.length === 0) {
     return normalizedBase;
   }
-  const entries = responses.map((response, index) => formatDurableChatTurnResumeEntry(response, index + 1));
+  const entries = operatorResponses.map((response, index) => formatDurableChatTurnResumeEntry(response, index + 1));
   return `${normalizedBase}\n\nResume context from answered blocking prompts:\n${entries.join("\n\n")}`;
+}
+
+function injectDurableChatRuntimeConfigurationContext(
+  prepared: PreparedAgentChatTurn,
+  responses?: DurableChatTurnUserInputResumeRecord[],
+): void {
+  const receipts = responses?.flatMap((response) =>
+    response.runtimeConfigurationReceipt ? [response.runtimeConfigurationReceipt] : [],
+  );
+  if (!receipts?.length) {
+    return;
+  }
+  const insertionIndex = prepared.history.findIndex((message) => message.role !== "system");
+  prepared.history.splice(insertionIndex < 0 ? prepared.history.length : insertionIndex, 0, {
+    role: "system",
+    content: [
+      "Runtime configuration verification (server-recorded).",
+      "The Gateway completed secure setup and live verification for these targets before resuming this turn:",
+      ...receipts.map((receipt) => `${receipt.targetId} (${receipt.provider})`),
+      "Credentials remain in the OS keychain. Continue the original user request with available tools.",
+      "Existing tool policy and approval requirements still apply.",
+    ].join("\n"),
+  });
 }
 
 export function parseApprovalWaitWorkflowPayload(run: DurableRunRecord): ApprovalWaitWorkflowPayload | undefined {
@@ -2040,6 +2066,7 @@ export async function executeDurableChatTurnRun(
   if (remoteContext) {
     injectDurableChatWorkerContext(prepared, remoteContext, run, payload.request.content, resumedContent);
   }
+  injectDurableChatRuntimeConfigurationContext(prepared, payload.userInputResponses);
   // Preserve the historical backfill path for runs that already have a stored
   // profile. New profile-free runs do not enter this branch.
   if (prepared.capabilityProfile && !existingCapabilityProfile && !payload.capabilityProfileId) {

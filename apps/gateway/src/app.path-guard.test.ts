@@ -18,6 +18,27 @@ describe("gateway encoded-path guard", () => {
     expect(isSuspiciousEncodedPath("/api/v1/other/delegation-child%3Astep-1/control")).toBe(true);
   });
 
+  it("accepts the issued secure Chat prompt ID only on its credential submission route", () => {
+    const promptId = "runtime_configuration:123e4567-e89b-42d3-a456-426614174000";
+    const base = "/api/v1/chat/sessions/sess-1/turns/turn-2/user-input";
+    for (const id of [promptId, encodeURIComponent(promptId)]) {
+      expect(isSuspiciousEncodedPath(`${base}/${id}/secure-configuration`)).toBe(false);
+      expect(isSuspiciousEncodedPath(`${base}/${id}/secure-configuration?view=chat`)).toBe(false);
+      expect(isSuspiciousEncodedPath(`${base}/${id}/respond`)).toBe(true);
+      expect(isSuspiciousEncodedPath(`/api/v1/files/${id}`)).toBe(true);
+    }
+    for (const id of [
+      "runtime_configuration:file.txt::$DATA",
+      "runtime_configuration:CON",
+      "other:123e4567-e89b-42d3-a456-426614174000",
+      `${promptId}%2Fescape`,
+      `${promptId}%5Cescape`,
+      `${promptId}%00`,
+    ]) {
+      expect(isSuspiciousEncodedPath(`${base}/${id}/secure-configuration`)).toBe(true);
+    }
+  });
+
   it("allows native durable run keys only in owned database route parameters", () => {
     for (const id of ["autonomous-delivery:run_cron_chat_123", "autonomous-delivery%3Arun_cron_chat_123"]) {
       for (const suffix of [
