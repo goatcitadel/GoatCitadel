@@ -1,3 +1,4 @@
+import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
 /* eslint-disable max-lines -- Public-entry helpers stay co-located so chat-turn intake, validation, and persistence remain auditable in one module. */
 /**
  * Chat turn public-entry helpers.
@@ -620,7 +621,8 @@ function captureStreamTerminalStatus(
 ): ChatTurnTraceRecord["status"] | undefined {
   if (chunk.type === "trace_update") return chunk.trace.status;
   if (chunk.type === "approval_required") return "waiting_for_approval";
-  if (chunk.type === "user_input_required") return "waiting_for_user_input";
+  if (chunk.type === "user_input_required" && !isBackgroundChatUserInputPrompt(chunk.prompt))
+    return "waiting_for_user_input";
   if (chunk.type === "error") return "failed";
   return current;
 }

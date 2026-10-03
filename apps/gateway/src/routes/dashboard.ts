@@ -300,6 +300,7 @@ export const updateSettingsSchema = z.object({
       chatTurnInterruptionRecoveryV1Disabled: z.boolean().optional(),
       chatThinkingStreamV1Enabled: z.boolean().optional(),
       chatContextBudgetVisibilityV1Enabled: z.boolean().optional(),
+      chatAsyncClarificationV1Enabled: z.boolean().optional(),
       unifiedComposerPaletteV1Enabled: z.boolean().optional(),
       attachedContextToolsV1Enabled: z.boolean().optional(),
       chatSessionStatusV1Enabled: z.boolean().optional(),

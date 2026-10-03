@@ -312,6 +312,8 @@ function isChatTurnRepairRecord(value: unknown): value is ChatTurnRepairRecord {
 function isChatUserInputPromptRecord(value: unknown): value is ChatUserInputPromptRecord {
   return (
     isRecord(value) &&
+    (value.delivery === undefined ||
+      (value.delivery === "background" && value.required === false && value.secureConfiguration === undefined)) &&
     typeof value.promptId === "string" &&
     typeof value.turnId === "string" &&
     (value.kind === "single_select" || value.kind === "text") &&

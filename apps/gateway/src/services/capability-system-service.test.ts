@@ -55,6 +55,22 @@ afterEach(async () => {
 });
 
 describe("CapabilitySystemService", () => {
+  it("keeps experimental optional input inspectable and noncallable until explicit enablement", async () => {
+    const harness = await createHarness({ toolCatalog: [createTool("user_input.request")] });
+    const inspectable = await harness.service.listCatalog("inspectable");
+    expect(inspectable.find((entry) => entry.toolName === "user_input.request")).toMatchObject({
+      callable: false,
+      reviewWarning: expect.stringContaining("disabled"),
+    });
+    expect(await harness.service.listCatalog("callable")).toEqual([]);
+    const enabled = await createHarness({
+      toolCatalog: [createTool("user_input.request")],
+      chatAsyncClarificationV1Enabled: true,
+    });
+    expect(await enabled.service.listCatalog("callable")).toEqual([
+      expect.objectContaining({ toolName: "user_input.request", callable: true }),
+    ]);
+  });
   it("projects only a bounded hexadecimal commitSha from an imported skill source manifest", async () => {
     const validDir = await fs.mkdtemp(path.join(os.tmpdir(), "goat-skill-provenance-valid-"));
     const invalidDir = await fs.mkdtemp(path.join(os.tmpdir(), "goat-skill-provenance-invalid-"));
@@ -5568,6 +5584,7 @@ describe("CapabilitySystemService governed lifecycle (HX-402 P2)", () => {
 
 async function createHarness(input?: {
   toolCatalog?: ToolCatalogEntry[];
+  chatAsyncClarificationV1Enabled?: boolean;
   sandboxConfig?: {
     required?: boolean;
     bestEffortHostEnabled?: boolean;
@@ -5669,6 +5686,7 @@ async function createHarness(input?: {
     storage: storage as never,
     readFeatureFlags: async () => ({
       codeModeV1Enabled: true,
+      chatAsyncClarificationV1Enabled: input?.chatAsyncClarificationV1Enabled,
     }),
     listToolCatalog: () => input?.toolCatalog ?? [createTool("tool.safe_read")],
     ...(input?.meshCatalogEntries === undefined

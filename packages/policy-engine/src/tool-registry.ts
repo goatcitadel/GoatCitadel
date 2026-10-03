@@ -458,6 +458,28 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "core",
   },
   {
+    name: "user_input.request",
+    category: "session",
+    riskLevel: "safe",
+    requiresApproval: false,
+    description:
+      "Ask an optional clarification while independent work continues. Use required-input flows for blockers; never request secrets or approval through this tool.",
+    argSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", minLength: 1, maxLength: 100 },
+        question: { type: "string", minLength: 1, maxLength: 1000 },
+      },
+      required: ["title", "question"],
+      additionalProperties: false,
+    },
+    pack: "core",
+    recommendedContexts: ["chat"],
+    usageHints: [
+      "Only ask when you can continue useful independent work. Replies arrive at a subsequent model boundary while this turn is active; do not assume a reply or treat one as approval.",
+    ],
+  },
+  {
     name: RUNTIME_CONFIGURE_TOOL_NAME,
     category: "ops",
     riskLevel: "caution",

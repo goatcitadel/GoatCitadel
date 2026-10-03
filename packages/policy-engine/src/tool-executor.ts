@@ -164,6 +164,7 @@ export interface ToolExecutorRuntimeHooks {
   subagentFanout?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
   /** Gateway-owned canonical status projection used by the model-safe `session.status` tool. */
   getChatSessionStatus?: (sessionId: string) => Promise<ChatSessionStatusModelProjection>;
+  assertOptionalUserInputAvailable?: () => Promise<void>;
   /** Gateway-owned governed attention request; operator-authored rules select external targets. */
   requestNotification?: (request: ToolInvokeRequest, input: NotifyRequest) => Promise<Record<string, unknown>>;
   /** Gateway-bound assistant proposal. The model cannot supply runtime identity or apply the document mutation. */
@@ -340,6 +341,23 @@ export async function executeTool(
         configurationRequired: true,
         targetId,
       });
+    }
+    case "user_input.request": {
+      if (!runtimeHooks.assertOptionalUserInputAvailable) throw new Error("Optional user input is unavailable.");
+      await runtimeHooks.assertOptionalUserInputAvailable();
+      const { title, question } = request.args;
+      if (
+        Object.keys(request.args).sort().join(",") !== "question,title" ||
+        typeof title !== "string" ||
+        !title.trim() ||
+        title.length > 100 ||
+        typeof question !== "string" ||
+        !question.trim() ||
+        question.length > 1000
+      ) {
+        throw new Error("Optional input requires only a bounded title and question.");
+      }
+      return finalizeToolResult({ status: "optional_input_requested", title: title.trim(), question: question.trim() });
     }
     case "session.status":
       return finalizeToolResult(

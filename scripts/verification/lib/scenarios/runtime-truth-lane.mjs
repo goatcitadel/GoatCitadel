@@ -63,6 +63,9 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
       includeUi: false,
       runtimeRoot,
       gatewayEnv: {
+        GOATCITADEL_AUTH_MODE: "token",
+        GOATCITADEL_AUTH_TOKEN: "verification-runtime-truth-operator-token",
+        GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
         GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
         GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
         GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",
@@ -163,6 +166,9 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
         const gatewayBeforeRestart = ownedGatewayProcessIdentity(stack);
 
         stack.gateway = await restartGatewayProcess(context, stack, {
+          GOATCITADEL_AUTH_MODE: "token",
+          GOATCITADEL_AUTH_TOKEN: "verification-runtime-truth-operator-token",
+          GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
           GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
           GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
           GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",
@@ -418,17 +424,28 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
           const browserLog = attachBrowserLogging(page);
           const browserLogCursor = browserLog.mark();
 
-          // Bring the shell up at the target route. A dev server can answer at
-          // its root (so the HTTP probe above passed) yet never hydrate the Next
-          // shell for the route in this environment — the documented
-          // UI-served-env gate. Treat a shell that never becomes ready as a SKIP,
-          // not a failure; only once it IS ready are the cross-check assertions
-          // below real pass/fail.
+          // Verify the default Cockpit against the exact recovered Chat run,
+          // then inspect the explicit Classic approval owner. Once the browser
+          // and server are available, readiness and identity failures are failures.
           try {
+            const threadResponse = page.waitForResponse(response =>
+              new URL(response.url()).pathname === `/api/v1/chat/sessions/${encodeURIComponent(durableTruth.sessionId)}/thread` && response.status() === 200,
+            ).catch(() => null);
+            await page.goto(buildVerificationUiUrl(ui.uiUrl, `/chat?sessionId=${encodeURIComponent(durableTruth.sessionId)}`), { waitUntil: "domcontentloaded" });
+            await waitForVerificationRouteReady(page, {
+              href: "/chat", readySelector: 'section[aria-label="Chat"] [aria-label="Messages"]',
+            }, NEXT_UI_PACKAGE);
+            const response = await threadResponse;
+            if (!response) throw new Error("Cockpit did not read the recovered session thread.");
+            const thread = await response.json();
+            if (!thread.turns?.some(turn => turn.trace?.durable?.runId === durableTruth.durableRunId && turn.trace.status === "completed")) {
+              throw new Error("Default Cockpit did not load the exact recovered completed Chat run.");
+            }
+            await page.getByText("Verification restart reply.", { exact: false }).first().waitFor({ timeout: 15000 });
             await page.goto(
               buildVerificationUiUrl(
                 ui.uiUrl,
-                `/ops/approvals?approvalId=${encodeURIComponent(durableTruth.approvalId)}`,
+                `/ops/approvals?approvalId=${encodeURIComponent(durableTruth.approvalId)}&shell=classic`,
               ),
               { waitUntil: "domcontentloaded" },
             );
@@ -437,17 +454,13 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
               {
                 expectedArea: "ops",
                 expectedSection: "approvals",
+                shell: "classic",
                 readyText: "Approval queue",
               },
               NEXT_UI_PACKAGE,
             );
           } catch (error) {
-            return shellSkip(
-              `SKIP: the canonical Next shell did not become ready (${clampString(errorMessage(error), 180)}). The ` +
-                "dev server answered but the shell never hydrated the /ops/approvals route on this host — no " +
-                "functionally UI-served environment. The approval-restart durable truth is proven headless by " +
-                "runtime-truth.approval-restart-durable-truth; only the shell cross-check is held.",
-            );
+            throw new Error(`Served Mission Control shell failed its recovered-run cross-check: ${clampString(errorMessage(error), 240)}`, { cause: error });
           }
 
           // Shell is ready — the cross-check assertions below are real pass/fail.

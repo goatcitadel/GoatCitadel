@@ -37,6 +37,39 @@ import {
 const TEST_RESPONDER = { actorId: "operator:test", authActorSource: "token" } as const;
 
 describe("chat-message-route-runtime", () => {
+  it("records optional answers without queueing or re-entering the waiting-run resolver", async () => {
+    const run = createDurableRun("run-optional", "running");
+    run.payload.optionalUserInputPrompts = [{ promptId: "optional-1" }];
+    const runtime = createRuntime({ durableRun: run, trace: { status: "running", durable: { runId: run.runId } } });
+    const answerOptional = vi.fn(async () => ({
+      disposition: "resolved",
+      run: { runId: run.runId, status: "running", version: 4 },
+      responseRecord: {},
+    }));
+    Object.assign(runtime, { chatAsyncClarificationV1Enabled: () => true });
+    Object.assign(runtime.storage.sessionMutationAdmissions, { answerDurableChatOptionalInput: answerOptional });
+    const result = await answerChatUserInputPrompt(runtime, "sess-1", "turn-1", "optional-1", {
+      kind: "text",
+      text: " Concise ",
+    });
+    expect(result.resumed).toBe(false);
+    expect(answerOptional).toHaveBeenCalledWith(
+      expect.objectContaining({
+        durableRunId: run.runId,
+        expectedWaitingRunVersion: 3,
+        promptId: "optional-1",
+        responder: TEST_RESPONDER,
+        response: { kind: "text", text: "Concise" },
+      }),
+    );
+    expect(runtime.storage.sessionMutationAdmissions.resolveDurableChatUserInput).not.toHaveBeenCalled();
+    expect(runtime.durableRunService.requestRunProcessing).not.toHaveBeenCalled();
+    Object.assign(runtime, { chatAsyncClarificationV1Enabled: () => false });
+    await expect(
+      answerChatUserInputPrompt(runtime, "sess-1", "turn-1", "optional-1", { kind: "text", text: "Concise" }),
+    ).rejects.toThrow("disabled");
+    expect(answerOptional).toHaveBeenCalledTimes(1);
+  });
   it("builds chat threads and records branch selection realtime truth", async () => {
     const state = createThreadState();
     const runtime = createRuntime({ state });

@@ -133,7 +133,7 @@ export async function runSurfaceRegressionLane(context, options = {}, deps) {
               }
               await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
               let nativeScrollEvidence = null;
-              if (verificationTarget.isNext && route.slug !== "chat" && route.slug !== "library-prompt-packs") {
+              if (verificationTarget.isNext && route.shell === "classic" && route.slug !== "chat" && route.slug !== "library-prompt-packs") {
                 if (route.slug === "settings-providers") {
                   await assertProviderAnchorAndAdviceContract(page);
                 }
@@ -239,7 +239,7 @@ export async function runSurfaceRegressionLane(context, options = {}, deps) {
 
       for (const redirect of buildSurfaceCompatibilityInputs(verificationTarget)) {
         const targetHref = redirect.targetHref ?? redirect.expectedPath;
-        const route = verificationTarget.routeByHref.get(targetHref);
+        const route = verificationTarget.surfaceRoutes.find(candidate => candidate.href === targetHref && candidate.shell === "classic");
         if (!route) {
           throw new Error(`verification redirect target was not mapped: ${targetHref}`);
         }
@@ -257,7 +257,7 @@ export async function runSurfaceRegressionLane(context, options = {}, deps) {
             const trace = await startBrowserTrace(context, { page, slug: artifactSlug });
             let artifacts;
             try {
-              await page.goto(buildVerificationUiUrl(stack.uiUrl, redirect.href), { waitUntil: "domcontentloaded" });
+              await page.goto(buildVerificationUiUrl(stack.uiUrl, resolveReleaseSurfaceHref({ ...redirect, shell: "classic" })), { waitUntil: "domcontentloaded" });
               await waitForMissionControlShell(page, { packageName: verificationTarget.packageName });
               await assertLegacyRedirectResolution(page, redirect.expectedPath, redirect.expectedSearchParams);
               await waitForVerificationRouteReady(page, route, verificationTarget.packageName);

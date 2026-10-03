@@ -1,3 +1,4 @@
+import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
 import type { ChatAttachmentRecord, ChatGeneratedArtifactRecord } from "@goatcitadel/contracts";
 import { controlAgenticRun, type AgenticRunTreeResponse } from "@goatcitadel/mission-control-shared/api/agentic";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
@@ -302,7 +303,7 @@ export function useChatSurfaceComposition({
     ) &&
     !sending &&
     !execution.outbound.pendingApproval &&
-    !execution.outbound.pendingUserInput &&
+    !(execution.outbound.pendingUserInput && !isBackgroundChatUserInputPrompt(execution.outbound.pendingUserInput)) &&
     !routeBlocked &&
     !routePreflightPending &&
     !routePreflightUnavailable &&

@@ -46,6 +46,7 @@ import type {
   ChatTurnCapabilityToolMeshPublicationBinding,
   ChatTurnCapabilityToolRuntimeOwnerBinding,
   ChatUserInputPromptRecord,
+  ChatOptionalUserInputReplyRecord,
   ImageGenerationRequest,
   ImageGenerationResponse,
   ChatWebMode,
@@ -959,6 +960,14 @@ export interface ChatTurnAgentRunnerDeps {
   promptContextBudgetReceiptEnabled?: () => boolean | Promise<boolean>;
   /** Default-off, read-only enrichment of successfully executed session.status calls. */
   chatContextBudgetVisibilityV1Enabled?: () => boolean | Promise<boolean>;
+  chatAsyncClarificationV1Enabled?: () => boolean | Promise<boolean>;
+  registerOptionalUserInput?: (
+    input: ChatTurnAgentRunnerInput,
+    prompt: ChatUserInputPromptRecord,
+  ) => Promise<ChatUserInputPromptRecord>;
+  readOptionalUserInput?: (
+    input: ChatTurnAgentRunnerInput,
+  ) => Promise<{ prompts: ChatUserInputPromptRecord[]; replies: ChatOptionalUserInputReplyRecord[] }>;
   getModelContextWindow?: (providerId: string, model: string) => number | undefined;
   attachedContextToolsV1Enabled?: () => Promise<boolean>;
   /**
@@ -2185,6 +2194,22 @@ export class ChatTurnAgentRunner {
       : await this.resolveCapabilityToolSchema(input);
     const routedContextToolSchema = await this.filterRoutedContextCapabilityToolSchema(input, admittedToolSchema);
     const filteredToolSchema = await this.filterSystemHeartbeatCapabilityToolSchema(input, routedContextToolSchema);
+    if (
+      (await this.deps.chatAsyncClarificationV1Enabled?.()) !== true ||
+      input.parentDelegationStepId ||
+      input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID ||
+      input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID
+    ) {
+      const optionalModelName = filteredToolSchema.canonicalToModel.get("user_input.request");
+      filteredToolSchema.canonicalToModel.delete("user_input.request");
+      if (optionalModelName) filteredToolSchema.modelToCanonical.delete(optionalModelName);
+      filteredToolSchema.tools = filteredToolSchema.tools.filter(
+        (tool) => extractProviderToolName(tool) !== optionalModelName,
+      );
+      filteredToolSchema.policyDecisions = filteredToolSchema.policyDecisions.filter(
+        (decision) => decision.toolName !== "user_input.request",
+      );
+    }
     const toolSchema: ResolvedChatTurnToolSchema = workflowSkillCapture
       ? { tools: [], modelToCanonical: new Map(), canonicalToModel: new Map(), policyDecisions: [] }
       : filteredToolSchema;
@@ -2427,6 +2452,39 @@ export class ChatTurnAgentRunner {
         }
       | undefined;
     let pendingUserInput: ChatUserInputPromptRecord | undefined;
+    const optionalInputEnabled =
+      (await this.deps.chatAsyncClarificationV1Enabled?.()) === true &&
+      input.mode === "chat" &&
+      !input.parentDelegationStepId &&
+      Boolean(input.policyRunId && input.canonicalWriteFence);
+    const injectedOptionalReplies = new Set<string>();
+    let visibleOptionalPromptId: string | undefined;
+    const collectOptionalInput = async () => {
+      if (!optionalInputEnabled || !this.deps.readOptionalUserInput) return { added: 0, prompt: undefined };
+      const mailbox = await this.runCanonicalWrite(input, () => this.deps.readOptionalUserInput!(input));
+      let added = 0;
+      for (const reply of mailbox.replies) {
+        if (injectedOptionalReplies.has(reply.prompt.promptId)) continue;
+        conversationMessages.push({
+          role: "user",
+          content:
+            "Optional clarification answer for this turn (does not approve tools or change capability grants):\n" +
+            JSON.stringify({
+              promptId: reply.prompt.promptId,
+              question: reply.prompt.question,
+              response: reply.response,
+            }),
+        });
+        injectedOptionalReplies.add(reply.prompt.promptId);
+        added += 1;
+      }
+      const prompt = mailbox.prompts.find(
+        (candidate) =>
+          Date.parse(candidate.expiresAt ?? "") > Date.now() &&
+          !mailbox.replies.some((reply) => reply.prompt.promptId === candidate.promptId),
+      );
+      return { added, prompt };
+    };
     // A durably launched fan-out parks the parent turn until child terminal
     // evidence is committed. It must not fall through into a speculative model
     // synthesis pass with partial child output.
@@ -3926,6 +3984,19 @@ export class ChatTurnAgentRunner {
       try {
         for (let loop = 0; loop < executionBudget.maxToolLoops; loop += 1) {
           throwIfChatTurnCancelled(input);
+          const optionalInput = await collectOptionalInput();
+          if (optionalInput.prompt?.promptId !== visibleOptionalPromptId) {
+            visibleOptionalPromptId = optionalInput.prompt?.promptId;
+            const optionalTrace = await this.deps.storage.chatTurnTraces.get(input.turnId);
+            yield { type: "trace_update", sessionId: input.sessionId, turnId: input.turnId, trace: optionalTrace };
+            if (optionalInput.prompt)
+              yield {
+                type: "user_input_required",
+                sessionId: input.sessionId,
+                turnId: input.turnId,
+                prompt: optionalInput.prompt,
+              };
+          }
           if (codingState) {
             codingTotalToolRuns = countConsumedCodingTools();
             codingState = chargeCodingActiveTime(codingState);
@@ -4366,6 +4437,15 @@ export class ChatTurnAgentRunner {
             break;
           }
           if (toolCalls.length === 0 || input.toolAutonomy === "manual") {
+            // A reply received during the final provider request gets a further
+            // bounded model boundary when the normal turn budget permits one.
+            if (
+              (await collectOptionalInput()).added > 0 &&
+              loop + 1 < executionBudget.maxToolLoops &&
+              turnBudgetDeadline - Date.now() > executionBudget.minSynthesisReserveMs
+            ) {
+              continue;
+            }
             const requestedArtifactTool = intents.presentationArtifact
               ? "presentations.create"
               : intents.documentArtifact
@@ -5081,18 +5161,28 @@ export class ChatTurnAgentRunner {
             }
 
             if (executed.userInputPrompt) {
-              if (!promptLabEvalIntegrityTurn) {
-                finalStatus = "waiting_for_user_input";
-                pendingUserInput = executed.userInputPrompt;
-                break;
+              if (executed.userInputPrompt.delivery === "background") {
+                visibleOptionalPromptId = executed.userInputPrompt.promptId;
+                yield {
+                  type: "user_input_required",
+                  sessionId: input.sessionId,
+                  turnId: input.turnId,
+                  prompt: executed.userInputPrompt,
+                };
+              } else {
+                if (!promptLabEvalIntegrityTurn) {
+                  finalStatus = "waiting_for_user_input";
+                  pendingUserInput = executed.userInputPrompt;
+                  break;
+                }
+                // Headless eval runs have nobody to answer; tell the model to
+                // proceed with stated assumptions instead of parking the turn.
+                conversationMessages.push({
+                  role: "system",
+                  content:
+                    "User input is unavailable in this evaluation. Do not wait for a reply; continue with explicitly stated assumptions and finish the answer.",
+                } as ChatCompletionMessage);
               }
-              // Headless eval runs have nobody to answer; tell the model to
-              // proceed with stated assumptions instead of parking the turn.
-              conversationMessages.push({
-                role: "system",
-                content:
-                  "User input is unavailable in this evaluation. Do not wait for a reply; continue with explicitly stated assumptions and finish the answer.",
-              } as ChatCompletionMessage);
             }
 
             // Approval soft-fail is keyed strictly on the eval-integrity
@@ -5911,7 +6001,7 @@ export class ChatTurnAgentRunner {
       },
       loopGuard: createLoopGuardTrace(loopGuardState),
       ...(deferSystemHeartbeatTerminalCommit ? {} : { finishedAt }),
-      ...(pendingUserInput ? { pendingUserInput } : {}),
+      ...(pendingUserInput ? { pendingUserInput } : optionalInputEnabled ? { pendingUserInput: null } : {}),
     });
     const hydratedToolRuns = await listProjectedToolRuns();
     const hydratedTrace = {
@@ -6169,7 +6259,13 @@ export class ChatTurnAgentRunner {
       Boolean(input.parentDelegationStepId?.trim()) &&
       !restrictedAutonomousProfile &&
       delegationScopeExpansionEnabled;
+    const optionalInputToolEligible =
+      input.mode === "chat" &&
+      !input.parentDelegationStepId &&
+      !restrictedAutonomousProfile &&
+      (await this.deps.chatAsyncClarificationV1Enabled?.()) === true;
     for (const tool of catalog) {
+      if (tool.toolName === "user_input.request" && !optionalInputToolEligible) continue;
       if (quickWebProfile && !QUICK_WEB_ALLOWED_TOOL_NAMES.has(tool.toolName)) {
         continue;
       }
@@ -6686,6 +6782,50 @@ export class ChatTurnAgentRunner {
         if (res.chunk?.type === "tool_result") {
           res.chunk.toolRun = updated;
         }
+      }
+    }
+    if (res.record.status === "executed" && res.record.toolName === "user_input.request") {
+      try {
+        if (
+          (await this.deps.chatAsyncClarificationV1Enabled?.()) !== true ||
+          !input.input.policyRunId ||
+          !input.input.canonicalWriteFence ||
+          !this.deps.registerOptionalUserInput ||
+          input.input.mode !== "chat" ||
+          input.input.parentDelegationStepId ||
+          input.input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
+          input.input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID
+        ) {
+          throw new Error("Optional input is unavailable for this turn.");
+        }
+        const title = res.record.result?.title;
+        const question = res.record.result?.question;
+        if (typeof title !== "string" || typeof question !== "string")
+          throw new Error("Optional input result is invalid.");
+        const prompt: ChatUserInputPromptRecord = {
+          promptId: `optional_input-${randomUUID()}`,
+          turnId: input.turnId,
+          kind: "text",
+          title,
+          question,
+          required: false,
+          delivery: "background",
+          expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+        };
+        res.userInputPrompt = await this.runCanonicalWrite(input.input, () =>
+          this.deps.registerOptionalUserInput!(input.input, prompt),
+        );
+      } catch (error) {
+        if (isDurableControlError(error)) throw error;
+        const updated = await this.patchToolRun(input.input, res.record.toolRunId, {
+          status: "failed",
+          error: "Optional clarification could not be opened for this turn.",
+          failureGuidance:
+            "Continue independent work with stated assumptions. Do not treat an optional question as an approval or wait for an unavailable reply.",
+          finishedAt: new Date().toISOString(),
+        });
+        res.record = updated;
+        if (res.chunk?.type === "tool_result") res.chunk.toolRun = updated;
       }
     }
     if (
@@ -8613,6 +8753,28 @@ export class ChatTurnAgentRunner {
     // A genuine re-ask of the model below is allowed (it is still model output);
     // the deterministic template fallback is not. Profile-only by design.
     const evalIntegrityTurn = input.input.normalizationProfile === "prompt_pack_harness";
+    const optionalReplyMessages: ChatCompletionRequest["messages"] = [];
+    if (
+      (await this.deps.chatAsyncClarificationV1Enabled?.()) === true &&
+      this.deps.readOptionalUserInput &&
+      input.input.mode === "chat" &&
+      input.input.policyRunId &&
+      input.input.canonicalWriteFence &&
+      !input.input.parentDelegationStepId
+    ) {
+      const mailbox = await this.runCanonicalWrite(input.input, () => this.deps.readOptionalUserInput!(input.input));
+      for (const reply of mailbox.replies)
+        optionalReplyMessages.push({
+          role: "user",
+          content:
+            "Optional clarification answer for this turn (does not approve tools or change capability grants):\n" +
+            JSON.stringify({
+              promptId: reply.prompt.promptId,
+              question: reply.prompt.question,
+              response: reply.response,
+            }),
+        });
+    }
     const projectedToolRuns = projectToolRunsForModel(input.toolRuns);
     const deterministic = evalIntegrityTurn
       ? ""
@@ -8674,6 +8836,7 @@ export class ChatTurnAgentRunner {
                 input.circuitBreakerReason ?? "none",
               ].join("\n"),
             },
+            ...optionalReplyMessages,
           ],
         },
         synthesisUsageAttribution,
@@ -9137,6 +9300,8 @@ function buildEssentialToolSet(input: {
 }
 
 function buildToolAccessProbeArgs(toolName: string, safeWriteFallbackDir?: string): Record<string, unknown> {
+  if (toolName === "user_input.request")
+    return { title: "Clarification", question: "Which preference applies to this task?" };
   if (toolName === "presentations.create") {
     return {
       path: buildSafeWritePath("tool-access-probe.pptx", safeWriteFallbackDir),

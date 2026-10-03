@@ -407,7 +407,9 @@ export function useChatOperatorPrompts({
         pushLocalNotice(
           result.resumed
             ? `Submitted response for ${pendingUserInput.promptId}. The turn resumed immediately.`
-            : `Submitted response for ${pendingUserInput.promptId}. Refresh the thread or resume the run when the runtime is ready.`,
+            : pendingUserInput.delivery === "background"
+              ? "Answer saved. Work continues; the runtime can use it at the next model step."
+              : `Submitted response for ${pendingUserInput.promptId}. Refresh the thread or resume the run when the runtime is ready.`,
           "success",
         );
         await loadSessionCoreState(selectedSession.sessionId, {

@@ -10,7 +10,17 @@ export function deriveThreadPendingUserInput(thread: ChatThreadResponse | null):
     thread.turns.find((turn) => turn.turnId === (thread.selectedTurnId ?? thread.activeLeafTurnId)) ??
     thread.turns.at(-1) ??
     null;
-  if (!selectedTurn || selectedTurn.trace.status !== "waiting_for_user_input") {
+  if (
+    !selectedTurn ||
+    (selectedTurn.trace.status !== "waiting_for_user_input" &&
+      !(
+        (selectedTurn.trace.status === "running" || selectedTurn.trace.status === "waiting_for_tool") &&
+        selectedTurn.trace.pendingUserInput?.delivery === "background" &&
+        selectedTurn.trace.pendingUserInput.required === false &&
+        selectedTurn.trace.pendingUserInput.secureConfiguration === undefined &&
+        Date.parse(selectedTurn.trace.pendingUserInput.expiresAt ?? "") > Date.now()
+      ))
+  ) {
     return null;
   }
   return selectedTurn.trace.pendingUserInput ?? null;

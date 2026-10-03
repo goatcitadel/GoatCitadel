@@ -1782,6 +1782,54 @@ describe("streamPreparedAgentChatTurn", () => {
     expect(host.hooksService.enqueueAfterHooks).not.toHaveBeenCalled();
   });
 
+  it("keeps optional questions nonblocking through the outer stream and completes the answer", async () => {
+    const host = createHost();
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "user_input_required",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        prompt: {
+          promptId: "optional-1",
+          turnId: "turn-1",
+          kind: "text",
+          title: "Style",
+          question: "Which style?",
+          required: false,
+          delivery: "background",
+        },
+      };
+      yield { type: "delta", sessionId: "session-1", turnId: "turn-1", delta: "Work finished." };
+      await host.storage.chatTurnTraces.patch("turn-1", { status: "completed", finishedAt: new Date().toISOString() });
+      yield {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "Work finished.",
+      };
+    }) as never;
+    const chunks = [];
+    for await (const chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "continue", mode: "chat" } as never,
+      createPreparedTurn(),
+      "chat_thread_turn_appended",
+      undefined,
+      { skipMessageStart: true },
+    ))
+      chunks.push(chunk);
+    expect(chunks.some((chunk) => chunk.type === "user_input_required")).toBe(true);
+    expect(chunks).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "message_done", content: "Work finished." })]),
+    );
+    expect(chunks.filter((chunk) => chunk.type === "trace_update").at(-1)).toMatchObject({
+      trace: { status: "completed" },
+    });
+    expect(host.ingestEvent).toHaveBeenCalled();
+  });
+
   it("finalizes user-input-required streams without done or assistant persistence", async () => {
     const host = createHost();
     const prompt = {

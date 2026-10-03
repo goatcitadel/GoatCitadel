@@ -86,6 +86,7 @@ import {
   runVertexFireworksProvidersLane as runVertexFireworksProvidersLaneImpl,
 } from "./scenarios/provider-reasoning-lanes.mjs";
 import { runSurfaceRegressionLane as runSurfaceRegressionLaneImpl } from "./scenarios/surface-regression-lane.mjs";
+import { runChatAsyncClarificationProof as runChatAsyncClarificationProofImpl } from "./scenarios/chat-async-clarification-proof.mjs";
 import {
   runUsabilityCoreLane as runUsabilityCoreLaneImpl,
   runUsabilityLane as runUsabilityLaneImpl,
@@ -396,8 +397,7 @@ export async function runSecurityEvalsLane(context) {
 function resolveVerificationTargetContext() {
   const uiTarget = resolveUiTarget(repoRoot, process.env);
   const packageName = uiTarget.packageName || DEFAULT_UI_PACKAGE;
-  const surfaceRoutes =
-    packageName === NEXT_UI_PACKAGE ? NEXT_RELEASE_SURFACE_MANIFEST : resolveSurfaceRegressionManifest();
+  const surfaceRoutes = resolveSurfaceRegressionManifest();
   return {
     uiTarget,
     packageName,
@@ -2425,6 +2425,10 @@ export async function runSurfaceRegressionLane(context, options = {}) {
   return await runSurfaceRegressionLaneImpl(context, options, verificationLaneDeps());
 }
 
+export async function runChatAsyncClarificationProof(context) {
+  return await runChatAsyncClarificationProofImpl(context, verificationLaneDeps());
+}
+
 export async function runUsabilityLane(context, options = {}) {
   return await runUsabilityLaneImpl(context, options, verificationLaneDeps());
 }
@@ -4318,7 +4322,8 @@ async function runLiveProviderScenarios(context, gatewayUrl) {
 async function waitForMissionControlShell(page, options = {}) {
   const timeoutMs = typeof options === "number" ? options : (options.timeoutMs ?? 30000);
   const packageName = typeof options === "number" ? DEFAULT_UI_PACKAGE : (options.packageName ?? DEFAULT_UI_PACKAGE);
-  const shellContract = resolveShellContract(packageName);
+  const shell = typeof options === "number" ? undefined : options.shell;
+  const shellContract = resolveShellContract(packageName, shell ?? new URL(page.url()).searchParams.get("shell") ?? "cockpit");
   await page.waitForFunction(
     ({ shellSelector, forbiddenSelector }) => {
       const shell = document.querySelector(shellSelector);
@@ -4335,11 +4340,12 @@ async function waitForMissionControlShell(page, options = {}) {
 }
 
 async function waitForVerificationRouteReady(page, route, packageName = DEFAULT_UI_PACKAGE, timeoutMs = 30000) {
-  if (packageName === NEXT_UI_PACKAGE && route.shell === "cockpit") {
-    await waitForCockpitVisualRouteReady(page, route, timeoutMs);
+  const shell = route.shell ?? new URL(page.url()).searchParams.get("shell") ?? "cockpit";
+  if (packageName === NEXT_UI_PACKAGE && shell === "cockpit") {
+    await waitForCockpitVisualRouteReady(page, { ...route, href: route.href ?? page.url() }, timeoutMs);
     return;
   }
-  await waitForMissionControlShell(page, { packageName, timeoutMs });
+  await waitForMissionControlShell(page, { packageName, timeoutMs, shell });
   if (packageName === NEXT_UI_PACKAGE) {
     await page.waitForFunction(
       ({ area, section, loadingSelector }) => {
@@ -4353,7 +4359,7 @@ async function waitForVerificationRouteReady(page, route, packageName = DEFAULT_
       {
         area: route.expectedArea ?? "chat",
         section: route.expectedSection ?? "root",
-        loadingSelector: resolveShellContract(packageName).loadingSelector,
+        loadingSelector: resolveShellContract(packageName, shell).loadingSelector,
       },
       { timeout: timeoutMs },
     );
@@ -5919,12 +5925,13 @@ async function runMissionControlNextMobileShellProof(context, input) {
         const trace = await startBrowserTrace(context, { page, slug: artifactSlug });
         let artifacts;
         try {
-          await page.goto(buildVerificationUiUrl(input.uiUrl, "/chat"), { waitUntil: "domcontentloaded" });
+          await page.goto(buildVerificationUiUrl(input.uiUrl, "/chat?shell=classic"), { waitUntil: "domcontentloaded" });
           await waitForVerificationRouteReady(
             page,
             {
               expectedArea: "chat",
               expectedSection: "root",
+              shell: "classic",
               readySelector: '.mc-next-threaded-surface[data-mode="chat"]',
             },
             input.packageName,
@@ -6019,10 +6026,10 @@ async function runMissionControlNextMobileShellProof(context, input) {
         const trace = await startBrowserTrace(context, { page, slug: artifactSlug });
         let artifacts;
         try {
-          await page.goto(buildVerificationUiUrl(input.uiUrl, "/ops/kanban"), { waitUntil: "domcontentloaded" });
+          await page.goto(buildVerificationUiUrl(input.uiUrl, "/ops/kanban?shell=classic"), { waitUntil: "domcontentloaded" });
           await waitForVerificationRouteReady(
             page,
-            { expectedArea: "ops", expectedSection: "kanban", readySelector: ".mc-next-kanban-board" },
+            { shell: "classic", expectedArea: "ops", expectedSection: "kanban", readySelector: ".mc-next-kanban-board" },
             input.packageName,
           );
           await setBrowserCorrelation(page, correlationId, input.sessionId);
@@ -6086,28 +6093,28 @@ async function runMissionControlNextMobileShellProof(context, input) {
         const routes = [
           {
             slug: "settings-providers",
-            href: "/settings/providers",
+            href: "/settings/providers?shell=classic",
             expectedArea: "settings",
             expectedSection: "providers",
             readyText: "Providers",
           },
           {
             slug: "ops-runtime",
-            href: "/ops/runtime",
+            href: "/ops/runtime?shell=classic",
             expectedArea: "ops",
             expectedSection: "runtime",
             readyText: "Services",
           },
           {
             slug: "projects",
-            href: "/projects",
+            href: "/projects?shell=classic",
             expectedArea: "projects",
             expectedSection: "root",
             readyText: "Projects",
           },
           {
             slug: "library-memory",
-            href: "/library/memory",
+            href: "/library/memory?shell=classic",
             expectedArea: "library",
             expectedSection: "memory",
             readyText: "Memory items",

@@ -1,4 +1,5 @@
 import type { FormEvent, KeyboardEvent } from "react";
+import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
 import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { resolveChatRouteReadiness } from "../../../features/threaded-surface/chat-route-readiness";
@@ -76,7 +77,7 @@ export function cockpitSendBlockReason(props: ComposerProps): string | null {
   if (props.historicalReadOnly)
     return "This historical view is read-only. Return to the latest conversation in current Chat.";
   if (props.sessionControlBanner) return "Another client controls this conversation. Open current Chat for its status.";
-  if (props.pendingApproval || props.pendingUserInput)
+  if (props.pendingApproval || (props.pendingUserInput && !isBackgroundChatUserInputPrompt(props.pendingUserInput)))
     return "A decision or response is pending. Resolve it in current Chat.";
   if (props.runVariablePanel?.open) return "Apply or close the run variables before sending.";
   if (props.composerPalette?.globalOpen) return "Choose a palette item before sending.";

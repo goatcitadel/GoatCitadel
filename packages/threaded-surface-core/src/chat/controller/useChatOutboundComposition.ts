@@ -1,3 +1,4 @@
+import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
 import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 import { setDevDiagnosticsActiveChatSession } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
@@ -203,7 +204,10 @@ export function useChatOutboundComposition({
     setPendingApproval: outbound.setPendingApproval,
     setPendingUserInput: outbound.setPendingUserInput,
   };
-  runtimeBlockerActiveRef.current = Boolean(outbound.pendingApproval || outbound.pendingUserInput);
+  runtimeBlockerActiveRef.current = Boolean(
+    outbound.pendingApproval ||
+    (outbound.pendingUserInput && !isBackgroundChatUserInputPrompt(outbound.pendingUserInput)),
+  );
 
   useChatApprovalController({
     selectedSessionId: selection.selectedSessionId,

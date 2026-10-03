@@ -732,12 +732,25 @@ export function resolveReleaseSurfaceHref(route, variant = {}, fixture = {}) {
   return href;
 }
 
-export function resolveShellContract(packageName) {
-  return packageName === "@goatcitadel/mission-control-next" ? NEXT_SHELL_CONTRACT : CURRENT_SHELL_CONTRACT;
+export const COCKPIT_SHELL_CONTRACT = {
+  shellSelector: '[data-cockpit-ready="true"] #main-content',
+  chromeSelector: 'nav[aria-label="Areas"], nav[aria-label="Areas on small screens"], section[aria-label="First-run setup"]',
+  forbiddenSelector: ".gateway-access-shell",
+  loadingSelector: '#main-content [aria-busy="true"]',
+};
+
+export function resolveShellContract(packageName, shell = "cockpit") {
+  if (packageName !== "@goatcitadel/mission-control-next") return CURRENT_SHELL_CONTRACT;
+  return shell === "classic" ? NEXT_SHELL_CONTRACT : COCKPIT_SHELL_CONTRACT;
 }
 
 export function resolveSurfaceRegressionManifest() {
-  return NEXT_RELEASE_SURFACE_MANIFEST;
+  return [
+    // Exercise the shipped default without a query override or saved shell preference.
+    { ...COCKPIT_VISUAL_MANIFEST[0], slug: "cockpit-default-chat", shell: undefined },
+    ...COCKPIT_VISUAL_MANIFEST,
+    ...NEXT_RELEASE_SURFACE_MANIFEST.map(route => ({ ...route, shell: "classic" })),
+  ];
 }
 
 export function resolveVisualRegressionManifest() {

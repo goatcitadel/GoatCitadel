@@ -10,8 +10,26 @@ import {
   RELEASE_SURFACE_VARIANTS,
   resolveDirectCompatibilityManifest,
   resolveReleaseSurfaceHref,
+  resolveShellContract,
+  resolveSurfaceRegressionManifest,
 } from "./release-surface-manifest.mjs";
 import { COCKPIT_VISUAL_MANIFEST } from "./cockpit-visual-manifest.mjs";
+
+test("surface proof covers the default cockpit and selects Classic explicitly for its owner checks", () => {
+  const routes = resolveSurfaceRegressionManifest();
+  const defaultChat = routes.find(route => route.slug === "cockpit-default-chat");
+  assert.equal(new URL(resolveReleaseSurfaceHref(defaultChat), "http://test.invalid").searchParams.has("shell"), false);
+  assert.equal(defaultChat.readySelector, COCKPIT_VISUAL_MANIFEST[0].readySelector);
+  assert.equal(resolveShellContract("@goatcitadel/mission-control-next").shellSelector, '[data-cockpit-ready="true"] #main-content');
+  assert.equal(resolveShellContract("@goatcitadel/mission-control-next", "classic").shellSelector, ".mc-next-shell");
+  for (const original of NEXT_RELEASE_SURFACE_MANIFEST) {
+    const route = routes.find(candidate => candidate.slug === original.slug);
+    assert.equal(route.shell, "classic");
+    assert.equal(new URL(resolveReleaseSurfaceHref(route), "http://test.invalid").searchParams.get("shell"), "classic");
+    assert.equal(route.readySelector, original.readySelector);
+  }
+  assert.equal(new Set(routes.map(route => route.slug)).size, routes.length);
+});
 
 test("cockpit captures are additive and preserve all classic PNG identities with explicit shell selection", () => {
   const classic = NEXT_VISUAL_REGRESSION_MANIFEST.filter(route => route.shell === "classic");

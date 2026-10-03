@@ -1,3 +1,4 @@
+import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
 import type {
   ChatMessageRecord,
   ChatSessionPrefsRecord,
@@ -297,7 +298,7 @@ function updateTurnFromStreamChunk(
         ...turn,
         trace: {
           ...turn.trace,
-          status: "waiting_for_user_input",
+          status: isBackgroundChatUserInputPrompt(chunk.prompt) ? turn.trace.status : "waiting_for_user_input",
           pendingUserInput: chunk.prompt,
         },
       };

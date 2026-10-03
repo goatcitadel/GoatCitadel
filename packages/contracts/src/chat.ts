@@ -2207,6 +2207,8 @@ export interface ChatUserInputPromptRecord {
   title: string;
   question: string;
   required: boolean;
+  /** Explicit opt-in delivery mode; absence preserves the blocking input protocol. */
+  delivery?: "background";
   dismissible?: boolean;
   expiresAt?: string;
   options?: ChatUserInputPromptOptionRecord[];
@@ -2247,6 +2249,20 @@ export type ChatUserInputPromptResponse =
 
 export interface ChatUserInputPromptAnswerRequest {
   response: Exclude<ChatUserInputPromptResponse, { kind: "secure_configuration" }>;
+}
+
+/** Canonical ordinary answer kept in the admitted durable run, never an approval or capability grant. */
+export interface ChatOptionalUserInputReplyRecord {
+  prompt: ChatUserInputPromptRecord;
+  response: Exclude<ChatUserInputPromptResponse, { kind: "secure_configuration" }>;
+  answeredAt: string;
+  responder: { actorId: string; authActorSource: string };
+  materialSha256: string;
+}
+
+/** Malformed or legacy prompts retain their blocking posture. */
+export function isBackgroundChatUserInputPrompt(prompt: ChatUserInputPromptRecord | null | undefined): boolean {
+  return prompt?.delivery === "background" && prompt.required === false && prompt.secureConfiguration === undefined;
 }
 
 export interface ChatSecureConfigurationSubmitRequest {

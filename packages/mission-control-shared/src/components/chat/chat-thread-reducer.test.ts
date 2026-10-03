@@ -92,6 +92,24 @@ function seed(): PendingStreamTurnSeed {
 }
 
 describe("chat-thread-reducer", () => {
+  it("preserves running execution when an optional question arrives", () => {
+    const thread = baseThread();
+    thread.turns[1]!.trace.status = "running";
+    const result = updateThreadFromStreamChunk(
+      thread as never,
+      {
+        type: "user_input_required",
+        sessionId,
+        turnId: "turn-2",
+        prompt: { promptId: "optional-1", turnId: "turn-2", delivery: "background", required: false },
+      } as never,
+      null,
+      sessionId,
+      null,
+    )!;
+    expect(result.turns[1]?.trace.status).toBe("running");
+    expect(result.turns[1]?.trace.pendingUserInput?.promptId).toBe("optional-1");
+  });
   it("identifies only thread-mutating stream chunks", () => {
     for (const type of [
       "message_start",

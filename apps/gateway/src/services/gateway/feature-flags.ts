@@ -34,6 +34,7 @@ export function buildUpdatedFeatureFlags(
     chatThinkingStreamV1Enabled: patch.chatThinkingStreamV1Enabled ?? current.chatThinkingStreamV1Enabled,
     chatContextBudgetVisibilityV1Enabled:
       patch.chatContextBudgetVisibilityV1Enabled ?? current.chatContextBudgetVisibilityV1Enabled,
+    chatAsyncClarificationV1Enabled: patch.chatAsyncClarificationV1Enabled ?? current.chatAsyncClarificationV1Enabled,
     unifiedComposerPaletteV1Enabled: patch.unifiedComposerPaletteV1Enabled ?? current.unifiedComposerPaletteV1Enabled,
     attachedContextToolsV1Enabled: patch.attachedContextToolsV1Enabled ?? current.attachedContextToolsV1Enabled,
     chatSessionStatusV1Enabled: patch.chatSessionStatusV1Enabled ?? current.chatSessionStatusV1Enabled,
@@ -97,6 +98,8 @@ export function resolveGatewayFeatureFlags(
     chatThinkingStreamV1Enabled: stored?.chatThinkingStreamV1Enabled ?? fromConfig.chatThinkingStreamV1Enabled,
     chatContextBudgetVisibilityV1Enabled:
       stored?.chatContextBudgetVisibilityV1Enabled ?? fromConfig.chatContextBudgetVisibilityV1Enabled ?? false,
+    chatAsyncClarificationV1Enabled:
+      stored?.chatAsyncClarificationV1Enabled ?? fromConfig.chatAsyncClarificationV1Enabled ?? false,
     unifiedComposerPaletteV1Enabled:
       stored?.unifiedComposerPaletteV1Enabled ?? fromConfig.unifiedComposerPaletteV1Enabled,
     attachedContextToolsV1Enabled: stored?.attachedContextToolsV1Enabled ?? fromConfig.attachedContextToolsV1Enabled,

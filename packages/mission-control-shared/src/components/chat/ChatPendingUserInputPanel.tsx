@@ -37,6 +37,8 @@ export function ChatPendingUserInputPanel(props: {
   }
 
   const activePrompt = pendingUserInput;
+  const isBackground =
+    activePrompt.delivery === "background" && activePrompt.required === false && !activePrompt.secureConfiguration;
   const submitLabel = activePrompt.submitLabel?.trim() || "Submit";
   const isSecureConfiguration = activePrompt.secureConfiguration !== undefined;
   const canSubmit = isSecureConfiguration
@@ -80,18 +82,26 @@ export function ChatPendingUserInputPanel(props: {
       className={`chat-approval-card chat-user-input-card chat-blocking-prompt chat-blocking-prompt-user-input${variant === "compact" ? " compact" : ""}`}
       data-variant={variant ?? "default"}
       data-pending-user-input="true"
-      role="alert"
-      aria-live="assertive"
+      role={isBackground ? "status" : "alert"}
+      aria-live={isBackground ? "polite" : "assertive"}
       key={promptKey}
       onKeyDown={handleKeyDown}
     >
       <div className="chat-approval-header">
         <p className="chat-approval-title">{activePrompt.title}</p>
-        <span className="chat-approval-countdown">Answer required</span>
+        <span className="chat-approval-countdown">
+          {isBackground ? "Optional · Work continues" : "Answer required"}
+        </span>
       </div>
       <p id={questionId} className="chat-approval-reason">
         {activePrompt.question}
       </p>
+      {isBackground ? (
+        <p className="chat-user-input-option-description">
+          Answer while this turn is active. Your reply is saved and can be used at the next model step. Do not enter
+          credentials here.
+        </p>
+      ) : null}
       {activePrompt.secureConfiguration ? (
         <div className="chat-user-input-secure">
           <label className="chat-user-input-option-row" htmlFor={`chat-secure-configuration-${activePrompt.promptId}`}>

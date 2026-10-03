@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { toChatStreamChunk } from "./chat-stream-codecs.js";
 
 describe("chat stream codecs", () => {
+  it("retains background delivery and rejects required or secure prompts disguised as optional", () => {
+    const prompt = {
+      promptId: "prompt-1",
+      turnId: "turn-1",
+      kind: "text",
+      title: "Style",
+      question: "Which style?",
+      required: false,
+      delivery: "background",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    };
+    const chunk = { type: "user_input_required", sessionId: "session-1", turnId: "turn-1", prompt };
+    expect(toChatStreamChunk(chunk)).toMatchObject({ prompt: { delivery: "background" } });
+    expect(toChatStreamChunk({ ...chunk, prompt: { ...prompt, required: true } })).toBeUndefined();
+    expect(toChatStreamChunk({ ...chunk, prompt: { ...prompt, secureConfiguration: {} } })).toBeUndefined();
+  });
   it("decodes persisted thinking deltas", () => {
     expect(
       toChatStreamChunk({

@@ -1,3 +1,4 @@
+import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
 /* eslint-disable max-lines -- Streaming remains centralized so turn persistence, SSE replay, and completion sequencing stay auditable together. */
 /**
  * Chat turn streaming execution.
@@ -2400,6 +2401,10 @@ export async function* streamPreparedAgentChatTurn(
         yield chunk;
       }
       if (chunk.type === "user_input_required") {
+        if (isBackgroundChatUserInputPrompt(chunk.prompt)) {
+          yield chunk;
+          continue;
+        }
         if (approvalRequired) {
           throw new Error(`Chat turn ${turnId} emitted both approval and user-input interrupts.`);
         }

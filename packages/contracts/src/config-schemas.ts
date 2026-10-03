@@ -746,6 +746,7 @@ export const AssistantConfigInputSchema = z
         chatThinkingStreamV1Enabled: z.boolean().optional(),
         // On-demand estimates in session.status. Absent/false keeps the normal hot path unchanged.
         chatContextBudgetVisibilityV1Enabled: z.boolean().optional(),
+        chatAsyncClarificationV1Enabled: z.boolean().optional(),
         // B2b: TTS voice replies to audio-capable channels (Telegram voice notes).
         // Absent/false (default) ⇒ byte-identical to today; no synthesis runs.
         channelVoiceReplyV1Enabled: z.boolean().optional(),

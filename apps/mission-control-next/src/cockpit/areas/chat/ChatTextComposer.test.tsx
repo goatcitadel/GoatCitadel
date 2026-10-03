@@ -27,6 +27,33 @@ function sendButton(): HTMLButtonElement {
   return button;
 }
 
+it("optional background input preserves the composer while required input and approvals block it", () => {
+  const prompt = {
+    promptId: "optional",
+    turnId: "turn",
+    kind: "text" as const,
+    title: "Style",
+    question: "Which style?",
+    required: false,
+    delivery: "background" as const,
+  };
+  expect(cockpitSendBlockReason(composerProps({ pendingUserInput: prompt }))).toBeNull();
+  expect(cockpitSendBlockReason(composerProps({ pendingUserInput: { ...prompt, required: true } }))).toContain(
+    "decision",
+  );
+  expect(cockpitSendBlockReason(composerProps({ pendingUserInput: { ...prompt, delivery: undefined } }))).toContain(
+    "decision",
+  );
+  expect(
+    cockpitSendBlockReason(
+      composerProps({
+        pendingUserInput: prompt,
+        pendingApproval: {} as MissionThreadedActiveSessionSurfaceProps["pendingApproval"],
+      }),
+    ),
+  ).toContain("decision");
+});
+
 function composerProps(overrides: Partial<ComposerProps> = {}): ComposerProps {
   return {
     draft: "Hello",

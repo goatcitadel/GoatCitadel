@@ -609,6 +609,7 @@ import {
   readProductSourceApplySupervisorConfiguration,
 } from "./product-source-apply-supervisor.js";
 import type * as chatMessageRouteRuntime from "./chat-message-route-runtime.js";
+import { registerChatOptionalInput, readChatOptionalInput } from "./chat-optional-user-input.js";
 import * as chatSessionService from "./chat-session-service.js";
 import * as llmCompletionService from "./llm-completion-service.js";
 import * as durableExecutionService from "./durable-execution-service.js";
@@ -1360,6 +1361,10 @@ export class GatewayService {
       // audit fire first in `engine.invoke`.
       subagentFanout: (request) => this.subagentFanout.execute(request),
       getChatSessionStatus: (sessionId) => this.chatSessionStatusService.getModelProjection(sessionId),
+      assertOptionalUserInputAvailable: async () => {
+        if (!(await this.isFeatureEnabled("chatAsyncClarificationV1Enabled")))
+          throw new Error("Optional clarification is disabled.");
+      },
       requestNotification: async (request, input) => await this.requestNotificationFromTool(request.sessionId, input),
       proposeDocumentPatch: async (request, input) => await this.proposeDocumentPatchFromTool(request, input),
       submitWorkResult: (request) => this.delegatedWorkResultService.execute(request),
@@ -1716,6 +1721,9 @@ export class GatewayService {
       promptContextBudgetReceiptEnabled: () => process.env.GOATCITADEL_DEBUG_PROMPT_CONTEXT_BUDGET_RECEIPTS === "1",
       chatContextBudgetVisibilityV1Enabled: async () =>
         await this.isFeatureEnabled("chatContextBudgetVisibilityV1Enabled"),
+      chatAsyncClarificationV1Enabled: async () => await this.isFeatureEnabled("chatAsyncClarificationV1Enabled"),
+      registerOptionalUserInput: (input, prompt) => registerChatOptionalInput(this.storage, input, prompt),
+      readOptionalUserInput: (input) => readChatOptionalInput(this.storage, input),
       getModelContextWindow: (providerId, model) => this.llmService.getModelContextWindow(providerId, model),
       subagentFanoutV1Disabled: async () => await this.isFeatureEnabled("subagentFanoutV1Disabled"),
       durableChatFanoutV1Enabled: async () => await this.isFeatureEnabled("durableChatFanoutV1Enabled"),
@@ -3330,6 +3338,7 @@ export class GatewayService {
 
   private buildChatMessageRouteRuntimeHost(): chatMessageRouteRuntime.ChatMessageRouteRuntimeHost {
     return {
+      chatAsyncClarificationV1Enabled: async () => await this.isFeatureEnabled("chatAsyncClarificationV1Enabled"),
       config: this.config,
       storage: this.storage,
       durableRunService: this.durableRunService,

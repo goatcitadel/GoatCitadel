@@ -30,6 +30,7 @@ const EXPECTED_PATCH_TOGGLEABLE: Record<keyof FeatureFlagsConfig, true> = {
   autonomyV1Disabled: true,
   chatThinkingStreamV1Enabled: true,
   chatContextBudgetVisibilityV1Enabled: true,
+  chatAsyncClarificationV1Enabled: true,
   unifiedComposerPaletteV1Enabled: true,
   attachedContextToolsV1Enabled: true,
   chatSessionStatusV1Enabled: true,

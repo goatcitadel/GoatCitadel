@@ -3685,14 +3685,21 @@ export class CapabilitySystemService {
     workspaceId?: string,
   ): Promise<CapabilityCatalogEntry[]> {
     const entries: CapabilityCatalogEntry[] = [];
-    for (const tool of this.options.listToolCatalog()) {
+    const builtInTools = this.options.listToolCatalog();
+    const optionalInputEnabled =
+      builtInTools.some((tool) => tool.toolName === "user_input.request") &&
+      (await this.options.readFeatureFlags()).chatAsyncClarificationV1Enabled === true;
+    for (const tool of builtInTools) {
       entries.push({
         capabilityId: `tool:${tool.toolName}`,
         kind: "tool",
         category: "built_in",
         title: tool.toolName,
         summary: tool.description,
-        callable: true,
+        callable: tool.toolName !== "user_input.request" || optionalInputEnabled,
+        ...(tool.toolName === "user_input.request" && !optionalInputEnabled
+          ? { reviewWarning: "Optional clarification is experimental and disabled on this Gateway." }
+          : {}),
         toolName: tool.toolName,
         wrapperVisibility: {
           readOnly: Boolean(tool.readOnly),

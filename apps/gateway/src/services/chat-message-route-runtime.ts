@@ -50,6 +50,7 @@ export interface ChatThreadLoadOptions {
 }
 
 export interface ChatMessageRouteRuntimeHost {
+  chatAsyncClarificationV1Enabled?: () => boolean | Promise<boolean>;
   readonly config?: {
     rootDir: string;
     assistant: { workspaceDir: string };
@@ -236,6 +237,51 @@ export async function answerChatUserInputPrompt(
     controllerGeneration: durablePayload.admissionControllerGeneration,
     materialSha256: durablePayload.admissionMaterialSha256,
   };
+
+  const optionalPrompt = Array.isArray(durableRun.payload.optionalUserInputPrompts)
+    ? durableRun.payload.optionalUserInputPrompts.find(
+        (candidate) =>
+          candidate && typeof candidate === "object" && (candidate as { promptId?: unknown }).promptId === promptId,
+      )
+    : undefined;
+  if (optionalPrompt) {
+    if ((await runtime.chatAsyncClarificationV1Enabled?.()) !== true || response.kind === "secure_configuration") {
+      throw new ConflictError({ message: "Optional clarification is disabled or requires an ordinary answer." });
+    }
+    const outcome = await runtime.storage.sessionMutationAdmissions.answerDurableChatOptionalInput({
+      admissionIdentity,
+      durableRunId,
+      expectedWaitingRunVersion: durableRun.version,
+      promptId,
+      eventKey: "chat.user_input.resolved",
+      correlationId: promptId,
+      responder,
+      response: response.kind === "text" ? { kind: "text", text: response.text.trim() } : response,
+    });
+    await runtime.publishRealtime(
+      "chat_thread_updated",
+      "chat",
+      {
+        type: "chat_thread_optional_input_answered",
+        sessionId,
+        turnId,
+        promptId,
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: { sessionId, turnId, runId: durableRunId },
+      },
+    );
+    return {
+      ok: true,
+      sessionId,
+      turnId,
+      promptId,
+      resumed: false,
+      ...(outcome.disposition === "replayed" ? { replayed: true } : {}),
+    };
+  }
 
   // Preserve specific request feedback while the turn is still waiting. Once a
   // seal exists the trace is intentionally running/terminal and storage owns

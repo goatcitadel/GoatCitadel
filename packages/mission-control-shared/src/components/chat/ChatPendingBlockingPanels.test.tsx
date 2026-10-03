@@ -7,6 +7,32 @@ import { ChatPendingApprovalPanel } from "./ChatPendingApprovalPanel";
 import { ChatPendingUserInputPanel, focusPendingUserInputControl } from "./ChatPendingUserInputPanel";
 
 describe("chat pending blocking panels", () => {
+  it("labels optional input as work continuing and uses a polite live region", async () => {
+    let renderer!: ReturnType<typeof createRenderer>;
+    await act(async () => {
+      renderer = createRenderer(
+        <ChatPendingUserInputPanel
+          pending={false}
+          onSubmit={vi.fn()}
+          pendingUserInput={{
+            turnId: "turn-1",
+            promptId: "optional-1",
+            kind: "text",
+            title: "Style",
+            question: "Which style?",
+            required: false,
+            delivery: "background",
+            expiresAt: "2099-01-01T00:00:00.000Z",
+          }}
+        />,
+      );
+    });
+    expect(JSON.stringify(renderer.toJSON())).toContain("Optional · Work continues");
+    expect(renderer.root.findByProps({ role: "status" }).props["aria-live"]).toBe("polite");
+    await act(async () => {
+      renderer.unmount();
+    });
+  });
   let container: HTMLDivElement | null = null;
   let root: Root | null = null;
 

@@ -119,6 +119,31 @@ describe("executeTool", () => {
     await removeTestWorkspace(testWorkspaceRoot);
   });
 
+  it("requires the optional-input feature hook and bounded ordinary arguments", async () => {
+    const request: ToolInvokeRequest = {
+      toolName: "user_input.request",
+      sessionId: "sess-1",
+      agentId: "assistant",
+      args: { title: "Style", question: "Which style?" },
+    };
+    await expect(executeTool(request, policyConfig, storageStub)).rejects.toThrow("unavailable");
+    const assertOptionalUserInputAvailable = vi.fn(async () => undefined);
+    expect(await executeTool(request, policyConfig, storageStub, { assertOptionalUserInputAvailable })).toMatchObject({
+      status: "optional_input_requested",
+      question: "Which style?",
+    });
+    await expect(
+      executeTool({ ...request, args: { ...request.args, required: true } }, policyConfig, storageStub, {
+        assertOptionalUserInputAvailable,
+      }),
+    ).rejects.toThrow("bounded title and question");
+    await expect(
+      executeTool({ ...request, args: { ...request.args, question: "x".repeat(1001) } }, policyConfig, storageStub, {
+        assertOptionalUserInputAvailable,
+      }),
+    ).rejects.toThrow("bounded title and question");
+  });
+
   it("dispatches browser tools to browser executor", async () => {
     mocked.isBrowserToolName.mockReturnValue(true);
     mocked.executeBrowserTool.mockResolvedValue({
@@ -5972,27 +5997,70 @@ describe("executeTool", () => {
     await fs.writeFile(filePath, "alpha\nbeta\n", "utf8");
     const before = await executeTool(toolRequest("fs.read", { path: filePath }), policyConfig, storageStub);
     expect(before.sha256).toMatch(/^[a-f0-9]{64}$/);
-    const patched = await executeTool(toolRequest("fs.patch", {
-      path: filePath, expectedSha256: before.sha256, oldText: "beta", newText: "gamma",
-    }), policyConfig, storageStub);
+    const patched = await executeTool(
+      toolRequest("fs.patch", {
+        path: filePath,
+        expectedSha256: before.sha256,
+        oldText: "beta",
+        newText: "gamma",
+      }),
+      policyConfig,
+      storageStub,
+    );
     expect(patched).toMatchObject({ path: filePath, beforeSha256: before.sha256, afterSha256: expect.any(String) });
     expect(await fs.readFile(filePath, "utf8")).toBe("alpha\ngamma\n");
-    await expect(executeTool(toolRequest("fs.patch", {
-      path: filePath, expectedSha256: before.sha256, oldText: "gamma", newText: "delta",
-    }), policyConfig, storageStub)).rejects.toThrow(/changed file/);
+    await expect(
+      executeTool(
+        toolRequest("fs.patch", {
+          path: filePath,
+          expectedSha256: before.sha256,
+          oldText: "gamma",
+          newText: "delta",
+        }),
+        policyConfig,
+        storageStub,
+      ),
+    ).rejects.toThrow(/changed file/);
     await fs.writeFile(filePath, "x\nx\n", "utf8");
     const duplicate = await executeTool(toolRequest("fs.read", { path: filePath }), policyConfig, storageStub);
-    await expect(executeTool(toolRequest("fs.patch", {
-      path: filePath, expectedSha256: duplicate.sha256, oldText: "x", newText: "y",
-    }), policyConfig, storageStub)).rejects.toThrow(/exactly one matching occurrence/);
+    await expect(
+      executeTool(
+        toolRequest("fs.patch", {
+          path: filePath,
+          expectedSha256: duplicate.sha256,
+          oldText: "x",
+          newText: "y",
+        }),
+        policyConfig,
+        storageStub,
+      ),
+    ).rejects.toThrow(/exactly one matching occurrence/);
     await fs.writeFile(filePath, "aaa", "utf8");
     const overlap = await executeTool(toolRequest("fs.read", { path: filePath }), policyConfig, storageStub);
-    await expect(executeTool(toolRequest("fs.patch", {
-      path: filePath, expectedSha256: overlap.sha256, oldText: "aa", newText: "b",
-    }), policyConfig, storageStub)).rejects.toThrow(/exactly one matching occurrence/);
-    await expect(executeTool(toolRequest("fs.patch", {
-      path: path.join(os.tmpdir(), "outside.txt"), expectedSha256: duplicate.sha256, oldText: "x", newText: "y",
-    }), policyConfig, storageStub)).rejects.toThrow();
+    await expect(
+      executeTool(
+        toolRequest("fs.patch", {
+          path: filePath,
+          expectedSha256: overlap.sha256,
+          oldText: "aa",
+          newText: "b",
+        }),
+        policyConfig,
+        storageStub,
+      ),
+    ).rejects.toThrow(/exactly one matching occurrence/);
+    await expect(
+      executeTool(
+        toolRequest("fs.patch", {
+          path: path.join(os.tmpdir(), "outside.txt"),
+          expectedSha256: duplicate.sha256,
+          oldText: "x",
+          newText: "y",
+        }),
+        policyConfig,
+        storageStub,
+      ),
+    ).rejects.toThrow();
   });
 
   it("rejects non-UTF-8 and UTF-16 files without changing their bytes", async () => {
@@ -6005,9 +6073,18 @@ describe("executeTool", () => {
       const filePath = path.join(testWorkspaceRoot, name);
       await fs.writeFile(filePath, bytes);
       const before = await executeTool(toolRequest("fs.read", { path: filePath }), policyConfig, storageStub);
-      await expect(executeTool(toolRequest("fs.patch", {
-        path: filePath, expectedSha256: before.sha256, oldText: "alpha", newText: "gamma",
-      }), policyConfig, storageStub)).rejects.toThrow(/UTF-8 text file without NUL bytes/);
+      await expect(
+        executeTool(
+          toolRequest("fs.patch", {
+            path: filePath,
+            expectedSha256: before.sha256,
+            oldText: "alpha",
+            newText: "gamma",
+          }),
+          policyConfig,
+          storageStub,
+        ),
+      ).rejects.toThrow(/UTF-8 text file without NUL bytes/);
       expect(await fs.readFile(filePath)).toEqual(bytes);
     }
   });
@@ -6025,9 +6102,18 @@ describe("executeTool", () => {
       throw error;
     }
     const before = await executeTool(toolRequest("fs.read", { path: linkPath }), policyConfig, storageStub);
-    await expect(executeTool(toolRequest("fs.patch", {
-      path: linkPath, expectedSha256: before.sha256, oldText: "beta", newText: "gamma",
-    }), policyConfig, storageStub)).rejects.toThrow(/symbolic link/i);
+    await expect(
+      executeTool(
+        toolRequest("fs.patch", {
+          path: linkPath,
+          expectedSha256: before.sha256,
+          oldText: "beta",
+          newText: "gamma",
+        }),
+        policyConfig,
+        storageStub,
+      ),
+    ).rejects.toThrow(/symbolic link/i);
     expect((await fs.lstat(linkPath)).isSymbolicLink()).toBe(true);
     expect(await fs.readFile(targetPath, "utf8")).toBe("alpha beta");
   });

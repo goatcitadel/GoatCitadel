@@ -1,3 +1,4 @@
+import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
 /* eslint-disable max-lines -- Outbound chat execution coordinates streaming, retries, attachments, and effect settlement in one hook. */
 import type {
   ChatMessageRecord,
@@ -843,8 +844,15 @@ export function useChatOutboundExecution(
               });
             }
             if (chunk.type === "user_input_required") {
-              setPendingApproval(null);
+              if (!isBackgroundChatUserInputPrompt(chunk.prompt)) setPendingApproval(null);
               setPendingUserInput(chunk.prompt);
+            }
+            if (
+              chunk.type === "trace_update" &&
+              chunk.trace.pendingUserInput === undefined &&
+              chunk.trace.status !== "waiting_for_user_input"
+            ) {
+              setPendingUserInput((current) => (isBackgroundChatUserInputPrompt(current) ? null : current));
             }
             if (chunk.type === "error") {
               streamErrorChunkReceived = true;
