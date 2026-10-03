@@ -786,7 +786,7 @@ export function useChatSessionData(input: {
     const needsBootstrap = initializedScopeRef.current !== scope;
     setLoading(needsBootstrap);
     if (needsBootstrap) initializedRef.current = false;
-    void Promise.all([loadSidebar(), loadRuntimeCatalog()])
+    void loadSidebar()
       .then(() => !cancelled && setError(null))
       .catch((err: Error) => !cancelled && setError(err.message))
       .finally(() => {
@@ -799,7 +799,15 @@ export function useChatSessionData(input: {
     return () => {
       cancelled = true;
     };
-  }, [loadRuntimeCatalog, loadSidebar, setError, surfaceMode, workspaceId]);
+  }, [loadSidebar, setError, surfaceMode, workspaceId]);
+
+  // Runtime command, skill and MCP catalogs must not gate conversation discovery.
+  // Refresh them independently so a slow catalog also cannot delay sidebar searches.
+  useEffect(() => {
+    let cancelled = false;
+    void loadRuntimeCatalog().catch((err: Error) => !cancelled && setError(err.message));
+    return () => { cancelled = true; };
+  }, [loadRuntimeCatalog, setError, surfaceMode, workspaceId]);
 
   useEffect(() => {
     if (!loading) {

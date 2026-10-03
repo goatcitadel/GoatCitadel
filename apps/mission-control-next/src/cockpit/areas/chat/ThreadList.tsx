@@ -19,7 +19,7 @@ export function ThreadList({ rail, projectOptions }: { rail: MissionThreadedSess
   return <aside aria-label="Conversations" className="hidden w-60 shrink-0 flex-col border-r border-line-subtle bg-raised md:flex">
     <div className="space-y-2 border-b border-line-subtle p-3">
       <div className="flex items-center justify-between gap-2"><h2 className="font-display text-sm font-semibold text-fg">Conversations</h2>
-        <button type="button" onClick={() => void rail.onCreateSession()} disabled={rail.creatingSession}
+        <button type="button" onClick={() => void rail.onCreateSession()} disabled={rail.creatingSession || rail.loading}
           className="rounded-md border border-line px-2 py-1 text-xs font-medium text-accent hover:border-accent disabled:opacity-60">{rail.creatingSession ? "Creating…" : "New"}</button>
       </div>
       <button type="button" disabled={activity.loading || !visibleIds.length} onClick={() => void activity.refresh()}
@@ -44,7 +44,7 @@ export function ThreadList({ rail, projectOptions }: { rail: MissionThreadedSess
             {activity.loading ? "Checking status" : (activity.records[session.sessionId] ?? UNKNOWN_THREAD_ACTIVITY).label}
           </span>
         </span>
-      </button>}</WindowedRecordList> : <p className="p-2 text-xs text-fg-muted">No conversations in this view.</p>}
+      </button>}</WindowedRecordList> : rail.loading ? <p role="status" className="p-2 text-xs text-fg-muted">Loading conversations…</p> : <p className="p-2 text-xs text-fg-muted">No conversations in this view.</p>}
     </nav>
     <div className="shrink-0 px-1">{rail.hasMoreSessions && rail.onLoadMoreSessions ? <button type="button" disabled={rail.loadingMoreSessions} onClick={rail.onLoadMoreSessions}
         className="w-full rounded-md p-2 text-xs text-fg-secondary hover:bg-sunken disabled:opacity-60">{rail.loadingMoreSessions ? "Loading…" : "Load more"}</button> : null}

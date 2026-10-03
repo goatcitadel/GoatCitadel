@@ -302,6 +302,23 @@ describe("useChatSessionData", () => {
     expect(latestRefreshSubscription?.options.enabled).toBe(true);
   });
 
+  it("opens conversation discovery while optional runtime catalogs are still pending", async () => {
+    // Expire the development-only catalog deduplication from earlier fixtures.
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(5001);
+    let resolveSkills!: (value: unknown) => void;
+    fetchSkillsMock.mockReturnValueOnce(new Promise((resolve) => { resolveSkills = resolve; }));
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<Harness workspaceId="workspace-slow-catalog" />); await flushEffects(8); });
+    expect(fetchSkillsMock).toHaveBeenCalledOnce();
+    expect(latestHarness?.result.loading).toBe(false);
+    expect(latestHarness?.selectedSessionId).toBe("session-1");
+    expect(latestHarness?.result.installedSkills).toEqual([]);
+    await act(async () => { resolveSkills({ items: [{ skillId: "late-skill" }] }); await flushEffects(8); });
+    expect(latestHarness?.result.installedSkills).toEqual([{ skillId: "late-skill" }]);
+    await act(async () => renderer.unmount());
+  });
+
   it("retains the mounted conversation during search but bootstraps a new workspace", async () => {
     let renderer!: ReactTestRenderer;
     await act(async () => { renderer = create(<Harness workspaceId="workspace-retained-search" />); await flushEffects(); });

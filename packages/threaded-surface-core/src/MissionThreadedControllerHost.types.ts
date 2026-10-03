@@ -26,6 +26,8 @@ import type { MissionThreadedBtwSideChatProps } from "./chat/useBtwSideChatContr
 
 export interface MissionThreadedSessionRailData {
   mode: ChatMode;
+  /** Initial conversation discovery is still pending; an empty list is not yet an empty history. */
+  loading?: boolean;
   showProjectCreate: boolean;
   creatingSession: boolean;
   search: string;
@@ -197,6 +199,8 @@ export interface MissionThreadedControllerHostProps {
   surface?: ChatMode;
   lockSurface?: boolean;
   hidePageHeader?: boolean;
+  /** Let a shell render its conversation layout while initial discovery loads. */
+  renderWhileLoading?: boolean;
   /**
    * Seeds modeOverride from an explicit URL mode (e.g. ?mode=chat) so it behaves
    * like the operator manually clicking the mode override control (QA finding N3):

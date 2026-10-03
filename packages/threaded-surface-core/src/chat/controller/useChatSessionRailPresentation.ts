@@ -46,7 +46,7 @@ type Input = {
   ) => void;
   sessionData: Pick<
     ReturnType<typeof useChatSessionData>,
-    "projects" | "sidebarNextCursor" | "sidebarLoadingMore" | "loadSidebar"
+    "projects" | "loading" | "sidebarNextCursor" | "sidebarLoadingMore" | "loadSidebar"
   >;
   threadController: Pick<
     ReturnType<typeof useChatThreadController>,
@@ -174,6 +174,7 @@ export function useChatSessionRailPresentation({
   const sessionRailData: MissionThreadedSessionRailData = useMemo(
     () => ({
       mode: surfaceState.messageMode,
+      loading: sessionData.loading,
       showProjectCreate: sessionControls.showProjectCreate,
       creatingSession: Boolean(sessionControls.creatingSessionMode),
       search,
@@ -224,6 +225,7 @@ export function useChatSessionRailPresentation({
       onLoadMoreSessions: () => void loadSidebar(selection.historyView, { append: true }),
     }),
     [
+      sessionData.loading,
       sessionControls.archiveWorkspacePending,
       threadController.availableFolders,
       blockHistoricalMutation,

@@ -2401,6 +2401,16 @@ describe("MissionThreadedControllerHost", () => {
     );
   });
 
+  it("lets a shell render immediately with explicit conversation discovery state", async () => {
+    useChatSessionDataMock.mockReturnValue({
+      ...useChatSessionDataMock(), loading: true, projects: null, sessions: null,
+    });
+    const { renderer, renderSurface } = await renderHost({ lockSurface: true, surface: "chat", renderWhileLoading: true });
+    expect(renderSurface).toHaveBeenCalled();
+    expect(latestSurfaceInput?.sessionRail.loading).toBe(true);
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("Preparing");
+  });
+
   it("renders loading state and clears shell trust on unmount", async () => {
     useChatSessionDataMock.mockReturnValue({
       ...useChatSessionDataMock(),

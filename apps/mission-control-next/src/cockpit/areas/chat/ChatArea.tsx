@@ -63,6 +63,7 @@ export function ChatArea({
         surface="chat"
         lockSurface
         hidePageHeader
+        renderWhileLoading
         onNavigateSurface={conversationNavigation.request}
         onOpenApprovals={(approvalId) =>
           approvalId
@@ -248,7 +249,7 @@ export function ChatAreaView({
                 active?.delegationRun?.status ? `Run ${active.delegationRun.status}` : null,
               ]
                 .filter(Boolean)
-                .join(" · ") || "Conversation ready"}
+                .join(" · ") || (input.sessionRail.loading ? "Loading conversations…" : "Conversation ready")}
             </p>
           </div>
           <ChatMobileConversationSelect rail={input.sessionRail} onOpenFilters={() => setFiltersOpen(true)} />
@@ -257,7 +258,7 @@ export function ChatAreaView({
             size="sm"
             className="md:hidden"
             aria-label="New conversation"
-            disabled={input.sessionRail.creatingSession}
+            disabled={input.sessionRail.creatingSession || input.sessionRail.loading}
             onClick={() => void input.sessionRail.onCreateSession()}
           >
             New
@@ -359,14 +360,20 @@ export function ChatAreaView({
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-5 text-center">
-            <p className="font-display text-lg font-medium text-fg">Choose a conversation</p>
-            <p className="max-w-sm text-sm text-fg-secondary">Choose a thread or start a new conversation.</p>
-            <Button
-              onClick={() => void input.sessionRail.onCreateSession()}
-              disabled={input.sessionRail.creatingSession}
-            >
-              {input.sessionRail.creatingSession ? "Creating…" : "New conversation"}
-            </Button>
+            {input.sessionRail.loading ? (
+              <p role="status" className="text-sm text-fg-muted">Loading conversations…</p>
+            ) : (
+              <>
+                <p className="font-display text-lg font-medium text-fg">Choose a conversation</p>
+                <p className="max-w-sm text-sm text-fg-secondary">Choose a thread or start a new conversation.</p>
+                <Button
+                  onClick={() => void input.sessionRail.onCreateSession()}
+                  disabled={input.sessionRail.creatingSession}
+                >
+                  {input.sessionRail.creatingSession ? "Creating…" : "New conversation"}
+                </Button>
+              </>
+            )}
           </div>
         )}
         {active?.sessionStatusPanel?.open && !buildOpen ? (

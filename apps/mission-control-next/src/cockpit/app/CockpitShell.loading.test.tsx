@@ -11,10 +11,11 @@ const imports = vi.hoisted(() => ({
   gallery: vi.fn(),
   chatUnmount: vi.fn(),
 }));
+const preferences = vi.hoisted(() => ({ theme: "dark", density: "comfortable", activeWorkspaceId: "workspace-1" }));
 vi.mock("../areas/chat/ChatArea", () => ({
   ChatArea: () => {
     useEffect(() => imports.chatUnmount, []);
-    return <div>Chat ready</div>;
+    return <div>Chat ready<input aria-label="Chat draft" defaultValue="" /></div>;
   },
 }));
 vi.mock("../areas/inbox/InboxArea", () => {
@@ -45,7 +46,7 @@ vi.mock("./inspector", () => ({
   InspectorPanel: () => null,
 }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
-  useUiPreferences: () => ({ theme: "dark", density: "comfortable" }),
+  useUiPreferences: () => preferences,
 }));
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({ useMediaQuery: () => false }));
 
@@ -60,6 +61,8 @@ it("keeps Chat immediate and loads only the requested cockpit area", async () =>
     act(() => root.render(<CockpitShell />));
     expect(container.textContent).toContain("Chat ready");
     for (const load of Object.values(imports)) expect(load).not.toHaveBeenCalled();
+    const draft = container.querySelector<HTMLInputElement>('input[aria-label="Chat draft"]')!;
+    draft.value = "Keep this draft";
 
     act(() => {
       window.history.pushState(null, "", "/work");
@@ -84,6 +87,21 @@ it("keeps Chat immediate and loads only the requested cockpit area", async () =>
     expect(imports.inbox).not.toHaveBeenCalled();
     expect(imports.system).not.toHaveBeenCalled();
     expect(imports.gallery).not.toHaveBeenCalled();
+
+    act(() => {
+      window.history.pushState(null, "", "/chat");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(container.querySelector('input[aria-label="Chat draft"]')).toBe(draft);
+    expect(draft.value).toBe("Keep this draft");
+    expect(draft.closest("div")?.style.display).not.toBe("none");
+    expect(container.querySelector('[role="status"]')).toBeNull();
+
+    preferences.activeWorkspaceId = "workspace-2";
+    act(() => root.render(<CockpitShell />));
+    const nextDraft = container.querySelector<HTMLInputElement>('input[aria-label="Chat draft"]')!;
+    expect(nextDraft).not.toBe(draft);
+    expect(nextDraft.value).toBe("");
   } finally {
     act(() => root.unmount());
     container.remove();

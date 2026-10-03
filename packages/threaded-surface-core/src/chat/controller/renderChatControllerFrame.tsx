@@ -21,6 +21,7 @@ import type { useMissionControlSurfaceState } from "../useMissionControlSurfaceS
 
 type Input = {
   lockSurface: NonNullable<MissionThreadedControllerHostProps["lockSurface"]>;
+  renderWhileLoading: boolean;
   error: string | null;
   hidePageHeader: NonNullable<MissionThreadedControllerHostProps["hidePageHeader"]>;
   approvalsCount: NonNullable<MissionThreadedControllerHostProps["approvalsCount"]>;
@@ -103,9 +104,10 @@ type Input = {
   >;
 };
 
-/** Renders the controller frame, invoking the surface only after loading completes. */
+/** Renders the controller frame; shells may own their initial discovery presentation. */
 export function renderChatControllerFrame({
   lockSurface,
+  renderWhileLoading,
   error,
   hidePageHeader,
   approvalsCount,
@@ -138,7 +140,7 @@ export function renderChatControllerFrame({
     turnStatus: latestSelectedTurn?.trace?.status,
     assistantContent: latestSelectedTurn?.assistantMessage?.content,
   });
-  if (sessionData.loading) {
+  if (sessionData.loading && !renderWhileLoading) {
     return (
       <section className={rootClassName}>
         {!lockSurface && !hidePageHeader ? (

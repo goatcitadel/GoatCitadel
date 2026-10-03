@@ -1,4 +1,5 @@
-import { lazy, Suspense, useContext, useEffect, useLayoutEffect, useState } from "react";
+import { Activity, lazy, Suspense, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
@@ -48,7 +49,13 @@ function CockpitShellContent({
   const areaLabel =
     COCKPIT_AREAS.find((entry) => entry.area === area)?.label ?? (area === "gallery" ? "Gallery" : "Settings");
   const firstRun = area === "settings" && rest[0] === "first-run";
-  const { theme, density } = useUiPreferences();
+  const { theme, density, activeCitadelId, activeWorkspaceId } = useUiPreferences();
+  // Preserve the visited Chat's DOM/state, but dispose its effects while hidden.
+  // Retention never crosses installation, Citadel or workspace boundaries.
+  const chatScope = JSON.stringify([getGatewayApiBaseUrl(), activeCitadelId, activeWorkspaceId]);
+  const retainedChat = useRef({ scope: chatScope, visited: false });
+  if (retainedChat.current.scope !== chatScope) retainedChat.current = { scope: chatScope, visited: false };
+  if (area === "chat") retainedChat.current.visited = true;
   const [paletteOpen, setPaletteOpen] = useState(false);
   const tablet = useMediaQuery("(640px <= width < 1024px)");
   const [collapseOverride, setCollapseOverride] = useState<boolean | null>(null);
@@ -126,35 +133,40 @@ function CockpitShellContent({
                   : "Reconnecting…"}
               </div>
             ) : null}
-            <Suspense
-              key={area}
-              fallback={
-                <p role="status" className="p-4 text-sm text-fg-muted">
-                  Loading {areaLabel}…
-                </p>
-              }
-            >
-              {area === "gallery" ? (
-                <Gallery />
-              ) : area === "chat" ? (
+            {retainedChat.current.visited ? (
+              <Activity key={chatScope} mode={area === "chat" ? "visible" : "hidden"}>
                 <ChatArea
                   gatewayUnavailable={gatewayReachability?.unavailable}
                   onVisibleSessionChange={onVisibleSessionChange}
                 />
-              ) : area === "inbox" ? (
-                <InboxArea />
-              ) : area === "library" ? (
-                <LibraryArea />
-              ) : area === "system" ? (
-                <SystemArea />
-              ) : area === "work" ? (
-                <WorkArea />
-              ) : area === "settings" ? (
-                <SettingsArea />
-              ) : (
-                <AreaPlaceholder area={area} />
-              )}
-            </Suspense>
+              </Activity>
+            ) : null}
+            {area !== "chat" ? (
+              <Suspense
+                key={area}
+                fallback={
+                  <p role="status" className="p-4 text-sm text-fg-muted">
+                    Loading {areaLabel}…
+                  </p>
+                }
+              >
+                {area === "gallery" ? (
+                  <Gallery />
+                ) : area === "inbox" ? (
+                  <InboxArea />
+                ) : area === "library" ? (
+                  <LibraryArea />
+                ) : area === "system" ? (
+                  <SystemArea />
+                ) : area === "work" ? (
+                  <WorkArea />
+                ) : area === "settings" ? (
+                  <SettingsArea />
+                ) : (
+                  <AreaPlaceholder area={area} />
+                )}
+              </Suspense>
+            ) : null}
           </main>
           <InspectorPanel />
         </div>

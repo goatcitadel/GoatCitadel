@@ -132,6 +132,7 @@ export function MissionThreadedControllerHost({
   surface,
   lockSurface = false,
   hidePageHeader = false,
+  renderWhileLoading = false,
   initialModeOverride,
   gatewayStatus,
   workTrust,
@@ -646,6 +647,7 @@ export function MissionThreadedControllerHost({
   };
   return renderChatControllerFrame({
     lockSurface,
+    renderWhileLoading,
     error: errorState.error,
     hidePageHeader,
     approvalsCount,

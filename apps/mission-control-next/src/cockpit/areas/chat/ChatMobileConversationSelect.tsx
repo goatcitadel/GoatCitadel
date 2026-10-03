@@ -20,6 +20,7 @@ export function ChatMobileConversationSelect({
       {rail.historyView === "archived" ? "Archived" : "Thread"}
       <select
         aria-label="Choose conversation"
+        disabled={rail.loading}
         value={selectedSessionId}
         onChange={(event) => {
           const value = event.target.value;

@@ -39,6 +39,19 @@ function view(surface: MissionThreadedRenderSurfaceInput, onVisibleSessionChange
 }
 
 describe("visible Chat session", () => {
+  it("shows conversation discovery immediately without claiming the history is empty or ready", async () => {
+    const surface = input(null);
+    surface.sessionRail.loading = true;
+    await act(async () => root.render(view(surface)));
+    expect(container.querySelector('section[aria-label="Chat"]')).toBeTruthy();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Loading conversations…");
+    expect(container.textContent).not.toContain("Choose a conversation");
+    expect(container.textContent).not.toContain("Conversation ready");
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="New conversation"]')?.disabled).toBe(true);
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Choose conversation"]')?.disabled).toBe(true);
+    await act(async () => root.unmount());
+  });
+
   it("opens the build editor on the selected path turn and falls back to the latest turn", () => {
     const active = {
       selectedTurnId: "hidden",
