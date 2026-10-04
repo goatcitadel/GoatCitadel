@@ -155,21 +155,44 @@ describe("cancel a waiting turn", () => {
 });
 
 describe("user input", () => {
-  it("answers the seeded prompt and waits for it to clear", async () => {
+  function seedPrompt(): void {
     mocks.seedChatUserInputScenario.mockResolvedValueOnce({
       sessionId: "s-1",
       workspaceId: "ws-testbench",
       turnId: "t-2",
       promptId: "p-1",
+      chatTurnDurableRunId: "run-2",
     });
-    mocks.answerChatUserInputPrompt.mockResolvedValueOnce({ ok: true, resumed: true });
-    mocks.fetchChatThread.mockResolvedValueOnce({ turns: [{ turnId: "t-2", trace: {} }] });
+    mocks.fetchChatThread.mockResolvedValue({ turns: [{ turnId: "t-2", trace: {} }] });
+  }
+
+  it("answers the seeded prompt, requires the turn to resume, and waits for the prompt to clear", async () => {
+    seedPrompt();
+    mocks.answerChatUserInputPrompt.mockResolvedValueOnce({ ok: true, resumed: true, resumedRunId: "run-2" });
     await expect(run("chat.user-input")).resolves.toMatchObject({
       status: "pass",
-      summary: "Answered; the turn resumed: yes.",
+      summary: "Answered; the turn resumed.",
     });
     expect(mocks.answerChatUserInputPrompt).toHaveBeenCalledWith("s-1", "t-2", "p-1", {
       response: { kind: "single_select", optionId: "option-a" },
     });
+  });
+
+  it("passes when the response omits the resumed run id", async () => {
+    seedPrompt();
+    mocks.answerChatUserInputPrompt.mockResolvedValueOnce({ ok: true, resumed: true });
+    await expect(run("chat.user-input")).resolves.toMatchObject({ status: "pass" });
+  });
+
+  it("fails when the answered prompt did not resume its turn", async () => {
+    seedPrompt();
+    mocks.answerChatUserInputPrompt.mockResolvedValueOnce({ ok: true, resumed: false });
+    await expect(run("chat.user-input")).rejects.toThrow("did not resume");
+  });
+
+  it("fails when the resumed run is not the seeded durable run", async () => {
+    seedPrompt();
+    mocks.answerChatUserInputPrompt.mockResolvedValueOnce({ ok: true, resumed: true, resumedRunId: "run-other" });
+    await expect(run("chat.user-input")).rejects.toThrow('resumed run "run-other", not the waiting run "run-2"');
   });
 });

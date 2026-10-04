@@ -134,6 +134,12 @@ export const chatTurnChecks: readonly CheckDef[] = [
         }),
       );
       ensure(answer.ok, "The gateway rejected the answer.", answer);
+      ensure(answer.resumed === true, "The answered prompt did not resume its turn.", answer);
+      ensure(
+        answer.resumedRunId === undefined || answer.resumedRunId === scenario.chatTurnDurableRunId,
+        `The answer resumed run "${answer.resumedRunId}", not the waiting run "${scenario.chatTurnDurableRunId}".`,
+        answer,
+      );
       await ctx.step("Prompt is cleared", () =>
         waitFor(
           () => fetchChatThread(session.sessionId),
@@ -141,7 +147,7 @@ export const chatTurnChecks: readonly CheckDef[] = [
           { signal: ctx.signal, timeoutMs: 15_000, label: "Clearing the answered prompt" },
         ),
       );
-      return pass(`Answered; the turn resumed: ${answer.resumed ? "yes" : "no"}.`, answer);
+      return pass("Answered; the turn resumed.", answer);
     },
   },
 ];
