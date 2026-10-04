@@ -44,5 +44,15 @@ export function describeRunEnd(state: RunState, counts: StatusCounts): string {
   if (state.running || state.endReason === undefined) {
     return "";
   }
-  return `Run ${state.endReason}: ${counts.pass} pass, ${counts.fail} fail, ${counts.blocked} blocked, ${counts.skipped} skipped.`;
+
+  const baseMessage = `${counts.pass} pass, ${counts.fail} fail, ${counts.blocked} blocked, ${counts.skipped} skipped`;
+
+  switch (state.endReason) {
+    case "completed":
+      return `Run completed: ${baseMessage}.`;
+    case "stopped":
+      return `Run stopped: ${baseMessage}, ${counts.cancelled} cancelled.`;
+    case "unreachable":
+      return `Run halted because the gateway became unreachable: ${baseMessage}, ${counts["not-run"]} not run.`;
+  }
 }

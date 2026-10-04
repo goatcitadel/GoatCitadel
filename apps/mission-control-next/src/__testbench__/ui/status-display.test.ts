@@ -30,4 +30,28 @@ describe("status display", () => {
       "Run completed: 1 pass, 0 fail, 0 blocked, 0 skipped.",
     );
   });
+
+  it("announces a stopped run with cancelled count", () => {
+    const running = runReducer(INITIAL_RUN_STATE, { type: "run-started", checkIds: ["a", "b"], at: "t" });
+    const stopping: RunEvent[] = [
+      { type: "check-finished", checkId: "a", status: "pass", summary: "ok", durationMs: 1 },
+      { type: "run-finished", at: "t", reason: "stopped" },
+    ];
+    const stopped = stopping.reduce(runReducer, running);
+    expect(describeRunEnd(stopped, countStatuses(stopped, ["a", "b"]))).toBe(
+      "Run stopped: 1 pass, 0 fail, 0 blocked, 0 skipped, 1 cancelled.",
+    );
+  });
+
+  it("announces an unreachable run with not-run count", () => {
+    const running = runReducer(INITIAL_RUN_STATE, { type: "run-started", checkIds: ["a", "b"], at: "t" });
+    const halting: RunEvent[] = [
+      { type: "check-finished", checkId: "a", status: "pass", summary: "ok", durationMs: 1 },
+      { type: "run-finished", at: "t", reason: "unreachable" },
+    ];
+    const halted = halting.reduce(runReducer, running);
+    expect(describeRunEnd(halted, countStatuses(halted, ["a", "b"]))).toBe(
+      "Run halted because the gateway became unreachable: 1 pass, 0 fail, 0 blocked, 0 skipped, 1 not run.",
+    );
+  });
 });
