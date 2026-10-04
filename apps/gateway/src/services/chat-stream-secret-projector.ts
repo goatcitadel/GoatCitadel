@@ -6,6 +6,8 @@ export const CHAT_STREAM_SECRET_PROJECTION_VERSION_FIELD = "__publicSecretProjec
 
 interface StreamTextProjectionState {
   pending: string;
+  /** Projected assistant text already streamed, reconciled against message_done. */
+  released: string;
   suppressUntilTerminal: boolean;
   suppressed: boolean;
   sessionId: string;
@@ -26,7 +28,8 @@ const MAX_UNDECIDED_STREAM_SUFFIX_CHARS = 512;
  * split a credential pattern into independently-safe fragments. Completed safe
  * words/statements are projected once and released; open credential quotes and
  * Authorization lines remain buffered through their logical delimiter. The
- * final message_done remains the authoritative complete projected content.
+ * final message_done remains the authoritative complete projected content; the
+ * retained assistant tail is streamed from it so released deltas join to it.
  */
 export class ChatStreamSecretProjector {
   private readonly textStates = new Map<string, StreamTextProjectionState>();
@@ -46,9 +49,11 @@ export class ChatStreamSecretProjector {
   }
 
   /**
-   * Projects a chunk and returns any safe thinking tail immediately before a
-   * terminal chunk. Thinking has no full-content terminal of its own, so this
-   * preserves its final token without weakening split-secret containment.
+   * Projects a chunk and returns any safe retained text tail immediately before
+   * a terminal chunk. Thinking has no full-content terminal of its own, so this
+   * preserves its final token without weakening split-secret containment. The
+   * assistant tail before message_done is taken from that chunk's projected
+   * content, so it never streams text the terminal content does not carry.
    */
   public projectAll(chunk: ProjectableChatStreamChunk): ProjectableChatStreamChunk[] {
     if (chunk.type === "delta" || chunk.type === "thinking_delta") {
@@ -59,7 +64,12 @@ export class ChatStreamSecretProjector {
     const pendingText =
       (chunk.type === "message_done" || chunk.type === "done" || chunk.type === "error") &&
       typeof chunk.turnId === "string"
-        ? this.drainPendingText(chunk.turnId, chunk.type !== "message_done")
+        ? this.drainPendingText(
+            chunk.turnId,
+            projected.type === "message_done"
+              ? { content: projected.content, messageId: projected.messageId }
+              : undefined,
+          )
         : [];
     if (
       (chunk.type === "message_done" || chunk.type === "done" || chunk.type === "error") &&
@@ -71,7 +81,7 @@ export class ChatStreamSecretProjector {
   }
 
   public flushTurn(turnId: string): ChatStreamChunkDraft[] {
-    const pending = this.drainPendingText(turnId, true);
+    const pending = this.drainPendingText(turnId);
     this.resetTurn(turnId);
     return pending;
   }
@@ -99,6 +109,7 @@ export class ChatStreamSecretProjector {
     const key = `${chunk.turnId}\u0000${chunk.type}`;
     const state = this.textStates.get(key) ?? {
       pending: "",
+      released: "",
       suppressUntilTerminal: this.suppressTextTurns.has(chunk.turnId),
       suppressed: this.suppressTextTurns.has(chunk.turnId),
       sessionId: chunk.sessionId,
@@ -141,18 +152,43 @@ export class ChatStreamSecretProjector {
         }
       }
     }
+    if (state.type === "delta") {
+      state.released += delta;
+    }
     this.textStates.set(key, state);
     return { ...chunk, delta } as T;
   }
 
-  private drainPendingText(turnId: string, includeAssistantDelta: boolean): ChatStreamChunkDraft[] {
+  /**
+   * Without a message_done terminal, retained text is drained through the
+   * canonical redactor. With one, the assistant stream instead receives only
+   * the remainder of that projected content after its released prefix, and
+   * nothing when the stream was suppressed or diverged from the final content.
+   */
+  private drainPendingText(
+    turnId: string,
+    assistantTerminal?: { content: string; messageId: string },
+  ): ChatStreamChunkDraft[] {
     const prefix = `${turnId}\u0000`;
     const states = [...this.textStates.entries()]
-      .filter(([key, state]) => key.startsWith(prefix) && (includeAssistantDelta || state.type === "thinking_delta"))
+      .filter(([key]) => key.startsWith(prefix))
       .sort((left, right) => left[1].order - right[1].order);
     const chunks: ChatStreamChunkDraft[] = [];
     for (const [key, state] of states) {
       this.textStates.delete(key);
+      if (state.type === "delta" && assistantTerminal) {
+        const tail = readAssistantTerminalRemainder(state, assistantTerminal.content);
+        if (tail) {
+          chunks.push({
+            type: "delta",
+            sessionId: state.sessionId,
+            turnId: state.turnId,
+            messageId: assistantTerminal.messageId,
+            delta: tail,
+          });
+        }
+        continue;
+      }
       const delta = state.suppressed ? "[REDACTED]" : redactSecretText(state.pending).value;
       if (!delta) {
         continue;
@@ -166,6 +202,13 @@ export class ChatStreamSecretProjector {
     }
     return chunks;
   }
+}
+
+function readAssistantTerminalRemainder(state: StreamTextProjectionState, terminalContent: string): string {
+  if (state.suppressed || !terminalContent.startsWith(state.released)) {
+    return "";
+  }
+  return terminalContent.slice(state.released.length);
 }
 
 function canBypassCanonicalStreamRedaction(value: string): boolean {
