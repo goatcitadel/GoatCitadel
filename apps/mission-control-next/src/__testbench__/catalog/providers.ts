@@ -84,13 +84,20 @@ export const providerChecks: readonly CheckDef[] = [
     tier: "external",
     realSafe: true,
     description:
-      "Asks the active provider's API for its model list. Reaches the provider over the network, spends no tokens, and saves nothing. The sandbox stub may not serve a catalog.",
+      "Asks the active provider for its model list. The gateway may answer from its catalog cache; a refresh reaches the provider's API and updates that cache. Spends no tokens. The sandbox stub may not serve a catalog.",
     routes: ["GET /api/v1/llm/config", "GET /api/v1/llm/models"],
     async run() {
       const config = await fetchLlmConfig();
       const catalog = await fetchLlmModels(config.activeProviderId);
       const warning = typeof catalog.warning === "string" && catalog.warning !== "" ? `: ${catalog.warning}` : "";
       ensure(catalog.source === "live", `The catalog came from ${catalog.source}${warning}.`, catalog);
+      // The gateway serves a cached catalog as "live" with catalogStatus "stale" while it revalidates.
+      ensure(
+        catalog.catalogStatus !== "stale",
+        "The catalog is a stale cached copy; the provider was not confirmed live.",
+        catalog,
+      );
+      ensure(catalog.items.length > 0, `The live catalog lists no models${warning}.`, catalog);
       return pass(`${catalog.items.length} models listed live by ${config.activeProviderId}.`);
     },
   },

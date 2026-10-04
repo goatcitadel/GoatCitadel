@@ -80,6 +80,20 @@ describe("provider checks", () => {
     await expect(run("llm.model-catalog")).rejects.toThrow("template_fallback: Catalog unreachable.");
   });
 
+  it("rejects a stale cached catalog that is still labelled live", async () => {
+    mocks.fetchLlmModels.mockResolvedValueOnce({ source: "live", catalogStatus: "stale", items: [{}] });
+    await expect(run("llm.model-catalog")).rejects.toThrow("stale cached copy");
+    mocks.fetchLlmModels.mockResolvedValueOnce({ source: "live", catalogStatus: "fresh", items: [{}] });
+    await expect(run("llm.model-catalog")).resolves.toMatchObject({ status: "pass" });
+  });
+
+  it("rejects a live catalog that lists no models and surfaces its warning", async () => {
+    mocks.fetchLlmModels.mockResolvedValueOnce({ source: "live", items: [] });
+    await expect(run("llm.model-catalog")).rejects.toThrow("lists no models");
+    mocks.fetchLlmModels.mockResolvedValueOnce({ source: "live", items: [], warning: "Provider returned nothing." });
+    await expect(run("llm.model-catalog")).rejects.toThrow("Provider returned nothing.");
+  });
+
   it("reports the provider exercise result and passes the run signal", async () => {
     mocks.exerciseProvider.mockResolvedValueOnce({ ok: true, model: "verification-stub-chat", elapsedMs: 12 });
     await expect(run("llm.provider-exercise")).resolves.toMatchObject({
