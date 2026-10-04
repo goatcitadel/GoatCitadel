@@ -621,7 +621,10 @@ function setupMocks() {
     decision: { providerId: "openai", model: "gpt-5.5" },
   });
   streamAgentChatMessageMock.mockImplementation(async () => undefined);
-  fetchChatSessionStatusMock.mockImplementation(async (sessionId: string) => ({ sessionId, workspaceId: "workspace-1" }));
+  fetchChatSessionStatusMock.mockImplementation(async (sessionId: string) => ({
+    sessionId,
+    workspaceId: "workspace-1",
+  }));
   createChatSessionMock.mockImplementation(async (input: { workspaceId?: string; projectId?: string }) => ({
     ...selectedSession,
     workspaceId: input.workspaceId ?? "workspace-1",
@@ -636,14 +639,41 @@ function setupMocks() {
       sessionId: "session-new",
       sessionKey: "session-new",
       title: "Fork of Launch plan",
-      forkRelationships: [{ forkId: "fork-1", direction: "forked_from", relatedSessionId: "session-1",
-        sourceTurnId: "turn-1", transcriptPathHash: "a".repeat(64), createdAt: "2026-09-30T00:00:00Z" }],
+      forkRelationships: [
+        {
+          forkId: "fork-1",
+          direction: "forked_from",
+          relatedSessionId: "session-1",
+          sourceTurnId: "turn-1",
+          transcriptPathHash: "a".repeat(64),
+          createdAt: "2026-09-30T00:00:00Z",
+        },
+      ],
     },
-    manifest: { manifestVersion: "chat.session-fork-manifest.v1", forkId: "fork-1", sourceSessionId: "session-1",
-      sourceTurnId: "turn-1", newSessionId: "session-new", workspaceId: "workspace-1", transcriptPathHash: "a".repeat(64),
-      turnMappings: [{ sourceTurnId: "turn-1", copiedTurnId: "copied-turn-1", sourceTraceHash: "b".repeat(64), copiedTraceHash: "c".repeat(64) }],
-      messageMappings: [], attachmentCopies: [], artifactCopies: [], contextSnapshotHashes: [], sourceEvidenceHashes: [],
-      createdByActorId: "operator", createdAt: "2026-09-30T00:00:00Z" },
+    manifest: {
+      manifestVersion: "chat.session-fork-manifest.v1",
+      forkId: "fork-1",
+      sourceSessionId: "session-1",
+      sourceTurnId: "turn-1",
+      newSessionId: "session-new",
+      workspaceId: "workspace-1",
+      transcriptPathHash: "a".repeat(64),
+      turnMappings: [
+        {
+          sourceTurnId: "turn-1",
+          copiedTurnId: "copied-turn-1",
+          sourceTraceHash: "b".repeat(64),
+          copiedTraceHash: "c".repeat(64),
+        },
+      ],
+      messageMappings: [],
+      attachmentCopies: [],
+      artifactCopies: [],
+      contextSnapshotHashes: [],
+      sourceEvidenceHashes: [],
+      createdByActorId: "operator",
+      createdAt: "2026-09-30T00:00:00Z",
+    },
   });
   fetchChatSessionGoalMock.mockResolvedValue({
     sessionId: "session-1",
@@ -1066,7 +1096,7 @@ async function selectDefaultSession() {
 
 describe("MissionThreadedControllerHost", () => {
   beforeEach(() => {
-  resetChatSessionCreationForTests();
+    resetChatSessionCreationForTests();
     vi.clearAllMocks();
     confirmModalProps = [];
     latestSurfaceInput = null;
@@ -1729,7 +1759,11 @@ describe("MissionThreadedControllerHost", () => {
       panel?.onDraftChange?.("export const blocked = true;");
       panel?.onDiscardDraft?.();
       panel?.onSaveFile?.();
-      await panel?.onFileOperation?.({ operation: "create_file", path: "src/blocked.ts", expectedRevision: "a".repeat(64) });
+      await panel?.onFileOperation?.({
+        operation: "create_file",
+        path: "src/blocked.ts",
+        expectedRevision: "a".repeat(64),
+      });
       panel?.onRunValidationCommand?.({ command: "pnpm", args: ["test"] } as any);
       panel?.onApplyPatch?.("diff --git a/a b/a");
       panel?.onRevertFile?.("src/index.ts");
@@ -2142,14 +2176,27 @@ describe("MissionThreadedControllerHost", () => {
   it("opens a returned plan in its owning Chat without waiting for realtime and ignores a departed owner", async () => {
     await renderHost();
     await selectDefaultSession();
-    const plan = await createChangePlanMock({workspaceId:"workspace-1",sessionId:"session-1",request:{kind:"session_model",providerId:"openai",model:"gpt-5.6"}});
-    await act(async()=> { latestSurfaceInput?.onReviewChangePlan?.(plan as any); await flushEffects(); });
+    const plan = await createChangePlanMock({
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      request: { kind: "session_model", providerId: "openai", model: "gpt-5.6" },
+    });
+    await act(async () => {
+      latestSurfaceInput?.onReviewChangePlan?.(plan as any);
+      await flushEffects();
+    });
     expect(latestSurfaceInput?.changePlanReceipt?.plan.planId).toBe(plan.planId);
-    expect(latestSurfaceInput?.changePlans?.map(item=>item.planId)).toContain(plan.planId);
+    expect(latestSurfaceInput?.changePlans?.map((item) => item.planId)).toContain(plan.planId);
     const previousOwner = latestSurfaceInput?.onReviewChangePlan;
-    await act(async()=>{ latestSurfaceInput?.sessionRail.onSelectSession("session-2",{turnId:"turn-2"}); await flushEffects(); });
-    await act(async()=>{ previousOwner?.(plan as any); await flushEffects(); });
-    expect(latestSurfaceInput?.changePlans?.map(item=>item.planId)).not.toContain(plan.planId);
+    await act(async () => {
+      latestSurfaceInput?.sessionRail.onSelectSession("session-2", { turnId: "turn-2" });
+      await flushEffects();
+    });
+    await act(async () => {
+      previousOwner?.(plan as any);
+      await flushEffects();
+    });
+    expect(latestSurfaceInput?.changePlans?.map((item) => item.planId)).not.toContain(plan.planId);
   });
 
   it("does not promote older terminal receipts after dismissing the newest one", async () => {
@@ -2403,9 +2450,16 @@ describe("MissionThreadedControllerHost", () => {
 
   it("lets a shell render immediately with explicit conversation discovery state", async () => {
     useChatSessionDataMock.mockReturnValue({
-      ...useChatSessionDataMock(), loading: true, projects: null, sessions: null,
+      ...useChatSessionDataMock(),
+      loading: true,
+      projects: null,
+      sessions: null,
     });
-    const { renderer, renderSurface } = await renderHost({ lockSurface: true, surface: "chat", renderWhileLoading: true });
+    const { renderer, renderSurface } = await renderHost({
+      lockSurface: true,
+      surface: "chat",
+      renderWhileLoading: true,
+    });
     expect(renderSurface).toHaveBeenCalled();
     expect(latestSurfaceInput?.sessionRail.loading).toBe(true);
     expect(JSON.stringify(renderer.toJSON())).not.toContain("Preparing");
@@ -2686,7 +2740,9 @@ describe("MissionThreadedControllerHost", () => {
       latestSurfaceInput?.activeSessionSurfaceProps?.onNavigateSurface("cowork", { sessionId: "session-2" });
       await flushEffects();
     });
-    expect(confirmModalProps.some((props) => props.open && props.title === "Discard unsaved workbench changes?")).toBe(false);
+    expect(confirmModalProps.some((props) => props.open && props.title === "Discard unsaved workbench changes?")).toBe(
+      false,
+    );
     expect(dirtyDock.discardWorkbenchDraft).not.toHaveBeenCalled();
     expect(navigateSurface).toHaveBeenCalledWith("cowork", expect.objectContaining({ sessionId: "session-2" }));
     await act(async () => {
@@ -3295,7 +3351,10 @@ describe("MissionThreadedControllerHost", () => {
     expect(latestSurfaceInput?.sessionRail.selectedSessionId).toBe("session-new");
     const sessionData = useChatSessionDataMock.mock.results.at(-1)?.value;
     expect(sessionData.setSessions).toHaveBeenCalled();
-    expect(sessionData.loadSidebar).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ preferredSessionId: "session-new" }));
+    expect(sessionData.loadSidebar).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ preferredSessionId: "session-new" }),
+    );
   });
 
   it("hydrates server metadata without overwriting conflicting rename and organization drafts", async () => {
@@ -4354,6 +4413,30 @@ describe("MissionThreadedControllerHost", () => {
     });
 
     expect(onResolvedModeChange).toHaveBeenCalledWith("chat", "session-sync");
+  });
+
+  it("selects the conversation named by the route search a shell passes, not the live URL", async () => {
+    // While the cockpit holds a Back move, the live URL briefly names the held target. The cockpit
+    // passes the location its views show, so a render in that window must not select the target.
+    const actual = await vi.importActual<typeof import("./chat/useChatThreadController")>(
+      "./chat/useChatThreadController",
+    );
+    const fixture = useChatThreadControllerMock();
+    // The real controller owns route selection; everything else it returns stays the fixture's.
+    useChatThreadControllerMock.mockImplementation((input: Parameters<typeof actual.useChatThreadController>[0]) => {
+      actual.useChatThreadController(input);
+      return fixture;
+    });
+    installBrowserGlobals("?sessionId=session-b");
+
+    await renderHost({ routeSearch: "?sessionId=session-a&shell=cockpit" });
+    expect(latestSurfaceInput?.sessionRail.selectedSessionId).toBe("session-a");
+    expect(useChatSessionDataMock).toHaveBeenLastCalledWith(expect.objectContaining({ routeSessionId: "session-a" }));
+
+    // Classic passes nothing and keeps reading the live URL.
+    await cleanupRenderedHosts();
+    await renderHost();
+    expect(latestSurfaceInput?.sessionRail.selectedSessionId).toBe("session-b");
   });
 
   describe("auto-route surfaceMode wiring guard (#136)", () => {

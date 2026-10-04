@@ -210,6 +210,12 @@ export interface MissionThreadedControllerHostProps {
    * session-mode-wins behavior untouched.
    */
   initialModeOverride?: ChatMode;
+  /**
+   * The query the controller selects the session, turn and artifact from. A shell that can hold a
+   * Back or Forward move passes the location its views show, because the live URL briefly names the
+   * held target. Omitted, the controller reads `window.location.search` during render.
+   */
+  routeSearch?: string;
   gatewayStatus?: ThreadedGatewayStatusSummary;
   workTrust?: WorkTrustDescriptor;
   onWorkTrustSummaryChange?: (summary: string | null) => void;

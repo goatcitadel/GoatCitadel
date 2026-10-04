@@ -1,5 +1,22 @@
 import { canonicalJsonString, type LlmProviderRequestConfig } from "@goatcitadel/contracts";
-import { providerSaveInput, type ProviderSaveDraft } from "./provider-save-contract";
+import { providerProfilePlanRequest, providerSaveInput, type ProviderSaveDraft } from "./provider-save-contract";
+
+/** What saving this draft sends, normalized as the save normalizes it. A governed creation also sends custody. */
+function sentProviderPayload(draft: ProviderSaveDraft): string {
+  const { request, ...profile } = providerSaveInput(draft);
+  return canonicalJsonString(
+    draft.governedCreation ? { request, plan: providerProfilePlanRequest(draft) } : { request, profile },
+  );
+}
+
+/**
+ * Whether saving `draft` sends anything that `saved` doesn't already hold. A draft can differ from the saved
+ * profile only in ways the save trims or parses away, and resubmitting the saved profile can conflict.
+ * Throws where the save itself would refuse the draft.
+ */
+export function sendsProviderChanges(draft: ProviderSaveDraft, saved: ProviderSaveDraft): boolean {
+  return sentProviderPayload(draft) !== sentProviderPayload(saved);
+}
 
 /** The existing owner merges transport fields; absence is not a delete instruction. */
 function removedField(previous: unknown, next: unknown, path = "transport"): string | undefined {

@@ -9,23 +9,34 @@ import { CockpitNavigationProvider } from "./CockpitNavigationProvider";
 
 vi.mock("../ui/Sheet", () => ({
   Sheet: ({ open, title, children }: { open: boolean; title: string; children: ReactNode }) =>
-    open ? <section role="dialog" aria-label={title}>{children}</section> : null,
+    open ? (
+      <section role="dialog" aria-label={title}>
+        {children}
+      </section>
+    ) : null,
 }));
-vi.mock("../../shell-preference", () => ({ switchShell: vi.fn() }));
+const shell = vi.hoisted(() => ({ switchShell: vi.fn<typeof import("../../shell-preference").switchShell>() }));
+vi.mock("../../shell-preference", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../shell-preference")>()),
+  switchShell: shell.switchShell,
+}));
 const preload = vi.hoisted(() => vi.fn());
 vi.mock("./use-cockpit-preload", () => ({ useCockpitPreload: () => preload }));
 vi.mock("../data/use-operator-inbox", () => ({
-  useOperatorInbox: () => ({ data: {
-    workspaceId: "default",
-    items: [],
-    coverage: [],
-    counts: {
-      needs_decision: { known: 2, complete: true },
-      proposals: { known: 0, complete: true },
-      needs_attention: { known: 0, complete: false },
-      updates: { known: 0, complete: false },
+  useOperatorInbox: () => ({
+    data: {
+      workspaceId: "default",
+      items: [],
+      coverage: [],
+      counts: {
+        needs_decision: { known: 2, complete: true },
+        proposals: { known: 0, complete: true },
+        needs_attention: { known: 0, complete: false },
+        updates: { known: 0, complete: false },
+      },
     },
-  }, isError: false }),
+    isError: false,
+  }),
 }));
 
 let root: Root;
@@ -53,7 +64,17 @@ function button(label: string): HTMLButtonElement {
 
 describe("MobileTabBar", () => {
   it("warms touch and keyboard destinations without navigating until activation", async () => {
-    await act(async () => root.render(<QueryClientProvider client={new QueryClient()}><UiPreferencesProvider><CockpitNavigationProvider><MobileTabBar onOpenPalette={vi.fn()} /></CockpitNavigationProvider></UiPreferencesProvider></QueryClientProvider>));
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <UiPreferencesProvider>
+            <CockpitNavigationProvider>
+              <MobileTabBar onOpenPalette={vi.fn()} />
+            </CockpitNavigationProvider>
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
     act(() => button("Work").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })));
     expect(preload).toHaveBeenLastCalledWith("work");
     act(() => button("Library").focus());
@@ -63,7 +84,17 @@ describe("MobileTabBar", () => {
     expect(window.location.pathname).toBe("/work");
   });
   it("opens More as a sheet with System and appearance controls", async () => {
-    await act(async () => root.render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><UiPreferencesProvider><CockpitNavigationProvider><MobileTabBar onOpenPalette={vi.fn()} /></CockpitNavigationProvider></UiPreferencesProvider></QueryClientProvider>));
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <UiPreferencesProvider>
+            <CockpitNavigationProvider>
+              <MobileTabBar onOpenPalette={vi.fn()} />
+            </CockpitNavigationProvider>
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
     expect(container.querySelector('[title="At least this many Inbox items"]')?.textContent).toBe("2+");
     expect(container.querySelector('button[aria-label="Inbox, at least 2 items"]')).not.toBeNull();
     await act(async () => button("More").click());
@@ -77,5 +108,27 @@ describe("MobileTabBar", () => {
     await act(async () => button("System").click());
     expect(window.location.pathname).toBe("/system");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+  it("switches to classic Mission Control as the saved layout, not a visit", async () => {
+    shell.switchShell.mockReset();
+    shell.switchShell.mockResolvedValue("opened");
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <UiPreferencesProvider>
+            <CockpitNavigationProvider>
+              <MobileTabBar onOpenPalette={vi.fn()} />
+            </CockpitNavigationProvider>
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await act(async () => button("More").click());
+    await act(async () => button("Switch to classic Mission Control").click());
+    await vi.waitFor(() => expect(shell.switchShell).toHaveBeenCalledOnce());
+    const [name, options] = shell.switchShell.mock.calls[0]!;
+    expect(name).toBe("classic");
+    // Without an href, switchShell builds the URL itself and saves classic as the layout.
+    expect(options.href).toBeUndefined();
   });
 });

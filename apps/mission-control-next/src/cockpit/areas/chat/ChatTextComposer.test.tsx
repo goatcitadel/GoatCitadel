@@ -10,7 +10,11 @@ import {
   type ComposerProps,
 } from "./ChatTextComposer";
 
-vi.mock("../../../shell-preference", () => ({ switchShell: vi.fn() }));
+const shell = vi.hoisted(() => ({ switchShell: vi.fn<typeof import("../../../shell-preference").switchShell>() }));
+vi.mock("../../../shell-preference", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../shell-preference")>()),
+  switchShell: shell.switchShell,
+}));
 
 let root: Root;
 let container: HTMLDivElement;
@@ -193,6 +197,21 @@ describe("cockpit text composer", () => {
     const labels = [...container.querySelectorAll("button")].map((b) => b.textContent?.trim());
     expect(labels).toContain("Open classic view");
     expect(labels).not.toContain("More controls");
+  });
+
+  it("opens the classic view as a visit with this conversation, so the saved layout stays the cockpit", async () => {
+    shell.switchShell.mockReset();
+    shell.switchShell.mockResolvedValue("opened");
+    window.history.replaceState(null, "", "/chat?shell=cockpit");
+    await act(async () => root.render(<ChatTextComposer props={composerProps()} />));
+    const open = [...container.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Open classic view");
+    await act(async () => open!.click());
+    await vi.waitFor(() => expect(shell.switchShell).toHaveBeenCalledOnce());
+    const [name, options] = shell.switchShell.mock.calls[0]!;
+    expect(name).toBe("classic");
+    const target = new URL(options.href!);
+    expect(target.searchParams.get("shellScope")).toBe("visit");
+    expect(target.searchParams.get("sessionId")).toBe("session-1");
   });
 
   it("does not send through a pending decision while the route is checking", async () => {

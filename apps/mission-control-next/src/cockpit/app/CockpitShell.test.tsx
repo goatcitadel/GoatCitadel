@@ -472,4 +472,54 @@ describe("CockpitShell", () => {
       consoleError.mockRestore();
     }
   });
+
+  it("contains a Chat render failure in the Chat view while the navigation stays usable", async () => {
+    chatArea.failure = new Error("synthetic Chat failure");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    window.history.replaceState(null, "", "/chat?shell=cockpit");
+    try {
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+            <CockpitShell />
+          </QueryClientProvider>,
+        );
+      });
+      expect(failedView("Chat")).toBe(true);
+      expect(container.querySelector('main [role="alert"]')?.textContent).toContain("Chat couldn't be shown");
+      const nav = container.querySelector('nav[aria-label="Areas"]')!;
+      await act(async () => nav.querySelector<HTMLButtonElement>('button[aria-label^="Inbox"]')!.click());
+      expect(window.location.pathname).toBe("/inbox");
+      expect(nav.querySelector('[aria-current="page"]')?.getAttribute("aria-label")).toMatch(/^Inbox/);
+    } finally {
+      chatArea.failure = null;
+      consoleError.mockRestore();
+    }
+  });
+
+  it("opens Chat from a failed area's Go to Chat", async () => {
+    libraryArea.failure = new Error("synthetic Library failure");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    window.history.replaceState(null, "", "/library?shell=cockpit");
+    try {
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={new QueryClient()}>
+            <CockpitShell />
+          </QueryClientProvider>,
+        );
+      });
+      await vi.waitFor(() => expect(failedView("Library")).toBe(true));
+      const goToChat = [...container.querySelectorAll<HTMLButtonElement>('[role="alert"] button')].find(
+        (button) => button.textContent === "Go to Chat",
+      );
+      await act(async () => goToChat!.click());
+      expect(window.location.pathname + window.location.search).toBe("/chat?shell=cockpit");
+      expect(container.textContent).toContain("Chat content");
+      expect(failedView("Library")).toBe(false);
+    } finally {
+      libraryArea.failure = null;
+      consoleError.mockRestore();
+    }
+  });
 });

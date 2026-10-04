@@ -388,4 +388,13 @@ describe("native provider owner composition", () => {
     await fill("Provider label", "Changed label");
     expect(button("Review provider profile").disabled).toBe(false);
   });
+  it("keeps profile review closed while the edit would send the saved profile", async () => {
+    await render();
+    await click("Edit provider profile");
+    // The save trims the label, so this sends exactly the saved profile.
+    await fill("Provider label", "Fixture ");
+    expect(button("Review provider profile").disabled).toBe(true);
+    await fill("Provider label", "Fixture renamed");
+    expect(button("Review provider profile").disabled).toBe(false);
+  });
 });

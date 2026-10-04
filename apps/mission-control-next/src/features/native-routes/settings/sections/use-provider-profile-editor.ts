@@ -29,7 +29,7 @@ import {
   providerProfilePlanRequest,
   type ProviderSaveDraft,
 } from "./provider-save-contract";
-import { prepareProviderSave } from "./provider-save-operation";
+import { prepareProviderSave, sendsProviderChanges } from "./provider-save-operation";
 import { matchesProviderTransportReceipt } from "./provider-transport-receipt";
 import type { ProviderCatalog, ProviderNoticeSetter } from "./provider-section-types";
 import {
@@ -142,6 +142,7 @@ export function useProviderProfileEditor({
   let saveOperation: ReturnType<typeof prepareProviderSave> | undefined;
   let creationRequest: ReturnType<typeof providerProfilePlanRequest> | undefined;
   let saveOperationError: string | undefined;
+  let sendsChanges = false;
   try {
     const prepared = prepareProviderSave(
       providerEditor.value,
@@ -150,6 +151,7 @@ export function useProviderProfileEditor({
     );
     if (providerEditor.value.governedCreation && prepared.kind === "profile")
       creationRequest = providerProfilePlanRequest(providerEditor.value);
+    sendsChanges = sendsProviderChanges(providerEditor.value, providerCanonical);
     saveOperation = prepared;
   } catch (error) {
     saveOperationError = getErrorMessage(error);
@@ -248,8 +250,16 @@ export function useProviderProfileEditor({
         }
       }
       const clean = transportConfirmed
-        ? providerEditor.acceptSaved({ ...submitted, transport: draftFromRequestConfig(next.providerConfigs
-          ?.find((item) => item.providerId === submitted.provider.providerId.trim())?.request) }, next.revision, submitted)
+        ? providerEditor.acceptSaved(
+            {
+              ...submitted,
+              transport: draftFromRequestConfig(
+                next.providerConfigs?.find((item) => item.providerId === submitted.provider.providerId.trim())?.request,
+              ),
+            },
+            next.revision,
+            submitted,
+          )
         : providerChange.receive(next, submitted, revision);
       acknowledged = true;
       if (!clean && next.changePlanReceipt && viewCurrent() && currentEditor.current === editorIdentity)
@@ -258,9 +268,12 @@ export function useProviderProfileEditor({
       if (viewCurrent() && currentEditor.current === editorIdentity) {
         if (clean) {
           onSaved(submitted.provider.providerId.trim());
-          setNotice({ tone: "success", message: transportConfirmed
-            ? "Transport accepted by the Gateway. The saved revision and public fields were confirmed; header values remain hidden."
-            : "Provider saved and confirmed." });
+          setNotice({
+            tone: "success",
+            message: transportConfirmed
+              ? "Transport accepted by the Gateway. The saved revision and public fields were confirmed; header values remain hidden."
+              : "Provider saved and confirmed.",
+          });
         }
       }
       if (clean) void loadModelsForProvider(submitted.provider.providerId.trim(), { force: true });
@@ -306,6 +319,8 @@ export function useProviderProfileEditor({
     providerRequestValidation,
     saveOperationKind: saveOperation?.kind,
     saveOperationError,
+    /** Whether a save sends anything the saved profile doesn't hold; whitespace-only edits send nothing new. */
+    sendsChanges,
     providerSaveBusy,
     setProviderSaveBusy,
     currentEditor,
