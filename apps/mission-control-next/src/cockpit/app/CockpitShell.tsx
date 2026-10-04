@@ -43,7 +43,7 @@ function CockpitShellContent({
   onVisibleSessionChange,
 }: CockpitShellProps) {
   const { isTransitionPending } = useCockpitNavigation();
-  const { area, rest, navigate } = useCockpitRoute();
+  const { area, rest, pathname, search, navigate } = useCockpitRoute();
   const areaLabel =
     COCKPIT_AREAS.find((entry) => entry.area === area)?.label ?? (area === "gallery" ? "Gallery" : "Settings");
   const firstRun = area === "settings" && rest[0] === "first-run";
@@ -133,7 +133,8 @@ function CockpitShellContent({
             ) : null}
             {retainedChat.current.visited ? (
               <Activity key={chatScope} mode={area === "chat" ? "visible" : "hidden"}>
-                <AreaErrorBoundary label="Chat" resetKey={chatScope}>
+                {/* A new route query, such as the palette's New chat, retries a failed Chat. */}
+                <AreaErrorBoundary label="Chat" resetKey={chatScope + search}>
                   <ChatArea
                     gatewayUnavailable={gatewayReachability?.unavailable}
                     onVisibleSessionChange={onVisibleSessionChange}
@@ -142,7 +143,8 @@ function CockpitShellContent({
               </Activity>
             ) : null}
             {area !== "chat" ? (
-              <AreaErrorBoundary key={area} label={areaLabel} resetKey={area} onGoToChat={() => navigate("/chat")}>
+              // `key` remounts on an area change; the path retries a failed view after Back or a jump inside the area.
+              <AreaErrorBoundary key={area} label={areaLabel} resetKey={pathname} onGoToChat={() => navigate("/chat")}>
                 <Suspense
                   key={area}
                   fallback={
