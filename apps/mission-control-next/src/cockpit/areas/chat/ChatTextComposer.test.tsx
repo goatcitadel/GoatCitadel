@@ -367,4 +367,19 @@ describe("cockpit text composer", () => {
     );
     expect(sendButton().disabled).toBe(true);
   });
+
+  it("does not send the Enter that confirms an IME composition", async () => {
+    const props = composerProps();
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    await act(async () =>
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true })),
+    );
+    await act(async () =>
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true })),
+    );
+    expect(props.onSend).not.toHaveBeenCalled();
+    await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(props.onSend).toHaveBeenCalledOnce();
+  });
 });

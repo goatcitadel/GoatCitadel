@@ -6,6 +6,7 @@ import { ChatComposerControls } from "./ChatComposerControls";
 import { ChatComposerPalette } from "./ChatComposerPalette";
 import { ChatRunVariables } from "./ChatRunVariables";
 import { composerSendBlock, type ComposerSendBlock } from "./composer-send-block";
+import { isImeEnter } from "./ime";
 
 export type ComposerProps = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -150,7 +151,7 @@ export function ChatTextComposer({
   };
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter") {
-      if (event.nativeEvent.isComposing || (event.shiftKey && !event.ctrlKey && !event.metaKey)) return;
+      if (isImeEnter(event) || (event.shiftKey && !event.ctrlKey && !event.metaKey)) return;
       event.preventDefault();
       if (props.commandSuggestions.length && !localReady) {
         const selected = props.commandSuggestions[props.commandIndex];

@@ -1,4 +1,5 @@
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
+import { isImeEnter } from "./ime";
 
 type PaletteProps = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -39,6 +40,7 @@ export function ChatComposerPalette({ props }: { props: PaletteProps }) {
                 palette.onIndexChange(Math.max(0, props.commandIndex - 1));
               }
               if (event.key === "Enter") {
+                if (isImeEnter(event as unknown as Parameters<typeof isImeEnter>[0])) return;
                 event.preventDefault();
                 choose(props.commandIndex);
               }
