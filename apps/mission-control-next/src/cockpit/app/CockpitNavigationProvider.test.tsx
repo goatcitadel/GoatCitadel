@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, StrictMode, useEffect } from "react";
+import { act, StrictMode, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { Window as HappyDomWindow } from "happy-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +11,7 @@ import {
   __resetFormDirtyRegistryForTests,
   getDirtySectionKeys,
   setSectionDirty,
+  useFormDirty,
 } from "../../features/native-routes/library/use-form-dirty";
 
 const scope = vi.hoisted(() => ({
@@ -27,6 +28,21 @@ let root: Root, element: HTMLDivElement;
 let route: ReturnType<typeof useCockpitRoute>, draft: ReturnType<typeof useSessionDraft<{ name: string }>>;
 let mounts = 0,
   unmounts = 0;
+let setPlainDirty: (dirty: boolean) => void = () => undefined;
+let editorUnmounts = 0;
+/** A route-owned editor whose draft is lost when it unmounts, like the Hooks "new" form. */
+function PlainEditor() {
+  const [dirty, setDirty] = useState(false);
+  setPlainDirty = setDirty;
+  useFormDirty("plain-editor", dirty, { label: "Plain editor" });
+  useEffect(
+    () => () => {
+      editorUnmounts++;
+    },
+    [],
+  );
+  return <p data-editor>{dirty ? "Unsaved" : "Saved"}</p>;
+}
 function Probe() {
   route = useCockpitRoute();
   draft = useSessionDraft("central-navigation-draft", { name: "Saved" }, 1, { label: "Current editor" });
@@ -36,7 +52,12 @@ function Probe() {
       unmounts++;
     };
   }, []);
-  return <p>{route.pathname}</p>;
+  return (
+    <>
+      <p>{route.pathname}</p>
+      {route.pathname === "/hooks" ? <PlainEditor /> : null}
+    </>
+  );
 }
 async function render(provided = true) {
   await act(async () => {
@@ -76,6 +97,7 @@ beforeEach(() => {
   });
   mounts = 0;
   unmounts = 0;
+  editorUnmounts = 0;
   window.history.replaceState(null, "", "/work?shell=cockpit");
   element = document.createElement("div");
   document.body.append(element);
@@ -259,62 +281,6 @@ describe("central cockpit navigation", () => {
     expect(window.location.pathname).toBe("/library");
   });
 
-  it("holds Back on the page while an editor that would lose its draft is unsaved, then leaves after Discard", async () => {
-    await render();
-    await act(async () => {
-      setSectionDirty("plain-editor", true, "Plain editor");
-    });
-    await act(async () => {
-      window.history.replaceState(null, "", "/library?shell=cockpit");
-      window.dispatchEvent(new Event("popstate"));
-    });
-    expect(window.location.pathname).toBe("/work");
-    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
-    await click("Discard changes");
-    await settleHistoryEvents();
-    expect(window.location.pathname).toBe("/library");
-  });
-
-  it("lets Back through when nothing is unsaved", async () => {
-    await render();
-    await act(async () => {
-      window.history.replaceState(null, "", "/library?shell=cockpit");
-      window.dispatchEvent(new Event("popstate"));
-    });
-    expect(window.location.pathname).toBe("/library");
-    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(0);
-  });
-
-  it("lets Back through while only a kept session draft is unsaved", async () => {
-    await render();
-    await act(async () => {
-      draft.setValue({ name: "Unsaved text" });
-    });
-    await act(async () => {
-      window.history.replaceState(null, "", "/library?shell=cockpit");
-      window.dispatchEvent(new Event("popstate"));
-    });
-    expect(window.location.pathname).toBe("/library");
-    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(0);
-    expect(draft.value.name).toBe("Unsaved text");
-  });
-
-  it("lets a hash-only Back through while an editor is unsaved", async () => {
-    window.history.replaceState(null, "", "/work?shell=cockpit#a");
-    await settleHistoryEvents();
-    await render();
-    await act(async () => {
-      setSectionDirty("plain-editor", true, "Plain editor");
-    });
-    await act(async () => {
-      window.history.replaceState(null, "", "/work?shell=cockpit#b");
-      window.dispatchEvent(new Event("popstate"));
-    });
-    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(0);
-    await settleHistoryEvents();
-    expect(window.location.hash).toBe("#b");
-  });
-
   it("asks the browser to confirm a reload or close only while a draft is unsaved", async () => {
     await render();
     const clean = new Event("beforeunload", { cancelable: true });
@@ -326,5 +292,246 @@ describe("central cockpit navigation", () => {
     const dirty = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(dirty);
     expect(dirty.defaultPrevented).toBe(true);
+  });
+});
+
+describe("browser Back and Forward with unsaved drafts", () => {
+  // A listener added after mount, like every React store and handoff listener in the app.
+  let seen: string[] = [];
+  const later = () => seen.push(window.location.pathname + window.location.hash);
+  const listenAfterMount = () => {
+    seen = [];
+    window.addEventListener("popstate", later);
+  };
+  const here = () => window.location.pathname + window.location.search + window.location.hash;
+  const dialogs = () => document.querySelectorAll('[role="dialog"]').length;
+  async function visit(...hrefs: string[]) {
+    for (const href of hrefs) {
+      await act(async () => {
+        route.navigate(href);
+      });
+    }
+  }
+  async function back() {
+    await act(async () => {
+      window.history.back();
+    });
+  }
+  async function forward() {
+    await act(async () => {
+      window.history.forward();
+    });
+  }
+  async function editPlainDraft() {
+    await act(async () => {
+      setPlainDirty(true);
+    });
+  }
+  afterEach(() => window.removeEventListener("popstate", later));
+
+  it("holds Back before any later listener or view sees it, keeping the editor and its draft", async () => {
+    await render();
+    await visit("/hooks");
+    await editPlainDraft();
+    const length = window.history.length;
+    listenAfterMount();
+    await back();
+    expect(here()).toBe("/hooks?shell=cockpit");
+    expect(route.pathname).toBe("/hooks");
+    expect(dialogs()).toBe(1);
+    expect(document.querySelector("[data-editor]")?.textContent).toBe("Unsaved");
+    expect(editorUnmounts).toBe(0);
+    expect(seen).toEqual([]);
+    expect(window.history.length).toBe(length);
+  });
+
+  it("leaves for the held destination after Discard without changing session history", async () => {
+    await render();
+    await visit("/hooks");
+    await editPlainDraft();
+    const length = window.history.length;
+    await back();
+    await click("Discard changes");
+    expect(here()).toBe("/work?shell=cockpit");
+    expect(route.pathname).toBe("/work");
+    expect(window.history.length).toBe(length);
+    await forward();
+    expect(here()).toBe("/hooks?shell=cockpit");
+    expect(dialogs()).toBe(0);
+  });
+
+  it("keeps the page and the stack on Cancel, and asks again on the next Back", async () => {
+    await render();
+    await visit("/hooks");
+    await editPlainDraft();
+    const length = window.history.length;
+    await back();
+    await click("Cancel");
+    expect(here()).toBe("/hooks?shell=cockpit");
+    expect(dialogs()).toBe(0);
+    expect(window.history.length).toBe(length);
+    await back();
+    expect(here()).toBe("/hooks?shell=cockpit");
+    expect(dialogs()).toBe(1);
+    await click("Discard changes");
+    expect(here()).toBe("/work?shell=cockpit");
+    expect(window.history.length).toBe(length);
+  });
+
+  it("holds Forward the same way", async () => {
+    await render();
+    await visit("/hooks", "/inbox");
+    await back();
+    expect(here()).toBe("/hooks?shell=cockpit");
+    await editPlainDraft();
+    const length = window.history.length;
+    listenAfterMount();
+    await forward();
+    expect(here()).toBe("/hooks?shell=cockpit");
+    expect(dialogs()).toBe(1);
+    expect(seen).toEqual([]);
+    await click("Discard changes");
+    expect(here()).toBe("/inbox?shell=cockpit");
+    expect(window.history.length).toBe(length);
+  });
+
+  it("holds Back for a kept session draft too, and Keep reaches the destination with the draft retained", async () => {
+    await render();
+    await visit("/library");
+    await act(async () => {
+      draft.setValue({ name: "Unsaved text" });
+    });
+    const length = window.history.length;
+    await back();
+    expect(here()).toBe("/library?shell=cockpit");
+    expect(dialogs()).toBe(1);
+    await click("Keep draft and close");
+    expect(here()).toBe("/work?shell=cockpit");
+    expect(route.pathname).toBe("/work");
+    expect(window.history.length).toBe(length);
+    expect(draft.value.name).toBe("Unsaved text");
+    expect(draft.isDirty).toBe(true);
+    expect(mounts).toBe(1);
+    expect(unmounts).toBe(0);
+  });
+
+  it("lets hash-only moves through, wherever shell=cockpit appears in the query", async () => {
+    window.history.replaceState(null, "", "/work#a");
+    await settleHistoryEvents();
+    await render();
+    await visit("/work?shell=cockpit#b");
+    await act(async () => {
+      setSectionDirty("plain-editor", true, "Plain editor");
+    });
+    listenAfterMount();
+    await back();
+    await settleHistoryEvents();
+    // A held move would keep its review open through these hashchange events, so each check discriminates.
+    expect(dialogs()).toBe(0);
+    expect(here()).toBe("/work#a");
+    expect(seen).toEqual(["/work#a"]);
+    await forward();
+    await settleHistoryEvents();
+    expect(here()).toBe("/work?shell=cockpit#b");
+    expect(dialogs()).toBe(0);
+  });
+
+  it("lets a same-page Settings tab move through", async () => {
+    window.history.replaceState(null, "", "/settings/general#appearance");
+    await settleHistoryEvents();
+    await render();
+    await visit("/settings/general?shell=cockpit#work-personality");
+    await settleHistoryEvents();
+    await act(async () => {
+      draft.setValue({ name: "Unsaved text" });
+    });
+    listenAfterMount();
+    await back();
+    await settleHistoryEvents();
+    expect(here()).toBe("/settings/general#appearance");
+    expect(dialogs()).toBe(0);
+    expect(seen).toEqual(["/settings/general#appearance"]);
+  });
+
+  it("lets Back through when nothing is unsaved", async () => {
+    await render();
+    await visit("/library");
+    listenAfterMount();
+    await back();
+    expect(here()).toBe("/work?shell=cockpit");
+    expect(route.pathname).toBe("/work");
+    expect(dialogs()).toBe(0);
+    expect(seen).toEqual(["/work"]);
+  });
+
+  it("puts the page back on an entry without a position, without adding entries", async () => {
+    await render();
+    await visit("/library");
+    // An entry written before positions existed, or by another history writer.
+    window.history.replaceState(null, "", window.location.href);
+    await visit("/hooks");
+    await editPlainDraft();
+    const length = window.history.length;
+    listenAfterMount();
+    await back();
+    expect(here()).toBe("/hooks?shell=cockpit");
+    expect(route.pathname).toBe("/hooks");
+    expect(dialogs()).toBe(1);
+    expect(seen).toEqual([]);
+    // Happy DOM drops forward entries on replaceState (browsers keep them), so only growth is checked here.
+    expect(window.history.length).toBeLessThanOrEqual(length);
+    await click("Discard changes");
+    expect(here()).toBe("/library?shell=cockpit");
+    expect(route.pathname).toBe("/library");
+    expect(window.history.length).toBeLessThanOrEqual(length);
+  });
+
+  it("holds Back under StrictMode", async () => {
+    await act(async () => {
+      root.render(
+        <StrictMode>
+          <CockpitNavigationProvider>
+            <Probe />
+          </CockpitNavigationProvider>
+        </StrictMode>,
+      );
+    });
+    await visit("/hooks");
+    await editPlainDraft();
+    const length = window.history.length;
+    await back();
+    expect(here()).toBe("/hooks?shell=cockpit");
+    expect(dialogs()).toBe(1);
+    await click("Discard changes");
+    expect(here()).toBe("/work?shell=cockpit");
+    expect(window.history.length).toBe(length);
+  });
+
+  it("holds a second Back while the review is open and keeps that review", async () => {
+    await render();
+    await visit("/library", "/hooks");
+    await editPlainDraft();
+    const length = window.history.length;
+    await back();
+    expect(dialogs()).toBe(1);
+    await back();
+    expect(dialogs()).toBe(1);
+    expect(here()).toBe("/hooks?shell=cockpit");
+    expect(window.history.length).toBe(length);
+    await click("Discard changes");
+    expect(here()).toBe("/library?shell=cockpit");
+    expect(window.history.length).toBe(length);
+  });
+
+  it("keeps the review open through the hashchange events of a held move across a path change", async () => {
+    await render();
+    await visit("/hooks#signing");
+    await editPlainDraft();
+    await back();
+    await settleHistoryEvents();
+    expect(dialogs()).toBe(1);
+    expect(here()).toBe("/hooks?shell=cockpit#signing");
+    await click("Discard changes");
+    expect(here()).toBe("/work?shell=cockpit");
   });
 });

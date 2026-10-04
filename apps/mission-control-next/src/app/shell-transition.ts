@@ -8,6 +8,8 @@ export const SHELL_NAVIGATION_EVENTS = [
   "goatcitadel:cockpit-location",
   "goatcitadel:classic-location",
 ] as const;
+/** Both shells number their history entries under this key, so one sequence survives a shell switch. */
+export const SHELL_HISTORY_POSITION = "goatcitadelNavigationPosition";
 export interface ShellTransitionOptions {
   /** The initiating view owns scope, draft-leave review, and lifetime. */
   isCurrent: () => boolean;

@@ -1,17 +1,21 @@
-import { useEffect, useLayoutEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { canonicalJsonString } from "@goatcitadel/contracts";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useShellHandoff } from "../../app/use-shell-handoff";
-import {
-  getDirtySectionActions,
-  getDirtySectionKeys,
-  useBeforeUnloadGuard,
-} from "../../features/native-routes/library/use-form-dirty";
+import { hasDirtySections, useBeforeUnloadGuard } from "../../features/native-routes/library/use-form-dirty";
 import { ShellSwitchFeedback } from "./use-cockpit-shell-switch";
 import { CockpitNavigationContext, type CockpitNavigationOwner } from "./cockpit-navigation-context";
+import { registerCockpitBackGuard } from "./cockpit-back-guard";
 import {
-  COCKPIT_LOCATION_EVENT,
   cockpitHref,
   commitCockpitNavigation,
   readCockpitHistory,
@@ -19,21 +23,7 @@ import {
   subscribeCockpitHistory,
 } from "./cockpit-history";
 
-function currentLocation(): string {
-  return window.location.pathname + window.location.search + window.location.hash;
-}
-
-/** Session drafts survive in-app navigation; only editors that would drop their state need a review. */
-function hasDraftsThatWouldBeLost(): boolean {
-  return getDirtySectionKeys().some((key) => !getDirtySectionActions(key)?.keepDraft);
-}
-
-/** A hash-only move keeps the same view mounted, so nothing on it is lost. */
-function samePage(from: string, to: string): boolean {
-  const source = new URL(from, "http://cockpit.invalid");
-  const target = new URL(to, "http://cockpit.invalid");
-  return source.pathname === target.pathname && source.search === target.search;
-}
+type HeldMove = { proceed: () => void };
 
 /** One presentation leave owner for the frame and all imperative native route callbacks. */
 export function CockpitNavigationProvider({ children }: { children: ReactNode }) {
@@ -53,32 +43,18 @@ export function CockpitNavigationProvider({ children }: { children: ReactNode })
   }, []);
   const handoff = useShellHandoff([identity, history]);
   useBeforeUnloadGuard();
-  const shownLocation = useRef(currentLocation());
-  const heldTarget = useRef<string | null>(null);
-  useLayoutEffect(() => {
-    shownLocation.current = currentLocation();
-  }, [history]);
-  useEffect(() => {
-    // Back and Forward can't be cancelled. When an editor that would lose its draft is dirty, the page
-    // puts its own URL back and replays the destination through the reviewed transition below, which
-    // asks first. Kept session drafts and hash-only moves pass through: nothing on screen is lost.
-    const onPopState = () => {
-      const target = currentLocation();
-      const source = shownLocation.current;
-      if (
-        target === source ||
-        samePage(source, target) ||
-        retainsSettingsPage(source, target) ||
-        !hasDraftsThatWouldBeLost()
-      )
-        return;
-      heldTarget.current = target;
-      window.history.pushState(null, "", source);
-      window.dispatchEvent(new Event(COCKPIT_LOCATION_EVENT));
-    };
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, []);
+  // Reviewed transitions that are still running already decided the drafts, kept ones included.
+  const running = useRef(0);
+  const [heldMove, setHeldMove] = useState<HeldMove | null>(null);
+  useLayoutEffect(
+    () =>
+      // Back and Forward to another page wait for the leave review while any draft is unsaved.
+      registerCockpitBackGuard({
+        holds: () => hasDirtySections() && running.current === 0,
+        review: (proceed) => setHeldMove({ proceed }),
+      }),
+    [],
+  );
   const isCurrent = () =>
     mounted.current &&
     view.current === renderedView &&
@@ -89,11 +65,22 @@ export function CockpitNavigationProvider({ children }: { children: ReactNode })
     handoff.requestTransition((review) => {
       const current = () => isCurrent() && review.isCurrent() && !review.signal.aborted;
       if (!current()) return;
-      return action({
-        isCurrent: current,
-        signal: review.signal,
-        navigate: (href, options) => current() && commitCockpitNavigation(href, options),
-      });
+      running.current += 1;
+      const settle = () => {
+        running.current -= 1;
+      };
+      try {
+        const result = action({
+          isCurrent: current,
+          signal: review.signal,
+          navigate: (href, options) => current() && commitCockpitNavigation(href, options),
+        });
+        void Promise.resolve(result).then(settle, settle);
+        return result;
+      } catch (error) {
+        settle();
+        throw error;
+      }
     });
   };
   const navigate: CockpitNavigationOwner["navigate"] = (href, options) => {
@@ -109,14 +96,15 @@ export function CockpitNavigationProvider({ children }: { children: ReactNode })
       review.navigate(destination, options);
     });
   };
-  // No dependency list on purpose: `navigate` is rebuilt every render, so this already ran after every
-  // render. It must see the render that restored the URL, so the review reads current scope.
-  useEffect(() => {
-    const target = heldTarget.current;
-    if (!target) return;
-    heldTarget.current = null;
-    navigate(target);
+  // Requested after the commit that rendered the restored page, so the review reads the current scope.
+  const reviewHeldMove = useEffectEvent((move: HeldMove) => {
+    requestTransition((review) => {
+      if (review.isCurrent()) move.proceed();
+    });
   });
+  useEffect(() => {
+    if (heldMove) reviewHeldMove(heldMove);
+  }, [heldMove]);
   return (
     <CockpitNavigationContext.Provider
       value={{ navigate, requestTransition, isTransitionPending: handoff.isTransitionPending }}

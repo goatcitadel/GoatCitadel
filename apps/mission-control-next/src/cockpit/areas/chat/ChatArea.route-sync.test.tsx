@@ -187,22 +187,39 @@ describe("cockpit controller route publication", () => {
     expect(new URLSearchParams(window.location.search).get("sessionId")).toBe("session-a");
   });
 
-  it("preserves the mounted draft on browser Back without intercepting browser history", async () => {
+  it("holds browser Back while the draft is unsaved, then preserves the mounted draft once confirmed", async () => {
     await render();
     await act(async () => {
       draft.setValue({ text: "Retained" });
       controller.request("chat", { sessionId: "session-b" });
       publishSelection({ sessionId: "session-b" });
     });
+    const length = window.history.length;
     await act(async () => {
       window.history.back();
     });
+    await vi.waitFor(() => expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1));
+    expect(container.querySelector("[data-route]")?.textContent).toContain("sessionId=session-b");
+    expect(new URLSearchParams(window.location.search).get("sessionId")).toBe("session-b");
+    await click("Keep draft and close");
     await vi.waitFor(() =>
       expect(container.querySelector("[data-route]")?.textContent).toContain("sessionId=session-a"),
     );
+    expect(window.history.length).toBe(length);
     expect(draft.value.text).toBe("Retained");
     expect(mounts).toBe(1);
     expect(unmounts).toBe(0);
+    await act(async () => {
+      window.history.forward();
+    });
+    await vi.waitFor(() => expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1));
+    expect(new URLSearchParams(window.location.search).get("sessionId")).toBe("session-a");
+    await click("Keep draft and close");
+    await vi.waitFor(() =>
+      expect(container.querySelector("[data-route]")?.textContent).toContain("sessionId=session-b"),
+    );
+    expect(window.history.length).toBe(length);
+    expect(draft.value.text).toBe("Retained");
   });
 
   it("keeps the requested canonical session URL and visible owner aligned when hydration fails", async () => {

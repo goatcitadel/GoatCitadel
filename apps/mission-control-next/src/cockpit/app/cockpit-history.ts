@@ -1,8 +1,9 @@
-import { SHELL_NAVIGATION_EVENTS } from "../../app/shell-transition";
+import { SHELL_HISTORY_POSITION, SHELL_NAVIGATION_EVENTS } from "../../app/shell-transition";
 import { buildSettingsIndex } from "../areas/settings/settings-index";
+import { COCKPIT_LOCATION_EVENT, nextCockpitPosition, readCockpitLocation } from "./cockpit-back-guard";
 import type { CockpitNavigationOptions } from "./cockpit-navigation-context";
 
-export const COCKPIT_LOCATION_EVENT = "goatcitadel:cockpit-location";
+export { COCKPIT_LOCATION_EVENT };
 const listeners = new Set<() => void>();
 let generation = 0;
 
@@ -25,7 +26,7 @@ export function subscribeCockpitHistory(listener: () => void) {
 }
 
 export function readCockpitHistory() {
-  return `${generation}:${window.location.href}`;
+  return `${generation}:${readCockpitLocation().href}`;
 }
 
 /** Normalize only local native URLs. Preserve record IDs, the full query, and the hash. */
@@ -69,8 +70,9 @@ export function commitCockpitNavigation(href: string, options?: CockpitNavigatio
   if (!destination) return false;
   const current = window.location.pathname + window.location.search + window.location.hash;
   if (cockpitHref(current) === destination) return false;
+  // A replaced entry keeps its state, position included. A pushed entry is numbered after the shown one.
   if (options?.replace) window.history.replaceState(window.history.state, "", destination);
-  else window.history.pushState(null, "", destination);
+  else window.history.pushState({ [SHELL_HISTORY_POSITION]: nextCockpitPosition() }, "", destination);
   window.dispatchEvent(new Event(COCKPIT_LOCATION_EVENT));
   return true;
 }

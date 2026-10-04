@@ -2,8 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { buildAppHref, normalizeAppRoute, type AppRoute } from "./route-model";
 import { coerceCompatibilityHrefToNext, resolveRouteFromLocation } from "./legacy-route-adapter";
 import { hasDirtySections } from "../features/native-routes/library/use-form-dirty";
-
-const POSITION = "goatcitadelNavigationPosition";
+import { SHELL_HISTORY_POSITION as POSITION } from "./shell-transition";
 
 /** Keep a rejected Back/Forward transition on its original history entry. */
 export function useShellHistory(apply: (route: AppRoute) => void) {

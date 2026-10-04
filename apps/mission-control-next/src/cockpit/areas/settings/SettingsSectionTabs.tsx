@@ -1,4 +1,5 @@
 import { Suspense, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { readCockpitLocation } from "../../app/cockpit-back-guard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/Tabs";
 import type { SettingsIndexEntry, SettingsIndexPage } from "./settings-index";
 import { preloadSettingsSection } from "./settings-controls";
@@ -22,7 +23,7 @@ function subscribe(onChange: () => void) {
 export function useSettingsSectionHash() {
   return useSyncExternalStore(
     subscribe,
-    () => window.location.hash.slice(1),
+    () => readCockpitLocation().hash.slice(1),
     () => "",
   );
 }
