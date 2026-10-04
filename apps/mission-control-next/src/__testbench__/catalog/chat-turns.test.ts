@@ -43,18 +43,27 @@ function run(id: string) {
   return findCheck(chatTurnChecks, id).run(makeTestContext());
 }
 
+function streamChunks(chunks: readonly unknown[]): void {
+  mocks.streamAgentChatMessage.mockImplementation(
+    async (_sessionId: string, _input: unknown, onChunk: (chunk: unknown) => void) => {
+      for (const chunk of chunks) {
+        onChunk(chunk);
+      }
+    },
+  );
+}
+
 describe("streamed reply", () => {
-  it("sends with the preflight route decision and collects the streamed text", async () => {
-    mocks.streamAgentChatMessage.mockImplementation(
-      async (_sessionId: string, _input: unknown, onChunk: (chunk: unknown) => void) => {
-        onChunk({ type: "delta", delta: "Verification " });
-        onChunk({ type: "delta", delta: "stub reply." });
-        onChunk({ type: "done" });
-      },
-    );
+  it("sends with the preflight route decision and passes when the deltas match the final message", async () => {
+    streamChunks([
+      { type: "delta", delta: "Verification " },
+      { type: "delta", delta: "stub reply." },
+      { type: "message_done", content: "Verification stub reply." },
+      { type: "done" },
+    ]);
     await expect(run("chat.stream-reply")).resolves.toMatchObject({
       status: "pass",
-      summary: expect.stringContaining("Verification stub reply."),
+      summary: "Streamed 24 characters matching the final message: “Verification stub reply.”.",
     });
     expect(mocks.streamAgentChatMessage.mock.calls[0]?.[1]).toMatchObject({
       routeDecision: DECISION,
@@ -70,12 +79,55 @@ describe("streamed reply", () => {
   });
 
   it("fails when the stream never sends done", async () => {
-    mocks.streamAgentChatMessage.mockImplementation(
-      async (_sessionId: string, _input: unknown, onChunk: (chunk: unknown) => void) => {
-        onChunk({ type: "delta", delta: "partial" });
-      },
-    );
+    streamChunks([
+      { type: "delta", delta: "partial" },
+      { type: "message_done", content: "partial" },
+    ]);
     await expect(run("chat.stream-reply")).rejects.toThrow("never sent its done event");
+  });
+
+  it("fails when the streamed deltas differ from the final message", async () => {
+    streamChunks([
+      { type: "delta", delta: "Verification " },
+      { type: "message_done", content: "Verification stub reply." },
+      { type: "done" },
+    ]);
+    const error = await run("chat.stream-reply").catch((caught: unknown) => caught);
+    expect(error).toMatchObject({
+      message:
+        'The stream delivered "Verification " but the final message is "Verification stub reply."; streamed text was lost.',
+      evidence: { streamed: "Verification ", final: "Verification stub reply." },
+    });
+  });
+
+  it("truncates long texts in the mismatch summary but keeps them whole as evidence", async () => {
+    const streamed = "a".repeat(200);
+    const final = "b".repeat(200);
+    streamChunks([{ type: "delta", delta: streamed }, { type: "message_done", content: final }, { type: "done" }]);
+    const error = await run("chat.stream-reply").catch((caught: unknown) => caught);
+    expect((error as Error).message).toContain(`"${"a".repeat(80)}…"`);
+    expect((error as Error).message).not.toContain("a".repeat(81));
+    expect(error).toMatchObject({ evidence: { streamed, final } });
+  });
+
+  it("fails with the error chunk's message when the stream reports an error", async () => {
+    streamChunks([
+      { type: "delta", delta: "Hello" },
+      { type: "error", error: "provider timed out" },
+      { type: "message_done", content: "Hello" },
+      { type: "done" },
+    ]);
+    await expect(run("chat.stream-reply")).rejects.toThrow("The stream reported an error: provider timed out");
+  });
+
+  it("fails when the stream never sends the final message", async () => {
+    streamChunks([{ type: "delta", delta: "partial" }, { type: "done" }]);
+    await expect(run("chat.stream-reply")).rejects.toThrow("never sent the final message");
+  });
+
+  it("fails when the stream carries no reply text", async () => {
+    streamChunks([{ type: "message_done", content: "" }, { type: "done" }]);
+    await expect(run("chat.stream-reply")).rejects.toThrow("carried no reply text");
   });
 });
 

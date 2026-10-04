@@ -6,13 +6,42 @@ import {
   streamAgentChatMessage,
 } from "@goatcitadel/mission-control-shared/api/chat";
 import { ensure, pass, summarizeEvidence, waitFor } from "../runner/assert";
-import type { CheckDef } from "../runner/types";
+import type { CheckDef, CheckResult } from "../runner/types";
 import { createScratchSession, requireWorkspace } from "./context";
 import { seedChatApprovalScenario, seedChatUserInputScenario } from "./dev-verification";
 
 type StreamChunk = Parameters<Parameters<typeof streamAgentChatMessage>[2]>[0];
 
 const PROMPT = "Reply with a short greeting for the GoatCitadel test bench.";
+const SUMMARY_TEXT_LIMIT = 80;
+
+function clip(text: string): string {
+  return text.length > SUMMARY_TEXT_LIMIT ? `${text.slice(0, SUMMARY_TEXT_LIMIT)}…` : text;
+}
+
+function verifyStreamedReply(chunks: readonly StreamChunk[]): CheckResult {
+  const errorChunk = chunks.find((chunk) => chunk.type === "error");
+  ensure(
+    errorChunk === undefined,
+    `The stream reported an error: ${errorChunk?.type === "error" ? errorChunk.error : ""}`,
+    summarizeEvidence(chunks),
+  );
+  ensure(
+    chunks.some((chunk) => chunk.type === "done"),
+    "The stream never sent its done event.",
+    summarizeEvidence(chunks),
+  );
+  const finalChunk = chunks.find((chunk) => chunk.type === "message_done");
+  ensure(finalChunk?.type === "message_done", "The stream never sent the final message.", summarizeEvidence(chunks));
+  const streamed = chunks.flatMap((chunk) => (chunk.type === "delta" ? [chunk.delta] : [])).join("");
+  ensure(
+    streamed === finalChunk.content,
+    `The stream delivered "${clip(streamed)}" but the final message is "${clip(finalChunk.content)}"; streamed text was lost.`,
+    { streamed, final: finalChunk.content },
+  );
+  ensure(streamed.trim() !== "", "The stream carried no reply text.", summarizeEvidence(chunks));
+  return pass(`Streamed ${streamed.length} characters matching the final message: “${clip(streamed)}”.`);
+}
 
 export const chatTurnChecks: readonly CheckDef[] = [
   {
@@ -51,14 +80,7 @@ export const chatTurnChecks: readonly CheckDef[] = [
           { signal: ctx.signal },
         ),
       );
-      const text = chunks.flatMap((chunk) => (chunk.type === "delta" ? [chunk.delta] : [])).join("");
-      ensure(text.trim() !== "", "The stream carried no reply text.", summarizeEvidence(chunks));
-      ensure(
-        chunks.some((chunk) => chunk.type === "done"),
-        "The stream never sent its done event.",
-        summarizeEvidence(chunks),
-      );
-      return pass(`Streamed ${text.length} characters: “${text.slice(0, 80)}”.`);
+      return verifyStreamedReply(chunks);
     },
   },
   {
