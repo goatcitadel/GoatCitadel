@@ -30,11 +30,13 @@ let mounts = 0,
   unmounts = 0;
 let setPlainDirty: (dirty: boolean) => void = () => undefined;
 let editorUnmounts = 0;
+/** When set, the editor offers "Save and continue" through this save owner. */
+let plainEditorSave: (() => Promise<boolean>) | undefined;
 /** A route-owned editor whose draft is lost when it unmounts, like the Hooks "new" form. */
 function PlainEditor() {
   const [dirty, setDirty] = useState(false);
   setPlainDirty = setDirty;
-  useFormDirty("plain-editor", dirty, { label: "Plain editor" });
+  useFormDirty("plain-editor", dirty, { label: "Plain editor", onSave: plainEditorSave });
   useEffect(
     () => () => {
       editorUnmounts++;
@@ -98,6 +100,7 @@ beforeEach(() => {
   mounts = 0;
   unmounts = 0;
   editorUnmounts = 0;
+  plainEditorSave = undefined;
   window.history.replaceState(null, "", "/work?shell=cockpit");
   element = document.createElement("div");
   document.body.append(element);
@@ -413,6 +416,59 @@ describe("browser Back and Forward with unsaved drafts", () => {
     expect(draft.isDirty).toBe(true);
     expect(mounts).toBe(1);
     expect(unmounts).toBe(0);
+  });
+
+  it("saves on Save and continue, then reaches the held destination by traversal", async () => {
+    const onSave = vi.fn(async () => true);
+    plainEditorSave = onSave;
+    await render();
+    await visit("/hooks");
+    await editPlainDraft();
+    const length = window.history.length;
+    const push = vi.spyOn(window.history, "pushState");
+    const go = vi.spyOn(window.history, "go");
+    await back();
+    expect(here()).toBe("/hooks?shell=cockpit");
+    expect(dialogs()).toBe(1);
+    await click("Save and continue");
+    expect(onSave).toHaveBeenCalledOnce();
+    expect(here()).toBe("/work?shell=cockpit");
+    expect(route.pathname).toBe("/work");
+    expect(dialogs()).toBe(0);
+    // The restore went forward one entry and the confirmed move back one; nothing was pushed or replaced.
+    expect(go.mock.calls).toEqual([[1], [-1]]);
+    expect(push).not.toHaveBeenCalled();
+    expect(window.history.length).toBe(length);
+    await forward();
+    expect(here()).toBe("/hooks?shell=cockpit");
+  });
+
+  it("lets Back through while a reviewed transition that already decided the drafts is still running", async () => {
+    await render();
+    await visit("/library");
+    await act(async () => {
+      draft.setValue({ name: "Unsaved text" });
+    });
+    let finish!: () => void;
+    const running = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    await act(async () => {
+      route.requestTransition(() => running);
+    });
+    await click("Keep draft and close");
+    // The kept draft is still unsaved, so only the running transition lets this Back through.
+    expect(draft.isDirty).toBe(true);
+    listenAfterMount();
+    await back();
+    expect(here()).toBe("/work?shell=cockpit");
+    expect(route.pathname).toBe("/work");
+    expect(seen).toEqual(["/work"]);
+    expect(dialogs()).toBe(0);
+    await act(async () => {
+      finish();
+      await running;
+    });
   });
 
   it("lets hash-only moves through, wherever shell=cockpit appears in the query", async () => {
