@@ -162,6 +162,167 @@ describe("ChatStreamSecretProjector", () => {
     ).toMatchObject({ content: "hello world" });
   });
 
+  it("streams the retained trailing word before the terminal message so deltas match its content", () => {
+    const projector = new ChatStreamSecretProjector();
+    const content = "Verification stub reply.";
+
+    const emitted = [
+      ...projector.projectAll(deltaChunk("Verification")),
+      ...projector.projectAll(deltaChunk(" stub reply.")),
+      ...projector.projectAll({
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "message-1",
+        content,
+      } satisfies ChatStreamChunkDraft),
+    ];
+
+    expect(joinDeltas(emitted)).toBe(content);
+    expect(emitted.at(-2)).toMatchObject({ type: "delta", messageId: "message-1", delta: "reply." });
+    expect(emitted.at(-1)).toMatchObject({ type: "message_done", content });
+  });
+
+  it("reconciles non-ASCII streamed text against the terminal content without retaining it", () => {
+    const projector = new ChatStreamSecretProjector();
+    const content = "Grüße aus 東京 🐐 und tschüss.";
+
+    const emitted = [
+      ...projector.projectAll(deltaChunk("Grüße aus ")),
+      ...projector.projectAll(deltaChunk("東京 🐐 und")),
+      ...projector.projectAll(deltaChunk(" tschüss.")),
+      ...projector.projectAll({
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "message-1",
+        content,
+      } satisfies ChatStreamChunkDraft),
+    ];
+
+    expect(joinDeltas(emitted)).toBe(content);
+    expect(emitted.at(-1)).toMatchObject({ type: "message_done", content });
+  });
+
+  it("does not stream a terminal tail when the final content has the same length but different streamed text", () => {
+    const projector = new ChatStreamSecretProjector();
+
+    const emitted = [
+      ...projector.projectAll(deltaChunk("Alpha beta ")),
+      ...projector.projectAll({
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "message-1",
+        content: "Gamma beta tail.",
+      } satisfies ChatStreamChunkDraft),
+    ];
+
+    expect(joinDeltas(emitted)).toBe("Alpha beta ");
+    expect(emitted.at(-1)).toMatchObject({ type: "message_done", content: "Gamma beta tail." });
+  });
+
+  it("streams only the redacted terminal remainder when a credential tail was retained", () => {
+    const projector = new ChatStreamSecretProjector();
+    const content = "Use Authorization: Bearer hunter2";
+
+    const emitted = [
+      ...projector.projectAll(deltaChunk("Use Authorization: Bearer hun")),
+      ...projector.projectAll(deltaChunk("ter2")),
+      ...projector.projectAll({
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "message-1",
+        content,
+      } satisfies ChatStreamChunkDraft),
+    ];
+    const done = emitted.at(-1);
+    const terminalContent = done?.type === "message_done" ? done.content : "";
+
+    expect(terminalContent).not.toContain("hunter2");
+    expect(joinDeltas(emitted)).toBe(terminalContent);
+    expect(JSON.stringify(emitted)).not.toContain("hunter2");
+  });
+
+  it("does not stream a terminal tail when the final content diverges from the streamed prefix", () => {
+    const projector = new ChatStreamSecretProjector();
+
+    const emitted = [
+      ...projector.projectAll(deltaChunk("Draft answer that was")),
+      ...projector.projectAll({
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "message-1",
+        content: "Repaired final answer.",
+      } satisfies ChatStreamChunkDraft),
+    ];
+
+    expect(joinDeltas(emitted)).toBe("Draft answer that ");
+    expect(emitted.at(-1)).toMatchObject({ type: "message_done", content: "Repaired final answer." });
+  });
+
+  it("streams a single undelimited reply in full before the terminal message", () => {
+    const projector = new ChatStreamSecretProjector();
+
+    expect(projector.project(deltaChunk("Hello."))).toMatchObject({ delta: "" });
+    expect(
+      projector.projectAll({
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "message-1",
+        content: "Hello.",
+      } satisfies ChatStreamChunkDraft),
+    ).toEqual([
+      expect.objectContaining({ type: "delta", delta: "Hello." }),
+      expect.objectContaining({ type: "message_done", content: "Hello." }),
+    ]);
+  });
+
+  it("streams no terminal tail for suppressed resumed or overflowed assistant text", () => {
+    const resumed = new ChatStreamSecretProjector();
+    resumed.beginTurn("turn-1", { suppressTextUntilTerminal: true });
+    resumed.project(deltaChunk("continued answer"));
+    const overflowed = new ChatStreamSecretProjector();
+    for (let index = 0; index < 30; index += 1) {
+      overflowed.project(deltaChunk("abcdefghijklmnopqrst"));
+    }
+
+    for (const projector of [resumed, overflowed]) {
+      expect(
+        projector.projectAll({
+          type: "message_done",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          messageId: "message-1",
+          content: "Final answer",
+        } satisfies ChatStreamChunkDraft),
+      ).toEqual([expect.objectContaining({ type: "message_done", content: "Final answer" })]);
+    }
+  });
+
+  it("drains the redacted assistant tail on done and flush without a terminal message", () => {
+    const done = new ChatStreamSecretProjector();
+    done.project(deltaChunk("Use Bearer hunter2"));
+    const flushed = new ChatStreamSecretProjector();
+    flushed.project(deltaChunk("The final word"));
+
+    const doneChunks = done.projectAll({
+      type: "done",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      messageId: "message-1",
+    } satisfies ChatStreamChunkDraft);
+    expect(doneChunks).toEqual([
+      expect.objectContaining({ type: "delta", delta: redactSecretText("Bearer hunter2").value }),
+      expect.objectContaining({ type: "done" }),
+    ]);
+    expect(JSON.stringify(doneChunks)).not.toContain("hunter2");
+    expect(flushed.flushTurn("turn-1")).toEqual([expect.objectContaining({ type: "delta", delta: "word" })]);
+  });
+
   it("suppresses resumed text until terminal content can be projected as a whole", () => {
     const projector = new ChatStreamSecretProjector();
     projector.beginTurn("turn-1", { suppressTextUntilTerminal: true });
@@ -291,6 +452,10 @@ describe("ChatStreamSecretProjector", () => {
     }
   });
 });
+
+function joinDeltas(chunks: ChatStreamChunkDraft[]): string {
+  return chunks.map((chunk) => (chunk.type === "delta" ? chunk.delta : "")).join("");
+}
 
 function deltaChunk(delta: string): ChatStreamChunkDraft {
   return {
