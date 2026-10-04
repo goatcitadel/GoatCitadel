@@ -134,4 +134,25 @@ describe("llama.cpp route service facade", () => {
       status: failed,
     });
   });
+
+  it("stays silent when only llama-server's latest log line changed", async () => {
+    const healthy = {
+      enabled: true,
+      desiredState: "running",
+      processState: "running",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      healthy: true,
+      activeModelId: "gemma-local",
+      updatedAt: "2026-10-03T00:00:00.000Z",
+    };
+    const runtime = {
+      getStatus: vi.fn(() => ({ ...healthy, lastError: "srv  log_server_r: request: GET /health 127.0.0.1 200" })),
+      refresh: vi.fn(async () => ({ ...healthy, updatedAt: "2026-10-03T00:00:05.000Z" })),
+    };
+    const publishRealtime = vi.fn(async () => undefined);
+    const service = createLlamaCppRoutePort({ llamaCppRuntime: runtime as never, setup: {} as never, publishRealtime });
+
+    await service.refreshLlamaCppRuntime();
+    expect(publishRealtime).not.toHaveBeenCalled();
+  });
 });

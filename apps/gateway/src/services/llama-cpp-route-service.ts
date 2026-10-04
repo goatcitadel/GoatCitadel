@@ -29,11 +29,13 @@ export interface LlamaCppRoutePortDependencies {
 }
 
 /**
- * What other windows need to hear about. `updatedAt` and the lease counters move on every
- * probe, so on their own they never count as a change.
+ * What other windows need to hear about. `updatedAt` and the lease diagnostics move with every
+ * probe, and for a managed llama-server `lastError` holds its latest stderr line (including the
+ * log line for each health probe), so none of them on their own count as a change. Real failures
+ * still change `healthy` and `processState`.
  */
 export function llamaCppStatusSignature(status: LlamaCppRuntimeStatus): string {
-  return JSON.stringify({ ...status, updatedAt: undefined, leaseDiagnostics: undefined });
+  return JSON.stringify({ ...status, updatedAt: undefined, leaseDiagnostics: undefined, lastError: undefined });
 }
 
 export function createLlamaCppRoutePort(deps: LlamaCppRoutePortDependencies): LlamaCppRoutePort {
