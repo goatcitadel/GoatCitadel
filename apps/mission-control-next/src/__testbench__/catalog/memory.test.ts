@@ -68,6 +68,14 @@ describe("memory lifecycle", () => {
     );
   });
 
+  it("fails when editing does not request an approval", async () => {
+    mocks.patchMemoryItem.mockResolvedValueOnce({ pendingApproval: null });
+    await expect(findCheck(memoryChecks, "memory.lifecycle").run(makeTestContext())).rejects.toThrow(
+      "Editing the item did not request an approval.",
+    );
+    expect(mocks.resolveApproval).not.toHaveBeenCalled();
+  });
+
   it("fails when forgetting does not request an approval", async () => {
     mocks.forgetMemoryItem.mockResolvedValueOnce({
       pendingApproval: null,

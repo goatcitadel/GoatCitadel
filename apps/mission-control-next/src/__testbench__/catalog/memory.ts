@@ -50,6 +50,7 @@ export const memoryChecks: readonly CheckDef[] = [
       const edit = await ctx.step("Edit item (approval-first)", () =>
         patchMemoryItem(item.itemId, { content: "Edited by the test bench." }),
       );
+      ensure(isMemoryMutationApprovalEnvelope(edit), "Editing the item did not request an approval.", edit);
       await ctx.step("Approve the edit", () => resolveApproval(edit.pendingApproval.approvalId, "approve"));
       // The approval only queues the edit; the item history is the proof that it was applied.
       await ctx.step("History shows the update", () =>
