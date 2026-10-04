@@ -130,6 +130,11 @@ describe("cockpit realtime invalidation", () => {
     expect(spy).not.toHaveBeenCalledWith({ queryKey: ["approvals", "operator-inbox"] });
   });
 
+  // The Gateway publishes llama.cpp events in two real shapes:
+  // - route lifecycle (llama-cpp-route-service.ts): eventType "system", with the type in payload.type
+  //   ("llamacpp_refreshed" | "llamacpp_started" | "llamacpp_stopped");
+  // - runtime events (gateway-service.ts onEvent): the runtime's own type as eventType
+  //   ("llamacpp_stdout" | "llamacpp_stderr" | "llamacpp_exited" | ...).
   it("refreshes only the health readers for a llama.cpp runtime signal", () => {
     const queryClient = new QueryClient();
     const spy = vi.spyOn(queryClient, "invalidateQueries");
