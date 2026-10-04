@@ -144,7 +144,12 @@ function CockpitShellContent({
             ) : null}
             {area !== "chat" ? (
               // `key` remounts on an area change; the path retries a failed view after Back or a jump inside the area.
-              <AreaErrorBoundary key={area} label={areaLabel} resetKey={pathname} onGoToChat={() => navigate("/chat")}>
+              <AreaErrorBoundary
+                key={area}
+                label={areaLabel}
+                resetKey={pathname + search}
+                onGoToChat={() => navigate("/chat")}
+              >
                 <Suspense
                   key={area}
                   fallback={
