@@ -312,7 +312,7 @@ describe("Inbox approval decisions", () => {
     expect(onResolved).toHaveBeenCalledWith(expect.stringContaining("decision recorded"));
   });
 
-  it("drops an open nuclear confirmation and its typed word when its reviewed evidence changes", async () => {
+  it("closes an open nuclear confirmation when its reviewed evidence changes", async () => {
     renderActions({ ...approval, riskLevel: "nuclear" });
     await act(async () => button("Review approval").click());
     await typeConfirmation("approve");

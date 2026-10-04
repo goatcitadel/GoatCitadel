@@ -2,10 +2,11 @@ import { useState } from "react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import type { ChatPendingApprovalState } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
 import { buildApprovalEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
+import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 
-/** Typing this word is the deliberate, untimed confirmation for the highest risk tier. */
+/** The deliberate, untimed confirmation word for nuclear risk and for risk levels this build doesn't know. */
 const CRITICAL_CONFIRMATION = "approve";
 
 export function RiskApprovalAction({
@@ -42,8 +43,11 @@ export function RiskApprovalAction({
     return (
       <p className="text-xs text-fg-muted">This runtime request needs the native review shown in current approvals.</p>
     );
-  if (approval.riskLevel === "danger" || approval.riskLevel === "nuclear") {
-    const critical = approval.riskLevel === "nuclear";
+  // Only the two lowest tiers approve in one click. Danger opens the evidence review, and nuclear
+  // or any risk level this build doesn't know also needs the typed confirmation.
+  if (approval.riskLevel !== "safe" && approval.riskLevel !== "caution") {
+    const critical = approval.riskLevel !== "danger";
+    const riskName = humanizeToken(approval.riskLevel);
     const confirmed = !critical || typed.trim().toLowerCase() === CRITICAL_CONFIRMATION;
     return (
       <>
@@ -62,7 +66,7 @@ export function RiskApprovalAction({
         <Dialog
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
-          title={critical ? "Confirm nuclear risk action" : "Confirm danger risk action"}
+          title={`Confirm ${riskName.toLowerCase()} risk action`}
           description="Review the exact action before approving once."
         >
           <div className="mb-3 max-h-72 space-y-2 overflow-y-auto text-sm text-fg-secondary">
@@ -71,7 +75,7 @@ export function RiskApprovalAction({
               {reviewed?.linkage?.toolName ?? approval.toolName ?? reviewed?.kind ?? approval.kind ?? "Action request"}
             </p>
             <p>
-              <strong>Risk:</strong> {critical ? "Nuclear" : "Danger"}
+              <strong>Risk:</strong> {riskName}
               {approval.reason ? ` · ${approval.reason}` : ""}
             </p>
             {evidence?.targets.length ? (

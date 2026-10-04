@@ -27,6 +27,17 @@ const reviewedApproval: ApprovalRequest = {
   explanationStatus: "not_requested",
 };
 
+const dialogButton = (label: string) =>
+  [...document.body.querySelectorAll("button")].find((button) => button.textContent === label)!;
+
+async function typeConfirmation(value: string) {
+  const input = document.body.querySelector<HTMLInputElement>('[role="dialog"] input')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
 beforeEach(() => {
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -171,6 +182,90 @@ describe("risk approval action", () => {
     )!;
     expect(confirm.disabled).toBe(true);
     expect(document.body.textContent).toContain("current action preview is unavailable");
+  });
+
+  it("keeps nuclear approval closed for any word but the confirmation word", async () => {
+    const onApprove = vi.fn();
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("nuclear")}
+          reviewedApproval={{ ...reviewedApproval, riskLevel: "nuclear" }}
+          pending={false}
+          onApprove={onApprove}
+        />,
+      ),
+    );
+    await act(async () => container.querySelector("button")?.click());
+    // The evidence is reviewable, so only the typed word can keep Approve once closed.
+    expect(document.body.textContent).toContain("pnpm test");
+    for (const word of ["yes", "approv"]) {
+      await typeConfirmation(word);
+      expect(dialogButton("Approve once").disabled).toBe(true);
+    }
+    await typeConfirmation("approve");
+    expect(dialogButton("Approve once").disabled).toBe(false);
+    expect(onApprove).not.toHaveBeenCalled();
+  });
+
+  it("starts a reopened nuclear review with an empty confirmation", async () => {
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("nuclear")}
+          reviewedApproval={{ ...reviewedApproval, riskLevel: "nuclear" }}
+          pending={false}
+          onApprove={vi.fn()}
+        />,
+      ),
+    );
+    const review = container.querySelector("button")!;
+    await act(async () => review.click());
+    await typeConfirmation("approve");
+    expect(dialogButton("Approve once").disabled).toBe(false);
+    await act(async () => dialogButton("Cancel").click());
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    // The same mounted instance reopens it; nothing was re-rendered with a new key.
+    expect(review.isConnected).toBe(true);
+    await act(async () => review.click());
+    expect(document.body.querySelector<HTMLInputElement>('[role="dialog"] input')?.value).toBe("");
+    expect(dialogButton("Approve once").disabled).toBe(true);
+  });
+
+  it.each(["safe", "caution"] as const)("approves %s risk in one click", async (riskLevel) => {
+    const onApprove = vi.fn();
+    await act(async () =>
+      root.render(<RiskApprovalAction approval={approval(riskLevel)} pending={false} onApprove={onApprove} />),
+    );
+    await act(async () => container.querySelector("button")?.click());
+    expect(onApprove).toHaveBeenCalledOnce();
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("sends a risk level it doesn't know through the review and the typed confirmation", async () => {
+    // A future Gateway may send a label this build doesn't know. It must not fall through to one click.
+    const unknownRisk = "critical" as unknown as ApprovalRequest["riskLevel"];
+    const onApprove = vi.fn();
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval(unknownRisk)}
+          reviewedApproval={{ ...reviewedApproval, riskLevel: unknownRisk }}
+          pending={false}
+          onApprove={onApprove}
+        />,
+      ),
+    );
+    const review = container.querySelector("button")!;
+    expect(review.textContent).toBe("Review approval");
+    await act(async () => review.click());
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Confirm critical risk action");
+    expect(document.body.textContent).toContain("pnpm test");
+    expect(dialogButton("Approve once").disabled).toBe(true);
+    await typeConfirmation("approve");
+    await act(async () => dialogButton("Approve once").click());
+    expect(onApprove).toHaveBeenCalledOnce();
   });
 
   it("never offers direct approval when risk is missing", async () => {
