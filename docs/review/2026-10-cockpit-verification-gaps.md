@@ -25,7 +25,7 @@ Both prerequisites are met on the base commit (plan Task 1, Step 1):
 | UX-budgets lane on main | Pending: CI after merge | | Measured by the nightly workflow's first run, not locally (check 1). Before the repair the review measured 24 failures on `522f84708` and 27 after the cockpit follow-through, out of 118 scenarios. |
 | Nightly CI wiring | Pending: CI after merge | | `verification-ux-budgets-nightly.yml` is in this PR and is not gating. Its first run happens after merge (check 2). |
 | SY-02 fresh-install re-test | Not run | | |
-| Large data (1,000 records) | Not run | | |
+| Large data (1,000 records) | Pending: CI after merge, once the proof is count-aware | | The count override landed. The long-lists proof still asserts 105 records in places, so another count fails on harness assumptions (check 4). |
 | Cross-browser smoke (Firefox, WebKit) | Not run | | |
 | Real browsers (Firefox, Safari) | Not run | | |
 | Screen readers | Not run | | |
@@ -98,6 +98,48 @@ Record here: the pass and fail counts, and a table of scenario id, class and evi
   `artifactSlug: ux-budgets` and `runner: ubuntu-latest` to the release-proof matrix in a later PR.
 - **Large-data runs:** the optional `long_list_count` dispatch input is covered in check 4.
 
+### 4. Large data, 1,000 records (plan Task 5)
+
+- **Status:** Pending. The count override landed. The run itself happens on GitHub after merge, and it needs the proof
+  changes below first.
+- **Who:** CI, by dispatching the nightly workflow with `long_list_count`. It is not run locally: seeding 1,000 records
+  per list and running the proof is heavy.
+- **What landed:** `readLongListCount` and the `GOATCITADEL_VERIFY_LONG_LIST_COUNT` override in
+  `scripts/verification/lib/scenarios/cockpit-long-list-fixture.mjs`, with unit tests. It returns 105 when the variable
+  is unset or empty, and accepts integers from 101 to 2000 (the proof needs more than 100 records). The nightly never
+  sets it, so the lane keeps 105 records and its timings stay comparable.
+- **Command, after merge:**
+
+```powershell
+gh workflow run verification-ux-budgets-nightly.yml --ref main -f long_list_count=1000
+```
+
+  The plan's local equivalent is `$env:GOATCITADEL_VERIFY_LONG_LIST_COUNT = "1000"` followed by
+  `node scripts/verification/cockpit-owner-controls-proof.mjs long-lists`.
+- **Expected, once the proof can take other counts:** `Status: passed`. The proof checks Inbox, Work, Work > History,
+  System > Quality and Chat, each with fewer than 100 rows rendered.
+- **Messages:** the fixture does not seed long message threads. Only one conversation carries messages. For the "10,000
+  messages" goal, W8's streaming work (CH-32, CH-50) re-measures long threads.
+
+**Premise check: the proof is not count-agnostic yet.** The plan expects the override alone to make a 1,000-record run
+pass. Reading `cockpit-long-lists-proof.mjs` and the fixture against the Gateway limits and the pages, a run at any
+count other than 105 fails on harness assumptions, not on product behavior:
+
+- **History:** the step clicks "Load older runs" once and waits for the literal text `105 saved runs loaded.`. The page
+  loads 100 runs per page, so another count needs another text and more clicks.
+- **Chat:** the step waits for `aria-setsize` and `aria-posinset` to equal the literal `105` (four places) after one
+  "Load more" click, and bounds the status reads for that one click.
+- **Quality:** the step requests `packLimit=200` and asserts at least `LONG_LIST_COUNT` packs. The page itself asks for
+  `packLimit: 200` (`SystemQuality.tsx`), so above 200 records it shows at most 200 packs. Candidate finding to confirm
+  when the proof can run: System > Quality stops at 200 stored prompt packs.
+- **Owner reads:** `readLongListOwners` lists tasks, approvals and sessions with `limit=200`, and the fixture asserts
+  the listing equals every seeded record. The Gateway allows at most 200 per page for tasks and approvals (cursor
+  paging exists), so seeding above 200 records fails the fixture's own check.
+
+Follow-up before the dispatch is useful: derive the proof's expectations from `LONG_LIST_COUNT` (paging loops for
+History and Chat, cursor reads in `readLongListOwners`, a Quality expectation capped at the page's 200), and run it
+once locally at the new count. Until then the `long_list_count` input is wired, but only 105 passes.
+
 ## Deviations from the plan
 
 1. **Check 1 is measured by CI, not locally (Tasks 2 and 3).** The plan runs the lane locally first and writes the
@@ -110,3 +152,8 @@ Record here: the pass and fail counts, and a table of scenario id, class and evi
      now, where the draft differed. The draft uploaded evidence even when the redaction check failed.
    - The concurrency group includes the trigger, so a manual large-data run is not cancelled when the nightly starts,
      and a manual run does not cancel the nightly.
+3. **The count override alone cannot make a 1,000-record run pass (Task 5).** The code landed as the plan specifies,
+   but the plan assumed the long-lists proof only needs a larger count. It hard-codes 105 in the History and Chat steps
+   and reads owner lists with a limit of 200 (check 4, "Premise check"). The proof has to become count-aware before the
+   `long_list_count` dispatch can pass. This PR does not change the proof: exercising it needs the heavy lanes, and the
+   edits depend on page behavior that has not been observed at other counts.

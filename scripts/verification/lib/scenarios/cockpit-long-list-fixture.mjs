@@ -3,7 +3,20 @@ import { randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
-export const LONG_LIST_COUNT = 105;
+const DEFAULT_LONG_LIST_COUNT = 105;
+const MAX_LONG_LIST_COUNT = 2000;
+
+/** Large-data checks raise the count; the UX-budgets lane keeps 105 so its timing budgets stay comparable. */
+export function readLongListCount(raw) {
+  if (raw === undefined || raw === "") return DEFAULT_LONG_LIST_COUNT;
+  const count = Number(raw);
+  if (!Number.isInteger(count) || count < 101 || count > MAX_LONG_LIST_COUNT) {
+    throw new Error(`GOATCITADEL_VERIFY_LONG_LIST_COUNT must be an integer from 101 to ${MAX_LONG_LIST_COUNT}.`);
+  }
+  return count;
+}
+
+export const LONG_LIST_COUNT = readLongListCount(process.env.GOATCITADEL_VERIFY_LONG_LIST_COUNT);
 export function assertExactRecords(expected, actual, key) {
   assert.equal(new Set(expected.map(item => item[key])).size, expected.length);
   assert.equal(new Set(actual.map(item => item[key])).size, actual.length);
