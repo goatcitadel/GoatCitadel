@@ -227,12 +227,24 @@ describe("CockpitShell", () => {
       workspaceId: "default",
       generatedAt: "2026-09-28T00:00:00Z",
       items: [
-        { id: "a", kind: "approval", group: "needs_decision", title: "t", summary: "s", createdAt: "x",
-          source: { workspaceId: "default" }, href: "/x" },
+        {
+          id: "a",
+          kind: "approval",
+          group: "needs_decision",
+          title: "t",
+          summary: "s",
+          createdAt: "x",
+          source: { workspaceId: "default" },
+          href: "/x",
+        },
       ],
       coverage: [],
-      counts: { needs_decision: { known: 1, complete: true }, proposals: { known: 0, complete: true },
-        needs_attention: { known: 0, complete: true }, updates: { known: 0, complete: true } },
+      counts: {
+        needs_decision: { known: 1, complete: true },
+        proposals: { known: 0, complete: true },
+        needs_attention: { known: 0, complete: true },
+        updates: { known: 0, complete: true },
+      },
     } as never);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () =>
