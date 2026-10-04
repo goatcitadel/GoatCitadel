@@ -372,14 +372,22 @@ describe("cockpit text composer", () => {
     const props = composerProps();
     await act(async () => root.render(<ChatTextComposer props={props} />));
     const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
-    const ime229 = new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true });
+    // Cancelable events, so `defaultPrevented` can tell whether the composer took the Enter.
+    const ime229 = new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true, cancelable: true });
     await act(async () => textarea.dispatchEvent(ime229));
     expect(ime229.defaultPrevented).toBe(false);
-    const imeComposing = new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true });
+    const imeComposing = new KeyboardEvent("keydown", {
+      key: "Enter",
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    });
     await act(async () => textarea.dispatchEvent(imeComposing));
     expect(imeComposing.defaultPrevented).toBe(false);
     expect(props.onSend).not.toHaveBeenCalled();
-    await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    const plainEnter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => textarea.dispatchEvent(plainEnter));
+    expect(plainEnter.defaultPrevented).toBe(true);
     expect(props.onSend).toHaveBeenCalledOnce();
   });
 
@@ -390,6 +398,8 @@ describe("cockpit text composer", () => {
         enabled: true,
         globalOpen: true,
         query: "",
+        failures: [],
+        onOpen: vi.fn(),
         onQueryChange: vi.fn(),
         onClose: vi.fn(),
         onIndexChange: vi.fn(),
@@ -398,13 +408,18 @@ describe("cockpit text composer", () => {
       },
     });
     await act(async () => root.render(<ChatTextComposer props={props} />));
-    const paletteInput = container.querySelector('input[class*="bg-canvas"]') as HTMLInputElement;
-    expect(paletteInput).toBeDefined();
-    await act(async () =>
-      paletteInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true })),
-    );
+    const paletteInput = [...container.querySelectorAll("label")]
+      .find((label) => label.textContent?.startsWith("Find a command"))
+      ?.querySelector("input");
+    expect(paletteInput).toBeInstanceOf(HTMLInputElement);
+    const input = paletteInput as HTMLInputElement;
+    const imeEnter = new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true, cancelable: true });
+    await act(async () => input.dispatchEvent(imeEnter));
+    expect(imeEnter.defaultPrevented).toBe(false);
     expect(props.composerPalette?.onSelect).not.toHaveBeenCalled();
-    await act(async () => paletteInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    const plainEnter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => input.dispatchEvent(plainEnter));
+    expect(plainEnter.defaultPrevented).toBe(true);
     expect(props.composerPalette?.onSelect).toHaveBeenCalledOnce();
   });
 });
