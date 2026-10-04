@@ -171,6 +171,55 @@ describe("native Chat permission profile", () => {
     expect(reviewDisabled()).toBe(true);
     expect(view.root.findAllByType(StatusBadge).map((badge) => badge.props.status.label)).toEqual(["Current"]);
   });
+  it("moves Current to the applied profile and keeps Review closed until another profile is picked", async () => {
+    const other = { ...profile, profileId: "other", label: "Other" };
+    items = [profile, other];
+    let effective: PermissionProfileSnapshotRecord = profile;
+    api.fetchEffectivePermissionProfile.mockImplementation(async () => ({ permissionProfile: effective }));
+    api.reviewPermissionProfileSelection.mockImplementation(async (input) => ({
+      input,
+      profile: items.find((item) => item.profileId === input.profileId),
+      revision: "b".repeat(64),
+      target: { workspaceId: input.workspaceId, operatorId: "operator" },
+      activeProfiles: [],
+    }));
+    api.activatePermissionProfile.mockImplementation(async (input) => {
+      effective = items.find((item) => item.profileId === input.profileId)!;
+      return {
+        ...input,
+        activationId: "new",
+        active: true,
+        operatorId: "operator",
+        createdBy: "operator",
+        createdAt: profile.createdAt,
+        updatedAt: profile.updatedAt,
+      };
+    });
+    await mount();
+    const radios = () => view.root.findAllByProps({ type: "radio" });
+    const currentProfiles = () =>
+      radios()
+        .filter((radio) =>
+          radio.parent!.findAllByType(StatusBadge).some((badge) => badge.props.status.label === "Current"),
+        )
+        .map((radio) => radio.props.value);
+    const reviewDisabled = () => button("Review Chat profile selection").props.disabled;
+    expect(currentProfiles()).toEqual(["safe"]);
+    await act(async () => radios()[1]!.props.onChange());
+    await click("Review Chat profile selection");
+    await click("Apply reviewed Chat profile");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(api.activatePermissionProfile).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ profileId: "other", surface: "chat" }),
+    );
+    expect(currentProfiles()).toEqual(["other"]);
+    expect(radios().map((radio) => radio.props.checked)).toEqual([false, true]);
+    expect(reviewDisabled()).toBe(true);
+    await act(async () => radios()[0]!.props.onChange());
+    expect(reviewDisabled()).toBe(false);
+  });
   it("marks the profile in effect for the selected policy context", async () => {
     items = [profile, { ...profile, profileId: "other", label: "Other" }];
     api.fetchEffectivePermissionProfile.mockImplementation(async ({ surface }) => ({
