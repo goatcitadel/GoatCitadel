@@ -69,7 +69,11 @@ export function GuidedModelSetup({
   excludeLlamaCpp?: boolean;
   /** Guided hosts can keep their own completion gate before entering Chat. */
   onEnterChat?: () => void;
-  renderApprovalAction?: (plan: ChangePlanRecord, pending: boolean, selection: { providerId: string; model: string; thinkingLevel: ChatThinkingLevel }) => ReactNode;
+  renderApprovalAction?: (
+    plan: ChangePlanRecord,
+    pending: boolean,
+    selection: { providerId: string; model: string; thinkingLevel: ChatThinkingLevel },
+  ) => ReactNode;
 }) {
   const catalog = useProviderModelCatalog("system");
   const completion = useOnboardingCompletion({ state: onboarding, scope: workspaceId, requireModel: true });
@@ -532,7 +536,9 @@ export function GuidedModelSetup({
         </NativeButton>
       </SettingsButtonRow>
       {actionError && !dialogPlan ? <p role="alert">{actionError}</p> : null}
-      {completion.notice || completion.attempt ? <p role="status">{completion.attempt?.message ?? completion.notice}</p> : null}
+      {completion.notice || completion.attempt ? (
+        <p role="status">{completion.attempt?.message ?? completion.notice}</p>
+      ) : null}
       {latestPlan ? (
         <ChatChangePlanCard
           plan={latestPlan}
@@ -557,9 +563,11 @@ export function GuidedModelSetup({
         plan={dialogPlan}
         pending={busy}
         error={actionError}
-        renderApprovalAction={renderApprovalAction
-          ? (plan, pending) => renderApprovalAction(plan, pending, { providerId, model, thinkingLevel })
-          : undefined}
+        renderApprovalAction={
+          renderApprovalAction
+            ? (plan, pending) => renderApprovalAction(plan, pending, { providerId, model, thinkingLevel })
+            : undefined
+        }
         onClose={() => {
           if (!busy) {
             setDialogPlan(null);
