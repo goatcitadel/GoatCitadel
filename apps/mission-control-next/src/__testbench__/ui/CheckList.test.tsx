@@ -75,6 +75,14 @@ describe("CheckList arrow keys", () => {
     await pressKey(rows[1] as HTMLElement, "Enter");
     expect(document.activeElement).toBe(rows[1]);
   });
+
+  it("leaves focus alone when no row holds it", async () => {
+    await renderList(5);
+    const list = document.querySelector<HTMLElement>(".testbench-list ul");
+    (document.activeElement as HTMLElement | null)?.blur();
+    await pressKey(list as HTMLElement, "ArrowUp");
+    expect(rowButtons()).not.toContain(document.activeElement);
+  });
 });
 
 describe("CheckList paging", () => {

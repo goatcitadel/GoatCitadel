@@ -36,6 +36,10 @@ export function CheckList({ checks, state, selectedId, running, onSelect, onRun,
     // Resolve the row that holds focus, whether that is its main button or its Run button.
     const activeItem = document.activeElement?.closest("li");
     const current = rows.findIndex((row) => row.closest("li") === activeItem);
+    if (current < 0) {
+      // Focus is not in a row (only possible if the list gains other focusable content); leave it alone.
+      return;
+    }
     const target = event.key === "ArrowDown" ? current + 1 : current - 1;
     const next = rows[Math.min(rows.length - 1, Math.max(0, target))];
     if (next) {

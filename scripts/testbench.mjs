@@ -1,6 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveAvailablePort, startVerificationStack, stopVerificationStack } from "./verification/lib/runtime.mjs";
+import {
+  WORKTREE_OUTPUT_LOCK_LEASE_ENV,
+  WORKTREE_OUTPUT_LOCK_PATH_ENV,
+  WORKTREE_OUTPUT_LOCK_ROOT_ENV,
+  acquireWorktreeOutputLock,
+} from "./lib/worktree-output-lock.mjs";
+import {
+  ensureGatewayWorkspaceBuild,
+  resolveAvailablePort,
+  startVerificationStack,
+  stopVerificationStack,
+} from "./verification/lib/runtime.mjs";
 import { ensureOnboardingComplete } from "./verification/lib/scenarios.mjs";
 import { startDeterministicLlmStub } from "./verification/lib/scenarios/deterministic-llm-stub.mjs";
 import { collectVerificationSecretEnvKeys } from "./verification/lib/scenarios/usability-coverage.mjs";
@@ -142,13 +153,38 @@ async function teardown({ stub, stack, runtimeRoot }) {
   }
 }
 
+const OUTPUT_LOCK_ENV_KEYS = new Set([
+  WORKTREE_OUTPUT_LOCK_LEASE_ENV,
+  WORKTREE_OUTPUT_LOCK_PATH_ENV,
+  WORKTREE_OUTPUT_LOCK_ROOT_ENV,
+]);
+
+/**
+ * Builds the gateway workspace while holding the worktree output lock, so a concurrent build, typecheck, or second
+ * test bench in this checkout cannot rewrite the same outputs mid-build (a held lock fails fast, naming its owner).
+ * The build's pnpm children inherit the lease, which is re-entrant through the environment. The lock is released
+ * before the gateway and UI start, so neither long-lived child carries it.
+ */
+async function buildGatewayWorkspaceLocked(context, envOmit) {
+  const lease = await acquireWorktreeOutputLock({ repoRoot, owner: "testbench:startup-build" });
+  try {
+    await ensureGatewayWorkspaceBuild(context, {
+      omitEnv: envOmit.filter((key) => !OUTPUT_LOCK_ENV_KEYS.has(key)),
+      processLogPrefix: "testbench",
+    });
+  } finally {
+    await lease.release();
+  }
+}
+
 /**
  * Starts the stub, the isolated runtime, the gateway, and the UI. Everything started is recorded on `started` so
  * the caller's teardown can stop it. Returns true when the sandbox is ready, and false when a stop was requested
  * first (the remaining phases, including the ready output, are skipped).
  */
 async function launchSandbox({ runId, artifactRoot, logRoot }, trigger, started) {
-  // A plain context, not createRunContext: holding the worktree output lock would block every build.
+  // A plain context, not createRunContext: holding the worktree output lock for the whole session would block every
+  // build in this checkout. Only the startup build takes it (see buildGatewayWorkspaceLocked).
   const context = { runId, artifactRoot };
   say("Starting the deterministic LLM stub…");
   started.stub = await startDeterministicLlmStub({ expectedAuthorization: `Bearer ${TESTBENCH_STUB_KEY}` });
@@ -156,18 +192,23 @@ async function launchSandbox({ runId, artifactRoot, logRoot }, trigger, started)
   say("Preparing an isolated runtime from shipped defaults…");
   started.runtimeRoot = await prepareTestbenchRuntime({ runId, stubBaseUrl: started.stub.baseUrl });
   if (trigger.requested()) return false;
-  const gatewayPort = await resolveAvailablePort(0);
-  const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
   // The children inherit no secrets and no GOATCITADEL_* / VITE_GOATCITADEL_* variables from this shell; only the
-  // explicit gatewayEnv and uiEnv settings below apply.
+  // explicit gatewayEnv and uiEnv settings below apply. Computed before the build lock exists, so it never lists the
+  // lock's lease variables.
   const envOmit = buildTestbenchEnvOmit(await collectVerificationSecretEnvKeys(path.join(repoRoot, "config")));
   if (trigger.requested()) return false;
-  // The gateway workspace build inside startVerificationStack is synchronous and blocks this process's event loop,
-  // so Ctrl+C, SIGTERM, and the stop file are only noticed once that build returns.
+  // The build is synchronous and blocks this process's event loop, so Ctrl+C, SIGTERM, and the stop file are only
+  // noticed once it returns. startVerificationStack below reuses this build instead of building again.
   say(
-    "Building the gateway workspace and starting the sandbox. The first build can take several minutes; " +
+    "Building the gateway workspace. The first build can take several minutes; " +
       "stopping takes effect after the build finishes…",
   );
+  await runPhase("the build", buildGatewayWorkspaceLocked(context, envOmit), trigger);
+  if (trigger.requested()) return false;
+  // Picked after the build, so a minutes-long build cannot let another process take the port first.
+  const gatewayPort = await resolveAvailablePort(0);
+  const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
+  say("Starting the sandbox gateway and UI…");
   started.stack = await runPhase(
     "startup",
     startVerificationStack(context, {

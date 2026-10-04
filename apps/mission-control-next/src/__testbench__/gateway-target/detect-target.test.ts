@@ -68,6 +68,16 @@ describe("detectTarget", () => {
     expect(target).toMatchObject({ kind: "real", sandboxVerified: false, rootDir: "/elsewhere" });
     expect(target.reason).toContain("is not the launched sandbox root");
   });
+
+  it.each([undefined, 42, "  "])("demotes when the gateway reports no usable root (%j)", async (rootDir) => {
+    const deps = makeDeps(
+      undefined,
+      async () => ({ diagnosticsEnabled: true, rootDir }) as unknown as DevVerificationStatus,
+    );
+    const target = await detectTarget({ requested: "sandbox", origin: ENV.sandboxOrigin }, ENV, deps);
+    expect(target).toMatchObject({ kind: "real", sandboxVerified: false, rootDir: undefined });
+    expect(target.reason).toBe("The gateway did not report its runtime root, so it cannot be verified as the sandbox.");
+  });
 });
 
 describe("normalizeRootPath", () => {

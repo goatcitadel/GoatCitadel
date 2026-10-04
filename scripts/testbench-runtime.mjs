@@ -49,9 +49,19 @@ export async function prepareTestbenchRuntime({ runId, stubBaseUrl, sourceRoot =
   // Ask git first so a failure leaves no half-built runtime root behind.
   const trackedSkillFiles = listTrackedSkillFiles(sourceRoot);
   const runtimeRoot = await prepareUsabilityRuntime(runId, stubBaseUrl, { sourceRoot, tempParent });
-  await copyTrackedSkills(sourceRoot, runtimeRoot, trackedSkillFiles);
-  await fs.mkdir(path.join(runtimeRoot, "home"), { recursive: true });
-  await fs.mkdir(path.join(runtimeRoot, "backups"), { recursive: true });
+  try {
+    await copyTrackedSkills(sourceRoot, runtimeRoot, trackedSkillFiles);
+    await fs.mkdir(path.join(runtimeRoot, "home"), { recursive: true });
+    await fs.mkdir(path.join(runtimeRoot, "backups"), { recursive: true });
+  } catch (error) {
+    // The caller learns the root only when this resolves, so a failure here must remove it.
+    await fs.rm(runtimeRoot, { recursive: true, force: true }).catch((cleanupError) => {
+      process.stderr.write(
+        `[testbench] Could not remove the partial sandbox root ${runtimeRoot}: ${cleanupError.message}\n`,
+      );
+    });
+    throw error;
+  }
   return runtimeRoot;
 }
 
@@ -83,6 +93,12 @@ export function buildTestbenchEnvOmit(secretEnvKeys, env = process.env) {
 }
 
 /**
+ * The children always run in development mode: a shell that exports NODE_ENV=production would otherwise make the
+ * gateway reject the test bench's Vite origin (it allows any loopback port only outside production).
+ */
+const TESTBENCH_NODE_ENV = "development";
+
+/**
  * Gateway environment on top of the verification stack defaults (SQLite, auth none, no secret store).
  * Pinned inside the runtime root: GOATCITADEL_HOME, GOATCITADEL_BACKUP_DIR, GOATCITADEL_LOCAL_ENV_FILE, and the two
  * Code Mode roots (the stack itself also pins GOATCITADEL_ROOT_DIR). Nothing else GoatCitadel-specific comes from
@@ -90,6 +106,7 @@ export function buildTestbenchEnvOmit(secretEnvKeys, env = process.env) {
  */
 export function buildTestbenchGatewayEnv(runtimeRoot) {
   return {
+    NODE_ENV: TESTBENCH_NODE_ENV,
     GOATCITADEL_HOME: path.join(runtimeRoot, "home"),
     GOATCITADEL_BACKUP_DIR: path.join(runtimeRoot, "backups"),
     // Points at a file that does not exist, so no operator .env is read or written.
@@ -111,6 +128,7 @@ export function buildTestbenchGatewayEnv(runtimeRoot) {
 
 export function buildTestbenchUiEnv({ gatewayUrl, runtimeRoot, realOrigin = DEFAULT_REAL_GATEWAY_ORIGIN }) {
   return {
+    NODE_ENV: TESTBENCH_NODE_ENV,
     VITE_GOATCITADEL_TESTBENCH_SANDBOX_ORIGIN: gatewayUrl,
     VITE_GOATCITADEL_TESTBENCH_SANDBOX_ROOT: runtimeRoot,
     VITE_GOATCITADEL_TESTBENCH_REAL_ORIGIN: realOrigin,

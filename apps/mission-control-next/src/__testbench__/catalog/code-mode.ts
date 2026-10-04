@@ -3,6 +3,7 @@ import { resolveApproval } from "@goatcitadel/mission-control-shared/api/approva
 import { createCodeModeRun, fetchCodeModeRun } from "@goatcitadel/mission-control-shared/api/capabilities";
 import { ensure, pass, waitFor } from "../runner/assert";
 import type { CheckDef } from "../runner/types";
+import { sha256Hex } from "./context";
 
 const TRUSTED_SOURCE = "return { ok: true };";
 const TERMINAL_STATUSES: ReadonlySet<CodeModeRunStatus> = new Set<CodeModeRunStatus>([
@@ -11,7 +12,6 @@ const TERMINAL_STATUSES: ReadonlySet<CodeModeRunStatus> = new Set<CodeModeRunSta
   "rejected",
   "expired",
 ]);
-const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 
 export const codeModeChecks: readonly CheckDef[] = [
   {
@@ -28,7 +28,7 @@ export const codeModeChecks: readonly CheckDef[] = [
       "POST /api/v1/approvals/:approvalId/resolve",
       "GET /api/v1/code-mode/runs/:runId",
     ],
-    steps: ["Create run", "Approve the run", "Run finishes", "Code artifact hash recorded"],
+    steps: ["Create run", "Approve the run", "Run finishes", "Code hashes match the snippet"],
     async run(ctx) {
       const created = await ctx.step("Create run", () =>
         createCodeModeRun({ language: "javascript", source: TRUSTED_SOURCE }),
@@ -48,16 +48,17 @@ export const codeModeChecks: readonly CheckDef[] = [
         `The run ended ${finished.status}${finished.error ? `: ${finished.error}` : ""}.`,
         finished,
       );
-      await ctx.step("Code artifact hash recorded", async () => {
+      await ctx.step("Code hashes match the snippet", async () => {
+        // The approved hash and the stored source artifact must both be the bytes of the snippet this check sent.
+        const expected = await sha256Hex(TRUSTED_SOURCE);
+        ensure(finished.codeHash === expected, "The run's code hash is not the SHA-256 of the approved snippet.", {
+          codeHash: finished.codeHash,
+          expected,
+        });
         ensure(
-          typeof finished.codeHash === "string" && finished.codeHash !== "",
-          "The run recorded no code hash.",
-          finished,
-        );
-        ensure(
-          SHA256_PATTERN.test(finished.codeArtifact.sha256),
-          "The code artifact has no SHA-256.",
-          finished.codeArtifact,
+          finished.codeArtifact.sha256 === expected,
+          "The stored code artifact is not the snippet that was approved.",
+          { codeArtifact: finished.codeArtifact, expected },
         );
       });
       return pass(`Run ${created.runId} completed; code artifact ${finished.codeArtifact.sha256.slice(0, 12)}….`);

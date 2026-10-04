@@ -9,7 +9,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({ resolveApproval: mocks.resolveApproval }));
 
-const SHA = "a".repeat(64);
+// SHA-256 of the fixed snippet `return { ok: true };`.
+const SHA = "2afa6c5e563288763723bf1da774a33173023b84fb7acf26c4dfab1222225923";
 
 beforeEach(() => {
   for (const mock of Object.values(mocks)) {
@@ -24,14 +25,14 @@ describe("Code Mode run", () => {
     mocks.fetchCodeModeRun.mockResolvedValueOnce({
       runId: "cm-1",
       status: "completed",
-      codeHash: "h",
+      codeHash: SHA,
       codeArtifact: { sha256: SHA },
     });
     const check = findCheck(codeModeChecks, "code-mode.run");
     const ctx = makeTestContext();
     await expect(check.run(ctx)).resolves.toMatchObject({
       status: "pass",
-      summary: "Run cm-1 completed; code artifact aaaaaaaaaaaa….",
+      summary: "Run cm-1 completed; code artifact 2afa6c5e5632….",
     });
     expect(mocks.createCodeModeRun).toHaveBeenCalledWith({ language: "javascript", source: "return { ok: true };" });
     expect(mocks.resolveApproval).toHaveBeenCalledWith("appr-cm", "approve");
@@ -51,7 +52,7 @@ describe("Code Mode run", () => {
       runId: "cm-1",
       status: "failed",
       error: "guest error",
-      codeHash: "h",
+      codeHash: SHA,
       codeArtifact: { sha256: SHA },
     });
     await expect(findCheck(codeModeChecks, "code-mode.run").run(makeTestContext())).rejects.toThrow(
@@ -63,7 +64,7 @@ describe("Code Mode run", () => {
     mocks.fetchCodeModeRun.mockResolvedValueOnce({
       runId: "cm-1",
       status: "rejected",
-      codeHash: "h",
+      codeHash: SHA,
       codeArtifact: { sha256: SHA },
     });
     await expect(findCheck(codeModeChecks, "code-mode.run").run(makeTestContext())).rejects.toThrow(
@@ -78,19 +79,31 @@ describe("Code Mode run", () => {
       codeArtifact: { sha256: SHA },
     });
     await expect(findCheck(codeModeChecks, "code-mode.run").run(makeTestContext())).rejects.toThrow(
-      "The run recorded no code hash.",
+      "The run's code hash is not the SHA-256 of the approved snippet.",
     );
   });
 
-  it("fails when the code artifact SHA-256 is malformed", async () => {
+  it("fails when the code hash is a well-formed hash of other code", async () => {
     mocks.fetchCodeModeRun.mockResolvedValueOnce({
       runId: "cm-1",
       status: "completed",
-      codeHash: "h",
-      codeArtifact: { sha256: "not-a-hash" },
+      codeHash: "b".repeat(64),
+      codeArtifact: { sha256: SHA },
     });
     await expect(findCheck(codeModeChecks, "code-mode.run").run(makeTestContext())).rejects.toThrow(
-      "The code artifact has no SHA-256.",
+      "The run's code hash is not the SHA-256 of the approved snippet.",
+    );
+  });
+
+  it("fails when the stored code artifact is not the approved snippet", async () => {
+    mocks.fetchCodeModeRun.mockResolvedValueOnce({
+      runId: "cm-1",
+      status: "completed",
+      codeHash: SHA,
+      codeArtifact: { sha256: "c".repeat(64) },
+    });
+    await expect(findCheck(codeModeChecks, "code-mode.run").run(makeTestContext())).rejects.toThrow(
+      "The stored code artifact is not the snippet that was approved.",
     );
   });
 

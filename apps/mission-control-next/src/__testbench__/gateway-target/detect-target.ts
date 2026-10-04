@@ -51,6 +51,10 @@ export async function detectTarget(
   } catch (error) {
     return demoted(base, `Sandbox status is unavailable: ${describeError(error)}`);
   }
+  // The status body is external data: a missing root cannot prove the sandbox.
+  if (typeof status.rootDir !== "string" || status.rootDir.trim() === "") {
+    return demoted(base, "The gateway did not report its runtime root, so it cannot be verified as the sandbox.");
+  }
   if (normalizeRootPath(status.rootDir) !== normalizeRootPath(env.sandboxRoot)) {
     return demoted(base, `Gateway root ${status.rootDir} is not the launched sandbox root.`, status.rootDir);
   }

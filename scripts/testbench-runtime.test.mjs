@@ -99,6 +99,21 @@ test("prepareTestbenchRuntime refuses to copy skills without git tracking info a
   assert.deepEqual(fs.readdirSync(tempParent), []);
 });
 
+test("prepareTestbenchRuntime removes the runtime root when copying a tracked skill fails", async (t) => {
+  const sourceRoot = makeSourceRoot(t);
+  // The tracked skill file is now a directory in the working tree, so copying it fails with an error other than ENOENT.
+  const trackedSkill = path.join(sourceRoot, "skills", "demo", "SKILL.md");
+  fs.rmSync(trackedSkill);
+  fs.mkdirSync(trackedSkill);
+  const tempParent = fs.mkdtempSync(path.join(os.tmpdir(), "testbench-parent-"));
+  t.after(() => fs.rmSync(tempParent, { recursive: true, force: true }));
+  await assert.rejects(
+    prepareTestbenchRuntime({ runId: "unit", stubBaseUrl: "http://127.0.0.1:1/v1", sourceRoot, tempParent }),
+    (error) => error?.code !== "ENOENT",
+  );
+  assert.deepEqual(fs.readdirSync(tempParent), []);
+});
+
 test("buildTestbenchGatewayEnv keeps home and backups inside the runtime root and turns Code Mode on", () => {
   const runtimeRoot = path.join(os.tmpdir(), "goatcitadel-usability-unit");
   const env = buildTestbenchGatewayEnv(runtimeRoot);
@@ -176,10 +191,13 @@ test("the sandbox children inherit no GoatCitadel setting from the shell, but ke
     GOATCITADEL_HOME: "C:/operator-home",
     GOATCITADEL_BACKUP_DIR: "C:/operator-backups",
     GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "false",
+    NODE_ENV: "production",
   };
   const omit = buildTestbenchEnvOmit(["OPENAI_API_KEY"], operatorEnv);
 
   const gateway = buildVerificationProcessEnv(operatorEnv, buildTestbenchGatewayEnv(runtimeRoot), omit);
+  // In production the gateway would reject the test bench's Vite origin.
+  assert.equal(gateway.NODE_ENV, "development");
   assert.equal(gateway.GOATCITADEL_HOME, path.join(runtimeRoot, "home"));
   assert.equal(gateway.GOATCITADEL_BACKUP_DIR, path.join(runtimeRoot, "backups"));
   assert.equal(gateway.GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED, "true");
@@ -194,13 +212,15 @@ test("the sandbox children inherit no GoatCitadel setting from the shell, but ke
     buildTestbenchUiEnv({ gatewayUrl: "http://127.0.0.1:41873", runtimeRoot }),
     omit,
   );
+  assert.equal(ui.NODE_ENV, "development");
   assert.equal(ui.VITE_GOATCITADEL_TESTBENCH_SANDBOX_ORIGIN, "http://127.0.0.1:41873");
   assert.equal(ui.VITE_GOATCITADEL_VISUAL_REGRESSION_MODE, undefined);
   assert.equal(ui.VITE_OTHER, "z");
 });
 
-test("buildTestbenchUiEnv hands the page the sandbox origin, root, and real origin", () => {
+test("buildTestbenchUiEnv runs Vite in development and hands the page the sandbox origin, root, and real origin", () => {
   assert.deepEqual(buildTestbenchUiEnv({ gatewayUrl: "http://127.0.0.1:41873", runtimeRoot: "/tmp/root" }), {
+    NODE_ENV: "development",
     VITE_GOATCITADEL_TESTBENCH_SANDBOX_ORIGIN: "http://127.0.0.1:41873",
     VITE_GOATCITADEL_TESTBENCH_SANDBOX_ROOT: "/tmp/root",
     VITE_GOATCITADEL_TESTBENCH_REAL_ORIGIN: "http://127.0.0.1:8787",
