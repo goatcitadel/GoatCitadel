@@ -26,7 +26,7 @@ Both prerequisites are met on the base commit (plan Task 1, Step 1):
 | Nightly CI wiring | Pending: CI after merge | | `verification-ux-budgets-nightly.yml` is in this PR and is not gating. Its first run happens after merge (check 2). |
 | SY-02 fresh-install re-test | Not run | | |
 | Large data (1,000 records) | Pending: CI after merge, once the proof is count-aware | | The count override landed. The long-lists proof still asserts 105 records in places, so another count fails on harness assumptions (check 4). |
-| Cross-browser smoke (Firefox, WebKit) | Not run | | |
+| Cross-browser smoke (Firefox, WebKit) | Pending: operator, after approving the engine download | | The script and its unit tests landed. A run needs a running testbench and the two engines (check 5). |
 | Real browsers (Firefox, Safari) | Not run | | |
 | Screen readers | Not run | | |
 | Real models (operator) | Not run | | |
@@ -140,6 +140,34 @@ Follow-up before the dispatch is useful: derive the proof's expectations from `L
 History and Chat, cursor reads in `readLongListOwners`, a Quality expectation capped at the page's 200), and run it
 once locally at the new count. Until then the `long_list_count` input is wired, but only 105 passes.
 
+### 5. Cross-browser smoke, Firefox and WebKit (plan Task 6)
+
+- **Status:** Pending. The script and its unit tests landed. A run needs the operator's approval to download the two
+  engines.
+- **Who:** the operator (or an agent they allow), against a running `pnpm testbench`.
+- **What landed:** `scripts/verification/cross-browser-smoke.mjs`. For each engine it opens every cockpit area
+  (`/chat`, `/inbox`, `/work`, `/library`, `/system/health` and `/settings/general`, each with `?shell=cockpit`) in a
+  fresh page, waits for the cockpit ready marker, and reports page errors, console errors and failed requests, with one
+  screenshot per area. It exits 1 when any area reports a problem. Every other repository lane uses only Chromium, so
+  this is the first Firefox and WebKit coverage.
+- **Approval needed first:** installing the engines downloads browser binaries for the Playwright package the
+  repository already uses. Nothing in this PR downloads them.
+
+Steps (plan Step 6), with `pnpm testbench` running:
+
+```powershell
+pnpm exec playwright install firefox webkit
+node scripts/verification/cross-browser-smoke.mjs --ui "<URL printed by the launcher>"
+```
+
+The launcher prints `Test bench: <origin>/testbench.html?target=sandbox`. The script uses only the origin, and the
+cockpit is served from the same origin, so the URL works as printed. If an engine is not installed, the script reports
+`engine failed` with the install command and still reports the other engines.
+
+Expected: one `ok` or `FAIL` line per engine and area, and a screenshots folder under
+`artifacts/verification/cross-browser-smoke/`. File each `FAIL` that does not also happen in Chromium (check with
+`--engines chromium`) as a new finding. Record the results here.
+
 ## Deviations from the plan
 
 1. **Check 1 is measured by CI, not locally (Tasks 2 and 3).** The plan runs the lane locally first and writes the
@@ -157,3 +185,11 @@ once locally at the new count. Until then the `long_list_count` input is wired, 
    and reads owner lists with a limit of 200 (check 4, "Premise check"). The proof has to become count-aware before the
    `long_list_count` dispatch can pass. This PR does not change the proof: exercising it needs the heavy lanes, and the
    edits depend on page behavior that has not been observed at other counts.
+4. **The smoke script differs from the plan's draft in four places (Task 6).** The unit tests keep the draft's three
+   tests and add checks for the guards below.
+   - It opens a fresh page for each route. The draft reused one page, so the previous route's aborted live event
+     stream could surface as a failed request on the next route in every engine.
+   - One engine failing to launch no longer discards the other engines' results, and the failure names the install
+     command. The draft printed results only after every engine had finished.
+   - Engine names are checked as own keys. The draft's `in` check accepted names such as `constructor`.
+   - A missing `--ui` and an empty `--engines` list are refused. The draft could run no engines and still pass.
