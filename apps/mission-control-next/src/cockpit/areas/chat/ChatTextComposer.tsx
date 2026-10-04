@@ -215,7 +215,11 @@ export function ChatTextComposer({
               Commands and context
             </button>{" "}
             ·{" "}
-            <button type="button" onClick={shellSwitch.request} className="inline-flex min-h-8 items-center font-medium text-accent hover:underline max-sm:min-h-11">
+            <button
+              type="button"
+              onClick={shellSwitch.request}
+              className="inline-flex min-h-8 items-center font-medium text-accent hover:underline max-sm:min-h-11"
+            >
               Open classic view
             </button>
           </p>

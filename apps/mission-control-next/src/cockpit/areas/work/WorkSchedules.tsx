@@ -43,8 +43,10 @@ export function WorkSchedules() {
   const [notice, setNotice] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const empty = { name: "", schedule: "0 9 * * *", action: "task" as CreateScheduleAction };
-  const editor = useSessionDraft(scheduleCreateDraftKey(getGatewayApiBaseUrl()), empty, undefined,
-    { label: "New schedule", active: createOpen });
+  const editor = useSessionDraft(scheduleCreateDraftKey(getGatewayApiBaseUrl()), empty, undefined, {
+    label: "New schedule",
+    active: createOpen,
+  });
   const { name, schedule, action: createAction } = editor.value;
   const selected = !schedules.isError && !detail.isError && detail.data?.jobId === selectedId ? detail.data : undefined;
   const operations = useScheduleOperations(
@@ -87,18 +89,21 @@ export function WorkSchedules() {
     setNotice(null);
     const jobId = createScheduleJobId(trimmedName);
     const submitted = editor.value;
-    const receipt = await operations.execute({
-      kind: "create",
-      input: {
-        jobId,
-        name: trimmedName,
-        schedule: trimmedSchedule,
-        action: createAction,
-        enabled: true,
+    const receipt = await operations.execute(
+      {
+        kind: "create",
+        input: {
+          jobId,
+          name: trimmedName,
+          schedule: trimmedSchedule,
+          action: createAction,
+          enabled: true,
+        },
       },
-    }, (recorded) => {
-      if (recorded.kind === "create") editor.acceptSaved(empty, undefined, submitted);
-    });
+      (recorded) => {
+        if (recorded.kind === "create") editor.acceptSaved(empty, undefined, submitted);
+      },
+    );
     if (receipt?.kind === "create") {
       setCreateOpen(false);
       setSelectedId(jobId);

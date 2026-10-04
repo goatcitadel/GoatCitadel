@@ -6,7 +6,11 @@ import { useShellHandoff } from "../../app/use-shell-handoff";
 import { ShellSwitchFeedback } from "./use-cockpit-shell-switch";
 import { CockpitNavigationContext, type CockpitNavigationOwner } from "./cockpit-navigation-context";
 import {
-  cockpitHref, commitCockpitNavigation, readCockpitHistory, retainsSettingsPage, subscribeCockpitHistory,
+  cockpitHref,
+  commitCockpitNavigation,
+  readCockpitHistory,
+  retainsSettingsPage,
+  subscribeCockpitHistory,
 } from "./cockpit-history";
 
 /** One presentation leave owner for the frame and all imperative native route callbacks. */
@@ -21,11 +25,16 @@ export function CockpitNavigationProvider({ children }: { children: ReactNode })
   const mounted = useRef(true);
   useLayoutEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; };
+    return () => {
+      mounted.current = false;
+    };
   }, []);
   const handoff = useShellHandoff([identity, history]);
-  const isCurrent = () => mounted.current && view.current === renderedView &&
-    getGatewayApiBaseUrl() === installation && readCockpitHistory() === history;
+  const isCurrent = () =>
+    mounted.current &&
+    view.current === renderedView &&
+    getGatewayApiBaseUrl() === installation &&
+    readCockpitHistory() === history;
   const requestTransition: CockpitNavigationOwner["requestTransition"] = (action) => {
     if (!isCurrent()) return;
     handoff.requestTransition((review) => {
@@ -47,10 +56,14 @@ export function CockpitNavigationProvider({ children }: { children: ReactNode })
       commitCockpitNavigation(destination, options);
       return;
     }
-    requestTransition((review) => { review.navigate(destination, options); });
+    requestTransition((review) => {
+      review.navigate(destination, options);
+    });
   };
   return (
-    <CockpitNavigationContext.Provider value={{ navigate, requestTransition, isTransitionPending: handoff.isTransitionPending }}>
+    <CockpitNavigationContext.Provider
+      value={{ navigate, requestTransition, isTransitionPending: handoff.isTransitionPending }}
+    >
       {children}
       <ShellSwitchFeedback owner={handoff} />
     </CockpitNavigationContext.Provider>

@@ -14,9 +14,14 @@ const COPY: Readonly<Record<Exclude<CockpitArea, "gallery">, string>> = {
 
 export function AreaPlaceholder({ area }: { area: Exclude<CockpitArea, "gallery"> }) {
   const shellSwitch = useCockpitShellSwitch();
-  return <><EmptyState
-    title="This area is in progress"
-    description={COPY[area]}
-    action={<Button onClick={shellSwitch.request}>Open in classic view</Button>}
-  />{shellSwitch.feedback}</>;
+  return (
+    <>
+      <EmptyState
+        title="This area is in progress"
+        description={COPY[area]}
+        action={<Button onClick={shellSwitch.request}>Open in classic view</Button>}
+      />
+      {shellSwitch.feedback}
+    </>
+  );
 }

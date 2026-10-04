@@ -5,7 +5,8 @@ export interface ApiErrorDescription {
   technical?: string;
 }
 
-export const GATEWAY_UNREACHABLE_SUMMARY = "Can't reach the GoatCitadel gateway. Check that it's running, then try again.";
+export const GATEWAY_UNREACHABLE_SUMMARY =
+  "Can't reach the GoatCitadel gateway. Check that it's running, then try again.";
 const DEFAULT_FALLBACK = "Something went wrong. Try again.";
 
 /** Keep request paths, stack traces, and transport details out of operator copy. */
@@ -65,8 +66,10 @@ function looksLikeTransportFailure(message: string): boolean {
 }
 
 function looksTechnical(message: string): boolean {
-  return /\/api\/v\d+\//.test(message) ||
+  return (
+    /\/api\/v\d+\//.test(message) ||
     /^(api|http) error \d{3}/i.test(message) ||
     /\b[A-Za-z]*Error:/.test(message) ||
-    /\n\s+at\s/.test(message);
+    /\n\s+at\s/.test(message)
+  );
 }
