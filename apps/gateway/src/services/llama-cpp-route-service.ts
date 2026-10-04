@@ -34,12 +34,18 @@ export interface LlamaCppRoutePortDependencies {
  * probe), so neither counts as a change on its own. Real failures still change `healthy` and
  * `processState`.
  *
- * In `leaseDiagnostics`, only `evidence.lastProbe.at` moves with every probe, but the whole object
- * is left out on purpose. So a lease-only transition (`activeLeaseCount`, `state`, `ownership`) is
- * no longer announced on its own; the next announced status carries it.
+ * In `leaseDiagnostics`, only `evidence.lastProbe` moves with every probe (its `healthy` repeats the
+ * top-level field), so only that is left out. Lease transitions (`activeLeaseCount`, `state`,
+ * `ownership`, the idle deadline, lease and start evidence) are still announced.
  */
 export function llamaCppStatusSignature(status: LlamaCppRuntimeStatus): string {
-  return JSON.stringify({ ...status, updatedAt: undefined, leaseDiagnostics: undefined, lastError: undefined });
+  const lease = status.leaseDiagnostics;
+  return JSON.stringify({
+    ...status,
+    updatedAt: undefined,
+    lastError: undefined,
+    leaseDiagnostics: lease && { ...lease, evidence: lease.evidence && { ...lease.evidence, lastProbe: undefined } },
+  });
 }
 
 export function createLlamaCppRoutePort(deps: LlamaCppRoutePortDependencies): LlamaCppRoutePort {

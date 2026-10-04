@@ -155,4 +155,59 @@ describe("llama.cpp route service facade", () => {
     await service.refreshLlamaCppRuntime();
     expect(publishRealtime).not.toHaveBeenCalled();
   });
+
+  describe("lease diagnostics", () => {
+    const leased = (activeLeaseCount: number, probeAt: string) => ({
+      enabled: true,
+      desiredState: "running",
+      processState: "running",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      healthy: true,
+      updatedAt: probeAt,
+      leaseDiagnostics: {
+        state: activeLeaseCount > 0 ? "leased" : "idle",
+        activeLeaseCount,
+        ownership: "owned",
+        purposes: [],
+        persistentDemand: { manual: false, api: false, autostart: false },
+        evidence: { lastProbe: { at: probeAt, healthy: true } },
+      },
+    });
+
+    it("stays silent when only the probe timestamp moved", async () => {
+      const runtime = {
+        getStatus: vi.fn(() => leased(1, "2026-10-03T00:00:00.000Z")),
+        refresh: vi.fn(async () => leased(1, "2026-10-03T00:00:05.000Z")),
+      };
+      const publishRealtime = vi.fn(async () => undefined);
+      const service = createLlamaCppRoutePort({
+        llamaCppRuntime: runtime as never,
+        setup: {} as never,
+        publishRealtime,
+      });
+
+      await service.refreshLlamaCppRuntime();
+      expect(publishRealtime).not.toHaveBeenCalled();
+    });
+
+    it("announces a lease-only transition", async () => {
+      const released = leased(0, "2026-10-03T00:00:05.000Z");
+      const runtime = {
+        getStatus: vi.fn(() => leased(1, "2026-10-03T00:00:00.000Z")),
+        refresh: vi.fn(async () => released),
+      };
+      const publishRealtime = vi.fn(async () => undefined);
+      const service = createLlamaCppRoutePort({
+        llamaCppRuntime: runtime as never,
+        setup: {} as never,
+        publishRealtime,
+      });
+
+      await service.refreshLlamaCppRuntime();
+      expect(publishRealtime).toHaveBeenCalledExactlyOnceWith("system", "llamacpp", {
+        type: "llamacpp_refreshed",
+        status: released,
+      });
+    });
+  });
 });
