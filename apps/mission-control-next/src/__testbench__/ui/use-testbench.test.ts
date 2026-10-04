@@ -67,16 +67,20 @@ describe("loadTestbench", () => {
         makeDeps({ preflight: async () => ({ status: "needs-auth", message: "Token required." }) }),
       ),
     ).resolves.toMatchObject({ phase: "blocked", title: "This gateway needs you to sign in" });
-    await expect(
-      loadTestbench(
-        SANDBOX_REQUEST,
-        ENV,
-        makeDeps({ preflight: async () => ({ status: "unreachable", message: "Network error." }) }),
-      ),
-    ).resolves.toMatchObject({
+    const unreachable = await loadTestbench(
+      SANDBOX_REQUEST,
+      ENV,
+      makeDeps({ preflight: async () => ({ status: "unreachable", message: "Network error." }) }),
+    );
+    expect(unreachable).toMatchObject({
       phase: "blocked",
       title: "Gateway unreachable",
       detail: expect.stringContaining("port 5173"),
+    });
+    expect(unreachable).toMatchObject({
+      detail: expect.stringContaining(
+        "production gateways only accept browser requests from allowlisted origins (by default ports 5173, 4173, and 8787)",
+      ),
     });
     await expect(
       loadTestbench(

@@ -98,7 +98,7 @@ function describeBlockedAccess(status: Exclude<GatewayAccessStatus, "ready">, me
       return {
         phase: "blocked",
         title: "Gateway unreachable",
-        detail: `${message} If this is an installed GoatCitadel, open the test bench from the dev server on port 5173: production gateways only accept browser requests from that origin.`,
+        detail: `${message} If this is an installed GoatCitadel, open the test bench from the dev server on port 5173: production gateways only accept browser requests from allowlisted origins (by default ports 5173, 4173, and 8787).`,
       };
     case "misconfigured":
       return { phase: "blocked", title: "Gateway access is misconfigured", detail: message };
