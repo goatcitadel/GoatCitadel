@@ -15,6 +15,9 @@ const SEED_ROUTES: readonly RouteKey[] = [
 
 const SEED_STEPS = ["Create session", "Seed approval scenario", "Approval is pending"] as const;
 
+/** Statuses that show the approval woke the run; failed, cancelled, dead-lettered, or paused runs did not resume. */
+const WOKEN_RUN_STATUSES: readonly string[] = ["queued", "running", "completed"];
+
 async function seedPendingApproval(ctx: CheckContext): Promise<ChatApprovalScenario> {
   const session = await ctx.step("Create session", () => createScratchSession(ctx, "approval"));
   const scenario = await ctx.step("Seed approval scenario", () =>
@@ -23,7 +26,7 @@ async function seedPendingApproval(ctx: CheckContext): Promise<ChatApprovalScena
   await ctx.step("Approval is pending", async () => {
     const pending = await fetchChatPendingApprovals(session.sessionId);
     ensure(
-      pending.items.some((item) => item.approvalId === scenario.approvalId),
+      pending.items.some((item) => item.approvalId === scenario.approvalId && !item.stale),
       "The seeded approval is not pending for the session.",
       pending,
     );
@@ -63,12 +66,12 @@ export const approvalChecks: readonly CheckDef[] = [
     id: "approvals.approve",
     kind: "journey",
     domain: "approvals",
-    title: "Approve a pending tool approval and resume the turn",
+    title: "Approve a pending tool approval and wake its turn",
     tier: "host",
     needsWorkspace: true,
     timeoutMs: 120_000,
     description:
-      "Approving the seeded shell.exec approval lets the turn resume, which may run its `pnpm test` command on this machine.",
+      "Approving the seeded shell.exec approval lets the turn resume, which may run its `pnpm test` command on this machine. The command may still be running after this check ends.",
     routes: [...SEED_ROUTES, "POST /api/v1/chat/tools/approve", "GET /api/v1/durable/runs/:runId"],
     steps: [...SEED_STEPS, "Approve the approval", "Durable run leaves waiting", "Approval recorded as approved"],
     async run(ctx) {
@@ -76,18 +79,40 @@ export const approvalChecks: readonly CheckDef[] = [
       const approved = await ctx.step("Approve the approval", () =>
         approveChatTool(scenario.sessionId, scenario.approvalId),
       );
-      ensure(approved.ok, "The gateway did not accept the approval.", approved);
-      const run = await ctx.step("Durable run leaves waiting", () =>
-        waitFor(
-          () => fetchDurableRun(scenario.chatTurnDurableRunId),
-          (current) => current.status !== "waiting",
-          { signal: ctx.signal, timeoutMs: 30_000, label: "The durable run waking" },
-        ),
+      ensure(
+        approved.ok && approved.resumed === true && approved.resumedRunId === scenario.chatTurnDurableRunId,
+        "The approval did not resume the seeded turn's durable run.",
+        approved,
       );
+      const run = await ctx.step("Durable run leaves waiting", async () => {
+        const current = await waitFor(
+          () => fetchDurableRun(scenario.chatTurnDurableRunId),
+          (candidate) => candidate.status !== "waiting",
+          { signal: ctx.signal, timeoutMs: 30_000, label: "The durable run waking" },
+        );
+        const detail = current.lastError ? `: ${current.lastError}` : "";
+        ensure(
+          WOKEN_RUN_STATUSES.includes(current.status),
+          `The durable run ended ${current.status} instead of resuming${detail}.`,
+          { runId: current.runId, status: current.status, lastError: current.lastError },
+        );
+        return current;
+      });
       const approval = await ctx.step("Approval recorded as approved", () =>
         waitForApprovalStatus(ctx, scenario.approvalId, "approved"),
       );
-      return pass(`Approved; the durable run is now ${run.status}.`, { approval, run });
+      return pass(
+        `Approval woke the durable run (status ${run.status} when read). Command execution was not verified.`,
+        {
+          approval,
+          linkage: {
+            resumed: approved.resumed,
+            resumedTurnId: approved.resumedTurnId,
+            resumedRunId: approved.resumedRunId,
+          },
+          run: { runId: run.runId, status: run.status, lastError: run.lastError },
+        },
+      );
     },
   },
 ];
