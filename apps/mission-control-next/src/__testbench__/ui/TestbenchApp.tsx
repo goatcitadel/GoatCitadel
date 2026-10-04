@@ -175,11 +175,8 @@ function ReadyView({ bench, load }: { readonly bench: TestbenchController; reado
 
 function externalConfirmMessage(check: CheckDef, target: TargetInfo): string {
   const where = target.kind === "sandbox" ? "the sandbox gateway" : `the real gateway at ${target.origin}`;
-  return [
-    `“${check.title}” runs against ${where}.`,
-    "It may spend provider tokens or reach services outside this machine.",
-    check.description,
-  ]
+  // The catalog integrity test requires every external check to describe its own cost in `description`.
+  return [`“${check.title}” runs against ${where} and leaves this machine.`, check.description]
     .filter((part): part is string => Boolean(part))
     .join(" ");
 }

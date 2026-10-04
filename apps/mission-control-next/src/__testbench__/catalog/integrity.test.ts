@@ -38,6 +38,12 @@ describe("hand-written catalog integrity", () => {
     }
   });
 
+  it("every external check describes its cost", () => {
+    for (const check of HAND_WRITTEN_CHECKS.filter((candidate) => candidate.tier === "external")) {
+      expect(check.description?.trim() ?? "", check.id).not.toBe("");
+    }
+  });
+
   it("tiers every check that can run code on the host as host", () => {
     for (const check of HAND_WRITTEN_CHECKS) {
       if (check.routes.some((route) => HOST_ROUTE_PATTERNS.some((pattern) => pattern.test(route)))) {

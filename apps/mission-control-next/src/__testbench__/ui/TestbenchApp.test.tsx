@@ -132,14 +132,16 @@ describe("TestbenchApp", () => {
     expect(external).toHaveBeenCalledTimes(1);
   });
 
-  it("always states where an external check runs and what it may cost", async () => {
+  it("states where an external check runs and its own cost, without a generic cost claim", async () => {
     const { checks } = makeChecks();
-    const bare = checks.map((check) => (check.id === "demo.external" ? { ...check, description: undefined } : check));
-    await render(<TestbenchApp targetRequest={SANDBOX_REQUEST} env={ENV} deps={makeDeps(bare)} />);
+    await render(<TestbenchApp targetRequest={SANDBOX_REQUEST} env={ENV} deps={makeDeps(checks)} />);
     await waitForText("Demo external");
     await click(buttonNamed("Run Demo external"));
-    expect(dialog()?.textContent).toContain("“Demo external” runs against the sandbox gateway.");
-    expect(dialog()?.textContent).toContain("It may spend provider tokens or reach services outside this machine.");
+    const message = dialog()?.textContent ?? "";
+    expect(message).toContain(
+      "“Demo external” runs against the sandbox gateway and leaves this machine. Spends tokens.",
+    );
+    expect(message).not.toContain("provider tokens");
   });
 
   it("names the real gateway in the confirmation when an allowlisted check runs there", async () => {
@@ -147,7 +149,9 @@ describe("TestbenchApp", () => {
     await render(<TestbenchApp targetRequest={REAL_REQUEST} env={ENV} deps={deps} />);
     await waitForText("REAL gateway");
     await click(buttonNamed("Run Demo external"));
-    expect(dialog()?.textContent).toContain("the real gateway at http://127.0.0.1:8787");
+    expect(dialog()?.textContent).toContain(
+      "“Demo external” runs against the real gateway at http://127.0.0.1:8787 and leaves this machine.",
+    );
   });
 
   it("does not run an external check when the confirmation is cancelled", async () => {
