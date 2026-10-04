@@ -1,62 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { REAL_TARGET, SANDBOX_TARGET } from "../test-support/context";
+import {
+  RUN_OPTIONS,
+  collector,
+  finished,
+  gatewayDownError,
+  gauged,
+  makeCheck,
+  type Gauge,
+} from "../test-support/scheduler-helpers";
 import { CheckAssertionError, pass } from "./assert";
-import { runChecks, type RunSeed } from "./scheduler";
-import type { RunEvent } from "./state";
-import type { CheckDef, CheckResult, CheckTier, RunOptions } from "./types";
-
-const OPTIONS: RunOptions = { allowHost: false, confirmedExternalIds: new Set() };
-
-function makeCheck(
-  id: string,
-  tier: CheckTier,
-  run: CheckDef["run"],
-  extra: Omit<Partial<CheckDef>, "id" | "tier" | "run"> = {},
-): CheckDef {
-  return { id, kind: "probe", domain: "test", title: id, tier, routes: ["GET /api/v1/test"], run, ...extra };
-}
-
-function collector() {
-  const events: RunEvent[] = [];
-  return { events, emit: (event: RunEvent) => void events.push(event) };
-}
-
-function finished(events: readonly RunEvent[], checkId: string) {
-  return events.find(
-    (event): event is Extract<RunEvent, { type: "check-finished" }> =>
-      event.type === "check-finished" && event.checkId === checkId,
-  );
-}
-
-function deferred() {
-  let resolve: () => void = () => undefined;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
-/** Lets abandoned check bodies run their continuations before the test asserts. */
-function settle(milliseconds = 30): Promise<void> {
-  return new Promise((done) => setTimeout(done, milliseconds));
-}
-
-interface Gauge {
-  active: number;
-  peak: number;
-}
-
-function gauged(gauge: Gauge, id: string, order: string[] = []) {
-  return async (): Promise<CheckResult> => {
-    gauge.active += 1;
-    gauge.peak = Math.max(gauge.peak, gauge.active);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    gauge.active -= 1;
-    order.push(id);
-    return pass(id);
-  };
-}
+import { runChecks } from "./scheduler";
 
 describe("runChecks", () => {
   it("skips disallowed checks with the policy reason and runs the rest", async () => {
@@ -64,7 +18,7 @@ describe("runChecks", () => {
     const reason = await runChecks({
       checks: [makeCheck("r", "read", async () => pass("ok")), makeCheck("m", "mutate", async () => pass("ok"))],
       target: REAL_TARGET,
-      options: OPTIONS,
+      options: RUN_OPTIONS,
       signal: new AbortController().signal,
       emit,
     });
@@ -92,7 +46,7 @@ describe("runChecks", () => {
     await runChecks({
       checks: [...mutates, ...reads],
       target: SANDBOX_TARGET,
-      options: OPTIONS,
+      options: RUN_OPTIONS,
       signal: new AbortController().signal,
       emit: () => undefined,
       readConcurrency: 2,
@@ -113,7 +67,7 @@ describe("runChecks", () => {
         makeCheck("p2", "read", gauged(probeGauge, "p2")),
       ],
       target: SANDBOX_TARGET,
-      options: OPTIONS,
+      options: RUN_OPTIONS,
       signal: new AbortController().signal,
       emit: () => undefined,
     });
@@ -135,7 +89,7 @@ describe("runChecks", () => {
         }),
       ],
       target: SANDBOX_TARGET,
-      options: OPTIONS,
+      options: RUN_OPTIONS,
       signal: new AbortController().signal,
       emit,
     });
@@ -157,16 +111,12 @@ describe("runChecks", () => {
     const reason = await runChecks({
       checks: [
         makeCheck("m1", "mutate", async () => {
-          throw new ApiRequestError("Network error POST /api/v1/test: fetch failed", {
-            kind: "network",
-            method: "POST",
-            path: "/api/v1/test",
-          });
+          throw gatewayDownError();
         }),
         makeCheck("m2", "mutate", later),
       ],
       target: SANDBOX_TARGET,
-      options: OPTIONS,
+      options: RUN_OPTIONS,
       signal: new AbortController().signal,
       emit,
     });
@@ -177,151 +127,6 @@ describe("runChecks", () => {
       reason: "unreachable",
       banner: expect.stringContaining("Gateway unreachable"),
     });
-  });
-
-  it("cancels the in-flight check when the operator stops the run", async () => {
-    const { events, emit } = collector();
-    const controller = new AbortController();
-    const started = deferred();
-    const running = runChecks({
-      checks: [
-        makeCheck("m1", "mutate", async () => {
-          started.resolve();
-          return new Promise<CheckResult>(() => undefined);
-        }),
-      ],
-      target: SANDBOX_TARGET,
-      options: OPTIONS,
-      signal: controller.signal,
-      emit,
-    });
-    await started.promise;
-    controller.abort();
-    expect(await running).toBe("stopped");
-    expect(finished(events, "m1")).toMatchObject({ status: "cancelled" });
-  });
-
-  it("fails a check that runs past its timeout", async () => {
-    const { events, emit } = collector();
-    await runChecks({
-      checks: [makeCheck("slow", "read", () => new Promise<CheckResult>(() => undefined), { timeoutMs: 20 })],
-      target: SANDBOX_TARGET,
-      options: OPTIONS,
-      signal: new AbortController().signal,
-      emit,
-    });
-    expect(finished(events, "slow")).toMatchObject({ status: "fail", summary: "Timed out before it finished." });
-  });
-
-  it("does not let a journey that ignores its signal start another step after the run is stopped", async () => {
-    const { events, emit } = collector();
-    const controller = new AbortController();
-    const firstStarted = deferred();
-    const firstGate = deferred();
-    const second = vi.fn(async () => undefined);
-    const running = runChecks({
-      checks: [
-        makeCheck(
-          "j",
-          "read",
-          async (ctx) => {
-            await ctx.step("First", async () => {
-              firstStarted.resolve();
-              await firstGate.promise;
-            });
-            await ctx.step("Second", second);
-            return pass("unreachable");
-          },
-          { kind: "journey" },
-        ),
-      ],
-      target: SANDBOX_TARGET,
-      options: OPTIONS,
-      signal: controller.signal,
-      emit,
-    });
-    await firstStarted.promise;
-    controller.abort();
-    expect(await running).toBe("stopped");
-    firstGate.resolve();
-    await settle();
-    expect(second).not.toHaveBeenCalled();
-    expect(events.some((event) => event.type === "step-started" && event.title === "Second")).toBe(false);
-    expect(events.at(-1)).toMatchObject({ type: "run-finished", reason: "stopped" });
-  });
-
-  it("does not let a journey that outlives its timeout start another step", async () => {
-    const { events, emit } = collector();
-    const second = vi.fn(async () => undefined);
-    await runChecks({
-      checks: [
-        makeCheck(
-          "slow-j",
-          "read",
-          async (ctx) => {
-            await ctx.step("First", () => new Promise<void>((done) => setTimeout(done, 50)));
-            await ctx.step("Second", second);
-            return pass("unreachable");
-          },
-          { kind: "journey", timeoutMs: 20 },
-        ),
-      ],
-      target: SANDBOX_TARGET,
-      options: OPTIONS,
-      signal: new AbortController().signal,
-      emit,
-    });
-    expect(finished(events, "slow-j")).toMatchObject({ status: "fail", summary: "Timed out before it finished." });
-    await settle(100);
-    expect(second).not.toHaveBeenCalled();
-    const finishedAt = events.findIndex((event) => event.type === "check-finished" && event.checkId === "slow-j");
-    expect(events.slice(finishedAt + 1).filter((event) => "checkId" in event)).toEqual([]);
-  });
-
-  it("ignores log and step calls made after the check has finished", async () => {
-    const { events, emit } = collector();
-    const lateStep = vi.fn(async () => undefined);
-    let captured: Parameters<CheckDef["run"]>[0] | undefined;
-    await runChecks({
-      checks: [
-        makeCheck("done", "read", async (ctx) => {
-          captured = ctx;
-          return pass("ok");
-        }),
-      ],
-      target: SANDBOX_TARGET,
-      options: OPTIONS,
-      signal: new AbortController().signal,
-      emit,
-    });
-    const before = events.length;
-    captured?.log("too late");
-    await expect(captured?.step("Late", lateStep)).rejects.toMatchObject({ name: "AbortError" });
-    expect(lateStep).not.toHaveBeenCalled();
-    expect(events).toHaveLength(before);
-  });
-
-  it("runs no check when the signal is already aborted", async () => {
-    const { events, emit } = collector();
-    const controller = new AbortController();
-    controller.abort();
-    const read = vi.fn(async () => pass("never"));
-    const mutate = vi.fn(async () => pass("never"));
-    const seed = vi.fn(async () => ({ workspaceId: "ws" }));
-    const reason = await runChecks({
-      checks: [makeCheck("r", "read", read), makeCheck("m", "mutate", mutate, { needsWorkspace: true })],
-      target: SANDBOX_TARGET,
-      options: OPTIONS,
-      signal: controller.signal,
-      emit,
-      seed,
-    });
-    expect(reason).toBe("stopped");
-    expect(read).not.toHaveBeenCalled();
-    expect(mutate).not.toHaveBeenCalled();
-    expect(seed).not.toHaveBeenCalled();
-    expect(events.some((event) => event.type === "check-finished")).toBe(false);
-    expect(events.at(-1)).toMatchObject({ type: "run-finished", reason: "stopped" });
   });
 
   it("seeds one workspace for every check that needs it", async () => {
@@ -340,7 +145,7 @@ describe("runChecks", () => {
     await runChecks({
       checks: [needing("a"), needing("b")],
       target: SANDBOX_TARGET,
-      options: OPTIONS,
+      options: RUN_OPTIONS,
       signal: new AbortController().signal,
       emit: () => undefined,
       seed,
@@ -360,7 +165,7 @@ describe("runChecks", () => {
         makeCheck("plain", "mutate", async () => pass("ok")),
       ],
       target: SANDBOX_TARGET,
-      options: OPTIONS,
+      options: RUN_OPTIONS,
       signal: new AbortController().signal,
       emit,
       seed: failingSeed,
@@ -375,97 +180,11 @@ describe("runChecks", () => {
     await runChecks({
       checks: [makeCheck("plain", "read", async () => pass("ok"))],
       target: SANDBOX_TARGET,
-      options: OPTIONS,
+      options: RUN_OPTIONS,
       signal: new AbortController().signal,
       emit: () => undefined,
       seed: unusedSeed,
     });
     expect(unusedSeed).not.toHaveBeenCalled();
-  });
-
-  it("does not report workspace checks as blocked when a stop interrupts seeding", async () => {
-    const { events, emit } = collector();
-    const plain = vi.fn(async () => pass("never"));
-    const reason = await runChecks({
-      checks: [
-        makeCheck("needs", "mutate", async () => pass("never"), { needsWorkspace: true }),
-        makeCheck("plain", "mutate", plain),
-      ],
-      target: SANDBOX_TARGET,
-      options: OPTIONS,
-      signal: new AbortController().signal,
-      emit,
-      seed: async () => {
-        throw new DOMException("Seeding was stopped.", "AbortError");
-      },
-    });
-    expect(reason).toBe("completed");
-    expect(finished(events, "needs")).toBeUndefined();
-    expect(events.some((event) => event.type === "check-finished" && event.status === "blocked")).toBe(false);
-  });
-
-  it("stops promptly when the seed call ignores its signal", async () => {
-    const controller = new AbortController();
-    const seedStarted = deferred();
-    const running = runChecks({
-      checks: [makeCheck("needs", "mutate", async () => pass("never"), { needsWorkspace: true })],
-      target: SANDBOX_TARGET,
-      options: OPTIONS,
-      signal: controller.signal,
-      emit: () => undefined,
-      seed: () => {
-        seedStarted.resolve();
-        return new Promise<RunSeed>(() => undefined);
-      },
-    });
-    await seedStarted.promise;
-    controller.abort();
-    expect(await running).toBe("stopped");
-  });
-
-  it("ends the run as unreachable without blocking workspace checks when seeding finds the gateway down", async () => {
-    const { events, emit } = collector();
-    const reason = await runChecks({
-      checks: [makeCheck("needs", "mutate", async () => pass("never"), { needsWorkspace: true })],
-      target: SANDBOX_TARGET,
-      options: OPTIONS,
-      signal: new AbortController().signal,
-      emit,
-      seed: async () => {
-        throw new ApiRequestError("Network error POST /api/v1/test: fetch failed", {
-          kind: "network",
-          method: "POST",
-          path: "/api/v1/test",
-        });
-      },
-    });
-    expect(reason).toBe("unreachable");
-    expect(finished(events, "needs")).toBeUndefined();
-    expect(events.at(-1)).toMatchObject({
-      type: "run-finished",
-      reason: "unreachable",
-      banner: expect.stringContaining("Gateway unreachable"),
-    });
-  });
-
-  it("emits exactly one check-finished even when the emit callback throws on it", async () => {
-    const events: RunEvent[] = [];
-    let threw = false;
-    await expect(
-      runChecks({
-        checks: [makeCheck("r", "read", async () => pass("ok"))],
-        target: SANDBOX_TARGET,
-        options: OPTIONS,
-        signal: new AbortController().signal,
-        emit: (event) => {
-          events.push(event);
-          if (event.type === "check-finished" && !threw) {
-            threw = true;
-            throw new Error("sink exploded");
-          }
-        },
-      }),
-    ).rejects.toThrow("sink exploded");
-    expect(events.filter((event) => event.type === "check-finished")).toHaveLength(1);
   });
 });

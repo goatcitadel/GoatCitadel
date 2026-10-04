@@ -39,7 +39,9 @@ export const DEFAULT_READ_CONCURRENCY = 4;
 export async function runChecks(input: RunChecksInput): Promise<RunEndReason> {
   const now = input.now ?? Date.now;
   const controller = new AbortController();
-  const forwardAbort = () => controller.abort(input.signal.reason);
+  // Not `abort(input.signal.reason)`: a caller's arbitrary reason (e.g. a string) would classify in-flight checks as
+  // failed. The default AbortError reason makes a stop always settle them as cancelled.
+  const forwardAbort = () => controller.abort();
   input.signal.addEventListener("abort", forwardAbort, { once: true });
   if (input.signal.aborted) {
     forwardAbort();
@@ -129,10 +131,11 @@ async function prepareRun(
     const seeded = await raceAbort(input.seed(signal), signal);
     return { runnable: allowed, workspaceId: seeded.workspaceId };
   } catch (error) {
-    const classified = classifyError(error);
-    if (classified.status === "cancelled") {
+    if (signal.aborted) {
+      // The run was stopped while seeding; an AbortError thrown with the run still live is a real seed failure.
       return dropNeeding();
     }
+    const classified = classifyError(error);
     if (classified.status === "unreachable") {
       onUnreachable(classified.summary);
       return dropNeeding();
