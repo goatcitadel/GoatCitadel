@@ -190,4 +190,34 @@ describe("Work run controls", () => {
     expect(api.recoverDurableDeadLetter).not.toHaveBeenCalled();
     expect(container.textContent).toContain("The run changed or its recovery record changed");
   });
+
+  it("keeps the run controls while the run is rechecked", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <UiPreferencesProvider>
+            <WorkRunControls runId="run-a" />
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(button("Pause")).toBeDefined());
+    let release!: () => void;
+    api.fetchDurableRun.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(run);
+        }),
+    );
+    await act(async () => {
+      void client.invalidateQueries();
+      // Query status reaches React on a zero-delay timer; let it fire inside act.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.textContent).toContain("Checking for changes…");
+    expect(button("Pause")).toBeDefined();
+    await act(async () => release());
+    await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+  });
 });

@@ -27,10 +27,7 @@ export function InboxApprovalDetail({
     enabled: Boolean(approvalId),
     staleTime: 0,
   });
-  const approval =
-    query.isFetching || query.isError
-      ? undefined
-      : query.data?.items.find((record) => record.approvalId === approvalId);
+  const approval = query.isError ? undefined : query.data?.items.find((record) => record.approvalId === approvalId);
   const evidence = approval ? buildApprovalEvidenceModel(approval.preview) : null;
   return (
     <section aria-label="Current approval" className="space-y-3 border-t border-line-subtle pt-3 text-sm">
@@ -47,9 +44,13 @@ export function InboxApprovalDetail({
           Refresh
         </Button>
       </div>
-      {query.isFetching ? (
+      {query.isLoading ? (
         <p role="status" className="text-fg-muted">
           Loading the current approval…
+        </p>
+      ) : query.isFetching ? (
+        <p role="status" className="text-fg-muted">
+          Checking for changes…
         </p>
       ) : null}
       {query.isError ? (

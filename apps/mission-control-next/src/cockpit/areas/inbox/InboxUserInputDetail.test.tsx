@@ -232,4 +232,34 @@ describe("Inbox Chat question", () => {
       false,
     );
   });
+
+  it("keeps the answer form while the question is rechecked", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <UiPreferencesProvider>
+            <InboxUserInputDetail item={item} workspaceId="default" />
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.querySelector('input[type="radio"]')).not.toBeNull());
+    let release!: () => void;
+    api.fetchChatThread.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(threadWith(prompt));
+        }),
+    );
+    await act(async () => {
+      void client.invalidateQueries();
+      // Query status reaches React on a zero-delay timer; let it fire inside act.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.textContent).toContain("Checking for changes…");
+    expect(container.querySelector('input[type="radio"]')).not.toBeNull();
+    await act(async () => release());
+    await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+  });
 });

@@ -48,7 +48,7 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
     staleTime: 0,
   });
   const scopeChanged = scopeRef.current !== workspaceId;
-  const prompt = query.isFetching || query.isError ? undefined : query.data;
+  const prompt = query.isError ? undefined : query.data;
   const canAnswer = Boolean(prompt && !prompt.secureConfiguration && !scopeChanged && !completed && !outcomeUncertain);
   const selectedOption = prompt?.options?.find((option) => option.optionId === selectedOptionId);
   const hasAnswer = prompt?.kind === "single_select" ? Boolean(selectedOption) : Boolean(textValue.trim());
@@ -157,9 +157,13 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
           This Inbox item has no complete question owner. Open Chat to review it.
         </p>
       ) : null}
-      {query.isFetching ? (
+      {query.isLoading ? (
         <p role="status" className="text-fg-muted">
           Loading the current question…
+        </p>
+      ) : query.isFetching ? (
+        <p role="status" className="text-fg-muted">
+          Checking for changes…
         </p>
       ) : null}
       {query.isError ? (

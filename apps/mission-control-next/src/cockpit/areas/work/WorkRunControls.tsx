@@ -65,7 +65,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
     queryFn: () => fetchDurableRun(runId),
     staleTime: 0,
   });
-  const run = query.isFetching || query.isError ? undefined : query.data;
+  const run = query.isError ? undefined : query.data;
   const letterQuery = useQuery({
     queryKey: ["tasks", "work-run-dead-letter", runId],
     queryFn: () => fetchDurableDeadLetters(200),
@@ -162,9 +162,13 @@ export function WorkRunControls({ runId }: { runId: string }) {
           Refresh
         </Button>
       </div>
-      {query.isFetching ? (
+      {query.isLoading ? (
         <p role="status" className="text-fg-muted">
           Checking the current run…
+        </p>
+      ) : query.isFetching ? (
+        <p role="status" className="text-fg-muted">
+          Checking for changes…
         </p>
       ) : null}
       {query.isError ? (
