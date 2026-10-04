@@ -15,6 +15,9 @@ import {
 
 const STOP_FILE_NAME = "stop";
 const STOP_FILE_POLL_MS = 1000;
+// A child that dies because of a console Ctrl+C exits just before or after our own SIGINT handler runs.
+// Waiting briefly lets that deliberate stop win, so only a genuinely unexpected exit sets the failure code.
+const CHILD_EXIT_GRACE_MS = 500;
 
 function say(message) {
   process.stdout.write(`[testbench] ${message}\n`);
@@ -31,59 +34,102 @@ async function pathExists(filePath) {
 }
 
 /**
- * Resolves on the first stop signal: Ctrl+C / SIGTERM, a child process exiting, or the stop file appearing.
- * The stop file exists because a background launcher on Windows cannot be sent Ctrl+C, and killing it
- * would skip teardown (orphaned gateway/Vite processes and a leftover sandbox root).
+ * Arms every deliberate shutdown trigger: Ctrl+C, SIGTERM, and the stop file. It is armed at the very start of
+ * main(), before anything is started, so a stop request at any point leads to the same teardown. The stop file
+ * exists because a background launcher on Windows cannot be sent Ctrl+C, and killing it would skip teardown
+ * (orphaned gateway/Vite processes and a leftover sandbox root).
+ *
+ * The signal listeners and the poll stay installed until `dispose()`, which main() calls only after teardown has
+ * finished, so a second signal during cleanup cannot hit the default handler and abort it half-way.
  */
-function waitForShutdown(stack, logRoot, stopFile) {
-  return new Promise((resolve) => {
-    let settled = false;
-    let probing = false;
-    const cleanups = [];
-
-    const finish = (message) => {
-      if (settled) return;
-      settled = true;
-      for (const cleanup of cleanups) cleanup();
-      say(message);
-      resolve();
-    };
-
-    const poll = setInterval(() => {
-      if (probing || settled) return;
-      probing = true;
-      pathExists(stopFile).then((found) => {
-        probing = false;
-        if (found) finish(`Stop file found (${stopFile}). Stopping the test bench…`);
-      });
-    }, STOP_FILE_POLL_MS);
-    cleanups.push(() => clearInterval(poll));
-
-    const onSignal = () => finish("Stopping the test bench…");
-    process.once("SIGINT", onSignal);
-    process.once("SIGTERM", onSignal);
-    cleanups.push(
-      () => process.off("SIGINT", onSignal),
-      () => process.off("SIGTERM", onSignal),
-    );
-
-    const watchChild = (child, message) => {
-      if (!child) return;
-      const onExit = (code) => finish(message(code));
-      if (child.exitCode !== null || child.signalCode !== null) {
-        // Already gone before we started listening: report it now instead of waiting forever.
-        onExit(child.exitCode);
-        return;
-      }
-      child.once("exit", onExit);
-      cleanups.push(() => child.off("exit", onExit));
-    };
-    watchChild(stack.gateway?.child, (code) => `The sandbox gateway exited (code ${code}). Logs: ${logRoot}`);
-    watchChild(stack.ui?.child, (code) => `The test bench UI exited (code ${code}). Logs: ${logRoot}`);
+function armShutdownTrigger(stopFile) {
+  let requested = false;
+  let probing = false;
+  let announce;
+  const promise = new Promise((resolve) => {
+    announce = resolve;
   });
+
+  /** Returns false when a stop was already requested. `failed` marks an unexpected stop (exit code 1). */
+  const request = (message, { failed = false } = {}) => {
+    if (requested) return false;
+    requested = true;
+    if (failed) process.exitCode = 1;
+    say(message);
+    announce();
+    return true;
+  };
+
+  const onSignal = () => {
+    if (!request("Stopping the test bench…")) say("Already stopping…");
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+
+  const poll = setInterval(() => {
+    if (probing || requested) return;
+    probing = true;
+    pathExists(stopFile).then((found) => {
+      probing = false;
+      if (found) request(`Stop file found (${stopFile}). Stopping the test bench…`);
+    });
+  }, STOP_FILE_POLL_MS);
+
+  return {
+    request,
+    promise,
+    requested: () => requested,
+    dispose() {
+      clearInterval(poll);
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+    },
+  };
+}
+
+/** Treats an exit of the sandbox gateway or the UI as a failed stop. Returns a function that stops watching. */
+function watchChildExits(stack, trigger, logRoot) {
+  const cleanups = [];
+  const watch = (child, describe) => {
+    if (!child) return;
+    const report = (code) => {
+      const message = describe(code ?? child.signalCode);
+      const timer = setTimeout(() => trigger.request(message, { failed: true }), CHILD_EXIT_GRACE_MS);
+      cleanups.push(() => clearTimeout(timer));
+    };
+    if (child.exitCode !== null || child.signalCode !== null) {
+      // Already gone before we started listening: report it instead of waiting forever.
+      report(child.exitCode);
+      return;
+    }
+    child.once("exit", report);
+    cleanups.push(() => child.off("exit", report));
+  };
+  watch(stack.gateway?.child, (code) => `The sandbox gateway exited (code ${code}). Logs: ${logRoot}`);
+  watch(stack.ui?.child, (code) => `The test bench UI exited (code ${code}). Logs: ${logRoot}`);
+  return () => {
+    for (const cleanup of cleanups) cleanup();
+  };
+}
+
+/**
+ * Awaits `work` to completion even when a stop arrives meanwhile: it owns processes that only teardown can stop,
+ * so its handles must arrive (or it must fail and clean up after itself) before teardown runs.
+ */
+async function runPhase(label, work, trigger) {
+  const settled = work.then(
+    () => "settled",
+    () => "settled",
+  );
+  const first = await Promise.race([settled, trigger.promise.then(() => "stop")]);
+  if (first === "stop") {
+    say(`Stop requested during ${label}; waiting for it to settle so everything it started is shut down…`);
+  }
+  return await work;
 }
 
 async function teardown({ stub, stack, runtimeRoot }) {
+  if (stub || stack || runtimeRoot) say("Cleaning up the sandbox…");
   if (stub) {
     await stub.close().catch((error) => {
       process.stderr.write(`[testbench] Closing the LLM stub failed (best-effort cleanup): ${error.message}\n`);
@@ -95,25 +141,33 @@ async function teardown({ stub, stack, runtimeRoot }) {
   }
 }
 
-async function main() {
-  const runId = createRunId("testbench");
-  const artifactRoot = path.join(repoRoot, "artifacts", "testbench", runId);
-  const logRoot = path.join(artifactRoot, "diagnostics");
-  const stopFile = path.join(artifactRoot, STOP_FILE_NAME);
-  await fs.mkdir(logRoot, { recursive: true });
+/**
+ * Starts the stub, the isolated runtime, the gateway, and the UI. Everything started is recorded on `started` so
+ * the caller's teardown can stop it. Returns true when the sandbox is ready, and false when a stop was requested
+ * first (the remaining phases, including the ready output, are skipped).
+ */
+async function launchSandbox({ runId, artifactRoot, logRoot }, trigger, started) {
   // A plain context, not createRunContext: holding the worktree output lock would block every build.
   const context = { runId, artifactRoot };
-  const started = {};
-  try {
-    say("Starting the deterministic LLM stub…");
-    started.stub = await startDeterministicLlmStub({ expectedAuthorization: `Bearer ${TESTBENCH_STUB_KEY}` });
-    say("Preparing an isolated runtime from shipped defaults…");
-    started.runtimeRoot = await prepareTestbenchRuntime({ runId, stubBaseUrl: started.stub.baseUrl });
-    const gatewayPort = await resolveAvailablePort(0);
-    const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
-    const secretEnvKeys = await collectVerificationSecretEnvKeys(path.join(repoRoot, "config"));
-    say("Building the gateway workspace and starting the sandbox. The first build can take several minutes…");
-    started.stack = await startVerificationStack(context, {
+  say("Starting the deterministic LLM stub…");
+  started.stub = await startDeterministicLlmStub({ expectedAuthorization: `Bearer ${TESTBENCH_STUB_KEY}` });
+  if (trigger.requested()) return false;
+  say("Preparing an isolated runtime from shipped defaults…");
+  started.runtimeRoot = await prepareTestbenchRuntime({ runId, stubBaseUrl: started.stub.baseUrl });
+  if (trigger.requested()) return false;
+  const gatewayPort = await resolveAvailablePort(0);
+  const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
+  const secretEnvKeys = await collectVerificationSecretEnvKeys(path.join(repoRoot, "config"));
+  if (trigger.requested()) return false;
+  // The gateway workspace build inside startVerificationStack is synchronous and blocks this process's event loop,
+  // so Ctrl+C, SIGTERM, and the stop file are only noticed once that build returns.
+  say(
+    "Building the gateway workspace and starting the sandbox. The first build can take several minutes; " +
+      "stopping takes effect after the build finishes…",
+  );
+  started.stack = await runPhase(
+    "startup",
+    startVerificationStack(context, {
       runtimeRoot: started.runtimeRoot,
       gatewayPort,
       gatewayMode: "built",
@@ -123,22 +177,55 @@ async function main() {
       uiEnvOmit: secretEnvKeys,
       gatewayEnv: buildTestbenchGatewayEnv(started.runtimeRoot),
       uiEnv: buildTestbenchUiEnv({ gatewayUrl, runtimeRoot: started.runtimeRoot }),
-    });
-    if (started.stack.gatewayUrl !== gatewayUrl) {
-      throw new Error(`The gateway started on ${started.stack.gatewayUrl}, not ${gatewayUrl}. Run pnpm testbench again.`);
+    }),
+    trigger,
+  );
+  started.stopWatching = watchChildExits(started.stack, trigger, logRoot);
+  if (trigger.requested()) return false;
+  if (started.stack.gatewayUrl !== gatewayUrl) {
+    throw new Error(`The gateway started on ${started.stack.gatewayUrl}, not ${gatewayUrl}. Run pnpm testbench again.`);
+  }
+  say("Completing onboarding on the sandbox…");
+  await runPhase("onboarding", ensureOnboardingComplete(started.stack.gatewayUrl, "testbench"), trigger);
+  return !trigger.requested();
+}
+
+function announceReady({ stack, runtimeRoot }, { logRoot, stopFile }) {
+  say("Sandbox ready.");
+  say(`Test bench: ${buildTestbenchUrl(stack.uiUrl)}`);
+  say(`Sandbox gateway: ${stack.gatewayUrl}`);
+  say(`Sandbox runtime root: ${runtimeRoot}`);
+  say(`Logs (written when each process exits): ${logRoot}`);
+  say("Press Ctrl+C to stop the sandbox and delete its runtime folder.");
+  say(`To stop from another shell, create: ${stopFile}`);
+}
+
+async function main() {
+  const runId = createRunId("testbench");
+  const artifactRoot = path.join(repoRoot, "artifacts", "testbench", runId);
+  const paths = {
+    runId,
+    artifactRoot,
+    logRoot: path.join(artifactRoot, "diagnostics"),
+    stopFile: path.join(artifactRoot, STOP_FILE_NAME),
+  };
+  const trigger = armShutdownTrigger(paths.stopFile);
+  const started = {};
+  try {
+    await fs.mkdir(paths.logRoot, { recursive: true });
+    say(`Run ${runId}. To stop from another shell at any time, create: ${paths.stopFile}`);
+    if (await launchSandbox(paths, trigger, started)) {
+      announceReady(started, paths);
+      await trigger.promise;
     }
-    say("Completing onboarding on the sandbox…");
-    await ensureOnboardingComplete(started.stack.gatewayUrl, "testbench");
-    say("Sandbox ready.");
-    say(`Test bench: ${buildTestbenchUrl(started.stack.uiUrl)}`);
-    say(`Sandbox gateway: ${started.stack.gatewayUrl}`);
-    say(`Sandbox runtime root: ${started.runtimeRoot}`);
-    say(`Logs (written when each process exits): ${logRoot}`);
-    say("Press Ctrl+C to stop the sandbox and delete its runtime folder.");
-    say(`To stop from another shell, create: ${stopFile}`);
-    await waitForShutdown(started.stack, logRoot, stopFile);
   } finally {
-    await teardown(started);
+    // Our own teardown kills the children; it must not be reported as an unexpected exit.
+    started.stopWatching?.();
+    try {
+      await teardown(started);
+    } finally {
+      trigger.dispose();
+    }
   }
 }
 
