@@ -10,7 +10,7 @@ import { ProviderManagementSettings } from "./ProviderManagementSettings";
 import { ProviderRoutingSettings } from "./ProviderRoutingSettings";
 import { ProviderAdviceSettings } from "./ProviderAdviceSettings";
 
-/** The governed model setup owner also serves the first-run route. */
+/** The Models settings section: the provider owners plus the shared guided model setup. */
 export function ModelsSettings() {
   const { navigate } = useCockpitRoute();
   const onboarding = useQuery({

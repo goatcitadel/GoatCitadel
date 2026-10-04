@@ -11,10 +11,13 @@ export function CockpitGuidedModelSetup({
   onboarding,
   reloadOnboarding,
   onEnterChat,
+  enterChatLabel,
 }: {
   onboarding: OnboardingState;
   reloadOnboarding: () => Promise<void>;
   onEnterChat: () => void;
+  /** Overrides the guided owner's "Enter Chat" button text when the host's next step is not Chat. */
+  enterChatLabel?: string;
 }) {
   const { navigate } = useCockpitRoute();
   const { activeWorkspaceId } = useUiPreferences();
@@ -40,6 +43,7 @@ export function CockpitGuidedModelSetup({
           reloadOnboarding={reloadOnboarding}
           setNotice={(next) => setNotice(next?.message ?? null)}
           onEnterChat={onEnterChat}
+          enterChatLabel={enterChatLabel}
         />
       </div>
       {notice ? (

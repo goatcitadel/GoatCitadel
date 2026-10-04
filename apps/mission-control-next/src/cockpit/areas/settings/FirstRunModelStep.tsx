@@ -54,7 +54,12 @@ export function FirstRunModelStep({
       </div>
       {choice === "provider" ? (
         <>
-          <CockpitGuidedModelSetup onboarding={state} reloadOnboarding={onReload} onEnterChat={onModelReady} />
+          <CockpitGuidedModelSetup
+            onboarding={state}
+            reloadOnboarding={onReload}
+            onEnterChat={onModelReady}
+            enterChatLabel="Continue to safety"
+          />
           <Button
             variant="ghost"
             size="sm"

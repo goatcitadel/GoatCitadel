@@ -25,12 +25,16 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ ...api, isApi
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: api.workspace }),
 }));
+const guided = vi.hoisted(() => ({ rendered: vi.fn() }));
 vi.mock("./CockpitGuidedModelSetup", () => ({
-  CockpitGuidedModelSetup: ({ onEnterChat }: { onEnterChat: () => void }) => (
-    <button type="button" onClick={onEnterChat}>
-      Guided model owner ready
-    </button>
-  ),
+  CockpitGuidedModelSetup: (props: { onEnterChat: () => void; enterChatLabel?: string }) => {
+    guided.rendered(props);
+    return (
+      <button type="button" onClick={props.onEnterChat}>
+        Guided model owner ready
+      </button>
+    );
+  },
 }));
 vi.mock("./LlamaSetupSettings", () => ({
   LlamaSetupSettings: ({ workspaceId }: { workspaceId?: string }) => <p>Native llama setup for {workspaceId}</p>,
@@ -100,6 +104,7 @@ describe("native first-run setup", () => {
     expect(container.textContent).not.toContain("Guided model owner ready");
     await click("Connect a provider");
     expect(button("Guided model owner ready")).toBeDefined();
+    expect(guided.rendered).toHaveBeenCalledWith(expect.objectContaining({ enterChatLabel: "Continue to safety" }));
     await click("Advanced: edit provider profiles");
     expect(api.navigate).toHaveBeenCalledWith("/settings/models?shell=cockpit#providers");
     await click("Guided model owner ready");

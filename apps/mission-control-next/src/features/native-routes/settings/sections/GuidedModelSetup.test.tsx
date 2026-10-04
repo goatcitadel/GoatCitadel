@@ -78,6 +78,7 @@ async function mount(
     capabilities?: object;
   } = {},
   onEnterChat?: () => void,
+  enterChatLabel?: string,
 ) {
   mocks.catalog.mockReturnValue({
     providers: [
@@ -116,6 +117,7 @@ async function mount(
         reloadOnboarding={reload}
         setNotice={notice}
         onEnterChat={onEnterChat}
+        enterChatLabel={enterChatLabel}
       />,
     );
   await act(async () => render("default"));
@@ -247,6 +249,36 @@ describe("guided first model setup", () => {
     await act(async () => view.button("Enter Chat")!.click());
     expect(enter).toHaveBeenCalledTimes(1);
     expect(mocks.complete).not.toHaveBeenCalled();
+  });
+  it("lets a host name the confirmed-default action and still calls onEnterChat from it", async () => {
+    const enter = vi.fn();
+    const view = await mount("ready", undefined, {}, enter, "Continue to safety");
+    expect(view.button("Enter Chat")).toBeUndefined();
+    await act(async () => view.button("Continue to safety")!.click());
+    expect(enter).toHaveBeenCalledTimes(1);
+    expect(mocks.complete).not.toHaveBeenCalled();
+  });
+  it("keeps the Enter Chat label when the host gives none", async () => {
+    const enter = vi.fn();
+    const view = await mount("ready", undefined, {}, enter);
+    expect(view.button("Enter Chat")).toBeDefined();
+    await act(async () => view.button("Enter Chat")!.click());
+    expect(enter).toHaveBeenCalledTimes(1);
+  });
+  it("uses the host's label only while the default is confirmed", async () => {
+    const missing = await mount("missing", undefined, {}, vi.fn(), "Continue to safety");
+    expect(missing.button("Continue to safety")).toBeUndefined();
+    expect(missing.button("Connect provider")).toBeDefined();
+    await missing.unmount();
+    const changed = await mount("ready", undefined, {}, vi.fn(), "Continue to safety");
+    expect(changed.button("Continue to safety")).toBeDefined();
+    const effort = [...changed.host.querySelectorAll("select")].find((select) => select.value === "standard")!;
+    await act(async () => {
+      effort.value = "extended";
+      effort.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(changed.button("Continue to safety")).toBeUndefined();
+    expect(changed.button("Confirm model")).toBeDefined();
   });
   it("requires connection when a saved default has missing or rejected credentials", async () => {
     const view = await mount("missing");

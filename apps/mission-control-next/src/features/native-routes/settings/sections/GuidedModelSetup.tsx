@@ -58,6 +58,7 @@ export function GuidedModelSetup({
   setNotice,
   excludeLlamaCpp = false,
   onEnterChat,
+  enterChatLabel = "Enter Chat",
   renderApprovalAction,
 }: {
   workspaceId: string;
@@ -69,6 +70,8 @@ export function GuidedModelSetup({
   excludeLlamaCpp?: boolean;
   /** Guided hosts can keep their own completion gate before entering Chat. */
   onEnterChat?: () => void;
+  /** Button text once the default is confirmed. A host whose `onEnterChat` does not open Chat should say so. */
+  enterChatLabel?: string;
   renderApprovalAction?: (
     plan: ChangePlanRecord,
     pending: boolean,
@@ -523,7 +526,7 @@ export function GuidedModelSetup({
         >
           {defaultPlanCompleted ? <Play size={16} /> : <PlugZap size={16} />}
           {defaultPlanCompleted
-            ? "Enter Chat"
+            ? enterChatLabel
             : providerReady
               ? "Confirm model"
               : verifiesLocalEndpoint
