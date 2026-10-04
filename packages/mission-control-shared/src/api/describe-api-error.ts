@@ -19,6 +19,9 @@ export function describeApiError(error: unknown, fallback = DEFAULT_FALLBACK): A
     if (error.kind === "protocol") {
       return { summary: "The gateway sent a response Mission Control couldn't read. Try again.", technical };
     }
+    if (readDisabledFeatureFlag(error.body)) {
+      return { summary: "This feature is turned off for this installation.", technical };
+    }
     return { summary: summaryForStatus(error.status, readBodyMessage(error.body)), technical };
   }
 
@@ -59,6 +62,15 @@ function readBodyMessage(body: unknown): string | undefined {
     if (typeof value === "string" && value.trim()) return value.trim();
   }
   return undefined;
+}
+
+/** The Gateway rejects a switched-off feature as STATE_CONFLICT with `details.flag`; that is not an edit conflict. */
+function readDisabledFeatureFlag(body: unknown): string | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const record = body as { code?: unknown; details?: unknown };
+  if (record.code !== "STATE_CONFLICT" || !record.details || typeof record.details !== "object") return undefined;
+  const flag = (record.details as { flag?: unknown }).flag;
+  return typeof flag === "string" && flag.trim() ? flag : undefined;
 }
 
 function looksLikeTransportFailure(message: string): boolean {

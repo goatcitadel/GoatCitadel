@@ -46,4 +46,18 @@ describe("describeApiError", () => {
     expect(describeApiError(new Error("Choose a model first.")).summary).toBe("Choose a model first.");
     expect(describeApiError(undefined, "Couldn't load skills.").summary).toBe("Couldn't load skills.");
   });
+
+  it("names a switched-off feature instead of reporting an edit conflict", () => {
+    const disabled = {
+      error: "Feature flag memoryLifecycleAdminV1Enabled is disabled.",
+      code: "STATE_CONFLICT",
+      details: { flag: "memoryLifecycleAdminV1Enabled" },
+    };
+    expect(describeApiError(httpError(409, disabled)).summary).toBe(
+      "This feature is turned off for this installation.",
+    );
+    expect(
+      describeApiError(httpError(409, { error: "Revision 4 is stale.", code: "STATE_CONFLICT" })).summary,
+    ).toContain("Refresh and try again");
+  });
 });
