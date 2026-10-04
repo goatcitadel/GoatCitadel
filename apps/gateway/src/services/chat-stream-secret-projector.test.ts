@@ -183,6 +183,45 @@ describe("ChatStreamSecretProjector", () => {
     expect(emitted.at(-1)).toMatchObject({ type: "message_done", content });
   });
 
+  it("reconciles non-ASCII streamed text against the terminal content without retaining it", () => {
+    const projector = new ChatStreamSecretProjector();
+    const content = "Grüße aus 東京 🐐 und tschüss.";
+
+    const emitted = [
+      ...projector.projectAll(deltaChunk("Grüße aus ")),
+      ...projector.projectAll(deltaChunk("東京 🐐 und")),
+      ...projector.projectAll(deltaChunk(" tschüss.")),
+      ...projector.projectAll({
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "message-1",
+        content,
+      } satisfies ChatStreamChunkDraft),
+    ];
+
+    expect(joinDeltas(emitted)).toBe(content);
+    expect(emitted.at(-1)).toMatchObject({ type: "message_done", content });
+  });
+
+  it("does not stream a terminal tail when the final content has the same length but different streamed text", () => {
+    const projector = new ChatStreamSecretProjector();
+
+    const emitted = [
+      ...projector.projectAll(deltaChunk("Alpha beta ")),
+      ...projector.projectAll({
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "message-1",
+        content: "Gamma beta tail.",
+      } satisfies ChatStreamChunkDraft),
+    ];
+
+    expect(joinDeltas(emitted)).toBe("Alpha beta ");
+    expect(emitted.at(-1)).toMatchObject({ type: "message_done", content: "Gamma beta tail." });
+  });
+
   it("streams only the redacted terminal remainder when a credential tail was retained", () => {
     const projector = new ChatStreamSecretProjector();
     const content = "Use Authorization: Bearer hunter2";

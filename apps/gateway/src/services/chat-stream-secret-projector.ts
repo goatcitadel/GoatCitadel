@@ -1,3 +1,4 @@
+import { createHash, type Hash } from "node:crypto";
 import { redactSecretText, type ChatStreamChunk, type ChatStreamChunkDraft } from "@goatcitadel/contracts";
 import { projectChatStreamChunkForPublic } from "./chat-secret-projection.js";
 
@@ -6,8 +7,13 @@ export const CHAT_STREAM_SECRET_PROJECTION_VERSION_FIELD = "__publicSecretProjec
 
 interface StreamTextProjectionState {
   pending: string;
-  /** Projected assistant text already streamed, reconciled against message_done. */
-  released: string;
+  /** Length, in UTF-16 code units, of the projected assistant text already streamed. */
+  releasedLength: number;
+  /**
+   * Running SHA-256 of that streamed text, so message_done can be reconciled against it without retaining the
+   * text itself: the projector's memory per turn stays bounded by the undecided suffix.
+   */
+  releasedDigest: Hash;
   suppressUntilTerminal: boolean;
   suppressed: boolean;
   sessionId: string;
@@ -109,7 +115,8 @@ export class ChatStreamSecretProjector {
     const key = `${chunk.turnId}\u0000${chunk.type}`;
     const state = this.textStates.get(key) ?? {
       pending: "",
-      released: "",
+      releasedLength: 0,
+      releasedDigest: createHash("sha256"),
       suppressUntilTerminal: this.suppressTextTurns.has(chunk.turnId),
       suppressed: this.suppressTextTurns.has(chunk.turnId),
       sessionId: chunk.sessionId,
@@ -152,8 +159,10 @@ export class ChatStreamSecretProjector {
         }
       }
     }
-    if (state.type === "delta") {
-      state.released += delta;
+    if (state.type === "delta" && delta) {
+      state.releasedLength += delta.length;
+      // UTF-16 code units hash identically whether fed in pieces or whole, even across a split surrogate pair.
+      state.releasedDigest.update(delta, "utf16le");
     }
     this.textStates.set(key, state);
     return { ...chunk, delta } as T;
@@ -205,10 +214,16 @@ export class ChatStreamSecretProjector {
 }
 
 function readAssistantTerminalRemainder(state: StreamTextProjectionState, terminalContent: string): string {
-  if (state.suppressed || !terminalContent.startsWith(state.released)) {
+  if (state.suppressed || terminalContent.length < state.releasedLength) {
     return "";
   }
-  return terminalContent.slice(state.released.length);
+  const terminalPrefixDigest = createHash("sha256")
+    .update(terminalContent.slice(0, state.releasedLength), "utf16le")
+    .digest("hex");
+  if (terminalPrefixDigest !== state.releasedDigest.digest("hex")) {
+    return "";
+  }
+  return terminalContent.slice(state.releasedLength);
 }
 
 function canBypassCanonicalStreamRedaction(value: string): boolean {
