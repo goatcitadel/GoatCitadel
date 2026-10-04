@@ -72,7 +72,7 @@ type Input = {
   >;
   planningPreferences: Pick<
     ReturnType<typeof useChatPlanningPreferences>,
-    "handleTogglePlanningMode" | "handleToggleResearchMode" | "handleToggleReviewMode"
+    "handleTogglePlanningMode" | "handleToggleResearchMode" | "handleToggleReviewMode" | "handleSetWebMode"
   >;
   oneShotContext: Pick<
     ReturnType<typeof useChatOneShotContext>,
@@ -134,6 +134,7 @@ export function createChatComposerActionProps({
   | "onAcknowledgeRouteBoundary"
   | "onTogglePlanningMode"
   | "onToggleResearchMode"
+  | "onSetWebMode"
   | "onToggleReviewMode"
   | "onToggleModelCouncil"
   | "onToggleWorkspaceSnapshot"
@@ -168,6 +169,7 @@ export function createChatComposerActionProps({
   const { handleRemoveQueuedItem } = orchestration;
   const { handleTogglePlanningMode } = planningPreferences;
   const { handleToggleResearchMode } = planningPreferences;
+  const { handleSetWebMode } = planningPreferences;
   const { handleToggleReviewMode } = planningPreferences;
   const { setModelCouncilEnabled } = oneShotContext;
   const { setWorkspaceSnapshotRequest } = oneShotContext;
@@ -227,6 +229,9 @@ export function createChatComposerActionProps({
     },
     onToggleResearchMode: () => {
       if (!blockHistoricalMutation()) handleToggleResearchMode();
+    },
+    onSetWebMode: (mode) => {
+      if (!blockHistoricalMutation()) handleSetWebMode(mode);
     },
     onToggleReviewMode: () => {
       if (!blockHistoricalMutation()) handleToggleReviewMode();

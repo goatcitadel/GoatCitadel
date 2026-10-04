@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import type { ChatWebMode } from "@goatcitadel/contracts";
 import { useChatPreferenceMutations } from "../useChatPreferenceMutations";
 import { useChatSessionData } from "../useChatSessionData";
 
@@ -29,6 +30,12 @@ export function useChatPlanningPreferences({ preferenceActions, planningMode, se
       orchestrationReviewDepth: currentReviewDepth === "off" ? "standard" : "off",
     });
   }, [handlePrefPatch, sessionData.prefs?.orchestrationReviewDepth]);
+  const handleSetWebMode = useCallback(
+    (webMode: ChatWebMode) => {
+      void handlePrefPatch({ webMode });
+    },
+    [handlePrefPatch],
+  );
 
-  return { handleTogglePlanningMode, handleToggleResearchMode, handleToggleReviewMode };
+  return { handleTogglePlanningMode, handleToggleResearchMode, handleToggleReviewMode, handleSetWebMode };
 }

@@ -94,7 +94,7 @@ function composerProps(overrides: Partial<ComposerProps> = {}): ComposerProps {
     planningMode: "off",
     onTogglePlanningMode: vi.fn(),
     currentWebMode: "off",
-    onToggleResearchMode: vi.fn(),
+    onSetWebMode: vi.fn(),
     currentReviewDepth: "off",
     onToggleReviewMode: vi.fn(),
     onRemoveAttachment: vi.fn(),

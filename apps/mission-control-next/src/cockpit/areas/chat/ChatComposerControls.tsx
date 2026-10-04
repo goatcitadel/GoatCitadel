@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { SlidersHorizontal } from "lucide-react";
+import type { ChatWebMode } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
@@ -19,7 +20,7 @@ type Controls = Pick<
   | "planningMode"
   | "onTogglePlanningMode"
   | "currentWebMode"
-  | "onToggleResearchMode"
+  | "onSetWebMode"
   | "currentReviewDepth"
   | "onToggleReviewMode"
   | "pendingAttachments"
@@ -36,6 +37,12 @@ type Controls = Pick<
 
 const THINKING_LEVELS = ["off", "minimal", "standard", "extended", "deep", "max", "ultra"] as const;
 const OPTIONS_ID = "cockpit-chat-composer-options";
+const WEB_MODES: readonly { value: ChatWebMode; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "off", label: "Off" },
+  { value: "quick", label: "Quick" },
+  { value: "deep", label: "Deep" },
+];
 
 export function ChatComposerControls({ props }: { props: Controls }) {
   const selectedProvider = props.providerOptions.find((provider) => provider.providerId === props.selectedProviderId);
@@ -44,7 +51,12 @@ export function ChatComposerControls({ props }: { props: Controls }) {
   // do not wrap into three rows above the draft.
   const phone = useMediaQuery("(max-width: 639px)");
   const [optionsOpen, setOptionsOpen] = useState(false);
-  const optionsSummary = [props.selectedModel || "No model", humanizeToken(props.currentThinkingLevel)].join(" · ");
+  const webLabel = WEB_MODES.find((mode) => mode.value === props.currentWebMode)?.label ?? "Auto";
+  const optionsSummary = [
+    props.selectedModel || "No model",
+    humanizeToken(props.currentThinkingLevel),
+    `Web ${webLabel}`,
+  ].join(" · ");
   const options = (
     <>
       <label className="flex items-center gap-1">
@@ -122,15 +134,22 @@ export function ChatComposerControls({ props }: { props: Controls }) {
       >
         Plan
       </button>
-      <button
-        type="button"
-        aria-pressed={props.currentWebMode !== "off"}
-        disabled={disabled}
-        onClick={props.onToggleResearchMode}
-        className="rounded-md border border-line px-2 py-1 text-fg-secondary hover:border-accent aria-[pressed=true]:border-accent max-sm:min-h-11"
-      >
+      <label className="flex items-center gap-1">
         Web
-      </button>
+        <select
+          aria-label="Web search"
+          value={props.currentWebMode}
+          disabled={disabled || !props.onSetWebMode}
+          onChange={(event) => props.onSetWebMode?.(event.target.value as ChatWebMode)}
+          className="rounded-md border border-line bg-canvas px-1 py-1 text-fg max-sm:min-h-11"
+        >
+          {WEB_MODES.map((mode) => (
+            <option key={mode.value} value={mode.value}>
+              {mode.label}
+            </option>
+          ))}
+        </select>
+      </label>
       <button
         type="button"
         aria-pressed={props.currentReviewDepth !== "off"}

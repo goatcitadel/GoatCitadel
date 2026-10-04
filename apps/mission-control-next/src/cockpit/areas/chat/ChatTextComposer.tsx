@@ -48,7 +48,7 @@ export type ComposerProps = Pick<
   | "planningMode"
   | "onTogglePlanningMode"
   | "currentWebMode"
-  | "onToggleResearchMode"
+  | "onSetWebMode"
   | "currentReviewDepth"
   | "onToggleReviewMode"
   | "onRemoveAttachment"

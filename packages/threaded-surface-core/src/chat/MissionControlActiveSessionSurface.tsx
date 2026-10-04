@@ -312,6 +312,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   onAcknowledgeRouteBoundary: () => void;
   onTogglePlanningMode: () => void;
   onToggleResearchMode: () => void;
+  /** Sets web search directly. The research toggle cannot reach every mode. */
+  onSetWebMode?: (mode: ChatWebMode) => void;
   onToggleReviewMode: () => void;
   onToggleModelCouncil?: () => void;
   onSetDeepMode: () => void;
