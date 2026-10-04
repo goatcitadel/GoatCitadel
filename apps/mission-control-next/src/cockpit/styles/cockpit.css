@@ -426,9 +426,22 @@ html[data-shell="cockpit"] .mc-dialog-content {
     margin-left: 1.25rem;
     list-style: revert;
   }
-  .cockpit-chat-content .mc-assistant-markdown :is(h1, h2, h3) {
+  .cockpit-chat-content .mc-assistant-markdown :is(h1, h2, h3, h4, h5, h6) {
     font-family: var(--font-display);
     font-weight: 600;
+    line-height: 1.3;
+  }
+  .cockpit-chat-content .mc-assistant-markdown h1 {
+    font-size: var(--text-xl);
+  }
+  .cockpit-chat-content .mc-assistant-markdown h2 {
+    font-size: var(--text-lg);
+  }
+  .cockpit-chat-content .mc-assistant-markdown :is(h3, h4, h5, h6) {
+    font-size: var(--text-md);
+  }
+  .cockpit-chat-content .mc-assistant-markdown :is(h1, h2, h3, h4, h5, h6):not(:first-child) {
+    margin-top: 1.25em;
   }
   .cockpit-chat-content .mc-assistant-markdown blockquote {
     border-left: 2px solid var(--cockpit-border-strong);
