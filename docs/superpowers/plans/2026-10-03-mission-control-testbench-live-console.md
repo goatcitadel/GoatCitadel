@@ -41,7 +41,7 @@ apps/mission-control-next/
     env.ts                                         # reads VITE_GOATCITADEL_TESTBENCH_* + PROD
     main.tsx                                       # PROD guard, meta injection, dynamic import of ui/mount
     main.test.ts
-    target/
+    gateway-target/
       resolve-target.ts                            # ?target= → requested kind + forced origin; meta tag
       resolve-target.test.ts
       detect-target.ts                             # three-part sandbox check → TargetInfo
@@ -114,15 +114,15 @@ package.json                                       # + "testbench" script
 
 **Files:**
 - Create: `apps/mission-control-next/src/__testbench__/env.ts`
-- Create: `apps/mission-control-next/src/__testbench__/target/resolve-target.ts`
-- Test: `apps/mission-control-next/src/__testbench__/target/resolve-target.test.ts`
+- Create: `apps/mission-control-next/src/__testbench__/gateway-target/resolve-target.ts`
+- Test: `apps/mission-control-next/src/__testbench__/gateway-target/resolve-target.test.ts`
 
 **Interfaces:**
 - Produces: `TestbenchEnv { sandboxOrigin; sandboxRoot; realOrigin: string | undefined; isProd: boolean }`, `readTestbenchEnv(env?)`, `TargetKind = "sandbox" | "real"`, `TargetRequest { requested: TargetKind; origin: string | undefined }`, `resolveTargetRequest(search, env)`, `GATEWAY_ORIGIN_META_NAME`, `applyGatewayOriginMeta(doc, origin)`, `buildTargetHref(currentHref, kind)`.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `apps/mission-control-next/src/__testbench__/target/resolve-target.test.ts`:
+Create `apps/mission-control-next/src/__testbench__/gateway-target/resolve-target.test.ts`:
 
 ```ts
 // @vitest-environment happy-dom
@@ -222,7 +222,7 @@ describe("buildTargetHref", () => {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `& '.\node_modules\.bin\vitest.cmd' run --root 'apps/mission-control-next' 'src/__testbench__/target/resolve-target.test.ts'`
+Run: `& '.\node_modules\.bin\vitest.cmd' run --root 'apps/mission-control-next' 'src/__testbench__/gateway-target/resolve-target.test.ts'`
 Expected: FAIL, because `../env` and `./resolve-target` do not exist.
 
 - [ ] **Step 3: Write the implementation**
@@ -253,7 +253,7 @@ function readNonEmpty(value: unknown): string | undefined {
 }
 ```
 
-Create `apps/mission-control-next/src/__testbench__/target/resolve-target.ts`:
+Create `apps/mission-control-next/src/__testbench__/gateway-target/resolve-target.ts`:
 
 ```ts
 import type { TestbenchEnv } from "../env";
@@ -297,7 +297,7 @@ export function buildTargetHref(currentHref: string, kind: TargetKind): string {
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `& '.\node_modules\.bin\vitest.cmd' run --root 'apps/mission-control-next' 'src/__testbench__/target/resolve-target.test.ts'`
+Run: `& '.\node_modules\.bin\vitest.cmd' run --root 'apps/mission-control-next' 'src/__testbench__/gateway-target/resolve-target.test.ts'`
 Expected: PASS (9 tests).
 
 - [ ] **Step 5: Checkpoint**
@@ -305,7 +305,7 @@ Expected: PASS (9 tests).
 Only if the operator authorized commits for this execution:
 
 ```powershell
-git add apps/mission-control-next/src/__testbench__/env.ts apps/mission-control-next/src/__testbench__/target/resolve-target.ts apps/mission-control-next/src/__testbench__/target/resolve-target.test.ts
+git add apps/mission-control-next/src/__testbench__/env.ts apps/mission-control-next/src/__testbench__/gateway-target/resolve-target.ts apps/mission-control-next/src/__testbench__/gateway-target/resolve-target.test.ts
 git commit -m "feat(testbench): resolve the test bench target from the URL"
 ```
 
@@ -316,8 +316,8 @@ Otherwise leave the files uncommitted and continue.
 ### Task 2: Sandbox detection
 
 **Files:**
-- Create: `apps/mission-control-next/src/__testbench__/target/detect-target.ts`
-- Test: `apps/mission-control-next/src/__testbench__/target/detect-target.test.ts`
+- Create: `apps/mission-control-next/src/__testbench__/gateway-target/detect-target.ts`
+- Test: `apps/mission-control-next/src/__testbench__/gateway-target/detect-target.test.ts`
 
 **Interfaces:**
 - Consumes: `TestbenchEnv` (Task 1), `TargetKind`, `TargetRequest` (Task 1).
@@ -325,7 +325,7 @@ Otherwise leave the files uncommitted and continue.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `apps/mission-control-next/src/__testbench__/target/detect-target.test.ts`:
+Create `apps/mission-control-next/src/__testbench__/gateway-target/detect-target.test.ts`:
 
 ```ts
 import { describe, expect, it, vi } from "vitest";
@@ -409,12 +409,12 @@ describe("normalizeRootPath", () => {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `& '.\node_modules\.bin\vitest.cmd' run --root 'apps/mission-control-next' 'src/__testbench__/target/detect-target.test.ts'`
+Run: `& '.\node_modules\.bin\vitest.cmd' run --root 'apps/mission-control-next' 'src/__testbench__/gateway-target/detect-target.test.ts'`
 Expected: FAIL, because `./detect-target` does not exist.
 
 - [ ] **Step 3: Write the implementation**
 
-Create `apps/mission-control-next/src/__testbench__/target/detect-target.ts`:
+Create `apps/mission-control-next/src/__testbench__/gateway-target/detect-target.ts`:
 
 ```ts
 import type { TestbenchEnv } from "../env";
@@ -500,7 +500,7 @@ function describeError(error: unknown): string {
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `& '.\node_modules\.bin\vitest.cmd' run --root 'apps/mission-control-next' 'src/__testbench__/target/detect-target.test.ts'`
+Run: `& '.\node_modules\.bin\vitest.cmd' run --root 'apps/mission-control-next' 'src/__testbench__/gateway-target/detect-target.test.ts'`
 Expected: PASS (7 tests).
 
 - [ ] **Step 5: Checkpoint**
@@ -508,7 +508,7 @@ Expected: PASS (7 tests).
 Only if commits are authorized:
 
 ```powershell
-git add apps/mission-control-next/src/__testbench__/target/detect-target.ts apps/mission-control-next/src/__testbench__/target/detect-target.test.ts
+git add apps/mission-control-next/src/__testbench__/gateway-target/detect-target.ts apps/mission-control-next/src/__testbench__/gateway-target/detect-target.test.ts
 git commit -m "feat(testbench): verify the sandbox by origin and runtime root"
 ```
 
@@ -599,7 +599,7 @@ Expected: FAIL, because `./policy` and `./types` do not exist.
 Create `apps/mission-control-next/src/__testbench__/runner/types.ts`:
 
 ```ts
-import type { TargetInfo } from "../target/detect-target";
+import type { TargetInfo } from "../gateway-target/detect-target";
 
 export type CheckTier = "read" | "mutate" | "host" | "external";
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -652,7 +652,7 @@ export const DEFAULT_CHECK_TIMEOUT_MS = 60_000;
 Create `apps/mission-control-next/src/__testbench__/runner/policy.ts`:
 
 ```ts
-import type { TargetInfo } from "../target/detect-target";
+import type { TargetInfo } from "../gateway-target/detect-target";
 import type { CheckDef, RunOptions } from "./types";
 
 export type Permission = { readonly allowed: true } | { readonly allowed: false; readonly reason: string };
@@ -1131,7 +1131,7 @@ Create `apps/mission-control-next/src/__testbench__/test-support/context.ts`:
 
 ```ts
 import type { CheckContext, CheckDef } from "../runner/types";
-import type { TargetInfo } from "../target/detect-target";
+import type { TargetInfo } from "../gateway-target/detect-target";
 
 export const SANDBOX_TARGET: TargetInfo = {
   kind: "sandbox",
@@ -1498,7 +1498,7 @@ import { request } from "@goatcitadel/mission-control-shared/api/client-core";
 import { pass, summarizeEvidence } from "../runner/assert";
 import { domainOfUrl, toRouteKey, type RouteManifest } from "../runner/routes";
 import type { CheckDef, RouteKey } from "../runner/types";
-import type { TargetKind } from "../target/resolve-target";
+import type { TargetKind } from "../gateway-target/resolve-target";
 import { REAL_TARGET_NETWORK_DOMAINS, findExclusion } from "./auto-probe-exclusions";
 
 export function buildAutoProbes(
@@ -2104,7 +2104,7 @@ Expected: FAIL, because `./scheduler` does not exist.
 Create `apps/mission-control-next/src/__testbench__/runner/scheduler.ts`:
 
 ```ts
-import type { TargetInfo } from "../target/detect-target";
+import type { TargetInfo } from "../gateway-target/detect-target";
 import { classifyError } from "./classify";
 import { checkPermission } from "./policy";
 import type { RunEndReason, RunEvent } from "./state";
@@ -2520,7 +2520,7 @@ Expected: FAIL, because the three modules do not exist.
 Create `apps/mission-control-next/src/__testbench__/runner/report.ts`:
 
 ```ts
-import type { TargetInfo } from "../target/detect-target";
+import type { TargetInfo } from "../gateway-target/detect-target";
 import type { CoverageReport } from "./routes";
 import { countStatuses, recordFor, type RunState } from "./state";
 import type { CheckDef } from "./types";
@@ -2968,7 +2968,7 @@ Create `apps/mission-control-next/src/__testbench__/catalog/dev-verification.ts`
 ```ts
 import { request } from "@goatcitadel/mission-control-shared/api/client-core";
 import type { RouteManifest } from "../runner/routes";
-import type { DevVerificationStatus } from "../target/detect-target";
+import type { DevVerificationStatus } from "../gateway-target/detect-target";
 
 const DEV_VERIFICATION = "/api/v1/dev/verification";
 
@@ -3234,7 +3234,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { TestbenchEnv } from "../env";
 import { pass } from "../runner/assert";
 import type { CheckDef } from "../runner/types";
-import type { TargetRequest } from "../target/resolve-target";
+import type { TargetRequest } from "../gateway-target/resolve-target";
 import { loadTestbench, type TestbenchDeps } from "./use-testbench";
 
 const ENV: TestbenchEnv = {
@@ -3343,8 +3343,8 @@ import { computeCoverage, trackedRouteKeys, type CoverageReport, type RouteManif
 import { runChecks, type RunSeed } from "../runner/scheduler";
 import { INITIAL_RUN_STATE, runReducer, type RunState } from "../runner/state";
 import type { CheckDef, RouteKey, RunOptions } from "../runner/types";
-import { detectTarget, type DevVerificationStatus, type TargetInfo } from "../target/detect-target";
-import type { TargetRequest } from "../target/resolve-target";
+import { detectTarget, type DevVerificationStatus, type TargetInfo } from "../gateway-target/detect-target";
+import type { TargetRequest } from "../gateway-target/resolve-target";
 
 export type GatewayAccessStatus = "ready" | "needs-auth" | "unreachable" | "misconfigured";
 
@@ -3602,7 +3602,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TestbenchEnv } from "../env";
 import { fail, pass } from "../runner/assert";
 import type { CheckDef } from "../runner/types";
-import type { TargetRequest } from "../target/resolve-target";
+import type { TargetRequest } from "../gateway-target/resolve-target";
 import { TestbenchApp } from "./TestbenchApp";
 import type { TestbenchDeps } from "./use-testbench";
 
@@ -3879,7 +3879,7 @@ Create `apps/mission-control-next/src/__testbench__/main.tsx`:
 
 ```tsx
 import { readTestbenchEnv } from "./env";
-import { applyGatewayOriginMeta, resolveTargetRequest } from "./target/resolve-target";
+import { applyGatewayOriginMeta, resolveTargetRequest } from "./gateway-target/resolve-target";
 
 const PRODUCTION_REFUSAL = "The GoatCitadel test bench is a development tool and does not run in production builds.";
 
@@ -3909,7 +3909,7 @@ import "@next/styles/mission-control-next.css";
 import "@next/features/native-routes/primitives/primitives.css";
 import "./testbench.css";
 import type { TestbenchEnv } from "../env";
-import type { TargetRequest } from "../target/resolve-target";
+import type { TargetRequest } from "../gateway-target/resolve-target";
 import { TestbenchApp } from "./TestbenchApp";
 
 const THEME_CLASS = "theme-signal-noir";
@@ -3930,8 +3930,8 @@ Create `apps/mission-control-next/src/__testbench__/ui/TopBar.tsx`:
 import { NativeButton, StatusChip } from "@next/features/native-routes/primitives";
 import { describeCoverage } from "../runner/report";
 import type { CoverageReport } from "../runner/routes";
-import type { TargetInfo } from "../target/detect-target";
-import { buildTargetHref } from "../target/resolve-target";
+import type { TargetInfo } from "../gateway-target/detect-target";
+import { buildTargetHref } from "../gateway-target/resolve-target";
 
 export interface TopBarProps {
   readonly target: TargetInfo;
@@ -4405,8 +4405,8 @@ import { checkPermission } from "../runner/policy";
 import { buildMarkdownReport } from "../runner/report";
 import { countStatuses, recordFor } from "../runner/state";
 import type { CheckDef } from "../runner/types";
-import type { TargetInfo } from "../target/detect-target";
-import type { TargetRequest } from "../target/resolve-target";
+import type { TargetInfo } from "../gateway-target/detect-target";
+import type { TargetRequest } from "../gateway-target/resolve-target";
 import { AreaRail } from "./AreaRail";
 import { CheckDrawer } from "./CheckDrawer";
 import { CheckList } from "./CheckList";

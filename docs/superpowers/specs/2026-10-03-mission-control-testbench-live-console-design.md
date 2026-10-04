@@ -115,7 +115,7 @@ apps/mission-control-next/
   testbench.html
   src/__testbench__/
     main.tsx            # PROD guard, target meta injection, dynamic import
-    target/             # target resolution, sandbox check
+    gateway-target/             # target resolution, sandbox check
     runner/             # check model, tier policy, error classification, scheduler, reducer
     catalog/            # index.ts registry, auto-probes, exclusions, one file per area
     ui/                 # React page, three-pane layout, styles
