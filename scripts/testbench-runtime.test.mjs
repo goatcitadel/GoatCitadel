@@ -131,6 +131,9 @@ test("buildTestbenchGatewayEnv keeps home and backups inside the runtime root an
     );
   }
   assert.equal(env.GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED, "true");
+  // The platform runner is on, but the sandbox stays required, so a machine without isolation still fails closed.
+  assert.equal(env.GOATCITADEL_CODE_MODE_BEST_EFFORT_SANDBOX_ENABLED, "true");
+  assert.equal(env.GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED, "true");
   assert.equal(env.GOATCITADEL_FEATURE_MEMORY_LIFECYCLE_ADMIN_V1_ENABLED, "true");
   assert.equal(env.GOATCITADEL_BUNDLED_POSTGRES_ENABLED, "false");
   assert.equal(env.GOATCITADEL_LLAMACPP_ENABLED, "false");

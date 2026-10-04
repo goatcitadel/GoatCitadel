@@ -114,6 +114,11 @@ export function buildTestbenchGatewayEnv(runtimeRoot) {
     GOATCITADEL_CODE_MODE_ARTIFACT_ROOT: path.join(runtimeRoot, "data", "code-mode", "artifacts"),
     GOATCITADEL_CODE_MODE_TEMP_ROOT: path.join(runtimeRoot, "data", "code-mode", "tmp"),
     GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
+    // The shipped example config disables the platform runner, so every Code Mode run would fail closed. Enable it
+    // as the repo's Code Mode verification lanes do, and keep the sandbox required: where the platform's isolation
+    // adapter is unavailable the run still fails closed, and the host check reports that as blocked.
+    GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "true",
+    GOATCITADEL_CODE_MODE_BEST_EFFORT_SANDBOX_ENABLED: "true",
     GOATCITADEL_FEATURE_MEMORY_LIFECYCLE_ADMIN_V1_ENABLED: "true",
     GOATCITADEL_RATE_LIMIT_ENABLED: "false",
     GOATCITADEL_BUNDLED_POSTGRES_AUTOSTART: "false",
