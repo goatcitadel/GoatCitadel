@@ -48,9 +48,11 @@ export function invalidateForEvent(
     return [];
   }
   if (event.source === "llamacpp") {
-    // A runtime status signal changes only what the health readers show. Refreshing the whole
-    // `system` topic re-read this status, and the Gateway used to announce every read (GL-01).
-    if (event.eventAuthority !== "durable_history") invalidate(queryKeys.healthAll());
+    // Status and lifecycle signals change what the health readers show. Raw llama-server output
+    // (one event per log chunk) does not, and refreshing health on it would probe llama-server,
+    // which can log again.
+    const processOutput = event.eventType === "llamacpp_stdout" || event.eventType === "llamacpp_stderr";
+    if (!processOutput && event.eventAuthority !== "durable_history") invalidate(queryKeys.healthAll());
     return [];
   }
   const { topics } = deriveRealtimeRefresh(event, { defaultTopics: ["surface"] });

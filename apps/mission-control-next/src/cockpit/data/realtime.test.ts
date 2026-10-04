@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { invalidateForEvent } from "./realtime";
+import { queryKeys } from "./query-keys";
 
 describe("cockpit realtime invalidation", () => {
   const invalidation = {
@@ -116,5 +117,29 @@ describe("cockpit realtime invalidation", () => {
       payload: { type: "llamacpp_refreshed" },
     });
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it.each(["llamacpp_stdout", "llamacpp_stderr"])("never refreshes health for llama-server output (%s)", (eventType) => {
+    const queryClient = new QueryClient();
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+    expect(
+      invalidateForEvent(queryClient, {
+        eventId: `log-${eventType}`, sequence: 8, eventType, source: "llamacpp",
+        timestamp: "2026-10-03T00:00:00.000Z", eventAuthority: "retained_stream",
+        payload: { message: "srv  log_server_r: request: GET /health 127.0.0.1 200" },
+      }),
+    ).toEqual([]);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the health query the readers actually use when llama-server exits", () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(queryKeys.health("workspace-a"), { checks: [] });
+    invalidateForEvent(queryClient, {
+      eventId: "llama-exit", sequence: 9, eventType: "llamacpp_exited", source: "llamacpp",
+      timestamp: "2026-10-03T00:00:00.000Z", eventAuthority: "retained_stream",
+      payload: { unexpected: true, code: 1 },
+    });
+    expect(queryClient.getQueryState(queryKeys.health("workspace-a"))?.isInvalidated).toBe(true);
   });
 });
