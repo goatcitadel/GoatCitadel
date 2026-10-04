@@ -1,4 +1,5 @@
 import type { CheckDef } from "../runner/types";
+import { approvalChecks } from "./approvals";
 import { capabilityChecks } from "./capabilities";
 import { chatSessionChecks } from "./chat-sessions";
 import { chatTurnChecks } from "./chat-turns";
@@ -11,4 +12,5 @@ export const HAND_WRITTEN_CHECKS: readonly CheckDef[] = [
   ...capabilityChecks,
   ...chatSessionChecks,
   ...chatTurnChecks,
+  ...approvalChecks,
 ];
