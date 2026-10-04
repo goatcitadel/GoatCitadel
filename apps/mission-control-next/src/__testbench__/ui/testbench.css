@@ -322,6 +322,17 @@
   white-space: nowrap;
 }
 
+/* Between 1024 and 1279px the default rail, drawer, and row columns leave a title about 75px; narrow them to ~230px. */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .testbench-panes {
+    grid-template-columns: 10rem minmax(0, 1fr) 17rem;
+  }
+
+  .testbench-row-main {
+    grid-template-columns: 6rem minmax(0, 1fr) 4rem 3.5rem;
+  }
+}
+
 @media (max-width: 1023px) {
   .testbench-panes {
     grid-template-columns: minmax(0, 1fr);
