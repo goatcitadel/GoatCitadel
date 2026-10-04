@@ -56,9 +56,9 @@ export async function prepareTestbenchRuntime({ runId, stubBaseUrl, sourceRoot =
 }
 
 /**
- * Path-relocating variables the gateway reads that the test bench does not pin. An operator shell that exports one
- * would silently point the sandbox at operator files, so the launcher omits them from both child environments and
- * the gateway falls back to its defaults inside the runtime root.
+ * Path-relocating variables the gateway reads that the test bench does not pin. They are always omitted, even when
+ * the operator shell does not export them, so the gateway falls back to its defaults inside the runtime root.
+ * `buildTestbenchEnvOmit` also omits every other GoatCitadel setting the shell exports.
  */
 export const TESTBENCH_INHERITED_PATH_ENV_KEYS = Object.freeze([
   "GOATCITADEL_CAPABILITY_CANDIDATE_ROOT",
@@ -67,17 +67,26 @@ export const TESTBENCH_INHERITED_PATH_ENV_KEYS = Object.freeze([
   "GOATCITADEL_PROMPT_PACK_PATH",
 ]);
 
-/** The environment keys the launcher removes from the gateway and UI children: secrets plus inherited paths. */
-export function buildTestbenchEnvOmit(secretEnvKeys) {
-  return [...secretEnvKeys, ...TESTBENCH_INHERITED_PATH_ENV_KEYS];
+/** Matches GoatCitadel gateway and Vite settings; case-insensitive because Windows environment names are. */
+const GOATCITADEL_SETTING_NAME = /^(?:VITE_)?GOATCITADEL_/i;
+
+/**
+ * The environment keys the launcher removes from the gateway and UI children, de-duplicated: the secret keys, every
+ * `GOATCITADEL_*` and `VITE_GOATCITADEL_*` variable in `env`, and the known path overrides. The sandbox therefore
+ * inherits no GoatCitadel configuration from the operator shell; only the launcher's explicit settings apply, because
+ * `buildVerificationProcessEnv` deletes omitted keys from the inherited environment and then spreads the explicit
+ * settings on top (so an explicit setting survives even when its name is omitted).
+ */
+export function buildTestbenchEnvOmit(secretEnvKeys, env = process.env) {
+  const inherited = Object.keys(env).filter((key) => GOATCITADEL_SETTING_NAME.test(key));
+  return [...new Set([...secretEnvKeys, ...inherited, ...TESTBENCH_INHERITED_PATH_ENV_KEYS])];
 }
 
 /**
  * Gateway environment on top of the verification stack defaults (SQLite, auth none, no secret store).
  * Pinned inside the runtime root: GOATCITADEL_HOME, GOATCITADEL_BACKUP_DIR, GOATCITADEL_LOCAL_ENV_FILE, and the two
- * Code Mode roots (the stack itself also pins GOATCITADEL_ROOT_DIR). The path variables in
- * TESTBENCH_INHERITED_PATH_ENV_KEYS are not pinned but omitted by the launcher. Any other path variable the
- * operator shell exports is still inherited.
+ * Code Mode roots (the stack itself also pins GOATCITADEL_ROOT_DIR). Nothing else GoatCitadel-specific comes from
+ * the operator shell: the launcher omits every GOATCITADEL_* variable it exports (see `buildTestbenchEnvOmit`).
  */
 export function buildTestbenchGatewayEnv(runtimeRoot) {
   return {

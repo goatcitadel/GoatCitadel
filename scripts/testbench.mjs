@@ -158,6 +158,8 @@ async function launchSandbox({ runId, artifactRoot, logRoot }, trigger, started)
   if (trigger.requested()) return false;
   const gatewayPort = await resolveAvailablePort(0);
   const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
+  // The children inherit no secrets and no GOATCITADEL_* / VITE_GOATCITADEL_* variables from this shell; only the
+  // explicit gatewayEnv and uiEnv settings below apply.
   const envOmit = buildTestbenchEnvOmit(await collectVerificationSecretEnvKeys(path.join(repoRoot, "config")));
   if (trigger.requested()) return false;
   // The gateway workspace build inside startVerificationStack is synchronous and blocks this process's event loop,
