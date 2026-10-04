@@ -1,0 +1,56 @@
+import { resolveApproval } from "@goatcitadel/mission-control-shared/api/approvals";
+import { createCodeModeRun, fetchCodeModeRun } from "@goatcitadel/mission-control-shared/api/capabilities";
+import { ensure, pass, waitFor } from "../runner/assert";
+import type { CheckDef } from "../runner/types";
+
+const TRUSTED_SOURCE = "return { ok: true };";
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set(["completed", "failed", "rejected", "expired"]);
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+
+export const codeModeChecks: readonly CheckDef[] = [
+  {
+    id: "code-mode.run",
+    kind: "journey",
+    domain: "code-mode",
+    title: "Governed Code Mode run",
+    tier: "host",
+    timeoutMs: 120_000,
+    description:
+      "Runs the fixed snippet `return { ok: true };` on this machine after approving it. Code Mode runs trusted code; it is not a hostile-code sandbox.",
+    routes: [
+      "POST /api/v1/code-mode/runs",
+      "POST /api/v1/approvals/:approvalId/resolve",
+      "GET /api/v1/code-mode/runs/:runId",
+    ],
+    steps: ["Create run", "Approve the run", "Run finishes", "Artifact hashes recorded"],
+    async run(ctx) {
+      const created = await ctx.step("Create run", () =>
+        createCodeModeRun({ language: "javascript", source: TRUSTED_SOURCE }),
+      );
+      const approvalId = created.approvalId;
+      ensure(created.status === "approval_pending" && approvalId, "The run did not wait for approval.", created);
+      await ctx.step("Approve the run", () => resolveApproval(approvalId, "approve"));
+      const finished = await ctx.step("Run finishes", () =>
+        waitFor(
+          () => fetchCodeModeRun(created.runId),
+          (run) => TERMINAL_STATUSES.has(run.status),
+          { signal: ctx.signal, timeoutMs: 90_000, intervalMs: 1_000, label: "The Code Mode run finishing" },
+        ),
+      );
+      ensure(
+        finished.status === "completed",
+        `The run ended ${finished.status}${finished.error ? `: ${finished.error}` : ""}.`,
+        finished,
+      );
+      await ctx.step("Artifact hashes recorded", async () => {
+        ensure(finished.codeHash !== "", "The run recorded no code hash.", finished);
+        ensure(
+          SHA256_PATTERN.test(finished.codeArtifact.sha256),
+          "The code artifact has no SHA-256.",
+          finished.codeArtifact,
+        );
+      });
+      return pass(`Run ${created.runId} completed; code artifact ${finished.codeArtifact.sha256.slice(0, 12)}….`);
+    },
+  },
+];
