@@ -28,7 +28,13 @@ vi.mock("./CommandPalette", () => ({
       </section>
     ) : null,
 }));
-vi.mock("../areas/library/LibraryArea", () => ({ LibraryArea: () => null }));
+const libraryArea = vi.hoisted(() => ({ failure: null as Error | null }));
+vi.mock("../areas/library/LibraryArea", () => ({
+  LibraryArea: () => {
+    if (libraryArea.failure) throw libraryArea.failure;
+    return null;
+  },
+}));
 vi.mock("../areas/system/system-health-sources", () => ({
   loadSystemHealthSources: vi.fn(async () => {
     throw new Error("Health owner unavailable in shell fixture.");
@@ -348,5 +354,31 @@ describe("CockpitShell", () => {
     expect(shellDraft.value.text).toBe("Keep this draft");
     input.remove();
     client.clear();
+  });
+
+  it("keeps the shell usable when one area fails to render", async () => {
+    libraryArea.failure = new Error("synthetic Library failure");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    window.history.replaceState(null, "", "/library?shell=cockpit");
+    try {
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={new QueryClient()}>
+            <CockpitShell />
+          </QueryClientProvider>,
+        );
+      });
+      await vi.waitFor(() =>
+        expect(
+          [...container.querySelectorAll('[role="alert"]')].some((node) =>
+            node.textContent?.includes("Library couldn't be shown"),
+          ),
+        ).toBe(true),
+      );
+      expect(container.querySelector('nav[aria-label="Areas"]')).not.toBeNull();
+    } finally {
+      libraryArea.failure = null;
+      consoleError.mockRestore();
+    }
   });
 });
