@@ -59,51 +59,53 @@ export interface DurableRecoverySeed {
 
 export interface ProviderExerciseResult {
   readonly ok: boolean;
-  readonly providerId?: string;
-  readonly model?: string;
+  readonly providerId?: string | null;
+  readonly model?: string | null;
   readonly elapsedMs?: number;
   readonly outputPreview?: string;
   readonly error?: string;
 }
 
-export function fetchDevStatus(): Promise<DevVerificationStatus> {
-  return request<DevVerificationStatus>(`${DEV_VERIFICATION}/status`);
+export function fetchDevStatus(signal?: AbortSignal): Promise<DevVerificationStatus> {
+  return request<DevVerificationStatus>(`${DEV_VERIFICATION}/status`, { signal });
 }
 
-export function fetchRouteManifest(): Promise<RouteManifest> {
-  return request<RouteManifest>(`${DEV_VERIFICATION}/route-access-manifest`);
+export function fetchRouteManifest(signal?: AbortSignal): Promise<RouteManifest> {
+  return request<RouteManifest>(`${DEV_VERIFICATION}/route-access-manifest`, { signal });
 }
 
-export function seedWorkspace(label: string): Promise<SeededWorkspace> {
-  return postJson(`${DEV_VERIFICATION}/seed`, {
-    workspaceName: label,
-    sessionTitle: `${label} session`,
-    sessionCount: 1,
-    longThreadTurns: 2,
-  });
+export function seedWorkspace(label: string, signal?: AbortSignal): Promise<SeededWorkspace> {
+  return postJson(
+    `${DEV_VERIFICATION}/seed`,
+    { workspaceName: label, sessionTitle: `${label} session`, sessionCount: 1, longThreadTurns: 2 },
+    signal,
+  );
 }
 
-export function seedChatApprovalScenario(scope: SessionScope): Promise<ChatApprovalScenario> {
-  return postJson(`${DEV_VERIFICATION}/chat-approval-scenario`, scope);
+export function seedChatApprovalScenario(scope: SessionScope, signal?: AbortSignal): Promise<ChatApprovalScenario> {
+  return postJson(`${DEV_VERIFICATION}/chat-approval-scenario`, scope, signal);
 }
 
-export function seedChatUserInputScenario(scope: SessionScope): Promise<ChatUserInputScenario> {
-  return postJson(`${DEV_VERIFICATION}/chat-user-input-scenario`, scope);
+export function seedChatUserInputScenario(scope: SessionScope, signal?: AbortSignal): Promise<ChatUserInputScenario> {
+  return postJson(`${DEV_VERIFICATION}/chat-user-input-scenario`, scope, signal);
 }
 
-export function seedMemoryItem(input: MemoryItemSeedInput): Promise<SeededMemoryItem> {
-  return postJson(`${DEV_VERIFICATION}/memory-item-seed`, input);
+export function seedMemoryItem(input: MemoryItemSeedInput, signal?: AbortSignal): Promise<SeededMemoryItem> {
+  return postJson(`${DEV_VERIFICATION}/memory-item-seed`, input, signal);
 }
 
-export function seedDurableRecovery(): Promise<DurableRecoverySeed> {
+export function seedDurableRecovery(signal?: AbortSignal): Promise<DurableRecoverySeed> {
   // Fastify rejects an empty body sent with a JSON content type, so send an empty object.
-  return postJson(`${DEV_VERIFICATION}/durable-recovery-seed`, {});
+  return postJson(`${DEV_VERIFICATION}/durable-recovery-seed`, {}, signal);
 }
 
-export function exerciseProvider(input: { readonly scenario: "simple" }): Promise<ProviderExerciseResult> {
-  return postJson(`${DEV_VERIFICATION}/provider-exercise`, input);
+export function exerciseProvider(
+  input: { readonly scenario: "simple" },
+  signal?: AbortSignal,
+): Promise<ProviderExerciseResult> {
+  return postJson(`${DEV_VERIFICATION}/provider-exercise`, input, signal);
 }
 
-function postJson<T>(path: string, body: unknown): Promise<T> {
-  return request<T>(path, { method: "POST", body: JSON.stringify(body) });
+function postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  return request<T>(path, { method: "POST", body: JSON.stringify(body), signal });
 }

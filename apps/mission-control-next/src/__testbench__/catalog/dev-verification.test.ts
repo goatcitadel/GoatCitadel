@@ -69,6 +69,16 @@ describe("dev verification client", () => {
     });
   });
 
+  it("forwards an abort signal to the request for reads and seeds", async () => {
+    const { signal } = new AbortController();
+    await fetchDevStatus(signal);
+    expect(requestMock).toHaveBeenLastCalledWith("/api/v1/dev/verification/status", { signal });
+    await seedWorkspace("Test bench run", signal);
+    expect(requestMock.mock.calls.at(-1)?.[1]).toMatchObject({ method: "POST", signal });
+    await seedDurableRecovery(signal);
+    expect(requestMock.mock.calls.at(-1)?.[1]).toMatchObject({ method: "POST", signal });
+  });
+
   it("sends an empty JSON object to the body-less durable recovery seed", async () => {
     await seedDurableRecovery();
     expect(lastPost()).toEqual({ path: "/api/v1/dev/verification/durable-recovery-seed", method: "POST", body: {} });
