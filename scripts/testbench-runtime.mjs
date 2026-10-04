@@ -56,8 +56,28 @@ export async function prepareTestbenchRuntime({ runId, stubBaseUrl, sourceRoot =
 }
 
 /**
+ * Path-relocating variables the gateway reads that the test bench does not pin. An operator shell that exports one
+ * would silently point the sandbox at operator files, so the launcher omits them from both child environments and
+ * the gateway falls back to its defaults inside the runtime root.
+ */
+export const TESTBENCH_INHERITED_PATH_ENV_KEYS = Object.freeze([
+  "GOATCITADEL_CAPABILITY_CANDIDATE_ROOT",
+  "GOATCITADEL_LLM_MODEL_METADATA_PATH",
+  "GOATCITADEL_LLM_MODEL_CATALOG_CACHE_PATH",
+  "GOATCITADEL_PROMPT_PACK_PATH",
+]);
+
+/** The environment keys the launcher removes from the gateway and UI children: secrets plus inherited paths. */
+export function buildTestbenchEnvOmit(secretEnvKeys) {
+  return [...secretEnvKeys, ...TESTBENCH_INHERITED_PATH_ENV_KEYS];
+}
+
+/**
  * Gateway environment on top of the verification stack defaults (SQLite, auth none, no secret store).
- * Every path-relocating variable is pinned inside the runtime root so nothing resolves to operator state.
+ * Pinned inside the runtime root: GOATCITADEL_HOME, GOATCITADEL_BACKUP_DIR, GOATCITADEL_LOCAL_ENV_FILE, and the two
+ * Code Mode roots (the stack itself also pins GOATCITADEL_ROOT_DIR). The path variables in
+ * TESTBENCH_INHERITED_PATH_ENV_KEYS are not pinned but omitted by the launcher. Any other path variable the
+ * operator shell exports is still inherited.
  */
 export function buildTestbenchGatewayEnv(runtimeRoot) {
   return {

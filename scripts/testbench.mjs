@@ -7,6 +7,7 @@ import { collectVerificationSecretEnvKeys } from "./verification/lib/scenarios/u
 import { createRunId, repoRoot } from "./verification/lib/shared.mjs";
 import {
   TESTBENCH_STUB_KEY,
+  buildTestbenchEnvOmit,
   buildTestbenchGatewayEnv,
   buildTestbenchUiEnv,
   buildTestbenchUrl,
@@ -157,7 +158,7 @@ async function launchSandbox({ runId, artifactRoot, logRoot }, trigger, started)
   if (trigger.requested()) return false;
   const gatewayPort = await resolveAvailablePort(0);
   const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
-  const secretEnvKeys = await collectVerificationSecretEnvKeys(path.join(repoRoot, "config"));
+  const envOmit = buildTestbenchEnvOmit(await collectVerificationSecretEnvKeys(path.join(repoRoot, "config")));
   if (trigger.requested()) return false;
   // The gateway workspace build inside startVerificationStack is synchronous and blocks this process's event loop,
   // so Ctrl+C, SIGTERM, and the stop file are only noticed once that build returns.
@@ -173,8 +174,8 @@ async function launchSandbox({ runId, artifactRoot, logRoot }, trigger, started)
       gatewayMode: "built",
       includeUi: true,
       processLogPrefix: "testbench",
-      gatewayEnvOmit: secretEnvKeys,
-      uiEnvOmit: secretEnvKeys,
+      gatewayEnvOmit: envOmit,
+      uiEnvOmit: envOmit,
       gatewayEnv: buildTestbenchGatewayEnv(started.runtimeRoot),
       uiEnv: buildTestbenchUiEnv({ gatewayUrl, runtimeRoot: started.runtimeRoot }),
     }),

@@ -9,7 +9,9 @@ import {
   DETERMINISTIC_LLM_PROVIDER_ID,
 } from "./verification/lib/scenarios/deterministic-llm-stub.mjs";
 import {
+  TESTBENCH_INHERITED_PATH_ENV_KEYS,
   TESTBENCH_STUB_KEY,
+  buildTestbenchEnvOmit,
   buildTestbenchGatewayEnv,
   buildTestbenchUiEnv,
   buildTestbenchUrl,
@@ -118,6 +120,24 @@ test("buildTestbenchGatewayEnv keeps home and backups inside the runtime root an
   assert.equal(env.GOATCITADEL_LLAMACPP_ENABLED, "false");
   assert.equal(env.GOATCITADEL_NPU_ENABLED, "false");
   assert.equal(env[DETERMINISTIC_LLM_KEY_ENV], TESTBENCH_STUB_KEY);
+});
+
+test("path overrides the operator shell may set are omitted from the sandbox, never pinned", () => {
+  assert.ok(TESTBENCH_INHERITED_PATH_ENV_KEYS.length > 0);
+  const pinned = Object.keys(buildTestbenchGatewayEnv(path.join(os.tmpdir(), "goatcitadel-usability-unit")));
+  for (const key of TESTBENCH_INHERITED_PATH_ENV_KEYS) {
+    assert.match(key, /^GOATCITADEL_[A-Z_]+$/);
+    assert.equal(pinned.includes(key), false, `${key} is both pinned and omitted`);
+  }
+});
+
+test("buildTestbenchEnvOmit adds the inherited path overrides to the secret keys without dropping either", () => {
+  const omit = buildTestbenchEnvOmit(["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
+  assert.deepEqual(omit.slice(0, 2), ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
+  for (const key of TESTBENCH_INHERITED_PATH_ENV_KEYS) {
+    assert.ok(omit.includes(key), `${key} is not omitted`);
+  }
+  assert.deepEqual(buildTestbenchEnvOmit([]), [...TESTBENCH_INHERITED_PATH_ENV_KEYS]);
 });
 
 test("buildTestbenchUiEnv hands the page the sandbox origin, root, and real origin", () => {
