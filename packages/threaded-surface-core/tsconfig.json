@@ -9,7 +9,6 @@
     "skipLibCheck": true,
     "types": ["node", "react", "react-dom"],
     "paths": {
-      "@goatcitadel/contracts": ["../../packages/contracts/src/index.ts"],
       "react": ["../../node_modules/@types/react/index.d.ts"],
       "react/jsx-runtime": ["../../node_modules/@types/react/jsx-runtime.d.ts"]
     }
