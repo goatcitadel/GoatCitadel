@@ -15,7 +15,11 @@ vi.mock("../ui/Sheet", () => ({
       </section>
     ) : null,
 }));
-vi.mock("../../shell-preference", () => ({ switchShell: vi.fn() }));
+const shell = vi.hoisted(() => ({ switchShell: vi.fn<typeof import("../../shell-preference").switchShell>() }));
+vi.mock("../../shell-preference", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../shell-preference")>()),
+  switchShell: shell.switchShell,
+}));
 const preload = vi.hoisted(() => vi.fn());
 vi.mock("./use-cockpit-preload", () => ({ useCockpitPreload: () => preload }));
 vi.mock("../data/use-operator-inbox", () => ({
@@ -104,5 +108,27 @@ describe("MobileTabBar", () => {
     await act(async () => button("System").click());
     expect(window.location.pathname).toBe("/system");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+  it("switches to classic Mission Control as the saved layout, not a visit", async () => {
+    shell.switchShell.mockReset();
+    shell.switchShell.mockResolvedValue("opened");
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <UiPreferencesProvider>
+            <CockpitNavigationProvider>
+              <MobileTabBar onOpenPalette={vi.fn()} />
+            </CockpitNavigationProvider>
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await act(async () => button("More").click());
+    await act(async () => button("Switch to classic Mission Control").click());
+    await vi.waitFor(() => expect(shell.switchShell).toHaveBeenCalledOnce());
+    const [name, options] = shell.switchShell.mock.calls[0]!;
+    expect(name).toBe("classic");
+    // Without an href, switchShell builds the URL itself and saves classic as the layout.
+    expect(options.href).toBeUndefined();
   });
 });

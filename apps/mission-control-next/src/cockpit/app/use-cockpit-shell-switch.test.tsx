@@ -39,7 +39,9 @@ afterEach(async () => {
 });
 
 describe("cockpit shell switch", () => {
-  it("opens a task detour in classic without saving it as the default", async () => {
+  it("opens a task detour in classic, marked as a visit and carrying the hook's conversation", async () => {
+    // No sessionId in the URL, so only the hook's argument can put one in the detour.
+    window.history.replaceState(null, "", "/chat?shell=cockpit");
     await act(async () => root.render(<Probe />));
     await act(async () => shellSwitch.visit());
     await vi.waitFor(() => expect(shell.switchShell).toHaveBeenCalledOnce());
