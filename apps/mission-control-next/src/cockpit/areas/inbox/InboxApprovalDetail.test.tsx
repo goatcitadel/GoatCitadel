@@ -9,7 +9,23 @@ import { InboxApprovalDetail } from "./InboxApprovalDetail";
 const api = vi.hoisted(() => ({ fetchApprovals: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ fetchApprovals: api.fetchApprovals }));
 vi.mock("./InboxApprovalActions", () => ({
-  InboxApprovalActions: () => <button type="button">Decision controls</button>,
+  InboxApprovalActions: ({
+    onResolved,
+    onInvalidated,
+  }: {
+    onResolved: (message: string) => void;
+    onInvalidated: () => void;
+  }) => (
+    <>
+      <button type="button">Decision controls</button>
+      <button type="button" onClick={() => onResolved("Approved decision recorded.")}>
+        Record decision
+      </button>
+      <button type="button" onClick={onInvalidated}>
+        Report changed record
+      </button>
+    </>
+  ),
 }));
 
 const approval: ApprovalRequest = {
@@ -36,6 +52,14 @@ const item: OperatorInboxItem = {
 let root: Root;
 let container: HTMLDivElement;
 let client: QueryClient;
+
+/** Query results reach React on zero-delay timers, so let them fire inside act until the view settles. */
+async function settleUntil(done: () => boolean) {
+  for (let pass = 0; pass < 20 && !done(); pass += 1)
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+}
 
 beforeEach(() => {
   api.fetchApprovals.mockReset();
@@ -79,5 +103,39 @@ describe("Inbox approval detail", () => {
     expect(container.textContent).not.toContain("Loading the current approval…");
     await act(async () => release());
     await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+  });
+
+  it.each([
+    ["Record decision", "Approved decision recorded."],
+    ["Report changed record", "The approval changed. Review the refreshed record before deciding."],
+  ])("drops the settled record while the queue is re-read after %s", async (action, notice) => {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <InboxApprovalDetail item={item} workspaceId="default" />
+        </QueryClientProvider>,
+      ),
+    );
+    await settleUntil(() => Boolean(container.textContent?.includes("Decision controls")));
+    expect(container.textContent).toContain("Decision controls");
+    let release!: () => void;
+    api.fetchApprovals.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ items: [] });
+        }),
+    );
+    await act(async () => {
+      [...container.querySelectorAll("button")].find((button) => button.textContent === action)!.click();
+      // Query status reaches React on a zero-delay timer; let it fire inside act.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // The superseded record and its controls leave, so only this panel announces the outcome.
+    expect(container.textContent).not.toContain("Decision controls");
+    expect([...container.querySelectorAll('[role="status"]')].map((node) => node.textContent)).toContain(notice);
+    await act(async () => release());
+    await settleUntil(() => Boolean(container.textContent?.includes("not found in the first page")));
+    expect(container.textContent).toContain("not found in the first page");
+    expect(container.textContent).toContain(notice);
   });
 });

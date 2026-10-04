@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
 import { fetchApprovals } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -20,13 +20,21 @@ export function InboxApprovalDetail({
   focusAction?: "approve" | "deny";
 }) {
   const [decisionNotice, setDecisionNotice] = useState("");
+  const queryClient = useQueryClient();
   const approvalId = item.source.approvalId;
+  const queryKey = ["approvals", "inbox-detail", workspaceId, approvalId];
   const query = useQuery({
-    queryKey: ["approvals", "inbox-detail", workspaceId, approvalId],
+    queryKey,
     queryFn: () => fetchApprovals({ status: "pending", workspaceId, limit: 200 }),
     enabled: Boolean(approvalId),
     staleTime: 0,
   });
+  // A decided or changed record is superseded. Drop it while the queue is re-read instead of keeping it
+  // on screen as a background recheck would, with its old badges and a second copy of the outcome.
+  const rereadSettled = (notice: string) => {
+    setDecisionNotice(notice);
+    void queryClient.resetQueries({ queryKey, exact: true });
+  };
   const approval = query.isError ? undefined : query.data?.items.find((record) => record.approvalId === approvalId);
   const evidence = approval ? buildApprovalEvidenceModel(approval.preview) : null;
   return (
@@ -133,14 +141,8 @@ export function InboxApprovalDetail({
               approval={approval}
               workspaceId={workspaceId}
               focusAction={focusAction}
-              onResolved={(message) => {
-                setDecisionNotice(message);
-                void query.refetch();
-              }}
-              onInvalidated={() => {
-                setDecisionNotice("The approval changed. Review the refreshed record before deciding.");
-                void query.refetch();
-              }}
+              onResolved={rereadSettled}
+              onInvalidated={() => rereadSettled("The approval changed. Review the refreshed record before deciding.")}
             />
           ) : null}
           <p className="text-xs text-fg-muted">
