@@ -63,12 +63,12 @@ Rejected approaches: wrapping the `scripts/verification` scenarios (needs a Node
 New `scripts/testbench.mjs`, exposed as the root script `testbench`. It sits beside `scripts/dev.mjs`, following the repo's flat layout for dev launchers:
 
 1. Start the deterministic LLM stub (`startDeterministicLlmStub`).
-2. Build the scratch runtime root with `prepareUsabilityRuntime(runId, stub.baseUrl)`. It reads only the tracked `config/goatcitadel.example.json`, writes the stub as the only provider, and copies `skills/`. It never reads gitignored real config, secrets, or `workspaces/`. The stock `prepareVerificationRuntime` copies all of `config/` and `workspaces/`, so the launcher does not use it.
-3. Call `startVerificationStack` with that `runtimeRoot` and `gatewayMode: "built"`. Gateway environment: SQLite, `GOATCITADEL_AUTH_MODE=none`, `GOATCITADEL_DISABLE_SECRET_STORE=true`, dev diagnostics on, rate limiting off, bundled Postgres, llama.cpp, and NPU off, Code Mode v1 on (`GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED=true`, so the `host` check can run), memory lifecycle admin on (`GOATCITADEL_FEATURE_MEMORY_LIFECYCLE_ADMIN_V1_ENABLED=true`; the shipped example config turns it off, which would leave the memory journey blocked), the stub key, and `GOATCITADEL_HOME` and `GOATCITADEL_BACKUP_DIR` inside the scratch root (otherwise backups default to the operator's real `~/.GoatCitadel/backups`). Secret-bearing variables are omitted from both children (`collectVerificationSecretEnvKeys`). The UI runs in Vite dev mode with `VITE_GOATCITADEL_TESTBENCH_SANDBOX_ORIGIN`, `VITE_GOATCITADEL_TESTBENCH_SANDBOX_ROOT`, and `VITE_GOATCITADEL_TESTBENCH_REAL_ORIGIN` (`http://127.0.0.1:8787`) set.
+2. Build the scratch runtime root with `prepareUsabilityRuntime(runId, stub.baseUrl)`. It reads only the tracked `config/goatcitadel.example.json` and writes the stub as the only provider. It never reads gitignored real config, secrets, or `workspaces/`. The stock `prepareVerificationRuntime` copies all of `config/` and `workspaces/`, so the launcher does not use it. The fixture copies the whole `skills/` directory, so the launcher then replaces that copy with the git-tracked skill files only (`git ls-files`); untracked workspace skills never reach the sandbox, and the launcher refuses to start when git cannot answer.
+3. Call `startVerificationStack` with that `runtimeRoot` and `gatewayMode: "built"`. Gateway environment: SQLite, `GOATCITADEL_AUTH_MODE=none`, `GOATCITADEL_DISABLE_SECRET_STORE=true`, dev diagnostics on, rate limiting off, bundled Postgres, llama.cpp, and NPU off, Code Mode v1 on (`GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED=true`, so the `host` check can run), memory lifecycle admin on (`GOATCITADEL_FEATURE_MEMORY_LIFECYCLE_ADMIN_V1_ENABLED=true`; the shipped example config turns it off, which would leave the memory journey blocked), the stub key, and the path variables `GOATCITADEL_HOME`, `GOATCITADEL_BACKUP_DIR`, `GOATCITADEL_LOCAL_ENV_FILE`, and the two Code Mode roots pinned inside the scratch root (otherwise backups default to the operator's real `~/.GoatCitadel/backups`; the stack also pins `GOATCITADEL_ROOT_DIR`). Secret-bearing variables are omitted from both children (`collectVerificationSecretEnvKeys`). So are the path overrides the test bench does not pin (`GOATCITADEL_CAPABILITY_CANDIDATE_ROOT`, `GOATCITADEL_LLM_MODEL_METADATA_PATH`, `GOATCITADEL_LLM_MODEL_CATALOG_CACHE_PATH`, `GOATCITADEL_PROMPT_PACK_PATH`), so an operator shell that exports them cannot point the sandbox at operator files and the gateway uses its defaults inside the scratch root. Any other path variable the operator shell exports is still inherited. The UI runs in Vite dev mode with `VITE_GOATCITADEL_TESTBENCH_SANDBOX_ORIGIN`, `VITE_GOATCITADEL_TESTBENCH_SANDBOX_ROOT`, and `VITE_GOATCITADEL_TESTBENCH_REAL_ORIGIN` (`http://127.0.0.1:8787`) set.
 4. Complete onboarding on the sandbox (`ensureOnboardingComplete`) so Chat is not routed to setup.
 5. Print `<uiUrl>/testbench.html?target=sandbox` and the log folder. `startVerificationStack` always builds the Gateway workspace first and buffers child output until exit, so the launcher prints a line before and after each phase.
 6. Do not hold the verification run context: it takes the worktree output lock, which would block every build and typecheck while the test bench runs. Logs go to `artifacts/testbench/<runId>/` (gitignored).
-7. On Ctrl+C, SIGTERM, or a startup failure: close the stub and call `stopVerificationStack` (never throws), which stops only the processes the launcher started and deletes the scratch root.
+7. Shutdown is armed before anything starts, so a stop request at any point leads to the same teardown. The triggers are Ctrl+C, SIGTERM, and a stop file at `artifacts/testbench/<runId>/stop` (a background launcher on Windows cannot be sent Ctrl+C, and killing it would skip teardown). A startup phase already in progress is awaited to completion first so that everything it started can be stopped; the synchronous gateway workspace build therefore delays a stop until it returns. An unexpected exit of the sandbox gateway or the UI also triggers teardown and a non-zero exit code. Teardown closes the stub and calls `stopVerificationStack` (never throws), which stops only the processes the launcher started and deletes the scratch root.
 
 The operator's everyday `pnpm dev` server also serves `/testbench.html?target=real`, so the launcher is not needed for real-gateway checks.
 
@@ -87,6 +87,8 @@ Every check declares exactly one tier.
 
 Code Mode is `host`, not `mutate`: a throwaway Gateway still executes code on the operator's machine. Nothing in the page claims hostile-code sandboxing.
 
+An external confirmation covers exactly one run of exactly one check; it is never remembered. The dialog says where the check runs (the sandbox gateway, or the real gateway at its origin), that it leaves this machine, and then shows that check's own `description`. The description is where each check states its cost (tokens spent, provider API reached, usage entries recorded), so every `external` check must carry one; the catalog integrity test enforces it.
+
 ### 5.2 Sandbox check
 
 The page treats the gateway as the sandbox only when all three conditions hold:
@@ -102,6 +104,7 @@ This check prevents accidents. It is not a security boundary. Gateway policy, ap
 ### 5.3 Run behavior
 
 - `read` checks run with a concurrency limit of 4. `mutate`, `host`, and `external` checks and all journeys run one at a time.
+- "Run all allowed" never runs `external` checks, including ones confirmed earlier: it carries no confirmations, so they are skipped with the reason "External checks run only after you confirm them." Each external check runs from its own Run button after its own confirmation.
 - A global Stop aborts in-flight work through an `AbortSignal` passed to every check.
 - In the sandbox, each "Run all" seeds a fresh test workspace and passes its id through the check context, so runs stay independent.
 - Results live in page memory only. They are never written to Gateway or runtime storage. "Copy report" puts a Markdown summary on the clipboard.
@@ -135,11 +138,14 @@ type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 // Spelled exactly as the route-access manifest spells it, including :params.
 type RouteKey = `${HttpMethod} /api/v1/${string}`;
 
+type CheckKind = "auto" | "probe" | "journey";
+
 interface CheckContext {
   target: TargetInfo; // kind, origin, sandboxVerified, reason
   workspaceId?: string; // seeded per run in the sandbox
   signal: AbortSignal;
-  log(entry: CheckLogEntry): void; // step-level evidence for the drawer
+  log(message: string, data?: unknown): void; // evidence for the drawer
+  step<T>(title: string, run: () => Promise<T>): Promise<T>; // a named journey stage
 }
 
 interface CheckResult {
@@ -148,34 +154,24 @@ interface CheckResult {
   evidence?: unknown; // shown only as secondary raw detail
 }
 
-interface ProbeDef {
-  kind: "probe";
+// One shape for auto-probes, hand-written probes, and journeys.
+interface CheckDef {
   id: string;
-  domain: DomainId;
+  kind: CheckKind;
+  domain: string;
   title: string;
   tier: CheckTier;
   routes: RouteKey[];
-  realSafe?: true;
+  description?: string; // required on external checks: states the check's own cost
+  realSafe?: true; // external only
+  needsWorkspace?: true; // needs the per-run seeded workspace (sandbox only)
+  steps?: string[]; // declared journey step titles, in order
+  timeoutMs?: number;
   run(ctx: CheckContext): Promise<CheckResult>;
-}
-
-interface JourneyStep<S> {
-  id: string;
-  title: string;
-  run(ctx: CheckContext, state: S): Promise<S>;
-}
-
-interface JourneyDef<S = unknown> {
-  kind: "journey";
-  id: string;
-  domain: DomainId;
-  title: string;
-  tier: CheckTier;
-  routes: RouteKey[];
-  steps: JourneyStep<S>[];
 }
 ```
 
+- A journey is a `CheckDef` with `kind: "journey"`, not a separate type. Its `run` body wraps each stage in `ctx.step(title, fn)`; the scheduler records the step as running, then passed or failed, and the drawer shows the declared `steps` titles that were never reached as `○ <title> (not run)`. A journey declares at least two steps. The scheduler abandons a stopped or timed-out check at its next `ctx.step` boundary, so journeys route every mutating call through a step.
 - Hand-written checks call shared client functions. They use `request()` only for routes without a client function. No raw `fetch`.
 - Small assertion helpers check results, reusing schemas that `@goatcitadel/contracts` already exports. No new dependencies.
 - Journeys use the `/api/v1/dev/verification/*` seed endpoints for setup.
@@ -193,6 +189,8 @@ interface JourneyDef<S = unknown> {
 
 Only `pass` renders as success. If the gateway is unreachable, the run stops with a banner instead of failing every remaining check.
 
+**Seeding.** In the sandbox each run seeds one test workspace before the checks that need it. If seeding fails, those checks finish with the classification of the seed error and the summary prefix "Could not seed a test workspace: ". `blocked` is for a disabled or unavailable feature, so a seed error that the table above classifies as `blocked` (disabled, feature flag off, access refused, 503) stays `blocked`; any other seed error, including an unexpected one, is `fail`. An unreachable gateway ends the run, and a Stop during seeding leaves those checks `cancelled`. On a target that cannot seed (the real gateway) they finish `blocked` with "No seeded test workspace is available on this target."
+
 The Gateway has no dedicated "feature disabled" error code, so classification matches the known shapes (all through `ApiRequestError`, which carries `kind`, `status`, and the parsed `body`):
 
 | Response | Result |
@@ -206,6 +204,8 @@ The Gateway has no dedicated "feature disabled" error code, so classification ma
 | 503 | `blocked` (unavailable or not configured) |
 | Anything else | `fail` |
 
+A message taken from a non-JSON response body is capped at 300 characters with an ellipsis; the full body stays in the evidence.
+
 ### 6.4 Coverage and auto-probes
 
 - **Covered** means a route in the Gateway's route list that at least one check claims. The meter shows covered over total.
@@ -217,7 +217,7 @@ The Gateway has no dedicated "feature disabled" error code, so classification ma
 
 ### 6.5 State
 
-Run state is an immutable reducer. The runner emits events (`run-started`, `check-started`, `step-finished`, `check-finished`, `run-stopped`); the UI renders state and dispatches commands only.
+Run state is an immutable reducer. The runner emits events: `run-started`, `check-skipped`, `check-started`, `step-started`, `step-finished`, `check-logged`, `check-finished`, and `run-finished` with `reason: completed | stopped | unreachable` (plus the banner text for `unreachable`). When a run ends, checks that never finished settle as `cancelled` after a stop and as `not run` after an unreachable gateway. The UI renders state and dispatches commands only.
 
 ## 7. Page UI
 
@@ -229,7 +229,7 @@ Run state is an immutable reducer. The runner emits events (`run-started`, `chec
   - List: rows with status, title, kind (auto, probe, journey), tier, duration, and a Run button.
   - Drawer: summary, journey steps with per-step status, the error, and a collapsed raw response labelled as secondary detail.
 - **Disallowed checks:** the Run button stays visible but disabled, with the reason stated (for example "Host checks are not allowed for this run" or "Mutating checks never run on the real gateway").
-- **External checks:** a confirmation dialog names the provider or destination and the possible cost.
+- **External checks:** a confirmation dialog names where the check runs and shows the check's own description of its cost (section 5.1).
 - **Narrow screens:** the rail becomes a dropdown and the drawer a bottom sheet. No horizontal page scroll.
 - **Design and accessibility:** use `mission-control-next-tokens.css` tokens and existing primitives with no hard-coded font sizes. Every status pairs an icon with a word. The list is semantic, with arrow-key navigation and visible focus. One polite live region announces when a run finishes, not on every row.
 
@@ -243,11 +243,11 @@ First wave of hand-written checks:
 | --- | --- |
 | Health | `/health`, `/livez`, readiness (`read`) |
 | Providers | Provider list and LLM config (`read`); chat completion through the active provider, which is the stub in the sandbox (`mutate`); live model catalog (`external`, `realSafe`); provider exercise (`external`, `realSafe`) |
-| Chat | Session lifecycle: create, rename, archive, restore (`mutate`); route preflight then streamed reply from the stub (`mutate`); cancel a turn that is waiting for approval (`mutate`); attachment upload with SHA-256 round trip (`mutate`) |
-| Approvals | Journey: seed, approval appears, reject, approval recorded as rejected (`mutate`). Journey: seed, approve, durable run leaves `waiting`, approval recorded as approved (`host`, because approving the seeded `shell.exec` approval may run its `pnpm test` command on this machine) |
-| User input | Journey: seed, answer the single-select prompt, turn resumes (`mutate`) |
+| Chat | Session lifecycle: create, rename, archive, restore (`mutate`); route preflight then streamed reply from the stub, which fails unless the stream reports no error, sends its final message and `done`, and the streamed deltas add up exactly to the final message (`mutate`); cancel a turn that is waiting for approval (`mutate`); attachment upload with SHA-256 round trip (`mutate`) |
+| Approvals | Journey: seed, approval appears, reject, approval recorded as rejected (`mutate`). Journey: seed, approve, the response must link to the seeded turn's durable run (resumed, same run id), the run leaves `waiting` for a woken status (`queued`, `running`, or `completed`), approval recorded as approved (`host`, because approving the seeded `shell.exec` approval may run its `pnpm test` command on this machine; the check proves the wake linkage and does not verify that the command ran or what it did) |
+| User input | Journey: seed, answer the single-select prompt; the answer must report that the turn resumed (and, when it names a run, the seeded durable run); the prompt clears from the thread (`mutate`) |
 | Memory | Journey: seed an item, edit it (approval-first: 202 pending approval), approve, history shows the update, forget it, approve, item is forgotten (`mutate`) |
-| Durable | Journey: seed recovery runs, retry the dead-lettered run, cancel the orphaned run (`mutate`) |
+| Durable | Journey: seed recovery runs, cancel the orphaned run (reseeding up to three times when the Gateway's worker reclaims it first), recover the dead-lettered run through its dead-letter entry, and confirm it is back in the queue (`queued`, `running`, or `completed`) (`mutate`) |
 | Capabilities | Invariants: every callable entry has `callable: true`, no candidate or proposal is callable, callable is a subset of inspectable, and the drift metrics report a valid subset (`read`) |
 | Realtime | Open the event stream, create a session, observe its `chat_session_updated` event (`mutate`) |
 | Backups | Create a backup in the sandbox backup folder, then list it (`mutate`) |
@@ -274,10 +274,11 @@ Test conventions: the app has no Testing Library. DOM tests use `// @vitest-envi
 - A check claiming a non-GET route cannot be tier `read`.
 - `realSafe` appears only on `external` checks.
 - Any check that calls Code Mode or a shell tool is tier `host`.
+- Every `external` check has a non-empty `description` (its own cost).
 
 **Component tests:** the three panes render every result state; disabled buttons show their reason; external checks require confirmation; keyboard navigation works; the live region announces once per run.
 
-**Launcher test (`scripts/testbench-runtime.test.mjs`, node:test):** given a source root whose gitignored `config/goatcitadel.json` holds a sentinel secret and which has a `workspaces/` folder, the runtime root contains neither; the Gateway environment keeps `GOATCITADEL_HOME` and `GOATCITADEL_BACKUP_DIR` inside the runtime root and turns Code Mode v1 on; and the UI environment carries the sandbox origin, root, and real origin.
+**Launcher test (`scripts/testbench-runtime.test.mjs`, node:test):** given a source root whose gitignored `config/goatcitadel.json` holds a sentinel secret and which has a `workspaces/` folder, the runtime root contains neither; the Gateway environment keeps `GOATCITADEL_HOME` and `GOATCITADEL_BACKUP_DIR` inside the runtime root and turns Code Mode v1 on; the inherited path overrides are listed for omission and none of them is also pinned; and the UI environment carries the sandbox origin, root, and real origin.
 
 **Proof before hand-back:**
 
