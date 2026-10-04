@@ -44,7 +44,11 @@ describe("AreaErrorBoundary", () => {
     failure.error = new Error("synthetic render failure");
     const onGoToChat = vi.fn();
     await render("inbox", onGoToChat);
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Inbox couldn't be shown");
+    const alert = container.querySelector('[role="alert"]')?.textContent;
+    expect(alert).toContain("Inbox couldn't be shown");
+    // A view can fail right after a send or an approval went through, so the fallback must not deny it.
+    expect(alert).toContain("check whether it went through before trying again");
+    expect(alert).not.toContain("didn't send or change anything");
     await act(async () => button("Go to Chat")?.click());
     expect(onGoToChat).toHaveBeenCalledOnce();
     failure.error = null;

@@ -57,7 +57,7 @@ export class AreaErrorBoundary extends Component<AreaErrorBoundaryProps, AreaErr
         <p className="text-fg-secondary">
           {staleBuild
             ? "Part of Mission Control didn't finish loading, usually because it was just updated. Reload to get the current version."
-            : "Something went wrong while showing this view. This error didn't send or change anything."}
+            : "Something went wrong while showing this view. If you had just sent or approved something, check whether it went through before trying again."}
         </p>
         <div className="flex flex-wrap gap-2">
           {staleBuild ? null : (
