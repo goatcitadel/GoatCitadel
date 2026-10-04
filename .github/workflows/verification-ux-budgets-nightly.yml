@@ -1,0 +1,95 @@
+name: Verification UX Budgets Nightly
+
+# Runs the cockpit UX-budgets lane every night without gating releases. It is a separate workflow, not a
+# verification-1-0-release-proof.yml matrix row: release-installers.yml waits for the whole release-proof
+# workflow, so a red row there would block tagged releases. Promote it into that matrix (laneScript
+# verify:ux:budgets, artifactSlug ux-budgets, runner ubuntu-latest) after 14 consecutive green nights.
+#
+# Large-data runs: dispatch with long_list_count to seed that many records per list in the long-lists
+# proof, for example:
+#   gh workflow run verification-ux-budgets-nightly.yml --ref main -f long_list_count=1000
+# The nightly never sets it, so it keeps the 105-record fixture and its timings stay comparable.
+on:
+  workflow_dispatch:
+    inputs:
+      long_list_count:
+        description: "Large-data run only (101 to 2000 records per list). Leave empty for the nightly default of 105. The long-lists proof still asserts 105 records in places; see docs/review/2026-10-cockpit-verification-gaps.md (Large data) before using another count."
+        required: false
+        default: ""
+        type: string
+  schedule:
+    - cron: "0 8 * * *"
+
+permissions:
+  contents: read
+
+# Scheduled and manual runs queue separately, so a manual large-data run is never cancelled by the nightly
+# (or the other way round). A newer run of the same kind replaces an older one.
+concurrency:
+  group: verification-ux-budgets-nightly-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  ux-budgets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history, matching the release-proof checkout (lane guards can compare against origin/main).
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.31.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The lane imports workspace packages from their dist output (for example packages/storage/dist in the
+      # long-list fixture), so build the Gateway's workspace dependencies first, as the release-proof lanes do.
+      - name: Build workspace dependencies
+        run: pnpm --filter "@goatcitadel/gateway^..." build
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install chromium
+
+      - name: Capture freshness boundary
+        id: proof-start
+        run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, 'started_after=' + new Date().toISOString() + '\n')"
+
+      - name: Run the UX-budgets lane
+        env:
+          GOATCITADEL_UI_PACKAGE: "@goatcitadel/mission-control-next"
+          # Empty on scheduled runs, which keeps the 105-record fixture. Only a large-data dispatch sets it.
+          GOATCITADEL_VERIFY_LONG_LIST_COUNT: ${{ inputs.long_list_count }}
+        run: pnpm verify:ux:budgets
+
+      - name: Run review generation
+        if: always()
+        run: >-
+          pnpm verify:review --
+          --started-after="${{ steps.proof-start.outputs.started_after }}"
+          --expected-lane="ux-budgets"
+
+      - name: Verify artifact redaction
+        id: artifact-redaction
+        if: always()
+        run: pnpm verify:artifacts:redaction
+
+      - name: Upload verification artifacts
+        if: always() && steps.artifact-redaction.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-ux-budgets-nightly-artifacts
+          path: artifacts/verification
+          if-no-files-found: error
+          retention-days: 14
