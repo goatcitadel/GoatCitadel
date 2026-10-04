@@ -248,8 +248,16 @@ export function useProviderProfileEditor({
         }
       }
       const clean = transportConfirmed
-        ? providerEditor.acceptSaved({ ...submitted, transport: draftFromRequestConfig(next.providerConfigs
-          ?.find((item) => item.providerId === submitted.provider.providerId.trim())?.request) }, next.revision, submitted)
+        ? providerEditor.acceptSaved(
+            {
+              ...submitted,
+              transport: draftFromRequestConfig(
+                next.providerConfigs?.find((item) => item.providerId === submitted.provider.providerId.trim())?.request,
+              ),
+            },
+            next.revision,
+            submitted,
+          )
         : providerChange.receive(next, submitted, revision);
       acknowledged = true;
       if (!clean && next.changePlanReceipt && viewCurrent() && currentEditor.current === editorIdentity)
@@ -258,9 +266,12 @@ export function useProviderProfileEditor({
       if (viewCurrent() && currentEditor.current === editorIdentity) {
         if (clean) {
           onSaved(submitted.provider.providerId.trim());
-          setNotice({ tone: "success", message: transportConfirmed
-            ? "Transport accepted by the Gateway. The saved revision and public fields were confirmed; header values remain hidden."
-            : "Provider saved and confirmed." });
+          setNotice({
+            tone: "success",
+            message: transportConfirmed
+              ? "Transport accepted by the Gateway. The saved revision and public fields were confirmed; header values remain hidden."
+              : "Provider saved and confirmed.",
+          });
         }
       }
       if (clean) void loadModelsForProvider(submitted.provider.providerId.trim(), { force: true });
