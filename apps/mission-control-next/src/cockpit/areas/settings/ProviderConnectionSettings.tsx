@@ -89,12 +89,12 @@ function ProviderConnectionEditor({ provider, registeredEnvVar, revision, availa
             className="mt-1 block min-h-11 w-full rounded-md border border-line bg-canvas px-3 text-fg" />
         </label>
         <p className="text-xs text-fg-muted">The Gateway owns this registered variable and checks reserved names and shared ownership before saving.</p>
-        {!shownEnvVar ? <p className="text-sm text-status-waiting">No environment variable is registered. Configure the provider profile in current Settings first.</p> : null}
+        {!shownEnvVar ? <p className="text-sm text-status-waiting">No environment variable is registered. Configure the provider profile in the classic Settings view first.</p> : null}
       </> : <p className="text-xs text-fg-muted">A keychain failure will not switch storage automatically.</p>}
       <Button size="sm" disabled={disabled || draft.isDirty || draft.hasRemoteChanges || (shownStorage === "env" && !shownEnvVar)}
         onClick={() => editor.prepareCredential(credentialStorage, shownEnvVar)}>Replace API credential</Button>
     </fieldset> : null}
-    {!credentialEditable ? <p className="text-sm text-fg-muted">This provider uses {humanizeToken(provider.authMode ?? "managed authentication")}. Use its existing authentication setup below or in current Settings.</p> : null}
+    {!credentialEditable ? <p className="text-sm text-fg-muted">This provider uses {humanizeToken(provider.authMode ?? "managed authentication")}. Use its existing authentication setup below or in the classic Settings view.</p> : null}
     {draft.isDirty ? <p className="text-xs text-fg-muted">Finish or discard the endpoint draft before replacing its credential.</p> : null}
     {attempt ? <div className="space-y-2 rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
       <p role={attempt.uncertain ? "alert" : "status"}>{attempt.message}</p>
@@ -118,7 +118,7 @@ function ProviderConnectionEditor({ provider, registeredEnvVar, revision, availa
     </div> : null}
     {editor.error ? <p role="alert" className="text-sm text-status-failed">{editor.error}</p> : null}
     {attempt?.uncertain || (plan && !canReviewConnectionPlan(plan) && !connectionPlanCompleted(plan))
-      ? <ClassicOwnerLink href="/settings/providers?shell=classic" scope={JSON.stringify([provider.providerId, plan?.planId])} className="inline-block text-sm font-medium text-accent hover:underline" label="Inspect provider activity in current Settings" /> : null}
+      ? <ClassicOwnerLink href="/settings/providers?shell=classic" scope={JSON.stringify([provider.providerId, plan?.planId])} className="inline-block text-sm font-medium text-accent hover:underline" label="Inspect provider activity in the classic view" /> : null}
     <ChatChangePlanActionDialog plan={editor.dialog} contextNote={reviewNote} pending={Boolean(attempt?.busy)} onClose={() => editor.setDialog(null)}
       onConfirm={(reviewed) => editor.act(reviewed)}
       onSubmitSecureInput={(reviewed, values) => editor.act(reviewed, values.credential ?? values.apiKey ?? "")}

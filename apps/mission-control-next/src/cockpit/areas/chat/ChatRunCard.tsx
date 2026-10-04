@@ -24,8 +24,8 @@ export function ChatRunCard({ props, turnId, durableRunId, onInspect }: {
     {run?.objective ? <p className="mt-2 line-clamp-2 text-fg-secondary">{run.objective}</p> : null}
     {run?.steps.length ? <p className="mt-2 text-xs text-fg-muted">{completed} of {run.steps.length} steps done · Latest: {run.steps.at(-1)?.label ?? humanizeToken(run.steps.at(-1)?.role ?? "step")}</p> : null}
     <div className="mt-3 flex flex-wrap gap-3">
-      {onInspect ? <button type="button" onClick={onInspect} className="font-medium text-accent hover:underline">Inspect run</button> : null}
-      {durableRunId ? <NativeOwnerLink scope={[props.selectedSessionId, turnId, durableRunId]} href={`/work/runs/${encodeURIComponent(durableRunId)}`} className="font-medium text-accent hover:underline">Open durable evidence</NativeOwnerLink> : null}
+      {onInspect ? <button type="button" onClick={onInspect} className="inline-flex min-h-8 items-center font-medium text-accent hover:underline max-sm:min-h-11">Inspect run</button> : null}
+      {durableRunId ? <NativeOwnerLink scope={[props.selectedSessionId, turnId, durableRunId]} href={`/work/runs/${encodeURIComponent(durableRunId)}`} className="inline-flex min-h-8 items-center font-medium text-accent hover:underline max-sm:min-h-11">Open durable evidence</NativeOwnerLink> : null}
     </div>
   </section>;
 }

@@ -38,4 +38,22 @@ describe("complete cockpit health projection", () => {
     expect(checks.find((check) => check.id === "updates")?.status.tone).toBe("waiting");
     expect(checks.find((check) => check.id === "remote_workers")?.status.tone).toBe("neutral");
   });
+
+  it("labels known-off features 'Not set up' and keeps them out of the missing-proof summary", () => {
+    const sources = {
+      ...missing,
+      summary: missing.summary,
+      llama: { state: "current", value: { enabled: false, healthy: false, processState: "stopped" } },
+      npu: { state: "current", value: { enabled: false, healthy: false, processState: "stopped" } },
+      connections: { state: "current", value: [] },
+      channels: { state: "current", value: { enabledCount: 0, checked: [] } },
+      workers: { state: "current", value: { items: [] } },
+    } as unknown as SystemHealthSources;
+    const checks = deriveSystemHealthChecks(sources, null, "verified");
+    for (const id of ["models", "channels", "integrations", "remote_workers"] as const) {
+      expect(checks.find((check) => check.id === id)).toMatchObject({ notSetUp: true, status: { label: "Not set up" } });
+    }
+    expect(checks.find((check) => check.id === "updates")?.status.label).toBe("Desktop app only");
+    expect(checks.find((check) => check.id === "backups")?.status.label).toBe("Verified");
+  });
 });

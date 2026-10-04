@@ -4,6 +4,7 @@ import { CapabilityCatalog } from "./CapabilityCatalog";
 import { LibraryResources } from "./LibraryResources";
 import { RESOURCE_KINDS, type ResourceKind } from "./library-resources";
 import { isLibraryGovernanceSection, LibraryGovernanceRoute } from "./LibraryGovernanceRoute";
+import { AREA_TABS } from "../../ui/area-layout";
 
 export function LibraryArea() {
   const route = useCockpitRoute();
@@ -17,10 +18,7 @@ export function LibraryArea() {
   const governance = route.rest.length === 1 && isLibraryGovernanceSection(route.rest[0]!) ? route.rest[0]! : undefined;
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <nav
-        aria-label="Library sections"
-        className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-3 pt-2 sm:px-5"
-      >
+      <nav aria-label="Library sections" className={AREA_TABS}>
         {([undefined, ...RESOURCE_KINDS] as const).map((section) => (
           <a
             key={section ?? "capabilities"}

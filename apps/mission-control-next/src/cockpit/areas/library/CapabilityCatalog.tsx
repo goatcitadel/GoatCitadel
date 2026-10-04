@@ -22,6 +22,7 @@ import { CapabilitySettings } from "./CapabilitySettings";
 import { CapabilityLastUsed, CapabilityUsageEvidence } from "./CapabilityUsageEvidence";
 import { capabilityUsage, filterCapabilities, loadCapabilityCatalog, type CapabilityCatalogView, type CapabilityUsage } from "./capability-catalog";
 import { catalogHref, readCatalogLocation } from "./capability-catalog-route";
+import { AREA_COLUMN } from "../../ui/area-layout";
 
 const STATUS_OPTIONS: readonly { value: CapabilityStatusFilter; label: string }[] = [
   { value: "all", label: "All statuses" },
@@ -111,7 +112,7 @@ export function CapabilityCatalog() {
   const workspacePolicy = !workspacePolicyQuery.isError ? readWorkspacePolicyEvidence(workspacePolicyQuery.data, workspaceId) : null;
   const workspacePolicyState = workspacePolicyQuery.isPending ? "loading" : workspacePolicy ? "ready" : "unavailable";
 
-  return <section className="flex h-full min-h-0 flex-col gap-3 p-3 sm:p-5">
+  return <section className={`${AREA_COLUMN} flex h-full min-h-0 flex-col gap-3 p-4 sm:p-6`}>
     <header className="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h1 className="font-display text-xl font-semibold text-fg">Library</h1>
@@ -166,7 +167,7 @@ export function CapabilityCatalog() {
                 <span className="block truncate text-xs text-fg-muted">{presentCapabilityDescription(item)}</span>
                 <span className="block truncate text-xs text-fg-muted"><CapabilityLastUsed usage={usage} /></span>
               </span>
-              <span className="hidden text-xs text-fg-muted md:block">{item.trustLabel ? humanizeToken(item.trustLabel) : "Trust not labeled"}</span>
+              {item.trustLabel ? <span className="hidden text-xs text-fg-muted md:block">{humanizeToken(item.trustLabel)}</span> : null}
               <StatusBadge status={presented} />
             </button>;
           }} />

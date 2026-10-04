@@ -1,6 +1,14 @@
 import type { OperatorInboxResponse } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
-import { inboxCountLabel, inboxKnownCount, inboxMatchesWorkspace } from "./inbox-presentation";
+import {
+  inboxCountIsExact,
+  inboxCountLabel,
+  inboxCountTitle,
+  inboxKnownCount,
+  inboxMatchesWorkspace,
+  inboxNavigationLabel,
+  inboxReadGaps,
+} from "./inbox-presentation";
 
 const projection: OperatorInboxResponse = {
   authority: "derived_projection",
@@ -53,6 +61,38 @@ describe("Inbox counts", () => {
         },
       }),
     ).toBeNull();
+  });
+
+  it("reads a count exactly when a declared scope is the only reason it is incomplete", () => {
+    const limited: OperatorInboxResponse = {
+      ...projection,
+      coverage: [
+        { source: "runtime_health", state: "limited", detail: "Other checks remain in System." },
+        { source: "memory_proposals", state: "not_enabled" },
+      ],
+    };
+    expect(inboxCountIsExact(limited, false)).toBe(true);
+    expect(inboxCountLabel(limited)).toBe("2");
+    expect(inboxNavigationLabel(inboxCountLabel(limited))).toBe("Inbox, 2 items");
+    const gap: OperatorInboxResponse = {
+      ...limited,
+      coverage: [...limited.coverage, { source: "dead_letters", state: "partial" }],
+    };
+    expect(inboxReadGaps(gap).map((source) => source.source)).toEqual(["dead_letters"]);
+    expect(inboxCountLabel(gap)).toBe("2+");
+  });
+
+  it("marks an unread source even when nothing is known", () => {
+    const unread: OperatorInboxResponse = {
+      ...projection,
+      coverage: [{ source: "dead_letters", state: "unavailable" }],
+      counts: { ...projection.counts, needs_decision: { known: 0, complete: true } },
+    };
+    expect(inboxCountLabel(unread)).toBe("?");
+    expect(inboxNavigationLabel("?")).toBe("Inbox, some sources could not be read");
+    expect(inboxNavigationLabel("1")).toBe("Inbox, 1 item");
+    expect(inboxNavigationLabel("1+")).toBe("Inbox, at least 1 item");
+    expect(inboxCountTitle("?")).toBe("Some Inbox sources could not be read");
   });
 
   it("hides a zero count", () => {

@@ -5,8 +5,10 @@ import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { integrationInputClass } from "./IntegrationFormFields";
+import { useActiveWorkspaceLabel } from "../../data/use-workspace-name";
 
 export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSettingsOwner }) {
+  const workspaceLabel = useActiveWorkspaceLabel();
   const [search, setSearch] = useState("");
   const [limit, setLimit] = useState(10);
   const issue = s.data?.issues.find(
@@ -44,7 +46,7 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
         <>
           <h4 className="font-display text-md font-semibold">Imported external connectors</h4>
           <p className="text-sm text-fg-secondary">
-            Review metadata is scoped to workspace {s.activeWorkspaceId}. These imported actions are catalog-only and
+            Review metadata is scoped to workspace {workspaceLabel}. These imported actions are catalog-only and
             non-callable. Staging creates a capability proposal; it grants no execution authority.
           </p>
           <label className="block text-sm">
@@ -171,7 +173,7 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
         <>
           <h4 className="font-display text-md font-semibold">External delivery evidence</h4>
           <p className="text-sm text-fg-secondary">
-            Workspace {s.activeWorkspaceId}
+            Workspace {workspaceLabel}
             {s.selectedConnectionId ? ` · connection ${s.selectedConnectionId}` : " · all connections"}. This bounded
             owner window records side effects; it does not infer missing deliveries or clean health.
           </p>
@@ -216,7 +218,7 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
       <Dialog
         open={Boolean(s.externalReview)}
         title="Confirm external connector review"
-        description={`${s.externalReview?.action?.label ?? s.externalReview?.service.label ?? "Connector"}: mark ${s.externalReview?.status ?? "reviewed"} in workspace ${s.activeWorkspaceId}. The connector remains non-callable. Current owner evidence is re-read before dispatch; this API has no atomic revision precondition.`}
+        description={`${s.externalReview?.action?.label ?? s.externalReview?.service.label ?? "Connector"}: mark ${s.externalReview?.status ?? "reviewed"} in workspace ${workspaceLabel}. The connector remains non-callable. Current owner evidence is re-read before dispatch; this API has no atomic revision precondition.`}
         onOpenChange={(open) => {
           if (!open && !s.externalMutation.pending) s.cancelExternalReview();
         }}
@@ -233,7 +235,7 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
       <Dialog
         open={Boolean(s.replayReview)}
         title="Create replay eligibility audit?"
-        description={`Inspect side-effect run ${s.replayReview?.run.runId ?? ""} in workspace ${s.activeWorkspaceId}. This creates a durable eligibility audit only. Unknown external outcomes require manual reconciliation. The snapshot is re-read; this creation API has no atomic revision precondition.`}
+        description={`Inspect side-effect run ${s.replayReview?.run.runId ?? ""} in workspace ${workspaceLabel}. This creates a durable eligibility audit only. Unknown external outcomes require manual reconciliation. The snapshot is re-read; this creation API has no atomic revision precondition.`}
         onOpenChange={(open) => {
           if (!open && !s.replayMutation.pending) s.cancelReplayAudit();
         }}

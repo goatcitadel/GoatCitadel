@@ -16,6 +16,7 @@ import { useInspector } from "../../app/inspector";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { ChatBlockers } from "./ChatBlockers";
 import { ChatRunCard } from "./ChatRunCard";
+import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 import { ChatTurnDetails } from "./ChatTurnDetails";
 import { recordedCostLabel } from "./recorded-cost";
 import "../../styles/chat-display.css";
@@ -56,7 +57,7 @@ function TurnReceipt({ turn }: { turn: ChatThreadTurnRecord }) {
           ),
         })
       }
-      className="mt-2 text-left text-xs text-fg-muted hover:text-accent"
+      className="mt-2 inline-flex min-h-8 items-center text-left text-xs text-fg-muted hover:text-accent max-sm:min-h-11"
       aria-label="Inspect turn details"
     >
       {details || humanizeToken(turn.trace.status)}
@@ -214,9 +215,7 @@ function ChatTranscriptFooter({ context }: { context?: TranscriptFooterContext }
         {receipt && !receipt.dismissed ? <ChatChangePlanCard {...receipt} /> : null}
         <ChatBlockers key={props.selectedSessionId} props={props} />
         {props.streamError && latestTurn?.trace.status !== "failed" && latestTurn?.trace.status !== "partial" ? (
-          <p role="alert" className="mt-2 rounded-md border border-status-failed p-2 text-sm text-fg-secondary">
-            The response was interrupted. Check this conversation's status before trying again.
-          </p>
+          <ChatStreamErrorNotice error={props.streamError} source={props.streamErrorSource} />
         ) : null}
         {!props.followOutput ? (
           <button type="button" onClick={context.jumpToLatest} className="mt-2 text-accent hover:underline">
@@ -333,7 +332,7 @@ export function ChatTranscript({
   if (!props.thread)
     return (
       <p role="alert" className="flex-1 p-5 text-sm text-fg-secondary">
-        Conversation unavailable. Open the current Chat to retry.
+        Conversation unavailable. Choose it again from the list to retry, or open it in the classic view.
       </p>
     );
 

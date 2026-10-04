@@ -79,8 +79,8 @@ export async function runCockpitChatArtifactEditProof({ context, browser, stack,
       const openFiles = async () => {
         await page.locator('[aria-label="Messages"]').waitFor({ timeout: 30_000 });
         if (variant === "mobile") {
-          await page.locator('summary[aria-label="Conversation actions"]').click();
-          await page.getByRole("button", { name: "Inspect conversation", exact: true }).click();
+          await page.getByRole("button", { name: "Conversation actions", exact: true }).click();
+          await page.getByRole("menuitem", { name: "Inspect conversation", exact: true }).click();
         } else await page.getByRole("button", { name: "Inspect", exact: true }).click();
         await page.getByRole("tab", { name: "Files", exact: true }).click();
         files = page.getByRole("tabpanel", { name: "Files", exact: true });

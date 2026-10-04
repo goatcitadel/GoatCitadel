@@ -87,29 +87,31 @@ export function projectInboxBackupTrust(
   cached: boolean,
   now: number,
 ) {
-  const observedAt = inspection?.observedAt ?? new Date(now).toISOString();
-  const age = inspection?.createdAt ? Date.parse(inspection.createdAt) : NaN;
+  // A brand-new installation has nothing to verify yet. That is "not set up", not a problem,
+  // so it is disclosed as scope rather than raised as attention on minute one.
+  if (!inspection)
+    return {
+      items: [],
+      state: "not_enabled" as const,
+      detail: "No backup has been published yet, so there is no backup proof to verify.",
+    };
+  const observedAt = inspection.observedAt ?? new Date(now).toISOString();
+  const age = inspection.createdAt ? Date.parse(inspection.createdAt) : NaN;
   const stale = !Number.isFinite(age) || now - age > BACKUP_STALE_MS;
-  const verified = inspection?.verified === true && inspection.contractVerified === true;
-  const summary = !inspection
-    ? "No published backup is available for installation-wide verification."
-    : !verified
-      ? "The latest installation-wide backup failed exact-byte or restore-contract verification."
-      : stale
-        ? "The latest verified installation-wide backup is older than 24 hours or has no valid creation time."
-        : null;
+  const verified = inspection.verified === true && inspection.contractVerified === true;
+  const summary = !verified
+    ? "The latest installation-wide backup failed exact-byte or restore-contract verification."
+    : stale
+      ? "The latest verified installation-wide backup is older than 24 hours or has no valid creation time."
+      : null;
   return {
     items: summary
       ? [
           {
-            id: "backup_trust:latest",
+            id: verified ? "backup_trust:stale" : "backup_trust:failed",
             kind: "backup_trust",
             group: "needs_attention",
-            title: !inspection
-              ? "No backup proof"
-              : !verified
-                ? "Backup verification needs review"
-                : "Backup proof is stale",
+            title: verified ? "Backup proof is stale" : "Backup verification needs review",
             summary,
             createdAt: observedAt,
             source: { workspaceId },

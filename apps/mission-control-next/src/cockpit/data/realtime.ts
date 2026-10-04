@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { QueryClient } from "@tanstack/react-query";
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
+import { createInvalidationBatcher } from "./invalidation-batcher";
 import { toast } from "sonner";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
@@ -21,7 +22,11 @@ import { playOperatorAttentionSound } from "@goatcitadel/mission-control-shared/
 import type { UiNotificationPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { showBrowserNotification } from "../../app/browser-notification";
 
-export function invalidateForEvent(queryClient: QueryClient, event: RealtimeEvent): RefreshTopic[] {
+export function invalidateForEvent(
+  queryClient: QueryClient,
+  event: RealtimeEvent,
+  invalidate: (queryKey: QueryKey) => void = (queryKey) => void queryClient.invalidateQueries({ queryKey }),
+): RefreshTopic[] {
   if (event.eventType === "inbox.changed") {
     if (
       event.source !== "operator_inbox" ||
@@ -36,16 +41,16 @@ export function invalidateForEvent(queryClient: QueryClient, event: RealtimeEven
       workspaceId.trim() === workspaceId &&
       workspaceId
     ) {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
+      invalidate(queryKeys.inbox(workspaceId));
     } else if (event.payload.scope === "all_workspaces" && workspaceId === undefined) {
-      void queryClient.invalidateQueries({ queryKey: ["approvals", "operator-inbox"] });
+      invalidate(["approvals", "operator-inbox"]);
     }
     return [];
   }
   const { topics } = deriveRealtimeRefresh(event, { defaultTopics: ["surface"] });
-  for (const topic of topics) void queryClient.invalidateQueries({ queryKey: [topic] });
+  for (const topic of topics) invalidate([topic]);
   if (topics.some((topic) => topic === "tools" || topic === "mcp" || topic === "agents")) {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.capabilities() });
+    invalidate(queryKeys.capabilities());
   }
   const inboxOwnerSignal =
     event.eventAuthority !== "durable_history" &&
@@ -58,7 +63,7 @@ export function invalidateForEvent(queryClient: QueryClient, event: RealtimeEven
     (inboxOwnerSignal ||
       topics.some((topic) => ["approvals", "tasks", "memory", "skills", "improvement", "system"].includes(topic)))
   ) {
-    void queryClient.invalidateQueries({ queryKey: ["approvals", "operator-inbox"] });
+    invalidate(["approvals", "operator-inbox"]);
   }
   return topics;
 }
@@ -103,6 +108,7 @@ export function useCockpitRealtime(input: {
     const generation = currentScope.current.generation;
     const delivered = new Set<string>();
     const pendingReads = new Set<AbortController>();
+    const batcher = createInvalidationBatcher(queryClient);
     const isCurrent = () =>
       active &&
       currentScope.current.enabled &&
@@ -111,7 +117,7 @@ export function useCockpitRealtime(input: {
       getGatewayApiBaseUrl() === installation;
     const disconnect = connectEventStream((event, delivery) => {
       if (!isCurrent()) return;
-      invalidateForEvent(queryClient, event);
+      invalidateForEvent(queryClient, event, batcher.invalidate);
       const notification = deriveRealtimeNotification(event);
       const decision = decideNotificationDelivery(notification, {
         replayed: delivery.replayed,
@@ -166,6 +172,7 @@ export function useCockpitRealtime(input: {
     }, setStreamState);
     return () => {
       active = false;
+      batcher.dispose();
       for (const read of pendingReads) read.abort();
       pendingReads.clear();
       disconnect();

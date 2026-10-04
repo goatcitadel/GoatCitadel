@@ -208,7 +208,7 @@ The cockpit Chat becomes the default only when all of these work:
 | --- | --- |
 | Needs decision | Approval (risk safe, caution, danger, or nuclear); user-input request; change plan awaiting input, confirmation, or approval |
 | Proposals | Memory proposal; document edit proposal; skill or capability candidate; improvement or self-repair proposal |
-| Needs attention | Failed or dead-lettered run; change plan in manual_required, failed, or rollback_failed; stale proof (backup verification); spend coverage gap; runtime degraded |
+| Needs attention | Failed or dead-lettered run; change plan in manual_required, failed, or rollback_failed; stale proof (backup verification); runtime degraded. Spend coverage was dropped from the Inbox on 2026-10-01: it never cleared and had no action; System → Spend keeps the lower-bound note. |
 | Updates | Background run completed; deliverable added to a task. Archived automatically after being viewed. ("Handoff ready" today is a UI-only toast guessed from event names; the Inbox uses the canonical `deliverable_added` task event instead) |
 
 ### 8.2 Item anatomy

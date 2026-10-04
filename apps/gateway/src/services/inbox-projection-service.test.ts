@@ -40,6 +40,32 @@ function dependencies(): InboxProjectionDependencies {
 }
 
 describe("Gateway inbox projection", () => {
+  it("treats a brand-new installation with no published backup as not set up, not as attention", async () => {
+    const deps = dependencies();
+    vi.mocked(deps.runtimeHealth.inspectLatestBackupTrust).mockResolvedValue(undefined);
+    const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
+    expect(projection.coverage.find((entry) => entry.source === "backup_trust")).toMatchObject({
+      state: "not_enabled",
+      detail: "No backup has been published yet, so there is no backup proof to verify.",
+    });
+    expect(projection.items.filter((item) => item.kind === "backup_trust")).toEqual([]);
+  });
+
+  it("separates a stale verified backup from a failed verification", async () => {
+    const deps = dependencies();
+    vi.mocked(deps.runtimeHealth.inspectLatestBackupTrust).mockResolvedValue({
+      observedAt: new Date().toISOString(),
+      createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+      verified: true,
+      contractVerified: true,
+    } as never);
+    const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
+    expect(projection.items.find((item) => item.kind === "backup_trust")).toMatchObject({
+      id: "backup_trust:stale",
+      title: "Backup proof is stale",
+    });
+  });
+
   it("treats disabled memory proposals as an explicit source setting", async () => {
     const deps = dependencies();
     vi.mocked(deps.memoryProposalsEnabled).mockResolvedValue(false);
@@ -77,7 +103,7 @@ describe("Gateway inbox projection", () => {
         .filter((item) => item.group === "needs_attention")
         .map((item) => item.id)
         .sort(),
-    ).toEqual(["backup_trust:latest", "runtime_health:daemon", "runtime_health:database"].sort());
+    ).toEqual(["backup_trust:failed", "runtime_health:daemon", "runtime_health:database"].sort());
     expect(first.coverage.find((entry) => entry.source === "backup_trust")?.state).toBe("current");
     expect(first.items.every((item) => item.source.workspaceId === "workspace-a")).toBe(true);
     expect(JSON.stringify(first)).not.toMatch(/private database path|private command|private-backup-path/);

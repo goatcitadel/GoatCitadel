@@ -222,6 +222,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
           await draft.fill("");
 
           stage = "review and confirm model";
+          await revealComposerOptions(page);
           let prefs = await read(`${sessionPath}/prefs`);
           const config = await read("/api/v1/llm/config");
           const target = config.providers?.find(
@@ -246,6 +247,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
             select: () => page.getByRole("combobox", { name: "Provider", exact: true }).selectOption(target.providerId),
             checkCancel: true,
           });
+          await revealComposerOptions(page);
           await waitUntil(
             page,
             async () => (await page.getByRole("combobox", { name: "Model", exact: true }).inputValue()) === prefs.model,
@@ -253,6 +255,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
           );
           assert.equal(await page.getByRole("combobox", { name: "Model", exact: true }).inputValue(), prefs.model);
           stage = "review and confirm effort";
+          await revealComposerOptions(page);
           prefs = await changePreferences({
             page,
             read,
@@ -345,6 +348,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
             (item) => item.id === personalityOwner.defaultPersonalityId,
           );
           assert.ok(defaultPersonality, "Personality owner has no canonical default");
+          await revealComposerOptions(page);
           await page.getByRole("button", { name: "Open personality settings", exact: true }).click();
           await page.waitForURL(/\/settings\/general\?shell=cockpit#work-personality/u);
           const personalityPanel = page.getByRole("region", { name: "Work personality", exact: true });
@@ -453,6 +457,12 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
       },
     );
   }
+}
+
+/** Phones fold the route and mode controls behind one Options toggle; wider layouts show them inline. */
+export async function revealComposerOptions(page) {
+  const toggle = page.locator('[aria-label="Composer controls"]').getByRole("button", { name: "Options", exact: true });
+  if ((await toggle.count()) && (await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
 }
 
 /** Exercise the shipped conversation controls; page.goto skips React scope persistence. */

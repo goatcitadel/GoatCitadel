@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client";
 import { useAutonomousGrantRevocation } from "../../../features/native-routes/settings/use-autonomous-grant-revocation";
 import {
@@ -21,6 +23,8 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
   const base = getGatewayApiBaseUrl();
   const snapshot = useQuery({ queryKey: ["settings", "autonomous-grants", base], queryFn: () => readAutonomousGrants() });
   const control = useAutonomousGrantRevocation({ scope: workspaceId, reload: () => snapshot.refetch() });
+  const { activeCitadelId } = useUiPreferences();
+  const workspaceName = useWorkspaceNameLookup(activeCitadelId);
   const items = (snapshot.isError ? [] : (snapshot.data ?? [])).filter((item) =>
     `${item.grantId} ${item.workspaceId} ${item.projectId ?? ""} ${item.reason}`
       .toLowerCase()
@@ -70,8 +74,8 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
             <li key={grant.grantId} className="space-y-2 rounded border border-line p-3 text-sm">
               <h4 className="break-words font-semibold">{grant.reason}</h4>
               <p>
-                Workspace {grant.workspaceId}
-                {grant.projectId ? ` · Project ${grant.projectId}` : ""} · {grant.status}
+                {workspaceName(grant.workspaceId) ?? "Workspace outside this Citadel"}
+                {grant.projectId ? " · project-scoped" : ""} · {grant.status}
               </p>
               <p>
                 {formatPermissionContextList(grant.surfaces)} · {grant.activationKinds.join(", ")} · Maximum risk{" "}
@@ -89,6 +93,14 @@ export function AutonomousGrantsSettings({ workspaceId }: { workspaceId: string 
                 <dl className="mt-2 space-y-1 break-words">
                   <dt>Grant</dt>
                   <dd className="font-mono">{grant.grantId}</dd>
+                  <dt>Workspace id</dt>
+                  <dd className="font-mono">{grant.workspaceId}</dd>
+                  {grant.projectId ? (
+                    <>
+                      <dt>Project id</dt>
+                      <dd className="font-mono">{grant.projectId}</dd>
+                    </>
+                  ) : null}
                   <dt>Capability patterns</dt>
                   <dd>{grant.capabilityPatterns.join(", ") || "None"}</dd>
                   <dt>Tool patterns</dt>

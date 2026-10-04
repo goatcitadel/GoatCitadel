@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { assertIndependentFork, assertSiblingSelection, assertTimerMutation, providerSnapshot } from "./cockpit-chat-thread-actions-assertions.mjs";
+import { clickTurnAction, waitForTurnAction } from "./cockpit-turn-actions.mjs";
 
 const prefix = "/api/v1/chat/sessions/";
 const pathOf = (url) => new URL(url).pathname;
@@ -51,7 +52,7 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
   const forkRoute = `${prefix}${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(sourceTurn.turnId)}/fork`;
   const forkWrites = () => writes.filter((write) => write.pathname.endsWith("/fork"));
   const providersBefore = providerSnapshot(providerStub);
-  await (await lastTurn(page, sourceTurn.userMessage.content)).getByRole("button", { name: "Fork", exact: true }).click();
+  await clickTurnAction(await lastTurn(page, sourceTurn.userMessage.content), "Fork");
   const dialog = page.getByRole("dialog", { name: "Fork conversation from this turn?", exact: true });
   await dialogBounds(dialog, viewport, ["Create fork", "Cancel"]);
   assert.ok((await dialog.innerText()).includes("read-only provenance, not replayed"));
@@ -62,7 +63,7 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
   assert.deepEqual((await api(listRoute)).items.map((item) => item.sessionId).sort(), list.items.map((item) => item.sessionId).sort());
   assert.deepEqual(await api(threadRoute), initial);
   assert.equal(forkWrites().length, 0, "Cancel created a fork.");
-  await (await lastTurn(page, sourceTurn.userMessage.content)).getByRole("button", { name: "Fork", exact: true }).click();
+  await clickTurnAction(await lastTurn(page, sourceTurn.userMessage.content), "Fork");
   await dialogBounds(dialog, viewport, ["Create fork", "Cancel"]);
   const responsePromise = page.waitForResponse((response) => response.request().method() === "POST" && pathOf(response.url()) === forkRoute);
   await dialog.getByRole("button", { name: "Create fork", exact: true }).click();
@@ -92,7 +93,7 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
   await capture("fork-created");
 
   const copied = forkThread.turns.find((turn) => turn.turnId === forkThread.activeLeafTurnId);
-  await (await lastTurn(page, copied.userMessage.content)).getByRole("button", { name: "Edit and resend", exact: true }).click();
+  await clickTurnAction(await lastTurn(page, copied.userMessage.content), "Edit and resend");
   const revised = `Independent fork sibling ${scope.variant} ${forkId}.`;
   await page.getByRole("textbox", { name: "Message", exact: true }).fill(revised);
   const send = page.getByRole("button", { name: "Send branch", exact: true });
@@ -103,7 +104,7 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
   // Canonical completion can precede the browser's stream settlement. Wait for
   // the normal composer and settled turn actions before switching branches.
   await page.getByRole("button", { name: "Send", exact: true }).waitFor();
-  await (await lastTurn(page, revised)).getByRole("button", { name: "Edit and resend", exact: true }).waitFor();
+  await waitForTurnAction(await lastTurn(page, revised), "Edit and resend");
   await waitUntil(() => page.getByRole("textbox", { name: "Message", exact: true }).inputValue(), (value) => value === "", page, "settled branch composer");
   const branched = await api(forkThreadRoute);
   const newTurn = branched.turns.find((turn) => turn.userMessage.content === revised);

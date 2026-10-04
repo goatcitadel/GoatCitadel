@@ -1,4 +1,5 @@
 import { mkdir } from "node:fs/promises";
+import { clickTurnAction } from "./cockpit-turn-actions.mjs";
 
 /** Exercise a branch edit against a disposable Gateway Chat turn in both cockpit layouts. */
 export async function runCockpitChatBranchProof({ context, browser, stack, citadelId, viewports, deps }) {
@@ -36,9 +37,7 @@ export async function runCockpitChatBranchProof({ context, browser, stack, citad
           await messages.waitFor({ timeout: 30_000 });
           const scroller = messages.locator('[data-testid="virtuoso-scroller"]');
           await scroller.evaluate((element) => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new element.ownerDocument.defaultView.Event("scroll", { bubbles: true })); });
-          const edit = messages.getByRole("button", { name: "Edit and resend" }).last();
-          await edit.waitFor({ timeout: 10_000 });
-          await edit.click();
+          await clickTurnAction(messages, "Edit and resend", { timeout: 10_000 });
           await page.getByRole("status").getByText("Editing a new branch from this turn.").waitFor();
           const revised = `Branch proof ${variant} revised message.`;
           await page.getByRole("textbox", { name: "Message" }).fill(revised);

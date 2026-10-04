@@ -27,26 +27,43 @@ export function projectThreadActivity(record: ChatSessionStatusResponse, workspa
   return UNKNOWN_THREAD_ACTIVITY;
 }
 
-/** One bounded visible-window request batch; never walks pages or starts row timers. */
-export async function readThreadActivityWindow(input: {
-  workspaceId: string; sessionIds: readonly string[]; signal: AbortSignal; isCurrent: () => boolean;
-  read?: typeof fetchChatSessionStatus;
-}): Promise<Record<string, ThreadActivity>> {
-  const ids = [...new Set(input.sessionIds)].slice(0, THREAD_ACTIVITY_WINDOW_LIMIT);
-  const result: Record<string, ThreadActivity> = {};
-  let next = 0;
-  const current = () => !input.signal.aborted && input.isCurrent();
-  const worker = async () => {
-    while (current() && next < ids.length) {
-      const id = ids[next++]!;
-      try {
-        const record = await (input.read ?? fetchChatSessionStatus)(id, input.signal);
-        if (current()) result[id] = projectThreadActivity(record, input.workspaceId, id);
-      } catch {
-        if (current()) result[id] = UNKNOWN_THREAD_ACTIVITY;
-      }
+/** Runs at most `limit` tasks at once; a task whose signal aborted while queued never starts. */
+export function createConcurrencyLimiter(limit: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  const release = () => {
+    active -= 1;
+    queue.shift()?.();
+  };
+  return async function run<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (active >= limit) await new Promise<void>((resolve) => queue.push(resolve));
+    active += 1;
+    try {
+      if (signal?.aborted) throw new DOMException("The status read was cancelled.", "AbortError");
+      return await task();
+    } finally {
+      release();
     }
   };
-  await Promise.all(Array.from({ length: Math.min(THREAD_ACTIVITY_CONCURRENCY, ids.length) }, worker));
-  return current() ? result : {};
+}
+
+/** Every visible row shares one gate, so a long thread list never floods the Gateway. */
+const statusReadGate = createConcurrencyLimiter(THREAD_ACTIVITY_CONCURRENCY);
+
+/** One canonical status read. Failures propagate so the query layer can retry and mark staleness. */
+export async function readThreadActivity(input: {
+  workspaceId: string; sessionId: string; signal: AbortSignal; read?: typeof fetchChatSessionStatus;
+}): Promise<ThreadActivity> {
+  return statusReadGate(async () => {
+    const record = await (input.read ?? fetchChatSessionStatus)(input.sessionId, input.signal);
+    return projectThreadActivity(record, input.workspaceId, input.sessionId);
+  }, input.signal);
+}
+
+/** "Last turn completed · as of 10:42" once a status is no longer known to be current. */
+export function threadActivityLabel(activity: ThreadActivity & { stale?: boolean }): string {
+  if (!activity.stale || !activity.observedAt) return activity.label;
+  const observed = new Date(activity.observedAt);
+  if (Number.isNaN(observed.getTime())) return activity.label;
+  return `${activity.label} · as of ${observed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
 }

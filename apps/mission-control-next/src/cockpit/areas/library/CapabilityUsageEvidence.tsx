@@ -11,13 +11,15 @@ function formattedDate(date: Date): string {
 }
 
 export function CapabilityLastUsed({ usage }: { usage: CapabilityUsage }) {
-  if (usage.status === "unsupported") return <>Last use unavailable</>;
+  // One vocabulary: "not tracked" (no counter for this kind), "could not be checked" (read failed),
+  // "no recorded use" (tracked, never used), or a time.
+  if (usage.status === "unsupported") return <>Usage not tracked for this type</>;
   if (usage.status === "unavailable") return <>Last use could not be checked</>;
-  if (usage.status === "not_recorded") return <>Last use not recorded</>;
+  if (usage.status === "not_recorded") return <>No recorded use</>;
   const date = validDate(usage.lastUsedAt);
   if (date) return <>Last used <time dateTime={usage.lastUsedAt}>{formattedDate(date)}</time></>;
   if (usage.usageCount === 0) return <>No recorded use</>;
-  return <>Last-use time not recorded</>;
+  return <>Used; time not recorded</>;
 }
 
 export function CapabilityUsageEvidence({ usage }: { usage: CapabilityUsage }) {

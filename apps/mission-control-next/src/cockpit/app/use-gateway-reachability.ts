@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchOnboardingState, isApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
@@ -6,12 +6,23 @@ import type { EventStreamConnectionState } from "@goatcitadel/mission-control-sh
 export interface GatewayReachability {
   unavailable: boolean;
   lastConfirmedAt: number | null;
+  /** Probe again now instead of waiting for the next five-second check. */
+  retry?: () => void;
 }
+
+/** One sentence for every place that tells the operator how to bring the Gateway back. */
+export const GATEWAY_START_HINT =
+  "To start it, open the GoatCitadel desktop app, run goatcitadel up, or run pnpm dev in a source checkout.";
 
 /** Probe HTTP when events fail; an SSE outage alone does not prove the Gateway is down. */
 export function useGatewayReachability(enabled: boolean, streamState: EventStreamConnectionState): GatewayReachability {
   const installation = getGatewayApiBaseUrl();
-  const [state, setState] = useState<GatewayReachability>({ unavailable: false, lastConfirmedAt: null });
+  const [state, setState] = useState<{ unavailable: boolean; lastConfirmedAt: number | null }>({
+    unavailable: false,
+    lastConfirmedAt: null,
+  });
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((value) => value + 1), []);
 
   useEffect(() => {
     if (!enabled) return;
@@ -52,7 +63,10 @@ export function useGatewayReachability(enabled: boolean, streamState: EventStrea
       window.clearInterval(interval);
       for (const controller of controllers) controller.abort();
     };
-  }, [enabled, installation, streamState]);
+  }, [enabled, installation, streamState, attempt]);
 
-  return enabled ? state : { unavailable: false, lastConfirmedAt: null };
+  const reachability = useMemo(() => ({ ...state, retry }), [state, retry]);
+  return enabled ? reachability : DISABLED;
 }
+
+const DISABLED: GatewayReachability = Object.freeze({ unavailable: false, lastConfirmedAt: null });

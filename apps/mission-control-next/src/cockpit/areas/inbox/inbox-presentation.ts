@@ -29,11 +29,44 @@ export function inboxKnownCount(projection: OperatorInboxResponse): { known: num
   );
 }
 
+const UNKNOWN_COUNT = "?";
+
+/** Sources whose expected read failed or came back incomplete; declared limits are not gaps. */
+export function inboxReadGaps(projection: OperatorInboxResponse) {
+  return projection.coverage.filter((source) => source.state === "partial" || source.state === "unavailable");
+}
+
+/**
+ * The Gateway marks a count incomplete for read gaps and for declared scopes ("limited") alike.
+ * When a declared scope is the only reason, the count is exact for what this Inbox covers; the
+ * scope itself is listed under "What this Inbox covers".
+ */
+export function inboxCountIsExact(projection: OperatorInboxResponse, complete: boolean): boolean {
+  if (complete) return true;
+  return inboxReadGaps(projection).length === 0 && projection.coverage.some((source) => source.state === "limited");
+}
+
+/** Badge text: "3", "3+" when a read gap may hide more, "?" when nothing is known and a read failed. */
 export function inboxCountLabel(projection: OperatorInboxResponse | undefined): string | null {
   if (!projection) return null;
   const count = inboxKnownCount(projection);
-  if (count.known === 0) return null;
-  return count.complete ? String(count.known) : `${count.known}+`;
+  if (count.known === 0) return inboxReadGaps(projection).length ? UNKNOWN_COUNT : null;
+  return inboxCountIsExact(projection, count.complete) ? String(count.known) : `${count.known}+`;
+}
+
+/** "Inbox, 3 items" / "Inbox, at least 3 items": the count belongs in the control's name. */
+export function inboxNavigationLabel(count: string | null): string {
+  if (!count) return "Inbox";
+  if (count === UNKNOWN_COUNT) return "Inbox, some sources could not be read";
+  const lowerBound = count.endsWith("+");
+  const number = lowerBound ? count.slice(0, -1) : count;
+  const noun = number === "1" ? "item" : "items";
+  return lowerBound ? `Inbox, at least ${number} ${noun}` : `Inbox, ${number} ${noun}`;
+}
+
+export function inboxCountTitle(count: string): string {
+  if (count === UNKNOWN_COUNT) return "Some Inbox sources could not be read";
+  return count.endsWith("+") ? "At least this many Inbox items" : "Inbox items";
 }
 
 export function inboxItemKindLabel(kind: OperatorInboxItem["kind"]): string {

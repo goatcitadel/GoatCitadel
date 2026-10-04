@@ -6,6 +6,7 @@ import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMedi
 import { ChatArea } from "../areas/chat/ChatArea";
 import { AreaPlaceholder } from "./AreaPlaceholder";
 import { CommandPalette } from "./CommandPalette";
+import { GatewayUnavailableBanner } from "./GatewayUnavailableBanner";
 import { CockpitNavigationContext, useCockpitNavigation } from "./cockpit-navigation-context";
 import { CockpitNavigationProvider } from "./CockpitNavigationProvider";
 import { InspectorPanel, InspectorProvider } from "./inspector";
@@ -15,6 +16,8 @@ import { Sidebar } from "./Sidebar";
 import { useCockpitRoute } from "./use-cockpit-route";
 import type { GatewayReachability } from "./use-gateway-reachability";
 import { SettingsArea, InboxArea, WorkArea, LibraryArea, SystemArea, Gallery } from "./area-loaders";
+import { applyCockpitAppearance } from "./cockpit-appearance";
+import { cockpitDocumentTitle } from "./cockpit-document-title";
 
 interface CockpitShellProps {
   streamState?: EventStreamConnectionState;
@@ -55,9 +58,17 @@ function CockpitShellContent({
   const [collapseOverride, setCollapseOverride] = useState<boolean | null>(null);
   const sidebarCollapsed = collapseOverride ?? tablet;
 
+  const documentTitle = cockpitDocumentTitle(areaLabel, area === "chat" || area === "gallery" ? undefined : rest[0]);
+  useEffect(() => {
+    const previous = document.title;
+    document.title = documentTitle;
+    return () => {
+      if (document.title === documentTitle) document.title = previous;
+    };
+  }, [documentTitle]);
+
   useLayoutEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.documentElement.dataset.density = density === "compact" ? "compact" : "comfortable";
+    applyCockpitAppearance(theme, density);
     document.documentElement.dataset.shell = "cockpit";
     return () => {
       // A same-document handoff can transfer this marker before React unmounts us.
@@ -117,15 +128,7 @@ function CockpitShellContent({
             }
           >
             {gatewayReachability?.unavailable ? (
-              <div
-                role="alert"
-                className="border-b border-status-failed bg-sunken px-4 py-3 text-sm font-medium text-status-failed"
-              >
-                Gateway unavailable. Sending is paused; your draft is preserved.{" "}
-                {gatewayReachability.lastConfirmedAt
-                  ? `Last connection confirmed at ${new Date(gatewayReachability.lastConfirmedAt).toLocaleTimeString()}.`
-                  : "Reconnecting…"}
-              </div>
+              <GatewayUnavailableBanner reachability={gatewayReachability} inChat={area === "chat"} />
             ) : null}
             {retainedChat.current.visited ? (
               <Activity key={chatScope} mode={area === "chat" ? "visible" : "hidden"}>

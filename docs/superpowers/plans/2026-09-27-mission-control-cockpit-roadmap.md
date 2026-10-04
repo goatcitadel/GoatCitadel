@@ -98,7 +98,7 @@ Phases 2 to 9 each get their own task-level plan when the phase before them exit
     - `GET /api/v1/durable/runs` and `/durable/dead-letters` (filter out entries with `resolvedAt`)
     - user-input waits through `storage.chatTurnTraces.listActive`
   - **What the projection must compute itself:**
-    - "Needs attention" items (backup verification, spend coverage) are computed in the UI today (`buildNeedsAttentionItems` in `RuntimeRoutePage.tsx`); the projection computes them server-side from the same sources.
+    - "Needs attention" items (backup verification; spend coverage, later dropped from the Inbox) are computed in the UI today (`buildNeedsAttentionItems` in `RuntimeRoutePage.tsx`); the projection computes them server-side from the same sources.
     - Document proposals and specialist candidates emit no realtime events, so the projection polls or re-derives them on `inbox.changed` from related events.
   - **Resolutions available:** approvals can't have explanations requested, so the Inbox displays them only when present. Dead letters resolve only through recover.
 

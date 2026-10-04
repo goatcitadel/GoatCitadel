@@ -67,7 +67,7 @@ export function WorkTaskCreate({
         </p>
       ) : null}
       {uncertain ? (
-        <ClassicOwnerLink href="/ops/kanban?shell=classic" scope={workspaceId} label="Review current tasks in Ops" />
+        <ClassicOwnerLink href="/ops/kanban?shell=classic" scope={workspaceId} label="Review tasks in the classic view" />
       ) : null}
       <form onSubmit={review} className="grid gap-3">
         <label className="grid gap-1 text-sm text-fg-secondary">

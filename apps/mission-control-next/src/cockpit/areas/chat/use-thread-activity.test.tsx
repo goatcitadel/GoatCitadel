@@ -42,7 +42,27 @@ it("rejects old workspace/Citadel ABA results and aborts old reads without displ
   await act(async () => { finish(statusRecord("s", "foreign")); });
   expect(signal.aborted).toBe(true); await vi.waitFor(() => expect(host.textContent).toBe("No recorded turns"));
   mocks.read.mockRejectedValue(new Error("Owner unavailable")); await act(async () => { await owner.refresh(); });
-  await vi.waitFor(() => expect(host.textContent).toBe("Status unavailable"));
+  // A failed refresh keeps the last answer but marks it as no longer current.
+  await vi.waitFor(() => expect(owner.records.s?.stale).toBe(true), { timeout: 4_000 });
+  expect(host.textContent).toBe("No recorded turns");
+});
+
+it("shows Status unavailable only when no answer was ever read", async () => {
+  mocks.read.mockRejectedValue(Object.assign(new Error("Not found"), { kind: "http", status: 404 }));
+  await render();
+  await vi.waitFor(() => expect(host.textContent).toBe("Status unavailable"), { timeout: 4_000 });
+});
+
+it("reads only the new thread when the visible list grows", async () => {
+  mocks.read.mockImplementation(async (id) => statusRecord(id));
+  function Grow({ ids }: { ids: string[] }) { owner = useThreadActivity(ids); return null; }
+  await render(<Grow ids={["s"]} />);
+  await vi.waitFor(() => expect(owner.records.s).toBeDefined());
+  mocks.read.mockClear();
+  await render(<Grow ids={["s", "t"]} />);
+  await vi.waitFor(() => expect(owner.records.t).toBeDefined());
+  expect(mocks.read.mock.calls.map(([id]) => id)).toEqual(["t"]);
+  expect(owner.records.s?.label).toBe("No recorded turns");
 });
 
 it("stops hidden rail reads after desktop to tablet resize, including retained chat refresh signals", async () => {
@@ -54,7 +74,8 @@ it("stops hidden rail reads after desktop to tablet resize, including retained c
   mocks.read.mockClear();
   await act(async () => { mocks.width = 800; window.dispatchEvent(new Event("resize")); });
   await vi.waitFor(() => expect(host.querySelector('[aria-label="Selected conversation activity"]')?.textContent).toBe("No recorded turns"));
-  expect(mocks.read.mock.calls.map(([id]) => id)).toEqual(["s"]);
+  // The phone picker reuses the rail's cached answer for the same thread instead of reading it again.
+  expect(mocks.read.mock.calls.map(([id]) => id)).toEqual([]);
   mocks.read.mockClear(); await act(async () => { await client.invalidateQueries({ queryKey: ["chat"] }); });
   expect(mocks.read.mock.calls.map(([id]) => id)).toEqual(["s"]);
 });

@@ -116,7 +116,7 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
           </ul>
           {!filtered.length ? (
             <p className="text-sm text-fg-muted">
-              No saved integrations match this view. Connection setup is available in current Settings.
+              No saved integrations match this view. Connection setup is available in the classic Settings view.
             </p>
           ) : null}
           {filtered.length > limit ? (

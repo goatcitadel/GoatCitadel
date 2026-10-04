@@ -5,6 +5,7 @@ import { SystemDashboards } from "./SystemDashboards";
 import { SystemDiagnostics } from "./SystemDiagnostics";
 import { SystemQuality } from "./SystemQuality";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { AREA_TABS } from "../../ui/area-layout";
 
 const VIEWS = [
   { id: "health", label: "Health", path: "/system" },
@@ -19,7 +20,7 @@ export function SystemArea() {
   const { rest, navigate } = useCockpitRoute();
   const view = VIEWS.find((item) => item.id === rest[0])?.id ?? "health";
   return <>
-    <nav aria-label="System views" className="mx-auto flex max-w-5xl gap-1 overflow-x-auto border-b border-line-subtle px-4 pt-3 sm:px-6">
+    <nav aria-label="System views" className={AREA_TABS}>
       {VIEWS.map((item) => <a
         key={item.id} href={item.path} aria-current={view === item.id ? "page" : undefined}
         onClick={(event) => { event.preventDefault(); navigate(item.path); }}

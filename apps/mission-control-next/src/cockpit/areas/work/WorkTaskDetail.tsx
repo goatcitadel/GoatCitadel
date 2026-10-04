@@ -161,11 +161,11 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
             </section>
           </div>
           <p className="text-sm text-fg-muted">
-            For other task details and controls, open{" "}
+            For other task details and controls, open the{" "}
             <ClassicOwnerLink
               href={`/ops/kanban?taskId=${encodeURIComponent(task.taskId)}&shell=classic`}
               scope={`${workspaceId}:${task.taskId}`}
-              label="current Ops Kanban"
+              label="classic Kanban view"
               className="font-medium text-accent"
             />
             .

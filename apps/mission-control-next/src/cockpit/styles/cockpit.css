@@ -251,8 +251,6 @@ html[data-shell="cockpit"] .mc-dialog-content {
   .cockpit-chat-host .mc-next-threaded-loading-steps li { border: 1px solid var(--cockpit-border); border-radius: 8px; padding: 0.35rem 0.55rem; color: var(--cockpit-text-secondary); font-size: var(--text-xs); }
   @media (max-width: 639px) { .cockpit-chat-host .mc-next-threaded-loading-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .cockpit-chat-user-bubble { max-width: 85%; }
-  .cockpit-chat-menu-trigger { list-style: none; }
-  .cockpit-chat-menu-trigger::-webkit-details-marker { display: none; }
   .cockpit-chat-draft { max-height: 40dvh; }
   .cockpit-chat-controls > * { flex-shrink: 0; white-space: nowrap; }
   .cockpit-chat-content .mc-assistant-renderer { color: var(--cockpit-text); font-size: var(--text-md); line-height: 1.65; }

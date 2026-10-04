@@ -1,13 +1,11 @@
-import type { FormEvent, KeyboardEvent } from "react";
-import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
-import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
+import { useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { resolveChatRouteReadiness } from "../../../features/threaded-surface/chat-route-readiness";
 import { useCockpitShellSwitch } from "../../app/use-cockpit-shell-switch";
 import { Button } from "../../ui/Button";
 import { ChatComposerControls } from "./ChatComposerControls";
 import { ChatComposerPalette } from "./ChatComposerPalette";
 import { ChatRunVariables } from "./ChatRunVariables";
+import { composerSendBlock, type ComposerSendBlock } from "./composer-send-block";
 
 export type ComposerProps = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -20,6 +18,7 @@ export type ComposerProps = Pick<
   | "hasActiveStream"
   | "isStopPending"
   | "historicalReadOnly"
+  | "onReturnToLatest"
   | "sessionControlBanner"
   | "pendingApproval"
   | "pendingUserInput"
@@ -71,27 +70,31 @@ export type ComposerProps = Pick<
   | "sessionStatusPanel"
 >;
 
-const ROUTE_CHECKING_HINT = "Checking the chat route. Send will wait for the Gateway check.";
+const REASON_ID = "cockpit-chat-send-reason";
+/** Short route checks are not worth announcing; only a check that outlasts this delay is shown. */
+export const ROUTE_CHECK_HINT_DELAY_MS = 700;
 
 export function cockpitSendBlockReason(props: ComposerProps): string | null {
-  if (props.historicalReadOnly)
-    return "This historical view is read-only. Return to the latest conversation in current Chat.";
-  if (props.sessionControlBanner) return "Another client controls this conversation. Open current Chat for its status.";
-  if (props.pendingApproval || (props.pendingUserInput && !isBackgroundChatUserInputPrompt(props.pendingUserInput)))
-    return "A decision or response is pending. Resolve it in current Chat.";
-  if (props.runVariablePanel?.open) return "Apply or close the run variables before sending.";
-  if (props.composerPalette?.globalOpen) return "Choose a palette item before sending.";
-  if (props.routeBoundaryAckRequired && !props.routeBoundaryAcknowledged)
-    return "Acknowledge the route fallback before sending.";
-  if (getWorkflowSkillCaptureDisplay(props.draft)) return "This captured workflow needs review in current Chat.";
-  if (props.commandSuggestions.length && /^\s*[/@$]/.test(props.draft)) return "Choose a suggestion before sending.";
-  if (!props.canSend && props.draft.trim()) {
-    if (props.profileDependentAdmissionBlockReason) return props.profileDependentAdmissionBlockReason;
-    if (props.selectedSessionId && props.routePreflightLoading && !props.routePreflight && !props.routePreflightError)
-      return ROUTE_CHECKING_HINT;
-    return resolveChatRouteReadiness(props).sendHint ?? "Sending is unavailable. Open current Chat for the reason.";
-  }
-  return null;
+  return composerSendBlock(props)?.message ?? null;
+}
+
+const GATEWAY_UNAVAILABLE_BLOCK: ComposerSendBlock = {
+  kind: "blocked",
+  message: "Gateway unavailable. Your draft is preserved; send resumes when the connection returns.",
+};
+
+/** True only once `active` has stayed true for `delayMs`. */
+function useSettled(active: boolean, delayMs: number): boolean {
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    if (!active) return;
+    const timer = window.setTimeout(() => setSettled(true), delayMs);
+    return () => {
+      window.clearTimeout(timer);
+      setSettled(false);
+    };
+  }, [active, delayMs]);
+  return active && settled;
 }
 
 export function ChatTextComposer({
@@ -119,19 +122,19 @@ export function ChatTextComposer({
     !props.hasActiveStream &&
     !props.historicalReadOnly &&
     !props.sessionControlBanner;
-  const reason = gatewayUnavailable
-    ? "Gateway unavailable. Your draft is preserved; send resumes when the connection returns."
-    : localReady
-      ? null
-      : cockpitSendBlockReason(props);
+  const block = gatewayUnavailable ? GATEWAY_UNAVAILABLE_BLOCK : localReady ? null : composerSendBlock(props);
+  const routeChecking = block?.kind === "route-checking";
   // The controller performs a fresh, authoritative preflight before dispatch. Let an explicit
   // send start that path while the display preflight is still debouncing this draft.
-  const routeCheckingSend = reason === ROUTE_CHECKING_HINT && !props.sending && !props.hasActiveStream;
+  const routeCheckingSend = routeChecking && !props.sending && !props.hasActiveStream;
   const canSubmit = Boolean(
     localReady ||
     (Boolean(props.draft.trim() || props.pendingAttachments.length) &&
-      ((props.canSend && !props.sending && !props.hasActiveStream && !reason) || routeCheckingSend)),
+      ((props.canSend && !props.sending && !props.hasActiveStream && !block) || routeCheckingSend)),
   );
+  // A route check that settles quickly never flashes or re-announces its hint.
+  const showRouteHint = useSettled(routeChecking, ROUTE_CHECK_HINT_DELAY_MS);
+  const visibleReason = block && (!routeChecking || showRouteHint) ? block : null;
   const send = () => {
     if (!canSubmit) return;
     if (localReady && command === "/schedule") {
@@ -194,6 +197,7 @@ export function ChatTextComposer({
           rows={1}
           value={props.draft}
           disabled={props.historicalReadOnly || Boolean(props.sessionControlBanner)}
+          aria-describedby={visibleReason ? REASON_ID : undefined}
           onChange={(event) => props.onDraftChange(event.target.value)}
           onKeyDown={keyDown}
           onPaste={props.onComposerPaste}
@@ -206,13 +210,13 @@ export function ChatTextComposer({
               type="button"
               onClick={() => props.composerPalette?.onOpen()}
               disabled={!props.composerPalette?.enabled}
-              className="font-medium text-accent hover:underline disabled:text-fg-muted"
+              className="inline-flex min-h-8 items-center font-medium text-accent hover:underline disabled:text-fg-muted max-sm:min-h-11"
             >
               Commands and context
             </button>{" "}
             ·{" "}
-            <button type="button" onClick={shellSwitch.request} className="font-medium text-accent hover:underline">
-              More controls
+            <button type="button" onClick={shellSwitch.request} className="inline-flex min-h-8 items-center font-medium text-accent hover:underline max-sm:min-h-11">
+              Open classic view
             </button>
           </p>
           {props.hasActiveStream ? (
@@ -220,13 +224,14 @@ export function ChatTextComposer({
               type="button"
               variant="secondary"
               size="sm"
+              className="max-sm:h-11 max-sm:px-4"
               disabled={props.isStopPending}
               onClick={props.onStopActiveTurn}
             >
               {props.isStopPending ? "Stopping…" : "Stop response"}
             </Button>
           ) : (
-            <Button type="submit" variant="primary" size="sm" disabled={!canSubmit}>
+            <Button type="submit" variant="primary" size="sm" className="max-sm:h-11 max-sm:px-4" disabled={!canSubmit}>
               {localReady
                 ? command === "/schedule"
                   ? "Open schedules"
@@ -251,10 +256,19 @@ export function ChatTextComposer({
             No model turn is sent.
           </p>
         ) : null}
-        {reason ? (
-          <p role="status" className="mt-2 text-xs text-fg-secondary">
-            {reason}
-          </p>
+        {visibleReason ? (
+          <div
+            id={REASON_ID}
+            role="status"
+            className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-secondary"
+          >
+            <p className="min-w-0">{visibleReason.message}</p>
+            {visibleReason.kind === "historical" && props.onReturnToLatest ? (
+              <Button size="sm" onClick={props.onReturnToLatest}>
+                Back to latest
+              </Button>
+            ) : null}
+          </div>
         ) : null}
       </div>
       {shellSwitch.feedback}

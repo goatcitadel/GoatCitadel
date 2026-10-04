@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import { SelectedThreadActivity } from "./SelectedThreadActivity";
 const mocks = vi.hoisted(() => ({ width: 800, activity: vi.fn(), media: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({ useMediaQuery: (query: string) => { mocks.media(query); return mocks.width < 1024; } }));
-vi.mock("./use-thread-activity", () => ({ useThreadActivity: (ids: string[]) => { mocks.activity(ids); return { records: { s: { label: "Working", tone: "running" } }, loading: false, refresh: vi.fn() }; } }));
+vi.mock("./use-thread-activity", () => ({ useThreadActivity: (ids: string[]) => { mocks.activity(ids); return { records: { s: { label: "Working", tone: "running" } }, checking: new Set<string>(), loading: false, refresh: vi.fn() }; } }));
 it("covers the actual tablet breakpoint with one selected read and disables the duplicate desktop read", async () => {
   const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
   try {

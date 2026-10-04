@@ -77,7 +77,7 @@ export function SpendOverview() {
       <section className="rounded-lg border border-line p-4">
         <h2 className="text-sm font-semibold text-fg">More cost evidence</h2>
         <p className="mt-1 text-sm text-fg-secondary">Review detailed coverage and provider evidence in the current Costs view.</p>
-        <ClassicOwnerLink className="mt-2 inline-block text-sm font-medium text-accent underline-offset-2 hover:underline" href="/ops/costs?shell=classic" scope="installation-costs" label="Open current Costs" />
+        <ClassicOwnerLink className="mt-2 inline-block text-sm font-medium text-accent underline-offset-2 hover:underline" href="/ops/costs?shell=classic" scope="installation-costs" label="Open costs in the classic view" />
       </section>
     </> : null}
   </section>;

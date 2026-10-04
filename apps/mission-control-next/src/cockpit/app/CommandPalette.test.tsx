@@ -15,6 +15,7 @@ const controls = vi.hoisted(() => ({
   inspect: vi.fn(),
   create: vi.fn(),
   search: { groups: [] as PaletteSearchGroup[], loading: false, error: undefined as string | undefined },
+  attempt: undefined as undefined | { state: string; message: string; mode: string; sessionId?: string },
 }));
 vi.mock("./use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: controls.navigate, requestTransition: controls.transition }) }));
 vi.mock("./use-cockpit-shell-switch", () => ({
@@ -22,10 +23,16 @@ vi.mock("./use-cockpit-shell-switch", () => ({
 }));
 vi.mock("./inspector", () => ({ useInspector: () => ({ open: controls.inspect }) }));
 vi.mock("./use-command-palette-search", () => ({ useCommandPaletteSearch: () => controls.search }));
-vi.mock("./use-command-new-chat", () => ({ useCommandNewChat: () => ({ create: controls.create, blocked: false }) }));
+vi.mock("./use-command-new-chat", () => ({
+  useCommandNewChat: () => ({ create: controls.create, blocked: false, attempt: controls.attempt }),
+}));
 vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({
-    data: { activeProviderId: "local", activeModel: "recorded-model" },
+    data: {
+      activeProviderId: "local",
+      activeModel: "recorded-model",
+      items: [{ workspaceId: "workspace-a", name: "Research" }],
+    },
     isFetching: false,
     isError: false,
   }),
@@ -49,6 +56,7 @@ beforeEach(() => {
   controls.transition.mockImplementation((action: (review: { isCurrent: () => boolean; signal: AbortSignal; navigate: typeof controls.navigate }) => void) =>
     action({ isCurrent: () => true, signal: new AbortController().signal, navigate: controls.navigate }));
   controls.search = { groups: [], loading: false, error: undefined };
+  controls.attempt = undefined;
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -60,6 +68,31 @@ afterEach(() => {
 });
 
 describe("CommandPalette", () => {
+  it("names the workspace instead of printing its id", () => {
+    act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    const text = document.querySelector('[role="dialog"]')!.textContent ?? "";
+    expect(text).toContain("Workspace: Research.");
+    expect(text).not.toContain("workspace-a");
+  });
+
+  it("does not replay a confirmed creation that was already opened before this palette open", () => {
+    const opened = { state: "confirmed", message: "Conversation created and independently verified.", mode: "chat", sessionId: "s1" };
+    controls.attempt = opened;
+    act(() => root.render(<CommandPalette open={false} onOpenChange={() => undefined} />));
+    act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    expect(document.querySelector('[role="dialog"]')!.textContent).not.toContain("Conversation created");
+    controls.attempt = { ...opened, sessionId: "s2" };
+    act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain("Conversation created");
+  });
+
+  it("keeps an unconfirmed creation visible so it is never retried blindly", () => {
+    controls.attempt = { state: "unknown", message: "Creation outcome is unconfirmed.", mode: "chat" };
+    act(() => root.render(<CommandPalette open={false} onOpenChange={() => undefined} />));
+    act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain("Creation outcome is unconfirmed.");
+  });
+
   it.each(["Enter", " "])("keeps disclosure activation %j separate from the selected New chat command", (key) => {
     controls.search.groups = [
       {

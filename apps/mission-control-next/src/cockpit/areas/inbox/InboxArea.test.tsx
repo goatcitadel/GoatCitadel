@@ -295,10 +295,51 @@ describe("InboxArea", () => {
         </QueryClientProvider>,
       ),
     );
-    expect(container.textContent).toContain("No known items in the checked sources.");
+    expect(container.textContent).toContain("Nothing needs your attention in the checked sources.");
     expect(container.textContent).toContain("What this Inbox covers");
     expect(container.textContent).not.toContain("Coverage is incomplete");
     expect(container.textContent).not.toContain("Count unknown");
+    // A declared scope is not a read gap, so the per-group counts read exactly.
+    expect(container.querySelector('[aria-label="Needs attention Gateway count"]')?.textContent).toBe("0");
+    expect(container.textContent).not.toContain("No known items returned in this group.");
+  });
+
+  it("says when sources could not be read instead of claiming an all-clear", async () => {
+    inboxMock.result = {
+      data: {
+        ...projection,
+        items: [],
+        coverage: [{ source: "dead_letters", state: "unavailable", detail: "Stopped runs could not be read." }],
+        counts: {
+          needs_decision: { known: 0, complete: true },
+          proposals: { known: 0, complete: true },
+          needs_attention: { known: 0, complete: false },
+          updates: { known: 0, complete: true },
+        },
+      },
+      isLoading: false,
+      isError: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    };
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <UiPreferencesProvider>
+            <CockpitNavigationProvider>
+              <InspectorProvider>
+                <InboxArea />
+              </InspectorProvider>
+            </CockpitNavigationProvider>
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    expect(container.textContent).toContain("No known items, but some sources could not be read completely.");
+    expect(container.textContent).not.toContain("Nothing needs your attention");
+    expect(container.textContent).toContain("Coverage is incomplete for 1 source");
+    expect(container.querySelector('[aria-label="Needs attention Gateway count"]')?.textContent).toBe("0 known");
   });
 
   it("opens the exact scoped deep link without deciding or reopening a dismissed inspector", async () => {

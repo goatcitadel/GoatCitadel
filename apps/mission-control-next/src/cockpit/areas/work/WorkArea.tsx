@@ -29,6 +29,7 @@ import { RunArtifacts } from "./RunArtifacts";
 import { RunWorkspaceContext } from "./RunWorkspaceContext";
 import { RunLineage } from "./RunLineage";
 import { workspaceTasksOptions } from "./work-queries";
+import { AREA_PAGE, AREA_TABS } from "../../ui/area-layout";
 
 const COLUMNS: readonly { id: WorkBoardGroup; title: string; description: string }[] = [
   { id: "running", title: "Running", description: "Queued or executing" },
@@ -53,7 +54,7 @@ function WorkBoard() {
   const tasks = useInfiniteQuery(workspaceTasksOptions(workspaceId));
   const board = runs.data ? projectWorkBoard(runs.data.pages.flatMap((page) => page.items), workspaceId) : null;
   const taskBoard = !tasks.isError && tasks.data ? projectWorkTasks(tasks.data.pages.flatMap((page) => page.items), workspaceId) : null;
-  return <section className="flex min-h-full flex-col gap-5 p-4 sm:p-6">
+  return <section className={`${AREA_PAGE} min-h-full`}>
     <header className="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h1 className="font-display text-xl font-semibold text-fg">Work</h1>
@@ -101,7 +102,7 @@ function WorkBoard() {
       onClick={() => void runs.fetchNextPage()}>{runs.isFetchingNextPage ? "Loading runs…" : "Load more runs"}</Button> : null}
     {!tasks.isError && tasks.hasNextPage ? <Button size="sm" variant="secondary" disabled={tasks.isFetchingNextPage}
       onClick={() => void tasks.fetchNextPage()}>{tasks.isFetchingNextPage ? "Loading tasks…" : "Load more tasks"}</Button> : null}
-    <p className="text-sm text-fg-muted">Open a task or run for owner evidence and available controls. Additional recovery options remain in <ClassicOwnerLink className="font-medium text-accent underline-offset-2 hover:underline" href="/ops/kanban?shell=classic" scope={workspaceId} label="current Ops Kanban" />.</p>
+    <p className="text-sm text-fg-muted">Open a task or run for owner evidence and available controls. Additional recovery options remain in the <ClassicOwnerLink className="font-medium text-accent underline-offset-2 hover:underline" href="/ops/kanban?shell=classic" scope={workspaceId} label="classic Kanban view" />.</p>
   </section>;
 }
 
@@ -128,7 +129,7 @@ function RunDetail({ runId }: { runId: string }) {
       </header>
       <p className="rounded-md border border-line bg-sunken p-3 text-sm text-fg-secondary">This page reads Gateway evidence. {sessionId
         ? <><NativeOwnerLink scope={[workspaceId, runId, sessionId]} className="font-medium text-accent" href={`/chat?sessionId=${encodeURIComponent(sessionId)}&shell=cockpit`}>Open this conversation in Chat</NativeOwnerLink> for its conversation context. </>
-        : null}<ClassicOwnerLink className="font-medium text-accent" href="/ops/runtime?shell=classic" scope={JSON.stringify([workspaceId, runId])} label="Open current Ops" /> for additional owner controls.</p>
+        : null}<ClassicOwnerLink className="font-medium text-accent" href="/ops/runtime?shell=classic" scope={JSON.stringify([workspaceId, runId])} label="Open the classic runtime view" /> for additional owner controls.</p>
       <WorkRunControls runId={runId} />
       <div className="grid gap-3 sm:grid-cols-3">
         <EvidenceCount title="Checkpoints" count={data.durable.checkpoints.items.length} state={data.durable.checkpoints.state} />
@@ -143,12 +144,12 @@ function RunDetail({ runId }: { runId: string }) {
       <RunLineage trace={data} workspaceId={workspaceId} />
       <RunSignedReceipt key={runId} runId={runId} />
       <section className="rounded-lg border border-line bg-raised p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-display text-lg font-semibold text-fg">Approvals</h2><ClassicOwnerLink className="text-sm text-accent" href="/ops/approvals?shell=classic" scope={JSON.stringify([workspaceId, runId])} label="Open current approvals" /></div>
+        <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-display text-lg font-semibold text-fg">Approvals</h2><ClassicOwnerLink className="text-sm text-accent" href="/ops/approvals?shell=classic" scope={JSON.stringify([workspaceId, runId])} label="Open approvals in the classic view" /></div>
         {data.approvals.state === "available" ? data.approvals.items.length ? <ul className="mt-3 grid gap-2">{data.approvals.items.map((approval) => <li key={approval.approvalId} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line p-3 text-sm"><span className="text-fg">{humanizeToken(approval.kind)}</span><span className="flex gap-2"><StatusBadge status={presentRiskLevel(approval.riskLevel)} /><StatusBadge status={presentApprovalStatus(approval.status)} /></span></li>)}</ul> : <p className="mt-2 text-sm text-fg-muted">No approvals were linked to this run.</p> : <p className="mt-2 text-sm text-fg-muted">Approval evidence is {humanizeToken(data.approvals.state).toLowerCase()}.</p>}
       </section>
       <RunArtifacts trace={data} workspaceId={workspaceId} />
       <RunWorkspaceContext trace={data} workspaceId={workspaceId} />
-      {data.errors.items.length ? <p className="rounded-md border border-status-failed p-3 text-sm text-fg">{data.errors.items.length} recorded {data.errors.items.length === 1 ? "error needs" : "errors need"} review in <ClassicOwnerLink className="font-medium text-accent" href="/ops/runtime?shell=classic" scope={JSON.stringify([workspaceId, runId])} label="current Ops" />.</p> : null}
+      {data.errors.items.length ? <p className="rounded-md border border-status-failed p-3 text-sm text-fg">{data.errors.items.length} recorded {data.errors.items.length === 1 ? "error needs" : "errors need"} review in the <ClassicOwnerLink className="font-medium text-accent" href="/ops/runtime?shell=classic" scope={JSON.stringify([workspaceId, runId])} label="classic runtime view" />.</p> : null}
     </> : null}
   </section>;
 }
@@ -169,7 +170,7 @@ export function WorkArea() {
   }
   const view = rest[0] === "history" ? "history" : rest[0] === "schedules" ? "schedules" : "board";
   return <>
-    <nav aria-label="Work views" className="mx-auto flex max-w-5xl gap-1 border-b border-line-subtle px-4 pt-3 sm:px-6">
+    <nav aria-label="Work views" className={AREA_TABS}>
       {[{ id: "board", label: "Board", path: "/work" }, { id: "history", label: "History", path: "/work/history" }, { id: "schedules", label: "Schedules", path: "/work/schedules" }].map((item) => <a
         key={item.id} href={item.path} aria-current={view === item.id ? "page" : undefined}
         onClick={(event) => { event.preventDefault(); navigate(item.path); }}

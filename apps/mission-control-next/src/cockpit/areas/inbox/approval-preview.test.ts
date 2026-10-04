@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
-import { approvalCreatedLabel, approvalExpiryLabel, approvalPreview } from "./approval-preview";
+import { approvalCreatedLabel, approvalExpiryLabel, approvalExplanationLine, approvalPreview } from "./approval-preview";
 
 const approval = {
   approvalId: "approval/one?two",
@@ -37,5 +37,14 @@ describe("approval preview", () => {
     expect(approvalExpiryLabel("2026-09-28T17:59:00Z", now)).toBe("Expiry passed; verify its current status");
     expect(approvalExpiryLabel("invalid", now)).toBeNull();
     expect(approvalCreatedLabel("invalid")).toBe("Time unavailable");
+  });
+});
+
+describe("approval explanation line", () => {
+  it("prints exactly one sentence for every explanation state", () => {
+    expect(approvalExplanationLine("  Deletes one file.  ", "completed")).toBe("Deletes one file.");
+    expect(approvalExplanationLine(undefined, "failed")).toContain("could not be generated");
+    expect(approvalExplanationLine("", "pending")).toContain("still being prepared");
+    expect(approvalExplanationLine(undefined, "not_requested")).toContain("No explanation was requested");
   });
 });

@@ -12,8 +12,10 @@ import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { integrationInputClass } from "./IntegrationFormFields";
 import { HookRecordEvidence, HookRunEvidence } from "./HookEvidence";
+import { useActiveWorkspaceLabel } from "../../data/use-workspace-name";
 
 export function HooksSettings({ workspaceId }: { workspaceId: string }) {
+  const workspaceLabel = useActiveWorkspaceLabel();
   const s = useHooksSettings(workspaceId),
     leave = useDraftLeaveDialogState(s.leave.dialogProps);
   const [limit, setLimit] = useState(10),
@@ -30,7 +32,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
         configured destination.
       </p>
       <p className="text-xs text-fg-muted">
-        Workspace: {workspaceId || "No workspace selected"}. {HOOK_OWNER_BOUNDARY}
+        {workspaceId ? `Workspace: ${workspaceLabel}.` : "No workspace selected."} {HOOK_OWNER_BOUNDARY}
       </p>
       {s.loading ? (
         <p role="status" className="text-sm">

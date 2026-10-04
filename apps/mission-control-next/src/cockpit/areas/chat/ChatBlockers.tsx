@@ -127,7 +127,7 @@ export function ChatBlockers({ props }: { props: Blockers }) {
             href={chatHref}
             scope={JSON.stringify([props.selectedSessionId, input.promptId])}
             className="mt-2 inline-block text-xs font-medium text-accent hover:underline"
-            label="Open this question in current Chat"
+            label="Open this question in the classic view"
           />
         </>
       ) : null}

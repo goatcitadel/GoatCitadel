@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { Activity, Inbox, LayoutGrid, Library, MessageSquare, MoreHorizontal, Search, Settings } from "lucide-react";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
-import { inboxCountLabel, inboxMatchesWorkspace } from "../areas/inbox/inbox-presentation";
+import { inboxCountLabel, inboxCountTitle, inboxMatchesWorkspace, inboxNavigationLabel } from "../areas/inbox/inbox-presentation";
 import { useOperatorInbox } from "../data/use-operator-inbox";
 import { useCockpitNavigation } from "./cockpit-navigation-context";
 import { ScopeSwitcher } from "./ScopeSwitcher";
@@ -39,9 +39,7 @@ export function MobileTabBar({ onOpenPalette }: { onOpenPalette: () => void }) {
         key={area}
         type="button"
         aria-current={current === area ? "page" : undefined}
-        aria-label={area === "inbox" && inboxCount
-          ? `Inbox, ${inboxCount === "?" ? "count unknown" : inboxCount.endsWith("+") ? `at least ${inboxCount.slice(0, -1)} items` : `${inboxCount} items`}`
-          : undefined}
+        aria-label={area === "inbox" && inboxCount ? inboxNavigationLabel(inboxCount) : undefined}
         onClick={() => navigate(path)}
         onPointerEnter={() => preload(area)}
         onFocus={() => preload(area)}
@@ -50,7 +48,7 @@ export function MobileTabBar({ onOpenPalette }: { onOpenPalette: () => void }) {
       >
         <span className="relative">
           <Icon aria-hidden="true" className="size-5" />
-          {area === "inbox" && inboxCount ? <span title={inboxCount === "?" ? "Inbox count unknown" : inboxCount.endsWith("+") ? "At least this many Inbox items" : "Inbox items"}
+          {area === "inbox" && inboxCount ? <span title={inboxCountTitle(inboxCount)}
             className="absolute -right-3 -top-1 min-w-4 rounded-full bg-accent px-0.5 text-center text-xs font-semibold text-accent-ink">{inboxCount}</span> : null}
         </span>
         {label}

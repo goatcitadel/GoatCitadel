@@ -31,7 +31,8 @@ export function summarizeRecentRunningWork(page: unknown, workspaceId: string) {
   return { state: "none", count: 0, label: "No queued or running interactive Chat/plan work recorded" };
 }
 
-export function WorkRunningIndicator({ workspaceId }: { workspaceId: string }) {
+/** `overlay` pins the dot to the icon's corner on the collapsed rail so it never squeezes the icon. */
+export function WorkRunningIndicator({ workspaceId, overlay = false }: { workspaceId: string; overlay?: boolean }) {
   const installation = getGatewayApiBaseUrl();
   const visible = useMediaQuery("(min-width: 640px)");
   const instance = useId();
@@ -49,7 +50,7 @@ export function WorkRunningIndicator({ workspaceId }: { workspaceId: string }) {
   const summary = visible && !query.isError && !query.isFetching && !query.isStale && getGatewayApiBaseUrl() === installation
     ? summarizeRecentRunningWork(query.data, workspaceId) : unavailable;
   return <span id="cockpit-work-running-summary" data-work-running={summary.state} title={summary.label}
-    className="ml-auto inline-flex items-center">
+    className={overlay ? "absolute right-1 top-1 inline-flex items-center" : "ml-auto inline-flex items-center"}>
     <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${summary.state === "running" ? "bg-status-running" : "bg-status-neutral"}`} />
     <span className="sr-only">{summary.label}</span>
   </span>;

@@ -1233,6 +1233,8 @@ test("cockpit Code Mode journey keeps owner probes while using cockpit controls"
   assert.ok(cockpit.operations.some((operation) => operation.kind === "return-to-cockpit-chat"));
   assert.ok(cockpit.operations.some((operation) => operation.kind === "click" && operation.name === "Open durable evidence"),
   );
+  // Run details sits in the phone overflow menu, so it goes through the layout-aware turn action.
+  assert.ok(cockpit.operations.some((operation) => operation.kind === "click-turn-action" && operation.name === "Run details"));
   assert.ok(!cockpit.operations.some((operation) => operation.kind === "click" && operation.name.startsWith("Open turn:")),
   );
   assert.deepEqual(cockpit.operations.slice(-5), [

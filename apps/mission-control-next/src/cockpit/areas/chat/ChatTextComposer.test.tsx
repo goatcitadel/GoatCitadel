@@ -3,7 +3,12 @@ import { act, createRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { ChatTextComposer, cockpitSendBlockReason, type ComposerProps } from "./ChatTextComposer";
+import {
+  ChatTextComposer,
+  cockpitSendBlockReason,
+  ROUTE_CHECK_HINT_DELAY_MS,
+  type ComposerProps,
+} from "./ChatTextComposer";
 
 vi.mock("../../../shell-preference", () => ({ switchShell: vi.fn() }));
 
@@ -64,6 +69,7 @@ function composerProps(overrides: Partial<ComposerProps> = {}): ComposerProps {
     sending: false,
     hasActiveStream: false,
     historicalReadOnly: false,
+    onReturnToLatest: vi.fn(),
     sessionControlBanner: null,
     pendingApproval: null,
     pendingUserInput: null,
@@ -124,10 +130,67 @@ describe("cockpit text composer", () => {
     const props = composerProps({ canSend: false, routePreflightLoading: true });
     await act(async () => root.render(<ChatTextComposer props={props} />));
     expect(sendButton().disabled).toBe(false);
-    expect(container.textContent).toContain("Send will wait for the Gateway check");
     const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
     await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     expect(props.onSend).toHaveBeenCalledOnce();
+  });
+
+  it("only shows the route-check hint once a check outlasts the delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const props = composerProps({ canSend: false, routePreflightLoading: true });
+      await act(async () => root.render(<ChatTextComposer props={props} />));
+      expect(container.textContent).not.toContain("Send will wait for the Gateway check");
+      expect(container.querySelector("textarea")?.getAttribute("aria-describedby")).toBeNull();
+      await act(async () => vi.advanceTimersByTimeAsync(ROUTE_CHECK_HINT_DELAY_MS));
+      expect(container.textContent).toContain("Send will wait for the Gateway check");
+      await act(async () => root.render(<ChatTextComposer props={{ ...props, canSend: true, routePreflightLoading: false }} />));
+      expect(container.textContent).not.toContain("Send will wait for the Gateway check");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends attached files alone while the route check is pending", async () => {
+    const props = composerProps({
+      draft: "",
+      canSend: false,
+      routePreflightLoading: true,
+      pendingAttachments: [{ attachmentId: "a", fileName: "a.txt", mimeType: "text/plain", sizeBytes: 1 }],
+    });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    expect(sendButton().disabled).toBe(false);
+    await act(async () => sendButton().click());
+    expect(props.onSend).toHaveBeenCalledOnce();
+  });
+
+  it("offers a way back from a read-only earlier version and links the reason to the draft", async () => {
+    const props = composerProps({ historicalReadOnly: true });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    const reason = container.querySelector("#cockpit-chat-send-reason");
+    expect(reason?.textContent).toContain("earlier version of the conversation");
+    expect(container.querySelector("textarea")?.getAttribute("aria-describedby")).toBe("cockpit-chat-send-reason");
+    const back = [...container.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Back to latest");
+    await act(async () => back?.click());
+    expect(props.onReturnToLatest).toHaveBeenCalledOnce();
+    expect(props.onSend).not.toHaveBeenCalled();
+  });
+
+  it("names the controlling client and never points at another shell for an inline decision", () => {
+    const banner = { model: { ownerLabel: "External controller" } } as ComposerProps["sessionControlBanner"];
+    expect(cockpitSendBlockReason(composerProps({ sessionControlBanner: banner }))).toContain("External controller");
+    const pending = cockpitSendBlockReason(
+      composerProps({ pendingApproval: {} as MissionThreadedActiveSessionSurfaceProps["pendingApproval"] }),
+    );
+    expect(pending).toContain("above");
+    expect(pending).not.toMatch(/current Chat|classic/i);
+  });
+
+  it("labels the shell switch as the classic view", async () => {
+    await act(async () => root.render(<ChatTextComposer props={composerProps()} />));
+    const labels = [...container.querySelectorAll("button")].map((b) => b.textContent?.trim());
+    expect(labels).toContain("Open classic view");
+    expect(labels).not.toContain("More controls");
   });
 
   it("does not send through a pending decision while the route is checking", async () => {

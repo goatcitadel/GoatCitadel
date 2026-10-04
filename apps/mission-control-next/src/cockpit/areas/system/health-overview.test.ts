@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { OperatorInboxResponse } from "@goatcitadel/contracts";
 import type { HealthSummaryResponse } from "@goatcitadel/mission-control-shared/api/types";
+import { backupTrustFromInbox } from "./backup-trust";
 import { deriveHealthChecks, summarizeHealthChecks } from "./health-overview";
 
 const healthy: HealthSummaryResponse = {
@@ -17,14 +19,29 @@ const healthy: HealthSummaryResponse = {
   costs: { summary: { scope: "all", from: "2026-09-27", to: "2026-09-28", items: [] }, qmd: {
     totalRuns: 0, compressionPercent: 0, expansionPercent: 0, efficiencyLabel: "neutral",
   } },
-  backups: { items: [], latest: { backupId: "backup", createdAt: "2026-09-28T10:00:00Z", files: [], verified: true, contractVerified: true } },
+  // The health summary lists manifests only; it never carries verification results.
+  backups: { items: [], latest: { backupId: "backup", createdAt: "2026-09-28T10:00:00Z", files: [] } },
 };
 
+function inbox(coverageState: OperatorInboxResponse["coverage"][number]["state"], itemId?: string): OperatorInboxResponse {
+  return {
+    authority: "derived_projection",
+    workspaceId: "default",
+    generatedAt: "2026-09-28T12:00:00Z",
+    coverage: [{ source: "backup_trust", state: coverageState }],
+    items: itemId
+      ? [{ id: itemId, kind: "backup_trust", group: "needs_attention", title: "t", summary: "s", createdAt: "x",
+          source: { workspaceId: "default" }, href: "/system/health" } as OperatorInboxResponse["items"][number]]
+      : [],
+    counts: {} as OperatorInboxResponse["counts"],
+  };
+}
+
 describe("system health checks", () => {
-  it("shows only checks backed by the summary and does not claim restore proof", () => {
-    const checks = deriveHealthChecks(healthy);
+  it("shows only checks backed by evidence and does not claim restore proof", () => {
+    const checks = deriveHealthChecks(healthy, "verified");
     expect(checks.map((item) => [item.id, item.status.label])).toEqual([
-      ["gateway", "Responding"], ["database", "Reachable"], ["service", "Running"], ["backups", "Verified record"],
+      ["gateway", "Responding"], ["database", "Reachable"], ["service", "Running"], ["backups", "Verified"],
     ]);
     expect(checks.find((item) => item.id === "backups")?.detail).toContain("full restore is not proven");
   });
@@ -34,20 +51,37 @@ describe("system health checks", () => {
       ...healthy,
       database: { driver: "postgres", configured: true, reachable: false, issues: ["secret/path/error"] },
       daemonStatus: { ...healthy.daemonStatus, running: false, state: "stopped" },
-      backups: { items: [], latest: null },
-    });
-    expect(checks.filter((item) => item.status.tone === "failed").map((item) => item.id)).toEqual(["database", "service"]);
-    expect(checks.find((item) => item.id === "backups")?.status.tone).toBe("waiting");
+    }, "failed");
+    expect(checks.filter((item) => item.status.tone === "failed").map((item) => item.id)).toEqual([
+      "database", "service", "backups",
+    ]);
     expect(JSON.stringify(checks)).not.toContain("secret/path/error");
   });
 
   it("limits the sidebar claim to checks returned by the summary", () => {
-    expect(summarizeHealthChecks(deriveHealthChecks(healthy))).toEqual({ label: "Reported system checks clear", tone: "done" });
-    const unknown = deriveHealthChecks({ ...healthy, database: undefined });
+    expect(summarizeHealthChecks(deriveHealthChecks(healthy, "verified"))).toEqual({ label: "Reported system checks clear", tone: "done" });
+    const unknown = deriveHealthChecks({ ...healthy, database: undefined }, "verified");
     expect(summarizeHealthChecks(unknown)).toEqual({ label: "Some system checks lack live proof", tone: "neutral" });
-    const attention = deriveHealthChecks({ ...healthy, backups: { items: [], latest: null } });
-    expect(summarizeHealthChecks(attention)).toEqual({ label: "1 system check needs review", tone: "waiting" });
-    const unverified = deriveHealthChecks({ ...healthy, backups: { items: [], latest: { backupId: "backup", createdAt: "2026-09-28T10:00:00Z", files: [] } } });
-    expect(unverified.find((item) => item.id === "backups")?.status.tone).toBe("waiting");
+    expect(summarizeHealthChecks(deriveHealthChecks(healthy, "stale"))).toEqual({ label: "1 system check needs review", tone: "waiting" });
+  });
+
+  it("never warns on a brand-new install that has no backup yet", () => {
+    const fresh = deriveHealthChecks({ ...healthy, backups: { items: [], latest: null } }, "none");
+    expect(fresh.find((item) => item.id === "backups")).toMatchObject({ notSetUp: true, status: { label: "No backup yet", tone: "neutral" } });
+    expect(summarizeHealthChecks(fresh)).toEqual({ label: "Reported system checks clear", tone: "done" });
+  });
+
+  it("does not invent verification it has not read", () => {
+    const pending = deriveHealthChecks(healthy, undefined).find((item) => item.id === "backups");
+    expect(pending?.status).toEqual({ label: "Not verified yet", tone: "neutral" });
+  });
+
+  it("reads backup verification from the Inbox projection", () => {
+    expect(backupTrustFromInbox(undefined)).toBeUndefined();
+    expect(backupTrustFromInbox(inbox("not_enabled"))).toBe("none");
+    expect(backupTrustFromInbox(inbox("unavailable"))).toBe("unknown");
+    expect(backupTrustFromInbox(inbox("current"))).toBe("verified");
+    expect(backupTrustFromInbox(inbox("limited", "backup_trust:stale"))).toBe("stale");
+    expect(backupTrustFromInbox(inbox("current", "backup_trust:failed"))).toBe("failed");
   });
 });

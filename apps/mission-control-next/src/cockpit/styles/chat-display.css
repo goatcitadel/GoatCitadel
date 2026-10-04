@@ -13,4 +13,49 @@
     + :is(.mc-assistant-markdown, .mc-assistant-streaming-tail) {
     margin-top: 0.75rem;
   }
+
+  /* The shared assistant copy button ships classic-only styles; give it a real hit area here. */
+  .cockpit-chat-content .mc-assistant-copy-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2rem;
+    min-height: 2rem;
+    margin-top: 0.25rem;
+    border: 1px solid var(--cockpit-border-subtle);
+    border-radius: var(--r-sm);
+    background: var(--cockpit-raised);
+    color: var(--cockpit-text-secondary);
+  }
+
+  .cockpit-chat-content .mc-assistant-copy-button:hover {
+    border-color: var(--cockpit-border-strong);
+    color: var(--cockpit-text);
+  }
+
+  .cockpit-chat-content .mc-assistant-copy-button.copied {
+    color: var(--cockpit-done);
+  }
+
+  .cockpit-chat-content .mc-assistant-copy-button.failed {
+    color: var(--cockpit-failed);
+  }
+
+  @media (max-width: 639px) {
+    .cockpit-chat-content .mc-assistant-copy-button {
+      min-width: 2.75rem;
+      min-height: 2.75rem;
+    }
+  }
+
+  /* The shared controller frame prints host errors as a classic-styled paragraph. */
+  .cockpit-chat-host p.error {
+    margin: 0;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--cockpit-failed);
+    background: var(--cockpit-sunken);
+    color: var(--cockpit-text-secondary);
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+  }
 }

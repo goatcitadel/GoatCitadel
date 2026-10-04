@@ -1,5 +1,5 @@
 import { Command } from "cmdk";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchLlmConfig } from "@goatcitadel/mission-control-shared/api/platform";
 import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
@@ -13,6 +13,7 @@ import { useCockpitRoute } from "./use-cockpit-route";
 import { useInspector } from "./inspector";
 import { useCommandPaletteSearch } from "./use-command-palette-search";
 import { useCommandNewChat } from "./use-command-new-chat";
+import { useWorkspaceName } from "../data/use-workspace-name";
 import {
   CommandPaletteCoverage,
   CommandPaletteResults,
@@ -48,6 +49,26 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const newChat = useCommandNewChat(scope, open, (sessionId) =>
     run(() => navigate(`/chat?${new URLSearchParams({ shell: "cockpit", sessionId })}`)),
   );
+  const workspaceName = useWorkspaceName(activeCitadelId, activeWorkspaceId, open && Boolean(activeWorkspaceId));
+  // A confirmed creation that was already opened before this palette open is history, not news.
+  // Unknown, failed and "opening failed" records stay visible because they prevent duplicates.
+  const latestAttempt = useRef(newChat.attempt);
+  useLayoutEffect(() => {
+    latestAttempt.current = newChat.attempt;
+  });
+  const [attemptAtOpen, setAttemptAtOpen] = useState<typeof newChat.attempt>(undefined);
+  useLayoutEffect(() => {
+    setAttemptAtOpen(open ? latestAttempt.current : undefined);
+  }, [open]);
+  const visibleAttempt =
+    newChat.attempt &&
+    !(
+      newChat.attempt === attemptAtOpen &&
+      newChat.attempt.state === "confirmed" &&
+      !newChat.attempt.message.includes("Opening it failed")
+    )
+      ? newChat.attempt
+      : undefined;
   const matches = (text: string) => text.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
   function selectObject(item: PaletteObject) {
     run(() => {
@@ -78,19 +99,19 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
             className="h-10 min-w-0 border-b border-line-subtle bg-transparent px-3 text-base text-fg outline-none"
           />
           <p className="px-3 py-2 text-xs text-fg-muted">
-            Workspace: {activeWorkspaceId || "not selected"}. Type at least two characters to search records.
-            Installation shared results are labeled.
+            {activeWorkspaceId ? `Workspace: ${workspaceName ?? "current workspace"}.` : "No workspace selected."} Type
+            at least two characters to search records. Installation shared results are labeled.
           </p>
-          {newChat.attempt ? (
+          {visibleAttempt ? (
             <div role="status" className="mb-2 px-3 text-sm text-fg-secondary">
-              <p>{newChat.attempt.message}</p>
-              {newChat.attempt.state === "confirmed" && newChat.attempt.sessionId ? (
+              <p>{visibleAttempt.message}</p>
+              {visibleAttempt.state === "confirmed" && visibleAttempt.sessionId ? (
                 <Button
                   size="sm"
                   onClick={() =>
                     run(() =>
                       navigate(
-                        `/chat?${new URLSearchParams({ shell: "cockpit", sessionId: newChat.attempt!.sessionId! })}`,
+                        `/chat?${new URLSearchParams({ shell: "cockpit", sessionId: visibleAttempt.sessionId! })}`,
                       ),
                     )
                   }

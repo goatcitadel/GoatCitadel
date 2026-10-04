@@ -72,7 +72,7 @@ function BoardEditorView({ workspaceId, board, onClose, onSaved }: BoardEditorPr
         </p>
       ) : null}
       {uncertain ? (
-        <ClassicOwnerLink href="/ops/boards?shell=classic" scope={workspaceId} label="Review current boards in Ops" />
+        <ClassicOwnerLink href="/ops/boards?shell=classic" scope={workspaceId} label="Review boards in the classic view" />
       ) : null}
       <form onSubmit={review} className="grid gap-4">
         <label className="grid gap-1 text-sm text-fg-secondary">

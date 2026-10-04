@@ -2,6 +2,7 @@ import type { GatewayAccessViewState } from "../../app/use-gateway-access";
 import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
 import { Button } from "../ui/Button";
 import { EmptyState } from "../ui/EmptyState";
+import { GATEWAY_START_HINT } from "./use-gateway-reachability";
 
 export function CockpitAccessGate({ access, busy, onRetry }: { access: GatewayAccessViewState; busy: boolean; onRetry: () => void }) {
   const shellSwitch = useCockpitShellSwitch();
@@ -11,7 +12,7 @@ export function CockpitAccessGate({ access, busy, onRetry }: { access: GatewayAc
   const title = checking ? "Connecting to GoatCitadel" : needsSignIn ? "Sign in to continue" : misconfigured ? "Gateway setup needs attention" : "Can't reach the GoatCitadel gateway";
   const description = needsSignIn || misconfigured
     ? "Continue in the classic view to complete gateway access. The cockpit uses the same access state."
-    : checking ? "Checking gateway access." : "Check that the gateway is running. This page retries automatically.";
+    : checking ? "Checking gateway access." : `It may not be running. ${GATEWAY_START_HINT} This page retries automatically.`;
   return <main className="flex h-dvh items-center justify-center bg-canvas">
     <EmptyState title={title} description={description} action={
       needsSignIn || misconfigured

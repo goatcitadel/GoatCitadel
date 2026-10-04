@@ -14,6 +14,7 @@ const api = vi.hoisted(() => ({
   testWorkspaceHook: vi.fn(),
 }));
 vi.mock("../../../features/native-routes/settings/sections/hooks-api", () => api);
+vi.mock("../../data/use-workspace-name", () => ({ useActiveWorkspaceLabel: () => "Research" }));
 vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({
   getGatewayApiBaseUrl: () => "http://fixture",
 }));

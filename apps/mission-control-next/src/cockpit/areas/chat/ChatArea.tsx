@@ -11,6 +11,7 @@ import {
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { ChatConversationFilters } from "./ChatConversationFilters";
+import { ChatEmptyState, ChatHeaderSubtitle, ChatSetupBanner } from "./ChatAreaChrome";
 import { ChatMobileConversationSelect } from "./ChatMobileConversationSelect";
 import { ChatTranscript } from "./ChatTranscript";
 import { ChatTextComposer } from "./ChatTextComposer";
@@ -239,24 +240,13 @@ export function ChatAreaView({
               title={active?.sessionTitle ?? "Chat"}
               dock={input.contextDockProps}
             />
-            <p className="hidden truncate text-xs text-fg-muted md:block">
-              {[
-                session?.projectName,
-                active?.activePersonality?.name,
-                active?.selectedProviderId && active?.selectedModel
-                  ? `${active.selectedProviderId} · ${active.selectedModel}`
-                  : null,
-                active?.delegationRun?.status ? `Run ${active.delegationRun.status}` : null,
-              ]
-                .filter(Boolean)
-                .join(" · ") || (input.sessionRail.loading ? "Loading conversations…" : "Conversation ready")}
-            </p>
+            <ChatHeaderSubtitle active={active} projectName={session?.projectName} loading={input.sessionRail.loading} />
           </div>
           <ChatMobileConversationSelect rail={input.sessionRail} onOpenFilters={() => setFiltersOpen(true)} />
           <SelectedThreadActivity sessionId={selectedSessionId} />
           <Button
             size="sm"
-            className="md:hidden"
+            className="md:hidden max-sm:h-11 max-sm:px-4"
             aria-label="New conversation"
             disabled={input.sessionRail.creatingSession || input.sessionRail.loading}
             onClick={() => void input.sessionRail.onCreateSession()}
@@ -293,12 +283,7 @@ export function ChatAreaView({
           ) : null}
         </header>
         {onboarding.data && !onboarding.isError && !onboarding.data.completed && !buildOpen ? (
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line-subtle bg-sunken px-3 py-2 text-sm text-fg-secondary">
-            <p>Finish setup before sending a test message so the Gateway can verify your first answer.</p>
-            <Button size="sm" onClick={() => navigate("/settings/first-run")}>
-              Return to setup
-            </Button>
-          </div>
+          <ChatSetupBanner onReturnToSetup={() => navigate("/settings/first-run")} />
         ) : null}
         {buildOpen && active?.streamError ? (
           <p role="alert" className="border-b border-status-failed bg-sunken px-3 py-2 text-sm text-fg-secondary">
@@ -359,22 +344,7 @@ export function ChatAreaView({
             />
           </div>
         ) : (
-          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-5 text-center">
-            {input.sessionRail.loading ? (
-              <p role="status" className="text-sm text-fg-muted">Loading conversations…</p>
-            ) : (
-              <>
-                <p className="font-display text-lg font-medium text-fg">Choose a conversation</p>
-                <p className="max-w-sm text-sm text-fg-secondary">Choose a thread or start a new conversation.</p>
-                <Button
-                  onClick={() => void input.sessionRail.onCreateSession()}
-                  disabled={input.sessionRail.creatingSession}
-                >
-                  {input.sessionRail.creatingSession ? "Creating…" : "New conversation"}
-                </Button>
-              </>
-            )}
-          </div>
+          <ChatEmptyState rail={input.sessionRail} />
         )}
         {active?.sessionStatusPanel?.open && !buildOpen ? (
           <div className="cockpit-chat-status-panel overflow-y-auto border-t border-line-subtle p-3">

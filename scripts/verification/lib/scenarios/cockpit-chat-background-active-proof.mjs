@@ -126,8 +126,8 @@ export async function runCockpitChatBackgroundActiveProof({ context, browser, st
       const openBackground = async () => {
         await page.locator('[aria-label="Messages"]').waitFor({ timeout: 30_000 });
         if (variant === "mobile") {
-          await page.locator('summary[aria-label="Conversation actions"]').click();
-          await page.getByRole("button", { name: "Inspect conversation", exact: true }).click();
+          await page.getByRole("button", { name: "Conversation actions", exact: true }).click();
+          await page.getByRole("menuitem", { name: "Inspect conversation", exact: true }).click();
         } else await page.getByRole("button", { name: "Inspect", exact: true }).click();
         await page.getByRole("tab", { name: "Background", exact: true }).click();
         await page.getByRole("region", { name: "Background work", exact: true }).getByRole("heading", { name: current.label, exact: true }).waitFor();

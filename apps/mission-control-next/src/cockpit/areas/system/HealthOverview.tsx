@@ -10,6 +10,9 @@ import { EmptyState } from "../../ui/EmptyState";
 import { StatusBadge } from "../../ui/StatusBadge";
 import type { HealthCheck } from "./health-overview";
 import { deriveSystemHealthChecks } from "./system-health";
+import { backupTrustFromInbox } from "./backup-trust";
+import { useOperatorInbox } from "../../data/use-operator-inbox";
+import { inboxMatchesWorkspace } from "../inbox/inbox-presentation";
 import { loadSystemHealthSources } from "./system-health-sources";
 import { HealthLocalRuntimeActions } from "./HealthLocalRuntimeActions";
 
@@ -38,7 +41,7 @@ function HealthCard({ check, workspaceId, onRefresh }: { check: HealthCheck; wor
       <StatusBadge status={check.status} />
     </div>
     <p className="mt-2 text-sm leading-relaxed text-fg-secondary">{check.detail}</p>
-    <ClassicOwnerLink className="mt-3 inline-block text-sm font-medium text-accent underline-offset-2 hover:underline" href={ownerHref(check.inspectPath)} scope={JSON.stringify([workspaceId, check.id])} label="Review in current controls" />
+    <ClassicOwnerLink className="mt-3 inline-block text-sm font-medium text-accent underline-offset-2 hover:underline" href={ownerHref(check.inspectPath)} scope={JSON.stringify([workspaceId, check.id])} label={`Review ${check.title.toLowerCase()} in the classic view`} />
     {check.id === "models" ? <HealthLocalRuntimeActions workspaceId={workspaceId} onRefresh={onRefresh} /> : null}
   </article>;
 }
@@ -48,10 +51,12 @@ export function HealthOverview() {
   const workspaceId = activeWorkspaceId ?? "default";
   const desktopUpdates = useDesktopUpdates();
   const health = useQuery({ queryKey: queryKeys.health(workspaceId), queryFn: () => loadSystemHealthSources(workspaceId), refetchInterval: 60_000 });
+  const inbox = useOperatorInbox(workspaceId);
+  const backupTrust = backupTrustFromInbox(!inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId) ? inbox.data : undefined);
   const sources = health.isError ? undefined : health.data;
-  const checks = sources ? deriveSystemHealthChecks(sources, desktopUpdates) : [];
+  const checks = sources ? deriveSystemHealthChecks(sources, desktopUpdates, backupTrust) : [];
   const problems = checks.filter((item) => item.status.tone === "failed" || item.status.tone === "waiting");
-  const unknown = checks.filter((item) => item.status.tone === "neutral");
+  const unknown = checks.filter((item) => item.status.tone === "neutral" && !item.notSetUp);
   const generatedAt = sources?.summary.state === "current" ? Date.parse(sources.summary.value.generatedAt) : Number.NaN;
   const unavailable = sources ? Object.entries(sources).filter(([, source]) => source.state === "unavailable") : [];
 
@@ -78,7 +83,7 @@ export function HealthOverview() {
         <h2 id="system-attention-title" className="font-display text-lg font-semibold text-fg">Needs attention</h2>
         {problems.length ? <ul className="mt-3 space-y-3">{problems.map((check) => <li key={check.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line bg-raised p-3">
           <span className="text-sm text-fg"><strong>{check.title}:</strong> {check.detail}</span>
-          <ClassicOwnerLink className="text-sm font-medium text-accent underline-offset-2 hover:underline" href={ownerHref(check.inspectPath)} scope={JSON.stringify([workspaceId, check.id])} label="Review" />
+          <ClassicOwnerLink className="text-sm font-medium text-accent underline-offset-2 hover:underline" href={ownerHref(check.inspectPath)} scope={JSON.stringify([workspaceId, check.id])} label={`Review ${check.title.toLowerCase()}`} />
         </li>)}</ul> : <p className="mt-2 text-sm text-fg-secondary">No problem was reported by the available checks{unknown.length ? `; ${unknown.length} ${unknown.length === 1 ? "check lacks" : "checks lack"} live proof` : ""}.</p>}
       </section>
 

@@ -158,9 +158,42 @@ describe("CockpitShell", () => {
         </QueryClientProvider>,
       ),
     );
-    expect(container.querySelector('main [role="alert"]')?.textContent).toContain(
-      "Gateway unavailable. Sending is paused; your draft is preserved.",
+    const alert = container.querySelector('main [role="alert"]');
+    // Only Chat sends, so other areas must not claim that sending is paused.
+    expect(alert?.textContent).toContain("Gateway unavailable. What you see here may be out of date.");
+    expect(alert?.textContent).not.toContain("Sending is paused");
+    expect(alert?.textContent).toContain("goatcitadel up");
+    const retry = vi.fn();
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <CockpitShell
+            streamState="retrying"
+            gatewayReachability={{ unavailable: true, lastConfirmedAt: null, retry }}
+          />
+        </QueryClientProvider>,
+      ),
     );
+    const check = [...container.querySelectorAll("main button")].find((b) => b.textContent?.trim() === "Check again");
+    await act(async () => (check as HTMLButtonElement).click());
+    expect(retry).toHaveBeenCalledOnce();
+    client.clear();
+  });
+
+  it("sets a per-area document title and restores the previous one on unmount", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    document.title = "Before";
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <CockpitShell />
+        </QueryClientProvider>,
+      ),
+    );
+    expect(document.title).toMatch(/^GoatCitadel /);
+    expect(document.title).not.toBe("GoatCitadel Mission Control Next");
+    await act(async () => root.render(<></>));
+    expect(document.title).toBe("Before");
     client.clear();
   });
   it("collapses to an accessible rail with Ctrl+B and preserves the route", async () => {
@@ -184,6 +217,45 @@ describe("CockpitShell", () => {
     expect(window.location.href).toBe(href);
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Expand sidebar"]')!.click());
     expect(sidebar.getAttribute("data-collapsed")).toBe("false");
+    client.clear();
+  });
+
+  it("keeps rail icons full size and shows a visible Inbox count when collapsed", async () => {
+    const { fetchOperatorInbox } = await import("@goatcitadel/mission-control-shared/api/operator-inbox");
+    vi.mocked(fetchOperatorInbox).mockResolvedValue({
+      authority: "derived_projection",
+      workspaceId: "default",
+      generatedAt: "2026-09-28T00:00:00Z",
+      items: [
+        { id: "a", kind: "approval", group: "needs_decision", title: "t", summary: "s", createdAt: "x",
+          source: { workspaceId: "default" }, href: "/x" },
+      ],
+      coverage: [],
+      counts: { needs_decision: { known: 1, complete: true }, proposals: { known: 0, complete: true },
+        needs_attention: { known: 0, complete: true }, updates: { known: 0, complete: true } },
+    } as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <CockpitShell />
+        </QueryClientProvider>,
+      ),
+    );
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true }));
+    });
+    const sidebar = container.querySelector('[aria-label="Cockpit sidebar"]')!;
+    expect(sidebar.getAttribute("data-collapsed")).toBe("true");
+    for (const icon of sidebar.querySelectorAll('nav[aria-label="Areas"] button > svg')) {
+      expect(icon.getAttribute("class")).toContain("shrink-0");
+    }
+    const inbox = sidebar.querySelector('nav[aria-label="Areas"] button[aria-label^="Inbox"]')!;
+    expect(inbox.getAttribute("aria-label")).toBe("Inbox, 1 item");
+    const badge = inbox.querySelector('[title="Inbox items"]')!;
+    expect(badge.textContent).toBe("1");
+    expect(badge.className).not.toContain("sr-only");
+    expect(container.querySelector("#cockpit-work-running-summary")?.className).toContain("absolute");
     client.clear();
   });
 

@@ -145,14 +145,6 @@ function ApprovalDecisionReview({
 
   return (
     <div className="space-y-2 border-t border-line-subtle pt-3">
-      <p className="text-xs text-fg-muted">
-        The current pending record is checked again before either decision. Approval alone does not prove the action
-        ran.
-      </p>
-      <p className="text-xs text-fg-muted">
-        To change this request, open its source and submit a new request. Editing an approval withdraws the original
-        action; it does not authorize a replacement. Project-wide always-allow is unavailable here.
-      </p>
       <div className="flex flex-wrap gap-2">
         <span ref={approveRef} className="inline-flex">
           <RiskApprovalAction
@@ -190,6 +182,19 @@ function ApprovalDecisionReview({
           {error}
         </p>
       ) : null}
+      <details className="text-xs text-fg-muted">
+        <summary className="cursor-pointer font-medium text-fg-secondary">How this decision works</summary>
+        <div className="mt-1 space-y-1">
+          <p>
+            The current pending record is checked again before either decision. Approval alone does not prove the
+            action ran.
+          </p>
+          <p>
+            To change this request, open its source and submit a new request. Editing an approval withdraws the original
+            action; it does not authorize a replacement. Project-wide always-allow is unavailable here.
+          </p>
+        </div>
+      </details>
       <Dialog
         open={denyOpen}
         onOpenChange={setDenyOpen}

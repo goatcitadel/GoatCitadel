@@ -16,7 +16,7 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { EmptyState } from "../../ui/EmptyState";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { approvalCreatedLabel, approvalExpiryLabel } from "./approval-preview";
-import { INBOX_GROUPS, inboxItemKindLabel, inboxMatchesWorkspace } from "./inbox-presentation";
+import { INBOX_GROUPS, inboxCountIsExact, inboxItemKindLabel, inboxMatchesWorkspace } from "./inbox-presentation";
 import { InboxCoverageSummary } from "./InboxCoverageSummary";
 import { InboxApprovalDetail } from "./InboxApprovalDetail";
 import { InboxChangePlanDetail } from "./InboxChangePlanDetail";
@@ -211,7 +211,7 @@ export function InboxArea() {
           <p className="mt-1 text-xs text-fg-muted">
             This view summarizes Gateway records. Open the current record to act.
           </p>
-          <p className="mt-1 text-xs text-fg-muted">
+          <p className="mt-1 text-xs text-fg-muted max-sm:hidden pointer-coarse:hidden">
             Keys: J/K select · O details · A/D focus approval actions · E source link. Confirm to decide.
           </p>
         </div>
@@ -263,6 +263,7 @@ export function InboxArea() {
             const items = visibleItems.filter((item) => item.group === group.id);
             const viewedCount = allItems.filter(isViewed).length;
             const count = projection.counts[group.id];
+            const exact = inboxCountIsExact(projection, count.complete);
             return (
               <section key={group.id} aria-labelledby={`inbox-${group.id}`} className="grid gap-3">
                 <header className="flex items-baseline gap-2">
@@ -270,7 +271,7 @@ export function InboxArea() {
                     {group.label}
                   </h2>
                   <span aria-label={`${group.label} Gateway count`} className="text-xs text-fg-muted">
-                    {count.complete ? count.known : count.known > 0 ? `${count.known}+` : "0 known"}
+                    {exact ? count.known : count.known > 0 ? `${count.known}+` : "0 known"}
                   </span>
                 </header>
                 {group.id === "updates" ? (
@@ -294,7 +295,7 @@ export function InboxArea() {
                   <p className="text-sm text-fg-muted">
                     {group.id === "updates" && viewedCount > 0
                       ? "No unviewed updates from this response."
-                      : count.complete
+                      : exact
                         ? "Nothing waiting here."
                         : "No known items returned in this group."}
                   </p>

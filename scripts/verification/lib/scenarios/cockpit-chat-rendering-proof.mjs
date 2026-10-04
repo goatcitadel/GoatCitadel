@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { recordRenderingFixture, RECORDED_OPENCODE_REPORT } from "./cockpit-chat-rendering-records.mjs";
+import { clickTurnAction } from "./cockpit-turn-actions.mjs";
 
 export const RENDER_CODE = "const result: number = 42;\nconsole.log(result);";
 export const RENDER_MARKDOWN = ["# Browser rendering proof", "", "**Strong evidence** and _emphasis_.", "",
@@ -150,7 +151,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
         assertSourceLinks({ citations: cited.citations, turn: cited, sessionId,
           rendered: await article.locator("details").filter({ has: page.locator("summary", { hasText: /^2 sources$/u }) }).locator("a").evaluateAll((links) => links.map((link) => ({ title: link.textContent, href: link.href }))) });
         assert.equal(await article.locator('a[href^="javascript:"], a[href^="data:"]').count(), 0);
-        await article.getByRole("button", { name: "Run details", exact: true }).click();
+        await clickTurnAction(article, "Run details");
         await page.getByRole("tab", { name: "Sources", exact: true }).click();
         const sources = page.getByRole("tabpanel", { name: "Sources", exact: true });
         assertSourceLinks({ citations: cited.citations, turn: cited, sessionId,
@@ -164,7 +165,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
         const uncited = thread.turns.find((item) => item.turnId === markdown.turnId);
         assert.deepEqual(uncited.citations, []);
         article = await findTurn(markdown.userMessage.content, "top");
-        await article.getByRole("button", { name: "Run details", exact: true }).click();
+        await clickTurnAction(article, "Run details");
         await page.getByRole("tab", { name: "Sources", exact: true }).click();
         await sources.getByText("No sources were recorded for this turn.", { exact: true }).waitFor();
         assert.equal(await sources.getByRole("link").count(), 0);
@@ -206,7 +207,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
         await capture("recorded-delegation");
         await closeInspector();
         article = await findTurn(markdown.userMessage.content, "top");
-        await article.getByRole("button", { name: "Run details", exact: true }).click();
+        await clickTurnAction(article, "Run details");
         await page.getByRole("tab", { name: "Run", exact: true }).click();
         await runPanel.getByText("No delegation run is linked to this turn.", { exact: true }).waitFor();
         assert.equal(await runPanel.getByText(delegation.objective, { exact: true }).count(), 0);
@@ -285,7 +286,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
         const article = await findTurn(turn.userMessage.content);
         const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
           && new URL(response.url()).pathname === `${sessionPath}/turns/${encodeURIComponent(turn.turnId)}/generated-artifact`);
-        await article.getByRole("button", { name: "Save answer", exact: true }).click();
+        await clickTurnAction(article, "Save answer");
         const response = await responsePromise; assert.equal(response.ok(), true);
         const created = await response.json();
         const owner = await read(`${sessionPath}/generated-artifacts?workspaceId=${encodeURIComponent(workspaceId)}`);

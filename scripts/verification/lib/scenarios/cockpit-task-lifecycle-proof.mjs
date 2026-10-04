@@ -278,7 +278,7 @@ export async function runCockpitTaskLifecycleProof({ context, browser, stack, ci
       const beforeHandoff = writes.length, documents = navigations;
       await page.evaluate(() => { window.__taskRealm = {}; window.__taskRoot = document.getElementById("root"); });
       await keepWorkDraftOnLeave({ page, label: "New task",
-        action: () => createPanel.getByRole("link", { name: "Review current tasks in Ops", exact: true }).click() });
+        action: () => createPanel.getByRole("link", { name: "Review tasks in the classic view", exact: true }).click() });
       await page.waitForSelector('html[data-shell="classic"] .mc-next-shell .mc-next-topbar', { timeout: 30_000 });
       await page.getByRole("heading", { name: "Kanban", exact: true }).waitFor();
       await page.getByRole("button", { name: "New task · Unsaved", exact: true }).click();

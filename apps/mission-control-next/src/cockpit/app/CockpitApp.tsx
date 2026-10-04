@@ -1,17 +1,19 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { UiPreferencesProvider, useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useGatewayAccess } from "../../app/use-gateway-access";
 import { createCockpitQueryClient } from "../data/query-client";
 import { useCockpitRealtime } from "../data/realtime";
 import { CockpitToaster } from "../ui/Toaster";
 import { CockpitAccessGate } from "./CockpitAccessGate";
+import { applyCockpitAppearance } from "./cockpit-appearance";
 import { CockpitNavigationProvider } from "./CockpitNavigationProvider";
 import { CockpitShell } from "./CockpitShell";
 import { useGatewayReachability } from "./use-gateway-reachability";
 
 function GatedCockpit() {
-  const { activeWorkspaceId, notifications } = useUiPreferences();
+  const { activeWorkspaceId, notifications, theme, density } = useUiPreferences();
+  useLayoutEffect(() => applyCockpitAppearance(theme, density), [theme, density]);
   const { gatewayAccess, gatewayBusy, retryGatewayAccess } = useGatewayAccess();
   const [queryClient] = useState(createCockpitQueryClient);
   const [visibleSessionId, setVisibleSessionId] = useState<string | undefined>();

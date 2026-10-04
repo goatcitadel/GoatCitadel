@@ -79,7 +79,7 @@ export function BudgetModeControl() {
     </div>
     {settings.isLoading ? <p role="status" className="mt-3 text-sm text-fg-muted">Loading budget preference…</p> : null}
     {settings.isError ? <p role="alert" className="mt-3 text-sm text-status-failed">{describeApiError(settings.error).summary}</p> : null}
-    {settings.data && !settings.isError && !ready ? <p role="alert" className="mt-3 text-sm text-status-failed">Gateway returned an incomplete budget setting. Review it in current Settings.</p> : null}
+    {settings.data && !settings.isError && !ready ? <p role="alert" className="mt-3 text-sm text-status-failed">Gateway returned an incomplete budget setting. Review it in the classic Settings view.</p> : null}
     {ready ? <>
       <p className="mt-3 text-xs text-fg-muted">Current: {humanizeToken(current)} · settings revision {settings.data?.revision}</p>
       <label className="mt-3 block max-w-sm text-sm font-medium text-fg">Mode
@@ -105,6 +105,6 @@ export function BudgetModeControl() {
       {!confirmed ? <ApprovedSettingsContinuation plan={change.change.plan} onSettled={change.refresh} /> : null}
     </div> : null}
     {notice && !(confirmed && notice.message.startsWith("Change submitted.")) ? <p role={notice.tone === "failed" ? "alert" : "status"} className={`mt-3 text-sm ${notice.tone === "failed" ? "text-status-failed" : notice.tone === "waiting" ? "text-status-waiting" : "text-status-done"}`}>{notice.message}</p> : null}
-    {outcomeUncertain ? <ClassicOwnerLink href="/settings/budget?shell=classic" scope={draft.key} className="mt-3 inline-block text-sm font-medium text-accent hover:underline" label="Inspect current Settings" /> : null}
+    {outcomeUncertain ? <ClassicOwnerLink href="/settings/budget?shell=classic" scope={draft.key} className="mt-3 inline-block text-sm font-medium text-accent hover:underline" label="Inspect budget settings in the classic view" /> : null}
   </section>;
 }

@@ -1,5 +1,6 @@
 import type { HealthSummaryResponse } from "@goatcitadel/mission-control-shared/api/types";
 import type { StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import type { BackupTrustState } from "./backup-trust";
 
 export interface HealthCheck {
   id: "gateway" | "database" | "service" | "backups" | "models" | "channels" | "integrations" | "updates" | "remote_workers";
@@ -7,14 +8,39 @@ export interface HealthCheck {
   detail: string;
   status: { label: string; tone: StatusTone };
   inspectPath: string;
+  /** Something the operator has not set up. It is shown, but never counted as missing proof. */
+  notSetUp?: boolean;
 }
 
-export function deriveHealthChecks(health: HealthSummaryResponse): HealthCheck[] {
+export function backupHealthCheck(trust: BackupTrustState | undefined, hasRecord: boolean): HealthCheck {
+  const base = { id: "backups", title: "Backups", inspectPath: "/ops/runtime" } as const;
+  switch (trust) {
+    case "verified":
+      return { ...base, status: { label: "Verified", tone: "done" },
+        detail: "The latest backup passed exact-byte and restore-contract verification. A full restore is not proven here." };
+    case "stale":
+      return { ...base, status: { label: "Stale", tone: "waiting" },
+        detail: "The latest verified backup is more than a day old or has no valid creation time." };
+    case "failed":
+      return { ...base, status: { label: "Verification failed", tone: "failed" },
+        detail: "The latest backup failed exact-byte or restore-contract verification." };
+    case "none":
+      return { ...base, notSetUp: true, status: { label: "No backup yet", tone: "neutral" },
+        detail: "No backup has been published yet. Create one from the classic runtime view." };
+    default:
+      return hasRecord
+        ? { ...base, status: { label: "Not verified yet", tone: "neutral" },
+            detail: "A backup record exists, but its verification has not been read yet." }
+        : { ...base, notSetUp: true, status: { label: "No backup yet", tone: "neutral" },
+            detail: "No backup record was returned by the health summary." };
+  }
+}
+
+export function deriveHealthChecks(health: HealthSummaryResponse, backupTrust?: BackupTrustState): HealthCheck[] {
   const database = health.database;
   const daemon = health.daemonStatus;
   const diagnosticIssues = daemon.diagnostics?.filter((item) => item.severity === "critical" || item.severity === "warn") ?? [];
   const hasCriticalDiagnostic = diagnosticIssues.some((item) => item.severity === "critical");
-  const backupVerified = health.backups.latest?.verified === true && health.backups.latest?.contractVerified === true;
 
   return [
     {
@@ -62,17 +88,7 @@ export function deriveHealthChecks(health: HealthSummaryResponse): HealthCheck[]
             : { label: "Running", tone: "done" },
       inspectPath: "/ops/runtime",
     },
-    {
-      id: "backups",
-      title: "Backups",
-      detail: backupVerified
-        ? "Backup verification and restore-contract evidence are recorded. A full restore is not proven here."
-        : health.backups.latest
-        ? "A backup record exists, but verification and restore-contract evidence are incomplete."
-        : "No backup record was returned by the health summary.",
-      status: backupVerified ? { label: "Verified record", tone: "done" } : { label: "Needs verification", tone: "waiting" },
-      inspectPath: "/ops/runtime",
-    },
+    backupHealthCheck(backupTrust, Boolean(health.backups.latest)),
   ];
 }
 
@@ -82,7 +98,7 @@ export function summarizeHealthChecks(checks: readonly HealthCheck[]): { label: 
     label: `${problems.length} ${problems.length === 1 ? "system check needs" : "system checks need"} review`,
     tone: problems.some((check) => check.status.tone === "failed") ? "failed" : "waiting",
   };
-  if (!checks.length || checks.some((check) => check.status.tone === "neutral")) {
+  if (!checks.length || checks.some((check) => check.status.tone === "neutral" && !check.notSetUp)) {
     return { label: "Some system checks lack live proof", tone: "neutral" };
   }
   return { label: "Reported system checks clear", tone: "done" };

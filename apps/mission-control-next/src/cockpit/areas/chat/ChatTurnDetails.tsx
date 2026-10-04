@@ -1,11 +1,11 @@
 import { useState } from "react";
 import type { ChatThreadTurnRecord, ChatToolRunRecord } from "@goatcitadel/contracts";
-import { canRetryTurn } from "@goatcitadel/mission-control-shared/components/chat/chat-display-helpers";
 import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/components/chat/ChatToolResultPreview";
 import { getChatToolRunDiagnostics } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
 import { projectChatToolEffectTruth } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-effect-truth";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { ChatOpenCodeEvidence } from "./ChatOpenCodeEvidence";
+import { ChatTurnActions } from "./ChatTurnActions";
 
 type TurnActions = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -70,7 +70,6 @@ export function ChatTurnDetails({
       setCopyStatus("Copy failed. Select the answer text to copy it.");
     }
   };
-  const siblings = turn.branch.siblingTurnIds ?? [];
   const counts = new Map<string, number>();
   for (const tool of turn.toolRuns) {
     const label = activityLabel(tool);
@@ -164,73 +163,14 @@ export function ChatTurnDetails({
           </ul>
         </section>
       ) : null}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        {canRetryTurn(turn) && !streaming && !readOnly ? (
-          <button
-            type="button"
-            onClick={() => actions.onRetryTurn(turn.turnId)}
-            className="font-medium text-accent hover:underline"
-          >
-            Retry
-          </button>
-        ) : null}
-        {answerContent ? (
-          <button type="button" onClick={() => void copyAnswer()} className="text-accent hover:underline">
-            {streaming ? "Copy answer so far" : "Copy answer"}
-          </button>
-        ) : null}
-        {!streaming && !readOnly ? (
-          <>
-            <button
-              type="button"
-              onClick={() => actions.onStartNewThreadFromTurn(turn.turnId)}
-              className="text-accent hover:underline"
-            >
-              Fork
-            </button>
-            <button
-              type="button"
-              onClick={() => actions.onEditTurn(turn.turnId)}
-              className="text-accent hover:underline"
-            >
-              Edit and resend
-            </button>
-          </>
-        ) : null}
-        <button
-          type="button"
-          onClick={() => actions.onOpenRunDetails(turn.turnId)}
-          className="text-accent hover:underline"
-        >
-          Run details
-        </button>
-        {turn.assistantMessage && turn.trace.status !== "failed" && !readOnly ? (
-          <button
-            type="button"
-            onClick={() => actions.onCreateGeneratedArtifact(turn.turnId)}
-            className="text-accent hover:underline"
-          >
-            Save answer
-          </button>
-        ) : null}
-        {siblings.length > 1 ? (
-          <span className="flex items-center gap-1 text-fg-muted">
-            Branch {turn.branch.activeSiblingIndex + 1} of {turn.branch.siblingCount}
-            {siblings.map((siblingId, index) => (
-              <button
-                key={siblingId}
-                type="button"
-                disabled={siblingId === turn.turnId}
-                onClick={() => actions.onSwitchBranch(siblingId)}
-                aria-label={`Switch to branch ${index + 1}`}
-                className="rounded border border-line px-1 text-accent disabled:text-fg-muted"
-              >
-                {index + 1}
-              </button>
-            ))}
-          </span>
-        ) : null}
-      </div>
+      <ChatTurnActions
+        turn={turn}
+        actions={actions}
+        streaming={streaming}
+        readOnly={readOnly}
+        hasAnswer={Boolean(answerContent)}
+        onCopy={() => void copyAnswer()}
+      />
       {copyStatus ? <p role="status">{copyStatus}</p> : null}
     </div>
   );

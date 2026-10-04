@@ -14,6 +14,9 @@ const api = vi.hoisted(() => ({
   revokeAutonomousActivationGrant: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: async () => ({ items: [{ workspaceId: "workspace-a", name: "Research" }] }),
+}));
 vi.mock("../../ui/Dialog", () => ({
   Dialog: ({ open, children, description }: { open: boolean; children?: ReactNode; description?: string }) =>
     open ? (
@@ -71,6 +74,14 @@ afterEach(async () => {
   client.clear();
   vi.unstubAllGlobals();
 });
+it("names the workspace and keeps its raw id inside the identity details", async () => {
+  await render();
+  const card = view!.root.findAllByType("li")[0]!;
+  const summaryLine = card.findAllByType("p")[0]!;
+  expect(text(summaryLine)).not.toContain(grant.workspaceId);
+  expect(text(card)).toContain(grant.workspaceId);
+});
+
 it("shows exact scope and consequences, cancels with zero writes, then requires canonical revocation", async () => {
   await render();
   await click(`Review revocation of ${grant.grantId}`);

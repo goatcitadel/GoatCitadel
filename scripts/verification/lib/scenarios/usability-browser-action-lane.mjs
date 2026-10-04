@@ -23,6 +23,7 @@ import {
 } from "./usability-browser-evidence.mjs";
 import { BROWSER_ACTION_BUNDLES } from "./usability-browser-action-registry.mjs";
 import { assertManagedRuntimeSaved } from "./cockpit-managed-runtime-proof.mjs";
+import { clickTurnAction, countTurnAction } from "./cockpit-turn-actions.mjs";
 
 const PACKAGE_NAME = "@goatcitadel/mission-control-next";
 const OPERATOR_TOKEN = "verification-usability-browser-actions-operator-token";
@@ -462,7 +463,7 @@ export function adaptCodeModeStepForCockpit(sourceStep) {
       return [{ kind: "return-to-cockpit-chat" }];
     }
     if (operation.kind === "click-pattern" && operation.namePattern === "Open durable run trace ") {
-      return [{ kind: "click", name: "Run details", exact: true }, { kind: "click", name: "Open durable evidence", exact: true },
+      return [{ kind: "click-turn-action", name: "Run details" }, { kind: "click", name: "Open durable evidence", exact: true },
       ];
     }
     if (operation.kind === "assert-text" && operation.value === "Signed evidence receipt") {
@@ -1796,6 +1797,12 @@ async function executeOperation(page, operation, state) {
       await state.deps.setBrowserCorrelation(page, state.correlationId, state.sessionId);
       return { kind: "reload", route: state.route.href, sessionId: state.sessionId };
     }
+    case "click-turn-action": {
+      // Phones move every turn action except Retry and Copy into "More turn actions".
+      const turn = page.locator('article[aria-label="Conversation turn"]').last();
+      await clickTurnAction(turn, operation.name, { timeout: ACTION_TIMEOUT_MS });
+      return { kind: operation.kind, accessibleName: operation.name };
+    }
     case "return-to-cockpit-chat": {
       const params = new URLSearchParams({ theme: "dark", sessionId: state.sessionId, shell: "cockpit" });
       await page.goto(state.deps.buildVerificationUiUrl(state.uiUrl, `/chat?${params.toString()}`), {
@@ -1928,13 +1935,14 @@ async function executeOperation(page, operation, state) {
       const failureMessage = /^This turn failed before completion\. Retry once, or narrow the request/iu;
       const turn = page.locator('article[aria-label="Conversation turn"]');
       await turn.getByText(failureMessage).waitFor({ state: "visible" });
-      const [messageCopies, failedBadges, retryControls, runControls, duplicateAlerts] = await Promise.all([
+      const [messageCopies, failedBadges, retryControls, duplicateAlerts] = await Promise.all([
         page.getByText(failureMessage).count(),
         turn.locator('[data-tone="failed"]').count(),
         turn.getByRole("button", { name: "Retry", exact: true }).count(),
-        turn.getByRole("button", { name: "Run details", exact: true }).count(),
         page.locator('section[aria-label="Chat"] [role="alert"]').count(),
       ]);
+      // Counted after the others: on phones this opens the turn's overflow menu, which hides the page from role queries.
+      const runControls = await countTurnAction(turn, "Run details");
       if (messageCopies !== 1 || failedBadges !== 1 || retryControls !== 1 || runControls !== 1 || duplicateAlerts !== 0) {
         const owners = await page.getByText(failureMessage).evaluateAll((nodes) => nodes.map((node) => ({
           tag: node.tagName, classes: node.className, parentTag: node.parentElement?.tagName,
@@ -1945,7 +1953,7 @@ async function executeOperation(page, operation, state) {
         throw new Error(`Chat failure repeated or lost recovery actions: messages=${messageCopies}, badges=${failedBadges}, retry=${retryControls}, run=${runControls}, alerts=${duplicateAlerts}, owners=${JSON.stringify(owners)}`,
         );
       }
-      if (await turn.getByRole("button", { name: "Save answer", exact: true }).count()) {
+      if (await countTurnAction(turn, "Save answer")) {
         throw new Error("failed answer still offers artifact saving");
       }
       return { kind: "terminal-ui-readback", readback: "single-failure-with-recovery", messageCopies };

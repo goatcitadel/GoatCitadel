@@ -18,9 +18,10 @@ import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
 import { queryKeys } from "../data/query-keys";
 import { summarizeHealthChecks } from "../areas/system/health-overview";
 import { deriveSystemHealthChecks } from "../areas/system/system-health";
+import { backupTrustFromInbox } from "../areas/system/backup-trust";
 import { loadSystemHealthSources } from "../areas/system/system-health-sources";
 import { useDesktopUpdates } from "../../features/desktop-updates/desktop-update-bridge";
-import { inboxCountLabel, inboxMatchesWorkspace } from "../areas/inbox/inbox-presentation";
+import { inboxCountLabel, inboxCountTitle, inboxMatchesWorkspace, inboxNavigationLabel } from "../areas/inbox/inbox-presentation";
 import { useOperatorInbox } from "../data/use-operator-inbox";
 import { WorkRunningIndicator } from "./WorkRunningIndicator";
 import { ScopeSwitcher } from "./ScopeSwitcher";
@@ -83,7 +84,13 @@ export function Sidebar({
     workspaces.data?.items.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? "Workspace";
   const stream = STREAM_STATUS[streamState];
   const healthStatus = health.data
-    ? summarizeHealthChecks(deriveSystemHealthChecks(health.data, desktopUpdates))
+    ? summarizeHealthChecks(
+        deriveSystemHealthChecks(
+          health.data,
+          desktopUpdates,
+          backupTrustFromInbox(!inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId) ? inbox.data : undefined),
+        ),
+      )
     : { label: "System checks unavailable", tone: "neutral" as const };
 
   return (
@@ -127,7 +134,7 @@ export function Sidebar({
             <button
               key={entry.area}
               type="button"
-              aria-label={entry.label}
+              aria-label={entry.area === "inbox" ? inboxNavigationLabel(inboxCount) : entry.label}
               title={collapsed ? entry.label : undefined}
               aria-current={current === entry.area ? "page" : undefined}
               aria-describedby={entry.area === "work" ? "cockpit-work-running-summary" : undefined}
@@ -135,17 +142,18 @@ export function Sidebar({
               onPointerEnter={() => preload(entry.area)}
               onFocus={() => preload(entry.area)}
               onPointerDown={() => preload(entry.area)}
-              className="flex h-8 items-center gap-2 rounded-md px-2 text-sm text-fg-secondary hover:bg-sunken aria-[current=page]:bg-sunken aria-[current=page]:text-fg"
+              className="relative flex h-8 items-center gap-2 rounded-md px-2 text-sm text-fg-secondary hover:bg-sunken aria-[current=page]:bg-sunken aria-[current=page]:text-fg"
             >
-              <Icon aria-hidden="true" className="size-4" />
+              <Icon aria-hidden="true" className="size-4 shrink-0" />
               <span className={collapsed ? "sr-only" : "flex-1 text-left"}>{entry.label}</span>
-              {entry.area === "work" ? <WorkRunningIndicator workspaceId={workspaceId} /> : null}
+              {entry.area === "work" ? <WorkRunningIndicator workspaceId={workspaceId} overlay={collapsed} /> : null}
               {entry.area === "inbox" && inboxCount ? (
                 <span
-                  title={inboxCount.endsWith("+") ? "At least this many Inbox items" : "Inbox items"}
+                  aria-hidden="true"
+                  title={inboxCountTitle(inboxCount)}
                   className={
                     collapsed
-                      ? "sr-only"
+                      ? "absolute -top-1 right-0 min-w-4 rounded-full bg-accent px-0.5 text-center text-xs font-semibold text-accent-ink"
                       : "rounded-full border border-line bg-sunken px-1.5 text-xs font-medium text-fg"
                   }
                 >

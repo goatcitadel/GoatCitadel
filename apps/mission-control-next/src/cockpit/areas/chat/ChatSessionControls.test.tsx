@@ -42,20 +42,46 @@ describe("Chat session controls", () => {
     expect(context.onRenameSession).toHaveBeenCalledOnce();
   });
 
+  const trigger = () => container.querySelector('button[aria-label="Conversation actions"]') as HTMLButtonElement;
+  const item = (label: string) =>
+    [...document.body.querySelectorAll('[role="menuitem"]')].find((node) => node.textContent === label) as HTMLElement | undefined;
+  const openWithPointer = () =>
+    act(async () => { trigger().dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 })); });
+
   it("exports immediately but requires confirmation before archiving", async () => {
     const context = dock();
     await act(async () => root.render(<ChatSessionOverflow dock={context} onFork={vi.fn()} />));
-    await act(async () => (container.querySelector("summary") as HTMLElement).click());
-    const exportButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Export conversation");
-    await act(async () => exportButton?.click());
+    await openWithPointer();
+    await act(async () => item("Export conversation")?.click());
     expect(context.onExportSnapshot).toHaveBeenCalledOnce();
-    await act(async () => (container.querySelector("summary") as HTMLElement).click());
-    const archiveButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Archive conversation");
-    await act(async () => archiveButton?.click());
+    expect(item("Export conversation")).toBeUndefined();
+    await openWithPointer();
+    await act(async () => item("Archive conversation")?.click());
     expect(context.onToggleArchiveSession).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain("Archive conversation?");
     const confirm = [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Archive");
     await act(async () => confirm?.click());
     expect(context.onToggleArchiveSession).toHaveBeenCalledOnce();
+  });
+
+  it("opens from the keyboard, closes on Escape and returns focus to the trigger", async () => {
+    await act(async () => root.render(<ChatSessionOverflow dock={dock()} onFork={vi.fn()} onInspect={vi.fn()} />));
+    trigger().focus();
+    await act(async () => { trigger().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+    expect(item("Inspect conversation")).toBeDefined();
+    expect(item("Fork from latest turn")).toBeDefined();
+    const menu = document.body.querySelector('[role="menu"]') as HTMLElement;
+    await act(async () => { menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(document.body.querySelector('[role="menu"]')).toBeNull();
+    // Radix restores focus on the next task after the menu unmounts.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(document.activeElement).toBe(trigger());
+  });
+
+  it("disables fork when the conversation has no turn to fork from", async () => {
+    await act(async () => root.render(<ChatSessionOverflow dock={dock()} />));
+    await openWithPointer();
+    expect(item("Fork from latest turn")?.getAttribute("aria-disabled")).toBe("true");
   });
 });

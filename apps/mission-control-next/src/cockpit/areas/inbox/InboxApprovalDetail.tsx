@@ -7,7 +7,7 @@ import { buildApprovalEvidenceModel } from "@goatcitadel/mission-control-shared/
 import { presentApprovalStatus, presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
-import { approvalExpiryLabel } from "./approval-preview";
+import { approvalExpiryLabel, approvalExplanationLine } from "./approval-preview";
 import { InboxApprovalActions } from "./InboxApprovalActions";
 
 export function InboxApprovalDetail({ item, workspaceId, focusAction }: {
@@ -31,11 +31,9 @@ export function InboxApprovalDetail({ item, workspaceId, focusAction }: {
     {approval ? <>
       <div className="flex flex-wrap gap-2"><StatusBadge status={presentRiskLevel(approval.riskLevel)} /><StatusBadge status={presentApprovalStatus(approval.status)} /></div>
       {approval.expiresAt ? <p className="text-fg-muted">{approvalExpiryLabel(approval.expiresAt)}</p> : null}
-      <p className="text-fg-secondary">{approval.explanation?.summary || "The explanation is not available yet. Review the full approval record before deciding."}</p>
+      <p className="text-fg-secondary">{approvalExplanationLine(approval.explanation?.summary, approval.explanationStatus)}</p>
       {approval.explanation?.riskExplanation ? <p className="text-fg-secondary">{approval.explanation.riskExplanation}</p> : null}
       {approval.explanation?.saferAlternative ? <p className="text-fg-secondary">Safer option: {approval.explanation.saferAlternative}</p> : null}
-      {approval.explanationStatus === "pending" ? <p className="text-fg-muted">Explanation pending.</p> : null}
-      {approval.explanationStatus === "failed" ? <p className="text-fg-muted">Explanation unavailable; inspect the original action before deciding.</p> : null}
       {evidence ? <section aria-label="Action preview" className="space-y-2 rounded-md border border-line bg-sunken p-3">
         <h4 className="font-medium text-fg">Action preview</h4>
         {evidence.targets.length ? <ul className="list-disc space-y-1 pl-5 text-fg-secondary">{evidence.targets.map((target) => <li key={target}>{target}</li>)}</ul> : null}

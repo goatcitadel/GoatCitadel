@@ -151,9 +151,8 @@ export function FirstRunArea() {
           ) : null}
           {!state.completed ? (
             <p className="text-xs text-fg-muted">
-              Finish records a setup marker after fresh model and approval checks; it does not run a model. The
-              completion API has no atomic settings revision guard. Your first completed Chat response provides separate
-              inference evidence.
+              Finish saves that setup is done after checking your model and approval choices again; it does not run a
+              model. Your first completed Chat answer confirms the model separately.
             </p>
           ) : null}
         </>

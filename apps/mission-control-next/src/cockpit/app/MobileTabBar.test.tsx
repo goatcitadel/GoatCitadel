@@ -18,6 +18,7 @@ vi.mock("../data/use-operator-inbox", () => ({
   useOperatorInbox: () => ({ data: {
     workspaceId: "default",
     items: [],
+    coverage: [],
     counts: {
       needs_decision: { known: 2, complete: true },
       proposals: { known: 0, complete: true },

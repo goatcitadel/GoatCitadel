@@ -193,7 +193,7 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
           {rail.snapshot.unknowns.length ? (
             <p className="text-xs text-fg-muted">
               {rail.snapshot.unknowns.length} runtime unknown{rail.snapshot.unknowns.length === 1 ? "" : "s"} remain.
-              Open current Chat for full diagnostics.
+              Open the classic view for full diagnostics.
             </p>
           ) : null}
         </>
