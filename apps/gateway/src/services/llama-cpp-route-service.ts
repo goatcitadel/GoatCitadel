@@ -29,10 +29,14 @@ export interface LlamaCppRoutePortDependencies {
 }
 
 /**
- * What other windows need to hear about. `updatedAt` and the lease diagnostics move with every
- * probe, and for a managed llama-server `lastError` holds its latest stderr line (including the
- * log line for each health probe), so none of them on their own count as a change. Real failures
- * still change `healthy` and `processState`.
+ * What other windows need to hear about. `updatedAt` moves with every probe, and for a managed
+ * llama-server `lastError` holds its latest stderr line (including the log line for each health
+ * probe), so neither counts as a change on its own. Real failures still change `healthy` and
+ * `processState`.
+ *
+ * In `leaseDiagnostics`, only `evidence.lastProbe.at` moves with every probe, but the whole object
+ * is left out on purpose. So a lease-only transition (`activeLeaseCount`, `state`, `ownership`) is
+ * no longer announced on its own; the next announced status carries it.
  */
 export function llamaCppStatusSignature(status: LlamaCppRuntimeStatus): string {
   return JSON.stringify({ ...status, updatedAt: undefined, leaseDiagnostics: undefined, lastError: undefined });
