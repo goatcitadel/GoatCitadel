@@ -74,4 +74,59 @@ describe("runReducer", () => {
     expect(recordFor(state, "missing").status).toBe("not-run");
     expect(countStatuses(state, ["a", "b", "missing"])).toMatchObject({ fail: 1, blocked: 1, "not-run": 1, pass: 0 });
   });
+
+  it("settles running steps to fail when a check is stopped with inflight work", () => {
+    const events: RunEvent[] = [
+      { type: "run-started", checkIds: ["a"], at: AT },
+      { type: "check-started", checkId: "a", at: AT },
+      { type: "step-started", checkId: "a", title: "Poll" },
+      { type: "run-finished", at: AT, reason: "stopped" },
+    ];
+    const state = apply(events);
+    const record = recordFor(state, "a");
+    expect(record.status).toBe("cancelled");
+    expect(record.steps).toEqual([{ title: "Poll", status: "fail" }]);
+    expect(state.running).toBe(false);
+    expect(state.endReason).toBe("stopped");
+  });
+
+  it("settles running steps to fail when check-finished is called with unclosed steps", () => {
+    const events: RunEvent[] = [
+      { type: "check-started", checkId: "a", at: AT },
+      { type: "step-started", checkId: "a", title: "Seed" },
+      { type: "check-finished", checkId: "a", status: "fail", summary: "error", durationMs: 5 },
+    ];
+    const state = apply(events);
+    const record = recordFor(state, "a");
+    expect(record.steps).toEqual([{ title: "Seed", status: "fail" }]);
+    expect(record.status).toBe("fail");
+  });
+
+  it("ignores late events after a check becomes terminal", () => {
+    const events: RunEvent[] = [
+      { type: "check-started", checkId: "a", at: AT },
+      { type: "check-finished", checkId: "a", status: "pass", summary: "ok", durationMs: 1 },
+    ];
+    const state = apply(events);
+    const lateStepStarted = runReducer(state, { type: "step-started", checkId: "a", title: "Late" });
+    const lateCheckLogged = runReducer(lateStepStarted, {
+      type: "check-logged",
+      checkId: "a",
+      entry: { at: AT, message: "too late" },
+    });
+    expect(state).toBe(lateStepStarted);
+    expect(lateStepStarted).toBe(lateCheckLogged);
+  });
+
+  it("marks queued checks not-run when run finishes with completed reason", () => {
+    const events: RunEvent[] = [
+      { type: "run-started", checkIds: ["a", "b"], at: AT },
+      { type: "check-started", checkId: "a", at: AT },
+      { type: "check-finished", checkId: "a", status: "pass", summary: "ok", durationMs: 1 },
+      { type: "run-finished", at: AT, reason: "completed" },
+    ];
+    const state = apply(events);
+    expect(recordFor(state, "a").status).toBe("pass");
+    expect(recordFor(state, "b").status).toBe("not-run");
+  });
 });

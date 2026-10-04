@@ -90,17 +90,32 @@ export function runReducer(state: RunState, event: RunEvent): RunState {
     case "check-started":
       return updateRecord(state, event.checkId, () => ({ ...EMPTY_CHECK_RECORD, status: "running" }));
     case "step-started":
-      return updateRecord(state, event.checkId, (record) => ({
-        ...record,
-        steps: [...record.steps, { title: event.title, status: "running" }],
-      }));
+      return updateRecord(state, event.checkId, (record) => {
+        if (record.status !== "running") {
+          return record;
+        }
+        return {
+          ...record,
+          steps: [...record.steps, { title: event.title, status: "running" }],
+        };
+      });
     case "step-finished":
-      return updateRecord(state, event.checkId, (record) => ({
-        ...record,
-        steps: finishStep(record.steps, event.title, event.status),
-      }));
+      return updateRecord(state, event.checkId, (record) => {
+        if (record.status !== "running") {
+          return record;
+        }
+        return {
+          ...record,
+          steps: finishStep(record.steps, event.title, event.status),
+        };
+      });
     case "check-logged":
-      return updateRecord(state, event.checkId, (record) => ({ ...record, log: [...record.log, event.entry] }));
+      return updateRecord(state, event.checkId, (record) => {
+        if (record.status !== "running") {
+          return record;
+        }
+        return { ...record, log: [...record.log, event.entry] };
+      });
     case "check-finished":
       return updateRecord(state, event.checkId, (record) => ({
         ...record,
@@ -108,6 +123,7 @@ export function runReducer(state: RunState, event: RunEvent): RunState {
         summary: event.summary,
         evidence: event.evidence,
         durationMs: event.durationMs,
+        steps: settleRunningSteps(record.steps),
       }));
     case "run-finished":
       return finishRun(state, event.at, event.reason, event.banner);
@@ -132,7 +148,12 @@ export function countStatuses(state: RunState, checkIds: readonly string[]): Sta
 }
 
 function updateRecord(state: RunState, checkId: string, update: (record: CheckRecord) => CheckRecord): RunState {
-  return { ...state, records: { ...state.records, [checkId]: update(recordFor(state, checkId)) } };
+  const oldRecord = recordFor(state, checkId);
+  const newRecord = update(oldRecord);
+  if (newRecord === oldRecord) {
+    return state;
+  }
+  return { ...state, records: { ...state.records, [checkId]: newRecord } };
 }
 
 function startRun(state: RunState, checkIds: readonly string[], at: string): RunState {
@@ -149,12 +170,18 @@ function startRun(state: RunState, checkIds: readonly string[], at: string): Run
   };
 }
 
+function settleRunningSteps(steps: readonly StepRecord[]): StepRecord[] {
+  return steps.map((step) => (step.status === "running" ? { ...step, status: "fail" } : step));
+}
+
 function finishRun(state: RunState, at: string, reason: RunEndReason, banner: string | undefined): RunState {
   const leftover: CheckRunStatus = reason === "stopped" ? "cancelled" : "not-run";
   const records = Object.fromEntries(
     Object.entries(state.records).map(([checkId, record]): [string, CheckRecord] => [
       checkId,
-      record.status === "queued" || record.status === "running" ? { ...record, status: leftover } : record,
+      record.status === "queued" || record.status === "running"
+        ? { ...record, status: leftover, steps: settleRunningSteps(record.steps) }
+        : record,
     ]),
   );
   return { ...state, running: false, finishedAt: at, endReason: reason, banner, records };
