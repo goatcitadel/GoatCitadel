@@ -142,7 +142,7 @@ The new completed journeys were checked against [rendering/Sources](../scripts/v
 ### Inline approvals and user-input waits — checkpoint proof present
 
 - Source: [ChatBlockers](../apps/mission-control-next/src/cockpit/areas/chat/ChatBlockers.tsx), [RiskApprovalAction](../apps/mission-control-next/src/cockpit/areas/chat/RiskApprovalAction.tsx), [ChatPendingQuestion](../apps/mission-control-next/src/cockpit/areas/chat/ChatPendingQuestion.tsx).
-- Unit evidence: [ChatBlockers.test.tsx](../apps/mission-control-next/src/cockpit/areas/chat/ChatBlockers.test.tsx), [RiskApprovalAction.test.tsx](../apps/mission-control-next/src/cockpit/areas/chat/RiskApprovalAction.test.tsx) cover danger review, uninterrupted nuclear hold and missing-risk withholding; shared outbound tests cover canonical approval reconciliation.
+- Unit evidence: [ChatBlockers.test.tsx](../apps/mission-control-next/src/cockpit/areas/chat/ChatBlockers.test.tsx), [RiskApprovalAction.test.tsx](../apps/mission-control-next/src/cockpit/areas/chat/RiskApprovalAction.test.tsx) cover danger review, nuclear approval's evidence review plus typed confirmation (`approve`), and missing-risk withholding; shared outbound tests cover canonical approval reconciliation.
 - Browser: B5 proves danger approval and user-input choice with resumed canonical records at both sizes.
 - Earlier inline-decision rerun passed in B22. B5 does not establish every risk class, live provider, frozen profile, or remote worker.
 

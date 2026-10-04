@@ -236,7 +236,7 @@ The cockpit Chat becomes the default only when all of these work:
 | Retry or recover | Retry for failed runs; recover for dead-lettered runs (the only resolution the Gateway offers) |
 
 - **Danger** needs a confirmation click.
-- **Nuclear** needs press-and-hold, about one second, on every device.
+- **Nuclear** needs press-and-hold, about one second, on every device. *(Superseded by CH-01 (H0 hotfix): nuclear approvals use the evidence review plus a typed confirmation.)*
 
 ### 8.4 Truth
 
