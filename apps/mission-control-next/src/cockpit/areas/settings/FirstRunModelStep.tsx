@@ -1,13 +1,24 @@
 import { useState } from "react";
 import type { OnboardingState } from "@goatcitadel/contracts";
 import { useDraftLeave } from "../../../features/native-routes/library/DraftLeaveDialog";
+import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
+import { CockpitGuidedModelSetup } from "./CockpitGuidedModelSetup";
 import { McpDraftLeave } from "./McpDraftLeave";
-import { ProviderManagementSettings } from "./ProviderManagementSettings";
-import { ProviderRoutingSettings } from "./ProviderRoutingSettings";
 import { LlamaSetupSettings } from "./LlamaSetupSettings";
 
-export function FirstRunModelStep({ state, workspaceId }: { state: OnboardingState; workspaceId?: string }) {
+export function FirstRunModelStep({
+  state,
+  workspaceId,
+  onReload,
+  onModelReady,
+}: {
+  state: OnboardingState;
+  workspaceId?: string;
+  onReload: () => Promise<void>;
+  onModelReady: () => void;
+}) {
+  const { navigate } = useCockpitRoute();
   const [choice, setChoice] = useState<"provider" | "llama" | null>(null);
   const leave = useDraftLeave();
   const label =
@@ -43,8 +54,14 @@ export function FirstRunModelStep({ state, workspaceId }: { state: OnboardingSta
       </div>
       {choice === "provider" ? (
         <>
-          <ProviderManagementSettings />
-          <ProviderRoutingSettings />
+          <CockpitGuidedModelSetup onboarding={state} reloadOnboarding={onReload} onEnterChat={onModelReady} />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => leave.request(() => navigate("/settings/models?shell=cockpit#providers"))}
+          >
+            Advanced: edit provider profiles
+          </Button>
         </>
       ) : null}
       {choice === "llama" ? <LlamaSetupSettings workspaceId={workspaceId} /> : null}

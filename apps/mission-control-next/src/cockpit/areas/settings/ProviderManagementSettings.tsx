@@ -255,6 +255,7 @@ export function ProviderManagementSettings() {
               disabled={
                 !ready ||
                 locked ||
+                !profile.providerEditor.isDirty ||
                 profile.providerEditor.hasRemoteChanges ||
                 Boolean(profile.providerRequestValidation.error) ||
                 Boolean(profile.saveOperationError)

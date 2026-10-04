@@ -1,13 +1,9 @@
-import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchOnboardingState } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { GuidedModelSetup } from "../../../features/native-routes/settings/sections/GuidedModelSetup";
-import { buildAppHref } from "../../../app/route-model";
-import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
+import { CockpitGuidedModelSetup } from "./CockpitGuidedModelSetup";
 import { ProviderCatalogSettings } from "./ProviderCatalogSettings";
 import { ProviderConnectionSettings } from "./ProviderConnectionSettings";
 import { ProviderManagementSettings } from "./ProviderManagementSettings";
@@ -17,9 +13,6 @@ import { ProviderAdviceSettings } from "./ProviderAdviceSettings";
 /** The governed model setup owner also serves the first-run route. */
 export function ModelsSettings() {
   const { navigate } = useCockpitRoute();
-  const { activeWorkspaceId } = useUiPreferences();
-  const workspaceId = activeWorkspaceId ?? "default";
-  const [notice, setNotice] = useState<string | null>(null);
   const onboarding = useQuery({
     queryKey: ["system", "onboarding"],
     queryFn: fetchOnboardingState,
@@ -53,33 +46,13 @@ export function ModelsSettings() {
           </Button>
         ) : null}
         {!onboarding.isError && onboarding.data ? (
-          <div className="cockpit-model-setup mt-4">
-            <GuidedModelSetup
-              workspaceId={workspaceId}
-              onboarding={onboarding.data}
-              route={{ area: "settings", section: "onboarding" }}
-              navigate={(route) => navigate(buildAppHref(route))}
-              renderApprovalAction={(plan, pending, selection) => (
-                <SettingsApprovalOwnerAction
-                  plan={plan}
-                  owner="guided-model"
-                  workspaceId={workspaceId}
-                  disabled={pending}
-                  viewIdentity={selection}
-                />
-              )}
-              reloadOnboarding={async () => {
-                await onboarding.refetch();
-              }}
-              setNotice={(next) => setNotice(next?.message ?? null)}
-              onEnterChat={() => navigate("/chat")}
-            />
-          </div>
-        ) : null}
-        {notice ? (
-          <p role="status" className="mt-3 text-sm text-fg-secondary">
-            {notice}
-          </p>
+          <CockpitGuidedModelSetup
+            onboarding={onboarding.data}
+            reloadOnboarding={async () => {
+              await onboarding.refetch();
+            }}
+            onEnterChat={() => navigate("/chat")}
+          />
         ) : null}
       </section>
     </>
