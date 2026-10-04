@@ -257,4 +257,43 @@ describe("central cockpit navigation", () => {
     });
     expect(window.location.pathname).toBe("/library");
   });
+
+  it("holds Back on the page while a draft is unsaved, then leaves after Discard", async () => {
+    await render();
+    await act(async () => {
+      draft.setValue({ name: "Unsaved text" });
+    });
+    await act(async () => {
+      window.history.replaceState(null, "", "/library?shell=cockpit");
+      window.dispatchEvent(new Event("popstate"));
+    });
+    expect(window.location.pathname).toBe("/work");
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    await click("Discard changes");
+    await settleHistoryEvents();
+    expect(window.location.pathname).toBe("/library");
+  });
+
+  it("lets Back through when nothing is unsaved", async () => {
+    await render();
+    await act(async () => {
+      window.history.replaceState(null, "", "/library?shell=cockpit");
+      window.dispatchEvent(new Event("popstate"));
+    });
+    expect(window.location.pathname).toBe("/library");
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(0);
+  });
+
+  it("asks the browser to confirm a reload or close only while a draft is unsaved", async () => {
+    await render();
+    const clean = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(clean);
+    expect(clean.defaultPrevented).toBe(false);
+    await act(async () => {
+      draft.setValue({ name: "Unsaved text" });
+    });
+    const dirty = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(dirty);
+    expect(dirty.defaultPrevented).toBe(true);
+  });
 });

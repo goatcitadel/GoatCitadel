@@ -1,17 +1,23 @@
-import { useLayoutEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
 import { canonicalJsonString } from "@goatcitadel/contracts";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useShellHandoff } from "../../app/use-shell-handoff";
+import { hasDirtySections, useBeforeUnloadGuard } from "../../features/native-routes/library/use-form-dirty";
 import { ShellSwitchFeedback } from "./use-cockpit-shell-switch";
 import { CockpitNavigationContext, type CockpitNavigationOwner } from "./cockpit-navigation-context";
 import {
+  COCKPIT_LOCATION_EVENT,
   cockpitHref,
   commitCockpitNavigation,
   readCockpitHistory,
   retainsSettingsPage,
   subscribeCockpitHistory,
 } from "./cockpit-history";
+
+function currentLocation(): string {
+  return window.location.pathname + window.location.search + window.location.hash;
+}
 
 /** One presentation leave owner for the frame and all imperative native route callbacks. */
 export function CockpitNavigationProvider({ children }: { children: ReactNode }) {
@@ -30,6 +36,26 @@ export function CockpitNavigationProvider({ children }: { children: ReactNode })
     };
   }, []);
   const handoff = useShellHandoff([identity, history]);
+  useBeforeUnloadGuard();
+  const shownLocation = useRef(currentLocation());
+  const heldTarget = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    shownLocation.current = currentLocation();
+  }, [history]);
+  useEffect(() => {
+    // Back and Forward can't be cancelled. With unsaved drafts the page puts its own URL back
+    // and replays the destination through the reviewed transition below, which asks first.
+    const onPopState = () => {
+      const target = currentLocation();
+      const source = shownLocation.current;
+      if (target === source || !hasDirtySections() || retainsSettingsPage(source, target)) return;
+      heldTarget.current = target;
+      window.history.pushState(null, "", source);
+      window.dispatchEvent(new Event(COCKPIT_LOCATION_EVENT));
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
   const isCurrent = () =>
     mounted.current &&
     view.current === renderedView &&
@@ -60,6 +86,14 @@ export function CockpitNavigationProvider({ children }: { children: ReactNode })
       review.navigate(destination, options);
     });
   };
+  // No dependency list on purpose: `navigate` is rebuilt every render, so this already ran after every
+  // render. It must see the render that restored the URL, so the review reads current scope.
+  useEffect(() => {
+    const target = heldTarget.current;
+    if (!target) return;
+    heldTarget.current = null;
+    navigate(target);
+  });
   return (
     <CockpitNavigationContext.Provider
       value={{ navigate, requestTransition, isTransitionPending: handoff.isTransitionPending }}
