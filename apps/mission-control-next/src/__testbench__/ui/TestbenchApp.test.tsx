@@ -1,47 +1,27 @@
 // @vitest-environment happy-dom
-import { act, type ReactElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { TestbenchEnv } from "../env";
 import { fail, pass } from "../runner/assert";
 import type { CheckDef } from "../runner/types";
-import type { TargetRequest } from "../gateway-target/resolve-target";
+import {
+  ENV,
+  REAL_REQUEST,
+  SANDBOX_REQUEST,
+  buttonNamed,
+  cleanup,
+  click,
+  makeDeps,
+  render,
+  rowFor,
+  rowButtons,
+  text,
+  waitForText,
+} from "../test-support/ui-helpers";
 import { TestbenchApp } from "./TestbenchApp";
-import type { TestbenchDeps } from "./use-testbench";
 
-interface ConfirmStubProps {
-  readonly open: boolean;
-  readonly title: string;
-  readonly message: string;
-  readonly confirmLabel?: string;
-  readonly onConfirm: () => void;
-  readonly onCancel: () => void;
-}
-
-vi.mock("@goatcitadel/mission-control-shared/components/ConfirmModal", async () => {
-  const { createElement } = await import("react");
-  return {
-    ConfirmModal: (props: ConfirmStubProps) =>
-      props.open
-        ? createElement(
-            "div",
-            { role: "dialog", "aria-label": props.title },
-            createElement("p", null, props.message),
-            createElement("button", { type: "button", onClick: props.onConfirm }, props.confirmLabel ?? "Confirm"),
-            createElement("button", { type: "button", onClick: props.onCancel }, "Cancel"),
-          )
-        : null,
-  };
-});
-
-const ENV: TestbenchEnv = {
-  sandboxOrigin: "http://127.0.0.1:41873",
-  sandboxRoot: "/tmp/sandbox",
-  realOrigin: "http://127.0.0.1:8787",
-  isProd: false,
-};
-const SANDBOX_REQUEST: TargetRequest = { requested: "sandbox", origin: ENV.sandboxOrigin };
-const REAL_REQUEST: TargetRequest = { requested: "real", origin: ENV.realOrigin };
+vi.mock("@goatcitadel/mission-control-shared/components/ConfirmModal", async () =>
+  (await import("../test-support/ui-helpers")).confirmModalStub(),
+);
 
 function makeChecks() {
   const external = vi.fn(async () => pass("External ok."));
@@ -101,73 +81,10 @@ function makeChecks() {
   return { checks, external };
 }
 
-function makeDeps(handWritten: readonly CheckDef[], overrides: Partial<TestbenchDeps> = {}): TestbenchDeps {
-  return {
-    apiBase: () => "http://127.0.0.1:41873",
-    preflight: async () => ({ status: "ready", message: "Gateway ready." }),
-    fetchStatus: async () => ({ diagnosticsEnabled: true, rootDir: "/tmp/sandbox" }),
-    fetchManifest: async () => ({
-      items: [
-        { method: "GET", url: "/api/v1/demo", tracked: true, accessClass: "operator" },
-        { method: "POST", url: "/api/v1/demo", tracked: true, accessClass: "operator" },
-        { method: "GET", url: "/api/v1/uncovered/:thingId", tracked: true, accessClass: "operator" },
-      ],
-    }),
-    seed: async () => ({ workspaceId: "ws-test" }),
-    handWritten,
-    ...overrides,
-  };
-}
+afterEach(cleanup);
 
-const roots: Root[] = [];
-
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    act(() => root.unmount());
-  }
-  document.body.innerHTML = "";
-});
-
-async function render(ui: ReactElement): Promise<void> {
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
-  roots.push(root);
-  await act(async () => {
-    root.render(ui);
-  });
-}
-
-function text(): string {
-  return document.body.textContent ?? "";
-}
-
-async function waitForText(expected: string): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (text().includes(expected)) {
-      return;
-    }
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-  }
-  throw new Error(`Text not found: ${expected}\n${text()}`);
-}
-
-function buttonNamed(name: string): HTMLButtonElement {
-  const found = Array.from(document.querySelectorAll("button")).find(
-    (button) => button.getAttribute("aria-label") === name || button.textContent?.trim() === name,
-  );
-  if (!found) {
-    throw new Error(`No button named ${name}`);
-  }
-  return found;
-}
-
-async function click(element: HTMLElement): Promise<void> {
-  await act(async () => {
-    element.click();
-  });
+function dialog(): Element | null {
+  return document.querySelector('[role="dialog"]');
 }
 
 describe("TestbenchApp", () => {
@@ -208,11 +125,72 @@ describe("TestbenchApp", () => {
     await render(<TestbenchApp targetRequest={SANDBOX_REQUEST} env={ENV} deps={makeDeps(checks)} />);
     await waitForText("Demo external");
     await click(buttonNamed("Run Demo external"));
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Spends tokens.");
+    expect(dialog()?.textContent).toContain("Spends tokens.");
     expect(external).not.toHaveBeenCalled();
     await click(buttonNamed("Run it"));
     await waitForText("Run completed: 1 pass");
     expect(external).toHaveBeenCalledTimes(1);
+  });
+
+  it("always states where an external check runs and what it may cost", async () => {
+    const { checks } = makeChecks();
+    const bare = checks.map((check) => (check.id === "demo.external" ? { ...check, description: undefined } : check));
+    await render(<TestbenchApp targetRequest={SANDBOX_REQUEST} env={ENV} deps={makeDeps(bare)} />);
+    await waitForText("Demo external");
+    await click(buttonNamed("Run Demo external"));
+    expect(dialog()?.textContent).toContain("“Demo external” runs against the sandbox gateway.");
+    expect(dialog()?.textContent).toContain("It may spend provider tokens or reach services outside this machine.");
+  });
+
+  it("names the real gateway in the confirmation when an allowlisted check runs there", async () => {
+    const deps = makeDeps(makeChecks().checks, { apiBase: () => "http://127.0.0.1:8787" });
+    await render(<TestbenchApp targetRequest={REAL_REQUEST} env={ENV} deps={deps} />);
+    await waitForText("REAL gateway");
+    await click(buttonNamed("Run Demo external"));
+    expect(dialog()?.textContent).toContain("the real gateway at http://127.0.0.1:8787");
+  });
+
+  it("does not run an external check when the confirmation is cancelled", async () => {
+    const { checks, external } = makeChecks();
+    await render(<TestbenchApp targetRequest={SANDBOX_REQUEST} env={ENV} deps={makeDeps(checks)} />);
+    await waitForText("Demo external");
+    await click(buttonNamed("Run Demo external"));
+    expect(dialog()).not.toBeNull();
+    await click(buttonNamed("Cancel"));
+    expect(dialog()).toBeNull();
+    expect(external).not.toHaveBeenCalled();
+    expect(rowFor("Demo external").textContent).toContain("○ not run");
+  });
+
+  it("asks again every time: a confirmation covers only the run it was given for", async () => {
+    const { checks, external } = makeChecks();
+    await render(<TestbenchApp targetRequest={SANDBOX_REQUEST} env={ENV} deps={makeDeps(checks)} />);
+    await waitForText("Demo external");
+    await click(buttonNamed("Run Demo external"));
+    await click(buttonNamed("Run it"));
+    await waitForText("Run completed: 1 pass");
+    expect(external).toHaveBeenCalledTimes(1);
+    expect(dialog()).toBeNull();
+
+    await click(buttonNamed("Run Demo external"));
+    expect(dialog()).not.toBeNull();
+    expect(external).toHaveBeenCalledTimes(1);
+  });
+
+  it("never runs an external check from Run all, even after it was confirmed once", async () => {
+    const { checks, external } = makeChecks();
+    await render(<TestbenchApp targetRequest={SANDBOX_REQUEST} env={ENV} deps={makeDeps(checks)} />);
+    await waitForText("Demo external");
+    await click(buttonNamed("Run Demo external"));
+    await click(buttonNamed("Run it"));
+    await waitForText("Run completed: 1 pass");
+
+    await click(buttonNamed("Run all allowed"));
+    await waitForText("Run completed: 2 pass, 1 fail, 0 blocked, 2 skipped.");
+    expect(external).toHaveBeenCalledTimes(1);
+    await click(rowFor("Demo external"));
+    const drawer = document.querySelector('aside[aria-label="Demo external details"]');
+    expect(drawer?.textContent).toContain("External checks run only after you confirm them.");
   });
 
   it("shows journey steps, including steps that never ran, in the drawer", async () => {
@@ -220,10 +198,7 @@ describe("TestbenchApp", () => {
     await waitForText("Run all allowed");
     await click(buttonNamed("Run all allowed"));
     await waitForText("Run completed");
-    const journeyRow = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-testbench-row]")).find((row) =>
-      row.textContent?.includes("Demo journey"),
-    );
-    await click(journeyRow as HTMLButtonElement);
+    await click(rowFor("Demo journey"));
     const drawer = document.querySelector('aside[aria-label="Demo journey details"]');
     expect(drawer?.textContent).toContain("✓ First step");
     expect(drawer?.textContent).toContain("Second step (not run)");
@@ -236,6 +211,21 @@ describe("TestbenchApp", () => {
     await click(buttonNamed("Uncovered routes (1)"));
     expect(text()).toContain("GET /api/v1/uncovered/:thingId");
     expect(text()).toContain("claimed by demo.host");
+  });
+
+  it("switches views with pressed buttons in a labelled group, not a partial tab pattern", async () => {
+    await render(<TestbenchApp targetRequest={SANDBOX_REQUEST} env={ENV} deps={makeDeps(makeChecks().checks)} />);
+    await waitForText("Uncovered routes (1)");
+    expect(document.querySelector('[role="tab"], [role="tablist"]')).toBeNull();
+    expect(document.querySelector('[role="group"][aria-label="Test bench views"]')).not.toBeNull();
+    expect(buttonNamed("Live console").getAttribute("aria-pressed")).toBe("true");
+    expect(buttonNamed("Uncovered routes (1)").getAttribute("aria-pressed")).toBe("false");
+    await click(buttonNamed("Uncovered routes (1)"));
+    expect(buttonNamed("Live console").getAttribute("aria-pressed")).toBe("false");
+    expect(buttonNamed("Uncovered routes (1)").getAttribute("aria-pressed")).toBe("true");
+    expect(rowButtons()).toHaveLength(0);
+    await click(buttonNamed("Live console"));
+    expect(rowButtons().length).toBeGreaterThan(0);
   });
 
   it("copies a Markdown report", async () => {
@@ -268,7 +258,7 @@ describe("TestbenchApp", () => {
   it("moves focus between rows with the arrow keys", async () => {
     await render(<TestbenchApp targetRequest={SANDBOX_REQUEST} env={ENV} deps={makeDeps(makeChecks().checks)} />);
     await waitForText("Demo read");
-    const rows = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-testbench-row]"));
+    const rows = rowButtons();
     rows[0]?.focus();
     await act(async () => {
       rows[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));

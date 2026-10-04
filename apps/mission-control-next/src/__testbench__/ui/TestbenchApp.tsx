@@ -71,8 +71,9 @@ function ReadyView({ bench, load }: { readonly bench: TestbenchController; reado
   );
   const selected = load.checks.find((check) => check.id === selectedId);
 
+  // Every external run asks first: a confirmation covers only the run it was given for.
   const requestRun = (check: CheckDef) => {
-    if (check.tier === "external" && !options.confirmedExternalIds.has(check.id)) {
+    if (check.tier === "external") {
       setPendingExternal(check);
       return;
     }
@@ -80,10 +81,7 @@ function ReadyView({ bench, load }: { readonly bench: TestbenchController; reado
   };
   // External checks stay clickable before confirmation: clicking opens the confirmation dialog.
   const permissionOf = (check: CheckDef) =>
-    checkPermission(check, load.target, {
-      ...options,
-      confirmedExternalIds: new Set([...options.confirmedExternalIds, check.id]),
-    });
+    checkPermission(check, load.target, { ...options, confirmedExternalIds: new Set([check.id]) });
   const confirmExternal = () => {
     if (pendingExternal) {
       bench.run([pendingExternal.id], pendingExternal.id);
@@ -124,11 +122,11 @@ function ReadyView({ bench, load }: { readonly bench: TestbenchController; reado
         onCopyReport={copyReport}
       />
       {runState.banner ? <NoticeBanner tone="error" message={runState.banner} /> : null}
-      <div className="testbench-tabs" role="tablist" aria-label="Test bench views">
-        <button type="button" role="tab" aria-selected={tab === "console"} onClick={() => setTab("console")}>
+      <div className="testbench-tabs" role="group" aria-label="Test bench views">
+        <button type="button" aria-pressed={tab === "console"} onClick={() => setTab("console")}>
           Live console
         </button>
-        <button type="button" role="tab" aria-selected={tab === "uncovered"} onClick={() => setTab("uncovered")}>
+        <button type="button" aria-pressed={tab === "uncovered"} onClick={() => setTab("uncovered")}>
           {`Uncovered routes (${bench.coverage ? bench.coverage.uncovered.length : "unavailable"})`}
         </button>
       </div>
@@ -177,7 +175,11 @@ function ReadyView({ bench, load }: { readonly bench: TestbenchController; reado
 
 function externalConfirmMessage(check: CheckDef, target: TargetInfo): string {
   const where = target.kind === "sandbox" ? "the sandbox gateway" : `the real gateway at ${target.origin}`;
-  return [`“${check.title}” runs against ${where} and leaves this machine.`, check.description]
+  return [
+    `“${check.title}” runs against ${where}.`,
+    "It may spend provider tokens or reach services outside this machine.",
+    check.description,
+  ]
     .filter((part): part is string => Boolean(part))
     .join(" ");
 }

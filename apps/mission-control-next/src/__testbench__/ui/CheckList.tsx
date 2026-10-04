@@ -33,8 +33,11 @@ export function CheckList({ checks, state, selectedId, running, onSelect, onRun,
       return;
     }
     const rows = Array.from(listRef.current?.querySelectorAll<HTMLButtonElement>("[data-testbench-row]") ?? []);
-    const current = rows.findIndex((row) => row === document.activeElement);
-    const next = rows[event.key === "ArrowDown" ? Math.min(rows.length - 1, current + 1) : Math.max(0, current - 1)];
+    // Resolve the row that holds focus, whether that is its main button or its Run button.
+    const activeItem = document.activeElement?.closest("li");
+    const current = rows.findIndex((row) => row.closest("li") === activeItem);
+    const target = event.key === "ArrowDown" ? current + 1 : current - 1;
+    const next = rows[Math.min(rows.length - 1, Math.max(0, target))];
     if (next) {
       event.preventDefault();
       next.focus();

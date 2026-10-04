@@ -86,7 +86,7 @@
   cursor: pointer;
 }
 
-.testbench-tabs button[aria-selected="true"] {
+.testbench-tabs button[aria-pressed="true"] {
   border-bottom-color: var(--brand);
   color: var(--fg-primary);
   font-weight: 600;
@@ -136,6 +136,10 @@
 .testbench-panes {
   display: grid;
   grid-template-columns: 13rem minmax(0, 1fr) 22rem;
+
+  /* One row that fills the bounded height, so the rail, list, and drawer each scroll on their own. */
+  grid-template-rows: minmax(0, 1fr);
+  height: calc(100vh - 13rem);
   min-height: 28rem;
   overflow: hidden;
   border: 1px solid var(--border-subtle);
@@ -321,6 +325,9 @@
 @media (max-width: 1023px) {
   .testbench-panes {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    height: auto;
+    min-height: 0;
   }
 
   .testbench-rail {

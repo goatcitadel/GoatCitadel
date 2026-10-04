@@ -13,6 +13,10 @@ if (container) {
     const targetRequest = resolveTargetRequest(window.location.search, env);
     // The shared client reads this tag once at module load, so it must exist before the app is imported.
     applyGatewayOriginMeta(document, targetRequest.origin);
-    void import("./ui/mount").then(({ mountTestbench }) => mountTestbench(container, targetRequest, env));
+    import("./ui/mount")
+      .then(({ mountTestbench }) => mountTestbench(container, targetRequest, env))
+      .catch((error: unknown) => {
+        container.textContent = `The test bench failed to load: ${error instanceof Error ? error.message : String(error)}`;
+      });
   }
 }

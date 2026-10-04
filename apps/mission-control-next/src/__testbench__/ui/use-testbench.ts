@@ -23,6 +23,8 @@ export interface TestbenchDeps {
   readonly handWritten: readonly CheckDef[];
 }
 
+const NO_CONFIRMED_EXTERNAL: ReadonlySet<string> = new Set<string>();
+
 export const DEFAULT_TESTBENCH_DEPS: TestbenchDeps = {
   apiBase: getGatewayApiBaseUrl,
   preflight: () => preflightGatewayAccess(),
@@ -111,7 +113,6 @@ export function useTestbench(
   const [load, setLoad] = useState<LoadState>({ phase: "loading" });
   const [runState, dispatch] = useReducer(runReducer, INITIAL_RUN_STATE);
   const [allowHost, setAllowHost] = useState(false);
-  const [confirmedExternalIds, setConfirmedExternalIds] = useState<ReadonlySet<string>>(() => new Set<string>());
   const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -144,18 +145,15 @@ export function useTestbench(
     () => (load.phase === "ready" ? computeCoverage(load.manifestKeys, load.checks) : undefined),
     [load],
   );
-  const options = useMemo<RunOptions>(() => ({ allowHost, confirmedExternalIds }), [allowHost, confirmedExternalIds]);
+  // A confirmation covers only the run it was given for, so the exposed options never carry one.
+  const options = useMemo<RunOptions>(() => ({ allowHost, confirmedExternalIds: NO_CONFIRMED_EXTERNAL }), [allowHost]);
 
   const run = useCallback(
     (checkIds: readonly string[], confirmExternalId?: string) => {
       if (load.phase !== "ready" || controllerRef.current) {
         return;
       }
-      const confirmed =
-        confirmExternalId === undefined ? confirmedExternalIds : new Set([...confirmedExternalIds, confirmExternalId]);
-      if (confirmExternalId !== undefined) {
-        setConfirmedExternalIds(confirmed);
-      }
+      const confirmed = confirmExternalId === undefined ? NO_CONFIRMED_EXTERNAL : new Set([confirmExternalId]);
       const wanted = new Set(checkIds);
       const controller = new AbortController();
       controllerRef.current = controller;
@@ -170,7 +168,7 @@ export function useTestbench(
         controllerRef.current = null;
       });
     },
-    [load, allowHost, confirmedExternalIds, deps],
+    [load, allowHost, deps],
   );
 
   const stop = useCallback(() => {
