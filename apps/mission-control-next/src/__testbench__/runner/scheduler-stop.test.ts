@@ -235,7 +235,7 @@ describe("runChecks seeding interrupted", () => {
     expect(state.records.plain?.status).toBe("cancelled");
   });
 
-  it("blocks workspace checks when the seed throws an AbortError although the run was not stopped", async () => {
+  it("fails workspace checks when the seed throws an AbortError although the run was not stopped", async () => {
     const { events, emit } = collector();
     const reason = await runChecks({
       checks: [needing()],
@@ -249,10 +249,10 @@ describe("runChecks seeding interrupted", () => {
     });
     expect(reason).toBe("completed");
     expect(finished(events, "needs")).toMatchObject({
-      status: "blocked",
+      status: "fail",
       summary: "Could not seed a test workspace: Stopped before it finished.",
     });
-    expect(foldEvents(events).records.needs?.status).toBe("blocked");
+    expect(foldEvents(events).records.needs?.status).toBe("fail");
   });
 
   it("stops promptly when the seed call ignores its signal", async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { REAL_TARGET, SANDBOX_TARGET } from "../test-support/context";
 import {
   RUN_OPTIONS,
@@ -154,7 +155,7 @@ describe("runChecks", () => {
     expect(seen).toEqual(["ws-seeded", "ws-seeded"]);
   });
 
-  it("blocks workspace checks when seeding fails and never seeds when nothing needs it", async () => {
+  it("fails workspace checks when seeding fails and never seeds when nothing needs it", async () => {
     const { events, emit } = collector();
     const failingSeed = vi.fn(async () => {
       throw new CheckAssertionError("seed exploded");
@@ -171,7 +172,7 @@ describe("runChecks", () => {
       seed: failingSeed,
     });
     expect(finished(events, "needs")).toMatchObject({
-      status: "blocked",
+      status: "fail",
       summary: "Could not seed a test workspace: seed exploded",
     });
     expect(finished(events, "plain")).toMatchObject({ status: "pass" });
@@ -186,5 +187,40 @@ describe("runChecks", () => {
       seed: unusedSeed,
     });
     expect(unusedSeed).not.toHaveBeenCalled();
+  });
+
+  it("fails workspace checks on an unexpected seed error but keeps a 503 seed failure blocked", async () => {
+    const seedFailure = async (seed: () => Promise<{ workspaceId: string }>) => {
+      const { events, emit } = collector();
+      await runChecks({
+        checks: [makeCheck("needs", "mutate", async () => pass("never"), { needsWorkspace: true })],
+        target: SANDBOX_TARGET,
+        options: RUN_OPTIONS,
+        signal: new AbortController().signal,
+        emit,
+        seed,
+      });
+      return finished(events, "needs");
+    };
+    expect(
+      await seedFailure(async () => {
+        throw new Error("boom");
+      }),
+    ).toMatchObject({ status: "fail", summary: "Could not seed a test workspace: boom" });
+    expect(
+      await seedFailure(async () => {
+        throw new ApiRequestError("API error 503", {
+          kind: "http",
+          method: "POST",
+          path: "/api/v1/dev/verification/seed-workspace",
+          status: 503,
+          body: { error: "Verification service is unavailable." },
+          bodyText: "",
+        });
+      }),
+    ).toMatchObject({
+      status: "blocked",
+      summary: "Could not seed a test workspace: Unavailable (503): Verification service is unavailable.",
+    });
   });
 });

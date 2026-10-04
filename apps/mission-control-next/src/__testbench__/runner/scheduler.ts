@@ -115,14 +115,14 @@ async function prepareRun(
     runnable: allowed.filter((check) => check.needsWorkspace !== true),
     workspaceId: undefined,
   });
-  const blockNeeding = (summary: string): PreparedRun => {
+  const settleNeeding = (status: "fail" | "blocked", summary: string): PreparedRun => {
     for (const check of needing) {
-      input.emit({ type: "check-finished", checkId: check.id, status: "blocked", summary, durationMs: 0 });
+      input.emit({ type: "check-finished", checkId: check.id, status, summary, durationMs: 0 });
     }
     return dropNeeding();
   };
   if (!input.seed || input.target.kind !== "sandbox") {
-    return blockNeeding("No seeded test workspace is available on this target.");
+    return settleNeeding("blocked", "No seeded test workspace is available on this target.");
   }
   if (signal.aborted) {
     return dropNeeding();
@@ -140,7 +140,10 @@ async function prepareRun(
       onUnreachable(classified.summary);
       return dropNeeding();
     }
-    return blockNeeding(`Could not seed a test workspace: ${classified.summary}`);
+    // Blocked means disabled or unavailable; an unexpected seed error is a failure. A live-run AbortError
+    // classifies as cancelled, but the user did not stop the run, so it is also a failure.
+    const status = classified.status === "blocked" ? "blocked" : "fail";
+    return settleNeeding(status, `Could not seed a test workspace: ${classified.summary}`);
   }
 }
 
