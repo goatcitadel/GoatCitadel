@@ -4,6 +4,7 @@ import { LONG_LIST_COUNT, assertExactRecords, seedLongListFixture, readLongListO
 import { assertProjectReadRequests } from "./cockpit-chat-project-proof.mjs";
 import { assertCitadelPresenceHeartbeat } from "./cockpit-citadel-directory-proof.mjs";
 import { recordCockpitObserverRequest, assertCockpitObserverRequests } from "./cockpit-observer-requests.mjs";
+import { inboxOwnerHref } from "./classic-owner-navigation.mjs";
 
 export function assertWindowedRecords({ total, rendered, keys, expectedKeys }) {
   assert.ok(total > 100); assert.equal(total, expectedKeys.length); assert.equal(new Set(expectedKeys).size, expectedKeys.length);
@@ -63,8 +64,9 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
           await page.waitForFunction(id => document.querySelector('[data-inbox-item][data-selected="true"] [data-record-key]')?.getAttribute("data-record-key") === id, decision.id);
         }
         await page.keyboard.press("e");
-        await page.waitForFunction(href => document.activeElement?.getAttribute("href") === href, decisions.at(-1).href);
-        assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("href")), decisions.at(-1).href);
+        const ownerHref = inboxOwnerHref(decisions.at(-1).href);
+        await page.waitForFunction(href => document.activeElement?.getAttribute("href") === href, ownerHref);
+        assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("href")), ownerHref);
         const last = page.locator('[data-inbox-item][data-selected="true"]');
         await last.getByRole("button", { name: "Show source context", exact: true }).click();
         const contextRegion = last.getByRole("region", { name: "Source conversation context" });

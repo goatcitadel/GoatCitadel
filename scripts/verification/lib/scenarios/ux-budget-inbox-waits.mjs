@@ -1,6 +1,7 @@
 import { CHAT_VIEWPORTS, measureLayout } from "./ux-budget-measurements.mjs";
 import { evaluateHorizontalOverflow } from "../ux-budgets.mjs";
 import { mkdir } from "node:fs/promises";
+import { inboxOwnerHref } from "./classic-owner-navigation.mjs";
 
 export async function runUxBudgetInboxWaits(environment) {
   const { context, browser, stack, fixture, seedInboxQuestion, seedCompletedBackgroundUpdate, deps } = environment;
@@ -46,7 +47,7 @@ export async function runUxBudgetInboxWaits(environment) {
           const page = await browserContext.newPage();
           await page.goto(buildVerificationUiUrl(stack.uiUrl, "/inbox"), { waitUntil: "domcontentloaded" });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
-          const row = page.locator("li[data-inbox-item]").filter({ has: page.locator(`a[href="${item.href}"]`) });
+          const row = page.locator("li[data-inbox-item]").filter({ has: page.locator(`a[href="${inboxOwnerHref(item.href)}"]`) });
           await row.getByRole("button", { name: "Details" }).click();
           const review = page.getByRole("region", { name: "Current Chat question" });
           await review.getByText("Which path should the verification run take from here?").waitFor();
@@ -137,7 +138,7 @@ export async function runUxBudgetInboxWaits(environment) {
           const page = await browserContext.newPage();
           await page.goto(buildVerificationUiUrl(stack.uiUrl, "/inbox"), { waitUntil: "domcontentloaded" });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
-          const row = page.locator("li[data-inbox-item]").filter({ has: page.locator(`a[href="${item.href}"]`) });
+          const row = page.locator("li[data-inbox-item]").filter({ has: page.locator(`a[href="${inboxOwnerHref(item.href)}"]`) });
           await row.getByText("Background run completed").waitFor();
           await row.getByRole("button", { name: "Details" }).click();
           const inspector = page.locator('[aria-label="Inspector: Background run completed"]');

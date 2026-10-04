@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-import { NEXT_RELEASE_SURFACE_MANIFEST } from "../release-surface-manifest.mjs";
+import { NEXT_RELEASE_SURFACE_MANIFEST, resolveReleaseSurfaceHref } from "../release-surface-manifest.mjs";
+import { classicManifestEntry } from "./ux-budget-measurements.mjs";
 import {
   COCKPIT_ROUTES,
   UX_BUDGET_ENFORCEMENT_DEFAULTS,
@@ -182,6 +183,20 @@ describe("UX budget lane wiring", () => {
   it("measures routes in the release surface manifest", () => {
     const known = new Set(NEXT_RELEASE_SURFACE_MANIFEST.map((entry) => entry.slug));
     for (const slug of UX_BUDGET_ROUTE_SLUGS) assert.ok(known.has(slug), slug);
+  });
+
+  it("pins release-manifest budgets to Classic now that Cockpit is the default", () => {
+    for (const slug of UX_BUDGET_ROUTE_SLUGS) {
+      const entry = classicManifestEntry(slug);
+      assert.equal(entry.shell, "classic", slug);
+      const href = new URL(resolveReleaseSurfaceHref(entry, {}, {}), "http://verification.invalid");
+      assert.equal(href.searchParams.get("shell"), "classic", slug);
+      assert.equal(href.searchParams.has("shellScope"), false, slug);
+    }
+    assert.match(
+      readFileSync(new URL("./ux-budget-routes.mjs", import.meta.url), "utf8"),
+      /`\/chat\?shell=classic&sessionId=/,
+    );
   });
 
   it("measures each cockpit area and the component gallery", () => {

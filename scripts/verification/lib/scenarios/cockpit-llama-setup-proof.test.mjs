@@ -34,10 +34,11 @@ test("exact specialist inspection requires the same pending approval, scope, imm
       scope: waiting.scope, intentHash: waiting.intentHash, targetOwnerId: waiting.target.ownerId,
       targetResourceId: waiting.target.resourceId, targetRevision: waiting.target.expectedRevision,
       adapterId: waiting.adapter.adapterId, adapterVersion: waiting.adapter.version } } };
-  const input = { plan: waiting, href: "/ops/approvals?approvalId=approval&shell=classic", replay, approvalWrites: [] };
+  const input = { plan: waiting, href: "/ops/approvals?approvalId=approval&shell=classic&shellScope=visit", replay, approvalWrites: [] };
   assertLlamaApprovalDestination(input);
   for (const patch of [
     { href: "/inbox?approvalId=approval" },
+    { href: "/ops/approvals?approvalId=approval&shell=classic" },
     { replay: { approval: { ...replay.approval, approvalId: "other" } } },
     { replay: { approval: { ...replay.approval, status: "approved" } } },
     { replay: { approval: { ...replay.approval, linkage: { workspaceId: "foreign" } } } },

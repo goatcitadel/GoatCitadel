@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clickClassicOwnerNavigation } from "./classic-owner-navigation.mjs";
+import { buildClassicOwnerUrl, clickClassicOwnerNavigation, inboxOwnerHref } from "./classic-owner-navigation.mjs";
 
 for (const posture of ["desktop", "mobile", "collapsed"]) {
   test(`waits for lazy classic chrome before ${posture} navigation`, async () => {
@@ -35,4 +35,15 @@ test("a failed classic mount cannot trigger a guessed drawer click", async () =>
     isVisible: async () => { inspected = true; return false; },
   }), /classic mount failed/u);
   assert.equal(inspected, false);
+});
+
+test("expected owner hrefs match the product's temporary classic visit", () => {
+  assert.equal(buildClassicOwnerUrl("/ops/approvals?approvalId=a-1&shell=classic"),
+    "/ops/approvals?approvalId=a-1&shell=classic&shellScope=visit");
+  assert.equal(buildClassicOwnerUrl("/library/capabilities"), "/library/capabilities?shell=classic&shellScope=visit");
+});
+
+test("Inbox rows only rewrite classic owner destinations", () => {
+  assert.equal(inboxOwnerHref("/chat?sessionId=s-1&shell=classic"), "/chat?sessionId=s-1&shell=classic&shellScope=visit");
+  assert.equal(inboxOwnerHref("/work/runs/run-1"), "/work/runs/run-1");
 });

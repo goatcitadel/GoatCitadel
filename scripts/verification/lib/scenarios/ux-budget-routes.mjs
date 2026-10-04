@@ -5,7 +5,8 @@ import {
   COPY_EXEMPT_SELECTOR,
   collectVisibleUiText,
   measureLayout,
-  manifestEntry,
+  classicManifestEntry,
+  readCapabilityOwnerText,
   TOAST_SETTLE_MS,
 } from "./ux-budget-measurements.mjs";
 import {
@@ -14,16 +15,19 @@ import {
   evaluateRailReach,
   evaluateToastBudget,
   findRawCopyTokens,
+  withoutOwnerText,
 } from "../ux-budgets.mjs";
 import { resolveReleaseSurfaceHref } from "../release-surface-manifest.mjs";
 
 export async function runUxBudgetRoutes(environment) {
   const { context, options, enforcement, browser, stack, fixture, openRoute, deps } = environment;
   const {
+    assertOk,
     auditPageAccessibility,
     axeSourcePath,
     buildVerificationUiUrl,
     installMissionControlNextBrowserState,
+    requestJson,
     runScenario,
   } = deps;
   for (const slug of options.routeSlugs ?? UX_BUDGET_ROUTE_SLUGS) {
@@ -36,7 +40,7 @@ export async function runUxBudgetRoutes(environment) {
         subsystem: "mission-control-ux",
       },
       async () => {
-        const entry = manifestEntry(slug);
+        const entry = classicManifestEntry(slug);
         const { browserContext, page } = await openRoute(
           { width: 1440, height: 900 },
           entry,
@@ -44,7 +48,11 @@ export async function runUxBudgetRoutes(environment) {
         );
         try {
           const layout = await page.evaluate(measureLayout);
-          const visibleText = await page.evaluate(collectVisibleUiText, COPY_EXEMPT_SELECTOR);
+          const ownerText = await readCapabilityOwnerText({ gatewayUrl: stack.gatewayUrl, requestJson, assertOk });
+          const visibleText = withoutOwnerText(
+            await page.evaluate(collectVisibleUiText, COPY_EXEMPT_SELECTOR),
+            ownerText,
+          );
           await page.addScriptTag({ path: axeSourcePath });
           const axe = await auditPageAccessibility(page);
           const blockingAxe = axe.violations.filter(
@@ -96,7 +104,7 @@ export async function runUxBudgetRoutes(environment) {
     );
   }
 
-  const chatEntry = manifestEntry("chat");
+  const chatEntry = classicManifestEntry("chat");
   for (const { variant, viewport } of CHAT_VIEWPORTS) {
     await runScenario(
       context,
@@ -110,7 +118,7 @@ export async function runUxBudgetRoutes(environment) {
         const { browserContext, page } = await openRoute(
           viewport,
           chatEntry,
-          `/chat?sessionId=${encodeURIComponent(fixture.sessionId)}`,
+          `/chat?shell=classic&sessionId=${encodeURIComponent(fixture.sessionId)}`,
         );
         try {
           const layout = await page.evaluate(measureLayout);
@@ -157,7 +165,10 @@ export async function runUxBudgetRoutes(environment) {
           await page.waitForTimeout(TOAST_SETTLE_MS);
           const toasts = evaluateToastBudget(await page.locator("[data-sonner-toast]").count());
           const overflow = evaluateHorizontalOverflow(await page.evaluate(measureLayout));
-          const rawCopy = findRawCopyTokens(await page.evaluate(collectVisibleUiText, COPY_EXEMPT_SELECTOR));
+          const ownerText = await readCapabilityOwnerText({ gatewayUrl: stack.gatewayUrl, requestJson, assertOk });
+          const rawCopy = findRawCopyTokens(
+            withoutOwnerText(await page.evaluate(collectVisibleUiText, COPY_EXEMPT_SELECTOR), ownerText),
+          );
           await page.addScriptTag({ path: axeSourcePath });
           const axe = await auditPageAccessibility(page);
           const blockingAxe = axe.violations.filter(

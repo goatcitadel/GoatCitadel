@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { startDeterministicLlmStub } from "./deterministic-llm-stub.mjs";
 import { assertIntegrationDialogBounds } from "./cockpit-integration-connections-proof.mjs";
+import { buildClassicOwnerUrl } from "./classic-owner-navigation.mjs";
 
 export function assertLlamaPrepared({ plan, request, settings, workspaceId }) {
   assert.equal(plan.origin?.surface, "settings"); assert.equal(plan.origin?.workspaceId, workspaceId);
@@ -27,7 +28,7 @@ export function assertLlamaApprovalDestination({ plan, href, replay, approvalWri
   assert.equal(plan.requiredAction?.kind, "approval");
   const id = plan.requiredAction.approvalId;
   assert.ok(id && plan.approvalRefs.includes(id));
-  assert.equal(href, `/ops/approvals?approvalId=${encodeURIComponent(id)}&shell=classic`);
+  assert.equal(href, buildClassicOwnerUrl(`/ops/approvals?approvalId=${encodeURIComponent(id)}&shell=classic`));
   assert.equal(replay.approval.approvalId, id);
   assert.equal(replay.approval.kind, "change_plan_effect");
   assert.equal(replay.approval.status, "pending");

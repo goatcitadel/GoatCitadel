@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { DETERMINISTIC_LLM_MODEL, startDeterministicLlmStub } from "./deterministic-llm-stub.mjs";
+import { buildClassicOwnerUrl } from "./classic-owner-navigation.mjs";
 
 const providerAt = (config, providerId) => config.providerConfigs?.find((provider) => provider.providerId === providerId);
 /** Keep a scheduled browser wait observed if its preceding UI action fails first. */
@@ -217,7 +218,7 @@ export async function runCockpitProviderManagementProof({ context, browser, stac
         const approvalDialog = page.getByRole("dialog");
         const approvalOwner = approvalDialog.getByRole("link", { name: "Review required approval", exact: true });
         await approvalOwner.waitFor();
-        assert.equal(await approvalOwner.getAttribute("href"), `/ops/approvals?approvalId=${encodeURIComponent(approvalId)}&shell=classic`);
+        assert.equal(await approvalOwner.getAttribute("href"), buildClassicOwnerUrl(`/ops/approvals?approvalId=${encodeURIComponent(approvalId)}&shell=classic`));
         assert.ok((await approvalDialog.innerText()).includes("separate canonical approval"));
         await capture("credential-approval-review");
         await approvalDialog.getByRole("button", { name: "Cancel", exact: true }).click();

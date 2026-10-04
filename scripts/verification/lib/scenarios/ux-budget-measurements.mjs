@@ -1,4 +1,5 @@
 import { NEXT_RELEASE_SURFACE_MANIFEST } from "../release-surface-manifest.mjs";
+import { ownerDescriptionLines } from "../ux-budgets.mjs";
 
 export const TOAST_SETTLE_MS = 5_000;
 
@@ -102,4 +103,25 @@ export function manifestEntry(slug) {
   const entry = NEXT_RELEASE_SURFACE_MANIFEST.find((candidate) => candidate.slug === slug);
   if (!entry) throw new Error(`UX budget route missing from release manifest: ${slug}`);
   return entry;
+}
+
+/** Capability descriptions exactly as both Library shells present them, from the built shared formatter. */
+export async function readCapabilityOwnerText({ gatewayUrl, requestJson, assertOk }) {
+  const { presentCapabilityDescription } = await import(
+    "../../../../packages/mission-control-shared/dist/content/capability-rows.js"
+  );
+  const lines = new Set();
+  for (const scope of ["inspectable", "callable"]) {
+    const response = await requestJson(gatewayUrl, `/api/v1/capabilities/catalog?scope=${scope}`);
+    assertOk(response, `read ${scope} capability catalog`);
+    for (const item of response.body?.items ?? []) {
+      for (const line of ownerDescriptionLines(presentCapabilityDescription(item))) lines.add(line);
+    }
+  }
+  return lines;
+}
+
+/** Release-manifest routes are Classic surfaces; Cockpit is the default, so pin them explicitly. */
+export function classicManifestEntry(slug) {
+  return { ...manifestEntry(slug), shell: "classic" };
 }

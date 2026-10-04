@@ -14,6 +14,24 @@ export function findRawCopyTokens(text) {
   );
 }
 
+/** Owner-supplied text (tool registry, SKILL.md, MCP summaries) is shown verbatim, like
+ * assistant output. Drop exact owner lines so the budget checks UI-authored copy only. */
+export function withoutOwnerText(visibleText, ownerLines) {
+  return visibleText
+    .split("\n")
+    .filter((line) => !ownerLines.has(line))
+    .join("\n");
+}
+
+/** Classic Library rows show `truncateText(description, 140)` (LibraryCapabilitiesSection);
+ * Cockpit rows show the full description. */
+const CLASSIC_LIBRARY_PREVIEW_LIMIT = 140;
+
+export function ownerDescriptionLines(description) {
+  if (description.length <= CLASSIC_LIBRARY_PREVIEW_LIMIT) return [description];
+  return [description, description.slice(0, CLASSIC_LIBRARY_PREVIEW_LIMIT).trimEnd()];
+}
+
 export function evaluateChatBudget({ viewportHeight, scrollerHeight }, variant) {
   const threshold = CHAT_BUDGET_THRESHOLDS[variant];
   if (threshold === undefined) throw new Error(`Unknown chat budget variant: ${variant}`);

@@ -460,7 +460,9 @@ export function adaptCodeModeStepForCockpit(sourceStep) {
       return [{ ...operation, name: "Back to conversation" }];
     }
     if (operation.kind === "reload") {
-      return [{ kind: "return-to-cockpit-chat" }];
+      // Classic waits on the loaded turn's Activity control. The build editor picks its
+      // pane when the selected turn loads, so wait for the turn before opening it.
+      return [{ kind: "return-to-cockpit-chat" }, { kind: "assert-text", value: "CHAT_CODE_MODE_OK" }];
     }
     if (operation.kind === "click-pattern" && operation.namePattern === "Open durable run trace ") {
       return [{ kind: "click-turn-action", name: "Run details" }, { kind: "click", name: "Open durable evidence", exact: true },

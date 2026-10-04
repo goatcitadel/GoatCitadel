@@ -147,6 +147,10 @@ export async function runCockpitManagedRuntimeProof({ context, browser, stack, c
           await panel.getByRole("button", { name: "Review runtime changes", exact: true }).click(); await dialog.waitFor();
           const restored = await save(editable(before.llamaCpp));
           assert.equal(restored.llamaCpp.alias, before.llamaCpp.alias);
+          // The save's live event refreshes the panel shortly after `save` returns, and that refresh decides
+          // whether this review is still confirmable. Branching before it lands races the refresh between the
+          // check and the click. The open modal hides the region from role queries, so locate it by id.
+          await page.locator("#managed-runtime").getByText(new RegExp(`settings revision ${restored.revision}\\b`, "u")).waitFor();
           const staleConfirm = dialog.getByRole("button", { name: "Apply reviewed runtime settings", exact: true });
           if (await staleConfirm.isDisabled()) {
             assert.ok((await dialog.innerText()).includes("This review is no longer current."));

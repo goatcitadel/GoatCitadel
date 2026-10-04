@@ -7,9 +7,31 @@ import {
   evaluateRailReach,
   evaluateToastBudget,
   findRawCopyTokens,
+  ownerDescriptionLines,
+  withoutOwnerText,
 } from "./ux-budgets.mjs";
 
 describe("UX budgets", () => {
+  it("exempts only exact owner-supplied lines from the raw-copy check", () => {
+    const owner = "Perform approved click, type, press, wait_for_selector, or wait steps.";
+    const visible = ["Library", owner, "Status: wait_for_selector"].join("\n");
+    assert.deepEqual(
+      findRawCopyTokens(withoutOwnerText(visible, new Set([owner]))).map(({ token }) => token),
+      ["wait_for_selector"],
+    );
+    assert.equal(withoutOwnerText(visible, new Set()), visible);
+  });
+
+  it("recognizes the Classic Library's truncated owner description", () => {
+    const long = `${"Perform approved click, type, press, wait_for_selector, or wait steps. ".repeat(3)}End.`;
+    const [full, preview] = ownerDescriptionLines(long);
+    assert.equal(full, long);
+    assert.equal(preview, long.slice(0, 140).trimEnd());
+    const classicRow = `${preview}\n\n…`;
+    assert.deepEqual(findRawCopyTokens(withoutOwnerText(classicRow, new Set([full, preview]))), []);
+    assert.deepEqual(ownerDescriptionLines("Short summary."), ["Short summary."]);
+  });
+
   it("catches technical copy but leaves plain text and tool names alone", () => {
     const raw = "task_updated /api/v1/chat/sessions/sess_57696ff7ad69ef722fc07b8f Network error POST 3f2b8c1e-9a4d-4c2b-8e1f-0a9b8c7d6e5f";
     assert.deepEqual(

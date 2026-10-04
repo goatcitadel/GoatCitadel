@@ -1230,7 +1230,12 @@ test("cockpit Code Mode journey keeps owner probes while using cockpit controls"
   assert.ok(cockpit.operations.some((operation) => operation.kind === "fill" && operation.label === "Message"));
   assert.ok(cockpit.operations.some((operation) => operation.kind === "click" && operation.name === "Back to conversation"),
   );
-  assert.ok(cockpit.operations.some((operation) => operation.kind === "return-to-cockpit-chat"));
+  const returned = cockpit.operations.findIndex((operation) => operation.kind === "return-to-cockpit-chat");
+  // The build editor picks its pane when the selected turn loads, so open it only after the turn is visible.
+  assert.deepEqual(cockpit.operations.slice(returned + 1, returned + 3), [
+    { kind: "assert-text", value: "CHAT_CODE_MODE_OK" },
+    { kind: "click", name: "Build editor", exact: true },
+  ]);
   assert.ok(cockpit.operations.some((operation) => operation.kind === "click" && operation.name === "Open durable evidence"),
   );
   // Run details sits in the phone overflow menu, so it goes through the layout-aware turn action.

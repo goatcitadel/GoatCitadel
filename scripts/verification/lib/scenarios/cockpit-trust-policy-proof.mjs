@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
+import { buildClassicOwnerUrl } from "./classic-owner-navigation.mjs";
 
 export function selectTrustProofCapability(snapshot) {
   assert.equal(snapshot.readOnly, true);
@@ -56,7 +57,7 @@ export async function runCockpitTrustPolicyProof({ context, browser, stack, cita
         assert.ok(detail.includes(capability.trustLabel ?? capability.lifecycleState ?? "Unknown"));
         if (capability.reviewWarning) assert.ok(detail.includes(capability.reviewWarning));
         for (const required of capability.requires ?? []) assert.ok(detail.includes(`Requires ${required}`));
-        assert.equal(await dialog.getByRole("link", { name: "Open Library / Capabilities in detailed settings", exact: true }).getAttribute("href"), "/library/capabilities?shell=classic");
+        assert.equal(await dialog.getByRole("link", { name: "Open Library / Capabilities in detailed settings", exact: true }).getAttribute("href"), buildClassicOwnerUrl("/library/capabilities?shell=classic"));
         await page.addScriptTag({ path: axeSourcePath });
         const screenshotDir = path.join(context.artifactRoot, "screenshots"); await mkdir(screenshotDir, { recursive: true });
         const audit = async (stage) => {

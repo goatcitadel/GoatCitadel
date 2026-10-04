@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
+import { buildClassicOwnerUrl } from "./classic-owner-navigation.mjs";
 
 export function assertLocalAiIntentAgreement({ kind, selected, request, receipt, owner, replay }) {
   assert.ok(["download", "serve"].includes(kind));
@@ -139,7 +140,8 @@ export async function runCockpitLocalAiProof({ context, browser, stack, citadelI
         await panel.getByRole("button", { name: "Jobs and endpoints", exact: true }).click();
         const jobs = page.getByRole("dialog", { name: "Jobs and endpoints", exact: true });
         await jobs.getByText(receipt.jobId, { exact: true }).waitFor();
-        assert.ok(await jobs.locator(`a[href="/ops/approvals?shell=classic&approvalId=${receipt.approvalId}"]`).count());
+        const approvalHref = buildClassicOwnerUrl(`/ops/approvals?shell=classic&approvalId=${encodeURIComponent(receipt.approvalId)}`);
+        assert.ok(await jobs.locator(`a[href="${approvalHref}"]`).count());
         await capture("retained-intent"); await jobs.getByRole("button", { name: "Close sheet", exact: true }).click();
         stage = "retain lost-response uncertainty without retry";
         let serveReceipt;
