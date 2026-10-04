@@ -381,4 +381,11 @@ describe("native provider owner composition", () => {
     expect(button("Remove saved API credential").disabled).toBe(true);
     expect(container.textContent).toContain("Credential status did not identify the selected provider");
   });
+  it("keeps profile review closed until the draft differs from the saved profile", async () => {
+    await render();
+    await click("Edit provider profile");
+    expect(button("Review provider profile").disabled).toBe(true);
+    await fill("Provider label", "Changed label");
+    expect(button("Review provider profile").disabled).toBe(false);
+  });
 });

@@ -1,8 +1,9 @@
-import { SHELL_NAVIGATION_EVENTS } from "../../app/shell-transition";
+import { SHELL_HISTORY_POSITION, SHELL_NAVIGATION_EVENTS } from "../../app/shell-transition";
 import { buildSettingsIndex } from "../areas/settings/settings-index";
+import { COCKPIT_LOCATION_EVENT, nextCockpitPosition, readCockpitLocation } from "./cockpit-back-guard";
 import type { CockpitNavigationOptions } from "./cockpit-navigation-context";
 
-export const COCKPIT_LOCATION_EVENT = "goatcitadel:cockpit-location";
+export { COCKPIT_LOCATION_EVENT };
 const listeners = new Set<() => void>();
 let generation = 0;
 
@@ -25,7 +26,7 @@ export function subscribeCockpitHistory(listener: () => void) {
 }
 
 export function readCockpitHistory() {
-  return `${generation}:${window.location.href}`;
+  return `${generation}:${readCockpitLocation().href}`;
 }
 
 /** Normalize only local native URLs. Preserve record IDs, the full query, and the hash. */
@@ -44,16 +45,23 @@ export function cockpitHref(href: string): string | null {
 
 /** Settings force-mounts its sections. Only a recognized tab on the same actual page stays mounted. */
 export function retainsSettingsPage(from: string, to: string): boolean {
-  const sourceHref = cockpitHref(from), targetHref = cockpitHref(to);
+  const sourceHref = cockpitHref(from),
+    targetHref = cockpitHref(to);
   if (!sourceHref || !targetHref) return false;
   const source = new URL(sourceHref, "http://cockpit.invalid");
   const target = new URL(targetHref, "http://cockpit.invalid");
-  if (source.pathname !== target.pathname || source.search !== target.search || source.hash === target.hash) return false;
+  if (source.pathname !== target.pathname || source.search !== target.search || source.hash === target.hash)
+    return false;
   const page = buildSettingsIndex().find((candidate) => source.pathname === `/settings/${candidate.id}`);
-  return Boolean(page && page.entries.some((entry) => {
-    const entryHref = new URL(entry.href, "http://cockpit.invalid");
-    return entry.destination === "cockpit" && entryHref.pathname === target.pathname && entryHref.hash === target.hash;
-  }));
+  return Boolean(
+    page &&
+    page.entries.some((entry) => {
+      const entryHref = new URL(entry.href, "http://cockpit.invalid");
+      return (
+        entry.destination === "cockpit" && entryHref.pathname === target.pathname && entryHref.hash === target.hash
+      );
+    }),
+  );
 }
 
 /** Internal commit for current reviewed frame/link capabilities and bound canonical Chat synchronization. */
@@ -62,8 +70,9 @@ export function commitCockpitNavigation(href: string, options?: CockpitNavigatio
   if (!destination) return false;
   const current = window.location.pathname + window.location.search + window.location.hash;
   if (cockpitHref(current) === destination) return false;
+  // A replaced entry keeps its state, position included. A pushed entry is numbered after the shown one.
   if (options?.replace) window.history.replaceState(window.history.state, "", destination);
-  else window.history.pushState(null, "", destination);
+  else window.history.pushState({ [SHELL_HISTORY_POSITION]: nextCockpitPosition() }, "", destination);
   window.dispatchEvent(new Event(COCKPIT_LOCATION_EVENT));
   return true;
 }

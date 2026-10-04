@@ -28,7 +28,21 @@ vi.mock("./CommandPalette", () => ({
       </section>
     ) : null,
 }));
-vi.mock("../areas/library/LibraryArea", () => ({ LibraryArea: () => null }));
+const libraryArea = vi.hoisted(() => ({ failure: null as Error | null }));
+vi.mock("../areas/library/LibraryArea", () => ({
+  LibraryArea: () => {
+    if (libraryArea.failure) throw libraryArea.failure;
+    return <p>Library content</p>;
+  },
+}));
+// No other test here visits Chat, so a stub keeps the failure test off the network.
+const chatArea = vi.hoisted(() => ({ failure: null as Error | null }));
+vi.mock("../areas/chat/ChatArea", () => ({
+  ChatArea: () => {
+    if (chatArea.failure) throw chatArea.failure;
+    return <p>Chat content</p>;
+  },
+}));
 vi.mock("../areas/system/system-health-sources", () => ({
   loadSystemHealthSources: vi.fn(async () => {
     throw new Error("Health owner unavailable in shell fixture.");
@@ -227,12 +241,24 @@ describe("CockpitShell", () => {
       workspaceId: "default",
       generatedAt: "2026-09-28T00:00:00Z",
       items: [
-        { id: "a", kind: "approval", group: "needs_decision", title: "t", summary: "s", createdAt: "x",
-          source: { workspaceId: "default" }, href: "/x" },
+        {
+          id: "a",
+          kind: "approval",
+          group: "needs_decision",
+          title: "t",
+          summary: "s",
+          createdAt: "x",
+          source: { workspaceId: "default" },
+          href: "/x",
+        },
       ],
       coverage: [],
-      counts: { needs_decision: { known: 1, complete: true }, proposals: { known: 0, complete: true },
-        needs_attention: { known: 0, complete: true }, updates: { known: 0, complete: true } },
+      counts: {
+        needs_decision: { known: 1, complete: true },
+        proposals: { known: 0, complete: true },
+        needs_attention: { known: 0, complete: true },
+        updates: { known: 0, complete: true },
+      },
     } as never);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () =>
@@ -336,5 +362,114 @@ describe("CockpitShell", () => {
     expect(shellDraft.value.text).toBe("Keep this draft");
     input.remove();
     client.clear();
+  });
+
+  it("keeps the shell usable when one area fails to render", async () => {
+    libraryArea.failure = new Error("synthetic Library failure");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    window.history.replaceState(null, "", "/library?shell=cockpit");
+    try {
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={new QueryClient()}>
+            <CockpitShell />
+          </QueryClientProvider>,
+        );
+      });
+      await vi.waitFor(() =>
+        expect(
+          [...container.querySelectorAll('[role="alert"]')].some((node) =>
+            node.textContent?.includes("Library couldn't be shown"),
+          ),
+        ).toBe(true),
+      );
+      expect(container.querySelector('nav[aria-label="Areas"]')).not.toBeNull();
+    } finally {
+      libraryArea.failure = null;
+      consoleError.mockRestore();
+    }
+  });
+
+  const failedView = (label: string) =>
+    [...container.querySelectorAll('[role="alert"]')].some((node) =>
+      node.textContent?.includes(`${label} couldn't be shown`),
+    );
+
+  it("retries a failed area when Back moves to another page of the same area", async () => {
+    libraryArea.failure = new Error("synthetic Library failure");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    window.history.replaceState(null, "", "/library?shell=cockpit");
+    window.history.pushState(null, "", "/library/skills?shell=cockpit");
+    try {
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={new QueryClient()}>
+            <CockpitShell />
+          </QueryClientProvider>,
+        );
+      });
+      await vi.waitFor(() => expect(failedView("Library")).toBe(true));
+      libraryArea.failure = null;
+      await act(async () => window.history.back());
+      expect(window.location.pathname).toBe("/library");
+      await vi.waitFor(() => expect(container.textContent).toContain("Library content"));
+      expect(failedView("Library")).toBe(false);
+    } finally {
+      libraryArea.failure = null;
+      consoleError.mockRestore();
+    }
+  });
+
+  it("retries a failed area when only its query string changes", async () => {
+    libraryArea.failure = new Error("synthetic Library failure");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    window.history.replaceState(null, "", "/library?type=skill&shell=cockpit");
+    window.history.pushState(null, "", "/library?type=tool&shell=cockpit");
+    try {
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={new QueryClient()}>
+            <CockpitShell />
+          </QueryClientProvider>,
+        );
+      });
+      await vi.waitFor(() => expect(failedView("Library")).toBe(true));
+      libraryArea.failure = null;
+      await act(async () => window.history.back());
+      expect(window.location.search).toBe("?type=skill&shell=cockpit");
+      await vi.waitFor(() => expect(container.textContent).toContain("Library content"));
+      expect(failedView("Library")).toBe(false);
+    } finally {
+      libraryArea.failure = null;
+      consoleError.mockRestore();
+    }
+  });
+
+  it("retries a failed Chat when the route opens another conversation", async () => {
+    chatArea.failure = new Error("synthetic Chat failure");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    window.history.replaceState(null, "", "/chat?shell=cockpit&sessionId=session-a");
+    try {
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={new QueryClient()}>
+            <CockpitNavigationProvider>
+              <PendingProbe />
+              <CockpitShell />
+            </CockpitNavigationProvider>
+          </QueryClientProvider>,
+        );
+      });
+      expect(failedView("Chat")).toBe(true);
+      chatArea.failure = null;
+      // What the palette's New chat does once the conversation is created and verified.
+      await act(async () => navigation.navigate("/chat?shell=cockpit&sessionId=session-b"));
+      expect(window.location.search).toContain("sessionId=session-b");
+      expect(failedView("Chat")).toBe(false);
+      expect(container.textContent).toContain("Chat content");
+    } finally {
+      chatArea.failure = null;
+      consoleError.mockRestore();
+    }
   });
 });

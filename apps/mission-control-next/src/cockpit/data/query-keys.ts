@@ -11,6 +11,7 @@ export const queryKeys = {
   pendingApprovals: (): TopicKey => ["approvals", "pending"],
   inbox: (workspaceId: string): TopicKey => ["approvals", "operator-inbox", workspaceId],
   health: (workspaceId: string): TopicKey => ["system", "health", workspaceId],
+  healthAll: (): TopicKey => ["system", "health"],
   costs: (): TopicKey => ["system", "costs", "day"],
   durableRuns: (): TopicKey => ["tasks", "durable-runs"],
   durableRunHistory: (workspaceId: string): TopicKey => ["tasks", "durable-runs", "history", workspaceId, getGatewayApiBaseUrl()],

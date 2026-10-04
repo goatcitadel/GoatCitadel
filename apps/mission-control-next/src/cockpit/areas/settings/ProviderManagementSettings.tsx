@@ -255,6 +255,7 @@ export function ProviderManagementSettings() {
               disabled={
                 !ready ||
                 locked ||
+                !profile.providerEditor.isDirty ||
                 profile.providerEditor.hasRemoteChanges ||
                 Boolean(profile.providerRequestValidation.error) ||
                 Boolean(profile.saveOperationError)
@@ -330,10 +331,15 @@ export function ProviderManagementSettings() {
         onConfirm={actions.confirm}
         onSubmitSecureInput={actions.secure}
         onContinueOAuth={(reviewed) => oauth.handleStartCodexOAuth(true, reviewed)}
-        renderApprovalAction={(reviewed, pending) => <SettingsApprovalOwnerAction
-          plan={reviewed} owner="provider-management" workspaceId={activeWorkspaceId ?? "default"}
-          disabled={pending} viewIdentity={[id, open, mode]}
-        />}
+        renderApprovalAction={(reviewed, pending) => (
+          <SettingsApprovalOwnerAction
+            plan={reviewed}
+            owner="provider-management"
+            workspaceId={activeWorkspaceId ?? "default"}
+            disabled={pending}
+            viewIdentity={[id, open, mode]}
+          />
+        )}
         onSubmitPublicForm={() => undefined}
         onReviewArtifacts={() => undefined}
         onOpenNativePathPicker={() => undefined}

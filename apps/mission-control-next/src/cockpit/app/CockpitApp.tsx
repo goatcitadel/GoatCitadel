@@ -4,6 +4,7 @@ import { UiPreferencesProvider, useUiPreferences } from "@goatcitadel/mission-co
 import { useGatewayAccess } from "../../app/use-gateway-access";
 import { createCockpitQueryClient } from "../data/query-client";
 import { useCockpitRealtime } from "../data/realtime";
+import { AreaErrorBoundary } from "../ui/AreaErrorBoundary";
 import { CockpitToaster } from "../ui/Toaster";
 import { CockpitAccessGate } from "./CockpitAccessGate";
 import { applyCockpitAppearance } from "./cockpit-appearance";
@@ -31,11 +32,13 @@ function GatedCockpit() {
   return (
     <QueryClientProvider client={queryClient}>
       <div data-cockpit-ready="true">
-        <CockpitShell
-          streamState={streamState}
-          gatewayReachability={gatewayReachability}
-          onVisibleSessionChange={setVisibleSessionId}
-        />
+        <AreaErrorBoundary label="Mission Control" resetKey="cockpit">
+          <CockpitShell
+            streamState={streamState}
+            gatewayReachability={gatewayReachability}
+            onVisibleSessionChange={setVisibleSessionId}
+          />
+        </AreaErrorBoundary>
       </div>
       <CockpitToaster />
     </QueryClientProvider>

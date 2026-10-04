@@ -4,6 +4,7 @@ import type { EventStreamConnectionState } from "@goatcitadel/mission-control-sh
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { ChatArea } from "../areas/chat/ChatArea";
+import { AreaErrorBoundary } from "../ui/AreaErrorBoundary";
 import { AreaPlaceholder } from "./AreaPlaceholder";
 import { CommandPalette } from "./CommandPalette";
 import { GatewayUnavailableBanner } from "./GatewayUnavailableBanner";
@@ -42,7 +43,7 @@ function CockpitShellContent({
   onVisibleSessionChange,
 }: CockpitShellProps) {
   const { isTransitionPending } = useCockpitNavigation();
-  const { area, rest, navigate } = useCockpitRoute();
+  const { area, rest, pathname, search, navigate } = useCockpitRoute();
   const areaLabel =
     COCKPIT_AREAS.find((entry) => entry.area === area)?.label ?? (area === "gallery" ? "Gallery" : "Settings");
   const firstRun = area === "settings" && rest[0] === "first-run";
@@ -132,37 +133,48 @@ function CockpitShellContent({
             ) : null}
             {retainedChat.current.visited ? (
               <Activity key={chatScope} mode={area === "chat" ? "visible" : "hidden"}>
-                <ChatArea
-                  gatewayUnavailable={gatewayReachability?.unavailable}
-                  onVisibleSessionChange={onVisibleSessionChange}
-                />
+                {/* A new route query, such as the palette's New chat, retries a failed Chat. */}
+                <AreaErrorBoundary label="Chat" resetKey={chatScope + search}>
+                  <ChatArea
+                    gatewayUnavailable={gatewayReachability?.unavailable}
+                    onVisibleSessionChange={onVisibleSessionChange}
+                  />
+                </AreaErrorBoundary>
               </Activity>
             ) : null}
             {area !== "chat" ? (
-              <Suspense
+              // `key` remounts on an area change; the path retries a failed view after Back or a jump inside the area.
+              <AreaErrorBoundary
                 key={area}
-                fallback={
-                  <p role="status" className="p-4 text-sm text-fg-muted">
-                    Loading {areaLabel}…
-                  </p>
-                }
+                label={areaLabel}
+                resetKey={pathname + search}
+                onGoToChat={() => navigate("/chat")}
               >
-                {area === "gallery" ? (
-                  <Gallery />
-                ) : area === "inbox" ? (
-                  <InboxArea />
-                ) : area === "library" ? (
-                  <LibraryArea />
-                ) : area === "system" ? (
-                  <SystemArea />
-                ) : area === "work" ? (
-                  <WorkArea />
-                ) : area === "settings" ? (
-                  <SettingsArea />
-                ) : (
-                  <AreaPlaceholder area={area} />
-                )}
-              </Suspense>
+                <Suspense
+                  key={area}
+                  fallback={
+                    <p role="status" className="p-4 text-sm text-fg-muted">
+                      Loading {areaLabel}…
+                    </p>
+                  }
+                >
+                  {area === "gallery" ? (
+                    <Gallery />
+                  ) : area === "inbox" ? (
+                    <InboxArea />
+                  ) : area === "library" ? (
+                    <LibraryArea />
+                  ) : area === "system" ? (
+                    <SystemArea />
+                  ) : area === "work" ? (
+                    <WorkArea />
+                  ) : area === "settings" ? (
+                    <SettingsArea />
+                  ) : (
+                    <AreaPlaceholder area={area} />
+                  )}
+                </Suspense>
+              </AreaErrorBoundary>
             ) : null}
           </main>
           <InspectorPanel />

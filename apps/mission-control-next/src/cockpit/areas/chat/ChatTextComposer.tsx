@@ -6,6 +6,7 @@ import { ChatComposerControls } from "./ChatComposerControls";
 import { ChatComposerPalette } from "./ChatComposerPalette";
 import { ChatRunVariables } from "./ChatRunVariables";
 import { composerSendBlock, type ComposerSendBlock } from "./composer-send-block";
+import { isImeEnter } from "./ime";
 
 export type ComposerProps = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -48,7 +49,7 @@ export type ComposerProps = Pick<
   | "planningMode"
   | "onTogglePlanningMode"
   | "currentWebMode"
-  | "onToggleResearchMode"
+  | "onSetWebMode"
   | "currentReviewDepth"
   | "onToggleReviewMode"
   | "onRemoveAttachment"
@@ -150,7 +151,7 @@ export function ChatTextComposer({
   };
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter") {
-      if (event.nativeEvent.isComposing || (event.shiftKey && !event.ctrlKey && !event.metaKey)) return;
+      if (isImeEnter(event) || (event.shiftKey && !event.ctrlKey && !event.metaKey)) return;
       event.preventDefault();
       if (props.commandSuggestions.length && !localReady) {
         const selected = props.commandSuggestions[props.commandIndex];
@@ -215,7 +216,11 @@ export function ChatTextComposer({
               Commands and context
             </button>{" "}
             ·{" "}
-            <button type="button" onClick={shellSwitch.request} className="inline-flex min-h-8 items-center font-medium text-accent hover:underline max-sm:min-h-11">
+            <button
+              type="button"
+              onClick={shellSwitch.visit}
+              className="inline-flex min-h-8 items-center font-medium text-accent hover:underline max-sm:min-h-11"
+            >
               Open classic view
             </button>
           </p>

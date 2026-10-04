@@ -58,6 +58,7 @@ export function GuidedModelSetup({
   setNotice,
   excludeLlamaCpp = false,
   onEnterChat,
+  enterChatLabel = "Enter Chat",
   renderApprovalAction,
 }: {
   workspaceId: string;
@@ -69,7 +70,13 @@ export function GuidedModelSetup({
   excludeLlamaCpp?: boolean;
   /** Guided hosts can keep their own completion gate before entering Chat. */
   onEnterChat?: () => void;
-  renderApprovalAction?: (plan: ChangePlanRecord, pending: boolean, selection: { providerId: string; model: string; thinkingLevel: ChatThinkingLevel }) => ReactNode;
+  /** Button text once the default is confirmed. A host whose `onEnterChat` does not open Chat should say so. */
+  enterChatLabel?: string;
+  renderApprovalAction?: (
+    plan: ChangePlanRecord,
+    pending: boolean,
+    selection: { providerId: string; model: string; thinkingLevel: ChatThinkingLevel },
+  ) => ReactNode;
 }) {
   const catalog = useProviderModelCatalog("system");
   const completion = useOnboardingCompletion({ state: onboarding, scope: workspaceId, requireModel: true });
@@ -519,7 +526,7 @@ export function GuidedModelSetup({
         >
           {defaultPlanCompleted ? <Play size={16} /> : <PlugZap size={16} />}
           {defaultPlanCompleted
-            ? "Enter Chat"
+            ? enterChatLabel
             : providerReady
               ? "Confirm model"
               : verifiesLocalEndpoint
@@ -532,7 +539,9 @@ export function GuidedModelSetup({
         </NativeButton>
       </SettingsButtonRow>
       {actionError && !dialogPlan ? <p role="alert">{actionError}</p> : null}
-      {completion.notice || completion.attempt ? <p role="status">{completion.attempt?.message ?? completion.notice}</p> : null}
+      {completion.notice || completion.attempt ? (
+        <p role="status">{completion.attempt?.message ?? completion.notice}</p>
+      ) : null}
       {latestPlan ? (
         <ChatChangePlanCard
           plan={latestPlan}
@@ -557,9 +566,11 @@ export function GuidedModelSetup({
         plan={dialogPlan}
         pending={busy}
         error={actionError}
-        renderApprovalAction={renderApprovalAction
-          ? (plan, pending) => renderApprovalAction(plan, pending, { providerId, model, thinkingLevel })
-          : undefined}
+        renderApprovalAction={
+          renderApprovalAction
+            ? (plan, pending) => renderApprovalAction(plan, pending, { providerId, model, thinkingLevel })
+            : undefined
+        }
         onClose={() => {
           if (!busy) {
             setDialogPlan(null);

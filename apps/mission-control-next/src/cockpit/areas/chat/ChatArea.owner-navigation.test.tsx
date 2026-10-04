@@ -47,7 +47,14 @@ function DraftProbe() {
   return null;
 }
 async function render() {
-  await act(async () => { root.render(<><ChatArea /><DraftProbe /></>); });
+  await act(async () => {
+    root.render(
+      <>
+        <ChatArea />
+        <DraftProbe />
+      </>,
+    );
+  });
 }
 beforeEach(() => {
   vi.resetAllMocks();
@@ -62,7 +69,9 @@ beforeEach(() => {
   root = createRoot(container);
 });
 afterEach(async () => {
-  await act(async () => { root.unmount(); });
+  await act(async () => {
+    root.unmount();
+  });
   container.remove();
   __resetSessionDraftsForTests();
   __resetFormDirtyRegistryForTests();
@@ -83,9 +92,13 @@ describe("cockpit Chat owner navigation", () => {
     host.onOpenLocalAiSettings();
     host.onOpenLibraryArtifacts();
     expect(mocks.navigate.mock.calls.map(([href]) => href)).toEqual([
-      "/inbox?shell=cockpit", "/work?shell=cockpit", "/settings/first-run?shell=cockpit",
-      "/system/health?shell=cockpit", "/settings/general?shell=cockpit#work-personality",
-      "/settings/models?shell=cockpit#providers", "/settings/models?shell=cockpit#local-ai",
+      "/inbox?shell=cockpit",
+      "/work?shell=cockpit",
+      "/settings/first-run?shell=cockpit",
+      "/system/health?shell=cockpit",
+      "/settings/general?shell=cockpit#work-personality",
+      "/settings/models?shell=cockpit#providers",
+      "/settings/models?shell=cockpit#local-ai",
       "/library/artifacts?shell=cockpit",
     ]);
     expect(assign).not.toHaveBeenCalled();
@@ -95,11 +108,15 @@ describe("cockpit Chat owner navigation", () => {
   it("passes exact specialist paths through the shared guarded handoff", async () => {
     const assign = vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
     await render();
-    await act(async () => { mocks.hostProps!.onOpenApprovals("approval/one?two"); });
-    await act(async () => { mocks.hostProps!.onOpenLibraryImports(); });
+    await act(async () => {
+      mocks.hostProps!.onOpenApprovals("approval/one?two");
+    });
+    await act(async () => {
+      mocks.hostProps!.onOpenLibraryImports();
+    });
     expect(mocks.switchShell.mock.calls.map(([shell, options]) => [shell, options.href])).toEqual([
-      ["classic", "/ops/approvals?approvalId=approval%2Fone%3Ftwo&shell=classic"],
-      ["classic", "/library/knowledge?shell=classic"],
+      ["classic", "/ops/approvals?approvalId=approval%2Fone%3Ftwo&shell=classic&shellScope=visit"],
+      ["classic", "/library/knowledge?shell=classic&shellScope=visit"],
     ]);
     for (const [, options] of mocks.switchShell.mock.calls) {
       expect(options.isCurrent()).toBe(true);
@@ -111,10 +128,16 @@ describe("cockpit Chat owner navigation", () => {
 
   it("shows the shared draft-leave review and prevents stale scope continuation", async () => {
     await render();
-    await act(async () => { draft.setValue({ name: "Unsaved" }); });
-    await act(async () => { mocks.hostProps!.onOpenLibraryImports(); });
+    await act(async () => {
+      draft.setValue({ name: "Unsaved" });
+    });
+    await act(async () => {
+      mocks.hostProps!.onOpenLibraryImports();
+    });
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Unsaved changes");
-    const oldKeep = [...document.querySelectorAll("button")].find((button) => button.textContent === "Keep draft and close");
+    const oldKeep = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Keep draft and close",
+    );
     expect(oldKeep).toBeDefined();
     expect(mocks.switchShell).not.toHaveBeenCalled();
     mocks.preferences = { ...mocks.preferences, activeCitadelId: "citadel-b" };
@@ -122,7 +145,9 @@ describe("cockpit Chat owner navigation", () => {
     mocks.preferences = { ...mocks.preferences, activeCitadelId: "citadel-a" };
     await render();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
-    await act(async () => { oldKeep!.click(); });
+    await act(async () => {
+      oldKeep!.click();
+    });
     expect(mocks.switchShell).not.toHaveBeenCalled();
     expect(mocks.navigate).not.toHaveBeenCalled();
     expect(draft.value.name).toBe("Unsaved");
@@ -132,7 +157,9 @@ describe("cockpit Chat owner navigation", () => {
   it("renders a failed handoff without losing the current view", async () => {
     mocks.switchShell.mockRejectedValueOnce(new Error("synthetic import failure"));
     await render();
-    await act(async () => { mocks.hostProps!.onOpenLibraryImports(); });
+    await act(async () => {
+      mocks.hostProps!.onOpenLibraryImports();
+    });
     expect(container.querySelector('[role="alert"]')?.textContent).toBe(
       "The view could not open. Your current drafts are still available.",
     );

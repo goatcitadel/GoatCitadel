@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 import type { CronJobRecordResponse } from "@goatcitadel/mission-control-shared/api/types";
 import {
   createCronJob,
@@ -44,6 +45,15 @@ const job = (overrides: Partial<CronJobRecordResponse> = {}): CronJobRecordRespo
   enabled: true,
   ...overrides,
 });
+
+const ownerGone = (id: string) =>
+  new ApiRequestError(`Cron job not found: ${id}`, {
+    kind: "http",
+    status: 404,
+    method: "GET",
+    path: `/api/v1/cron/jobs/${encodeURIComponent(id)}`,
+    body: { error: `Cron job not found: ${id}` },
+  });
 
 let container: HTMLDivElement;
 let root: Root;
@@ -170,13 +180,44 @@ describe("Work schedules", () => {
     await vi.waitFor(() => expect(container.textContent).toContain("action outcome is unconfirmed"));
     expect(container.querySelector<HTMLButtonElement>("button[disabled]")?.disabled).toBe(true);
     const actionButtons = [...container.querySelectorAll<HTMLButtonElement>("button")].filter((button) =>
-      ["Run now", "Pause", "Cancel schedule"].includes(button.textContent?.trim() ?? ""),
+      ["Run now", "Pause", "Delete schedule…"].includes(button.textContent?.trim() ?? ""),
     );
     expect(actionButtons).toHaveLength(3);
     expect(actionButtons.every((button) => button.disabled)).toBe(true);
     expect(
       container.querySelector<HTMLAnchorElement>('a[href="/ops/schedules?shell=classic&shellScope=visit"]'),
     ).not.toBeNull();
+  });
+
+  it("names schedule deletion plainly and offers Pause instead", async () => {
+    vi.mocked(deleteCronJob).mockResolvedValue({ deleted: true, jobId: "job-a" } as never);
+    await render();
+    await review();
+    await click("Delete schedule…");
+    expect(container.textContent).toContain("Delete “Daily review”? Future runs stop and it can't be restored.");
+    await click("Pause instead");
+    expect(container.textContent).toContain("Pause this schedule?");
+    expect(deleteCronJob).not.toHaveBeenCalled();
+    await click("Keep schedule");
+    await click("Delete schedule…");
+    // Deletion is confirmed only by the owner's exact not-found answer on the follow-up read.
+    vi.mocked(fetchCronJob).mockResolvedValueOnce(job()).mockRejectedValueOnce(ownerGone("job-a"));
+    await click("Delete schedule");
+    await vi.waitFor(() => expect(container.textContent).toContain("Schedule deleted."));
+    expect(deleteCronJob).toHaveBeenCalledOnce();
+  });
+
+  it("does not offer Pause instead when the schedule is already paused", async () => {
+    vi.mocked(fetchCronJobs).mockResolvedValue({ items: [job({ enabled: false })] });
+    vi.mocked(fetchCronJob).mockResolvedValue(job({ enabled: false }));
+    await render();
+    await review();
+    await click("Delete schedule…");
+    expect(container.textContent).toContain("Delete “Daily review”?");
+    const labels = [...container.querySelectorAll("button")].map((item) => item.textContent?.trim());
+    expect(labels).toEqual(expect.arrayContaining(["Delete schedule", "Keep schedule"]));
+    expect(labels).not.toContain("Pause instead");
+    expect(deleteCronJob).not.toHaveBeenCalled();
   });
 
   it("creates a Gateway schedule and selects its confirmed record", async () => {

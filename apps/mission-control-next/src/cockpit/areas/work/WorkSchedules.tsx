@@ -43,8 +43,10 @@ export function WorkSchedules() {
   const [notice, setNotice] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const empty = { name: "", schedule: "0 9 * * *", action: "task" as CreateScheduleAction };
-  const editor = useSessionDraft(scheduleCreateDraftKey(getGatewayApiBaseUrl()), empty, undefined,
-    { label: "New schedule", active: createOpen });
+  const editor = useSessionDraft(scheduleCreateDraftKey(getGatewayApiBaseUrl()), empty, undefined, {
+    label: "New schedule",
+    active: createOpen,
+  });
   const { name, schedule, action: createAction } = editor.value;
   const selected = !schedules.isError && !detail.isError && detail.data?.jobId === selectedId ? detail.data : undefined;
   const operations = useScheduleOperations(
@@ -87,18 +89,21 @@ export function WorkSchedules() {
     setNotice(null);
     const jobId = createScheduleJobId(trimmedName);
     const submitted = editor.value;
-    const receipt = await operations.execute({
-      kind: "create",
-      input: {
-        jobId,
-        name: trimmedName,
-        schedule: trimmedSchedule,
-        action: createAction,
-        enabled: true,
+    const receipt = await operations.execute(
+      {
+        kind: "create",
+        input: {
+          jobId,
+          name: trimmedName,
+          schedule: trimmedSchedule,
+          action: createAction,
+          enabled: true,
+        },
       },
-    }, (recorded) => {
-      if (recorded.kind === "create") editor.acceptSaved(empty, undefined, submitted);
-    });
+      (recorded) => {
+        if (recorded.kind === "create") editor.acceptSaved(empty, undefined, submitted);
+      },
+    );
     if (receipt?.kind === "create") {
       setCreateOpen(false);
       setSelectedId(jobId);
@@ -114,7 +119,7 @@ export function WorkSchedules() {
     if (receipt) {
       if (receipt.kind === "cancel") {
         setSelectedId(null);
-        setNotice("Schedule cancelled.");
+        setNotice("Schedule deleted.");
       } else if (receipt.kind === "run") {
         setNotice(`Run request acknowledged as ${receipt.run.runId}. Check Work for its outcome.`);
       } else {
@@ -281,13 +286,8 @@ export function WorkSchedules() {
                     <div className="grid gap-2 rounded-md border border-line-strong bg-sunken p-3">
                       <p className="text-sm text-fg">
                         {pending === "cancel"
-                          ? "Cancel"
-                          : pending === "run"
-                            ? "Run now"
-                            : pending === "pause"
-                              ? "Pause"
-                              : "Resume"}{" "}
-                        this schedule? The Gateway will recheck its current record before the request.
+                          ? `Delete “${selected.name}”? Future runs stop and it can't be restored.`
+                          : `${pending === "run" ? "Run now" : pending === "pause" ? "Pause" : "Resume"} this schedule? The Gateway will recheck its current record before the request.`}
                       </p>
                       {pending === "run" ? (
                         <p className="text-xs text-fg-muted">
@@ -301,8 +301,19 @@ export function WorkSchedules() {
                           disabled={busy || actionLocked}
                           onClick={() => void applyAction()}
                         >
-                          Confirm {pending}
+                          {pending === "cancel" ? "Delete schedule" : `Confirm ${pending}`}
                         </Button>
+                        {pending === "cancel" && selected.enabled ? (
+                          <Button
+                            disabled={busy || actionLocked}
+                            onClick={() => {
+                              operations.invalidate();
+                              setPending("pause");
+                            }}
+                          >
+                            Pause instead
+                          </Button>
+                        ) : null}
                         <Button
                           disabled={busy}
                           onClick={() => {
@@ -345,7 +356,7 @@ export function WorkSchedules() {
                           setPending("cancel");
                         }}
                       >
-                        Cancel schedule
+                        Delete schedule…
                       </Button>
                     </div>
                   )}

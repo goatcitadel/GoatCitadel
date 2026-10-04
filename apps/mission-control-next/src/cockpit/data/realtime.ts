@@ -47,6 +47,14 @@ export function invalidateForEvent(
     }
     return [];
   }
+  if (event.source === "llamacpp") {
+    // Status and lifecycle signals change what the health readers show. Raw llama-server output
+    // (one event per log chunk) does not, and refreshing health on it would probe llama-server,
+    // which can log again.
+    const processOutput = event.eventType === "llamacpp_stdout" || event.eventType === "llamacpp_stderr";
+    if (!processOutput && event.eventAuthority !== "durable_history") invalidate(queryKeys.healthAll());
+    return [];
+  }
   const { topics } = deriveRealtimeRefresh(event, { defaultTopics: ["surface"] });
   for (const topic of topics) invalidate([topic]);
   if (topics.some((topic) => topic === "tools" || topic === "mcp" || topic === "agents")) {

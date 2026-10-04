@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PermissionProfileSnapshotRecord } from "@goatcitadel/contracts";
 import { __resetPermissionActivationsForTests } from "../../../features/native-routes/settings/use-permission-profile-activation";
+import { StatusBadge } from "../../ui/StatusBadge";
 import { PermissionProfileSettings } from "./PermissionProfileSettings";
 const switchShellMock = vi.hoisted(() => vi.fn<typeof import("../../../shell-preference").switchShell>());
 vi.mock("../../../shell-preference", async (importOriginal) => ({
@@ -146,6 +147,47 @@ describe("native Chat permission profile", () => {
     });
     expect(text(view.root)).toContain("Current effective workspace Chat profile: Safe");
     expect(text(view.root)).toContain("Autonomous activation grants");
+  });
+  it("selects and marks the profile already in effect", async () => {
+    api.fetchEffectivePermissionProfile.mockResolvedValue({ permissionProfile: { profileId: "safe", label: "Safe" } });
+    await mount();
+    const radio = view.root.findAllByProps({ type: "radio" })[0]!;
+    expect(radio.props.checked).toBe(true);
+    expect(radio.props.value).toBe("safe");
+    expect(view.root.findAllByType(StatusBadge).map((badge) => badge.props.status.label)).toContain("Current");
+    expect(button("Review Chat profile selection").props.disabled).toBe(true);
+  });
+  it("offers a review only for a profile other than the one in effect", async () => {
+    items = [profile, { ...profile, profileId: "other", label: "Other" }];
+    api.fetchEffectivePermissionProfile.mockResolvedValue({ permissionProfile: { profileId: "safe", label: "Safe" } });
+    await mount();
+    const radios = () => view.root.findAllByProps({ type: "radio" });
+    const reviewDisabled = () => button("Review Chat profile selection").props.disabled;
+    await act(async () => radios()[1]!.props.onChange());
+    expect(radios().map((radio) => radio.props.checked)).toEqual([false, true]);
+    expect(reviewDisabled()).toBe(false);
+    await act(async () => radios()[0]!.props.onChange());
+    expect(radios().map((radio) => radio.props.checked)).toEqual([true, false]);
+    expect(reviewDisabled()).toBe(true);
+    expect(view.root.findAllByType(StatusBadge).map((badge) => badge.props.status.label)).toEqual(["Current"]);
+  });
+  it("marks the profile in effect for the selected policy context", async () => {
+    items = [profile, { ...profile, profileId: "other", label: "Other" }];
+    api.fetchEffectivePermissionProfile.mockImplementation(async ({ surface }) => ({
+      permissionProfile:
+        surface === "tools" ? { profileId: "other", label: "Other" } : { profileId: "safe", label: "Safe" },
+    }));
+    await mount();
+    const checked = () => view.root.findAllByProps({ type: "radio" }).map((radio) => radio.props.checked);
+    const chooseContext = (value: string) =>
+      act(async () =>
+        view.root.findByProps({ "aria-label": "Selection policy context" }).props.onChange({ target: { value } }),
+      );
+    expect(checked()).toEqual([true, false]);
+    await chooseContext("tools");
+    expect(checked()).toEqual([false, true]);
+    await chooseContext("all");
+    expect(checked()).toEqual([false, false]);
   });
   it("bounds the loaded list and excludes archived or foreign workspace profiles", async () => {
     items = [

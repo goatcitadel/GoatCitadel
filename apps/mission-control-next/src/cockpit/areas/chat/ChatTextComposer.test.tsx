@@ -94,7 +94,7 @@ function composerProps(overrides: Partial<ComposerProps> = {}): ComposerProps {
     planningMode: "off",
     onTogglePlanningMode: vi.fn(),
     currentWebMode: "off",
-    onToggleResearchMode: vi.fn(),
+    onSetWebMode: vi.fn(),
     currentReviewDepth: "off",
     onToggleReviewMode: vi.fn(),
     onRemoveAttachment: vi.fn(),
@@ -144,7 +144,9 @@ describe("cockpit text composer", () => {
       expect(container.querySelector("textarea")?.getAttribute("aria-describedby")).toBeNull();
       await act(async () => vi.advanceTimersByTimeAsync(ROUTE_CHECK_HINT_DELAY_MS));
       expect(container.textContent).toContain("Send will wait for the Gateway check");
-      await act(async () => root.render(<ChatTextComposer props={{ ...props, canSend: true, routePreflightLoading: false }} />));
+      await act(async () =>
+        root.render(<ChatTextComposer props={{ ...props, canSend: true, routePreflightLoading: false }} />),
+      );
       expect(container.textContent).not.toContain("Send will wait for the Gateway check");
     } finally {
       vi.useRealTimers();
@@ -364,5 +366,60 @@ describe("cockpit text composer", () => {
       ),
     );
     expect(sendButton().disabled).toBe(true);
+  });
+
+  it("does not send the Enter that confirms an IME composition", async () => {
+    const props = composerProps();
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    // Cancelable events, so `defaultPrevented` can tell whether the composer took the Enter.
+    const ime229 = new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true, cancelable: true });
+    await act(async () => textarea.dispatchEvent(ime229));
+    expect(ime229.defaultPrevented).toBe(false);
+    const imeComposing = new KeyboardEvent("keydown", {
+      key: "Enter",
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => textarea.dispatchEvent(imeComposing));
+    expect(imeComposing.defaultPrevented).toBe(false);
+    expect(props.onSend).not.toHaveBeenCalled();
+    const plainEnter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => textarea.dispatchEvent(plainEnter));
+    expect(plainEnter.defaultPrevented).toBe(true);
+    expect(props.onSend).toHaveBeenCalledOnce();
+  });
+
+  it("does not choose a command when the Enter key confirms an IME composition in the palette", async () => {
+    const props = composerProps({
+      commandSuggestions: [{ key: "status", command: "/status", description: "Show status", applyValue: "/status" }],
+      composerPalette: {
+        enabled: true,
+        globalOpen: true,
+        query: "",
+        failures: [],
+        onOpen: vi.fn(),
+        onQueryChange: vi.fn(),
+        onClose: vi.fn(),
+        onIndexChange: vi.fn(),
+        onSelect: vi.fn(),
+        loading: false,
+      },
+    });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    const paletteInput = [...container.querySelectorAll("label")]
+      .find((label) => label.textContent?.startsWith("Find a command"))
+      ?.querySelector("input");
+    expect(paletteInput).toBeInstanceOf(HTMLInputElement);
+    const input = paletteInput as HTMLInputElement;
+    const imeEnter = new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true, cancelable: true });
+    await act(async () => input.dispatchEvent(imeEnter));
+    expect(imeEnter.defaultPrevented).toBe(false);
+    expect(props.composerPalette?.onSelect).not.toHaveBeenCalled();
+    const plainEnter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => input.dispatchEvent(plainEnter));
+    expect(plainEnter.defaultPrevented).toBe(true);
+    expect(props.composerPalette?.onSelect).toHaveBeenCalledOnce();
   });
 });

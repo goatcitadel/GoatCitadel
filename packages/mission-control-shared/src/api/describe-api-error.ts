@@ -5,7 +5,8 @@ export interface ApiErrorDescription {
   technical?: string;
 }
 
-export const GATEWAY_UNREACHABLE_SUMMARY = "Can't reach the GoatCitadel gateway. Check that it's running, then try again.";
+export const GATEWAY_UNREACHABLE_SUMMARY =
+  "Can't reach the GoatCitadel gateway. Check that it's running, then try again.";
 const DEFAULT_FALLBACK = "Something went wrong. Try again.";
 
 /** Keep request paths, stack traces, and transport details out of operator copy. */
@@ -17,6 +18,9 @@ export function describeApiError(error: unknown, fallback = DEFAULT_FALLBACK): A
     }
     if (error.kind === "protocol") {
       return { summary: "The gateway sent a response Mission Control couldn't read. Try again.", technical };
+    }
+    if (readDisabledFeatureFlag(error.body)) {
+      return { summary: "This feature is turned off for this installation.", technical };
     }
     return { summary: summaryForStatus(error.status, readBodyMessage(error.body)), technical };
   }
@@ -60,13 +64,24 @@ function readBodyMessage(body: unknown): string | undefined {
   return undefined;
 }
 
+/** The Gateway rejects a switched-off feature as STATE_CONFLICT with `details.flag`; that is not an edit conflict. */
+function readDisabledFeatureFlag(body: unknown): string | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const record = body as { code?: unknown; details?: unknown };
+  if (record.code !== "STATE_CONFLICT" || !record.details || typeof record.details !== "object") return undefined;
+  const flag = (record.details as { flag?: unknown }).flag;
+  return typeof flag === "string" && flag.trim() ? flag : undefined;
+}
+
 function looksLikeTransportFailure(message: string): boolean {
   return /^network error\b/i.test(message) || /failed to fetch|networkerror|econnrefused|load failed/i.test(message);
 }
 
 function looksTechnical(message: string): boolean {
-  return /\/api\/v\d+\//.test(message) ||
+  return (
+    /\/api\/v\d+\//.test(message) ||
     /^(api|http) error \d{3}/i.test(message) ||
     /\b[A-Za-z]*Error:/.test(message) ||
-    /\n\s+at\s/.test(message);
+    /\n\s+at\s/.test(message)
+  );
 }

@@ -1,13 +1,21 @@
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { buildClassicOwnerUrl } from "../../app/classic-owner-url";
 import { useShellHandoff } from "../../app/use-shell-handoff";
 import { useDraftLeaveDialogState } from "../../features/native-routes/library/DraftLeaveDialog";
+import { buildShellSwitchUrl } from "../../shell-preference";
 import { Button } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
 export function useCockpitShellSwitch(sessionId?: string | null) {
   const { activeWorkspaceId, activeCitadelId } = useUiPreferences();
   const owner = useShellHandoff([activeCitadelId, activeWorkspaceId, sessionId]);
   return {
+    /** An explicit layout choice: Classic becomes the saved default. */
     request: () => owner.request("classic", { sessionId }),
+    /** A task detour: Classic opens for this visit and the saved default stays Cockpit. */
+    visit: () =>
+      owner.request("classic", {
+        href: buildClassicOwnerUrl(buildShellSwitchUrl(window.location.href, "classic", sessionId)),
+      }),
     feedback: <ShellSwitchFeedback owner={owner} />,
   };
 }

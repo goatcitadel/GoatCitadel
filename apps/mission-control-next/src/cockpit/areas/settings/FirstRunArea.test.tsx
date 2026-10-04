@@ -25,10 +25,17 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ ...api, isApi
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: api.workspace }),
 }));
-vi.mock("./ProviderManagementSettings", () => ({
-  ProviderManagementSettings: () => <p>Native provider connection owner</p>,
+const guided = vi.hoisted(() => ({ rendered: vi.fn() }));
+vi.mock("./CockpitGuidedModelSetup", () => ({
+  CockpitGuidedModelSetup: (props: { onEnterChat: () => void; enterChatLabel?: string }) => {
+    guided.rendered(props);
+    return (
+      <button type="button" onClick={props.onEnterChat}>
+        Guided model owner ready
+      </button>
+    );
+  },
 }));
-vi.mock("./ProviderRoutingSettings", () => ({ ProviderRoutingSettings: () => <p>Native default model owner</p> }));
 vi.mock("./LlamaSetupSettings", () => ({
   LlamaSetupSettings: ({ workspaceId }: { workspaceId?: string }) => <p>Native llama setup for {workspaceId}</p>,
 }));
@@ -92,16 +99,24 @@ afterEach(() => {
 });
 
 describe("native first-run setup", () => {
-  it("uses native model owners on demand and does not offer a premature Chat entry", async () => {
+  it("connects through the guided model owner and moves on to safety when the model is ready", async () => {
     await render();
-    expect(container.textContent).not.toContain("Native provider connection owner");
+    expect(container.textContent).not.toContain("Guided model owner ready");
     await click("Connect a provider");
-    expect(container.textContent).toContain("Native provider connection owner");
-    expect(container.textContent).toContain("Native default model owner");
-    await click("Configure llama.cpp");
-    expect(container.textContent).toContain("Native llama setup for workspace-a");
+    expect(button("Guided model owner ready")).toBeDefined();
+    expect(guided.rendered).toHaveBeenCalledWith(expect.objectContaining({ enterChatLabel: "Continue to safety" }));
+    await click("Advanced: edit provider profiles");
+    expect(api.navigate).toHaveBeenCalledWith("/settings/models?shell=cockpit#providers");
+    await click("Guided model owner ready");
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Set your safety posture");
     expect(button("Open Chat")).toBeUndefined();
     expect(api.completeOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("still offers the local llama.cpp setup", async () => {
+    await render();
+    await click("Configure llama.cpp");
+    expect(container.textContent).toContain("Native llama setup for workspace-a");
   });
   it("requires fresh safety review then exact owner completion before Chat", async () => {
     await render();

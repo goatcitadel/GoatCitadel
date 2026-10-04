@@ -85,7 +85,14 @@ export function FirstRunArea() {
             })}
           </nav>
           <div className="rounded-lg border border-line bg-raised p-4 sm:p-6">
-            {step === "model" ? <FirstRunModelStep state={state} workspaceId={activeWorkspaceId} /> : null}
+            {step === "model" ? (
+              <FirstRunModelStep
+                state={state}
+                workspaceId={activeWorkspaceId}
+                onReload={setup.refresh}
+                onModelReady={() => setup.setStep("safety")}
+              />
+            ) : null}
             {step === "safety" ? (
               <div className="space-y-4">
                 <h2 className="font-display text-lg font-semibold text-fg">Set your safety posture</h2>

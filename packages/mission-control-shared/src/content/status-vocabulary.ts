@@ -91,7 +91,10 @@ export function humanizeToken(value: string): string {
   return words ? words[0]!.toUpperCase() + words.slice(1) : "";
 }
 
-export function presentRunStatus(value: DurableRunStatus, options: { waitingOnOperator?: boolean } = {}): StatusPresentation {
+export function presentRunStatus(
+  value: DurableRunStatus,
+  options: { waitingOnOperator?: boolean } = {},
+): StatusPresentation {
   return value === "waiting" && options.waitingOnOperator ? status("Waiting on you", "waiting") : runStatuses[value];
 }
 
@@ -112,7 +115,8 @@ export function presentApprovalOutcome(value: ApprovalResolutionOutcome): Status
 }
 
 export function presentRiskLevel(value: ApprovalRequest["riskLevel"]): StatusPresentation {
-  return riskLevels[value];
+  // A risk level this build doesn't know yet keeps its own name and the most severe tone.
+  return riskLevels[value] ?? status(humanizeToken(String(value)), "failed");
 }
 
 export function presentEventClass(value: string | null | undefined): string {

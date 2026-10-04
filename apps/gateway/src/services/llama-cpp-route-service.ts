@@ -1,4 +1,5 @@
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
+import type { LlamaCppRuntimeStatus } from "@goatcitadel/contracts";
 import type { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import type { LlamaCppSetupService } from "./llama-cpp-setup-service.js";
 
@@ -27,6 +28,26 @@ export interface LlamaCppRoutePortDependencies {
   publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
+/**
+ * What other windows need to hear about. `updatedAt` moves with every probe, and for a managed
+ * llama-server `lastError` holds its latest stderr line (including the log line for each health
+ * probe), so neither counts as a change on its own. Real failures still change `healthy` and
+ * `processState`.
+ *
+ * In `leaseDiagnostics`, only `evidence.lastProbe` moves with every probe (its `healthy` repeats the
+ * top-level field), so only that is left out. Lease transitions (`activeLeaseCount`, `state`,
+ * `ownership`, the idle deadline, lease and start evidence) are still announced.
+ */
+export function llamaCppStatusSignature(status: LlamaCppRuntimeStatus): string {
+  const lease = status.leaseDiagnostics;
+  return JSON.stringify({
+    ...status,
+    updatedAt: undefined,
+    lastError: undefined,
+    leaseDiagnostics: lease && { ...lease, evidence: lease.evidence && { ...lease.evidence, lastProbe: undefined } },
+  });
+}
+
 export function createLlamaCppRoutePort(deps: LlamaCppRoutePortDependencies): LlamaCppRoutePort {
   const runtime = deps.llamaCppRuntime;
   const setup = deps.setup;
@@ -38,11 +59,16 @@ export function createLlamaCppRoutePort(deps: LlamaCppRoutePortDependencies): Ll
     getLlamaCppSetup: (workspaceId) => setup.get(workspaceId),
     listLlamaCppModels: () => runtime.listModels(),
     refreshLlamaCppRuntime: async () => {
+      // Status reads probe the runtime because nothing else watches it. Announce only a probe
+      // that changed the status; announcing every read made each window read it again.
+      const before = llamaCppStatusSignature(runtime.getStatus());
       const status = await runtime.refresh();
-      await deps.publishRealtime("system", "llamacpp", {
-        type: "llamacpp_refreshed",
-        status,
-      });
+      if (llamaCppStatusSignature(status) !== before) {
+        await deps.publishRealtime("system", "llamacpp", {
+          type: "llamacpp_refreshed",
+          status,
+        });
+      }
       return status;
     },
     startLlamaCppHuggingFaceDownload: (input) => runtime.startHuggingFaceDownload(input),

@@ -36,7 +36,7 @@ function props(overrides: Partial<Props> = {}): Props {
     planningMode: "off",
     onTogglePlanningMode: vi.fn(),
     currentWebMode: "off",
-    onToggleResearchMode: vi.fn(),
+    onSetWebMode: vi.fn(),
     currentReviewDepth: "off",
     onToggleReviewMode: vi.fn(),
     pendingAttachments: [],
@@ -71,7 +71,7 @@ describe("Chat composer controls", () => {
     expect(control('select[aria-label="Provider"]')).toBeNull();
     const toggle = control("button[aria-expanded]") as HTMLButtonElement;
     expect(toggle.textContent).toContain("Options");
-    expect(toggle.textContent).toContain("stub-chat · Standard");
+    expect(toggle.textContent).toContain("stub-chat · Standard · Web Off");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
 
     await act(async () => toggle.click());
@@ -87,5 +87,18 @@ describe("Chat composer controls", () => {
 
     await act(async () => toggle.click());
     expect(control('select[aria-label="Provider"]')).toBeNull();
+  });
+
+  it("sets web search to any mode, including off", async () => {
+    const input = props({ currentWebMode: "auto" });
+    await act(async () => root.render(<ChatComposerControls props={input} />));
+    const select = control('select[aria-label="Web search"]') as HTMLSelectElement;
+    expect(select.value).toBe("auto");
+    expect([...select.options].map((option) => option.textContent)).toEqual(["Auto", "Off", "Quick", "Deep"]);
+    await act(async () => {
+      select.value = "off";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(input.onSetWebMode).toHaveBeenCalledWith("off");
   });
 });

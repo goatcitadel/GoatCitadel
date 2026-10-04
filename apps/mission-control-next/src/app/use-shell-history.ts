@@ -2,8 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { buildAppHref, normalizeAppRoute, type AppRoute } from "./route-model";
 import { coerceCompatibilityHrefToNext, resolveRouteFromLocation } from "./legacy-route-adapter";
 import { hasDirtySections } from "../features/native-routes/library/use-form-dirty";
-
-const POSITION = "goatcitadelNavigationPosition";
+import { SHELL_HISTORY_POSITION as POSITION } from "./shell-transition";
 
 /** Keep a rejected Back/Forward transition on its original history entry. */
 export function useShellHistory(apply: (route: AppRoute) => void) {
@@ -22,7 +21,11 @@ export function useShellHistory(apply: (route: AppRoute) => void) {
     if (pending.current?.href === href && typeof window.history.go === "function") {
       const delta = pending.current.position - position.current;
       pending.current = null;
-      if (delta) { allowed.current = true; window.history.go(delta); return; }
+      if (delta) {
+        allowed.current = true;
+        window.history.go(delta);
+        return;
+      }
     }
     pending.current = null;
     const nextPosition = options?.replace ? position.current : position.current + 1;
@@ -37,19 +40,30 @@ export function useShellHistory(apply: (route: AppRoute) => void) {
   useEffect(() => {
     window.history.replaceState({ ...window.history.state, [POSITION]: position.current }, "", window.location.href);
     const onPopState = () => {
-      if (restoring.current) { restoring.current = false; return; }
+      if (restoring.current) {
+        restoring.current = false;
+        return;
+      }
       const nextRoute = resolveRouteFromLocation(window.location.href);
       const href = buildAppHref(nextRoute);
       const targetPosition = window.history.state?.[POSITION];
       if (hasDirtySections() && !allowed.current && href !== currentHref.current) {
-        if (typeof targetPosition === "number" && targetPosition !== position.current && typeof window.history.go === "function") {
+        if (
+          typeof targetPosition === "number" &&
+          targetPosition !== position.current &&
+          typeof window.history.go === "function"
+        ) {
           pending.current = { position: targetPosition, href };
           restoring.current = true;
           window.history.go(position.current - targetPosition);
         } else {
           // Older entries have no presentation index. Preserve their URL target for
           // the leave decision without introducing a duplicate forward navigation.
-          window.history.replaceState({ ...window.history.state, [POSITION]: position.current }, "", currentHref.current);
+          window.history.replaceState(
+            { ...window.history.state, [POSITION]: position.current },
+            "",
+            currentHref.current,
+          );
         }
         requestRef.current(nextRoute, { replace: true });
         return;
@@ -59,7 +73,10 @@ export function useShellHistory(apply: (route: AppRoute) => void) {
       if (typeof targetPosition === "number") position.current = targetPosition;
       currentHref.current = href;
       const compatibilityHref = coerceCompatibilityHrefToNext(window.location.href);
-      if (compatibilityHref && compatibilityHref !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      if (
+        compatibilityHref &&
+        compatibilityHref !== `${window.location.pathname}${window.location.search}${window.location.hash}`
+      ) {
         window.history.replaceState({ ...window.history.state, [POSITION]: position.current }, "", compatibilityHref);
       }
       applyRef.current(nextRoute);
@@ -67,5 +84,11 @@ export function useShellHistory(apply: (route: AppRoute) => void) {
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
-  return { navigate, requestRef, cancel: () => { pending.current = null; } };
+  return {
+    navigate,
+    requestRef,
+    cancel: () => {
+      pending.current = null;
+    },
+  };
 }

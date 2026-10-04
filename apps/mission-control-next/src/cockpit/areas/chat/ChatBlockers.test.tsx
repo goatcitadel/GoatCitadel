@@ -96,4 +96,86 @@ describe("Chat blockers", () => {
     expect(document.body.textContent).toContain("Confirm danger risk action");
     expect(document.body.textContent).toContain("pnpm test");
   });
+
+  it("loads persisted evidence for nuclear risk before its review", async () => {
+    api.fetchApprovals.mockResolvedValue({
+      items: [
+        {
+          approvalId: "approval/1",
+          kind: "tool_invoke",
+          status: "pending",
+          riskLevel: "nuclear",
+          payload: {},
+          preview: { commands: ["rm -rf build"] },
+          createdAt: "2026-10-01T00:00:00Z",
+        },
+      ],
+    });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ChatBlockers
+            props={
+              {
+                pendingApproval: { approvalId: "approval/1", kind: "tool_invoke", riskLevel: "nuclear" },
+                pendingUserInput: null,
+                selectedSessionId: "session/1",
+                approvalPending: false,
+                userInputPending: false,
+                onApprovePending: vi.fn(),
+                onDenyPending: vi.fn(),
+                onSubmitUserInput: vi.fn(),
+              } as unknown as Parameters<typeof ChatBlockers>[0]["props"]
+            }
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(api.fetchApprovals).toHaveBeenCalledOnce());
+    const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval");
+    await act(async () => review?.click());
+    await vi.waitFor(() => expect(document.body.textContent).toContain("rm -rf build"));
+    expect(document.body.textContent).toContain("Confirm nuclear risk action");
+  });
+
+  it("loads persisted evidence for a risk level this build does not know", async () => {
+    api.fetchApprovals.mockResolvedValue({
+      items: [
+        {
+          approvalId: "approval/1",
+          kind: "tool_invoke",
+          status: "pending",
+          riskLevel: "critical_infra",
+          payload: {},
+          preview: { commands: ["kubectl delete ns prod"] },
+          createdAt: "2026-10-01T00:00:00Z",
+        },
+      ],
+    });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ChatBlockers
+            props={
+              {
+                pendingApproval: { approvalId: "approval/1", kind: "tool_invoke", riskLevel: "critical_infra" },
+                pendingUserInput: null,
+                selectedSessionId: "session/1",
+                approvalPending: false,
+                userInputPending: false,
+                onApprovePending: vi.fn(),
+                onDenyPending: vi.fn(),
+                onSubmitUserInput: vi.fn(),
+              } as unknown as Parameters<typeof ChatBlockers>[0]["props"]
+            }
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(api.fetchApprovals).toHaveBeenCalledOnce());
+    expect(container.textContent).toContain("Critical infra");
+    const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval");
+    await act(async () => review?.click());
+    await vi.waitFor(() => expect(document.body.textContent).toContain("kubectl delete ns prod"));
+  });
 });

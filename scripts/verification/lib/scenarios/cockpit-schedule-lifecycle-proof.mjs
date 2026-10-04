@@ -209,9 +209,9 @@ export async function runCockpitScheduleLifecycleProof({
           assert.deepEqual(await read(created.receipt.jobId), created.receipt);
           await detail.getByRole("heading", { name, exact: true }).waitFor();
           stage = "confirm exact schedule deletion";
-          await detail.getByRole("button", { name: "Cancel schedule", exact: true }).click();
+          await detail.getByRole("button", { name: "Delete schedule…", exact: true }).click();
           const removed = await responseFor("DELETE", routeFor(created.receipt.jobId), () =>
-            detail.getByRole("button", { name: "Confirm cancel", exact: true }).click(),
+            detail.getByRole("button", { name: "Delete schedule", exact: true }).click(),
           );
           assert.deepEqual(removed.receipt, { deleted: true, jobId: created.receipt.jobId });
           assert.equal(removed.query.get("expectedRevision"), String(created.receipt.revision));
@@ -328,7 +328,7 @@ export async function runCockpitScheduleLifecycleProof({
           await nav.getByRole("link", { name: "Schedules", exact: true }).click();
           await select(seed.name);
           // The query cache may still show the pre-request record. Both the old and freshly read controls must stay locked.
-          for (const name of ["Run now", "Cancel schedule"])
+          for (const name of ["Run now", "Delete schedule…"])
             assert.equal(await detail.getByRole("button", { name, exact: true }).isDisabled(), true);
           const toggle = detail.getByRole("button", { name: /^(Pause|Resume)$/ });
           assert.equal(await toggle.count(), 1);
@@ -339,7 +339,7 @@ export async function runCockpitScheduleLifecycleProof({
           await page.getByRole("button", { name: "Refresh", exact: true }).click();
           await refreshed;
           await detail.getByRole("button", { name: "Resume", exact: true }).waitFor();
-          for (const action of ["Run now", "Resume", "Cancel schedule"])
+          for (const action of ["Run now", "Resume", "Delete schedule…"])
             assert.equal(await detail.getByRole("button", { name: action, exact: true }).isDisabled(), true);
           await capture("unknown-native", detail);
           const documentCount = navigations,
@@ -452,7 +452,7 @@ export async function runCockpitScheduleLifecycleProof({
           );
           for (const button of await target
             .getByRole("button", {
-              name: /^(Run now|Resume|Pause|Cancel schedule|Run Schedule review .+ now|Cancel Schedule review .+)$/u,
+              name: /^(Run now|Resume|Pause|Delete schedule…|Run Schedule review .+ now|Cancel Schedule review .+)$/u,
             })
             .all()) {
             await button.scrollIntoViewIfNeeded();

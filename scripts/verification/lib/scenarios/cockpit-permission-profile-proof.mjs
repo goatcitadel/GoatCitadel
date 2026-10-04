@@ -22,7 +22,7 @@ export function assertPermissionActivationOwnerAgreement({ workspaceId, reviewed
   assert.equal(effective.permissionProfile?.profileId ?? effective.permissionProfileId, reviewed.profile.profileId);
 }
 
-/** Uses new workspaces only in the lane-owned runtime; no tool execution or profile-rule edits. */
+/** Uses new workspaces and one new workspace-scoped profile each, only in the lane-owned runtime; no tool execution or edits to existing profile rules. */
 export async function runCockpitPermissionProfileProof({ context, browser, stack, citadelId, viewports, deps }) {
   const { assertOk, auditPageAccessibility, axeSourcePath, buildVerificationUiUrl, emptyArtifacts,
     installMissionControlNextBrowserState, path, relativeToRun, requestJson, runScenario } = deps;
@@ -51,6 +51,22 @@ export async function runCockpitPermissionProfileProof({ context, browser, stack
         const profiles = await api(`/api/v1/tools/permission-profiles?workspaceId=${encodeURIComponent(workspaceId)}`);
         const selected = profiles.items.find((item) => item.profileId === "safe" && item.status === "active" && item.approvalMode === "approve_all");
         assert.ok(selected, "The owner must expose its existing safe profile.");
+        // A fresh workspace already runs on safe, so the page marks it Current and will not review it again.
+        // The alternate is a disposable workspace-scoped profile that the proof can review and apply first.
+        const other = await api("/api/v1/tools/permission-profiles", {
+          method: "POST",
+          body: {
+            label: `Proof alternate ${suffix}`,
+            scope: "workspace",
+            scopeRef: workspaceId,
+            approvalMode: "approve_all",
+            toolPatterns: ["session.status"],
+            deny: ["shell.exec"],
+            readAccessMode: "roots_only",
+            defaultForSurfaces: [],
+          },
+        });
+        assert.ok(other.profileId, "The owner must create the disposable alternate profile.");
         const readEffective = () => api(`/api/v1/tools/permission-profiles/effective?workspaceId=${encodeURIComponent(workspaceId)}&surface=chat`);
         const theme = variant === "mobile" ? "light" : "dark";
         browserContext = await browser.newContext({ viewport, colorScheme: theme });
@@ -70,11 +86,13 @@ export async function runCockpitPermissionProfileProof({ context, browser, stack
         await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/safety?shell=cockpit"), { waitUntil: "domcontentloaded" });
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
         const panel = page.getByRole("region", { name: "Chat permission profile", exact: true });
-        await panel.getByRole("searchbox", { name: "Find permission profile", exact: true }).fill(selected.label);
-        const choice = panel.getByRole("radio", { name: new RegExp(`^${selected.label}(?:\\s|$)`) });
-        await choice.check();
+        // The page marks the profile in effect Current and keeps Review disabled until a different profile is picked.
+        const pick = async (profile) => {
+          await panel.getByRole("searchbox", { name: "Find permission profile", exact: true }).fill(profile.label);
+          await panel.getByRole("radio", { name: new RegExp(`^${profile.label}(?:\\s|$)`) }).check();
+        };
         const group = panel.getByRole("group", { name: "Reviewed Chat profile selection", exact: true });
-        const requestReview = async () => {
+        const requestReview = async (profile) => {
           const response = page.waitForResponse((item) => item.request().method() === "POST"
             && new URL(item.url()).pathname === "/api/v1/tools/permission-profiles/selection-review");
           await panel.getByRole("button", { name: "Review Chat profile selection", exact: true }).click();
@@ -82,7 +100,7 @@ export async function runCockpitPermissionProfileProof({ context, browser, stack
           const review = await result.json(); await group.waitFor();
           assert.equal(review.input.workspaceId, workspaceId);
           assert.equal(review.input.surface, "chat");
-          assert.equal(review.profile.profileId, selected.profileId);
+          assert.equal(review.profile.profileId, profile.profileId);
           return review;
         };
         await mkdir(screenshotDir, { recursive: true });
@@ -98,29 +116,43 @@ export async function runCockpitPermissionProfileProof({ context, browser, stack
           await page.screenshot({ path: screenshot, fullPage: false }); screenshots.push(relativeToRun(context, screenshot));
         };
         stage = "review and cancel without activation";
-        await requestReview(); assert.equal(writes.length, 0);
+        await pick(other);
+        await requestReview(other); assert.equal(writes.length, 0);
         await audit("review");
         await group.getByRole("button", { name: "Cancel selection", exact: true }).click();
         await group.waitFor({ state: "hidden" }); assert.equal(writes.length, 0);
 
         stage = "apply reviewed owner selection";
-        const reviewed = await requestReview();
+        const reviewed = await requestReview(other);
         const savedResponse = page.waitForResponse((item) => item.request().method() === "POST"
           && new URL(item.url()).pathname === "/api/v1/tools/permission-profiles/activate");
         await group.getByRole("button", { name: "Apply reviewed Chat profile", exact: true }).click();
         const response = await savedResponse; assert.equal(response.status(), 200);
         const receipt = await response.json();
-        await panel.getByText(`Current effective workspace Chat profile: ${selected.label}`, { exact: true }).waitFor();
+        await panel.getByText(`Current effective workspace Chat profile: ${other.label}`, { exact: true }).waitFor();
         await group.waitFor({ state: "hidden" });
         assert.equal(writes.length, 1);
         assertPermissionActivationOwnerAgreement({ workspaceId, reviewed, request: writes[0], receipt, effective: await readEffective() });
         await audit("saved");
 
         stage = "reject stale reviewed selection before mutation";
-        const stale = await requestReview();
-        const fresh = await api("/api/v1/tools/permission-profiles/selection-review", { method: "POST", body: stale.input });
-        await api("/api/v1/tools/permission-profiles/activate", { method: "POST", body: { profileId: selected.profileId, workspaceId,
-          surface: "chat", expectedProfileRevision: fresh.profile.revision, expectedSelectionRevision: fresh.revision } });
+        // The concurrent owner re-applies the alternate, which stays in effect, so the safe review remains a real change.
+        await pick(selected);
+        const stale = await requestReview(selected);
+        const concurrent = await api("/api/v1/tools/permission-profiles/selection-review", {
+          method: "POST",
+          body: { operation: "activate", profileId: other.profileId, workspaceId, surface: "chat" },
+        });
+        await api("/api/v1/tools/permission-profiles/activate", {
+          method: "POST",
+          body: {
+            profileId: other.profileId,
+            workspaceId,
+            surface: "chat",
+            expectedProfileRevision: concurrent.profile.revision,
+            expectedSelectionRevision: concurrent.revision,
+          },
+        });
         const changed = await api("/api/v1/tools/permission-profiles/selection-review", { method: "POST", body: stale.input });
         assert.notEqual(changed.revision, stale.revision, "Concurrent owner activation must advance the selection revision.");
         await group.getByRole("button", { name: "Apply reviewed Chat profile", exact: true }).click();
@@ -129,7 +161,7 @@ export async function runCockpitPermissionProfileProof({ context, browser, stack
         await audit("stale-guard");
 
         stage = "retain unknown acknowledgement without retry";
-        const uncertainReview = await requestReview();
+        const uncertainReview = await requestReview(selected);
         let ownerReply;
         let intercepted = 0;
         const loseAcknowledgement = async (route) => {
@@ -152,9 +184,10 @@ export async function runCockpitPermissionProfileProof({ context, browser, stack
         assert.equal(writes.length, 2); assert.deepEqual(unrelatedWrites, []);
         await audit("unknown-locked");
         return { status: "passed", metrics: { workspaceId, profileId: selected.profileId, cancelledActivationWrites: 0,
+          alternateProfileId: other.profileId,
           browserActivations: writes.length, exactOwnerAgreement: true, staleWritePrevented: true,
           responseLossInjected: true, appSessionRemountLock: true, blockingAxe: 0,
-          limitation: "Existing safe profile in disposable workspaces; no tool execution. Response loss is injected after a real owner commit." },
+          limitation: "Existing safe profile plus one disposable workspace-scoped alternate in disposable workspaces; no tool execution. The alternate is applied first because the page does not review the profile already in effect. Response loss is injected after a real owner commit." },
         artifacts: emptyArtifacts({ screenshots }) };
       } catch (error) {
         if (page && !page.isClosed()) {

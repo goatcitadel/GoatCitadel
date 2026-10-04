@@ -99,6 +99,15 @@ function button(label: string): HTMLButtonElement {
   return found;
 }
 
+async function typeConfirmation(value: string) {
+  const input = document.body.querySelector<HTMLInputElement>('[role="dialog"] input');
+  if (!input) throw new Error("Missing confirmation input");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
 describe("Inbox approval decisions", () => {
   it("explains request changes and unavailable project grants without adding decision authority", async () => {
     renderActions(approval);
@@ -106,7 +115,10 @@ describe("Inbox approval decisions", () => {
     expect(container.textContent).toContain("Editing an approval withdraws the original action");
     expect(container.textContent).toContain("does not authorize a replacement");
     expect(container.textContent).toContain("Project-wide always-allow is unavailable here");
-    expect([...container.querySelectorAll("button")].map((entry) => entry.textContent)).toEqual(["Review approval", "Deny"]);
+    expect([...container.querySelectorAll("button")].map((entry) => entry.textContent)).toEqual([
+      "Review approval",
+      "Deny",
+    ]);
     expect(api.resolveApproval).not.toHaveBeenCalled();
     await approve();
     expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve");
@@ -283,16 +295,32 @@ describe("Inbox approval decisions", () => {
     expect(onResolved).toHaveBeenCalledWith(expect.stringContaining("decision recorded"));
   });
 
-  it("cancels a delayed nuclear hold when its reviewed evidence changes", async () => {
-    vi.useFakeTimers();
+  it("requires the typed nuclear confirmation, then rereads the same pending owner record before approval", async () => {
+    const nuclear: ApprovalRequest = { ...approval, riskLevel: "nuclear" };
+    api.fetchApprovals.mockResolvedValue({ items: [nuclear] });
+    api.resolveApproval.mockResolvedValue({ approval: { ...nuclear, status: "approved" }, effects: [] });
+    const { onResolved } = renderActions(nuclear);
+    await act(async () => button("Review approval").click());
+    expect(button("Approve once").disabled).toBe(true);
+    await typeConfirmation("approve");
+    expect(button("Approve once").disabled).toBe(false);
+    expect(api.fetchApprovals).not.toHaveBeenCalled();
+    expect(api.resolveApproval).not.toHaveBeenCalled();
+    await act(async () => button("Approve once").click());
+    expect(api.fetchApprovals).toHaveBeenCalledWith({ status: "pending", workspaceId: "default", limit: 200 });
+    expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve");
+    expect(onResolved).toHaveBeenCalledWith(expect.stringContaining("decision recorded"));
+  });
+
+  it("closes an open nuclear confirmation when its reviewed evidence changes", async () => {
     renderActions({ ...approval, riskLevel: "nuclear" });
-    act(() => {
-      button("Hold 1 second to approve once").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-    });
+    await act(async () => button("Review approval").click());
+    await typeConfirmation("approve");
+    expect(button("Approve once").disabled).toBe(false);
     renderActions({ ...approval, riskLevel: "nuclear", preview: { targets: ["new-target.txt"] } });
-    await act(async () => {
-      vi.advanceTimersByTime(1_100);
-    });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => button("Review approval").click());
+    expect(button("Approve once").disabled).toBe(true);
     expect(api.fetchApprovals).not.toHaveBeenCalled();
     expect(api.resolveApproval).not.toHaveBeenCalled();
   });

@@ -15,7 +15,10 @@ import {
 describe("status vocabulary", () => {
   it("distinguishes a run waiting on the operator from another wait", () => {
     expect(presentRunStatus("waiting")).toEqual({ label: "Waiting", tone: "neutral" });
-    expect(presentRunStatus("waiting", { waitingOnOperator: true })).toEqual({ label: "Waiting on you", tone: "waiting" });
+    expect(presentRunStatus("waiting", { waitingOnOperator: true })).toEqual({
+      label: "Waiting on you",
+      tone: "waiting",
+    });
     expect(presentRunStatus("dead_lettered")).toEqual({ label: "Failed · needs recovery", tone: "failed" });
     expect(presentChatTurnStatus("waiting_for_approval")).toEqual({ label: "Waiting on you", tone: "waiting" });
   });
@@ -26,6 +29,8 @@ describe("status vocabulary", () => {
     expect(presentApprovalStatus("edited")).toEqual({ label: "Approved with edits", tone: "done" });
     expect(presentApprovalOutcome("policy_blocked")).toEqual({ label: "Blocked by policy", tone: "failed" });
     expect(presentRiskLevel("nuclear")).toEqual({ label: "Nuclear", tone: "failed" });
+    // A level a newer Gateway sends must still render instead of crashing the badge.
+    expect(presentRiskLevel("critical_infra" as never)).toEqual({ label: "Critical infra", tone: "failed" });
   });
 
   it("turns internal event and effect tokens into readable copy", () => {
