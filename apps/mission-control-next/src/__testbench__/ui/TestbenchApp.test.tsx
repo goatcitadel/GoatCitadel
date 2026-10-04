@@ -205,7 +205,8 @@ describe("TestbenchApp", () => {
     await click(rowFor("Demo journey"));
     const drawer = document.querySelector('aside[aria-label="Demo journey details"]');
     expect(drawer?.textContent).toContain("✓ First step");
-    expect(drawer?.textContent).toContain("Second step (not run)");
+    expect(drawer?.textContent).toContain("○ Second step (not run)");
+    expect(drawer?.textContent).not.toContain("– Second step");
     expect(drawer?.textContent).toContain("Second step never ran.");
   });
 

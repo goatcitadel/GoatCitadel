@@ -129,4 +129,22 @@ describe("readErrorMessage", () => {
     expect(readErrorMessage(undefined, " raw text ")).toBe("raw text");
     expect(readErrorMessage(undefined, undefined)).toBe("No error message.");
   });
+
+  it("caps a raw-body fallback at 300 characters with an ellipsis, and leaves shorter text alone", () => {
+    expect(readErrorMessage(undefined, "x".repeat(300))).toBe("x".repeat(300));
+    expect(readErrorMessage(undefined, `${"x".repeat(500)}\n`)).toBe(`${"x".repeat(300)}…`);
+    expect(readErrorMessage({}, "<html>".repeat(100))).toBe(`${"<html>".repeat(100).slice(0, 300)}…`);
+  });
+
+  it("keeps an HTTP error summary short when the gateway answers with a long non-JSON page", () => {
+    const error = new ApiRequestError("API error 500", {
+      kind: "http",
+      method: "GET",
+      path: "/api/v1/demo",
+      status: 500,
+      bodyText: "y".repeat(5_000),
+    });
+    const classified = classifyError(error);
+    expect(classified.summary).toBe(`GET /api/v1/demo returned 500: ${"y".repeat(300)}…`);
+  });
 });

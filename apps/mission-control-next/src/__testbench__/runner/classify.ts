@@ -1,6 +1,8 @@
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { CheckAssertionError } from "./assert";
 
+const RAW_BODY_MESSAGE_LIMIT = 300;
+
 export interface Classification {
   readonly status: "fail" | "blocked" | "cancelled" | "unreachable";
   readonly summary: string;
@@ -83,7 +85,11 @@ export function readErrorMessage(body: unknown, bodyText: string | undefined): s
     }
   }
   const text = bodyText?.trim();
-  return text ? text : "No error message.";
+  if (!text) {
+    return "No error message.";
+  }
+  // A non-JSON body (an HTML error page, a proxy message) can be huge; the full text stays in the evidence.
+  return text.length > RAW_BODY_MESSAGE_LIMIT ? `${text.slice(0, RAW_BODY_MESSAGE_LIMIT)}…` : text;
 }
 
 function isFeatureFlagConflict(body: unknown): boolean {

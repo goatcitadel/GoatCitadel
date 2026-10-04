@@ -40,7 +40,10 @@ export function CheckDrawer({ check, record, onClose }: CheckDrawerProps) {
             <li key={`${step.title}-${index}`}>{`${STEP_ICON[step.status]} ${step.title}`}</li>
           ))}
           {unreached.map((title) => (
-            <li key={`unreached-${title}`} className="testbench-meta">{`– ${title} (not run)`}</li>
+            <li
+              key={`unreached-${title}`}
+              className="testbench-meta"
+            >{`${STATUS_DISPLAY["not-run"].icon} ${title} (not run)`}</li>
           ))}
         </ol>
       ) : null}
