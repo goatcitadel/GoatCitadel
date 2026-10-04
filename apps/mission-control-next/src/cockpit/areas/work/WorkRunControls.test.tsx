@@ -8,17 +8,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkRunControls } from "./WorkRunControls";
 
 const api = vi.hoisted(() => ({
-  fetchDurableRun: vi.fn(), pauseDurableRun: vi.fn(), resumeDurableRun: vi.fn(), cancelDurableRun: vi.fn(),
-  fetchDurableDeadLetters: vi.fn(), retryDurableRun: vi.fn(), recoverDurableDeadLetter: vi.fn(),
+  fetchDurableRun: vi.fn(),
+  pauseDurableRun: vi.fn(),
+  resumeDurableRun: vi.fn(),
+  cancelDurableRun: vi.fn(),
+  fetchDurableDeadLetters: vi.fn(),
+  retryDurableRun: vi.fn(),
+  recoverDurableDeadLetter: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/durable", () => api);
 
 const run: DurableRunRecord = {
-  runId: "run-a", workflowKey: "maintenance.repair", status: "running", attemptCount: 1, maxAttempts: 3,
-  version: 2, payload: { workspaceId: "default" }, createdAt: "2026-09-28T00:00:00Z", updatedAt: "2026-09-28T01:00:00Z",
+  runId: "run-a",
+  workflowKey: "maintenance.repair",
+  status: "running",
+  attemptCount: 1,
+  maxAttempts: 3,
+  version: 2,
+  payload: { workspaceId: "default" },
+  createdAt: "2026-09-28T00:00:00Z",
+  updatedAt: "2026-09-28T01:00:00Z",
 };
 const letter: DurableDeadLetterRecord = {
-  deadLetterId: "dead-a", runId: run.runId, reason: "Stopped", payload: {}, createdAt: "2026-09-28T02:00:00Z",
+  deadLetterId: "dead-a",
+  runId: run.runId,
+  reason: "Stopped",
+  payload: {},
+  createdAt: "2026-09-28T02:00:00Z",
 };
 
 let root: Root;
@@ -38,16 +54,31 @@ beforeEach(() => {
   root = createRoot(container);
 });
 
-afterEach(() => { act(() => root.unmount()); container.remove(); });
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+});
 
 async function renderControls() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  await act(async () => root.render(<QueryClientProvider client={client}><UiPreferencesProvider>
-    <WorkRunControls runId="run-a" />
-  </UiPreferencesProvider></QueryClientProvider>));
-  await act(async () => { await api.fetchDurableRun.mock.results[0]?.value; await new Promise((resolve) => setTimeout(resolve, 0)); });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <UiPreferencesProvider>
+          <WorkRunControls runId="run-a" />
+        </UiPreferencesProvider>
+      </QueryClientProvider>,
+    ),
+  );
+  await act(async () => {
+    await api.fetchDurableRun.mock.results[0]?.value;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
   if (api.fetchDurableDeadLetters.mock.results.length) {
-    await act(async () => { await api.fetchDurableDeadLetters.mock.results[0]?.value; await new Promise((resolve) => setTimeout(resolve, 0)); });
+    await act(async () => {
+      await api.fetchDurableDeadLetters.mock.results[0]?.value;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
   }
 }
 
@@ -64,7 +95,9 @@ describe("Work run controls", () => {
     expect(api.pauseDurableRun).not.toHaveBeenCalled();
     await act(async () => button("Confirm pause").click());
     expect(api.fetchDurableRun.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(api.fetchDurableRun.mock.invocationCallOrder[1]!).toBeLessThan(api.pauseDurableRun.mock.invocationCallOrder[0]!);
+    expect(api.fetchDurableRun.mock.invocationCallOrder[1]!).toBeLessThan(
+      api.pauseDurableRun.mock.invocationCallOrder[0]!,
+    );
     expect(api.pauseDurableRun).toHaveBeenCalledWith("run-a");
     expect(container.textContent).toContain("Gateway returned paused");
   });
@@ -106,8 +139,12 @@ describe("Work run controls", () => {
   });
 
   it("does not offer manual replay for an admitted Chat run", async () => {
-    api.fetchDurableRun.mockResolvedValue({ ...run, status: "failed", workflowKey: "chat.turn.execute",
-      payload: { workspaceId: "default", version: "chat.turn.execute.v2" } });
+    api.fetchDurableRun.mockResolvedValue({
+      ...run,
+      status: "failed",
+      workflowKey: "chat.turn.execute",
+      payload: { workspaceId: "default", version: "chat.turn.execute.v2" },
+    });
     await renderControls();
     expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Retry")).toBe(false);
     expect(container.textContent).toContain("new mutation instead of manual replay");
@@ -133,7 +170,8 @@ describe("Work run controls", () => {
 
   it("refuses recovery when the dead letter resolves between review and request", async () => {
     api.fetchDurableRun.mockResolvedValue({ ...run, status: "dead_lettered" });
-    api.fetchDurableDeadLetters.mockResolvedValueOnce({ items: [letter] })
+    api.fetchDurableDeadLetters
+      .mockResolvedValueOnce({ items: [letter] })
       .mockResolvedValueOnce({ items: [{ ...letter, resolvedAt: "later" }] });
     await renderControls();
     await act(async () => button("Recover").click());

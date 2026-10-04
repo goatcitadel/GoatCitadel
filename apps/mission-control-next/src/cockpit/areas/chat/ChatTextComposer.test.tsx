@@ -144,7 +144,9 @@ describe("cockpit text composer", () => {
       expect(container.querySelector("textarea")?.getAttribute("aria-describedby")).toBeNull();
       await act(async () => vi.advanceTimersByTimeAsync(ROUTE_CHECK_HINT_DELAY_MS));
       expect(container.textContent).toContain("Send will wait for the Gateway check");
-      await act(async () => root.render(<ChatTextComposer props={{ ...props, canSend: true, routePreflightLoading: false }} />));
+      await act(async () =>
+        root.render(<ChatTextComposer props={{ ...props, canSend: true, routePreflightLoading: false }} />),
+      );
       expect(container.textContent).not.toContain("Send will wait for the Gateway check");
     } finally {
       vi.useRealTimers();
