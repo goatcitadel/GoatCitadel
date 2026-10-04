@@ -178,8 +178,8 @@ export function WorkRunControls({ runId }: { runId: string }) {
       ) : null}
       {run ? (
         <p className="text-fg-secondary">
-          Current owner status: {run.status}. These controls are available only for runs scoped to the selected
-          workspace.
+          {query.isFetching ? "Last known owner status" : "Current owner status"}: {run.status}. These controls are
+          available only for runs scoped to the selected workspace.
         </p>
       ) : null}
       {run?.status === "dead_lettered" && letterQuery.isFetching ? (

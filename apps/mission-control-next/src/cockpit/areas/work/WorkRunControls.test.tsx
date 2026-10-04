@@ -216,8 +216,10 @@ describe("Work run controls", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(container.textContent).toContain("Checking for changes…");
+    expect(container.textContent).toContain("Last known owner status:");
     expect(button("Pause")).toBeDefined();
     await act(async () => release());
     await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+    expect(container.textContent).toContain("Current owner status:");
   });
 });
