@@ -21,6 +21,13 @@ export function classifyError(error: unknown): Classification {
     return { status: "fail", summary: error instanceof Error ? error.message : String(error) };
   }
   if (error.kind === "network") {
+    const cause = (error as { cause?: unknown }).cause;
+    if (hasName(cause, "AbortError")) {
+      return { status: "cancelled", summary: "Stopped before it finished." };
+    }
+    if (hasName(cause, "TimeoutError")) {
+      return { status: "fail", summary: "Timed out before it finished." };
+    }
     return { status: "unreachable", summary: `Gateway unreachable: ${error.message}` };
   }
   if (error.kind === "protocol") {

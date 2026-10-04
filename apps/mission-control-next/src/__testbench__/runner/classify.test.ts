@@ -27,6 +27,45 @@ describe("classifyError", () => {
     });
   });
 
+  it("classifies a network ApiRequestError with an AbortError cause as cancelled", () => {
+    const error = new ApiRequestError("Network error GET /api/v1/demo: cancelled", {
+      kind: "network",
+      method: "GET",
+      path: "/api/v1/demo",
+      cause: new DOMException("stopped", "AbortError"),
+    });
+    expect(classifyError(error)).toEqual({
+      status: "cancelled",
+      summary: "Stopped before it finished.",
+    });
+  });
+
+  it("classifies a network ApiRequestError with a TimeoutError cause as fail", () => {
+    const error = new ApiRequestError("Network error GET /api/v1/demo: timeout", {
+      kind: "network",
+      method: "GET",
+      path: "/api/v1/demo",
+      cause: new DOMException("slow", "TimeoutError"),
+    });
+    expect(classifyError(error)).toEqual({
+      status: "fail",
+      summary: "Timed out before it finished.",
+    });
+  });
+
+  it("classifies a network ApiRequestError with an unrelated cause as unreachable", () => {
+    const error = new ApiRequestError("Network error GET /api/v1/demo: connection refused", {
+      kind: "network",
+      method: "GET",
+      path: "/api/v1/demo",
+      cause: new Error("ECONNREFUSED"),
+    });
+    expect(classifyError(error)).toMatchObject({
+      status: "unreachable",
+      summary: expect.stringContaining("connection refused"),
+    });
+  });
+
   it("maps a user stop to cancelled and a timeout to fail", () => {
     expect(classifyError(new DOMException("stopped", "AbortError")).status).toBe("cancelled");
     expect(classifyError(new DOMException("slow", "TimeoutError"))).toEqual({
