@@ -15,7 +15,10 @@ import {
 describe("status vocabulary", () => {
   it("distinguishes a run waiting on the operator from another wait", () => {
     expect(presentRunStatus("waiting")).toEqual({ label: "Waiting", tone: "neutral" });
-    expect(presentRunStatus("waiting", { waitingOnOperator: true })).toEqual({ label: "Waiting on you", tone: "waiting" });
+    expect(presentRunStatus("waiting", { waitingOnOperator: true })).toEqual({
+      label: "Waiting on you",
+      tone: "waiting",
+    });
     expect(presentRunStatus("dead_lettered")).toEqual({ label: "Failed · needs recovery", tone: "failed" });
     expect(presentChatTurnStatus("waiting_for_approval")).toEqual({ label: "Waiting on you", tone: "waiting" });
   });

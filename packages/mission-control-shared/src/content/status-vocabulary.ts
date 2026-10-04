@@ -91,7 +91,10 @@ export function humanizeToken(value: string): string {
   return words ? words[0]!.toUpperCase() + words.slice(1) : "";
 }
 
-export function presentRunStatus(value: DurableRunStatus, options: { waitingOnOperator?: boolean } = {}): StatusPresentation {
+export function presentRunStatus(
+  value: DurableRunStatus,
+  options: { waitingOnOperator?: boolean } = {},
+): StatusPresentation {
   return value === "waiting" && options.waitingOnOperator ? status("Waiting on you", "waiting") : runStatuses[value];
 }
 
