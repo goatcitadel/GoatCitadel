@@ -12,17 +12,25 @@ export function CockpitGuidedModelSetup({
   reloadOnboarding,
   onEnterChat,
   enterChatLabel,
+  onNoticeChange,
 }: {
   onboarding: OnboardingState;
   reloadOnboarding: () => Promise<void>;
   onEnterChat: () => void;
   /** Overrides the guided owner's "Enter Chat" button text when the host's next step is not Chat. */
   enterChatLabel?: string;
+  /**
+   * Given by a host that keeps and shows the notice itself, so it outlives this card: Models settings
+   * unmounts the card when the re-read after a change fails. Without it the card shows its own (first run).
+   */
+  onNoticeChange?: (notice: string | null) => void;
 }) {
   const { navigate } = useCockpitRoute();
   const { activeWorkspaceId } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
-  const [notice, setNotice] = useState<string | null>(null);
+  const [ownNotice, setOwnNotice] = useState<string | null>(null);
+  const setNotice = onNoticeChange ?? setOwnNotice;
+  const notice = onNoticeChange ? null : ownNotice;
   return (
     <>
       <div className="cockpit-model-setup mt-4">

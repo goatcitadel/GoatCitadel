@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchOnboardingState } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -13,6 +14,9 @@ import { ProviderAdviceSettings } from "./ProviderAdviceSettings";
 /** The Models settings section: the provider owners plus the shared guided model setup. */
 export function ModelsSettings() {
   const { navigate } = useCockpitRoute();
+  // Kept here, outside the guided card: a failed re-read after a change unmounts the card, and the
+  // change's result must stay on screen next to the error.
+  const [notice, setNotice] = useState<string | null>(null);
   const onboarding = useQuery({
     queryKey: ["system", "onboarding"],
     queryFn: fetchOnboardingState,
@@ -52,7 +56,13 @@ export function ModelsSettings() {
               await onboarding.refetch();
             }}
             onEnterChat={() => navigate("/chat")}
+            onNoticeChange={setNotice}
           />
+        ) : null}
+        {notice ? (
+          <p role="status" className="mt-3 text-sm text-fg-secondary">
+            {notice}
+          </p>
         ) : null}
       </section>
     </>
