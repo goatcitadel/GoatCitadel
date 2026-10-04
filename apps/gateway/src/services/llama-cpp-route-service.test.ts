@@ -16,6 +16,7 @@ describe("llama.cpp route service facade", () => {
       cancelHuggingFaceDownload: vi.fn((jobId: string) => ({ jobId, state: "cancelled" })),
       detectLocalInstall: vi.fn(() => ({ installed: true })),
       getHuggingFaceDownloadStatus: vi.fn((jobId: string) => ({ jobId, state: "running" })),
+      getStatus: vi.fn(() => status),
       listModels: vi.fn(() => [{ id: "llama-3" }]),
       refresh: vi.fn(async () => ({ ...status, refreshed: true })),
       start: vi.fn(async (source: string) => ({ ...status, source })),
@@ -103,5 +104,34 @@ describe("llama.cpp route service facade", () => {
     await expect(service.startLlamaCppRuntime()).rejects.toBe(error);
     expect(runtime.start.mock.contexts).toEqual([runtime]);
     expect(deps.publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("announces a refresh only when the probe changed what operators see", async () => {
+    const steady = {
+      enabled: true,
+      desiredState: "running",
+      processState: "running",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      healthy: true,
+      activeModelId: "gemma-local",
+      updatedAt: "2026-10-03T00:00:00.000Z",
+    };
+    const runtime = {
+      getStatus: vi.fn(() => steady),
+      refresh: vi.fn(async () => ({ ...steady, updatedAt: "2026-10-03T00:00:05.000Z" })),
+    };
+    const publishRealtime = vi.fn(async () => undefined);
+    const service = createLlamaCppRoutePort({ llamaCppRuntime: runtime as never, setup: {} as never, publishRealtime });
+
+    await service.refreshLlamaCppRuntime();
+    expect(publishRealtime).not.toHaveBeenCalled();
+
+    const failed = { ...steady, healthy: false, processState: "error", updatedAt: "2026-10-03T00:00:10.000Z" };
+    runtime.refresh.mockResolvedValueOnce(failed);
+    await service.refreshLlamaCppRuntime();
+    expect(publishRealtime).toHaveBeenCalledExactlyOnceWith("system", "llamacpp", {
+      type: "llamacpp_refreshed",
+      status: failed,
+    });
   });
 });

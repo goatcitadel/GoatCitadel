@@ -1,4 +1,5 @@
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
+import type { LlamaCppRuntimeStatus } from "@goatcitadel/contracts";
 import type { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import type { LlamaCppSetupService } from "./llama-cpp-setup-service.js";
 
@@ -27,6 +28,14 @@ export interface LlamaCppRoutePortDependencies {
   publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
+/**
+ * What other windows need to hear about. `updatedAt` and the lease counters move on every
+ * probe, so on their own they never count as a change.
+ */
+export function llamaCppStatusSignature(status: LlamaCppRuntimeStatus): string {
+  return JSON.stringify({ ...status, updatedAt: undefined, leaseDiagnostics: undefined });
+}
+
 export function createLlamaCppRoutePort(deps: LlamaCppRoutePortDependencies): LlamaCppRoutePort {
   const runtime = deps.llamaCppRuntime;
   const setup = deps.setup;
@@ -38,11 +47,16 @@ export function createLlamaCppRoutePort(deps: LlamaCppRoutePortDependencies): Ll
     getLlamaCppSetup: (workspaceId) => setup.get(workspaceId),
     listLlamaCppModels: () => runtime.listModels(),
     refreshLlamaCppRuntime: async () => {
+      // Status reads probe the runtime because nothing else watches it. Announce only a probe
+      // that changed the status; announcing every read made each window read it again.
+      const before = llamaCppStatusSignature(runtime.getStatus());
       const status = await runtime.refresh();
-      await deps.publishRealtime("system", "llamacpp", {
-        type: "llamacpp_refreshed",
-        status,
-      });
+      if (llamaCppStatusSignature(status) !== before) {
+        await deps.publishRealtime("system", "llamacpp", {
+          type: "llamacpp_refreshed",
+          status,
+        });
+      }
       return status;
     },
     startLlamaCppHuggingFaceDownload: (input) => runtime.startHuggingFaceDownload(input),
