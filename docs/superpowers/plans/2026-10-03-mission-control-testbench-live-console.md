@@ -7162,4 +7162,3 @@ Only if the operator's everyday gateway is running: open `http://127.0.0.1:5173/
 - [ ] **Step 6: Report**
 
 Report to the operator: what changed (files), which lanes ran and their results, the sandbox run counts (pass, fail, blocked, skipped) with the summary of each failure, the coverage number, which steps were not run (host checks, external checks, real-gateway pass), and any remaining risk.
-
