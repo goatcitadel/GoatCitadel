@@ -54,7 +54,8 @@ export function ChatArea({
   gatewayUnavailable?: boolean;
 }) {
   const { activeWorkspaceId, activeCitadelId } = useUiPreferences();
-  const { navigate } = useCockpitRoute();
+  // `search` is the page the views show: while a Back move is held, the live URL names its target.
+  const { navigate, search } = useCockpitRoute();
   const handoff = useShellHandoff([activeCitadelId, activeWorkspaceId]);
   const conversationNavigation = useChatOwnerNavigation(activeWorkspaceId ?? "default", activeCitadelId);
   return (
@@ -66,6 +67,7 @@ export function ChatArea({
         lockSurface
         hidePageHeader
         renderWhileLoading
+        routeSearch={search}
         onNavigateSurface={conversationNavigation.request}
         onOpenApprovals={(approvalId) =>
           approvalId

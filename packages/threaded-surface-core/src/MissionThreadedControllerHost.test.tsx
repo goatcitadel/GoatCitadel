@@ -4415,6 +4415,30 @@ describe("MissionThreadedControllerHost", () => {
     expect(onResolvedModeChange).toHaveBeenCalledWith("chat", "session-sync");
   });
 
+  it("selects the conversation named by the route search a shell passes, not the live URL", async () => {
+    // While the cockpit holds a Back move, the live URL briefly names the held target. The cockpit
+    // passes the location its views show, so a render in that window must not select the target.
+    const actual = await vi.importActual<typeof import("./chat/useChatThreadController")>(
+      "./chat/useChatThreadController",
+    );
+    const fixture = useChatThreadControllerMock();
+    // The real controller owns route selection; everything else it returns stays the fixture's.
+    useChatThreadControllerMock.mockImplementation((input: Parameters<typeof actual.useChatThreadController>[0]) => {
+      actual.useChatThreadController(input);
+      return fixture;
+    });
+    installBrowserGlobals("?sessionId=session-b");
+
+    await renderHost({ routeSearch: "?sessionId=session-a&shell=cockpit" });
+    expect(latestSurfaceInput?.sessionRail.selectedSessionId).toBe("session-a");
+    expect(useChatSessionDataMock).toHaveBeenLastCalledWith(expect.objectContaining({ routeSessionId: "session-a" }));
+
+    // Classic passes nothing and keeps reading the live URL.
+    await cleanupRenderedHosts();
+    await renderHost();
+    expect(latestSurfaceInput?.sessionRail.selectedSessionId).toBe("session-b");
+  });
+
   describe("auto-route surfaceMode wiring guard (#136)", () => {
     it("passes surfaceMode=undefined to the outbound hook on a new unlocked thread (auto-route guard)", async () => {
       // Render unlocked (no lockSurface, no surface) — modeOverride starts null,

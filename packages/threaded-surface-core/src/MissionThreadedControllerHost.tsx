@@ -134,6 +134,7 @@ export function MissionThreadedControllerHost({
   hidePageHeader = false,
   renderWhileLoading = false,
   initialModeOverride,
+  routeSearch: shownRouteSearch,
   gatewayStatus,
   workTrust,
   onWorkTrustSummaryChange,
@@ -200,7 +201,7 @@ export function MissionThreadedControllerHost({
   const [agenticControlPending, setAgenticControlPending] = useState<string | null>(null);
   const [agenticControlStatus, setAgenticControlStatus] = useState<string | null>(null);
   const coordination = useChatControllerCoordination();
-  const routeSearch = typeof window === "undefined" ? "" : window.location.search;
+  const routeSearch = shownRouteSearch ?? (typeof window === "undefined" ? "" : window.location.search);
   const deferredSearch = useDeferredValue(search.trim());
   // Keep controller ownership aligned with ThreadedSurfacePage and its CSS:
   // below 1180px the inline rail becomes a drawer. Using the shell's narrower
