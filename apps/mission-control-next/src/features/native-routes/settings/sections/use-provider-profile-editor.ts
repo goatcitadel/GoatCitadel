@@ -29,7 +29,7 @@ import {
   providerProfilePlanRequest,
   type ProviderSaveDraft,
 } from "./provider-save-contract";
-import { prepareProviderSave } from "./provider-save-operation";
+import { prepareProviderSave, sendsProviderChanges } from "./provider-save-operation";
 import { matchesProviderTransportReceipt } from "./provider-transport-receipt";
 import type { ProviderCatalog, ProviderNoticeSetter } from "./provider-section-types";
 import {
@@ -142,6 +142,7 @@ export function useProviderProfileEditor({
   let saveOperation: ReturnType<typeof prepareProviderSave> | undefined;
   let creationRequest: ReturnType<typeof providerProfilePlanRequest> | undefined;
   let saveOperationError: string | undefined;
+  let sendsChanges = false;
   try {
     const prepared = prepareProviderSave(
       providerEditor.value,
@@ -150,6 +151,7 @@ export function useProviderProfileEditor({
     );
     if (providerEditor.value.governedCreation && prepared.kind === "profile")
       creationRequest = providerProfilePlanRequest(providerEditor.value);
+    sendsChanges = sendsProviderChanges(providerEditor.value, providerCanonical);
     saveOperation = prepared;
   } catch (error) {
     saveOperationError = getErrorMessage(error);
@@ -317,6 +319,8 @@ export function useProviderProfileEditor({
     providerRequestValidation,
     saveOperationKind: saveOperation?.kind,
     saveOperationError,
+    /** Whether a save sends anything the saved profile doesn't hold; whitespace-only edits send nothing new. */
+    sendsChanges,
     providerSaveBusy,
     setProviderSaveBusy,
     currentEditor,

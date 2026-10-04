@@ -256,6 +256,8 @@ export function ProviderManagementSettings() {
                 !ready ||
                 locked ||
                 !profile.providerEditor.isDirty ||
+                // Applying an edit that sends the saved profile again can conflict and lock provider changes.
+                !profile.sendsChanges ||
                 profile.providerEditor.hasRemoteChanges ||
                 Boolean(profile.providerRequestValidation.error) ||
                 Boolean(profile.saveOperationError)
