@@ -119,7 +119,7 @@ export function WorkSchedules() {
     if (receipt) {
       if (receipt.kind === "cancel") {
         setSelectedId(null);
-        setNotice("Schedule cancelled.");
+        setNotice("Schedule deleted.");
       } else if (receipt.kind === "run") {
         setNotice(`Run request acknowledged as ${receipt.run.runId}. Check Work for its outcome.`);
       } else {
@@ -286,13 +286,8 @@ export function WorkSchedules() {
                     <div className="grid gap-2 rounded-md border border-line-strong bg-sunken p-3">
                       <p className="text-sm text-fg">
                         {pending === "cancel"
-                          ? "Cancel"
-                          : pending === "run"
-                            ? "Run now"
-                            : pending === "pause"
-                              ? "Pause"
-                              : "Resume"}{" "}
-                        this schedule? The Gateway will recheck its current record before the request.
+                          ? `Delete “${selected.name}”? Future runs stop and it can't be restored.`
+                          : `${pending === "run" ? "Run now" : pending === "pause" ? "Pause" : "Resume"} this schedule? The Gateway will recheck its current record before the request.`}
                       </p>
                       {pending === "run" ? (
                         <p className="text-xs text-fg-muted">
@@ -306,8 +301,19 @@ export function WorkSchedules() {
                           disabled={busy || actionLocked}
                           onClick={() => void applyAction()}
                         >
-                          Confirm {pending}
+                          {pending === "cancel" ? "Delete schedule" : `Confirm ${pending}`}
                         </Button>
+                        {pending === "cancel" && selected.enabled ? (
+                          <Button
+                            disabled={busy || actionLocked}
+                            onClick={() => {
+                              operations.invalidate();
+                              setPending("pause");
+                            }}
+                          >
+                            Pause instead
+                          </Button>
+                        ) : null}
                         <Button
                           disabled={busy}
                           onClick={() => {
@@ -350,7 +356,7 @@ export function WorkSchedules() {
                           setPending("cancel");
                         }}
                       >
-                        Cancel schedule
+                        Delete schedule…
                       </Button>
                     </div>
                   )}

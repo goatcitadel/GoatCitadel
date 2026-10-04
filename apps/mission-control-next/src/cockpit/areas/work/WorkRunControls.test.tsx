@@ -102,6 +102,17 @@ describe("Work run controls", () => {
     expect(container.textContent).toContain("Gateway returned paused");
   });
 
+  it("asks a capitalized question and never pairs two Cancel buttons", async () => {
+    await renderControls();
+    await act(async () => button("Cancel").click());
+    expect(document.body.textContent).toContain("Cancel this run?");
+    expect(button("Keep running")).toBeDefined();
+    await act(async () => button("Keep running").click());
+    await act(async () => button("Pause").click());
+    expect(document.body.textContent).toContain("Pause this run?");
+    expect(button("Go back")).toBeDefined();
+  });
+
   it("prevents a stale cancel request", async () => {
     api.fetchDurableRun.mockResolvedValueOnce(run).mockResolvedValueOnce({ ...run, status: "completed", version: 3 });
     await renderControls();

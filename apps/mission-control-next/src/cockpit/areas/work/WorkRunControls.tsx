@@ -242,7 +242,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
         onOpenChange={(open) => {
           if (!open && !pending) setReviewed(null);
         }}
-        title={`${reviewed?.action ?? "Change"} this run`}
+        title={`${ACTIONS.find((entry) => entry.id === reviewed?.action)?.label ?? "Change"} this run?`}
         description={`${description ?? "This changes the run."} Gateway will recheck policy and state.`}
       >
         <div className="flex flex-wrap gap-2">
@@ -259,7 +259,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
             Confirm {reviewed?.action ?? "action"}
           </Button>
           <Button size="sm" disabled={pending} onClick={() => setReviewed(null)}>
-            Cancel request
+            {reviewed?.action === "cancel" ? "Keep running" : "Go back"}
           </Button>
         </div>
       </Dialog>
