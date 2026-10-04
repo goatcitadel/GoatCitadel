@@ -132,6 +132,15 @@ describe("shared boundary and presentation tail components", () => {
     expect(textOf(renderer.toJSON())).toContain("hit a render failure");
   });
 
+  // What each engine's dynamic import() rejects with when a deployed chunk is gone.
+  it.each([
+    ["Chromium", "Failed to fetch dynamically imported module: http://localhost:5173/assets/InboxArea-3f2a91.js"],
+    ["Safari", "Importing a module script failed."],
+    ["Firefox", "error loading dynamically imported module: http://localhost:5173/assets/InboxArea-3f2a91.js"],
+  ])("recognizes a stale chunk from %s's import failure", (_engine, message) => {
+    expect(isModuleLoadError(new TypeError(message))).toBe(true);
+  });
+
   it("reports office canvas failures and resets on a new scene key", () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     let shouldThrow = true;

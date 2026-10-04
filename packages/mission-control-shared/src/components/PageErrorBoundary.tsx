@@ -12,8 +12,9 @@ interface PageErrorBoundaryState {
   error: Error | null;
 }
 
+// Chromium, Safari, Firefox, then webpack-style chunk loaders.
 const MODULE_LOAD_ERROR_PATTERN =
-  /Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk [\w-]+ failed/i;
+  /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module|Loading chunk [\w-]+ failed/i;
 
 export function isModuleLoadError(error: Error | null): boolean {
   if (!error) {
