@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import type { ChatPendingApprovalState } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
 import { buildApprovalEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
@@ -22,6 +22,7 @@ export function RiskApprovalAction({
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [typed, setTyped] = useState("");
+  const confirmationHintId = useId();
   const disabled = pending || Boolean(approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now());
   const reviewed =
     reviewedApproval?.approvalId === approval.approvalId &&
@@ -140,16 +141,23 @@ export function RiskApprovalAction({
             ) : null}
           </div>
           {critical ? (
-            <label className="mb-3 block text-sm text-fg-secondary">
-              Type <strong className="font-mono text-fg">{CRITICAL_CONFIRMATION}</strong> to approve this action once
-              <input
-                value={typed}
-                onChange={(event) => setTyped(event.target.value)}
-                autoComplete="off"
-                spellCheck={false}
-                className="mt-1 block min-h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-fg"
-              />
-            </label>
+            <div className="mb-3">
+              <label className="block text-sm text-fg-secondary">
+                Type <strong className="font-mono text-fg">{CRITICAL_CONFIRMATION}</strong> to approve this action once
+                <input
+                  value={typed}
+                  onChange={(event) => setTyped(event.target.value)}
+                  aria-required="true"
+                  aria-describedby={confirmationHintId}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="mt-1 block min-h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-fg"
+                />
+              </label>
+              <p id={confirmationHintId} className="mt-1 text-xs text-fg-muted">
+                Approve once stays unavailable until the word matches.
+              </p>
+            </div>
           ) : null}
           <div className="flex flex-wrap gap-2">
             <Button

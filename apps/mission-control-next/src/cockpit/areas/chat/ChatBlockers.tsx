@@ -27,11 +27,11 @@ export function ChatBlockers({ props }: { props: Blockers }) {
   const workspaceId = activeWorkspaceId ?? "default";
   const pendingApproval = props.pendingApproval;
   const reviewedApproval = useQuery({
-    queryKey: ["approvals", "cockpit-chat-danger", workspaceId, pendingApproval?.approvalId],
+    queryKey: ["approvals", "cockpit-chat-review", workspaceId, pendingApproval?.approvalId],
     queryFn: () => fetchApprovals({ status: "pending", workspaceId, limit: 200 }),
+    // Every risk RiskApprovalAction reviews needs the persisted evidence; only safe and caution are one-click.
     enabled: Boolean(
-      pendingApproval &&
-      (!pendingApproval.riskLevel || pendingApproval.riskLevel === "danger" || pendingApproval.riskLevel === "nuclear"),
+      pendingApproval && pendingApproval.riskLevel !== "safe" && pendingApproval.riskLevel !== "caution",
     ),
     staleTime: 0,
   }).data?.items.find((record) => record.approvalId === pendingApproval?.approvalId);

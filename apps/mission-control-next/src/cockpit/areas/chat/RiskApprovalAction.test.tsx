@@ -208,6 +208,24 @@ describe("risk approval action", () => {
     expect(onApprove).not.toHaveBeenCalled();
   });
 
+  it("tells assistive technology the confirmation word is required and why approval waits", async () => {
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("nuclear")}
+          reviewedApproval={{ ...reviewedApproval, riskLevel: "nuclear" }}
+          pending={false}
+          onApprove={vi.fn()}
+        />,
+      ),
+    );
+    await act(async () => container.querySelector("button")?.click());
+    const input = document.body.querySelector<HTMLInputElement>('[role="dialog"] input')!;
+    expect(input.getAttribute("aria-required")).toBe("true");
+    const hint = document.getElementById(input.getAttribute("aria-describedby") ?? "");
+    expect(hint?.textContent).toBe("Approve once stays unavailable until the word matches.");
+  });
+
   it("starts a reopened nuclear review with an empty confirmation", async () => {
     await act(async () =>
       root.render(
