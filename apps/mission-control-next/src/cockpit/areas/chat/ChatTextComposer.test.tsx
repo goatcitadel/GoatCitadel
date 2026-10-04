@@ -372,14 +372,39 @@ describe("cockpit text composer", () => {
     const props = composerProps();
     await act(async () => root.render(<ChatTextComposer props={props} />));
     const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
-    await act(async () =>
-      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true })),
-    );
-    await act(async () =>
-      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true })),
-    );
+    const ime229 = new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true });
+    await act(async () => textarea.dispatchEvent(ime229));
+    expect(ime229.defaultPrevented).toBe(false);
+    const imeComposing = new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true });
+    await act(async () => textarea.dispatchEvent(imeComposing));
+    expect(imeComposing.defaultPrevented).toBe(false);
     expect(props.onSend).not.toHaveBeenCalled();
     await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     expect(props.onSend).toHaveBeenCalledOnce();
+  });
+
+  it("does not choose a command when the Enter key confirms an IME composition in the palette", async () => {
+    const props = composerProps({
+      commandSuggestions: [{ key: "status", command: "/status", description: "Show status", applyValue: "/status" }],
+      composerPalette: {
+        enabled: true,
+        globalOpen: true,
+        query: "",
+        onQueryChange: vi.fn(),
+        onClose: vi.fn(),
+        onIndexChange: vi.fn(),
+        onSelect: vi.fn(),
+        loading: false,
+      },
+    });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    const paletteInput = container.querySelector('input[class*="bg-canvas"]') as HTMLInputElement;
+    expect(paletteInput).toBeDefined();
+    await act(async () =>
+      paletteInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true })),
+    );
+    expect(props.composerPalette?.onSelect).not.toHaveBeenCalled();
+    await act(async () => paletteInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(props.composerPalette?.onSelect).toHaveBeenCalledOnce();
   });
 });
