@@ -1,10 +1,16 @@
+import type { CodeModeRunStatus } from "@goatcitadel/contracts";
 import { resolveApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { createCodeModeRun, fetchCodeModeRun } from "@goatcitadel/mission-control-shared/api/capabilities";
 import { ensure, pass, waitFor } from "../runner/assert";
 import type { CheckDef } from "../runner/types";
 
 const TRUSTED_SOURCE = "return { ok: true };";
-const TERMINAL_STATUSES: ReadonlySet<string> = new Set(["completed", "failed", "rejected", "expired"]);
+const TERMINAL_STATUSES: ReadonlySet<CodeModeRunStatus> = new Set<CodeModeRunStatus>([
+  "completed",
+  "failed",
+  "rejected",
+  "expired",
+]);
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 
 export const codeModeChecks: readonly CheckDef[] = [
@@ -22,7 +28,7 @@ export const codeModeChecks: readonly CheckDef[] = [
       "POST /api/v1/approvals/:approvalId/resolve",
       "GET /api/v1/code-mode/runs/:runId",
     ],
-    steps: ["Create run", "Approve the run", "Run finishes", "Artifact hashes recorded"],
+    steps: ["Create run", "Approve the run", "Run finishes", "Code artifact hash recorded"],
     async run(ctx) {
       const created = await ctx.step("Create run", () =>
         createCodeModeRun({ language: "javascript", source: TRUSTED_SOURCE }),
@@ -42,8 +48,12 @@ export const codeModeChecks: readonly CheckDef[] = [
         `The run ended ${finished.status}${finished.error ? `: ${finished.error}` : ""}.`,
         finished,
       );
-      await ctx.step("Artifact hashes recorded", async () => {
-        ensure(finished.codeHash !== "", "The run recorded no code hash.", finished);
+      await ctx.step("Code artifact hash recorded", async () => {
+        ensure(
+          typeof finished.codeHash === "string" && finished.codeHash !== "",
+          "The run recorded no code hash.",
+          finished,
+        );
         ensure(
           SHA256_PATTERN.test(finished.codeArtifact.sha256),
           "The code artifact has no SHA-256.",

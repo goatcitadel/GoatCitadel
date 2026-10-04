@@ -27,12 +27,15 @@ describe("Code Mode run", () => {
       codeHash: "h",
       codeArtifact: { sha256: SHA },
     });
-    await expect(findCheck(codeModeChecks, "code-mode.run").run(makeTestContext())).resolves.toMatchObject({
+    const check = findCheck(codeModeChecks, "code-mode.run");
+    const ctx = makeTestContext();
+    await expect(check.run(ctx)).resolves.toMatchObject({
       status: "pass",
       summary: "Run cm-1 completed; code artifact aaaaaaaaaaaa….",
     });
     expect(mocks.createCodeModeRun).toHaveBeenCalledWith({ language: "javascript", source: "return { ok: true };" });
     expect(mocks.resolveApproval).toHaveBeenCalledWith("appr-cm", "approve");
+    expect(ctx.steps.map((step) => step.title)).toEqual(check.steps);
   });
 
   it("fails when the run does not wait for approval", async () => {
@@ -53,6 +56,41 @@ describe("Code Mode run", () => {
     });
     await expect(findCheck(codeModeChecks, "code-mode.run").run(makeTestContext())).rejects.toThrow(
       "The run ended failed: guest error.",
+    );
+  });
+
+  it("fails naming the status when the run is rejected", async () => {
+    mocks.fetchCodeModeRun.mockResolvedValueOnce({
+      runId: "cm-1",
+      status: "rejected",
+      codeHash: "h",
+      codeArtifact: { sha256: SHA },
+    });
+    await expect(findCheck(codeModeChecks, "code-mode.run").run(makeTestContext())).rejects.toThrow(
+      "The run ended rejected.",
+    );
+  });
+
+  it("fails when the finished run has no code hash", async () => {
+    mocks.fetchCodeModeRun.mockResolvedValueOnce({
+      runId: "cm-1",
+      status: "completed",
+      codeArtifact: { sha256: SHA },
+    });
+    await expect(findCheck(codeModeChecks, "code-mode.run").run(makeTestContext())).rejects.toThrow(
+      "The run recorded no code hash.",
+    );
+  });
+
+  it("fails when the code artifact SHA-256 is malformed", async () => {
+    mocks.fetchCodeModeRun.mockResolvedValueOnce({
+      runId: "cm-1",
+      status: "completed",
+      codeHash: "h",
+      codeArtifact: { sha256: "not-a-hash" },
+    });
+    await expect(findCheck(codeModeChecks, "code-mode.run").run(makeTestContext())).rejects.toThrow(
+      "The code artifact has no SHA-256.",
     );
   });
 
