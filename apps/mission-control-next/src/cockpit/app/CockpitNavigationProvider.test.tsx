@@ -10,6 +10,7 @@ import { useSessionDraft, __resetSessionDraftsForTests } from "../../features/na
 import {
   __resetFormDirtyRegistryForTests,
   getDirtySectionKeys,
+  setSectionDirty,
 } from "../../features/native-routes/library/use-form-dirty";
 
 const scope = vi.hoisted(() => ({
@@ -258,10 +259,10 @@ describe("central cockpit navigation", () => {
     expect(window.location.pathname).toBe("/library");
   });
 
-  it("holds Back on the page while a draft is unsaved, then leaves after Discard", async () => {
+  it("holds Back on the page while an editor that would lose its draft is unsaved, then leaves after Discard", async () => {
     await render();
     await act(async () => {
-      draft.setValue({ name: "Unsaved text" });
+      setSectionDirty("plain-editor", true, "Plain editor");
     });
     await act(async () => {
       window.history.replaceState(null, "", "/library?shell=cockpit");
@@ -282,6 +283,36 @@ describe("central cockpit navigation", () => {
     });
     expect(window.location.pathname).toBe("/library");
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(0);
+  });
+
+  it("lets Back through while only a kept session draft is unsaved", async () => {
+    await render();
+    await act(async () => {
+      draft.setValue({ name: "Unsaved text" });
+    });
+    await act(async () => {
+      window.history.replaceState(null, "", "/library?shell=cockpit");
+      window.dispatchEvent(new Event("popstate"));
+    });
+    expect(window.location.pathname).toBe("/library");
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(0);
+    expect(draft.value.name).toBe("Unsaved text");
+  });
+
+  it("lets a hash-only Back through while an editor is unsaved", async () => {
+    window.history.replaceState(null, "", "/work?shell=cockpit#a");
+    await settleHistoryEvents();
+    await render();
+    await act(async () => {
+      setSectionDirty("plain-editor", true, "Plain editor");
+    });
+    await act(async () => {
+      window.history.replaceState(null, "", "/work?shell=cockpit#b");
+      window.dispatchEvent(new Event("popstate"));
+    });
+    expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(0);
+    await settleHistoryEvents();
+    expect(window.location.hash).toBe("#b");
   });
 
   it("asks the browser to confirm a reload or close only while a draft is unsaved", async () => {

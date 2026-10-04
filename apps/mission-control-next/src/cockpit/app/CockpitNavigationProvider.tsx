@@ -3,7 +3,11 @@ import { canonicalJsonString } from "@goatcitadel/contracts";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useShellHandoff } from "../../app/use-shell-handoff";
-import { hasDirtySections, useBeforeUnloadGuard } from "../../features/native-routes/library/use-form-dirty";
+import {
+  getDirtySectionActions,
+  getDirtySectionKeys,
+  useBeforeUnloadGuard,
+} from "../../features/native-routes/library/use-form-dirty";
 import { ShellSwitchFeedback } from "./use-cockpit-shell-switch";
 import { CockpitNavigationContext, type CockpitNavigationOwner } from "./cockpit-navigation-context";
 import {
@@ -17,6 +21,18 @@ import {
 
 function currentLocation(): string {
   return window.location.pathname + window.location.search + window.location.hash;
+}
+
+/** Session drafts survive in-app navigation; only editors that would drop their state need a review. */
+function hasDraftsThatWouldBeLost(): boolean {
+  return getDirtySectionKeys().some((key) => !getDirtySectionActions(key)?.keepDraft);
+}
+
+/** A hash-only move keeps the same view mounted, so nothing on it is lost. */
+function samePage(from: string, to: string): boolean {
+  const source = new URL(from, "http://cockpit.invalid");
+  const target = new URL(to, "http://cockpit.invalid");
+  return source.pathname === target.pathname && source.search === target.search;
 }
 
 /** One presentation leave owner for the frame and all imperative native route callbacks. */
@@ -43,12 +59,19 @@ export function CockpitNavigationProvider({ children }: { children: ReactNode })
     shownLocation.current = currentLocation();
   }, [history]);
   useEffect(() => {
-    // Back and Forward can't be cancelled. With unsaved drafts the page puts its own URL back
-    // and replays the destination through the reviewed transition below, which asks first.
+    // Back and Forward can't be cancelled. When an editor that would lose its draft is dirty, the page
+    // puts its own URL back and replays the destination through the reviewed transition below, which
+    // asks first. Kept session drafts and hash-only moves pass through: nothing on screen is lost.
     const onPopState = () => {
       const target = currentLocation();
       const source = shownLocation.current;
-      if (target === source || !hasDirtySections() || retainsSettingsPage(source, target)) return;
+      if (
+        target === source ||
+        samePage(source, target) ||
+        retainsSettingsPage(source, target) ||
+        !hasDraftsThatWouldBeLost()
+      )
+        return;
       heldTarget.current = target;
       window.history.pushState(null, "", source);
       window.dispatchEvent(new Event(COCKPIT_LOCATION_EVENT));
