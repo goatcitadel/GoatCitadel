@@ -8,6 +8,7 @@ import { profileCanBeSelected } from "../../../features/native-routes/settings/p
 import { describeToolApprovalMode } from "../../../features/native-routes/settings/helpers/permission-helpers";
 import { Button } from "../../ui/Button";
 import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
+import { StatusBadge } from "../../ui/StatusBadge";
 import { PermissionProfileEditor } from "./PermissionProfileEditor";
 import { LocalOperatorOverrides } from "./LocalOperatorOverrides";
 import { readEffectivePermissionContexts } from "../../../features/native-routes/settings/effective-permission-contexts";
@@ -40,7 +41,15 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
   const profiles = snapshot.isError
     ? []
     : (snapshot.data?.profiles ?? []).filter((item) => profileCanBeSelected(item, workspaceId));
-  const selected = profiles.find((item) => item.profileId === selectedId);
+  const effectiveProfileId = snapshot.isError
+    ? undefined
+    : snapshot.data?.effective.find((item) => item.surface === surface)?.profileId;
+  const shownProfileId = selectedId || effectiveProfileId || "";
+  // Re-selecting the profile already in effect is not a change to review.
+  const selected =
+    selectedId && selectedId !== effectiveProfileId
+      ? profiles.find((item) => item.profileId === selectedId)
+      : undefined;
   const control = usePermissionProfileActivation({
     key: JSON.stringify([workspaceId, selectedId, surface]),
     workspaceId,
@@ -143,7 +152,8 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
                   <input
                     type="radio"
                     name="workspace-chat-profile"
-                    checked={selectedId === item.profileId}
+                    value={item.profileId}
+                    checked={shownProfileId === item.profileId}
                     disabled={control.locked || control.reviewing}
                     onChange={() => {
                       control.clear();
@@ -152,6 +162,9 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
                   />
                   <span className="min-w-0">
                     <strong className="break-words">{item.label}</strong>
+                    {item.profileId === effectiveProfileId ? (
+                      <StatusBadge className="ml-2" status={{ label: "Current", tone: "done" }} />
+                    ) : null}
                     <span className="mt-1 block break-words text-fg-secondary">
                       {item.description || describeToolApprovalMode(item.approvalMode)}
                     </span>
@@ -168,7 +181,7 @@ export function PermissionProfileSettings({ workspaceId }: { workspaceId: string
           {!filtered.length ? <p className="text-sm text-fg-muted">No eligible profiles match this search.</p> : null}
           <Button
             variant="primary"
-            disabled={!control.ready || control.locked || control.reviewing}
+            disabled={!selected || !control.ready || control.locked || control.reviewing}
             onClick={() => void control.request(surface)}
           >
             Review {contextLabel} profile selection
