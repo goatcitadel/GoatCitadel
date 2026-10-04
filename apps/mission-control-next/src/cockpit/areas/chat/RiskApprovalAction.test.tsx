@@ -127,22 +127,50 @@ describe("risk approval action", () => {
     ).toBe(true);
   });
 
-  it("requires an uninterrupted one-second hold for nuclear approval", async () => {
-    vi.useFakeTimers();
+  it("requires the evidence review and a typed confirmation for nuclear approval", async () => {
+    const onApprove = vi.fn();
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("nuclear")}
+          reviewedApproval={{ ...reviewedApproval, riskLevel: "nuclear" }}
+          pending={false}
+          onApprove={onApprove}
+        />,
+      ),
+    );
+    await act(async () => container.querySelector("button")?.click());
+    expect(document.body.textContent).toContain("Confirm nuclear risk action");
+    expect(document.body.textContent).toContain("pnpm test");
+    const confirm = () =>
+      [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Approve once")!;
+    expect(confirm().disabled).toBe(true);
+    const input = document.body.querySelector<HTMLInputElement>('[role="dialog"] input')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Approve");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(confirm().disabled).toBe(false);
+    await act(async () => confirm().click());
+    expect(onApprove).toHaveBeenCalledOnce();
+  });
+
+  it("withholds nuclear approval when the current action cannot be reviewed", async () => {
     const onApprove = vi.fn();
     await act(async () =>
       root.render(<RiskApprovalAction approval={approval("nuclear")} pending={false} onApprove={onApprove} />),
     );
-    const button = container.querySelector("button")!;
-    await act(async () => button.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })));
-    await act(async () => vi.advanceTimersByTime(999));
-    expect(onApprove).not.toHaveBeenCalled();
-    await act(async () => button.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Enter" })));
-    await act(async () => vi.advanceTimersByTime(1_000));
-    expect(onApprove).not.toHaveBeenCalled();
-    await act(async () => button.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })));
-    await act(async () => vi.advanceTimersByTime(1_000));
-    expect(onApprove).toHaveBeenCalledTimes(1);
+    await act(async () => container.querySelector("button")?.click());
+    const input = document.body.querySelector<HTMLInputElement>('[role="dialog"] input')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "approve");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const confirm = [...document.body.querySelectorAll("button")].find(
+      (button) => button.textContent === "Approve once",
+    )!;
+    expect(confirm.disabled).toBe(true);
+    expect(document.body.textContent).toContain("current action preview is unavailable");
   });
 
   it("never offers direct approval when risk is missing", async () => {

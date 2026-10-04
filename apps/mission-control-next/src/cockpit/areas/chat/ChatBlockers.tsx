@@ -29,7 +29,10 @@ export function ChatBlockers({ props }: { props: Blockers }) {
   const reviewedApproval = useQuery({
     queryKey: ["approvals", "cockpit-chat-danger", workspaceId, pendingApproval?.approvalId],
     queryFn: () => fetchApprovals({ status: "pending", workspaceId, limit: 200 }),
-    enabled: Boolean(pendingApproval && (!pendingApproval.riskLevel || pendingApproval.riskLevel === "danger")),
+    enabled: Boolean(
+      pendingApproval &&
+      (!pendingApproval.riskLevel || pendingApproval.riskLevel === "danger" || pendingApproval.riskLevel === "nuclear"),
+    ),
     staleTime: 0,
   }).data?.items.find((record) => record.approvalId === pendingApproval?.approvalId);
   // Retained stream signals can omit risk metadata. Hydrate only from the

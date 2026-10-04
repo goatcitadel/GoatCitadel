@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import type { ChatPendingApprovalState } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
 import { buildApprovalEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 
-const HOLD_MS = 1_000;
+/** Typing this word is the deliberate, untimed confirmation for the highest risk tier. */
+const CRITICAL_CONFIRMATION = "approve";
 
 export function RiskApprovalAction({
   approval,
@@ -19,19 +20,7 @@ export function RiskApprovalAction({
   onApprove: () => void;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [holding, setHolding] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const clear = () => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
-    setHolding(false);
-  };
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
+  const [typed, setTyped] = useState("");
   const disabled = pending || Boolean(approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now());
   const reviewed =
     reviewedApproval?.approvalId === approval.approvalId &&
@@ -46,15 +35,6 @@ export function RiskApprovalAction({
     evidence?.changes.length ||
     evidence?.supporting.some((detail) => /^(?:Url|Uri|Selector|Field|Input):/.test(detail)),
   );
-  const start = () => {
-    if (disabled || timer.current) return;
-    setHolding(true);
-    timer.current = setTimeout(() => {
-      timer.current = null;
-      setHolding(false);
-      onApprove();
-    }, HOLD_MS);
-  };
 
   if (!approval.riskLevel)
     return <p className="text-xs text-fg-muted">Risk is unavailable. Review the persisted approval before deciding.</p>;
@@ -62,45 +42,27 @@ export function RiskApprovalAction({
     return (
       <p className="text-xs text-fg-muted">This runtime request needs the native review shown in current approvals.</p>
     );
-  if (approval.riskLevel === "nuclear")
-    return (
-      <Button
-        type="button"
-        variant="danger"
-        size="sm"
-        disabled={disabled}
-        onPointerDown={start}
-        onPointerUp={clear}
-        onPointerLeave={clear}
-        onPointerCancel={clear}
-        onKeyDown={(event) => {
-          if (event.key === " " || event.key === "Enter") {
-            event.preventDefault();
-            if (!event.repeat) start();
-          }
-        }}
-        onKeyUp={(event) => {
-          if (event.key === " " || event.key === "Enter") {
-            event.preventDefault();
-            clear();
-          }
-        }}
-        onClick={(event) => event.preventDefault()}
-        aria-label="Hold to approve nuclear risk action"
-      >
-        {holding ? "Keep holding…" : "Hold 1 second to approve once"}
-      </Button>
-    );
-  if (approval.riskLevel === "danger")
+  if (approval.riskLevel === "danger" || approval.riskLevel === "nuclear") {
+    const critical = approval.riskLevel === "nuclear";
+    const confirmed = !critical || typed.trim().toLowerCase() === CRITICAL_CONFIRMATION;
     return (
       <>
-        <Button type="button" variant="danger" size="sm" disabled={disabled} onClick={() => setConfirmOpen(true)}>
+        <Button
+          type="button"
+          variant="danger"
+          size="sm"
+          disabled={disabled}
+          onClick={() => {
+            setTyped("");
+            setConfirmOpen(true);
+          }}
+        >
           Review approval
         </Button>
         <Dialog
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
-          title="Confirm danger risk action"
+          title={critical ? "Confirm nuclear risk action" : "Confirm danger risk action"}
           description="Review the exact action before approving once."
         >
           <div className="mb-3 max-h-72 space-y-2 overflow-y-auto text-sm text-fg-secondary">
@@ -109,7 +71,8 @@ export function RiskApprovalAction({
               {reviewed?.linkage?.toolName ?? approval.toolName ?? reviewed?.kind ?? approval.kind ?? "Action request"}
             </p>
             <p>
-              <strong>Risk:</strong> Danger{approval.reason ? ` · ${approval.reason}` : ""}
+              <strong>Risk:</strong> {critical ? "Nuclear" : "Danger"}
+              {approval.reason ? ` · ${approval.reason}` : ""}
             </p>
             {evidence?.targets.length ? (
               <div>
@@ -172,10 +135,22 @@ export function RiskApprovalAction({
               </p>
             ) : null}
           </div>
+          {critical ? (
+            <label className="mb-3 block text-sm text-fg-secondary">
+              Type <strong className="font-mono text-fg">{CRITICAL_CONFIRMATION}</strong> to approve this action once
+              <input
+                value={typed}
+                onChange={(event) => setTyped(event.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                className="mt-1 block min-h-10 w-full rounded-md border border-line-strong bg-canvas px-3 text-fg"
+              />
+            </label>
+          ) : null}
           <div className="flex flex-wrap gap-2">
             <Button
               variant="danger"
-              disabled={disabled || !hasActionPreview}
+              disabled={disabled || !hasActionPreview || !confirmed}
               onClick={() => {
                 setConfirmOpen(false);
                 onApprove();
@@ -188,6 +163,7 @@ export function RiskApprovalAction({
         </Dialog>
       </>
     );
+  }
   return (
     <Button type="button" size="sm" variant="primary" disabled={disabled} onClick={onApprove}>
       Approve once
