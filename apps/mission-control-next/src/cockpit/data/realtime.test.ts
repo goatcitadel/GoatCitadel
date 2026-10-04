@@ -94,4 +94,27 @@ describe("cockpit realtime invalidation", () => {
     });
     expect(spy).not.toHaveBeenCalledWith({ queryKey: ["approvals", "operator-inbox"] });
   });
+
+  it("refreshes only the health readers for a llama.cpp runtime signal", () => {
+    const queryClient = new QueryClient();
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+    const topics = invalidateForEvent(queryClient, {
+      eventId: "llama-1", sequence: 6, eventType: "system", source: "llamacpp",
+      timestamp: "2026-10-03T00:00:00.000Z", eventAuthority: "retained_stream",
+      payload: { type: "llamacpp_refreshed", status: { healthy: true, activeModelId: "gemma-local" } },
+    });
+    expect(topics).toEqual([]);
+    expect(spy).toHaveBeenCalledExactlyOnceWith({ queryKey: ["system", "health"] });
+  });
+
+  it("ignores replayed llama.cpp history", () => {
+    const queryClient = new QueryClient();
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+    invalidateForEvent(queryClient, {
+      eventId: "llama-2", sequence: 7, eventType: "system", source: "llamacpp",
+      timestamp: "2026-10-03T00:00:00.000Z", eventAuthority: "durable_history",
+      payload: { type: "llamacpp_refreshed" },
+    });
+    expect(spy).not.toHaveBeenCalled();
+  });
 });

@@ -47,6 +47,12 @@ export function invalidateForEvent(
     }
     return [];
   }
+  if (event.source === "llamacpp") {
+    // A runtime status signal changes only what the health readers show. Refreshing the whole
+    // `system` topic re-read this status, and the Gateway used to announce every read (GL-01).
+    if (event.eventAuthority !== "durable_history") invalidate(queryKeys.healthAll());
+    return [];
+  }
   const { topics } = deriveRealtimeRefresh(event, { defaultTopics: ["surface"] });
   for (const topic of topics) invalidate([topic]);
   if (topics.some((topic) => topic === "tools" || topic === "mcp" || topic === "agents")) {
