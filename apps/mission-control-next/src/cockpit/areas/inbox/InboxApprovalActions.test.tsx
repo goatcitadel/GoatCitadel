@@ -106,7 +106,10 @@ describe("Inbox approval decisions", () => {
     expect(container.textContent).toContain("Editing an approval withdraws the original action");
     expect(container.textContent).toContain("does not authorize a replacement");
     expect(container.textContent).toContain("Project-wide always-allow is unavailable here");
-    expect([...container.querySelectorAll("button")].map((entry) => entry.textContent)).toEqual(["Review approval", "Deny"]);
+    expect([...container.querySelectorAll("button")].map((entry) => entry.textContent)).toEqual([
+      "Review approval",
+      "Deny",
+    ]);
     expect(api.resolveApproval).not.toHaveBeenCalled();
     await approve();
     expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve");
