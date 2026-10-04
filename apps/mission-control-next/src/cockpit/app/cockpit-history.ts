@@ -44,16 +44,23 @@ export function cockpitHref(href: string): string | null {
 
 /** Settings force-mounts its sections. Only a recognized tab on the same actual page stays mounted. */
 export function retainsSettingsPage(from: string, to: string): boolean {
-  const sourceHref = cockpitHref(from), targetHref = cockpitHref(to);
+  const sourceHref = cockpitHref(from),
+    targetHref = cockpitHref(to);
   if (!sourceHref || !targetHref) return false;
   const source = new URL(sourceHref, "http://cockpit.invalid");
   const target = new URL(targetHref, "http://cockpit.invalid");
-  if (source.pathname !== target.pathname || source.search !== target.search || source.hash === target.hash) return false;
+  if (source.pathname !== target.pathname || source.search !== target.search || source.hash === target.hash)
+    return false;
   const page = buildSettingsIndex().find((candidate) => source.pathname === `/settings/${candidate.id}`);
-  return Boolean(page && page.entries.some((entry) => {
-    const entryHref = new URL(entry.href, "http://cockpit.invalid");
-    return entry.destination === "cockpit" && entryHref.pathname === target.pathname && entryHref.hash === target.hash;
-  }));
+  return Boolean(
+    page &&
+    page.entries.some((entry) => {
+      const entryHref = new URL(entry.href, "http://cockpit.invalid");
+      return (
+        entry.destination === "cockpit" && entryHref.pathname === target.pathname && entryHref.hash === target.hash
+      );
+    }),
+  );
 }
 
 /** Internal commit for current reviewed frame/link capabilities and bound canonical Chat synchronization. */

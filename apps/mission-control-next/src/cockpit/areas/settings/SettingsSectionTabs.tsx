@@ -63,10 +63,14 @@ export function SettingsSectionTabs({
     >
       <TabsList aria-label={`${page.label} sections`} className="mt-3 max-w-full overflow-x-auto pb-px">
         {page.entries.map((entry) => (
-          <TabsTrigger key={entry.section} value={entry.section} className="min-h-11 shrink-0 whitespace-nowrap"
+          <TabsTrigger
+            key={entry.section}
+            value={entry.section}
+            className="min-h-11 shrink-0 whitespace-nowrap"
             onPointerEnter={() => preloadSettingsSection(entry.section)}
             onFocus={() => preloadSettingsSection(entry.section)}
-            onPointerDown={() => preloadSettingsSection(entry.section)}>
+            onPointerDown={() => preloadSettingsSection(entry.section)}
+          >
             {entry.tabLabel ?? entry.label}
           </TabsTrigger>
         ))}
@@ -79,9 +83,17 @@ export function SettingsSectionTabs({
           hidden={value !== entry.section}
           className="min-w-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
         >
-          {visited.current.has(entry.section) ? <Suspense fallback={<p role="status" className="py-3 text-sm text-fg-muted">Loading {entry.tabLabel ?? entry.label}…</p>}>
-            {children(entry)}
-          </Suspense> : null}
+          {visited.current.has(entry.section) ? (
+            <Suspense
+              fallback={
+                <p role="status" className="py-3 text-sm text-fg-muted">
+                  Loading {entry.tabLabel ?? entry.label}…
+                </p>
+              }
+            >
+              {children(entry)}
+            </Suspense>
+          ) : null}
         </TabsContent>
       ))}
     </Tabs>

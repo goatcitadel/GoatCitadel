@@ -14,7 +14,11 @@ function subscribe(onChange: () => void): () => void {
 }
 
 export function useCockpitRoute() {
-  const location = useSyncExternalStore(subscribe, () => window.location.pathname + window.location.search, () => "/chat");
+  const location = useSyncExternalStore(
+    subscribe,
+    () => window.location.pathname + window.location.search,
+    () => "/chat",
+  );
   const queryStart = location.indexOf("?");
   const pathname = queryStart < 0 ? location : location.slice(0, queryStart);
   const search = queryStart < 0 ? "" : location.slice(queryStart);
