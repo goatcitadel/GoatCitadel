@@ -23,6 +23,7 @@ import { SelectedThreadActivity } from "./SelectedThreadActivity";
 import { ThreadList } from "./ThreadList";
 import { useInspector } from "../../app/inspector";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { buildClassicOwnerUrl } from "../../../app/classic-owner-url";
 import { useShellHandoff } from "../../../app/use-shell-handoff";
 import { ShellSwitchFeedback } from "../../app/use-cockpit-shell-switch";
 import { ChatOwnerNavigationBoundary } from "./ChatOwnerNavigationBoundary";
@@ -69,7 +70,7 @@ export function ChatArea({
         onOpenApprovals={(approvalId) =>
           approvalId
             ? handoff.request("classic", {
-                href: `/ops/approvals?approvalId=${encodeURIComponent(approvalId)}&shell=classic`,
+                href: buildClassicOwnerUrl(`/ops/approvals?approvalId=${encodeURIComponent(approvalId)}`),
               })
             : navigate("/inbox?shell=cockpit")
         }
@@ -79,7 +80,7 @@ export function ChatArea({
         onOpenProviderSettings={() => navigate("/settings/models?shell=cockpit#providers")}
         onOpenLocalAiSettings={() => navigate("/settings/models?shell=cockpit#local-ai")}
         onOpenLibraryArtifacts={() => navigate("/library/artifacts?shell=cockpit")}
-        onOpenLibraryImports={() => handoff.request("classic", { href: "/library/knowledge?shell=classic" })}
+        onOpenLibraryImports={() => handoff.request("classic", { href: buildClassicOwnerUrl("/library/knowledge") })}
         onOpenOpsRuntime={() => navigate("/system/health?shell=cockpit")}
         renderSurface={(input: MissionThreadedRenderSurfaceInput) => (
           <ChatOwnerNavigationBoundary input={input} owner={conversationNavigation}>

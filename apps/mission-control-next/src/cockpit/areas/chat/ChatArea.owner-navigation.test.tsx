@@ -115,8 +115,8 @@ describe("cockpit Chat owner navigation", () => {
       mocks.hostProps!.onOpenLibraryImports();
     });
     expect(mocks.switchShell.mock.calls.map(([shell, options]) => [shell, options.href])).toEqual([
-      ["classic", "/ops/approvals?approvalId=approval%2Fone%3Ftwo&shell=classic"],
-      ["classic", "/library/knowledge?shell=classic"],
+      ["classic", "/ops/approvals?approvalId=approval%2Fone%3Ftwo&shell=classic&shellScope=visit"],
+      ["classic", "/library/knowledge?shell=classic&shellScope=visit"],
     ]);
     for (const [, options] of mocks.switchShell.mock.calls) {
       expect(options.isCurrent()).toBe(true);

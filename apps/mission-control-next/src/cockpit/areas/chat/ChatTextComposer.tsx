@@ -218,7 +218,7 @@ export function ChatTextComposer({
             ·{" "}
             <button
               type="button"
-              onClick={shellSwitch.request}
+              onClick={shellSwitch.visit}
               className="inline-flex min-h-8 items-center font-medium text-accent hover:underline max-sm:min-h-11"
             >
               Open classic view

@@ -19,7 +19,7 @@ export function AreaPlaceholder({ area }: { area: Exclude<CockpitArea, "gallery"
       <EmptyState
         title="This area is in progress"
         description={COPY[area]}
-        action={<Button onClick={shellSwitch.request}>Open in classic view</Button>}
+        action={<Button onClick={shellSwitch.visit}>Open in classic view</Button>}
       />
       {shellSwitch.feedback}
     </>

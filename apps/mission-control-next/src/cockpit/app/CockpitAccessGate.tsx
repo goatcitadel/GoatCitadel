@@ -37,7 +37,7 @@ export function CockpitAccessGate({
         description={description}
         action={
           needsSignIn || misconfigured ? (
-            <Button variant="primary" onClick={shellSwitch.request}>
+            <Button variant="primary" onClick={shellSwitch.visit}>
               Open classic view
             </Button>
           ) : (
