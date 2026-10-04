@@ -152,7 +152,7 @@ describe("viewed Updates presentation", () => {
     await renderUpdates(client);
     const link = container.querySelector<HTMLAnchorElement>("a[data-inbox-owner]")!;
     expect(link.getAttribute("href")).toBe(`${projection.items[0]!.href}&shellScope=visit`);
-    expect(link.getAttribute("aria-label")).toBe("Open in Approvals");
+    expect(link.getAttribute("aria-label")).toBe("Open in classic Approvals");
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true })));
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true })));
     expect(document.activeElement).toBe(link);
@@ -472,7 +472,7 @@ describe("InboxArea", () => {
     expect(container.textContent).toContain("Review file write");
     expect(container.textContent).toContain("No known items returned in this group.");
     const link = container.querySelector('a[href="/ops/approvals?approvalId=test&shell=classic&shellScope=visit"]');
-    expect(link?.textContent).toContain("Open in Approvals");
+    expect(link?.textContent).toContain("Open in classic Approvals");
     const details = [...container.querySelectorAll("button")].find((button) => button.textContent === "Details");
     if (!details) throw new Error("Missing details control");
     const input = document.createElement("input");
@@ -581,7 +581,7 @@ describe("InboxArea", () => {
     expect(container.textContent).toContain("Report");
     expect(
       container.querySelector('a[href="/ops/kanban?shell=classic&taskId=task-a&shellScope=visit"]')?.textContent,
-    ).toContain("Open in Ops");
+    ).toContain("Open in classic Ops");
     const details = [...container.querySelectorAll("button")].find((button) => button.textContent === "Details");
     if (!details) throw new Error("Missing details control");
     await act(async () => details.click());
@@ -634,7 +634,7 @@ describe("InboxArea", () => {
     expect(container.textContent).toContain("Background run completed");
     expect(
       container.querySelector('a[href="/ops/runtime?runId=child-run-a&shell=classic&shellScope=visit"]')?.textContent,
-    ).toContain("Open in Ops");
+    ).toContain("Open in classic Ops");
     const details = [...container.querySelectorAll("button")].find((button) => button.textContent === "Details");
     if (!details) throw new Error("Missing details control");
     await act(async () => details.click());

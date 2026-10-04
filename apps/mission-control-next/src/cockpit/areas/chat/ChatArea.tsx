@@ -240,7 +240,11 @@ export function ChatAreaView({
               title={active?.sessionTitle ?? "Chat"}
               dock={input.contextDockProps}
             />
-            <ChatHeaderSubtitle active={active} projectName={session?.projectName} loading={input.sessionRail.loading} />
+            <ChatHeaderSubtitle
+              active={active}
+              projectName={session?.projectName}
+              loading={input.sessionRail.loading}
+            />
           </div>
           <ChatMobileConversationSelect rail={input.sessionRail} onOpenFilters={() => setFiltersOpen(true)} />
           <SelectedThreadActivity sessionId={selectedSessionId} />
@@ -261,7 +265,9 @@ export function ChatAreaView({
           {codePanel ? (
             <Button
               size="sm"
+              className="whitespace-nowrap max-sm:h-11 max-sm:px-3"
               aria-expanded={buildOpen}
+              aria-label={buildOpen ? "Back to conversation" : "Build editor"}
               onClick={() => {
                 if (!buildOpen) {
                   const turnId = buildEditorTurnId(active);
@@ -270,7 +276,10 @@ export function ChatAreaView({
                 setBuildOpen((open) => !open);
               }}
             >
-              {buildOpen ? "Back to conversation" : "Build editor"}
+              <span className="max-sm:hidden">{buildOpen ? "Back to conversation" : "Build editor"}</span>
+              <span aria-hidden="true" className="sm:hidden">
+                {buildOpen ? "Back" : "Build"}
+              </span>
             </Button>
           ) : null}
           {active ? (

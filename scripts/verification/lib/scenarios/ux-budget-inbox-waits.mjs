@@ -161,7 +161,7 @@ export async function runUxBudgetInboxWaits(environment) {
           if (await page.locator(`li[data-inbox-item] a[href*="${seeded.orphanRunId}"]`).count()) {
             throw new Error("Forged background watcher appeared in the Inbox.");
           }
-          await inspector.getByRole("link", { name: "Open in Ops" }).click();
+          await inspector.getByRole("link", { name: "Open in classic Ops" }).click();
           await page.waitForURL(
             (url) =>
               url.pathname === "/ops/runtime" &&

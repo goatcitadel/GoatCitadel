@@ -45,6 +45,8 @@ export async function startVerificationStack(context, options = {}) {
     GOATCITADEL_DISABLE_SECRET_STORE: "true",
     GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true",
     GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
+    // The Gateway otherwise reads, and copies to verify, the operator's real ~/.GoatCitadel/backups.
+    GOATCITADEL_BACKUP_DIR: path.join(runtimeRoot, "backups"),
     ...options.gatewayEnv,
   };
 
