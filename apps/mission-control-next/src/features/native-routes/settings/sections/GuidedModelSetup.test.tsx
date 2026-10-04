@@ -104,7 +104,13 @@ async function mount(
     root.render(
       <GuidedModelSetup
         workspaceId={workspaceId}
-        onboarding={{ ...owner, settings: { ...owner.settings, llm: { ...owner.settings.llm, activeProviderId: provider.providerId ?? "test" } } }}
+        onboarding={{
+          ...owner,
+          settings: {
+            ...owner.settings,
+            llm: { ...owner.settings.llm, activeProviderId: provider.providerId ?? "test" },
+          },
+        }}
         route={{ area: "settings", section: "onboarding", theme: "dark" }}
         navigate={navigate}
         reloadOnboarding={reload}
