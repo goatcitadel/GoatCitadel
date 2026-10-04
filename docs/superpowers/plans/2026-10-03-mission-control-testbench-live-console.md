@@ -6777,7 +6777,7 @@ git commit -m "feat(testbench): check realtime delivery and governed Code Mode r
 
 **Interfaces:**
 - Consumes: `prepareUsabilityRuntime(runId, baseUrl, { sourceRoot?, tempParent? })` from `scripts/verification/lib/scenarios/usability-runtime-fixture.mjs` (reads only the tracked `config/goatcitadel.example.json`, writes the stub provider config, copies `skills/`); `DETERMINISTIC_LLM_KEY_ENV` from `scripts/verification/lib/scenarios/deterministic-llm-stub.mjs`.
-- Produces: `TESTBENCH_STUB_KEY`, `DEFAULT_REAL_GATEWAY_ORIGIN`, `prepareTestbenchRuntime({ runId, stubBaseUrl, sourceRoot?, tempParent? })`, `buildTestbenchGatewayEnv(runtimeRoot)`, `buildTestbenchUiEnv({ gatewayUrl, runtimeRoot, realOrigin? })`, `buildTestbenchUrl(uiUrl)`.
+- Produces (gateway env includes `GOATCITADEL_FEATURE_MEMORY_LIFECYCLE_ADMIN_V1_ENABLED: "true"`): `TESTBENCH_STUB_KEY`, `DEFAULT_REAL_GATEWAY_ORIGIN`, `prepareTestbenchRuntime({ runId, stubBaseUrl, sourceRoot?, tempParent? })`, `buildTestbenchGatewayEnv(runtimeRoot)`, `buildTestbenchUiEnv({ gatewayUrl, runtimeRoot, realOrigin? })`, `buildTestbenchUrl(uiUrl)`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -6850,6 +6850,7 @@ test("buildTestbenchGatewayEnv keeps home and backups inside the runtime root an
     assert.ok(relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative), `${key} escapes the runtime root`);
   }
   assert.equal(env.GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED, "true");
+  assert.equal(env.GOATCITADEL_FEATURE_MEMORY_LIFECYCLE_ADMIN_V1_ENABLED, "true");
   assert.equal(env.GOATCITADEL_BUNDLED_POSTGRES_ENABLED, "false");
   assert.equal(env.GOATCITADEL_LLAMACPP_ENABLED, "false");
   assert.equal(env.GOATCITADEL_NPU_ENABLED, "false");
@@ -6905,6 +6906,7 @@ export function buildTestbenchGatewayEnv(runtimeRoot) {
     GOATCITADEL_HOME: path.join(runtimeRoot, "home"),
     GOATCITADEL_BACKUP_DIR: path.join(runtimeRoot, "backups"),
     GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
+    GOATCITADEL_FEATURE_MEMORY_LIFECYCLE_ADMIN_V1_ENABLED: "true",
     GOATCITADEL_RATE_LIMIT_ENABLED: "false",
     GOATCITADEL_BUNDLED_POSTGRES_AUTOSTART: "false",
     GOATCITADEL_BUNDLED_POSTGRES_ENABLED: "false",
