@@ -72,4 +72,32 @@ describe("AreaErrorBoundary", () => {
     await render("work");
     expect(container.textContent).toContain("Area content");
   });
+
+  it.each([null, undefined])("contains a thrown %s and recovers on Try again or a new reset key", async (thrown) => {
+    const failing = { active: true };
+    function ThrowsFalsy() {
+      // Anything can be thrown; a falsy value must still count as a failure.
+      if (failing.active) throw thrown;
+      return <p>Area content</p>;
+    }
+    const renderAt = (resetKey: string) =>
+      act(async () =>
+        root.render(
+          <AreaErrorBoundary label="Inbox" resetKey={resetKey}>
+            <ThrowsFalsy />
+          </AreaErrorBoundary>,
+        ),
+      );
+    await renderAt("inbox");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Inbox couldn't be shown");
+    failing.active = false;
+    await act(async () => button("Try again")?.click());
+    expect(container.textContent).toContain("Area content");
+    failing.active = true;
+    await renderAt("inbox");
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    failing.active = false;
+    await renderAt("work");
+    expect(container.textContent).toContain("Area content");
+  });
 });

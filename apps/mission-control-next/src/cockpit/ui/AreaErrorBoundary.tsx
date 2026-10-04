@@ -12,6 +12,8 @@ interface AreaErrorBoundaryProps {
 }
 
 interface AreaErrorBoundaryState {
+  /** Kept apart from `error`: `throw null` and `throw undefined` are failures too. */
+  hasError: boolean;
   error: Error | null;
 }
 
@@ -21,10 +23,10 @@ function reloadDocument(): void {
 
 /** One failed view or lazy chunk must not blank the whole cockpit. */
 export class AreaErrorBoundary extends Component<AreaErrorBoundaryProps, AreaErrorBoundaryState> {
-  public override state: AreaErrorBoundaryState = { error: null };
+  public override state: AreaErrorBoundaryState = { hasError: false, error: null };
 
-  public static getDerivedStateFromError(error: Error): AreaErrorBoundaryState {
-    return { error };
+  public static getDerivedStateFromError(error: unknown): AreaErrorBoundaryState {
+    return { hasError: true, error: error instanceof Error ? error : null };
   }
 
   public override componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
@@ -37,16 +39,17 @@ export class AreaErrorBoundary extends Component<AreaErrorBoundaryProps, AreaErr
   }
 
   public override componentDidUpdate(previous: AreaErrorBoundaryProps): void {
-    if (this.state.error && previous.resetKey !== this.props.resetKey) this.setState({ error: null });
+    if (this.state.hasError && previous.resetKey !== this.props.resetKey)
+      this.setState({ hasError: false, error: null });
   }
 
   private readonly retry = () => {
-    this.setState({ error: null });
+    this.setState({ hasError: false, error: null });
   };
 
   public override render(): ReactNode {
-    const { error } = this.state;
-    if (!error) return this.props.children;
+    const { hasError, error } = this.state;
+    if (!hasError) return this.props.children;
     const staleBuild = isModuleLoadError(error);
     return (
       <section
