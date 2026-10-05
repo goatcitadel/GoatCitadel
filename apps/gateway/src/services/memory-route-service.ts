@@ -92,11 +92,17 @@ export class MemoryRouteService {
     return this.memory.listMaintenanceRecommendations(workspaceId, limit);
   }
 
-  public acceptMaintenanceRecommendation(recommendationId: string, input: Parameters<MemoryRoutePort["acceptMaintenanceRecommendation"]>[1]) {
+  public acceptMaintenanceRecommendation(
+    recommendationId: string,
+    input: Parameters<MemoryRoutePort["acceptMaintenanceRecommendation"]>[1],
+  ) {
     return this.memory.acceptMaintenanceRecommendation(recommendationId, input);
   }
 
-  public rejectMaintenanceRecommendation(recommendationId: string, input: Parameters<MemoryRoutePort["rejectMaintenanceRecommendation"]>[1]) {
+  public rejectMaintenanceRecommendation(
+    recommendationId: string,
+    input: Parameters<MemoryRoutePort["rejectMaintenanceRecommendation"]>[1],
+  ) {
     return this.memory.rejectMaintenanceRecommendation(recommendationId, input);
   }
 

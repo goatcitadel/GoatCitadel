@@ -170,13 +170,14 @@ export class DurableOperatorService {
       async () => {
         if (run.status === "queued") await this.deps.durableRunService.requestRunProcessing(runId);
       },
-      () => this.enqueueRunHook(run, "orchestration.retry.scheduled", runId, {
-        runId,
-        reason,
-        actorId,
-        status: run.status,
-        attemptCount: run.attemptCount,
-      }),
+      () =>
+        this.enqueueRunHook(run, "orchestration.retry.scheduled", runId, {
+          runId,
+          reason,
+          actorId,
+          status: run.status,
+          attemptCount: run.attemptCount,
+        }),
     ]);
   }
 
@@ -193,12 +194,13 @@ export class DurableOperatorService {
     if (result.outcome === "woke" && result.run) {
       return this.afterWakeCommit("Durable run wake", result, [
         ...(options.deferProcessing ? [] : [() => this.deps.durableRunService.requestRunProcessing(runId)]),
-        () => this.enqueueRunHook(result.run!, "orchestration.run.woken", runId, {
-          runId,
-          eventKey: event.eventKey,
-          correlationId: event.correlationId,
-          payload: event.payload ?? {},
-        }),
+        () =>
+          this.enqueueRunHook(result.run!, "orchestration.run.woken", runId, {
+            runId,
+            eventKey: event.eventKey,
+            correlationId: event.correlationId,
+            payload: event.payload ?? {},
+          }),
       ]);
     }
     return result;

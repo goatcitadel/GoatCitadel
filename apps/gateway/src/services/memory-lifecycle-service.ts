@@ -1,4 +1,10 @@
-import { detectNearDuplicateMemoryItems, detectRetrievalGaps, calculateLexicalOverlap, resolveBenchmarkRetrievalStrategy, buildMemoryBenchmarkCoverageNote } from "./memory-retrieval-quality.js";
+import {
+  detectNearDuplicateMemoryItems,
+  detectRetrievalGaps,
+  calculateLexicalOverlap,
+  resolveBenchmarkRetrievalStrategy,
+  buildMemoryBenchmarkCoverageNote,
+} from "./memory-retrieval-quality.js";
 /* eslint-disable max-lines -- MemoryLifecycleService centralizes memory lifecycle writes, write-gate evidence, and structured memory governance until repository ownership is split. */
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -2740,7 +2746,10 @@ export class MemoryLifecycleService {
     }));
   }
 
-  public composeContext(input: MemoryContextComposeRequest, usageLineage?: TrustedUtilityModelUsageLineage): Promise<MemoryContextPack> {
+  public composeContext(
+    input: MemoryContextComposeRequest,
+    usageLineage?: TrustedUtilityModelUsageLineage,
+  ): Promise<MemoryContextPack> {
     return usageLineage ? this.deps.context.compose(input, usageLineage) : this.deps.context.compose(input);
   }
 
@@ -3688,7 +3697,10 @@ export class MemoryLifecycleService {
     return this.deps.maintenance.listRecommendations(workspaceId, limit);
   }
 
-  public async acceptMaintenanceRecommendation(recommendationId: string, input: MemoryMaintenanceRecommendationAcceptInput): Promise<{
+  public async acceptMaintenanceRecommendation(
+    recommendationId: string,
+    input: MemoryMaintenanceRecommendationAcceptInput,
+  ): Promise<{
     recommendation: MemoryMaintenanceRecommendationRecord;
     policy: MemoryMaintenancePolicyRecord;
   }> {

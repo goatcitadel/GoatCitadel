@@ -880,19 +880,26 @@ async function assertLinkedChatTurnActive(
     await storage.durableRuns.getRunForUpdate(trace.durable.runId);
     trace = await storage.chatTurnTraces.get(linkage.turnId);
   }
-  const completedCodeModeRequest = trace.status === "completed" &&
+  const completedCodeModeRequest =
+    trace.status === "completed" &&
     approval.kind === "code_mode.run" &&
-    linkage.actionType === "code_mode.run" && linkage.toolName === "code_mode.run" &&
+    linkage.actionType === "code_mode.run" &&
+    linkage.toolName === "code_mode.run" &&
     linkage.originSurface === "chat" &&
-    typeof linkage.runId === "string" && linkage.runId.length > 0 &&
-    typeof linkage.workspaceId === "string" && linkage.workspaceId.length > 0 &&
+    typeof linkage.runId === "string" &&
+    linkage.runId.length > 0 &&
+    typeof linkage.workspaceId === "string" &&
+    linkage.workspaceId.length > 0 &&
     approval.payload.runId === linkage.runId &&
     approval.payload.workspaceId === linkage.workspaceId &&
     approval.payload.sessionId === linkage.sessionId &&
     approval.payload.turnId === linkage.turnId &&
-    typeof approval.payload.codeHash === "string" && approval.payload.codeHash.length > 0 &&
-    typeof approval.payload.wrapperManifestHash === "string" && approval.payload.wrapperManifestHash.length > 0 &&
-    typeof approval.payload.capabilitySnapshotId === "string" && approval.payload.capabilitySnapshotId.length > 0;
+    typeof approval.payload.codeHash === "string" &&
+    approval.payload.codeHash.length > 0 &&
+    typeof approval.payload.wrapperManifestHash === "string" &&
+    approval.payload.wrapperManifestHash.length > 0 &&
+    typeof approval.payload.capabilitySnapshotId === "string" &&
+    approval.payload.capabilitySnapshotId.length > 0;
   if (trace.sessionId !== linkage.sessionId || (isChatTurnTerminalStatus(trace.status) && !completedCodeModeRequest)) {
     throw new ConflictError({
       message: "This chat turn has already stopped or finished; its action cannot be approved or requested again.",
@@ -900,13 +907,21 @@ async function assertLinkedChatTurnActive(
   }
   if (completedCodeModeRequest && approval.approvalId) {
     const run = await storage.codeModeRuns.find(linkage.runId!);
-    if (!run || run.status !== "approval_pending" || run.approvalId !== approval.approvalId ||
-      run.runId !== linkage.runId || run.workspaceId !== linkage.workspaceId ||
-      run.sessionId !== linkage.sessionId || run.turnId !== linkage.turnId ||
+    if (
+      !run ||
+      run.status !== "approval_pending" ||
+      run.approvalId !== approval.approvalId ||
+      run.runId !== linkage.runId ||
+      run.workspaceId !== linkage.workspaceId ||
+      run.sessionId !== linkage.sessionId ||
+      run.turnId !== linkage.turnId ||
       run.codeHash !== approval.payload.codeHash ||
       run.wrapperManifestHash !== approval.payload.wrapperManifestHash ||
-      run.capabilitySnapshotId !== approval.payload.capabilitySnapshotId) {
-      throw new ConflictError({ message: "The completed Chat turn's Code Mode approval no longer matches its pending run." });
+      run.capabilitySnapshotId !== approval.payload.capabilitySnapshotId
+    ) {
+      throw new ConflictError({
+        message: "The completed Chat turn's Code Mode approval no longer matches its pending run.",
+      });
     }
   }
   await assertChatTurnToolUseOpen(storage, linkage.sessionId, linkage.turnId);
