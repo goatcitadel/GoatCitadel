@@ -5,13 +5,18 @@ type TopicKey = readonly [RefreshTopic, ...unknown[]];
 
 /** An owner topic is the first segment so its realtime signals can invalidate it. */
 export const queryKeys = {
-  workspaces: (citadelId?: string): TopicKey => ["system", "workspaces", citadelId ?? "all"],
-  citadels: (): TopicKey => ["system", "citadels"],
+  /** Workspace and Citadel listings share one prefix so directory events refresh them together. */
+  directory: (): TopicKey => ["system", "directory"],
+  workspaces: (citadelId?: string): TopicKey => ["system", "directory", "workspaces", citadelId ?? "all"],
+  citadels: (): TopicKey => ["system", "directory", "citadels"],
   capabilities: (): TopicKey => ["skills", "capabilities"],
   pendingApprovals: (): TopicKey => ["approvals", "pending"],
+  inboxAll: (): TopicKey => ["approvals", "operator-inbox"],
   inbox: (workspaceId: string): TopicKey => ["approvals", "operator-inbox", workspaceId],
   health: (workspaceId: string): TopicKey => ["system", "health", workspaceId],
   healthAll: (): TopicKey => ["system", "health"],
+  memory: (): TopicKey => ["memory"],
+  improvement: (): TopicKey => ["improvement"],
   costs: (): TopicKey => ["system", "costs", "day"],
   durableRuns: (): TopicKey => ["tasks", "durable-runs"],
   durableRunHistory: (workspaceId: string): TopicKey => [

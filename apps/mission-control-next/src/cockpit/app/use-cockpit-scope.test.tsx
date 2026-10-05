@@ -183,7 +183,7 @@ describe("cockpit scope owner", () => {
     width = 390;
     await render();
     await act(async () => {
-      await client.invalidateQueries({ queryKey: ["system", "scope-active-citadel"] });
+      await client.invalidateQueries({ queryKey: ["system", "directory", "active-citadel"] });
     });
     expect(mocks.currentCitadel).not.toHaveBeenCalled();
   });

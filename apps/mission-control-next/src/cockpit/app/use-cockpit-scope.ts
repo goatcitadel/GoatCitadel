@@ -45,13 +45,13 @@ export function useCockpitScope(
   }, [renderedToken]);
   const [feedback, setFeedback] = useState({ token: renderedToken, busy: false, error: "" });
   const citadels = useQuery({
-    queryKey: ["system", "scope-citadels", installation],
+    queryKey: ["system", "directory", "scope-citadels", installation],
     queryFn: ({ signal }) => listCitadels("active", 500, { signal }),
     enabled: open,
     staleTime: 0,
   });
   const workspaces = useQuery({
-    queryKey: ["system", "scope-workspaces", installation, choice.citadelId],
+    queryKey: ["system", "directory", "scope-workspaces", installation, choice.citadelId],
     queryFn: ({ signal }) => fetchWorkspaces("active", 500, choice.citadelId, { signal }),
     enabled: open && Boolean(choice.citadelId),
     staleTime: 0,

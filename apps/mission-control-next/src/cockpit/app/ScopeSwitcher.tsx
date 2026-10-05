@@ -32,7 +32,7 @@ export function ScopeSwitcher({
     history = readCockpitHistory();
   const visible = useMediaQuery("(min-width: 640px)") && !hideTrigger;
   const activeCitadel = useQuery({
-    queryKey: ["system", "scope-active-citadel", installation, activeCitadelId],
+    queryKey: ["system", "directory", "active-citadel", installation, activeCitadelId],
     queryFn: ({ signal }) => getCitadelStructureSnapshot(activeCitadelId, { signal }),
     enabled: visible && Boolean(activeCitadelId),
     // staleTime already refreshes a stale Citadel; forcing a refetch on every mount multiplied boot requests.
