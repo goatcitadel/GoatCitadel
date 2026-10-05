@@ -409,6 +409,27 @@ export async function listApprovals(
   );
 }
 
+/**
+ * One approval with the same projection as the list. A workspace-scoped read never reveals an approval
+ * from another workspace: it answers not found, as the scoped list would omit it.
+ */
+export async function getApproval(
+  host: ApprovalLifecycleHost,
+  approvalId: string,
+  workspaceId?: string,
+): Promise<ApprovalRequest> {
+  const storage = host.storage;
+  const approval = await storage.approvals.get(approvalId);
+  const scopedWorkspaceId = workspaceId?.trim();
+  if (scopedWorkspaceId && approval.linkage?.workspaceId !== scopedWorkspaceId) {
+    throw new NotFoundError({ entity: "Approval", id: approvalId });
+  }
+  return withCanonicalApprovalOutcome(
+    storage,
+    withApprovalFollowUp(approval, await storage.approvalEffects.listByApproval(approval.approvalId)),
+  );
+}
+
 export async function listApprovalsPage(
   host: ApprovalLifecycleHost,
   input: {

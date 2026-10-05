@@ -685,6 +685,17 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  fastify.get("/api/v1/memory/trace-candidates/:candidateId", operatorOnly, async (request, reply) => {
+    const params = traceCandidateParamsSchema.safeParse(request.params);
+    const query = traceCandidateListQuerySchema.pick({ workspaceId: true }).safeParse(request.query ?? {});
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid trace candidate read." });
+    try {
+      return reply.send(await memory.getTraceCandidate(params.data.candidateId, query.data.workspaceId));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
   fastify.post("/api/v1/memory/trace-candidates", operatorOnly, async (request, reply) => {
     const parsed = traceCandidateCreateSchema.safeParse(request.body ?? {});
     if (!parsed.success) {

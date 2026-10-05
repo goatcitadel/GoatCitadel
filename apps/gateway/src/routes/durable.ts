@@ -5,6 +5,7 @@ import {
   assertDurableChildWatcherIdBounds,
   assertDurableChildWatcherRunIdBounds,
   DURABLE_CHILD_WATCHER_LIMITS,
+  NotFoundError,
   ValidationError,
 } from "@goatcitadel/contracts";
 import { resolveApprovalActorId } from "./approvals.js";
@@ -242,6 +243,20 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     return projectDurableRouteResponse({
       items: await durable.listDeadLetters(parsed.data.limit),
     });
+  });
+
+  fastify.get("/api/v1/durable/dead-letters/:entryId", operatorOnly, async (request, reply) => {
+    const params = deadLetterParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send(projectDurableRouteResponse({ error: params.error.flatten() }));
+    }
+    try {
+      return reply.send(projectDurableRouteResponse(await durable.getDeadLetter(params.data.entryId)));
+    } catch (error) {
+      const notFound = error instanceof NotFoundError || /not found/i.test((error as Error)?.message ?? "");
+      if (!notFound) throw error;
+      return reply.code(404).send(projectDurableRouteResponse({ error: (error as Error).message }));
+    }
   });
 
   fastify.get("/api/v1/durable/runs/:runId/checkpoints", operatorOnly, async (request, reply) => {

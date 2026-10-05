@@ -287,6 +287,18 @@ export async function fetchTraceMemoryCandidates(input?: {
   return request<{ items: TraceMemoryCandidateRecord[] }>(`/api/v1/memory/trace-candidates?${params.toString()}`);
 }
 
+/** One trace-memory proposal by id, within its workspace. */
+export async function fetchTraceMemoryCandidate(
+  candidateId: string,
+  options: { workspaceId?: string; signal?: AbortSignal } = {},
+): Promise<TraceMemoryCandidateRecord> {
+  const query = options.workspaceId?.trim() ? `?workspaceId=${encodeURIComponent(options.workspaceId.trim())}` : "";
+  return request<TraceMemoryCandidateRecord>(
+    `/api/v1/memory/trace-candidates/${encodeURIComponent(candidateId)}${query}`,
+    options.signal ? { signal: options.signal } : undefined,
+  );
+}
+
 export async function proposeTraceMemoryCandidate(
   input: TraceMemoryCandidateInput,
 ): Promise<TraceMemoryCandidateRecord> {

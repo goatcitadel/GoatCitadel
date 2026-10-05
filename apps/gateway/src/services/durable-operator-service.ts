@@ -26,6 +26,7 @@ export interface DurableOperatorServiceDeps {
     | "listDurableRuns"
     | "listDurableRunHistory"
     | "listDurableDeadLetters"
+    | "getDurableDeadLetter"
     | "listDurableRunCheckpoints"
     | "createDurableRun"
     | "getDurableRun"
@@ -85,6 +86,10 @@ export class DurableOperatorService {
 
   public async listDeadLetters(limit = 50): Promise<DurableDeadLetterRecord[]> {
     return this.deps.durableRunService.listDurableDeadLetters(limit);
+  }
+
+  public async getDeadLetter(deadLetterId: string): Promise<DurableDeadLetterRecord> {
+    return this.deps.durableRunService.getDurableDeadLetter(deadLetterId);
   }
 
   public async listRunCheckpoints(runId: string, limit = 200): Promise<DurableCheckpointRecord[]> {

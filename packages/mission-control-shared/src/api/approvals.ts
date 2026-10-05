@@ -52,6 +52,18 @@ export async function fetchApprovals(
   return request<ApprovalsResponse>(`/api/v1/approvals${query.size > 0 ? `?${query.toString()}` : ""}`);
 }
 
+/** One approval by id; a workspace-scoped read answers not found for another workspace's approval. */
+export async function fetchApproval(
+  approvalId: string,
+  options: { workspaceId?: string; signal?: AbortSignal } = {},
+): Promise<ApprovalRequest> {
+  const query = options.workspaceId?.trim() ? `?workspaceId=${encodeURIComponent(options.workspaceId.trim())}` : "";
+  return request<ApprovalRequest>(
+    `/api/v1/approvals/${encodeURIComponent(approvalId)}${query}`,
+    options.signal ? { signal: options.signal } : undefined,
+  );
+}
+
 export async function resolveApproval(
   approvalId: string,
   decision: "approve" | "reject",

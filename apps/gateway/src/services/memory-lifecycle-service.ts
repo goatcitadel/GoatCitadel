@@ -3106,6 +3106,20 @@ export class MemoryLifecycleService {
     return record;
   }
 
+  /**
+   * One trace-memory proposal, read like the list: the same feature gate, and only within its workspace
+   * (another workspace's proposal answers not found, as the workspace list would omit it).
+   */
+  public async getTraceMemoryCandidate(candidateId: string, workspaceId?: string): Promise<TraceMemoryCandidateRecord> {
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.ensureTraceCandidateSchema();
+    const candidate = await this.requireTraceMemoryCandidate(candidateId);
+    if (normalizeStructuredWorkspaceId(candidate.workspaceId) !== normalizeStructuredWorkspaceId(workspaceId)) {
+      throw new NotFoundError({ entity: "memory_trace_candidate", id: candidateId });
+    }
+    return candidate;
+  }
+
   public async listTraceMemoryCandidates(
     input: {
       workspaceId?: string;

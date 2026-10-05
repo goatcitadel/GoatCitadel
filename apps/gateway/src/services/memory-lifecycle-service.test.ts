@@ -2019,6 +2019,13 @@ describe("MemoryLifecycleService", () => {
         context: expect.objectContaining({ contextId: "ctx-targeted" }),
       });
 
+      // A read by id stays inside the workspace its list is scoped to.
+      await expect(service.getTraceMemoryCandidate(candidate.candidateId, "default")).resolves.toMatchObject({
+        candidateId: candidate.candidateId,
+      });
+      await expect(service.getTraceMemoryCandidate(candidate.candidateId, "workspace-other")).rejects.toMatchObject({
+        code: "ENTITY_NOT_FOUND",
+      });
       const learning = await service.promoteTraceMemoryCandidate(candidate.candidateId, "operator-1");
       expect(learning).toMatchObject({
         key: "release.docs_check",

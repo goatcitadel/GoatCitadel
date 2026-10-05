@@ -56,6 +56,7 @@ export interface ApprovalRuntime {
     resolvedBy?: string;
   }): Promise<ApprovalResolveResult>;
   listApprovals(status?: ApprovalRequest["status"], limit?: number, workspaceId?: string): Promise<ApprovalRequest[]>;
+  getApproval(approvalId: string, workspaceId?: string): Promise<ApprovalRequest>;
   listApprovalsPage(input: {
     status?: ApprovalRequest["status"];
     limit?: number;
@@ -156,6 +157,10 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     workspaceId?: string,
   ): Promise<ApprovalRequest[]> {
     return approvalLifecycleService.listApprovals(this.host, status, limit, workspaceId);
+  }
+
+  public async getApproval(approvalId: string, workspaceId?: string): Promise<ApprovalRequest> {
+    return approvalLifecycleService.getApproval(this.host, approvalId, workspaceId);
   }
 
   public async listApprovalsPage(input: {

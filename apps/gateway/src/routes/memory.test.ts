@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { NotFoundError } from "@goatcitadel/contracts";
 import { memoryRoutes } from "./memory.js";
 
 describe("memory routes", () => {
@@ -48,6 +49,52 @@ describe("memory routes", () => {
     }
     await app.close();
     app = null;
+  });
+
+  it("reads one trace-memory proposal by id within its workspace, operator-only like the list", async () => {
+    const candidate = { candidateId: "candidate-1", workspaceId: "workspace-a", status: "proposed" };
+    const getTraceCandidate = vi.fn(async (candidateId: string, workspaceId?: string) => {
+      if (candidateId !== "candidate-1" || workspaceId !== "workspace-a") {
+        throw new NotFoundError({ entity: "memory_trace_candidate", id: candidateId });
+      }
+      return candidate;
+    });
+    const built = buildApp({ getTraceCandidate });
+    app = built.app;
+    await app.register(memoryRoutes);
+
+    const found = await app.inject({
+      method: "GET",
+      url: "/api/v1/memory/trace-candidates/candidate-1?workspaceId=workspace-a",
+    });
+    expect(found.statusCode).toBe(200);
+    expect(found.json()).toEqual(candidate);
+    expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/v1/memory/trace-candidates/missing?workspaceId=workspace-a" }))
+        .statusCode,
+    ).toBe(404);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/v1/memory/trace-candidates/candidate-1?workspaceId=workspace-b" }))
+        .statusCode,
+    ).toBe(404);
+  });
+
+  it("rejects an unauthenticated trace-memory proposal read the same way the list does", async () => {
+    const getTraceCandidate = vi.fn();
+    const listTraceCandidates = vi.fn();
+    const requireOperatorAuth = vi.fn(
+      async (_request: unknown, reply: { code: (status: number) => { send: (body: { error: string }) => unknown } }) =>
+        reply.code(401).send({ error: "Operator authentication required." }),
+    );
+    const built = buildApp({ getTraceCandidate, listTraceCandidates }, requireOperatorAuth);
+    app = built.app;
+    await app.register(memoryRoutes);
+    const byId = await app.inject({ method: "GET", url: "/api/v1/memory/trace-candidates/candidate-1" });
+    const list = await app.inject({ method: "GET", url: "/api/v1/memory/trace-candidates" });
+    expect(byId.statusCode).toBe(401);
+    expect(list.statusCode).toBe(401);
+    expect(getTraceCandidate).not.toHaveBeenCalled();
   });
 
   it("defaults the item-list status to active so forgotten content is not returned by default", async () => {

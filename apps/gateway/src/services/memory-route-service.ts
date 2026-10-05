@@ -34,6 +34,7 @@ type MemoryRoutePort = Pick<
   | "recordMemoryFeedback"
   | "patchMemoryQualityIssue"
   | "listTraceMemoryCandidates"
+  | "getTraceMemoryCandidate"
   | "proposeTraceMemoryCandidate"
   | "promoteTraceMemoryCandidate"
   | "rejectTraceMemoryCandidate"
@@ -148,6 +149,10 @@ export class MemoryRouteService {
     actorId: string,
   ) {
     return this.memory.patchMemoryQualityIssue(issueId, input, actorId);
+  }
+
+  public getTraceCandidate(candidateId: string, workspaceId?: string) {
+    return this.memory.getTraceMemoryCandidate(candidateId, workspaceId);
   }
 
   public listTraceCandidates(input: Parameters<MemoryRoutePort["listTraceMemoryCandidates"]>[0]) {

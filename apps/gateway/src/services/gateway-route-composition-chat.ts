@@ -263,6 +263,10 @@ export function composeChatRouteDependencies(
         workspaceId: scope.workspaceId,
       });
     },
+    getDocumentPatchProposal: async (proposalId, workspaceId) => {
+      await gateway.requireFeatureEnabled("documentEditingV1Enabled");
+      return getDocumentEditing().getProposal(proposalId, workspaceId);
+    },
     listDocumentPatchProposals: async (input) => {
       await gateway.requireFeatureEnabled("documentEditingV1Enabled");
       return getDocumentEditing().listProposals(input);

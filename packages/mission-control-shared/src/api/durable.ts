@@ -221,6 +221,17 @@ export async function fetchDurableDeadLetters(limit = 100): Promise<{ items: Dur
   );
 }
 
+/** One stopped run's dead letter by id. */
+export async function fetchDurableDeadLetter(
+  deadLetterId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<DurableDeadLetterRecord> {
+  return request<DurableDeadLetterRecord>(
+    `/api/v1/durable/dead-letters/${encodeURIComponent(deadLetterId)}`,
+    options.signal ? { signal: options.signal } : undefined,
+  );
+}
+
 export async function fetchObserveRunTrace(runId: string): Promise<ObserveRunTraceResponse> {
   return request<ObserveRunTraceResponse>(`/api/v1/observe/runs/${encodeURIComponent(runId)}/trace`);
 }

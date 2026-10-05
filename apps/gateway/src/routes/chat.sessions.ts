@@ -1073,6 +1073,29 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
   });
 
+  fastify.get("/api/v1/chat/document-patch-proposals/:proposalId", async (request, reply) => {
+    const params = documentPatchProposalParamsSchema.safeParse(request.params);
+    const query = documentPatchProposalActionSchema.safeParse(request.query ?? {});
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send({
+        item: await fastify.services.chatSessions.getDocumentPatchProposal(
+          params.data.proposalId,
+          query.data.workspaceId,
+        ),
+      });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
   fastify.post("/api/v1/chat/document-patch-proposals", async (request, reply) => {
     const body = createDocumentPatchProposalSchema.safeParse(request.body ?? {});
     if (!body.success) return reply.code(400).send({ error: body.error.flatten() });

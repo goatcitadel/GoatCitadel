@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { ConflictError, ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { registerChatSessionRoutes } from "./chat.sessions.js";
 
 describe("chat session routes", () => {
@@ -366,6 +366,36 @@ describe("chat session routes", () => {
         url: "/api/v1/chat/sessions/sess-1/knowledge-attachments/attachment-1",
       }),
     ).resolves.toMatchObject({ statusCode: 200 });
+  });
+
+  it("reads one document proposal by id within its workspace", async () => {
+    const proposal = { proposalId: "proposal-1", workspaceId: "workspace-a", state: "pending" };
+    const getDocumentPatchProposal = vi.fn(async (proposalId: string, workspaceId: string) => {
+      if (proposalId !== "proposal-1" || workspaceId !== "workspace-a") {
+        throw new NotFoundError({ entity: "Document patch proposal", id: proposalId });
+      }
+      return proposal;
+    });
+    app = buildApp(createChatSessionsService({ getDocumentPatchProposal }));
+
+    const found = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/document-patch-proposals/proposal-1?workspaceId=workspace-a",
+    });
+    expect(found.statusCode).toBe(200);
+    expect(found.json()).toEqual({ item: proposal });
+    const missing = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/document-patch-proposals/missing?workspaceId=workspace-a",
+    });
+    expect(missing.statusCode).toBe(404);
+    const foreign = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/document-patch-proposals/proposal-1?workspaceId=workspace-b",
+    });
+    expect(foreign.statusCode).toBe(404);
+    const unscoped = await app.inject({ method: "GET", url: "/api/v1/chat/document-patch-proposals/proposal-1" });
+    expect(unscoped.statusCode).toBe(400);
   });
 
   it("passes an activity request to the sessions list and returns each session's activity", async () => {

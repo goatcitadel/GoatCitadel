@@ -897,6 +897,17 @@ export async function listDocumentPatchProposals(input: {
   return request<DocumentPatchProposalListResponse>(`/api/v1/chat/document-patch-proposals?${query.toString()}`);
 }
 
+/** One document proposal by id, within its workspace. */
+export async function fetchDocumentPatchProposal(
+  proposalId: string,
+  options: { workspaceId: string; signal?: AbortSignal },
+): Promise<DocumentPatchProposalResponse> {
+  return request<DocumentPatchProposalResponse>(
+    `/api/v1/chat/document-patch-proposals/${encodeURIComponent(proposalId)}?workspaceId=${encodeURIComponent(options.workspaceId)}`,
+    options.signal ? { signal: options.signal } : undefined,
+  );
+}
+
 export async function createDocumentPatchProposal(
   input: CreateDocumentPatchProposalRequest & { sessionId?: string },
 ): Promise<DocumentPatchProposalResponse> {

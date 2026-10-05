@@ -29,6 +29,7 @@ export const chatSessionsRouteMethods = [
   "getChatSessionWorkbenchTree",
   "getChatSideChat",
   "listChatGeneratedArtifacts",
+  "getDocumentPatchProposal",
   "listDocumentPatchProposals",
   "listChatSessions",
   "listChatTimers",
