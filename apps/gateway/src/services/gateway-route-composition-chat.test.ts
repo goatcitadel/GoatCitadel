@@ -95,6 +95,7 @@ vi.mock("./chat-session-service.js", () => ({
     };
   }),
   deleteChatSession: vi.fn((_deps, sessionId) => ({ op: "delete", sessionId })),
+  forkChatSessionFromTurn: vi.fn((_deps, sessionId, turnId) => ({ op: "fork", sessionId, turnId })),
   getChatSessionBinding: vi.fn((_deps, sessionId) => ({ sessionId, binding: null })),
   listChatSessions: vi.fn((_deps, query) => ({ items: [query] })),
   pinChatSession: vi.fn((_deps, sessionId) => ({ sessionId, pinned: true })),
@@ -147,6 +148,7 @@ vi.mock("./chat-workbench-service.js", () => ({
 }));
 
 import { NotFoundError } from "@goatcitadel/contracts";
+import * as chatSessionService from "./chat-session-service.js";
 import { composeChatRouteDependencies } from "./gateway-route-composition-chat.js";
 import {
   createAuthenticatedOperatorAdmissionContext,
@@ -368,11 +370,15 @@ function createGateway() {
         status: "cancelled",
       })),
     },
+    chatSessionStatusService: {
+      getOperatorStatus: fn((sessionId: string) => ({ sessionId, status: "idle" })),
+    },
     researchService: {
       getRun: fn((sessionId: string, runId: string) => ({ sessionId, runId })),
     },
     normalizeWorkspaceId: fn((workspaceId?: string) => `normalized:${workspaceId?.trim() ?? "default"}`),
-    isFeatureEnabled: fn(() => true),
+    // GatewayService.isFeatureEnabled is async; a sync stub hid unawaited gates.
+    isFeatureEnabled: fn(async (_flag: string) => true),
     getSession: fn((sessionId: string) => ({ sessionId })),
     requireChatSession: fn((sessionId: string) => ({ sessionId, required: true })),
     ensureChatSessionRuntimeGrants: fn((sessionId: string) => ({ sessionId, granted: true })),
@@ -1075,16 +1081,85 @@ describe("composeChatRouteDependencies", () => {
     expect(gateway.chatProjectService.listChatProjects).not.toHaveBeenCalled();
   });
 
+  it("answers 404 from every flag-gated chat route when the async feature flag resolves false", async () => {
+    const gateway = createGateway();
+    gateway.isFeatureEnabled.mockImplementation(async () => false);
+    const forkChatSessionFromTurn = vi.mocked(chatSessionService.forkChatSessionFromTurn);
+    forkChatSessionFromTurn.mockClear();
+    const deps = composeChatRouteDependencies(gateway as never) as any;
+
+    const gated: Array<[string, () => Promise<unknown>, RegExp]> = [
+      [
+        "chatTimersV1Enabled",
+        () => deps.chatSessions.createChatTimer("session-1", { message: "Reminder" }, "operator"),
+        /Chat timer session-1 not found/,
+      ],
+      ["chatTimersV1Enabled", () => deps.chatSessions.listChatTimers("session-1"), /Chat timer session-1 not found/],
+      [
+        "chatTimersV1Enabled",
+        () => deps.chatSessions.cancelChatTimer("session-1", "timer-1", 2),
+        /Chat timer timer-1 not found/,
+      ],
+      [
+        "conversationForksV1Enabled",
+        () => deps.chatSessions.forkChatSessionFromTurn("session-1", "turn-1", {}, "operator"),
+        /Chat session fork turn-1 not found/,
+      ],
+      [
+        "chatSessionStatusV1Enabled",
+        () => deps.chatSessions.getChatSessionStatus("session-1"),
+        /Chat session status session-1 not found/,
+      ],
+    ];
+    for (const [flag, call, message] of gated) {
+      gateway.isFeatureEnabled.mockClear();
+      const rejection = await call().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(rejection, flag).toBeInstanceOf(NotFoundError);
+      expect((rejection as NotFoundError).httpStatus, flag).toBe(404);
+      expect((rejection as Error).message, flag).toMatch(message);
+      expect(gateway.isFeatureEnabled).toHaveBeenCalledWith(flag);
+    }
+    expect(gateway.chatTimerService.create).not.toHaveBeenCalled();
+    expect(gateway.chatTimerService.list).not.toHaveBeenCalled();
+    expect(gateway.chatTimerService.cancel).not.toHaveBeenCalled();
+    expect(forkChatSessionFromTurn).not.toHaveBeenCalled();
+    expect(gateway.chatSessionStatusService.getOperatorStatus).not.toHaveBeenCalled();
+  });
+
+  it("reaches the owning services once the async feature flags resolve true", async () => {
+    const gateway = createGateway();
+    const forkChatSessionFromTurn = vi.mocked(chatSessionService.forkChatSessionFromTurn);
+    forkChatSessionFromTurn.mockClear();
+    const deps = composeChatRouteDependencies(gateway as never) as any;
+
+    await expect(deps.chatSessions.forkChatSessionFromTurn("session-1", "turn-1", {}, "operator")).resolves.toEqual({
+      op: "fork",
+      sessionId: "session-1",
+      turnId: "turn-1",
+    });
+    await expect(deps.chatSessions.getChatSessionStatus("session-1")).resolves.toEqual({
+      sessionId: "session-1",
+      status: "idle",
+    });
+    expect(gateway.isFeatureEnabled).toHaveBeenCalledWith("conversationForksV1Enabled");
+    expect(gateway.isFeatureEnabled).toHaveBeenCalledWith("chatSessionStatusV1Enabled");
+    expect(forkChatSessionFromTurn).toHaveBeenCalledTimes(1);
+    expect(gateway.chatSessionStatusService.getOperatorStatus).toHaveBeenCalledWith("session-1");
+  });
+
   it("preserves history owner receivers and checks scope before projection for every history route", async () => {
     const calls: string[] = [];
     const gateway = Object.assign(createGateway(), {
-      ensureChatMessageProjection: vi.fn(async function(this: unknown, sessionId: string) {
+      ensureChatMessageProjection: vi.fn(async function (this: unknown, sessionId: string) {
         expect(this).toBe(gateway);
         calls.push(`project:${sessionId}`);
       }),
     });
     Object.assign(gateway.storage.chatSessionMeta, {
-      get: async function(this: unknown, sessionId: string) {
+      get: async function (this: unknown, sessionId: string) {
         expect(this).toBe(gateway.storage.chatSessionMeta);
         calls.push(`scope:${sessionId}`);
         return { sessionId, workspaceId: "workspace-1" };
@@ -1112,18 +1187,33 @@ describe("composeChatRouteDependencies", () => {
     const deps = composeChatRouteDependencies(gateway as never);
     const scope = { workspaceId: "workspace-1", sessionId: "session-1" };
     const anchor = { ...scope, messageId: "message-1", sequence: 4 };
-    const continuation = { ...scope, direction: "older" as const, cursorMessageId: "message-1",
-      cursorSequence: 4, snapshotMaxSequence: 9 };
+    const continuation = {
+      ...scope,
+      direction: "older" as const,
+      cursorMessageId: "message-1",
+      cursorSequence: 4,
+      snapshotMaxSequence: 9,
+    };
     await deps.chatMessages.listChatMessagePage(scope);
     expect(await deps.chatMessages.readChatHistoryWindow(anchor, 7)).toEqual({ anchor, limit: 7 });
     expect(await deps.chatMessages.readChatHistoryContinuation(continuation)).toEqual(continuation);
-    expect(calls).toEqual(["scope:session-1", "project:session-1", "page",
-      "scope:session-1", "project:session-1", "window",
-      "scope:session-1", "project:session-1", "continuation"]);
+    expect(calls).toEqual([
+      "scope:session-1",
+      "project:session-1",
+      "page",
+      "scope:session-1",
+      "project:session-1",
+      "window",
+      "scope:session-1",
+      "project:session-1",
+      "continuation",
+    ]);
     calls.length = 0;
     await expect(deps.chatMessages.listChatMessagePage({ ...scope, workspaceId: "foreign" })).rejects.toThrow();
     await expect(deps.chatMessages.readChatHistoryWindow({ ...anchor, workspaceId: "foreign" })).rejects.toThrow();
-    await expect(deps.chatMessages.readChatHistoryContinuation({ ...continuation, workspaceId: "foreign" })).rejects.toThrow();
+    await expect(
+      deps.chatMessages.readChatHistoryContinuation({ ...continuation, workspaceId: "foreign" }),
+    ).rejects.toThrow();
     expect(calls).toEqual(["scope:session-1", "scope:session-1", "scope:session-1"]);
   });
 });

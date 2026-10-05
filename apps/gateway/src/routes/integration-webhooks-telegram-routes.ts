@@ -57,11 +57,11 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
         }
         return { ok: true as const };
       },
-      parsePayload: ({ connectionId, request }) => {
+      parsePayload: async ({ connectionId, request }) => {
         const normalized = normalizeTelegramWebhookPayload({
           connectionId,
           payload: request.body,
-          voiceInboundEnabled: fastify.services.integrationWebhooks.isVoiceInboundEnabled?.() === true,
+          voiceInboundEnabled: (await fastify.services.integrationWebhooks.isVoiceInboundEnabled?.()) === true,
         });
         if (normalized.kind === "ignore") {
           return {
@@ -277,7 +277,9 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
   );
 }
 
-async function resolveRoutePersonalityCatalog(fastify: FastifyInstance): Promise<Omit<PersonalityCatalogResponse, "revision">> {
+async function resolveRoutePersonalityCatalog(
+  fastify: FastifyInstance,
+): Promise<Omit<PersonalityCatalogResponse, "revision">> {
   const settings = (
     fastify.services as {
       settings?: { getPersonalityCatalog?: () => PersonalityCatalogResponse | Promise<PersonalityCatalogResponse> };
