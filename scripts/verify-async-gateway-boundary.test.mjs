@@ -551,6 +551,176 @@ test("route-port scan allows awaited, combinator, chained, thunked, streamed, ow
   }
 });
 
+const REPLY_SEND_FIXTURE_PRELUDE = `
+  import type { GatewayRouteServices } from "../services/gateway-route-services.js";
+
+  interface FastifyReply<TPayload = unknown> {
+    send(payload?: TPayload): FastifyReply<TPayload>;
+    code(statusCode: number): FastifyReply<TPayload>;
+    status(statusCode: number): FastifyReply<TPayload>;
+    header(name: string, value: string): FastifyReply<TPayload>;
+  }
+  interface Learning {
+    id: string;
+  }
+  interface EngineeringLearningService {
+    get(id: string): Promise<Learning>;
+    findOverlaps(id: string): Promise<Learning[]>;
+    list(): Promise<Learning[]>;
+    refreshAll(): Promise<number>;
+    describe(id: string): Learning;
+  }
+  declare const fastify: {
+    gatewayRuntime: { engineeringLearningService: EngineeringLearningService };
+    services: GatewayRouteServices;
+  };
+  declare const reply: FastifyReply;
+  declare const service: EngineeringLearningService;
+`;
+
+test("reply-send scan flags Promise payloads passed directly or nested in Fastify reply.send", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-async-gateway-reply-send-"));
+  try {
+    await writeRoutePortFixture(repoRoot);
+    await writeFile(
+      path.join(repoRoot, "apps", "gateway", "src", "routes", "learnings.ts"),
+      `
+        ${REPLY_SEND_FIXTURE_PRELUDE}
+
+        export async function directRuntimeRead(id: string): Promise<unknown> {
+          return reply.send(fastify.gatewayRuntime.engineeringLearningService.get(id));
+        }
+        export async function nestedItems(id: string): Promise<unknown> {
+          return reply.send({ items: service.findOverlaps(id) });
+        }
+        export async function codeChained(): Promise<unknown> {
+          return reply.code(201).send(service.list());
+        }
+        export async function longChainNested(): Promise<unknown> {
+          return reply.status(200).header("cache-control", "no-store").send({ staleCount: service.refreshAll() });
+        }
+        export async function statementSend(id: string): Promise<void> {
+          reply.send(service.get(id));
+        }
+        export async function pendingVariable(id: string): Promise<unknown> {
+          const pending = service.get(id);
+          return reply.send(pending);
+        }
+        export async function shorthandProperty(): Promise<unknown> {
+          const items = service.list();
+          return reply.send({ items });
+        }
+        export async function deeplyNested(id: string): Promise<unknown> {
+          return reply.send({ data: { learning: service.get(id) }, items: [service.get(id)] });
+        }
+        export async function conditionalPayload(id: string, enabled: boolean): Promise<unknown> {
+          return reply.send(enabled ? service.get(id) : undefined);
+        }
+        export async function selectedLiteralPayloads(
+          id: string,
+          enabled: boolean,
+          cached: { learning: Learning } | undefined,
+        ): Promise<unknown> {
+          reply.send(enabled ? { items: service.list() } : { items: [] });
+          return reply.send(cached ?? { learning: service.get(id) });
+        }
+        export async function helperReply(target: FastifyReply, id: string): Promise<unknown> {
+          return target.code(200).send({ learning: (service.get(id)) as Promise<Learning> });
+        }
+        export async function routePortAlreadyFlagged(id: string): Promise<unknown> {
+          return reply.send({ report: fastify.services.reports.exportReport(id) });
+        }
+      `,
+      "utf8",
+    );
+
+    const result = await verifyAsyncGatewayBoundary({ repoRoot });
+    const replySendDiagnostics = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "promise_sent_to_fastify_reply",
+    );
+    assert.equal(replySendDiagnostics.length, 13);
+    assert.ok(replySendDiagnostics.every((diagnostic) => diagnostic.filePath.endsWith("routes/learnings.ts")));
+    assert.ok(replySendDiagnostics.some((diagnostic) => diagnostic.message.includes("serializes")));
+
+    // The class-typed route-service call is owned by the route-port rule; the
+    // reply-send rule must not report the same Promise a second time.
+    const routePortDiagnostics = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "unawaited_route_service_call",
+    );
+    assert.equal(routePortDiagnostics.length, 1);
+    assert.ok(routePortDiagnostics[0]?.message.includes("reports.exportReport"));
+    assert.ok(
+      replySendDiagnostics.every((diagnostic) => diagnostic.line !== routePortDiagnostics[0]?.line),
+      "a route-port finding must not be double-reported as a reply-send finding",
+    );
+    assert.equal(result.diagnostics.length, 14);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("reply-send scan allows awaited, resolved, synchronous, and non-reply payload shapes", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-async-gateway-reply-send-ok-"));
+  try {
+    await writeRoutePortFixture(repoRoot);
+    await writeFile(
+      path.join(repoRoot, "apps", "gateway", "src", "routes", "learnings-ok.ts"),
+      `
+        ${REPLY_SEND_FIXTURE_PRELUDE}
+
+        export async function awaitedDirect(id: string): Promise<unknown> {
+          return reply.send(await fastify.gatewayRuntime.engineeringLearningService.get(id));
+        }
+        export async function awaitedNested(id: string): Promise<unknown> {
+          return reply.send({ items: await service.findOverlaps(id) });
+        }
+        export async function awaitedCodeChained(): Promise<unknown> {
+          return reply.code(201).send(await service.list());
+        }
+        export async function awaitedVariable(id: string): Promise<unknown> {
+          const learning = await service.get(id);
+          return reply.send({ learning });
+        }
+        export async function awaitedDeferredPending(id: string): Promise<unknown> {
+          const pending = service.get(id);
+          return reply.send({ learning: await pending });
+        }
+        export async function awaitedCombinator(id: string): Promise<unknown> {
+          const [learning, items] = await Promise.all([service.get(id), service.list()]);
+          return reply.send({ learning, items, count: (await service.refreshAll()) + 1 });
+        }
+        export async function sendInsideThen(id: string): Promise<unknown> {
+          return service.get(id).then((learning) => reply.send({ learning }));
+        }
+        export async function returnedPromise(id: string): Promise<Learning> {
+          return service.get(id);
+        }
+        export async function awaitedSelectedLiteralPayloads(
+          id: string,
+          enabled: boolean,
+          cached: { learning: Learning } | undefined,
+        ): Promise<unknown> {
+          reply.send(enabled ? { items: await service.list() } : { items: [] });
+          return reply.send(cached ?? { learning: await service.get(id) });
+        }
+        export function synchronousPayload(id: string): unknown {
+          return reply.send({ learning: service.describe(id), items: [service.describe(id)] });
+        }
+        export function emptyAndLiteralPayloads(): unknown {
+          reply.code(204).send();
+          return reply.send({ ok: true, nested: { values: [1, 2, 3] } });
+        }
+      `,
+      "utf8",
+    );
+
+    const result = await verifyAsyncGatewayBoundary({ repoRoot });
+    assert.deepEqual(result.diagnostics, []);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("route-port scan fails loud when an any-typed port method has no scanner-visible builder", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-async-gateway-route-ports-unmapped-"));
   const gatewayRoot = path.join(repoRoot, "apps", "gateway");
