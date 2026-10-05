@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThreadList } from "./ThreadList";
 
 vi.mock("./use-thread-activity", () => ({
-  useThreadActivity: () => ({ records: {}, loading: false, refresh: vi.fn() }),
+  useThreadActivity: () => ({}),
 }));
 
 let root: Root;

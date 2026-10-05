@@ -313,6 +313,8 @@ export async function fetchChatSessions(
     limit?: number;
     cursor?: string;
     includeHidden?: boolean;
+    /** Ask for each session's turn activity, so a list can show status without one read per row. */
+    includeActivity?: boolean;
   },
   options: { signal?: AbortSignal } = {},
 ): Promise<ChatSessionsResponse> {
@@ -328,6 +330,7 @@ export async function fetchChatSessions(
   if (input?.view) query.set("view", input.view);
   if (input?.mode) query.set("mode", input.mode);
   if (input?.includeHidden !== undefined) query.set("includeHidden", String(input.includeHidden));
+  if (input?.includeActivity) query.set("includeActivity", "true");
   query.set("limit", String(input?.limit ?? 200));
   if (input?.cursor) query.set("cursor", input.cursor);
   return request<ChatSessionsResponse>(

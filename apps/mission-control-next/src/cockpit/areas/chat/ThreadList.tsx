@@ -1,9 +1,5 @@
-import { useCallback, useMemo, useState } from "react";
-import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
-import type { ListRange } from "react-virtuoso";
 import { WindowedRecordList } from "../../ui/WindowedRecordList";
 import { useThreadActivity } from "./use-thread-activity";
-import { THREAD_ACTIVITY_WINDOW_LIMIT } from "./thread-activity";
 import { ThreadRowStatus } from "./ThreadRowStatus";
 import type { MissionThreadedSessionRailData } from "@goatcitadel/threaded-surface-core";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
@@ -17,17 +13,8 @@ export function ThreadList({
   projectOptions?: readonly ChatProjectFilterOption[];
 }) {
   const sessions = rail.missionSessions;
-  const railVisible = useMediaQuery("(width >= 1024px)");
-  const [range, setRange] = useState<ListRange>({ startIndex: 0, endIndex: -1 });
-  const visibleIds = useMemo(
-    () =>
-      sessions
-        .slice(range.startIndex, Math.min(range.endIndex + 1, range.startIndex + THREAD_ACTIVITY_WINDOW_LIMIT))
-        .map((session) => session.sessionId),
-    [sessions, range],
-  );
-  const activity = useThreadActivity(railVisible ? visibleIds : []);
-  const updateRange = useCallback((next: ListRange) => setRange(next), []);
+  // Status comes with the sessions list, so the rail makes no request of its own.
+  const activity = useThreadActivity(sessions);
   return (
     <aside
       aria-label="Conversations"
@@ -45,15 +32,6 @@ export function ThreadList({
             {rail.creatingSession ? "Creating…" : "New"}
           </button>
         </div>
-        <button
-          type="button"
-          disabled={activity.loading || !visibleIds.length}
-          onClick={() => void activity.refresh()}
-          aria-busy={activity.loading || undefined}
-          className="text-xs text-fg-muted hover:text-accent disabled:opacity-60"
-        >
-          Refresh visible status
-        </button>
         <ChatConversationFilters rail={rail} projectOptions={projectOptions} />
         <div className="flex gap-1" aria-label="Conversation history">
           {(["active", "archived"] as const).map((view) => (
@@ -77,7 +55,6 @@ export function ThreadList({
             label="Recent conversations"
             threshold={0}
             className="h-full min-h-0"
-            onVisibleRangeChange={updateRange}
           >
             {(session) => (
               <button
@@ -91,10 +68,7 @@ export function ThreadList({
                   <span className="block truncate text-xs text-fg-muted">
                     {session.projectName ?? humanizeToken(session.lifecycleStatus)}
                   </span>
-                  <ThreadRowStatus
-                    record={activity.records[session.sessionId]}
-                    checking={activity.checking.has(session.sessionId)}
-                  />
+                  <ThreadRowStatus record={activity[session.sessionId]} />
                 </span>
               </button>
             )}

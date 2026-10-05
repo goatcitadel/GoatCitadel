@@ -322,6 +322,7 @@ export function useChatSessionData(input: {
                 workspaceId,
                 cursor,
                 mode: surfaceMode,
+                includeActivity: true,
               });
           if (!isCurrent()) return;
           setSessions((current) => {
@@ -385,6 +386,7 @@ export function useChatSessionData(input: {
                     limit: sessionLimit,
                     workspaceId,
                     mode: surfaceMode,
+                    includeActivity: true,
                   }),
             ]);
             return { projects, sessions };

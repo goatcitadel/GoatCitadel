@@ -9,10 +9,10 @@ const TONE_DOT: Readonly<Record<ThreadActivityRecord["tone"], string>> = {
   neutral: "bg-fg-muted",
 };
 
-/** One row's status: checking only before the first answer, then the last answer, dated once stale. */
-export function ThreadRowStatus({ record, checking }: { record?: ThreadActivityRecord; checking: boolean }) {
+/** One row's status from the sessions list, dated once it is no longer known to be current. */
+export function ThreadRowStatus({ record }: { record?: ThreadActivityRecord }) {
   const shown = record ?? UNKNOWN_THREAD_ACTIVITY;
-  const label = record ? threadActivityLabel(record) : checking ? "Checking status" : UNKNOWN_THREAD_ACTIVITY.label;
+  const label = threadActivityLabel(shown);
   return (
     <span
       className="flex items-center gap-1 text-xs text-fg-muted"

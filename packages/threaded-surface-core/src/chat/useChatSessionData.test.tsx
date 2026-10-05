@@ -272,6 +272,8 @@ describe("useChatSessionData", () => {
       view: "active",
       limit: 100,
       workspaceId: "workspace-bootstrap",
+      // The rail shows each conversation's status from the list itself, not one status read per row.
+      includeActivity: true,
     });
     expect(fetchSettingsMock).toHaveBeenCalledTimes(1);
     expect(fetchChatCommandCatalogMock).toHaveBeenCalledTimes(1);
@@ -555,6 +557,7 @@ describe("useChatSessionData", () => {
       limit: 100,
       workspaceId: "workspace-pagination",
       cursor: "cursor-page-2",
+      includeActivity: true,
     });
     expect(latestHarness?.result.sessions?.items.map((item) => item.sessionId)).toEqual([
       "session-1",
