@@ -8,21 +8,41 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboxRunRecovery } from "./InboxRunRecovery";
 
 const api = vi.hoisted(() => ({
-  fetchDurableRun: vi.fn(), fetchDurableDeadLetters: vi.fn(), retryDurableRun: vi.fn(), recoverDurableDeadLetter: vi.fn(),
+  fetchDurableRun: vi.fn(),
+  fetchDurableDeadLetters: vi.fn(),
+  retryDurableRun: vi.fn(),
+  recoverDurableDeadLetter: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/durable", () => api);
 
 const run: DurableRunRecord = {
-  runId: "run-a", workflowKey: "maintenance.repair", status: "failed", attemptCount: 1, maxAttempts: 3,
-  version: 4, payload: { workspaceId: "default" }, createdAt: "2026-09-28T00:00:00Z", updatedAt: "2026-09-28T01:00:00Z",
+  runId: "run-a",
+  workflowKey: "maintenance.repair",
+  status: "failed",
+  attemptCount: 1,
+  maxAttempts: 3,
+  version: 4,
+  payload: { workspaceId: "default" },
+  createdAt: "2026-09-28T00:00:00Z",
+  updatedAt: "2026-09-28T01:00:00Z",
 };
 const item: OperatorInboxItem = {
-  id: "failed_run:run-a", kind: "failed_run", group: "needs_attention", title: "Recover failed run", summary: "Failed",
-  createdAt: run.createdAt, updatedAt: run.updatedAt, source: { workspaceId: "default", runId: run.runId },
+  id: "failed_run:run-a",
+  kind: "failed_run",
+  group: "needs_attention",
+  title: "Recover failed run",
+  summary: "Failed",
+  createdAt: run.createdAt,
+  updatedAt: run.updatedAt,
+  source: { workspaceId: "default", runId: run.runId },
   href: "/ops/runtime?runId=run-a",
 };
 const letter: DurableDeadLetterRecord = {
-  deadLetterId: "dead-a", runId: run.runId, reason: "Stopped", payload: {}, createdAt: "2026-09-28T02:00:00Z",
+  deadLetterId: "dead-a",
+  runId: run.runId,
+  reason: "Stopped",
+  payload: {},
+  createdAt: "2026-09-28T02:00:00Z",
 };
 
 let root: Root;
@@ -39,13 +59,22 @@ beforeEach(() => {
   root = createRoot(container);
 });
 
-afterEach(() => { act(() => root.unmount()); container.remove(); });
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+});
 
 async function renderRecovery(inboxItem = item) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  await act(async () => root.render(<QueryClientProvider client={client}><UiPreferencesProvider>
-    <InboxRunRecovery item={inboxItem} workspaceId="default" />
-  </UiPreferencesProvider></QueryClientProvider>));
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <UiPreferencesProvider>
+          <InboxRunRecovery item={inboxItem} workspaceId="default" />
+        </UiPreferencesProvider>
+      </QueryClientProvider>,
+    ),
+  );
   await act(async () => {
     await api.fetchDurableRun.mock.results[0]?.value;
     if (inboxItem.kind === "dead_letter") await api.fetchDurableDeadLetters.mock.results[0]?.value;
@@ -92,8 +121,13 @@ describe("Inbox run recovery", () => {
   });
 
   it("recovers only the exact unresolved dead letter", async () => {
-    const deadItem: OperatorInboxItem = { ...item, id: "dead_letter:dead-a", kind: "dead_letter",
-      createdAt: letter.createdAt, source: { ...item.source, deadLetterId: "dead-a" } };
+    const deadItem: OperatorInboxItem = {
+      ...item,
+      id: "dead_letter:dead-a",
+      kind: "dead_letter",
+      createdAt: letter.createdAt,
+      source: { ...item.source, deadLetterId: "dead-a" },
+    };
     api.fetchDurableRun.mockResolvedValue({ ...run, status: "dead_lettered" });
     await renderRecovery(deadItem);
     await act(async () => button("Recover run").click());

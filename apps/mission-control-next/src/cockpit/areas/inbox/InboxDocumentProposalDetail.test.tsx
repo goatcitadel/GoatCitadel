@@ -7,9 +7,15 @@ import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboxDocumentProposalDetail } from "./InboxDocumentProposalDetail";
 
-const api = vi.hoisted(() => ({ fetchOperatorInbox: vi.fn(), listDocumentPatchProposals: vi.fn(),
-  applyDocumentPatchProposal: vi.fn(), rejectDocumentPatchProposal: vi.fn() }));
-vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({ fetchOperatorInbox: api.fetchOperatorInbox }));
+const api = vi.hoisted(() => ({
+  fetchOperatorInbox: vi.fn(),
+  listDocumentPatchProposals: vi.fn(),
+  applyDocumentPatchProposal: vi.fn(),
+  rejectDocumentPatchProposal: vi.fn(),
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({
+  fetchOperatorInbox: api.fetchOperatorInbox,
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
   listDocumentPatchProposals: api.listDocumentPatchProposals,
   applyDocumentPatchProposal: api.applyDocumentPatchProposal,
@@ -17,25 +23,44 @@ vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
 }));
 
 const item: OperatorInboxItem = {
-  id: "document_proposal:proposal-a", kind: "document_proposal", group: "proposals", title: "Review note edit",
+  id: "document_proposal:proposal-a",
+  kind: "document_proposal",
+  group: "proposals",
+  title: "Review note edit",
   summary: "A proposed document patch is waiting for review. Open its diff before applying it.",
-  createdAt: "2026-09-28T00:00:00Z", updatedAt: "2026-09-28T00:01:00Z",
+  createdAt: "2026-09-28T00:00:00Z",
+  updatedAt: "2026-09-28T00:01:00Z",
   source: { workspaceId: "default", proposalId: "proposal-a", sessionId: "session-a", turnId: "turn-a" },
   href: "/chat?sessionId=session-a&shell=classic",
 };
 const proposal: DocumentPatchProposalRecord = {
-  proposalId: "proposal-a", schemaVersion: "document-patch-proposal.v1", workspaceId: "default",
-  sessionId: "session-a", turnId: "turn-a", targetKind: "personal_note", targetId: "note-a", baseRevision: 1,
-  proposedContent: "After", derivedDiff: "--- current\n+++ proposed\n@@ full replacement @@\n-Before\n+After",
-  authorKind: "assistant", authorId: "assistant-a", state: "pending",
-  createdAt: item.createdAt, updatedAt: item.updatedAt!,
+  proposalId: "proposal-a",
+  schemaVersion: "document-patch-proposal.v1",
+  workspaceId: "default",
+  sessionId: "session-a",
+  turnId: "turn-a",
+  targetKind: "personal_note",
+  targetId: "note-a",
+  baseRevision: 1,
+  proposedContent: "After",
+  derivedDiff: "--- current\n+++ proposed\n@@ full replacement @@\n-Before\n+After",
+  authorKind: "assistant",
+  authorId: "assistant-a",
+  state: "pending",
+  createdAt: item.createdAt,
+  updatedAt: item.updatedAt!,
 };
 const projection: OperatorInboxResponse = {
-  authority: "derived_projection", workspaceId: "default", generatedAt: "2026-09-28T00:01:00Z",
-  items: [item], coverage: [{ source: "document_proposals", state: "current" }],
+  authority: "derived_projection",
+  workspaceId: "default",
+  generatedAt: "2026-09-28T00:01:00Z",
+  items: [item],
+  coverage: [{ source: "document_proposals", state: "current" }],
   counts: {
-    needs_decision: { known: 0, complete: true }, proposals: { known: 1, complete: true },
-    needs_attention: { known: 0, complete: false }, updates: { known: 0, complete: false },
+    needs_decision: { known: 0, complete: true },
+    proposals: { known: 1, complete: true },
+    needs_attention: { known: 0, complete: false },
+    updates: { known: 0, complete: false },
   },
 };
 
@@ -46,21 +71,37 @@ beforeEach(() => {
   for (const mock of Object.values(api)) mock.mockReset();
   api.fetchOperatorInbox.mockResolvedValue(projection);
   api.listDocumentPatchProposals.mockResolvedValue({ items: [proposal] });
-  api.applyDocumentPatchProposal.mockResolvedValue({ item: { ...proposal, state: "applied", appliedTargetId: "note-a",
-    appliedRevision: 2, appliedContentHash: "hash-a" } });
+  api.applyDocumentPatchProposal.mockResolvedValue({
+    item: {
+      ...proposal,
+      state: "applied",
+      appliedTargetId: "note-a",
+      appliedRevision: 2,
+      appliedContentHash: "hash-a",
+    },
+  });
   api.rejectDocumentPatchProposal.mockResolvedValue({ item: { ...proposal, state: "rejected" } });
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
 });
 
-afterEach(() => { act(() => root.unmount()); container.remove(); });
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+});
 
 async function renderDetail(inboxItem = item) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  await act(async () => root.render(<QueryClientProvider client={client}><UiPreferencesProvider>
-    <InboxDocumentProposalDetail item={inboxItem} workspaceId="default" />
-  </UiPreferencesProvider></QueryClientProvider>));
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <UiPreferencesProvider>
+          <InboxDocumentProposalDetail item={inboxItem} workspaceId="default" />
+        </UiPreferencesProvider>
+      </QueryClientProvider>,
+    ),
+  );
   await act(async () => {
     await api.fetchOperatorInbox.mock.results[0]?.value;
     if (api.listDocumentPatchProposals.mock.results[0]) await api.listDocumentPatchProposals.mock.results[0].value;
@@ -98,8 +139,9 @@ describe("Inbox document proposal", () => {
   });
 
   it("refuses a changed diff after review", async () => {
-    api.listDocumentPatchProposals.mockResolvedValueOnce({ items: [proposal] })
-      .mockResolvedValueOnce({ items: [{ ...proposal, proposedContent: "Different", derivedDiff: "-Before\n+Different" }] });
+    api.listDocumentPatchProposals.mockResolvedValueOnce({ items: [proposal] }).mockResolvedValueOnce({
+      items: [{ ...proposal, proposedContent: "Different", derivedDiff: "-Before\n+Different" }],
+    });
     await renderDetail();
     await act(async () => button("Review apply").click());
     await act(async () => button("Confirm apply").click());
@@ -122,7 +164,9 @@ describe("Inbox document proposal", () => {
   });
 
   it("keeps an oversized diff read-only in the bounded Inbox inspector", async () => {
-    api.listDocumentPatchProposals.mockResolvedValue({ items: [{ ...proposal, derivedDiff: `-${"x".repeat(64_001)}` }] });
+    api.listDocumentPatchProposals.mockResolvedValue({
+      items: [{ ...proposal, derivedDiff: `-${"x".repeat(64_001)}` }],
+    });
     await renderDetail();
     expect(container.textContent).toContain("too large for bounded Inbox review");
     expect(container.textContent).not.toContain("Review apply");

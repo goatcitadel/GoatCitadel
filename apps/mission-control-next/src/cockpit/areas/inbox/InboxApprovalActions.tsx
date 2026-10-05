@@ -186,8 +186,8 @@ function ApprovalDecisionReview({
         <summary className="cursor-pointer font-medium text-fg-secondary">How this decision works</summary>
         <div className="mt-1 space-y-1">
           <p>
-            The current pending record is checked again before either decision. Approval alone does not prove the
-            action ran.
+            The current pending record is checked again before either decision. Approval alone does not prove the action
+            ran.
           </p>
           <p>
             To change this request, open its source and submit a new request. Editing an approval withdraws the original

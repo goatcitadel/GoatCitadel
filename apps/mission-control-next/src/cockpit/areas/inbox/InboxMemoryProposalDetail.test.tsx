@@ -13,18 +13,34 @@ const api = vi.hoisted(() => ({
   rejectTraceMemoryCandidate: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/memory", () => api);
-vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => ({ activeWorkspaceId: "workspace-a" }) }));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
+  useUiPreferences: () => ({ activeWorkspaceId: "workspace-a" }),
+}));
 
 const item: OperatorInboxItem = {
-  id: "memory_proposal:candidate-a", kind: "memory_proposal", group: "proposals", title: "Review memory proposal",
-  summary: "Use the project style guide.", createdAt: "2026-09-28T12:00:00.000Z", updatedAt: "2026-09-28T12:01:00.000Z",
-  source: { workspaceId: "workspace-a", proposalId: "candidate-a" }, href: "/library/memory?shell=classic",
+  id: "memory_proposal:candidate-a",
+  kind: "memory_proposal",
+  group: "proposals",
+  title: "Review memory proposal",
+  summary: "Use the project style guide.",
+  createdAt: "2026-09-28T12:00:00.000Z",
+  updatedAt: "2026-09-28T12:01:00.000Z",
+  source: { workspaceId: "workspace-a", proposalId: "candidate-a" },
+  href: "/library/memory?shell=classic",
 };
 const candidate: TraceMemoryCandidateRecord = {
-  candidateId: "candidate-a", workspaceId: "workspace-a", candidateType: "repo_fact", status: "proposed",
-  sourceText: "A project discussion", proposedInsight: "Use the project style guide.", confidence: 0.9,
-  sourceRefs: [{ sourceType: "session", sourceRef: "session-a" }], authority: "agent_proposed", dedupeKey: "key-a",
-  createdAt: "2026-09-28T12:00:00.000Z", updatedAt: "2026-09-28T12:01:00.000Z",
+  candidateId: "candidate-a",
+  workspaceId: "workspace-a",
+  candidateType: "repo_fact",
+  status: "proposed",
+  sourceText: "A project discussion",
+  proposedInsight: "Use the project style guide.",
+  confidence: 0.9,
+  sourceRefs: [{ sourceType: "session", sourceRef: "session-a" }],
+  authority: "agent_proposed",
+  dedupeKey: "key-a",
+  createdAt: "2026-09-28T12:00:00.000Z",
+  updatedAt: "2026-09-28T12:01:00.000Z",
 };
 
 let root: Root;
@@ -37,12 +53,20 @@ function button(label: string): HTMLButtonElement {
 }
 
 async function settle() {
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 }
 
 beforeEach(() => {
   api.fetchTraceMemoryCandidates.mockReset().mockResolvedValue({ items: [candidate] });
-  api.promoteTraceMemoryCandidate.mockReset().mockResolvedValue({ learningId: "learning-a", workspaceId: "workspace-a", status: "trusted", insight: candidate.proposedInsight, sourceRefs: candidate.sourceRefs });
+  api.promoteTraceMemoryCandidate.mockReset().mockResolvedValue({
+    learningId: "learning-a",
+    workspaceId: "workspace-a",
+    status: "trusted",
+    insight: candidate.proposedInsight,
+    sourceRefs: candidate.sourceRefs,
+  });
   api.rejectTraceMemoryCandidate.mockReset().mockResolvedValue({ ...candidate, status: "rejected" });
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -56,23 +80,46 @@ afterEach(() => {
 
 async function render() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  await act(async () => root.render(<QueryClientProvider client={client}><InboxMemoryProposalDetail item={item} workspaceId="workspace-a" /></QueryClientProvider>));
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <InboxMemoryProposalDetail item={item} workspaceId="workspace-a" />
+      </QueryClientProvider>,
+    ),
+  );
   await settle();
 }
 
 describe("Inbox memory proposal review", () => {
   it("requires the exact proposed workspace record", () => {
     expect(canResolveInboxMemoryProposal(item, candidate, candidate, "workspace-a")).toBe(true);
-    expect(canResolveInboxMemoryProposal(item, candidate, { ...candidate, proposedInsight: "Changed" }, "workspace-a")).toBe(false);
-    expect(canResolveInboxMemoryProposal(item, candidate, { ...candidate, workspaceId: "workspace-b" }, "workspace-a")).toBe(false);
-    expect(canResolveInboxMemoryProposal(item, candidate, { ...candidate, status: "promoted" }, "workspace-a")).toBe(false);
-    expect(canResolveInboxMemoryProposal({ ...item, source: { workspaceId: "workspace-a", proposalId: "other" } }, candidate, candidate, "workspace-a")).toBe(false);
+    expect(
+      canResolveInboxMemoryProposal(item, candidate, { ...candidate, proposedInsight: "Changed" }, "workspace-a"),
+    ).toBe(false);
+    expect(
+      canResolveInboxMemoryProposal(item, candidate, { ...candidate, workspaceId: "workspace-b" }, "workspace-a"),
+    ).toBe(false);
+    expect(canResolveInboxMemoryProposal(item, candidate, { ...candidate, status: "promoted" }, "workspace-a")).toBe(
+      false,
+    );
+    expect(
+      canResolveInboxMemoryProposal(
+        { ...item, source: { workspaceId: "workspace-a", proposalId: "other" } },
+        candidate,
+        candidate,
+        "workspace-a",
+      ),
+    ).toBe(false);
   });
 
   it("shows the current proposal and confirms promotion after a fresh owner read", async () => {
     await render();
     expect(container.textContent).toContain("Proposed insight: Use the project style guide.");
-    expect(api.fetchTraceMemoryCandidates).toHaveBeenCalledWith({ workspaceId: "workspace-a", status: "proposed", limit: 500 });
+    expect(api.fetchTraceMemoryCandidates).toHaveBeenCalledWith({
+      workspaceId: "workspace-a",
+      status: "proposed",
+      limit: 500,
+    });
     await act(async () => button("Promote to memory").click());
     expect(api.promoteTraceMemoryCandidate).not.toHaveBeenCalled();
     await act(async () => button("Confirm promotion").click());
@@ -105,7 +152,13 @@ describe("Inbox memory proposal review", () => {
 
   it("treats a mismatched mutation response as uncertain", async () => {
     await render();
-    api.promoteTraceMemoryCandidate.mockResolvedValueOnce({ learningId: "learning-b", workspaceId: "workspace-b", status: "trusted", insight: candidate.proposedInsight, sourceRefs: candidate.sourceRefs });
+    api.promoteTraceMemoryCandidate.mockResolvedValueOnce({
+      learningId: "learning-b",
+      workspaceId: "workspace-b",
+      status: "trusted",
+      insight: candidate.proposedInsight,
+      sourceRefs: candidate.sourceRefs,
+    });
     await act(async () => button("Promote to memory").click());
     await act(async () => button("Confirm promotion").click());
     await settle();
