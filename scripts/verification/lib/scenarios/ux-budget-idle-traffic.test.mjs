@@ -5,8 +5,10 @@ import {
   IDLE_TRAFFIC_BUDGETS,
   countGatewayRequests,
   countRequestsByPath,
+  createIdleTrafficConversation,
   evaluateRequestBudget,
   gatewayRequestPath,
+  waitUntil,
 } from "./ux-budget-idle-traffic.mjs";
 
 const gateway = "http://127.0.0.1:18787";
@@ -72,11 +74,50 @@ describe("Gateway request filter", () => {
   });
 });
 
+describe("idle-traffic helpers", () => {
+  it("creates a dedicated conversation in the fixture workspace", async () => {
+    const calls = [];
+    const requestJson = async (base, route, init) => {
+      calls.push({ base, route, init });
+      return { ok: true, status: 200, body: { sessionId: "s-idle" } };
+    };
+    const assertOk = (result) => assert.ok(result.ok);
+    const sessionId = await createIdleTrafficConversation({ requestJson, assertOk }, gateway, "w-1");
+    assert.equal(sessionId, "s-idle");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].route, "/api/v1/chat/sessions");
+    assert.equal(calls[0].init.method, "POST");
+    assert.equal(calls[0].init.body.workspaceId, "w-1");
+  });
+
+  it("fails when the Gateway returns no conversation", async () => {
+    const requestJson = async () => ({ ok: true, status: 200, body: {} });
+    await assert.rejects(
+      createIdleTrafficConversation({ requestJson, assertOk: () => undefined }, gateway, "w-1"),
+      /no conversation/u,
+    );
+  });
+
+  it("waits until a condition holds and reports a timeout", async () => {
+    const page = { waitForTimeout: async () => undefined };
+    let polls = 0;
+    await waitUntil(page, async () => ++polls >= 3, "never");
+    assert.equal(polls, 3);
+    await assert.rejects(
+      waitUntil(page, async () => false, "Send never became available", 2),
+      /Send never/u,
+    );
+  });
+});
+
 describe("idle-traffic scenarios", () => {
   it("registers the three rule 17 scenarios", async () => {
     const { readFileSync } = await import("node:fs");
     const source = readFileSync(new URL("./ux-budget-idle-traffic.mjs", import.meta.url), "utf8");
     for (const id of ["two-tabs", "chat-turn-elsewhere", "open-chat"])
       assert.ok(source.includes(`id: "ux-budgets.idle-traffic.${id}"`), id);
+    // The turn runs in its own conversation, and Send is clicked only once it is available.
+    assert.ok(source.includes("createIdleTrafficConversation(deps, stack.gatewayUrl, fixture.workspaceId)"));
+    assert.ok(source.includes("waitUntil(chatPage, () => send.isEnabled()"));
   });
 });

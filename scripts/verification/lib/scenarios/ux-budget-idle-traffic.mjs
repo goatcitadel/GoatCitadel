@@ -73,6 +73,30 @@ export function countRequestsByPath(paths) {
   return Object.fromEntries(Object.entries(counts).sort(([left], [right]) => left.localeCompare(right)));
 }
 
+/** Polls `predicate` until it holds; throws `message` after `attempts` tries. */
+export async function waitUntil(page, predicate, message, attempts = 80) {
+  for (let index = 0; index < attempts; index += 1) {
+    if (await predicate()) return;
+    await page.waitForTimeout(250);
+  }
+  throw new Error(message);
+}
+
+/**
+ * A conversation of its own for the turn: the shared seeded one may still be mid-turn from an earlier
+ * scenario, which leaves Send unavailable.
+ */
+export async function createIdleTrafficConversation({ requestJson, assertOk }, gatewayUrl, workspaceId) {
+  const created = await requestJson(gatewayUrl, "/api/v1/chat/sessions", {
+    method: "POST",
+    body: { workspaceId, title: "Idle traffic check", mode: "chat" },
+  });
+  assertOk(created, "create the idle-traffic conversation");
+  const sessionId = created.body?.sessionId;
+  if (!sessionId) throw new Error("The Gateway returned no conversation for the idle-traffic turn.");
+  return sessionId;
+}
+
 async function waitForMoreText(page, text, before, timeout) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
@@ -102,9 +126,9 @@ export async function runUxBudgetIdleTraffic(environment) {
     return browserContext;
   }
 
-  async function openChat(page) {
+  async function openChat(page, sessionId = fixture.sessionId) {
     await page.goto(
-      buildVerificationUiUrl(stack.uiUrl, `/chat?sessionId=${encodeURIComponent(fixture.sessionId)}&shell=cockpit`),
+      buildVerificationUiUrl(stack.uiUrl, `/chat?sessionId=${encodeURIComponent(sessionId)}&shell=cockpit`),
       { waitUntil: "domcontentloaded" },
     );
     await page.waitForSelector('[aria-label="Messages"]', { timeout: 30_000 });
@@ -178,15 +202,18 @@ export async function runUxBudgetIdleTraffic(environment) {
     async () => {
       const browserContext = await newCockpitContext();
       try {
+        const sessionId = await createIdleTrafficConversation(deps, stack.gatewayUrl, fixture.workspaceId);
         const chatPage = await browserContext.newPage();
         const inboxPage = await browserContext.newPage();
-        await openChat(chatPage);
+        await openChat(chatPage, sessionId);
         await openInbox(inboxPage);
         await chatPage.waitForTimeout(SETTLE_MS);
         const replies = await chatPage.getByText("UX_BUDGET_OK").count();
         const inboxCounter = countGatewayRequests(inboxPage, stack.gatewayUrl, counterOptions);
         await chatPage.getByRole("textbox", { name: "Message", exact: true }).fill("Idle traffic check");
-        await chatPage.getByRole("button", { name: "Send", exact: true }).click();
+        const send = chatPage.getByRole("button", { name: "Send", exact: true });
+        await waitUntil(chatPage, () => send.isEnabled(), "Send never became available for the idle-traffic turn");
+        await send.click();
         await waitForMoreText(chatPage, "UX_BUDGET_OK", replies, 60_000);
         await chatPage.waitForTimeout(AFTER_REPLY_MS);
         return await report("chat-turn-elsewhere", {
