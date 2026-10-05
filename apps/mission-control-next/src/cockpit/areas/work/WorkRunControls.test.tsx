@@ -166,7 +166,7 @@ describe("Work run controls", () => {
     });
     await renderControls();
     expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Retry")).toBe(false);
-    expect(container.textContent).toContain("new mutation instead of manual replay");
+    expect(container.textContent).toContain("can't be retried from here. Send the request again in its conversation.");
   });
 
   it("recovers the exact unresolved dead letter only after a fresh owner read", async () => {

@@ -210,7 +210,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
       {run && available.length === 0 && !(run.status === "dead_lettered" && !deadLetter) ? (
         <p className="text-fg-muted">
           {admittedChatNeedsNewMutation
-            ? "This admitted Chat run needs a new mutation instead of manual replay."
+            ? "This Chat reply can't be retried from here. Send the request again in its conversation."
             : "No direct control is available from this run state or workspace."}{" "}
           See its full record in Ops.
         </p>
