@@ -3,6 +3,7 @@ import type { ArtifactDesignPlan } from "./artifact-design.js";
 import {
   PdfDocumentWriter,
   PdfPage,
+  countWinAnsiLoss,
   measureWinAnsi,
   mixPdfColors,
   pdfColor,
@@ -39,6 +40,8 @@ const BODY_BOTTOM = 486;
 const BODY_MIN_SIZE = 16;
 const SOURCE_MIN_SIZE = 12;
 const MAX_IMAGE_EDGE = 1600;
+const MAX_LOST_SHARE = 0.2;
+const MIN_LOST_TO_REJECT = 5;
 
 export interface PresentationPdfInput {
   title: string;
@@ -77,11 +80,12 @@ export async function createPresentationPdf(input: PresentationPdfInput): Promis
     { title: input.title, bullets: input.subtitle ? [input.subtitle] : [] },
     ...input.slides,
   ];
+  const warnings: string[] = [];
+  assertLatinRenderable(deckSlides, warnings);
   const writer = new PdfDocumentWriter();
   const catalogId = writer.reserve();
   const pagesId = writer.reserve();
   const fonts = writer.addStandardFonts();
-  const warnings: string[] = [];
   const images = await embedVisuals(writer, input, theme, warnings);
   const layout = resolvePresentationDeckLayoutPlan(input.design, deckSlides, new Set(images.keys()));
   const pageIds = deckSlides.map((slide, index) => {
@@ -118,6 +122,30 @@ export async function createPresentationPdf(input: PresentationPdfInput): Promis
     warnings,
     usedAssetIds: ["renderer-generated-visual", "built-in-shapes-icons"],
   };
+}
+
+/**
+ * The PDF uses the standard Latin (WinAnsi) Helvetica faces. Mostly non-Latin
+ * decks would render as "?" glyphs, so they fail before writing; a few lost
+ * characters (emoji, stray symbols) are disclosed as a warning instead.
+ */
+function assertLatinRenderable(slides: readonly PresentationSlide[], warnings: string[]): void {
+  const text = slides.flatMap((slide) => [
+    slide.title,
+    ...slide.bullets.map(presentationBulletText),
+    ...(slide.table ? [...slide.table.headers, ...slide.table.rows.flat()].map((cell) => cell.text) : []),
+    ...(slide.chart ? [...slide.chart.categories, ...slide.chart.series.map((series) => series.name)] : []),
+  ]);
+  const { lost, visible } = countWinAnsiLoss(text.join("\n"));
+  if (lost === 0) return;
+  if (lost >= MIN_LOST_TO_REJECT && lost / Math.max(1, visible) > MAX_LOST_SHARE) {
+    throw new Error(
+      `PDF decks support Latin-script text only, and ${lost} of ${visible} characters cannot be shown; use format "pptx" for this content.`,
+    );
+  }
+  warnings.push(
+    `${lost} character(s) outside the PDF's Latin character set (such as emoji or non-Latin script) were replaced or dropped.`,
+  );
 }
 
 function resolveTheme(design: ArtifactDesignPlan): PdfDeckTheme {
@@ -368,8 +396,13 @@ function drawSources(context: SlideContext): void {
 }
 
 function drawDataSlide(context: SlideContext): void {
-  drawContentTitle(context);
   const { page, theme, slide } = context;
+  if (!slide.table && !slide.chart) {
+    // A matrix/chart archetype without data keeps its full bullet list.
+    drawStacked(context);
+    return;
+  }
+  drawContentTitle(context);
   let top = BODY_TOP;
   if (slide.bullets.length > 0) {
     const introHeight = 54;

@@ -7,7 +7,7 @@ import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ToolPolicyConfig } from "@goatcitadel/contracts";
 import { createArtifactDesignPlan } from "./artifact-design.js";
-import { measureWinAnsi, toWinAnsiBytes, wrapWinAnsi } from "./pdf-writer.js";
+import { countWinAnsiLoss, measureWinAnsi, toWinAnsiBytes, wrapWinAnsi } from "./pdf-writer.js";
 import { createPresentationPdf } from "./presentation-pdf.js";
 import type { PresentationSlide, PresentationSource } from "./presentation-model.js";
 import { executeArtifactTool } from "./tool-executor/artifact-executor.js";
@@ -33,6 +33,20 @@ const SOURCES: PresentationSource[] = [
 describe("pdf writer text primitives", () => {
   it("encodes typographic punctuation as WinAnsi bytes and drops pictographs", () => {
     expect(toWinAnsiBytes("“Hi” – café 🎉 → ok")).toBe("\x93Hi\x94 \x96 caf\xe9  -> ok");
+  });
+
+  it("splits a very long unbroken token in linear time", () => {
+    const token = "x".repeat(20_000);
+    const started = performance.now();
+    const lines = wrapWinAnsi(token, "regular", 16, 300);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(lines.join("")).toBe(token);
+    for (const line of lines) expect(measureWinAnsi(line, "regular", 16)).toBeLessThanOrEqual(300);
+  });
+
+  it("counts characters WinAnsi cannot show", () => {
+    expect(countWinAnsiLoss("café – “ok”")).toEqual({ lost: 0, visible: 9 });
+    expect(countWinAnsiLoss("Привет 🎉")).toEqual({ lost: 7, visible: 7 });
   });
 
   it("measures with Helvetica metrics and wraps within the width", () => {
@@ -148,6 +162,43 @@ describe("createPresentationPdf", () => {
     expect(result.warnings.join(" ")).toMatch(/Skipped the visual for slide 1/u);
     expect(result.buffer.toString("latin1")).not.toContain("/Subtype /Image");
     expect(result.manifest.visualCount).toBe(0);
+  });
+
+  it("keeps every bullet on a matrix slide that has no table data", async () => {
+    const bullets = ["First venue closes at 7 PM.", "Second venue closes at 9 PM.", "Third venue stays open late."];
+    const slides: PresentationSlide[] = [{ title: "Venues", archetype: "matrix", bullets }];
+
+    const result = await createPresentationPdf({
+      title: "Matrix Without Data",
+      slides,
+      sources: [],
+      design: designFor("Matrix Without Data", slides),
+    });
+
+    const text = contentStreams(result.buffer).join("\n");
+    for (const bullet of bullets) expect(text).toContain(`(${bullet})`);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("discloses dropped emoji but rejects a mostly non-Latin deck", async () => {
+    const emojiSlides: PresentationSlide[] = [{ title: "Party Plan 🎉", bullets: ["Bring snacks and music."] }];
+    const emoji = await createPresentationPdf({
+      title: "Party",
+      slides: emojiSlides,
+      sources: [],
+      design: designFor("Party", emojiSlides),
+    });
+    expect(emoji.warnings.join(" ")).toMatch(/1 character\(s\) outside the PDF's Latin character set/u);
+
+    const russianSlides: PresentationSlide[] = [{ title: "Планы на вечер", bullets: ["Ужин и кино в центре города."] }];
+    await expect(
+      createPresentationPdf({
+        title: "Вечер",
+        slides: russianSlides,
+        sources: [],
+        design: designFor("Вечер", russianSlides),
+      }),
+    ).rejects.toThrow("PDF decks support Latin-script text only");
   });
 
   it("warns instead of overflowing when a slide holds more text than fits", async () => {

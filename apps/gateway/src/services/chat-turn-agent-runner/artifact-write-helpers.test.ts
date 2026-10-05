@@ -77,6 +77,7 @@ describe("artifact creation intent", () => {
     "Make a slide deck and export it as a PDF.",
     "Create a PowerPoint presentation as a PDF.",
     "Build a pitch deck in PDF format.",
+    "Make slides on the launch and convert them to a PDF.",
   ])("recognizes a presentation delivered as a PDF: %s", (content) => {
     expect(detectPresentationArtifactIntent(content)).toBe(true);
     expect(detectPresentationPdfOutputIntent(content)).toBe(true);
@@ -88,6 +89,12 @@ describe("artifact creation intent", () => {
     "Make a slide deck about PDF accessibility.",
     "Create a PDF report.",
     "Summarize the PDF and make slides.",
+    "Turn this PDF into a PowerPoint.",
+    "Convert the attached PDF to slides.",
+    "Make a slide deck on PDF security.",
+    "Create a presentation for PDF users.",
+    "Make a PowerPoint, not a PDF.",
+    "Make slides summarizing what's in the PDF.",
   ])("does not treat a PDF input or non-deck PDF as a PDF deck: %s", (content) => {
     expect(detectPresentationPdfOutputIntent(content)).toBe(false);
   });

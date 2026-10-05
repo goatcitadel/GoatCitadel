@@ -2097,7 +2097,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     preferredForIntents: ["presentation", "slide_deck", "powerpoint", "artifact_output", "document_generation"],
     usageHints: [
       "Use when the user asks for PowerPoint, PPTX, slides, a slide deck, or a presentation file.",
-      'When the user wants the deck saved or exported as a PDF ("deck style, saved as a PDF"), use this tool with format "pdf" and a .pdf path instead of documents.create, so the PDF keeps the slide design.',
+      'When the user wants the deck saved or exported as a PDF ("deck style, saved as a PDF"), use this tool with format "pdf" and a .pdf path instead of documents.create, so the PDF keeps the slide design. PDF decks use standard Latin fonts; use pptx for non-Latin-script content.',
       "Do not satisfy a requested PowerPoint by returning markdown-only slide text unless this tool is unavailable or blocked.",
       "Use design.mode polished or design.preset when the user asks for a visually appealing deck.",
       "Set design.skillId to design-intelligence for non-plain decks so Design Quality V1 checks asset specificity, layout integrity, and placeholder/provenance cleanup.",

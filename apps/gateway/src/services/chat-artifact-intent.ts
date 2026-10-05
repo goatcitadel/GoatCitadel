@@ -49,12 +49,16 @@ export function detectPresentationArtifactIntent(content: string): boolean {
 }
 
 /** "Put it in a deck, saved as a PDF": a presentation whose requested output
- * format is PDF. Named input files ("turn report.pdf into slides") are sources,
- * not the output format. */
+ * format is PDF. A PDF named as the source ("turn this PDF into slides",
+ * "turn report.pdf into slides"), the topic ("a deck on PDF security"), or a
+ * rejected format ("a PowerPoint, not a PDF") is not the output format. */
 export function detectPresentationPdfOutputIntent(content: string): boolean {
   if (!detectPresentationArtifactIntent(content)) return false;
   const prose = stripArtifactFileNames(artifactRequestProse(content));
-  return artifactRequestObjects(prose).some(({ object }) => /\bpdfs?\b/u.test(object));
+  if (/\b(?:not|instead\s+of|rather\s+than)\s+(?:as\s+|in\s+)?(?:an?\s+)?pdfs?\b/u.test(prose)) return false;
+  return artifactRequestObjects(prose).some(({ object }) =>
+    /\b(?:as|to|in|into)\s+(?:an?\s+)?pdfs?\b|\bpdf\s+format\b/u.test(object),
+  );
 }
 
 function artifactRequestObjects(prose: string): Array<{ verb: string; object: string }> {

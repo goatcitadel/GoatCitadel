@@ -100,8 +100,8 @@ const ASCII_FALLBACKS: Readonly<Record<string, string>> = {
   "‐": "-",
   "‑": "-",
   "−": "-",
-  " ": " ",
-  " ": " ",
+  "\u2009": " ",
+  "\u202f": " ",
 };
 
 /**
@@ -117,6 +117,24 @@ export function toWinAnsiBytes(text: string): string {
   return output;
 }
 
+/**
+ * Counts visible characters that WinAnsi cannot show: those replaced by "?"
+ * or dropped (pictographs). Non-Latin scripts are lost in a Helvetica PDF.
+ */
+export function countWinAnsiLoss(text: string): { lost: number; visible: number } {
+  let lost = 0;
+  let visible = 0;
+  for (const char of text) {
+    if (/\s/u.test(char) || (char.codePointAt(0) ?? 0) < 0x20 || VARIATION_OR_JOINER.test(char)) continue;
+    visible += 1;
+    const mapped = winAnsiByteString(char);
+    if (mapped === "" || (mapped === "?" && char !== "?")) lost += 1;
+  }
+  return { lost, visible };
+}
+
+const VARIATION_OR_JOINER = /[\uFE0F\u200D]/u;
+
 function winAnsiByteString(char: string): string {
   const code = char.codePointAt(0) ?? 0x3f;
   if (char === "\t" || char === "\n") return " ";
@@ -126,7 +144,7 @@ function winAnsiByteString(char: string): string {
   if (special !== undefined) return String.fromCharCode(special);
   const fallback = ASCII_FALLBACKS[char];
   if (fallback !== undefined) return fallback;
-  if (/\p{Extended_Pictographic}|[️‍]/u.test(char)) return "";
+  if (/\p{Extended_Pictographic}/u.test(char) || VARIATION_OR_JOINER.test(char)) return "";
   const base = char.normalize("NFKD").replace(/\p{M}/gu, "");
   if (base && base !== char && [...base].every((part) => (part.codePointAt(0) ?? 0x100) <= 0xff)) return base;
   return "?";
@@ -157,14 +175,23 @@ export function wrapWinAnsi(bytes: string, font: PdfFont, size: number, maxWidth
     if (current) lines.push(current);
     current = word;
     while (measureWinAnsi(current, font, size) > maxWidth && current.length > 1) {
-      let cut = current.length - 1;
-      while (cut > 1 && measureWinAnsi(current.slice(0, cut), font, size) > maxWidth) cut -= 1;
+      const cut = fittingPrefixLength(current, font, size, maxWidth);
       lines.push(current.slice(0, cut));
       current = current.slice(cut);
     }
   }
   if (current) lines.push(current);
   return lines;
+}
+
+/** Longest prefix (at least one character) that fits maxWidth, in one forward pass. */
+function fittingPrefixLength(bytes: string, font: PdfFont, size: number, maxWidth: number): number {
+  let width = 0;
+  for (let index = 0; index < bytes.length; index += 1) {
+    width += measureWinAnsi(bytes[index]!, font, size);
+    if (width > maxWidth) return Math.max(1, index);
+  }
+  return bytes.length;
 }
 
 /** Shortens WinAnsi byte-string text with an ellipsis so it fits maxWidth. */
