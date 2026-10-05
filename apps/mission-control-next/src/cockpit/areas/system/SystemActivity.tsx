@@ -26,7 +26,7 @@ function writeShowBackground(value: boolean): void {
   try {
     window.sessionStorage.setItem(SHOW_BACKGROUND_KEY, String(value));
   } catch {
-    // Storage is unavailable; the choice still applies to this view.
+    // Best-effort: storage is unavailable, so the choice applies to this view only.
   }
 }
 

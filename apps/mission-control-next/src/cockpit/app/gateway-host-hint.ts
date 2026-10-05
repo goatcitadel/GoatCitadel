@@ -17,7 +17,7 @@ export function currentGatewayHost(): GatewayHost {
   try {
     hostname = new URL(getGatewayApiBaseUrl(), window.location.href).hostname;
   } catch {
-    // An unparsable base URL falls back to the page host.
+    // Fall back to the page host when the base URL can't be parsed.
   }
   return { desktopApp, hostname };
 }
