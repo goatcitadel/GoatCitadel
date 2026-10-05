@@ -1065,6 +1065,36 @@ describe("composeChatRouteDependencies", () => {
     );
   });
 
+  it.each([
+    [true, true],
+    [false, false],
+  ])(
+    "awaits the async session status flag before asking for list and search activity (flag %s)",
+    async (flag, expected) => {
+      const gateway = createGateway();
+      gateway.isFeatureEnabled = vi.fn(async () => flag) as never;
+      const deps = composeChatRouteDependencies(gateway as never) as any;
+
+      const listed = await deps.chatSessions.listChatSessions({ includeActivity: true });
+      const searched = await deps.chatSessions.searchChatSessions({ query: "deploy", includeActivity: true });
+
+      expect(listed.items[0].includeActivity).toBe(expected);
+      expect(searched.items[0].includeActivity).toBe(expected);
+      expect(gateway.isFeatureEnabled).toHaveBeenCalledWith("chatSessionStatusV1Enabled");
+    },
+  );
+
+  it("does not read the session status flag when activity is not requested", async () => {
+    const gateway = createGateway();
+    gateway.isFeatureEnabled = vi.fn(async () => true) as never;
+    const deps = composeChatRouteDependencies(gateway as never) as any;
+
+    const listed = await deps.chatSessions.listChatSessions({ limit: 1 });
+
+    expect(listed.items[0].includeActivity).toBe(false);
+    expect(gateway.isFeatureEnabled).not.toHaveBeenCalled();
+  });
+
   it("rejects explicit Citadel and workspace mismatches before chat project services run", async () => {
     const gateway = createGateway();
     const deps = composeChatRouteDependencies(gateway as never) as any;
