@@ -168,7 +168,6 @@ const REPLAY_GAP_EFFECT = effect(
     ["improvement"],
     ["capability"],
     ["change-plan"],
-    ["document-patch-proposal"],
     ["library"],
     ["settings"],
     ["quality"],

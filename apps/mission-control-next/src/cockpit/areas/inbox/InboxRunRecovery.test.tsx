@@ -5,10 +5,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { DurableDeadLetterRecord, DurableRunRecord, OperatorInboxItem } from "@goatcitadel/contracts";
 import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { InboxRunRecovery } from "./InboxRunRecovery";
 
 const api = vi.hoisted(() => ({
   fetchDurableRun: vi.fn(),
+  fetchDurableDeadLetter: vi.fn(),
   fetchDurableDeadLetters: vi.fn(),
   retryDurableRun: vi.fn(),
   recoverDurableDeadLetter: vi.fn(),
@@ -51,7 +53,7 @@ let container: HTMLDivElement;
 beforeEach(() => {
   for (const mock of Object.values(api)) mock.mockReset();
   api.fetchDurableRun.mockResolvedValue(run);
-  api.fetchDurableDeadLetters.mockResolvedValue({ items: [letter] });
+  api.fetchDurableDeadLetter.mockResolvedValue(letter);
   api.retryDurableRun.mockResolvedValue({ ...run, status: "queued", version: 5 });
   api.recoverDurableDeadLetter.mockResolvedValue({ ...run, status: "queued", version: 5 });
   container = document.createElement("div");
@@ -77,7 +79,7 @@ async function renderRecovery(inboxItem = item) {
   );
   await act(async () => {
     await api.fetchDurableRun.mock.results[0]?.value;
-    if (inboxItem.kind === "dead_letter") await api.fetchDurableDeadLetters.mock.results[0]?.value;
+    if (inboxItem.kind === "dead_letter") await Promise.allSettled([api.fetchDurableDeadLetter.mock.results[0]?.value]);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 }
@@ -132,8 +134,28 @@ describe("Inbox run recovery", () => {
     await renderRecovery(deadItem);
     await act(async () => button("Recover run").click());
     await act(async () => button("Confirm recover run").click());
-    expect(api.fetchDurableDeadLetters).toHaveBeenCalledWith(200);
+    expect(api.fetchDurableDeadLetter).toHaveBeenCalledWith("dead-a");
+    expect(api.fetchDurableDeadLetters).not.toHaveBeenCalled();
     expect(api.recoverDurableDeadLetter).toHaveBeenCalledWith("dead-a");
     expect(api.retryDurableRun).not.toHaveBeenCalled();
+  });
+
+  it("says a stopped run that left recovery is no longer waiting", async () => {
+    api.fetchDurableRun.mockResolvedValue({ ...run, status: "dead_lettered" });
+    api.fetchDurableDeadLetter.mockRejectedValue(
+      new ApiRequestError("API error 404", { kind: "http", method: "GET", path: "/x", status: 404 }),
+    );
+    await renderRecovery({
+      ...item,
+      id: "dead_letter:dead-a",
+      kind: "dead_letter",
+      createdAt: letter.createdAt,
+      source: { ...item.source, deadLetterId: "dead-a" },
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.textContent).toContain("This stopped run is no longer waiting for recovery.");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 });

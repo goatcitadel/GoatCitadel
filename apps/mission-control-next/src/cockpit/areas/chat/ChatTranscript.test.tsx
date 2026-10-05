@@ -10,15 +10,16 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InspectorPanel, InspectorProvider } from "../../app/inspector";
 import { ChatTranscript } from "./ChatTranscript";
-import { fetchApprovals } from "@goatcitadel/mission-control-shared/api/client";
+import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 
 const viewport = vi.hoisted(() => ({
   preview: null as { turnId: string; visibleText: string } | null,
 }));
 
-vi.mock("@goatcitadel/mission-control-shared/api/client", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client")>()),
-  fetchApprovals: vi.fn().mockResolvedValue({ items: [] }),
+vi.mock("@goatcitadel/mission-control-shared/api/approvals", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/approvals")>()),
+  fetchApproval: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("react-virtuoso", () => ({
@@ -106,16 +107,12 @@ afterEach(() => {
 describe("ChatTranscript", () => {
   it("hydrates missing approval risk from the matching pending canonical record", async () => {
     const onApprovePending = vi.fn();
-    vi.mocked(fetchApprovals).mockResolvedValueOnce({
-      items: [
-        {
-          approvalId: "hydrate-risk",
-          kind: "tool_invoke",
-          status: "pending",
-          riskLevel: "caution",
-          expiresAt: "2099-10-02T00:00:00Z",
-        },
-      ],
+    vi.mocked(fetchApproval).mockResolvedValueOnce({
+      approvalId: "hydrate-risk",
+      kind: "tool_invoke",
+      status: "pending",
+      riskLevel: "caution",
+      expiresAt: "2099-10-02T00:00:00Z",
     } as never);
     await act(async () =>
       renderWithProviders(
@@ -140,11 +137,15 @@ describe("ChatTranscript", () => {
   });
 
   it.each([
-    { name: "missing", items: [] },
-    { name: "settled", items: [{ approvalId: "closed-risk", status: "approved", riskLevel: "caution" }] },
-    { name: "unrelated", items: [{ approvalId: "another-risk", status: "pending", riskLevel: "caution" }] },
-  ])("keeps an unclassified approval closed when its canonical record is $name", async ({ items }) => {
-    vi.mocked(fetchApprovals).mockResolvedValueOnce({ items } as never);
+    { name: "missing", record: undefined },
+    { name: "settled", record: { approvalId: "closed-risk", status: "approved", riskLevel: "caution" } },
+    { name: "unrelated", record: { approvalId: "another-risk", status: "pending", riskLevel: "caution" } },
+  ])("keeps an unclassified approval closed when its canonical record is $name", async ({ record }) => {
+    if (record) vi.mocked(fetchApproval).mockResolvedValueOnce(record as never);
+    else
+      vi.mocked(fetchApproval).mockRejectedValueOnce(
+        new ApiRequestError("API error 404", { kind: "http", method: "GET", path: "/x", status: 404 }),
+      );
     await act(async () =>
       renderWithProviders(
         <InspectorProvider>

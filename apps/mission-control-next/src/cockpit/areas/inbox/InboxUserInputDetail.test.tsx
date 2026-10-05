@@ -11,6 +11,7 @@ import type {
 import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboxUserInputDetail } from "./InboxUserInputDetail";
+import { queryKeys } from "../../data/query-keys";
 
 const api = vi.hoisted(() => ({
   fetchOperatorInbox: vi.fn(),
@@ -99,8 +100,15 @@ afterEach(() => {
   container.remove();
 });
 
+/** The Inbox area keeps the Inbox cached; seed it from the mocked owner read, then forget that read. */
+async function seedCachedInbox(client: QueryClient) {
+  client.setQueryData(queryKeys.inbox("default"), await api.fetchOperatorInbox("default"));
+  api.fetchOperatorInbox.mockClear();
+}
+
 async function renderDetail(inboxItem = item) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await seedCachedInbox(client);
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -111,7 +119,6 @@ async function renderDetail(inboxItem = item) {
     ),
   );
   await act(async () => {
-    await api.fetchOperatorInbox.mock.results[0]?.value;
     if (api.fetchChatThread.mock.results[0]) await api.fetchChatThread.mock.results[0].value;
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
@@ -126,6 +133,8 @@ function button(label: string): HTMLButtonElement {
 describe("Inbox Chat question", () => {
   it("reviews a choice, re-reads both owners, then submits the exact answer once", async () => {
     await renderDetail();
+    // Opening checks the cached Inbox; only the answer re-reads it.
+    expect(api.fetchOperatorInbox).not.toHaveBeenCalled();
     const radio = container.querySelector<HTMLInputElement>('input[type="radio"]');
     if (!radio) throw new Error("Missing option");
     await act(async () => radio.click());
@@ -133,7 +142,7 @@ describe("Inbox Chat question", () => {
     expect(document.body.textContent).toContain("Safe path");
     expect(api.answerChatUserInputPrompt).not.toHaveBeenCalled();
     await act(async () => button("Confirm answer").click());
-    expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(2);
+    expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(1);
     expect(api.fetchChatThread).toHaveBeenCalledTimes(2);
     expect(api.answerChatUserInputPrompt).toHaveBeenCalledOnce();
     expect(api.answerChatUserInputPrompt).toHaveBeenCalledWith("session-a", "turn-a", "prompt-a", {
@@ -235,6 +244,7 @@ describe("Inbox Chat question", () => {
 
   it("keeps the answer form while the question is rechecked", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await seedCachedInbox(client);
     await act(async () =>
       root.render(
         <QueryClientProvider client={client}>

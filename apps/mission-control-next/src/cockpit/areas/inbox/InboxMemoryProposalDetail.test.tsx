@@ -4,10 +4,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { OperatorInboxItem, TraceMemoryCandidateRecord } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { InboxMemoryProposalDetail } from "./InboxMemoryProposalDetail";
 import { canResolveInboxMemoryProposal } from "./memory-proposal-guard";
 
 const api = vi.hoisted(() => ({
+  fetchTraceMemoryCandidate: vi.fn(),
   fetchTraceMemoryCandidates: vi.fn(),
   promoteTraceMemoryCandidate: vi.fn(),
   rejectTraceMemoryCandidate: vi.fn(),
@@ -59,7 +61,8 @@ async function settle() {
 }
 
 beforeEach(() => {
-  api.fetchTraceMemoryCandidates.mockReset().mockResolvedValue({ items: [candidate] });
+  api.fetchTraceMemoryCandidate.mockReset().mockResolvedValue(candidate);
+  api.fetchTraceMemoryCandidates.mockReset();
   api.promoteTraceMemoryCandidate.mockReset().mockResolvedValue({
     learningId: "learning-a",
     workspaceId: "workspace-a",
@@ -115,16 +118,16 @@ describe("Inbox memory proposal review", () => {
   it("shows the current proposal and confirms promotion after a fresh owner read", async () => {
     await render();
     expect(container.textContent).toContain("Proposed insight: Use the project style guide.");
-    expect(api.fetchTraceMemoryCandidates).toHaveBeenCalledWith({
+    expect(api.fetchTraceMemoryCandidate).toHaveBeenCalledWith("candidate-a", {
       workspaceId: "workspace-a",
-      status: "proposed",
-      limit: 500,
+      signal: expect.any(AbortSignal),
     });
+    expect(api.fetchTraceMemoryCandidates).not.toHaveBeenCalled();
     await act(async () => button("Promote to memory").click());
     expect(api.promoteTraceMemoryCandidate).not.toHaveBeenCalled();
     await act(async () => button("Confirm promotion").click());
     await settle();
-    expect(api.fetchTraceMemoryCandidates).toHaveBeenCalledTimes(2);
+    expect(api.fetchTraceMemoryCandidate).toHaveBeenCalledTimes(2);
     expect(api.promoteTraceMemoryCandidate).toHaveBeenCalledWith("candidate-a");
     expect(container.textContent).toContain("Gateway promoted the proposal");
     expect(container.textContent).not.toContain("Promote to memory");
@@ -132,7 +135,7 @@ describe("Inbox memory proposal review", () => {
 
   it("does not mutate when the current proposal changed", async () => {
     await render();
-    api.fetchTraceMemoryCandidates.mockResolvedValueOnce({ items: [{ ...candidate, proposedInsight: "Changed" }] });
+    api.fetchTraceMemoryCandidate.mockResolvedValueOnce({ ...candidate, proposedInsight: "Changed" });
     await act(async () => button("Reject proposal").click());
     await act(async () => button("Confirm rejection").click());
     await settle();
@@ -178,9 +181,26 @@ describe("Inbox memory proposal review", () => {
   });
 
   it("withholds actions for a foreign workspace owner record", async () => {
-    api.fetchTraceMemoryCandidates.mockResolvedValue({ items: [{ ...candidate, workspaceId: "workspace-b" }] });
+    api.fetchTraceMemoryCandidate.mockResolvedValue({ ...candidate, workspaceId: "workspace-b" });
     await render();
     expect(container.textContent).toContain("belongs to another workspace");
     expect(container.textContent).not.toContain("Promote to memory");
+  });
+
+  it.each([
+    [
+      "missing",
+      () =>
+        api.fetchTraceMemoryCandidate.mockRejectedValue(
+          new ApiRequestError("API error 404", { kind: "http", method: "GET", path: "/x", status: 404 }),
+        ),
+    ],
+    ["decided", () => api.fetchTraceMemoryCandidate.mockResolvedValue({ ...candidate, status: "rejected" })],
+  ])("says a %s proposal is no longer waiting", async (_label, arrange) => {
+    arrange();
+    await render();
+    expect(container.textContent).toContain("This proposal is no longer waiting.");
+    expect(container.textContent).not.toContain("Promote to memory");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 });

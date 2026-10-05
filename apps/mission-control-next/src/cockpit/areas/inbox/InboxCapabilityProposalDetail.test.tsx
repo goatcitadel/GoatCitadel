@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CapabilityProposalDetailRecord, OperatorInboxItem, OperatorInboxResponse } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { currentCapabilityProposal, InboxCapabilityProposalDetail } from "./InboxCapabilityProposalDetail";
+import { queryKeys } from "../../data/query-keys";
 
 const api = vi.hoisted(() => ({ fetchCapabilityProposal: vi.fn(), fetchOperatorInbox: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({
@@ -67,7 +68,14 @@ afterEach(() => {
   client.clear();
 });
 
+/** The Inbox area keeps the Inbox cached; seed it from the mocked owner read, then forget that read. */
+async function seedCachedInbox(workspaceId: string) {
+  client.setQueryData(queryKeys.inbox(workspaceId), await api.fetchOperatorInbox(workspaceId));
+  api.fetchOperatorInbox.mockClear();
+}
+
 async function render(selected = item) {
+  await seedCachedInbox("workspace-a");
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -81,7 +89,8 @@ async function render(selected = item) {
 describe("Inbox capability proposal detail", () => {
   it("shows current scoped owner metadata without offering an unsupported decision", async () => {
     await render();
-    expect(api.fetchOperatorInbox).toHaveBeenCalledWith("workspace-a");
+    // Opening checks the cached Inbox: no Inbox read of its own.
+    expect(api.fetchOperatorInbox).not.toHaveBeenCalled();
     expect(api.fetchCapabilityProposal).toHaveBeenCalledWith("proposal-a");
     expect(container.textContent).toContain("A candidate is linked to this proposal");
     expect(container.textContent).toContain("Decisions for this proposal are unavailable in Inbox");

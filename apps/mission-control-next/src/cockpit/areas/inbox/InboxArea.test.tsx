@@ -11,7 +11,7 @@ import { InspectorPanel, InspectorProvider } from "../../app/inspector";
 import { InboxArea } from "./InboxArea";
 import { __resetInboxViewedUpdatesForTests, isInboxUpdateViewed } from "./inbox-viewed-updates";
 
-const apiMocks = vi.hoisted(() => ({ fetchApprovals: vi.fn(), resolveApproval: vi.fn() }));
+const apiMocks = vi.hoisted(() => ({ fetchApproval: vi.fn(), fetchApprovals: vi.fn(), resolveApproval: vi.fn() }));
 const switchShellMock = vi.hoisted(() => vi.fn<typeof import("../../../shell-preference").switchShell>());
 vi.mock("../../../shell-preference", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../shell-preference")>()),
@@ -19,6 +19,7 @@ vi.mock("../../../shell-preference", async (importOriginal) => ({
 }));
 const inboxMock = vi.hoisted(() => ({ result: null as unknown, installation: "http://localhost:8787" }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => apiMocks);
+vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({ fetchApproval: apiMocks.fetchApproval }));
 vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>()),
   getGatewayApiBaseUrl: () => inboxMock.installation,
@@ -76,6 +77,7 @@ const projection: OperatorInboxResponse = {
 
 vi.mock("../../data/use-operator-inbox", () => ({
   useOperatorInbox: () => inboxMock.result,
+  useCachedInboxItem: () => ({ projection: (inboxMock.result as { data?: unknown })?.data, fingerprint: "cached" }),
 }));
 
 let root: Root;
@@ -87,9 +89,10 @@ beforeEach(() => {
   inboxMock.installation = "http://localhost:8787";
   window.history.replaceState(null, "", "/inbox");
   inboxMock.result = { data: projection, isLoading: false, isError: false, isFetching: false, refetch: vi.fn() };
+  apiMocks.fetchApproval.mockReset();
   apiMocks.fetchApprovals.mockReset();
   apiMocks.resolveApproval.mockReset();
-  apiMocks.fetchApprovals.mockResolvedValue({ items: [approval] });
+  apiMocks.fetchApproval.mockResolvedValue(approval);
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -196,7 +199,7 @@ describe("viewed Updates presentation", () => {
     expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(0);
     expect(data).toEqual(original);
     expect(JSON.stringify({ ...window.localStorage })).toBe(persistedBefore);
-    expect(apiMocks.fetchApprovals).not.toHaveBeenCalled();
+    expect(apiMocks.fetchApproval).not.toHaveBeenCalled();
     expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
   });
 
@@ -385,13 +388,13 @@ describe("InboxArea", () => {
       ),
     );
     expect(container.textContent).toContain("belongs to another workspace");
-    expect(apiMocks.fetchApprovals).not.toHaveBeenCalled();
+    expect(apiMocks.fetchApproval).not.toHaveBeenCalled();
     await act(async () => {
       window.history.replaceState(null, "", "/inbox?workspaceId=default&item=missing");
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
     expect(container.textContent).toContain("no longer in the current Inbox");
-    expect(apiMocks.fetchApprovals).not.toHaveBeenCalled();
+    expect(apiMocks.fetchApproval).not.toHaveBeenCalled();
   });
 
   it("withholds items and counts from a foreign projection", async () => {
@@ -483,9 +486,13 @@ describe("InboxArea", () => {
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true })));
     expect(document.activeElement).toBe(details);
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "o", bubbles: true })));
-    expect(apiMocks.fetchApprovals).toHaveBeenCalledWith({ status: "pending", workspaceId: "default", limit: 200 });
+    expect(apiMocks.fetchApproval).toHaveBeenCalledWith("test", {
+      workspaceId: "default",
+      signal: expect.any(AbortSignal),
+    });
+    expect(apiMocks.fetchApprovals).not.toHaveBeenCalled();
     await act(async () => {
-      await apiMocks.fetchApprovals.mock.results[0]?.value;
+      await apiMocks.fetchApproval.mock.results[0]?.value;
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     const inspector = container.querySelector('[aria-label="Inspector: Review file write"]');
@@ -514,12 +521,12 @@ describe("InboxArea", () => {
     const input = document.createElement("input");
     container.appendChild(input);
     await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true })));
-    expect(apiMocks.fetchApprovals).not.toHaveBeenCalled();
+    expect(apiMocks.fetchApproval).not.toHaveBeenCalled();
     input.remove();
 
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true })));
     await act(async () => {
-      await apiMocks.fetchApprovals.mock.results[0]?.value;
+      await apiMocks.fetchApproval.mock.results[0]?.value;
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(document.activeElement?.textContent).toBe("Review approval");

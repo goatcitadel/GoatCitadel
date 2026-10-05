@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { OperatorInboxItem, TraceMemoryCandidateRecord } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import {
-  fetchTraceMemoryCandidates,
+  fetchTraceMemoryCandidate,
   promoteTraceMemoryCandidate,
   rejectTraceMemoryCandidate,
 } from "@goatcitadel/mission-control-shared/api/memory";
@@ -12,13 +12,16 @@ import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { canResolveInboxMemoryProposal } from "./memory-proposal-guard";
+import { nullWhenMissing } from "./inbox-record-read";
 
+/** The proposal by id; one that was decided or left this workspace is no longer waiting here. */
 async function readCandidate(
   workspaceId: string,
   candidateId: string,
-): Promise<TraceMemoryCandidateRecord | undefined> {
-  const response = await fetchTraceMemoryCandidates({ workspaceId, status: "proposed", limit: 500 });
-  return response.items.find((candidate) => candidate.candidateId === candidateId);
+  signal?: AbortSignal,
+): Promise<TraceMemoryCandidateRecord | null> {
+  const candidate = await nullWhenMissing(fetchTraceMemoryCandidate(candidateId, { workspaceId, signal }));
+  return candidate?.status === "proposed" ? candidate : null;
 }
 
 export function InboxMemoryProposalDetail({ item, workspaceId }: { item: OperatorInboxItem; workspaceId: string }) {
@@ -37,13 +40,13 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const query = useQuery({
-    queryKey: ["memory", "inbox-proposal", workspaceId, candidateId],
-    queryFn: () => readCandidate(workspaceId, candidateId!),
+    queryKey: ["memory", "candidate", workspaceId, candidateId],
+    queryFn: ({ signal }) => readCandidate(workspaceId, candidateId!, signal),
     enabled: Boolean(candidateId),
     staleTime: 0,
   });
   const scopeChanged = scopeRef.current !== workspaceId;
-  const candidate = query.isFetching || query.isError ? undefined : query.data;
+  const candidate = query.isFetching || query.isError ? undefined : (query.data ?? undefined);
   const eligible = Boolean(
     candidate && !scopeChanged && canResolveInboxMemoryProposal(item, candidate, candidate, workspaceId),
   );
@@ -67,7 +70,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
       const latest = await readCandidate(workspaceId, candidateId);
       if (
         scopeRef.current !== workspaceId ||
-        !canResolveInboxMemoryProposal(item, review.candidate, latest, workspaceId)
+        !canResolveInboxMemoryProposal(item, review.candidate, latest ?? undefined, workspaceId)
       ) {
         setReview(null);
         setError("The proposal changed or left the pending queue. Refresh its current record before deciding.");
@@ -148,9 +151,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
         </p>
       ) : null}
       {!query.isFetching && !query.isError && candidateId && !candidate ? (
-        <p className="text-fg-muted">
-          This proposal was not found in the first 500 pending records. Open Memory to check its current status.
-        </p>
+        <p className="text-fg-muted">This proposal is no longer waiting. Open Memory to check its current status.</p>
       ) : null}
       {candidate && candidate.workspaceId === workspaceId ? (
         <>

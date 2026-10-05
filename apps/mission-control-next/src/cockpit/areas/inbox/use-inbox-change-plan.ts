@@ -4,6 +4,7 @@ import { canonicalJsonString, type ChangePlanRecord, type OperatorInboxItem } fr
 import { confirmChangePlan } from "@goatcitadel/mission-control-shared/api/chat";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { queryKeys } from "../../data/query-keys";
+import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import {
   canReviewInboxConfirmation,
   readCurrentInboxPlan,
@@ -32,10 +33,11 @@ function subscribe(listener: () => void) {
 export function useInboxChangePlan(item: OperatorInboxItem, workspaceId: string, activeWorkspaceId: string) {
   const queryClient = useQueryClient();
   const itemKey = canonicalJsonString(item);
+  const cached = useCachedInboxItem(workspaceId, item.id);
   const query = useQuery({
-    queryKey: ["change-plan", "inbox-detail", workspaceId, itemKey],
-    queryFn: () => readCurrentInboxPlan(item, workspaceId),
-    enabled: Boolean(item.source.planId) && workspaceId === activeWorkspaceId,
+    queryKey: ["change-plan", "inbox-detail", workspaceId, itemKey, cached.fingerprint],
+    queryFn: () => readCurrentInboxPlan(item, workspaceId, cached.projection),
+    enabled: Boolean(item.source.planId) && workspaceId === activeWorkspaceId && Boolean(cached.projection),
     staleTime: 0,
   });
   const identity = canonicalJsonString([workspaceId, activeWorkspaceId, itemKey, query.data]);

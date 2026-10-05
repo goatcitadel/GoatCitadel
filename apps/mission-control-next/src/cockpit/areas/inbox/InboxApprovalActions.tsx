@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ApprovalRequest, OperatorInboxItem } from "@goatcitadel/contracts";
-import { fetchApprovals, resolveApproval } from "@goatcitadel/mission-control-shared/api/client";
+import { resolveApproval } from "@goatcitadel/mission-control-shared/api/client";
+import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
@@ -10,6 +11,7 @@ import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { canResolveInboxApproval, inboxApprovalReviewKey, matchesInboxApprovalDecision } from "./inbox-approval-guard";
+import { nullWhenMissing } from "./inbox-record-read";
 import {
   beginInboxApprovalAttempt,
   releaseInboxApprovalCheck,
@@ -78,11 +80,11 @@ function ApprovalDecisionReview({
     let mutationAttempted = false;
     let resolvedMessage: string | undefined;
     try {
-      const latest = await fetchApprovals({ status: "pending", workspaceId, limit: 200 });
+      const latest = await nullWhenMissing(fetchApproval(approval.approvalId, { workspaceId }));
       // A different selection, workspace, or reviewed record unmounts this review.
       // Cancel before dispatch; after dispatch retain the original action's outcome.
       if (!current.current) return;
-      const record = latest.items.find((entry) => entry.approvalId === approval.approvalId);
+      const record = latest ?? undefined;
       if (!canResolveInboxApproval(item, approval, record, workspaceId)) {
         setError("This approval changed or is no longer in the current pending queue. Refresh it before deciding.");
         onInvalidated();

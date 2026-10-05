@@ -6,10 +6,12 @@ import type { DocumentPatchProposalRecord, OperatorInboxItem, OperatorInboxRespo
 import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboxDocumentProposalDetail } from "./InboxDocumentProposalDetail";
+import { queryKeys } from "../../data/query-keys";
 
 const api = vi.hoisted(() => ({
   fetchOperatorInbox: vi.fn(),
   listDocumentPatchProposals: vi.fn(),
+  fetchDocumentPatchProposal: vi.fn(),
   applyDocumentPatchProposal: vi.fn(),
   rejectDocumentPatchProposal: vi.fn(),
 }));
@@ -18,6 +20,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
   listDocumentPatchProposals: api.listDocumentPatchProposals,
+  fetchDocumentPatchProposal: api.fetchDocumentPatchProposal,
   applyDocumentPatchProposal: api.applyDocumentPatchProposal,
   rejectDocumentPatchProposal: api.rejectDocumentPatchProposal,
 }));
@@ -70,7 +73,7 @@ let container: HTMLDivElement;
 beforeEach(() => {
   for (const mock of Object.values(api)) mock.mockReset();
   api.fetchOperatorInbox.mockResolvedValue(projection);
-  api.listDocumentPatchProposals.mockResolvedValue({ items: [proposal] });
+  api.fetchDocumentPatchProposal.mockResolvedValue({ item: proposal });
   api.applyDocumentPatchProposal.mockResolvedValue({
     item: {
       ...proposal,
@@ -91,8 +94,10 @@ afterEach(() => {
   container.remove();
 });
 
-async function renderDetail(inboxItem = item) {
+/** The Inbox area keeps the Inbox cached; the detail reads that copy instead of fetching it again. */
+async function renderDetail(inboxItem = item, cachedInbox: OperatorInboxResponse = projection) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client.setQueryData(queryKeys.inbox("default"), cachedInbox);
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -103,8 +108,7 @@ async function renderDetail(inboxItem = item) {
     ),
   );
   await act(async () => {
-    await api.fetchOperatorInbox.mock.results[0]?.value;
-    if (api.listDocumentPatchProposals.mock.results[0]) await api.listDocumentPatchProposals.mock.results[0].value;
+    if (api.fetchDocumentPatchProposal.mock.results[0]) await api.fetchDocumentPatchProposal.mock.results[0].value;
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 }
@@ -120,11 +124,19 @@ describe("Inbox document proposal", () => {
     await renderDetail();
     expect(container.textContent).toContain("-Before");
     expect(container.textContent).toContain("+After");
+    // Opening reads the proposal by id and checks the cached Inbox: no Inbox or list read.
+    expect(api.fetchOperatorInbox).not.toHaveBeenCalled();
+    expect(api.listDocumentPatchProposals).not.toHaveBeenCalled();
+    expect(api.fetchDocumentPatchProposal).toHaveBeenCalledExactlyOnceWith("proposal-a", {
+      workspaceId: "default",
+      signal: expect.any(AbortSignal),
+    });
     await act(async () => button("Review apply").click());
     expect(api.applyDocumentPatchProposal).not.toHaveBeenCalled();
     await act(async () => button("Confirm apply").click());
-    expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(2);
-    expect(api.listDocumentPatchProposals).toHaveBeenCalledTimes(2);
+    // The decision re-reads the Inbox once and the proposal again.
+    expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(1);
+    expect(api.fetchDocumentPatchProposal).toHaveBeenCalledTimes(2);
     expect(api.applyDocumentPatchProposal).toHaveBeenCalledWith("proposal-a", "default");
     expect(container.textContent).toContain("Gateway recorded this document proposal as applied");
   });
@@ -139,8 +151,8 @@ describe("Inbox document proposal", () => {
   });
 
   it("refuses a changed diff after review", async () => {
-    api.listDocumentPatchProposals.mockResolvedValueOnce({ items: [proposal] }).mockResolvedValueOnce({
-      items: [{ ...proposal, proposedContent: "Different", derivedDiff: "-Before\n+Different" }],
+    api.fetchDocumentPatchProposal.mockResolvedValueOnce({ item: proposal }).mockResolvedValueOnce({
+      item: { ...proposal, proposedContent: "Different", derivedDiff: "-Before\n+Different" },
     });
     await renderDetail();
     await act(async () => button("Review apply").click());
@@ -150,22 +162,21 @@ describe("Inbox document proposal", () => {
   });
 
   it("never reads a proposal when the Inbox projection is foreign", async () => {
-    api.fetchOperatorInbox.mockResolvedValue({ ...projection, workspaceId: "other" });
-    await renderDetail();
-    expect(api.listDocumentPatchProposals).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("not found in the current bounded pending list");
+    await renderDetail(item, { ...projection, workspaceId: "other" });
+    expect(api.fetchDocumentPatchProposal).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("This proposal is no longer waiting.");
   });
 
   it("refuses a foreign owner record", async () => {
-    api.listDocumentPatchProposals.mockResolvedValue({ items: [{ ...proposal, workspaceId: "other" }] });
+    api.fetchDocumentPatchProposal.mockResolvedValue({ item: { ...proposal, workspaceId: "other" } });
     await renderDetail();
     expect(container.textContent).not.toContain("Review apply");
     expect(api.applyDocumentPatchProposal).not.toHaveBeenCalled();
   });
 
   it("keeps an oversized diff read-only in the bounded Inbox inspector", async () => {
-    api.listDocumentPatchProposals.mockResolvedValue({
-      items: [{ ...proposal, derivedDiff: `-${"x".repeat(64_001)}` }],
+    api.fetchDocumentPatchProposal.mockResolvedValue({
+      item: { ...proposal, derivedDiff: `-${"x".repeat(64_001)}` },
     });
     await renderDetail();
     expect(container.textContent).toContain("too large for bounded Inbox review");

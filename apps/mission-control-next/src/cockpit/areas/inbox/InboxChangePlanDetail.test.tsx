@@ -6,6 +6,7 @@ import type { ChangePlanRecord, OperatorInboxItem, OperatorInboxResponse } from 
 import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboxChangePlanDetail } from "./InboxChangePlanDetail";
+import { queryKeys } from "../../data/query-keys";
 import { __resetInboxChangePlanAttemptsForTests } from "./use-inbox-change-plan";
 
 const api = vi.hoisted(() => ({ fetchOperatorInbox: vi.fn(), fetchChangePlan: vi.fn(), confirmChangePlan: vi.fn() }));
@@ -109,6 +110,9 @@ afterEach(() => {
 
 async function renderDetail(inboxItem = item) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  // The Inbox area keeps the Inbox cached; seed it from the mocked owner read, then forget that read.
+  client.setQueryData(queryKeys.inbox("default"), await api.fetchOperatorInbox("default"));
+  api.fetchOperatorInbox.mockClear();
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -119,7 +123,6 @@ async function renderDetail(inboxItem = item) {
     ),
   );
   await act(async () => {
-    await api.fetchOperatorInbox.mock.results[0]?.value;
     if (api.fetchChangePlan.mock.results[0]) await api.fetchChangePlan.mock.results[0].value;
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
@@ -139,7 +142,8 @@ describe("Inbox change-plan confirmation", () => {
     expect(document.body.textContent).toContain("Apply this exact Chat model change.");
     expect(api.confirmChangePlan).not.toHaveBeenCalled();
     await act(async () => button("Confirm change").click());
-    expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(2);
+    // Opening checked the cached Inbox; only the confirmation re-read it.
+    expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(1);
     expect(api.fetchChangePlan).toHaveBeenCalledTimes(2);
     expect(api.confirmChangePlan).toHaveBeenCalledOnce();
     expect(api.confirmChangePlan).toHaveBeenCalledWith(

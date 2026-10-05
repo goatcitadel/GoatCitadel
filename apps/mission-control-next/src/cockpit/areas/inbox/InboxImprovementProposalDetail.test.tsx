@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CuratorReviewItem, OperatorInboxItem, OperatorInboxResponse } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canDecideImprovementProposal, InboxImprovementProposalDetail } from "./InboxImprovementProposalDetail";
+import { queryKeys } from "../../data/query-keys";
 
 const api = vi.hoisted(() => ({
   fetchCuratorReviewItem: vi.fn(),
@@ -93,7 +94,14 @@ afterEach(() => {
   client.clear();
 });
 
+/** The Inbox area keeps the Inbox cached; seed it from the mocked owner read, then forget that read. */
+async function seedCachedInbox(workspaceId: string) {
+  client.setQueryData(queryKeys.inbox(workspaceId), await api.fetchOperatorInbox(workspaceId));
+  api.fetchOperatorInbox.mockClear();
+}
+
 async function render() {
+  await seedCachedInbox("workspace-a");
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -130,11 +138,13 @@ describe("Inbox improvement proposal review", () => {
 
   it("confirms keep only after fresh Inbox and owner reads", async () => {
     await render();
+    // Opening checks the cached Inbox; only the decision re-reads it.
+    expect(api.fetchOperatorInbox).not.toHaveBeenCalled();
     await act(async () => button("Keep proposal").click());
     expect(api.approveImprovementCandidate).not.toHaveBeenCalled();
     await act(async () => button("Confirm keep").click());
     await settle();
-    expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(2);
+    expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(1);
     expect(api.fetchCuratorReviewItem).toHaveBeenCalledTimes(2);
     expect(api.approveImprovementCandidate).toHaveBeenCalledWith("candidate-a", {
       reviewPrecondition: review.reviewPrecondition,

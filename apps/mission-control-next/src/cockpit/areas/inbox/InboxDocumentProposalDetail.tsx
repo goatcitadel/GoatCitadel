@@ -1,15 +1,16 @@
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { DocumentPatchProposalRecord, OperatorInboxItem } from "@goatcitadel/contracts";
+import type { DocumentPatchProposalRecord, OperatorInboxItem, OperatorInboxResponse } from "@goatcitadel/contracts";
 import {
   applyDocumentPatchProposal,
-  listDocumentPatchProposals,
+  fetchDocumentPatchProposal,
   rejectDocumentPatchProposal,
 } from "@goatcitadel/mission-control-shared/api/chat";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
+import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import {
@@ -17,17 +18,23 @@ import {
   currentInboxDocumentProposal,
   hasCurrentInboxDocumentProposalItem,
 } from "./inbox-document-proposal-guard";
+import { nullWhenMissing } from "./inbox-record-read";
 
+/**
+ * The proposal by id, still in this workspace's Inbox. Opening the detail checks the cached Inbox; the
+ * decision re-reads the Inbox once (no `projection`) so it never acts on a superseded item.
+ */
 async function readCurrentProposal(
   item: OperatorInboxItem,
   workspaceId: string,
+  projection?: OperatorInboxResponse,
+  signal?: AbortSignal,
 ): Promise<DocumentPatchProposalRecord | null> {
   if (!item.source.proposalId) return null;
-  const projection = await fetchOperatorInbox(workspaceId);
-  if (!hasCurrentInboxDocumentProposalItem(item, projection, workspaceId)) return null;
-  const response = await listDocumentPatchProposals({ workspaceId, state: "pending" });
-  const proposal = response.items.find((record) => record.proposalId === item.source.proposalId);
-  return proposal ? (currentInboxDocumentProposal(item, projection, proposal, workspaceId) ?? null) : null;
+  const inbox = projection ?? (await fetchOperatorInbox(workspaceId));
+  if (!hasCurrentInboxDocumentProposalItem(item, inbox, workspaceId)) return null;
+  const response = await nullWhenMissing(fetchDocumentPatchProposal(item.source.proposalId, { workspaceId, signal }));
+  return response ? (currentInboxDocumentProposal(item, inbox, response.item, workspaceId) ?? null) : null;
 }
 
 type Decision = "apply" | "reject";
@@ -44,10 +51,11 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
   const [outcomeUncertain, setOutcomeUncertain] = useState(false);
   const [result, setResult] = useState<DocumentPatchProposalRecord | null>(null);
   const [error, setError] = useState("");
+  const cached = useCachedInboxItem(workspaceId, item.id);
   const query = useQuery({
-    queryKey: ["document-patch-proposal", "inbox-detail", workspaceId, item.id, item.source.sessionId],
-    queryFn: () => readCurrentProposal(item, workspaceId),
-    enabled: Boolean(item.source.proposalId),
+    queryKey: ["chat", "document-proposal", workspaceId, item.source.proposalId, cached.fingerprint],
+    queryFn: ({ signal }) => readCurrentProposal(item, workspaceId, cached.projection, signal),
+    enabled: Boolean(item.source.proposalId) && Boolean(cached.projection),
     staleTime: 0,
   });
   const scopeChanged = scopeRef.current !== workspaceId;
@@ -155,10 +163,7 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
         </p>
       ) : null}
       {!query.isFetching && !query.isError && !proposal ? (
-        <p className="text-fg-muted">
-          This proposal was not found in the current bounded pending list for this workspace. Open its owner for the
-          latest status.
-        </p>
+        <p className="text-fg-muted">This proposal is no longer waiting. Open its owner for the latest status.</p>
       ) : null}
       {scopeChanged ? (
         <p role="alert" className="text-fg-secondary">

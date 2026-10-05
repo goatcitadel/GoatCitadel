@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import {
-  fetchDurableDeadLetters,
+  fetchDurableDeadLetter,
   fetchDurableRun,
   recoverDurableDeadLetter,
   retryDurableRun,
@@ -13,13 +13,16 @@ import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { canRequestRunRecovery, sameRunRecoveryEvidence, type RunRecoveryEvidence } from "./run-recovery-guard";
+import { nullWhenMissing } from "./inbox-record-read";
 
 async function readRecoveryEvidence(item: OperatorInboxItem): Promise<RunRecoveryEvidence> {
   if (!item.source.runId) throw new Error("The run ID is missing from this Inbox item.");
   const run = await fetchDurableRun(item.source.runId);
   if (item.kind !== "dead_letter") return { run };
-  const letters = await fetchDurableDeadLetters(200);
-  return { run, deadLetter: letters.items.find((entry) => entry.deadLetterId === item.source.deadLetterId) };
+  const deadLetter = item.source.deadLetterId
+    ? await nullWhenMissing(fetchDurableDeadLetter(item.source.deadLetterId))
+    : null;
+  return { run, deadLetter: deadLetter ?? undefined };
 }
 
 export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxItem; workspaceId: string }) {
@@ -132,7 +135,7 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
           </p>
           {item.kind === "dead_letter" && !evidence.deadLetter ? (
             <p className="text-fg-muted">
-              The dead letter was not found in the current bounded owner list. Open Ops for its current record.
+              This stopped run is no longer waiting for recovery. Open Ops for its current record.
             </p>
           ) : null}
           {!eligible ? (

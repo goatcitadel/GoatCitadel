@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
-import { fetchApprovals } from "@goatcitadel/mission-control-shared/api/client";
+import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { buildApprovalEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { presentApprovalStatus, presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
@@ -9,6 +9,7 @@ import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { approvalExpiryLabel, approvalExplanationLine } from "./approval-preview";
 import { InboxApprovalActions } from "./InboxApprovalActions";
+import { nullWhenMissing } from "./inbox-record-read";
 
 export function InboxApprovalDetail({
   item,
@@ -22,10 +23,11 @@ export function InboxApprovalDetail({
   const [decisionNotice, setDecisionNotice] = useState("");
   const queryClient = useQueryClient();
   const approvalId = item.source.approvalId;
-  const queryKey = ["approvals", "inbox-detail", workspaceId, approvalId];
+  // The same key as Chat's blocker card, so moving between them is a cache hit (IN-11).
+  const queryKey = ["approvals", "record", workspaceId, approvalId];
   const query = useQuery({
     queryKey,
-    queryFn: () => fetchApprovals({ status: "pending", workspaceId, limit: 200 }),
+    queryFn: ({ signal }) => nullWhenMissing(fetchApproval(approvalId!, { workspaceId, signal })),
     enabled: Boolean(approvalId),
     staleTime: 0,
   });
@@ -35,7 +37,9 @@ export function InboxApprovalDetail({
     setDecisionNotice(notice);
     void queryClient.resetQueries({ queryKey, exact: true });
   };
-  const approval = query.isError ? undefined : query.data?.items.find((record) => record.approvalId === approvalId);
+  const record = query.isError ? undefined : query.data;
+  // Only a pending approval is waiting here; a decided one is reviewed in Approvals.
+  const approval = record?.status === "pending" ? record : undefined;
   const evidence = approval ? buildApprovalEvidenceModel(approval.preview) : null;
   return (
     <section aria-label="Current approval" className="space-y-3 border-t border-line-subtle pt-3 text-sm">
@@ -73,9 +77,7 @@ export function InboxApprovalDetail({
       ) : null}
       {!query.isFetching && !query.isError && !approval ? (
         <p className="text-fg-muted">
-          This approval was not found in the first page of this workspace&apos;s pending queue
-          {query.data?.nextCursor ? "; more records are available" : ""}. Open Approvals for the current record and
-          outcome.
+          This approval is no longer waiting. Open Approvals for the current record and outcome.
         </p>
       ) : null}
       {approval ? (
@@ -146,8 +148,7 @@ export function InboxApprovalDetail({
             />
           ) : null}
           <p className="text-xs text-fg-muted">
-            This is a workspace-scoped read of the canonical pending queue. The full decision and follow-on record
-            remain in Approvals.
+            This is the current record for this workspace. The full decision and follow-on record remain in Approvals.
           </p>
         </>
       ) : null}

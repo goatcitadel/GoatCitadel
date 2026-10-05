@@ -3,6 +3,7 @@ import {
   CHANGE_PLAN_STATUSES,
   type ChangePlanRecord,
   type OperatorInboxItem,
+  type OperatorInboxResponse,
 } from "@goatcitadel/contracts";
 import { fetchChangePlan } from "@goatcitadel/mission-control-shared/api/chat";
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
@@ -12,12 +13,17 @@ import {
   hasCurrentInboxChangePlanItem,
 } from "./inbox-change-plan-guard";
 
+/**
+ * The plan, still in this workspace's Inbox. Opening the detail checks the cached Inbox; confirming
+ * re-reads the Inbox once (no `cached`) so it never acts on a superseded item.
+ */
 export async function readCurrentInboxPlan(
   item: OperatorInboxItem,
   workspaceId: string,
+  cached?: OperatorInboxResponse,
 ): Promise<ChangePlanRecord | null> {
   if (!item.source.planId) return null;
-  const projection = await fetchOperatorInbox(workspaceId);
+  const projection = cached ?? (await fetchOperatorInbox(workspaceId));
   if (!hasCurrentInboxChangePlanItem(item, projection, workspaceId)) return null;
   const plan = await fetchChangePlan(item.source.planId, {
     workspaceId,

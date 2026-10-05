@@ -1,12 +1,13 @@
 import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { useQuery } from "@tanstack/react-query";
-import { fetchApprovals } from "@goatcitadel/mission-control-shared/api/client";
+import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { humanizeToken, presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { Button } from "../../ui/Button";
 import { approvalExpiryLabel } from "../inbox/approval-preview";
+import { nullWhenMissing } from "../inbox/inbox-record-read";
 import { ChatPendingQuestion } from "./ChatPendingQuestion";
 import { RiskApprovalAction } from "./RiskApprovalAction";
 
@@ -26,19 +27,23 @@ export function ChatBlockers({ props }: { props: Blockers }) {
   const { activeWorkspaceId } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
   const pendingApproval = props.pendingApproval;
-  const reviewedApproval = useQuery({
-    queryKey: ["approvals", "cockpit-chat-review", workspaceId, pendingApproval?.approvalId],
-    queryFn: () => fetchApprovals({ status: "pending", workspaceId, limit: 200 }),
-    // Every risk RiskApprovalAction reviews needs the persisted evidence; only safe and caution are one-click.
-    enabled: Boolean(
-      pendingApproval && pendingApproval.riskLevel !== "safe" && pendingApproval.riskLevel !== "caution",
-    ),
-    staleTime: 0,
-  }).data?.items.find((record) => record.approvalId === pendingApproval?.approvalId);
+  const approvalId = pendingApproval?.approvalId;
+  const reviewedApproval =
+    useQuery({
+      // The same key as the Inbox approval detail, so moving between them is a cache hit (IN-11).
+      queryKey: ["approvals", "record", workspaceId, approvalId],
+      queryFn: ({ signal }) => nullWhenMissing(fetchApproval(approvalId!, { workspaceId, signal })),
+      // Every risk RiskApprovalAction reviews needs the persisted evidence; only safe and caution are one-click.
+      enabled: Boolean(approvalId && pendingApproval?.riskLevel !== "safe" && pendingApproval?.riskLevel !== "caution"),
+      staleTime: 0,
+    }).data ?? undefined;
   // Retained stream signals can omit risk metadata. Hydrate only from the
   // matching pending canonical record; unavailable/settled records stay closed.
   const approval =
-    pendingApproval && !pendingApproval.riskLevel && reviewedApproval?.status === "pending"
+    pendingApproval &&
+    !pendingApproval.riskLevel &&
+    reviewedApproval?.approvalId === pendingApproval.approvalId &&
+    reviewedApproval.status === "pending"
       ? {
           ...pendingApproval,
           kind: reviewedApproval.kind,

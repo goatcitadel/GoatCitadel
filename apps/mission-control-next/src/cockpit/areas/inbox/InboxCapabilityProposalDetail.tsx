@@ -7,6 +7,7 @@ import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/oper
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
+import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { inboxMatchesWorkspace } from "./inbox-presentation";
 
 const ACTIVE_STATUSES = new Set(["proposed", "validating", "pending_approval"]);
@@ -44,13 +45,15 @@ export function currentCapabilityProposal(
   return detail;
 }
 
+/** The proposal, still in this workspace's Inbox; the cached Inbox is used when given, else read once. */
 async function readCurrentProposal(
   item: OperatorInboxItem,
   workspaceId: string,
+  cached?: OperatorInboxResponse,
 ): Promise<CapabilityProposalDetailRecord | null> {
   if (item.kind !== "capability_proposal" || item.source.workspaceId !== workspaceId || !item.source.proposalId)
     return null;
-  const projection = await fetchOperatorInbox(workspaceId);
+  const projection = cached ?? (await fetchOperatorInbox(workspaceId));
   if (!inboxMatchesWorkspace(projection, workspaceId) || !projection.items.some((record) => record.id === item.id))
     return null;
   const detail = await fetchCapabilityProposal(item.source.proposalId);
@@ -61,10 +64,11 @@ export function InboxCapabilityProposalDetail({ item, workspaceId }: { item: Ope
   const { activeWorkspaceId } = useUiPreferences();
   const scopeRef = useRef(activeWorkspaceId ?? "default");
   scopeRef.current = activeWorkspaceId ?? "default";
+  const cached = useCachedInboxItem(workspaceId, item.id);
   const query = useQuery({
-    queryKey: ["capability", "inbox-proposal", workspaceId, item.id],
-    queryFn: () => readCurrentProposal(item, workspaceId),
-    enabled: Boolean(item.source.proposalId) && item.source.workspaceId === workspaceId,
+    queryKey: ["capability", "inbox-proposal", workspaceId, item.id, cached.fingerprint],
+    queryFn: () => readCurrentProposal(item, workspaceId, cached.projection),
+    enabled: Boolean(item.source.proposalId) && item.source.workspaceId === workspaceId && Boolean(cached.projection),
     staleTime: 0,
   });
   const current = query.isFetching || query.isError || scopeRef.current !== workspaceId ? null : query.data;

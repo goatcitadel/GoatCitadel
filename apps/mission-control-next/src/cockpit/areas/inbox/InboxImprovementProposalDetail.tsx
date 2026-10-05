@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { CuratorReviewItem, OperatorInboxItem } from "@goatcitadel/contracts";
+import type { CuratorReviewItem, OperatorInboxItem, OperatorInboxResponse } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import {
   approveImprovementCandidate,
@@ -10,6 +10,7 @@ import {
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
+import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 
@@ -39,9 +40,17 @@ export function canDecideImprovementProposal(
   );
 }
 
-async function readCurrentReview(item: OperatorInboxItem, workspaceId: string): Promise<CuratorReviewItem | null> {
+/**
+ * The review, still in this workspace's Inbox. Opening the detail checks the cached Inbox; the decision
+ * re-reads the Inbox once (no `cached`) so it never acts on a superseded item.
+ */
+async function readCurrentReview(
+  item: OperatorInboxItem,
+  workspaceId: string,
+  cached?: OperatorInboxResponse,
+): Promise<CuratorReviewItem | null> {
   if (!item.source.proposalId) return null;
-  const projection = await fetchOperatorInbox(workspaceId);
+  const projection = cached ?? (await fetchOperatorInbox(workspaceId));
   if (
     projection.workspaceId !== workspaceId ||
     !projection.items.some(
@@ -77,10 +86,11 @@ export function InboxImprovementProposalDetail({
   const [uncertain, setUncertain] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const cached = useCachedInboxItem(workspaceId, item.id);
   const query = useQuery({
-    queryKey: ["improvement", "inbox-review", workspaceId, item.source.proposalId],
-    queryFn: () => readCurrentReview(item, workspaceId),
-    enabled: Boolean(item.source.proposalId),
+    queryKey: ["improvement", "inbox-review", workspaceId, item.source.proposalId, cached.fingerprint],
+    queryFn: () => readCurrentReview(item, workspaceId, cached.projection),
+    enabled: Boolean(item.source.proposalId) && Boolean(cached.projection),
     staleTime: 0,
   });
   const scopeChanged = scopeRef.current !== workspaceId;

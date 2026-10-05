@@ -4,24 +4,31 @@ import type {
   ChatUserInputPromptAnswerRequest,
   ChatUserInputPromptRecord,
   OperatorInboxItem,
+  OperatorInboxResponse,
 } from "@goatcitadel/contracts";
 import { answerChatUserInputPrompt, fetchChatThread } from "@goatcitadel/mission-control-shared/api/chat";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
+import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { currentInboxUserInput, hasCurrentInboxUserInputItem } from "./inbox-user-input-guard";
 
 type Answer = ChatUserInputPromptAnswerRequest["response"];
 
+/**
+ * The question, still in this workspace's Inbox. Opening the detail checks the cached Inbox; answering
+ * re-reads the Inbox once (no `cached`). The prompt itself is only readable through its conversation.
+ */
 async function readCurrentQuestion(
   item: OperatorInboxItem,
   workspaceId: string,
+  cached?: OperatorInboxResponse,
 ): Promise<ChatUserInputPromptRecord | null> {
   if (!item.source.sessionId || !item.source.turnId || !item.source.promptId) return null;
-  const projection = await fetchOperatorInbox(workspaceId);
+  const projection = cached ?? (await fetchOperatorInbox(workspaceId));
   if (!hasCurrentInboxUserInputItem(item, projection, workspaceId)) return null;
   const thread = await fetchChatThread(item.source.sessionId);
   return currentInboxUserInput(item, projection, thread, workspaceId) ?? null;
@@ -41,10 +48,11 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
   const [outcomeUncertain, setOutcomeUncertain] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const cached = useCachedInboxItem(workspaceId, item.id);
   const query = useQuery({
-    queryKey: ["chat", "inbox-user-input", workspaceId, item.id, item.source.sessionId],
-    queryFn: () => readCurrentQuestion(item, workspaceId),
-    enabled: Boolean(item.source.sessionId && item.source.turnId && item.source.promptId),
+    queryKey: ["chat", "inbox-user-input", workspaceId, item.id, item.source.sessionId, cached.fingerprint],
+    queryFn: () => readCurrentQuestion(item, workspaceId, cached.projection),
+    enabled: Boolean(item.source.sessionId && item.source.turnId && item.source.promptId && cached.projection),
     staleTime: 0,
   });
   const scopeChanged = scopeRef.current !== workspaceId;
