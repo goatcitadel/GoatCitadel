@@ -96,6 +96,7 @@ describe("UX budget lane wiring", () => {
       [...lane.matchAll(/await (runUxBudget\w+)\(environment\)/g)].map((match) => match[1]),
       [
         "runUxBudgetRoutes",
+        "runUxBudgetIdleTraffic",
         "runUxBudgetInboxProposals",
         "runUxBudgetInboxChanges",
         "runUxBudgetInboxWaits",

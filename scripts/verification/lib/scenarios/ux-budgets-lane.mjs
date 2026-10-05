@@ -3,6 +3,7 @@ import { selectCockpitOwnerProofs } from "./ux-budget-owner-proofs.mjs";
 import { CHAT_VIEWPORTS, UX_BUDGET_ENFORCEMENT_DEFAULTS } from "./ux-budget-measurements.mjs";
 import { createUxBudgetBrowserFixtures } from "./ux-budget-browser-fixtures.mjs";
 import { runUxBudgetRoutes } from "./ux-budget-routes.mjs";
+import { runUxBudgetIdleTraffic } from "./ux-budget-idle-traffic.mjs";
 import { runUxBudgetInboxProposals } from "./ux-budget-inbox-proposals.mjs";
 import { runUxBudgetInboxChanges } from "./ux-budget-inbox-changes.mjs";
 import { runUxBudgetInboxWaits } from "./ux-budget-inbox-waits.mjs";
@@ -124,6 +125,7 @@ export async function runUxBudgetsLane(context, options = {}, deps) {
       ...createUxBudgetBrowserFixtures({ browser, stack, fixture, deps }),
     };
     await runUxBudgetRoutes(environment);
+    await runUxBudgetIdleTraffic(environment);
     await runUxBudgetInboxProposals(environment);
     await runUxBudgetInboxChanges(environment);
     await runUxBudgetInboxWaits(environment);
