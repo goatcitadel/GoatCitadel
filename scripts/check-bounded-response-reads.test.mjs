@@ -58,6 +58,25 @@ test("bounded response read checker ignores comments and strings", () => {
   assert.deepEqual(violations, []);
 });
 
+test("bounded response read checker ignores argument-taking methods that share a body-reader name", () => {
+  const violations = collectRawResponseReadViolations(
+    "packages/policy-engine/src/presentation-pdf.ts",
+    `
+      page.text(37, 516, footer, { font: "regular", size: 10 });
+      page.text(
+        x,
+        y,
+        label,
+      );
+      const raw = await response.text( );
+    `,
+  );
+
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].display, ".text()");
+  assert.equal(violations[0].line, 8);
+});
+
 test("bounded response read checker flags raw response reads in policy-engine", () => {
   const violations = collectRawResponseReadViolations(
     "packages/policy-engine/src/some-module.ts",

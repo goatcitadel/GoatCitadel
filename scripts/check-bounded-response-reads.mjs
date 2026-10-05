@@ -41,11 +41,13 @@ const BOUNDED_BY_CONSTRUCTION_METHODS = new Set(["text", "json", "arrayBuffer"])
 const bareFetchPattern = /\bfetch\s*\(/g;
 
 const bodyReadPatterns = [
-  { method: "text", display: ".text()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*text\s*\(/g },
-  { method: "json", display: ".json()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*json\s*\(/g },
-  { method: "arrayBuffer", display: ".arrayBuffer()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*arrayBuffer\s*\(/g },
-  { method: "blob", display: ".blob()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*blob\s*\(/g },
-  { method: "formData", display: ".formData()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*formData\s*\(/g },
+  // Response body readers take no arguments, so only zero-argument calls are matched; this keeps
+  // unrelated APIs such as the PDF writer's `page.text(x, y, label, style)` out of the guard.
+  { method: "text", display: ".text()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*text\s*\(\s*\)/g },
+  { method: "json", display: ".json()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*json\s*\(\s*\)/g },
+  { method: "arrayBuffer", display: ".arrayBuffer()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*arrayBuffer\s*\(\s*\)/g },
+  { method: "blob", display: ".blob()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*blob\s*\(\s*\)/g },
+  { method: "formData", display: ".formData()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*formData\s*\(\s*\)/g },
   {
     method: "body.getReader",
     display: ".body.getReader()",
