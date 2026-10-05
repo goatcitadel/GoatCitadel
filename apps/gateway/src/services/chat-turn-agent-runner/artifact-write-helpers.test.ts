@@ -142,6 +142,34 @@ describe("thread-grounded presentation artifacts", () => {
     ).toBe("/api/v1/files/download?relativePath=goatcitadel_out%2Fnotes.txt");
   });
 
+  it("describes a presentations.create PDF as a PDF slide deck", () => {
+    const workspaceRoot = path.resolve("workspace");
+    const artifactPath = path.join(workspaceRoot, "goatcitadel_out", "tonight.pdf");
+    const downloadHref = buildWorkspaceFileDownloadHref(artifactPath, workspaceRoot);
+    const run = {
+      toolRunId: "tool-run-pdf-deck",
+      sessionId: "session-pdf-deck",
+      turnId: "turn-pdf-deck",
+      toolName: "presentations.create",
+      status: "executed" as const,
+      args: { path: "./workspace/goatcitadel_out/tonight.pdf", format: "pdf" },
+      result: { path: artifactPath, bytesWritten: 42, slideCount: 4, format: "pdf" },
+      startedAt: "2026-10-04T00:00:00.000Z",
+      finishedAt: "2026-10-04T00:00:01.000Z",
+    };
+
+    const delivered = mergePresentationArtifactDeliveryContent("", run, { downloadHref });
+    expect(delivered).toContain(`Created the PDF slide deck at \`${artifactPath}\`.`);
+    expect(delivered).toContain(`[Download the PDF slide deck](${downloadHref})`);
+    expect(delivered).not.toContain("PowerPoint");
+    expect(mergeWorkspaceFileDownloadContent("Ready.", run, downloadHref)).toContain(
+      `[Download the PDF slide deck](${downloadHref})`,
+    );
+    expect(
+      mergePresentationArtifactDeliveryContent("", { ...run, status: "failed", result: undefined, error: "it failed" }),
+    ).toBe("I tried to create the PDF slide deck with `presentations.create`, but it failed.");
+  });
+
   it("upgrades matching legacy sandbox links for governed document writes", () => {
     const workspaceRoot = path.resolve("workspace");
     const artifactPath = path.join(workspaceRoot, "goatcitadel_out", "research brief.docx");

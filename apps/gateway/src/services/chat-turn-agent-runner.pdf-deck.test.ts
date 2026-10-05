@@ -61,6 +61,75 @@ describe("ChatTurnAgentRunner deck-style PDF requests", () => {
     );
   });
 
+  it("steers the deck to presentations.create as a PDF and delivers it as a PDF slide deck", async () => {
+    const providerRequests: ChatCompletionRequest[] = [];
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockImplementationOnce(async (request) => {
+        providerRequests.push(request);
+        return namedToolCallCompletion("presentations.create", {
+          path: "./workspace/goatcitadel_out/fun-things-tonight-91303.pdf",
+          format: "pdf",
+          title: "Fun Things To Do Tonight Near 91303",
+          slides: [
+            {
+              title: "Evening Plans Around 91303",
+              bullets: [
+                "Westfield Topanga in Canoga Park offers dining and entertainment until 7 PM tonight.",
+                "The Village at Topanga adds outdoor dining and an easy evening walk.",
+              ],
+            },
+            {
+              title: "Late Fun Tonight",
+              bullets: ["Catch a late movie or go bowling after dinner.", "Check showtimes before heading out."],
+            },
+          ],
+        });
+      })
+      .mockImplementationOnce(async (request) => {
+        providerRequests.push(request);
+        return completion("Your deck of fun things to do tonight near 91303 is ready as a PDF.");
+      });
+    const invokeTool = vi.fn(
+      async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: {
+          path: `${WORKSPACE_ROOT}/goatcitadel_out/fun-things-tonight-91303.pdf`,
+          bytesWritten: 9_216,
+          format: "pdf",
+          mimeType: "application/pdf",
+          title: request.args.title,
+          slideCount: 3,
+        },
+      }),
+    );
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["presentations.create", "documents.create"]),
+      createChatCompletion,
+      invokeTool,
+      workspaceFileRootDir: WORKSPACE_ROOT,
+    });
+
+    const result = await orchestrator.run(turnInput({ content: PDF_DECK_PROMPT }));
+
+    expect(
+      providerRequests[0]?.messages.some(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.includes('presentations.create using format "pdf"'),
+      ),
+    ).toBe(true);
+    expect(invokeTool.mock.calls.map(([request]) => request.toolName)).toEqual(["presentations.create"]);
+    expect(invokeTool.mock.calls[0]?.[0].args).toMatchObject({ format: "pdf" });
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.assistantContent).toContain(
+      "[Download the PDF slide deck](/api/v1/files/download?relativePath=goatcitadel_out%2Ffun-things-tonight-91303.pdf)",
+    );
+    expect(result.assistantContent).not.toContain("PowerPoint");
+  });
+
   it("names the PDF deck, not a PowerPoint, when nothing was created", async () => {
     const createChatCompletion = vi
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()

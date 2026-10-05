@@ -582,9 +582,10 @@ export function mergePresentationArtifactDeliveryContent(
   toolRun: ChatToolRunRecord,
   options?: { downloadHref?: string },
 ): string {
+  const pdfDeck = isPdfPresentationRun(toolRun);
   if (toolRun.status !== "executed") {
     const failure = toolRun.error ?? "the presentation tool did not complete";
-    const fallback = `I tried to create the PowerPoint artifact with \`presentations.create\`, but ${failure}.`;
+    const fallback = `I tried to create the ${pdfDeck ? "PDF slide deck" : "PowerPoint artifact"} with \`presentations.create\`, but ${failure}.`;
     return existingContent.trim().length > 0 ? `${existingContent.trim()}\n\n${fallback}` : fallback;
   }
   const result = (toolRun.result ?? {}) as Record<string, unknown>;
@@ -595,12 +596,18 @@ export function mergePresentationArtifactDeliveryContent(
         ? result.fallbackPath
         : typeof toolRun.args?.path === "string"
           ? toolRun.args.path
-          : "the requested PPTX path";
+          : pdfDeck
+            ? "the requested PDF path"
+            : "the requested PPTX path";
   const slideCount = typeof result.slideCount === "number" ? result.slideCount : undefined;
   const bytesWritten = typeof result.bytesWritten === "number" ? result.bytesWritten : undefined;
   const trimmed = stripSandboxPresentationDownloadLinks(existingContent).trim();
   const delivery = [
-    trimmed.includes(path) ? undefined : `Created the PowerPoint presentation artifact at \`${path}\`.`,
+    trimmed.includes(path)
+      ? undefined
+      : pdfDeck
+        ? `Created the PDF slide deck at \`${path}\`.`
+        : `Created the PowerPoint presentation artifact at \`${path}\`.`,
     slideCount !== undefined && !new RegExp(`\\bSlides:\\s*${slideCount}\\b`, "iu").test(trimmed)
       ? `Slides: ${slideCount}.`
       : undefined,
@@ -608,7 +615,7 @@ export function mergePresentationArtifactDeliveryContent(
       ? `Size: ${bytesWritten} bytes.`
       : undefined,
     options?.downloadHref && !trimmed.includes(options.downloadHref)
-      ? `[Download the PowerPoint](${options.downloadHref})`
+      ? `[${presentationDownloadLabel(toolRun)}](${options.downloadHref})`
       : undefined,
   ]
     .filter((part): part is string => Boolean(part))
@@ -687,12 +694,32 @@ export function mergeWorkspaceFileDownloadContent(
   }
   const label =
     toolRun.toolName === "presentations.create"
-      ? "Download the PowerPoint"
+      ? presentationDownloadLabel(toolRun)
       : toolRun.toolName === "documents.create"
         ? "Download the document"
         : `Download ${fileName}`;
   const link = `[${label}](${downloadHref})`;
   return upgraded.trim() ? `${upgraded.trim()}\n\n${link}` : link;
+}
+
+/** presentations.create writes a PowerPoint by default and a deck-style PDF on request. */
+export function isPdfPresentationRun(toolRun: ChatToolRunRecord): boolean {
+  if (toolRun.toolName !== "presentations.create") {
+    return false;
+  }
+  const result = (toolRun.result ?? {}) as Record<string, unknown>;
+  if (typeof result.format === "string") {
+    return result.format.toLowerCase() === "pdf";
+  }
+  const args = toolRun.args ?? {};
+  if (typeof args.format === "string" && args.format.trim()) {
+    return args.format.trim().toLowerCase() === "pdf";
+  }
+  return typeof args.path === "string" && /\.pdf$/iu.test(args.path.trim());
+}
+
+function presentationDownloadLabel(toolRun: ChatToolRunRecord): string {
+  return isPdfPresentationRun(toolRun) ? "Download the PDF slide deck" : "Download the PowerPoint";
 }
 
 function replaceMatchingSandboxWorkspaceFileLink(content: string, fileName: string, downloadHref: string): string {

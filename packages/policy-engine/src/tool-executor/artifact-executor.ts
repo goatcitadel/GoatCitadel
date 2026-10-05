@@ -23,7 +23,10 @@ import {
   presentationSlideText,
   validatePresentationVisibleContent,
   validateResearchPresentation,
+  type PresentationRenderManifest,
+  type PresentationResearch,
 } from "../presentation-model.js";
+import { createPresentationPdf, type PresentationPdfInput } from "../presentation-pdf.js";
 import {
   createPresentationPptxWithDiagnostics,
   type PresentationPackageAuditor,
@@ -164,7 +167,8 @@ async function presentationsCreate(
   runtime: PresentationArtifactRuntime,
 ) {
   const requestedPath = required(args.path, "path");
-  const p = ensurePptxPath(requestedPath);
+  const format = resolvePresentationFormat(asString(args.format), requestedPath);
+  const p = ensurePresentationPath(requestedPath, format);
   assertWritePathInJail(p, config.sandbox.writeJailRoots);
   assertStructuredResearchGrounding(args, runtime.request);
   assertNoModelCallablePresentationNotes(args.slides);
@@ -199,7 +203,7 @@ async function presentationsCreate(
       bullets: presentationSlideText(slide),
       speakerNotes: slide.speakerNotes,
     })),
-    format: "pptx",
+    format,
     design: normalizePresentationDesignInput(args),
     destination: args.destination,
   });
@@ -216,31 +220,31 @@ async function presentationsCreate(
   const preparedVisuals = await preparePresentationVisuals(runtime);
   const mappedVisualSlideIndexes = new Set(preparedVisuals.assets.map((item) => item.slideIndex));
   const deckQuality = analyzePresentationDeckQuality(design, deckSlides, mappedVisualSlideIndexes);
-  const pptx = await createPresentationPptxWithDiagnostics(
-    {
-      title,
-      subtitle: subtitle || undefined,
-      slides,
-      research,
-      sources: normalizedSources.sources,
-      slidesPrepared: true,
-      design,
-      visualAsset,
-      visualAssets: preparedVisuals.assets.map((item) => ({ slideIndex: item.slideIndex, asset: item.asset })),
-    },
-    runtime.presentationPackageAuditor ? { auditPackage: runtime.presentationPackageAuditor } : {},
-  );
+  const rendererInput: PresentationPdfInput = {
+    title,
+    subtitle: subtitle || undefined,
+    slides,
+    sources: normalizedSources.sources,
+    design,
+    visualAsset,
+    visualAssets: preparedVisuals.assets.map((item) => ({ slideIndex: item.slideIndex, asset: item.asset })),
+  };
+  const rendered =
+    format === "pdf"
+      ? await renderPresentationPdfArtifact(rendererInput, deckQuality)
+      : await renderPresentationPptxArtifact({ ...rendererInput, research }, deckQuality, runtime);
   const full = path.resolve(p);
   await fs.mkdir(path.dirname(full), { recursive: true });
-  await fs.writeFile(full, pptx.buffer);
+  await fs.writeFile(full, rendered.buffer);
   return {
     path: full,
-    bytesWritten: pptx.buffer.length,
-    format: "pptx",
+    bytesWritten: rendered.buffer.length,
+    format,
+    mimeType: rendered.mimeType,
     title,
-    slideCount: pptx.manifest.slideCount,
-    renderer: pptx.renderer,
-    warnings: [...preparedVisuals.warnings, ...pptx.warnings],
+    slideCount: rendered.manifest.slideCount,
+    renderer: rendered.renderer,
+    warnings: [...preparedVisuals.warnings, ...rendered.warnings],
     visualAsset: visualAsset
       ? {
           source: visualAsset.source,
@@ -264,21 +268,21 @@ async function presentationsCreate(
           sourceCount: normalizedSources.sources.length,
         }
       : undefined,
-    renderManifest: pptx.manifest,
-    packageAudit: pptx.packageAudit,
+    renderManifest: rendered.manifest,
+    packageAudit: rendered.packageAudit,
     designReport: buildArtifactDesignReport(design, {
       localPath: full,
-      usedAssetIds: pptx.usedAssetIds,
-      validationResults: presentationValidationResults(deckQuality, pptx),
+      usedAssetIds: rendered.usedAssetIds,
+      validationResults: rendered.validationResults,
       residualRisks: buildPresentationResidualRisks(
-        [...preparedVisuals.warnings, ...pptx.warnings],
+        [...preparedVisuals.warnings, ...rendered.warnings],
         [
           ...presentationQualityFindings(deckQuality),
           ...presentationAssetSpecificityFindings(visualAsset, preparedVisuals.assets.length, design.mode),
         ],
       ),
       designQuality: {
-        retryAttempted: pptx.retryAttempted,
+        retryAttempted: rendered.retryAttempted,
         findings: [
           ...presentationQualityFindings(deckQuality),
           ...presentationAssetSpecificityFindings(visualAsset, preparedVisuals.assets.length, design.mode),
@@ -294,15 +298,86 @@ async function presentationsCreate(
             : "No Gateway presentation-grounding receipt was attached to this direct artifact invocation.",
         },
         visualLayout: {
-          status: preparedVisuals.warnings.length > 0 || pptx.warnings.length > 0 ? "warning" : "passed",
+          status: preparedVisuals.warnings.length > 0 || rendered.warnings.length > 0 ? "warning" : "passed",
           detail:
-            preparedVisuals.warnings.length > 0 || pptx.warnings.length > 0
-              ? [...preparedVisuals.warnings, ...pptx.warnings].join(" ")
+            preparedVisuals.warnings.length > 0 || rendered.warnings.length > 0
+              ? [...preparedVisuals.warnings, ...rendered.warnings].join(" ")
               : `Rendered ${slides.length + 1} slides with ${preparedVisuals.assets.length + (visualAsset ? 1 : 0)} provider visual(s) and content-aware native layouts.`,
         },
       },
     }),
   };
+}
+
+type PresentationArtifactFormat = "pptx" | "pdf";
+
+interface RenderedPresentationArtifact {
+  buffer: Buffer;
+  mimeType: string;
+  manifest: PresentationRenderManifest;
+  renderer: PresentationPptxDiagnostics["renderer"] | "native-pdf";
+  warnings: string[];
+  usedAssetIds: string[];
+  retryAttempted: boolean;
+  packageAudit?: PresentationPptxDiagnostics["packageAudit"];
+  validationResults: Record<string, Partial<Pick<ArtifactValidationCheck, "status" | "detail">>>;
+}
+
+async function renderPresentationPptxArtifact(
+  input: PresentationPdfInput & { research?: PresentationResearch },
+  deckQuality: PresentationDeckQualitySummary,
+  runtime: PresentationArtifactRuntime,
+): Promise<RenderedPresentationArtifact> {
+  const pptx = await createPresentationPptxWithDiagnostics(
+    { ...input, slidesPrepared: true },
+    runtime.presentationPackageAuditor ? { auditPackage: runtime.presentationPackageAuditor } : {},
+  );
+  return {
+    buffer: pptx.buffer,
+    mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    manifest: pptx.manifest,
+    renderer: pptx.renderer,
+    warnings: pptx.warnings,
+    usedAssetIds: pptx.usedAssetIds,
+    retryAttempted: pptx.retryAttempted,
+    packageAudit: pptx.packageAudit,
+    validationResults: presentationValidationResults(deckQuality, pptx),
+  };
+}
+
+async function renderPresentationPdfArtifact(
+  input: PresentationPdfInput,
+  deckQuality: PresentationDeckQualitySummary,
+): Promise<RenderedPresentationArtifact> {
+  const pdf = await createPresentationPdf(input);
+  return {
+    buffer: pdf.buffer,
+    mimeType: "application/pdf",
+    manifest: pdf.manifest,
+    renderer: "native-pdf",
+    warnings: pdf.warnings,
+    usedAssetIds: pdf.usedAssetIds,
+    retryAttempted: false,
+    validationResults: {
+      ...presentationValidationResults(deckQuality),
+      "pdf-render": {
+        status: pdf.warnings.length > 0 ? "warning" : "passed",
+        detail:
+          pdf.warnings.length > 0
+            ? pdf.warnings.join(" ")
+            : `Rendered ${pdf.manifest.slideCount} landscape slide page(s) with the deck design tokens and standard PDF fonts.`,
+      },
+    },
+  };
+}
+
+function resolvePresentationFormat(value: string | undefined, requestedPath: string): PresentationArtifactFormat {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "pdf") return "pdf";
+  if (normalized && !["pptx", "ppt", "powerpoint"].includes(normalized)) {
+    throw new Error(`presentations.create format must be "pptx" or "pdf"; received "${value}".`);
+  }
+  return !normalized && /\.pdf$/iu.test(requestedPath) ? "pdf" : "pptx";
 }
 
 function assertPresentationLayoutQualityBeforeVisuals(
@@ -665,12 +740,13 @@ function normalizeDocumentBullets(value: unknown): string[] {
     .slice(0, 12);
 }
 
-function ensurePptxPath(value: string): string {
-  if (/\.pptx$/i.test(value)) {
+function ensurePresentationPath(value: string, format: PresentationArtifactFormat): string {
+  const extension = `.${format}`;
+  if (value.toLowerCase().endsWith(extension)) {
     return value;
   }
   const parsed = path.parse(value);
-  const fileName = parsed.name ? `${parsed.name}.pptx` : "presentation.pptx";
+  const fileName = parsed.name ? `${parsed.name}${extension}` : `presentation${extension}`;
   return path.join(parsed.dir, fileName);
 }
 

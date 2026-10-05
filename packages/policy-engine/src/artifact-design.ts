@@ -317,7 +317,7 @@ export function createArtifactDesignPlan(input: ArtifactDesignPlanInput): Artifa
     layouts:
       mode === "plain" || mode === "minimal" ? ARTIFACT_LAYOUT_LIBRARY.data : ARTIFACT_LAYOUT_LIBRARY[input.kind],
     assetPlan: buildAssetPlan(input, mode, assetPolicy),
-    validationChecks: buildValidationChecks(input.kind, mode, destination),
+    validationChecks: buildValidationChecks(input.kind, mode, destination, input.format),
     guideReferences: ARTIFACT_DESIGN_GUIDES,
     destination,
     outputNotes: buildOutputNotes(input.kind, destination),
@@ -533,6 +533,7 @@ function buildValidationChecks(
   kind: ArtifactKind,
   mode: ArtifactDesignMode,
   destination: ArtifactDestinationRequest,
+  format?: string,
 ): ArtifactValidationCheck[] {
   const plainDesign = kind === "data" || mode === "minimal" || mode === "plain";
   const checks: ArtifactValidationCheck[] = [
@@ -592,12 +593,21 @@ function buildValidationChecks(
     },
   ];
   if (kind === "presentation") {
-    checks.push({
-      id: "pptx-package",
-      label: "PowerPoint package validity",
-      status: "planned",
-      detail: "Deck output should include valid relationships, theme parts, slide content, and visual media.",
-    });
+    checks.push(
+      format?.toLowerCase() === "pdf"
+        ? {
+            id: "pdf-render",
+            label: "PDF deck render",
+            status: "planned",
+            detail: "Deck output should render every slide as a landscape page with the deck design and readable text.",
+          }
+        : {
+            id: "pptx-package",
+            label: "PowerPoint package validity",
+            status: "planned",
+            detail: "Deck output should include valid relationships, theme parts, slide content, and visual media.",
+          },
+    );
     checks.push({
       id: "presentation-template",
       label: "Presentation template discipline",

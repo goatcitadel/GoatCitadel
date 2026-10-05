@@ -4033,6 +4033,12 @@ export class ChatTurnAgentRunner {
         content: buildResearchArtifactSearchCompletionInstruction(),
       } as ChatCompletionMessage);
     }
+    if (intents.presentationPdf && toolSchema.canonicalToModel.has("presentations.create")) {
+      conversationMessages.push({
+        role: "system",
+        content: buildPdfDeckDeliveryInstruction(),
+      } as ChatCompletionMessage);
+    }
 
     if (!assistantContent && !approvalPayload && !pendingUserInput) {
       try {
@@ -9863,6 +9869,14 @@ function buildEvidenceGroundingInstruction(): string {
     "- If you cannot verify a specific claim from the tool results, do not present it as verified. Use hedging language or omit it.",
     "- Cite only the few URLs that directly support the key claims you make. Do not append long source inventories.",
     "- If the results are insufficient to answer the question well, tell the user what was found and what is missing.",
+  ].join("\n");
+}
+
+function buildPdfDeckDeliveryInstruction(): string {
+  return [
+    "Deck delivery format for this turn:",
+    '- The user asked for a slide deck saved as a PDF. Create it with presentations.create using format "pdf" and a .pdf path.',
+    "- Do not use documents.create for this deck: its PDFs are plain documents without the slide design.",
   ].join("\n");
 }
 

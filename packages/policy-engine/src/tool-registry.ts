@@ -1871,13 +1871,21 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     category: "knowledge",
     riskLevel: "caution",
     requiresApproval: false,
-    description: "Create a real PowerPoint .pptx deck in a jailed workspace path.",
+    description:
+      "Create a real slide deck in a jailed workspace path: a PowerPoint .pptx (default) or a deck-style PDF with one landscape page per slide.",
     argSchema: {
       type: "object",
       properties: {
         path: {
           type: "string",
-          description: "Output path for the .pptx file. Use a safe workspace or artifacts path when none is provided.",
+          description:
+            "Output path for the deck file (.pptx, or .pdf when format is pdf). Use a safe workspace or artifacts path when none is provided.",
+        },
+        format: {
+          type: "string",
+          enum: ["pptx", "pdf"],
+          description:
+            "Deck file format. Use pdf when the user wants the slides saved or exported as a PDF; defaults to pptx (or pdf for a .pdf path).",
         },
         title: { type: "string" },
         subtitle: { type: "string" },
@@ -2069,12 +2077,27 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
           ],
         },
       },
+      {
+        title: "Create a slide deck saved as a PDF",
+        args: {
+          path: "./workspace/artifacts/weekend-plans.pdf",
+          format: "pdf",
+          title: "Weekend Plans",
+          slides: [
+            {
+              title: "Saturday Evening",
+              bullets: ["Catch the outdoor movie at the park.", "Grab dinner nearby before the 7 PM showing."],
+            },
+          ],
+        },
+      },
     ],
     pack: "knowledge",
     recommendedContexts: ["chat", "cowork", "code"],
     preferredForIntents: ["presentation", "slide_deck", "powerpoint", "artifact_output", "document_generation"],
     usageHints: [
       "Use when the user asks for PowerPoint, PPTX, slides, a slide deck, or a presentation file.",
+      'When the user wants the deck saved or exported as a PDF ("deck style, saved as a PDF"), use this tool with format "pdf" and a .pdf path instead of documents.create, so the PDF keeps the slide design.',
       "Do not satisfy a requested PowerPoint by returning markdown-only slide text unless this tool is unavailable or blocked.",
       "Use design.mode polished or design.preset when the user asks for a visually appealing deck.",
       "Set design.skillId to design-intelligence for non-plain decks so Design Quality V1 checks asset specificity, layout integrity, and placeholder/provenance cleanup.",
