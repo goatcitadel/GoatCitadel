@@ -1,3 +1,4 @@
+import type { QueryKey } from "@tanstack/react-query";
 import type { RefreshTopic } from "@goatcitadel/mission-control-shared/state/refresh-bus";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 
@@ -37,3 +38,18 @@ export const queryKeys = {
   systemDiagnostics: (): TopicKey => ["system", "diagnostics"],
   systemBoards: (workspaceId: string): TopicKey => ["surface", "saved-boards", workspaceId],
 };
+
+/**
+ * Prefixes of every cockpit query whose reader calls `fetchSettings`. A settings save publishes no settings
+ * event of its own, so these refresh from its change plan (see `event-map.ts`). Kept complete by
+ * `settings-readers.inventory.test.ts`.
+ */
+export const SETTINGS_READER_KEYS: readonly QueryKey[] = [
+  ["system", "managed-runtime-settings"],
+  ["system", "settings-budget-mode"],
+  ["system", "settings-approval-mode"],
+  ["system", "first-run-defaults"],
+  ["settings", "gateway-auth"],
+  ["settings", "permission-selection"],
+  ["settings", "local-operator-overrides"],
+];

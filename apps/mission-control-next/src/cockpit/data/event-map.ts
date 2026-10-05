@@ -2,7 +2,7 @@ import type { QueryKey } from "@tanstack/react-query";
 import type { RealtimeEvent } from "@goatcitadel/mission-control-shared/api/shell-client";
 import { deriveRealtimeRefresh } from "@goatcitadel/mission-control-shared/state/realtime-derived";
 import type { RefreshTopic } from "@goatcitadel/mission-control-shared/state/refresh-bus";
-import { queryKeys } from "./query-keys";
+import { queryKeys, SETTINGS_READER_KEYS } from "./query-keys";
 
 /** The cockpit query prefixes an event changes, and the shared refresh-bus topics it signals. */
 export interface EventEffect {
@@ -43,6 +43,12 @@ const IGNORED_TYPES = new Set([
   "proactive_tick_started",
   "proactive_no_action",
 ]);
+
+/** A governed settings save moves through a change plan on `runtime_settings`; no settings event exists. */
+function changesRuntimeSettings(event: RealtimeEvent): boolean {
+  const owner = event.payload?.targetOwnerId;
+  return typeof owner === "string" && (owner === "runtime_settings" || owner.startsWith("runtime_settings."));
+}
 
 const DIRECTORY_KEYS: readonly QueryKey[] = [
   queryKeys.directory(),
@@ -104,7 +110,14 @@ const SOURCE_RULES = new Map<string, Rule>([
   ["memory", () => effect([queryKeys.memory(), ["library", "resources", "memory"], queryKeys.inboxAll()], ["memory"])],
   ["improvement", () => effect([queryKeys.improvement(), queryKeys.inboxAll()], ["improvement"])],
   ["curator", () => effect(CAPABILITY_KEYS, ["skills"])],
-  ["evolution_control_plane", () => effect([queryKeys.inboxAll(), ["change-plan"]], ["approvals"])],
+  [
+    "evolution_control_plane",
+    (e) =>
+      effect(
+        [queryKeys.inboxAll(), ["change-plan"], ...(changesRuntimeSettings(e) ? SETTINGS_READER_KEYS : [])],
+        ["approvals"],
+      ),
+  ],
   ["capabilities", () => effect(CAPABILITY_KEYS, ["skills"])],
   ["skills", () => effect([queryKeys.capabilities()], ["skills"])],
   // A tool call inside a turn changes no catalog or grant; the turn's own chat events carry it.

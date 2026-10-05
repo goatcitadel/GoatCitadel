@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RealtimeEvent, RealtimeEventType } from "@goatcitadel/contracts";
 import { resolveRealtimeEvent } from "./event-map";
-import { queryKeys } from "./query-keys";
+import { queryKeys, SETTINGS_READER_KEYS } from "./query-keys";
 
 function event(eventType: string, source: string, extra: Partial<RealtimeEvent> = {}): RealtimeEvent {
   return {
@@ -70,6 +70,25 @@ describe("resolveRealtimeEvent", () => {
     expect(resolveRealtimeEvent(event("approval_resolved", "approvals", { links: { approvalId: "a-1" } }))).toEqual({
       kind: "mapped",
       effect: { keys: [["approvals"]], refresh: ["approvals"] },
+    });
+  });
+
+  it("refreshes every settings reader when a runtime settings change plan moves", () => {
+    for (const targetOwnerId of ["runtime_settings", "runtime_settings.llm_defaults"]) {
+      const result = resolveRealtimeEvent(
+        event("change_plan.completed", "evolution_control_plane", { payload: { targetOwnerId, planId: "p-1" } }),
+      );
+      expect(result.kind).toBe("mapped");
+      const keys = result.kind === "mapped" ? result.effect.keys : [];
+      for (const key of SETTINGS_READER_KEYS) expect(keys).toContainEqual(key);
+      expect(keys).toContainEqual(queryKeys.inboxAll());
+    }
+    const other = resolveRealtimeEvent(
+      event("change_plan.completed", "evolution_control_plane", { payload: { targetOwnerId: "runtime_settings_x" } }),
+    );
+    expect(other).toEqual({
+      kind: "mapped",
+      effect: { keys: [queryKeys.inboxAll(), ["change-plan"]], refresh: ["approvals"] },
     });
   });
 
