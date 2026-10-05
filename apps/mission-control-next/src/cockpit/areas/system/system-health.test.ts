@@ -28,7 +28,15 @@ describe("complete cockpit health projection", () => {
       llama: { state: "current", value: { enabled: true, healthy: false, processState: "error" } },
       npu: { state: "current", value: { enabled: false, healthy: false, processState: "stopped" } },
       connections: { state: "current", value: [{ kind: "external_connector", enabled: true, status: "error" }] },
-      channels: { state: "current", value: { enabledCount: 1, checked: [{ connection: { kind: "channel", enabled: true }, runtime: { state: "current", value: { ready: false } } }] } },
+      channels: {
+        state: "current",
+        value: {
+          enabledCount: 1,
+          checked: [
+            { connection: { kind: "channel", enabled: true }, runtime: { state: "current", value: { ready: false } } },
+          ],
+        },
+      },
       workers: { state: "current", value: { items: [{ posture: { value: "active" } }] } },
     } as unknown as SystemHealthSources;
     const checks = deriveSystemHealthChecks(sources, updates);
@@ -51,7 +59,10 @@ describe("complete cockpit health projection", () => {
     } as unknown as SystemHealthSources;
     const checks = deriveSystemHealthChecks(sources, null, "verified");
     for (const id of ["models", "channels", "integrations", "remote_workers"] as const) {
-      expect(checks.find((check) => check.id === id)).toMatchObject({ notSetUp: true, status: { label: "Not set up" } });
+      expect(checks.find((check) => check.id === id)).toMatchObject({
+        notSetUp: true,
+        status: { label: "Not set up" },
+      });
     }
     expect(checks.find((check) => check.id === "updates")?.status.label).toBe("Desktop app only");
     expect(checks.find((check) => check.id === "backups")?.status.label).toBe("Verified");
