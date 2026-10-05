@@ -130,9 +130,17 @@ export function resolveChatRefreshPlan(
     };
   }
   if (eventType === "chat_thread_updated") {
+    // The sessions list carries each conversation's status, so it reloads too (coalesced by the subscription).
     return {
-      refreshSidebar: false,
+      refreshSidebar: true,
       refreshSession: "full",
+    };
+  }
+  if ((signal.source ?? "").toLowerCase() === "approvals") {
+    // A conversation waiting on (or released from) an approval changes the status the sessions list shows.
+    return {
+      refreshSidebar: true,
+      refreshSession: "none",
     };
   }
   if (eventType === "chat_session_title_updated") {

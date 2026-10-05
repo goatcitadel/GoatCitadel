@@ -75,8 +75,14 @@ describe("chat-page-pure-helpers coverage", () => {
       refreshSession: "full",
     });
     expect(resolveChatRefreshPlan({ eventType: "chat_thread_updated", reason: "assistant", source: "sse" })).toEqual({
-      refreshSidebar: false,
+      refreshSidebar: true,
       refreshSession: "full",
+    });
+    expect(
+      resolveChatRefreshPlan({ eventType: "approval_created", reason: "approval_created", source: "approvals" }),
+    ).toEqual({
+      refreshSidebar: true,
+      refreshSession: "none",
     });
     expect(
       resolveChatRefreshPlan({ eventType: "chat_session_title_updated", reason: "rename", source: "sse" }),

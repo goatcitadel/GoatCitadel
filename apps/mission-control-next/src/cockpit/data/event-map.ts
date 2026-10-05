@@ -81,7 +81,8 @@ const SYSTEM_SOURCE_TYPES = new Map<string, EventEffect | "ignore">([
 /** Owner sources. Keys are cockpit query prefixes; owners that feed the Inbox also refresh the Inbox. */
 const SOURCE_RULES = new Map<string, Rule>([
   ["operator_inbox", () => undefined], // inbox.changed is handled before the map (needs workspace scope)
-  ["approvals", () => effect([["approvals"]], ["approvals"])],
+  // An approval tied to a conversation changes the status the Chat rail shows for it.
+  ["approvals", (e) => effect([["approvals"]], e.links?.sessionId ? ["approvals", "chat"] : ["approvals"])],
   ["auth", () => effect([["approvals"], ["settings", "device-grants"]], ["approvals"])],
   ["chat", () => effect([["chat"]], ["chat"])],
   ["chat.timer", () => effect([["chat"]], ["chat"])],

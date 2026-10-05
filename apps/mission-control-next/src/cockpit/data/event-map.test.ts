@@ -63,6 +63,16 @@ describe("resolveRealtimeEvent", () => {
     });
   });
 
+  it("signals Chat for an approval tied to a conversation, so the rail status follows it", () => {
+    expect(
+      resolveRealtimeEvent(event("approval_created", "approvals", { links: { sessionId: "s-1", approvalId: "a-1" } })),
+    ).toEqual({ kind: "mapped", effect: { keys: [["approvals"]], refresh: ["approvals", "chat"] } });
+    expect(resolveRealtimeEvent(event("approval_resolved", "approvals", { links: { approvalId: "a-1" } }))).toEqual({
+      kind: "mapped",
+      effect: { keys: [["approvals"]], refresh: ["approvals"] },
+    });
+  });
+
   it("maps workspace lifecycle under system to the directory readers only", () => {
     expect(resolveRealtimeEvent(event("workspace_updated", "system"))).toEqual({
       kind: "mapped",

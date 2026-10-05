@@ -90,3 +90,21 @@ it("shows the selected conversation's status on narrow screens from the same lis
   expect(host.textContent).toBe("");
   expect(mocks.status).not.toHaveBeenCalled();
 });
+
+it("dates a row's status once it is more than two minutes old, without a new read", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(new Date("2026-10-05T10:01:00.000Z"));
+    await act(async () => root.render(<ThreadList rail={rail} />));
+    const firstRow = () => host.querySelectorAll("li")[0]?.textContent ?? "";
+    expect(firstRow()).toContain("Working");
+    expect(firstRow()).not.toContain("as of");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000);
+    });
+    expect(firstRow()).toContain("Working · as of");
+    expect(mocks.status).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
