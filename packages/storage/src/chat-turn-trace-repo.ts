@@ -392,7 +392,11 @@ export class ChatTurnTraceRepository {
   }
 
   /** Completed turn traces across all sessions, oldest first — used by background consolidation watermark scans. */
-  public listCompletedSince(sinceIso: string, limit = 200, after?: { startedAt: string; turnId: string }): ChatTurnTraceRecord[] {
+  public listCompletedSince(
+    sinceIso: string,
+    limit = 200,
+    after?: { startedAt: string; turnId: string },
+  ): ChatTurnTraceRecord[] {
     const rows = toChatTurnTraceRows(
       this.listCompletedSinceStmt.all({
         sinceIso,

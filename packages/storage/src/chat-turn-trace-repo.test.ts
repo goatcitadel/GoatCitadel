@@ -163,13 +163,21 @@ describe("ChatTurnTraceRepository", () => {
       repo.create(baseTrace({ turnId: "turn-running" }));
       const since = "2026-03-26T00:00:00.000Z";
       const first = repo.listCompletedSince(since, 2);
-      assert.deepEqual(first.map(t => t.turnId), ["turn-a", "turn-b"]);
+      assert.deepEqual(
+        first.map((t) => t.turnId),
+        ["turn-a", "turn-b"],
+      );
       const last = first[1]!;
       const next = repo.listCompletedSince(since, 2, { startedAt: last.startedAt, turnId: last.turnId });
-      assert.deepEqual(next.map(t => t.turnId), ["turn-c"]);
+      assert.deepEqual(
+        next.map((t) => t.turnId),
+        ["turn-c"],
+      );
       assert.deepEqual(repo.listCompletedSince(since, 2, { startedAt: next[0]!.startedAt, turnId: "turn-c" }), []);
       assert.deepEqual(repo.listCompletedSince(last.startedAt, 2), []);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   });
 
   it("rolls back a newly inserted trace when its post-insert read fails", () => {
