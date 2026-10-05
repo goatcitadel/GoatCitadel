@@ -67,10 +67,9 @@ export async function runCockpitMcpPolicyRequestsProof({ context, browser, stack
   for (const { variant, viewport } of viewports) {
     await runScenario(context, { id: `ux-budgets.cockpit-mcp-policy-requests.${variant}`, lane: "ux-budgets",
       title: `Native MCP policy and seeded operator responses ${variant}`, subsystem: "mission-control-ux" }, async () => {
-      let stage = "seed disposable owner records", browserContext, page;
+      let stage = "enable isolated metadata diagnostics through its governed owner", browserContext, page;
       const screenshots = [], writes = [], unexpected = [], screenshotDir = path.join(context.artifactRoot, "screenshots");
       try {
-        stage = "enable isolated metadata diagnostics through its governed owner";
         await enableMcpDiagnosticsFixture(api, ms => new Promise(resolve => setTimeout(resolve, ms)));
         const label = `UX MCP policy ${variant} ${Date.now()}`;
         const original = await api("/api/v1/mcp/servers", { method: "POST", body: {

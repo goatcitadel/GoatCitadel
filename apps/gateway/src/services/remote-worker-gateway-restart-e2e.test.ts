@@ -110,10 +110,10 @@ describe.skipIf(process.platform !== "win32")("native worker across a full Gatew
     let storage: Storage | undefined;
     const streamController = new AbortController();
     let streamOutcome: unknown;
-    let stage = "setup";
+    // The initializer names the first stage so a failure report never reads an unset value (js/useless-assignment-to-local).
+    let stage = meshCase === "write" ? "native fixture path budget" : "setup";
     try {
       if (meshCase === "write") {
-        stage = "native fixture path budget";
         const nativeRoot = join(fixtureRoot, "stock-worker", "native");
         const relativeNativePaths = [
           ...[...CELL_PROVISIONING_SOURCES, ...CELL_PROVISIONING_HOST_SOURCES].map((name: string) => join("source", name)),

@@ -118,7 +118,7 @@ export async function runChatStreamingDisplayProof(context, deps) {
           const thread = () => api(`${route}/thread`);
           const waitForTurnStatus = async (userContent, status) => {
             const deadline = Date.now() + 30_000;
-            let observed = "missing";
+            let observed; // Always assigned before the loop can exit (js/useless-assignment-to-local).
             do {
               const turn = (await thread()).turns.find(
                 (record) => record.branch.isSelectedPath && record.userMessage.content === userContent,

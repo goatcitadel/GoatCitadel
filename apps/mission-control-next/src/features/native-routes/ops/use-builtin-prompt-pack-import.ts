@@ -134,10 +134,10 @@ export function useBuiltinPromptPackImport({ reload }: { reload: () => Promise<u
     const descriptor = selected.importCapability!;
     update(selected.packKey, { phase: "saving" });
     setNotice(null);
-    let dispatched = false;
     let receiptRecorded = false;
     try {
-      dispatched = true;
+      // The import request is the first thing this block does, so every caught error follows its dispatch
+      // (js/trivial-conditional flagged the former always-true `dispatched` flag).
       const result = await importBuiltinPromptPackIfAbsent(selected.packKey, {
         expectedDefinitionRevision: descriptor.definitionRevision,
       });
@@ -175,7 +175,7 @@ export function useBuiltinPromptPackImport({ reload }: { reload: () => Promise<u
         /* The separate evidence view already reports its refresh state. */
       }
     } catch (error) {
-      const uncertain = dispatched && !definiteConflict(error);
+      const uncertain = !definiteConflict(error);
       const message = uncertain
         ? `${receiptRecorded ? "An import receipt was recorded, but the current saved definition could not be confirmed." : "Import outcome is unconfirmed."} Do not retry this definition. Inspect its saved owner.`
         : `The import was not applied. Refresh and review the current definition. ${describeApiError(error).summary}`;
