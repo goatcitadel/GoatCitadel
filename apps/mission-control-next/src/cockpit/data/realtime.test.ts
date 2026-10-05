@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
 import type { RealtimeEvent } from "@goatcitadel/contracts";
-import { invalidateForEvent, realtimeRefreshSignal } from "./realtime";
+import { subscribeRefresh, type RefreshSignal } from "@goatcitadel/mission-control-shared/state/refresh-bus";
+import { createRealtimeSink, invalidateForEvent, realtimeRefreshSignal, UNMAPPED_TOPIC_INTERVAL_MS } from "./realtime";
 import { queryKeys } from "./query-keys";
 
 const base = {
@@ -139,5 +141,35 @@ describe("invalidateForEvent", () => {
       expect(s.invalidate).not.toHaveBeenCalled();
       expect(s.unmapped).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("unmapped event throttle", () => {
+  it("gives events inside the window one trailing refresh at its end instead of dropping them", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const signals: RefreshSignal[] = [];
+    const off = subscribeRefresh("tasks", (signal) => signals.push(signal));
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const { sink, dispose } = createRealtimeSink(queryClient);
+    const unmapped = (eventId: string) =>
+      ({ ...base, eventId, eventType: "x_new", source: "x_owner", links: { taskId: "t" } }) as RealtimeEvent;
+    try {
+      sink.unmapped("tasks", unmapped("a"));
+      sink.unmapped("tasks", unmapped("b"));
+      sink.unmapped("tasks", unmapped("c"));
+      expect(signals.map((signal) => signal.eventId)).toEqual(["a"]);
+      await vi.advanceTimersByTimeAsync(UNMAPPED_TOPIC_INTERVAL_MS);
+      expect(signals.map((signal) => signal.eventId)).toEqual(["a", "c"]);
+      await vi.advanceTimersByTimeAsync(UNMAPPED_TOPIC_INTERVAL_MS * 2);
+      expect(signals).toHaveLength(2);
+      expect(invalidate.mock.calls.filter(([filters]) => filters?.queryKey?.[0] === "tasks")).toHaveLength(2);
+    } finally {
+      dispose();
+      off();
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

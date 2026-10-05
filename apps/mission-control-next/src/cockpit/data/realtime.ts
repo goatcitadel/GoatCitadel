@@ -30,7 +30,10 @@ import { playOperatorAttentionSound } from "@goatcitadel/mission-control-shared/
 import type { UiNotificationPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { showBrowserNotification } from "../../app/browser-notification";
 
-/** An event the map does not know refreshes its keyword topics at most once every five seconds per topic. */
+/**
+ * An event the map does not know refreshes its keyword topics at most once every five seconds per topic;
+ * events inside the window share one trailing refresh when it ends.
+ */
 export const UNMAPPED_TOPIC_INTERVAL_MS = 5_000;
 
 export interface RealtimeSink {
@@ -86,9 +89,11 @@ export function realtimeRefreshSignal(event: RealtimeEvent): Omit<RefreshSignal,
   };
 }
 
-function createRealtimeSink(queryClient: QueryClient): { sink: RealtimeSink; dispose: () => void } {
+/** Exported for tests. An unmapped event inside its topic's window gets one trailing refresh, never a drop. */
+export function createRealtimeSink(queryClient: QueryClient): { sink: RealtimeSink; dispose: () => void } {
   const batcher = createInvalidationBatcher(queryClient, { minIntervalMs: throttleIntervalFor });
   const lastUnmapped = new Map<RefreshTopic, number>();
+  const trailingUnmapped = new Map<RefreshTopic, { timer: ReturnType<typeof setTimeout>; event: RealtimeEvent }>();
   const warned = new Set<string>();
   const signal = (topic: RefreshTopic, event: RealtimeEvent) => emitRefresh(topic, realtimeRefreshSignal(event));
   const sink: RealtimeSink = {
@@ -101,14 +106,37 @@ function createRealtimeSink(queryClient: QueryClient): { sink: RealtimeSink; dis
         // eslint-disable-next-line no-console
         console.warn(`Unmapped realtime event ${id}; refreshing ${topic} (throttled).`);
       }
-      const now = Date.now();
-      if (now - (lastUnmapped.get(topic) ?? -Infinity) < UNMAPPED_TOPIC_INTERVAL_MS) return;
-      lastUnmapped.set(topic, now);
-      batcher.invalidate([topic]);
-      signal(topic, event);
+      const wait = (lastUnmapped.get(topic) ?? -Infinity) + UNMAPPED_TOPIC_INTERVAL_MS - Date.now();
+      if (wait <= 0) {
+        refreshUnmapped(topic, event);
+        return;
+      }
+      const trailing = trailingUnmapped.get(topic);
+      if (trailing) {
+        trailing.event = event;
+        return;
+      }
+      const entry = {
+        event,
+        timer: setTimeout(() => {
+          trailingUnmapped.delete(topic);
+          refreshUnmapped(topic, entry.event);
+        }, wait),
+      };
+      trailingUnmapped.set(topic, entry);
     },
   };
-  return { sink, dispose: batcher.dispose };
+  function refreshUnmapped(topic: RefreshTopic, event: RealtimeEvent) {
+    lastUnmapped.set(topic, Date.now());
+    batcher.invalidate([topic]);
+    signal(topic, event);
+  }
+  const dispose = () => {
+    for (const { timer } of trailingUnmapped.values()) clearTimeout(timer);
+    trailingUnmapped.clear();
+    batcher.dispose();
+  };
+  return { sink, dispose };
 }
 
 /**
