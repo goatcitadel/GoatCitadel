@@ -24,6 +24,42 @@ describe("cockpit refetch guard", () => {
     assert.deepEqual(lines("const data = !query.isError && !query.isFetching ? query.data : undefined;"), [1]);
   });
 
+  it("flags a Prettier-split ternary that hides the record", () => {
+    assert.deepEqual(
+      lines(["const record =", "  query.isFetching", "    ? undefined", "    : query.data;"].join("\n")),
+      [2],
+    );
+    assert.deepEqual(
+      lines(["const record = query.isFetching || query.isError", "  ? null", "  : query.data;"].join("\n")),
+      [1],
+    );
+    assert.deepEqual(lines(["{scope.isFetching", '  ? "Reading Citadel…"', "  : scope.data?.name}"].join("\n")), [1]);
+    assert.deepEqual(
+      lines(["const data = !query.isFetching && !query.isError", "  ? query.data", "  : undefined;"].join("\n")),
+      [1],
+    );
+  });
+
+  it("allows split ternaries that keep the record or only gate a control", () => {
+    assert.deepEqual(
+      lines(
+        ["const label = query.isFetching", '  ? query.data?.name ?? "Unnamed"', "  : query.data?.name;"].join("\n"),
+      ),
+      [],
+    );
+    assert.deepEqual(lines(["<Button disabled={query.isFetching}>", "  ? Help", "</Button>"].join("\n")), []);
+    assert.deepEqual(
+      lines(
+        [
+          "const record = query.isFetching // refetch-guard: allow export must read a settled record",
+          "  ? undefined",
+          "  : query.data;",
+        ].join("\n"),
+      ),
+      [],
+    );
+  });
+
   it("reports the line of each hit", () => {
     const source = ["const ok = true;", "const record = query.isFetching ? undefined : query.data;", ""].join("\n");
     assert.deepEqual(lines(source), [2]);

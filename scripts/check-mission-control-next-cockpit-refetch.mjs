@@ -36,12 +36,32 @@ function isTestFile(filePath) {
   return /\.test\.[cm]?[jt]sx?$/.test(filePath);
 }
 
+/*
+ * Prettier splits a long ternary: the condition line ends in an isFetching test and the next line starts
+ * with `? undefined`, `? null`, `? "…"`, or (after a negated isFetching test) `? q.data`.
+ */
+const SPLIT_CONDITION = /\.isFetching\b[^;{}]*$/;
+const SPLIT_HIDDEN_BRANCH = /^\s*\?\s*(undefined|null|"[^"]*"|'[^']*')\s*$/;
+const SPLIT_NEGATED_CONDITION = /!\s*\w+(\.\w+)*\.isFetching\b[^;{}]*$/;
+const SPLIT_DATA_BRANCH = /^\s*\?\s*\w+(\.\w+)*\.data\b/;
+
+function isSplitHiddenRecord(line, next) {
+  if (next === undefined) return false;
+  const condition = line.replace(/\s*\/\/.*$/, "");
+  return (
+    (SPLIT_CONDITION.test(condition) && SPLIT_HIDDEN_BRANCH.test(next)) ||
+    (SPLIT_NEGATED_CONDITION.test(condition) && SPLIT_DATA_BRANCH.test(next))
+  );
+}
+
 export function findRefetchHiddenRecords(filePath, contents) {
   if (isTestFile(filePath)) return [];
   const findings = [];
-  contents.split(/\r?\n/).forEach((line, index) => {
+  const sourceLines = contents.split(/\r?\n/);
+  sourceLines.forEach((line, index) => {
     if (isAllowed(line)) return;
-    if (PATTERNS.some((pattern) => pattern.test(line))) {
+    const next = sourceLines[index + 1];
+    if (PATTERNS.some((pattern) => pattern.test(line)) || (isSplitHiddenRecord(line, next) && !isAllowed(next))) {
       findings.push({ file: filePath, line: index + 1, text: line.trim() });
     }
   });

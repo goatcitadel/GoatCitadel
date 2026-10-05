@@ -32,10 +32,10 @@ export function recordView<T, D>(
   const phase: RecordPhase = query.isError
     ? "error"
     : query.isPending
-      ? query.isFetching
+      ? query.isFetching // refetch-guard: allow phase label only; the record is kept
         ? "loading"
         : "ready"
-      : query.isFetching
+      : query.isFetching // refetch-guard: allow phase label only; the record is kept
         ? "checking"
         : "ready";
   return {
