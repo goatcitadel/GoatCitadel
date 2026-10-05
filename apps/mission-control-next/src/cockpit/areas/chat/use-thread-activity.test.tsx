@@ -3,6 +3,7 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
+import { publishEventStreamStatus } from "@goatcitadel/mission-control-shared/state/event-stream-status-store";
 import type { MissionThreadedSessionRailData } from "@goatcitadel/threaded-surface-core";
 import { ThreadList } from "./ThreadList";
 import { SelectedThreadActivity } from "./SelectedThreadActivity";
@@ -108,6 +109,28 @@ it("dates a row's status once it is more than two minutes old, without a new rea
     expect(firstRow()).toContain("Working · as of");
     expect(mocks.status).not.toHaveBeenCalled();
   } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("waits ten minutes before dating a status while live updates are flowing", async () => {
+  vi.useFakeTimers();
+  publishEventStreamStatus({ state: "open", reconnectAttempts: 0 });
+  try {
+    vi.setSystemTime(new Date("2026-10-05T10:01:00.000Z"));
+    await act(async () => root.render(<ThreadList rail={rail} />));
+    const firstRow = () => host.querySelectorAll("li")[0]?.textContent ?? "";
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000);
+    });
+    expect(firstRow()).toContain("Working");
+    expect(firstRow()).not.toContain("as of");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9 * 60_000);
+    });
+    expect(firstRow()).toContain("Working · as of");
+  } finally {
+    publishEventStreamStatus({ state: "closed", reconnectAttempts: 0 });
     vi.useRealTimers();
   }
 });
