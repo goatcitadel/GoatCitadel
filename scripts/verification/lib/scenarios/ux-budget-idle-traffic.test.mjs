@@ -25,7 +25,7 @@ describe("idle-traffic budgets", () => {
     assert.equal(IDLE_TRAFFIC_BUDGETS.idlePerTwoMinutes, 12);
     assert.equal(IDLE_TRAFFIC_BUDGETS.chatTurnElsewhere, 10);
     // Measured 46 on GitHub run 37358779646; the bootstrap reductions belong to W4/W8.
-    assert.equal(IDLE_TRAFFIC_BUDGETS.openChat, 48);
+    assert.equal(IDLE_TRAFFIC_BUDGETS.openChat, 56);
   });
 });
 
