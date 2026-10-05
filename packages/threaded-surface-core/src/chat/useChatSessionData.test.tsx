@@ -911,6 +911,42 @@ describe("useChatSessionData", () => {
     expect(latestHarness?.errors).toContain("secondary failed");
   });
 
+  it("reloads only the conversation list for another conversation's thread event", async () => {
+    await act(async () => {
+      create(<Harness workspaceId="workspace-other-session" initialSelectedSessionId="session-1" />);
+      await flushEffects(8);
+    });
+    await act(async () => {
+      await flushEffects(8);
+    });
+    const threads = fetchChatThreadMock.mock.calls.length;
+    const otherSignal = {
+      eventId: "other-thread",
+      eventType: "chat_thread_updated",
+      timestamp: Date.now() + 1_000,
+      reason: "chat_thread_updated",
+      source: "chat",
+      sessionId: "session-2",
+    };
+    await act(async () => {
+      await latestRefreshSubscription?.callback(otherSignal);
+    });
+    expect(fetchChatThreadMock).toHaveBeenCalledTimes(threads);
+    // The list still reloads (its read itself is served by the dev bootstrap cache in this harness).
+    expect(recordChatRefreshPhaseMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phase: "plan_resolved",
+        signal: expect.objectContaining({ eventId: "other-thread" }),
+        plan: { refreshSidebar: true, refreshSession: "none" },
+      }),
+    );
+
+    await act(async () => {
+      await latestRefreshSubscription?.callback({ ...otherSignal, eventId: "own-thread", sessionId: "session-1" });
+    });
+    expect(fetchChatThreadMock).toHaveBeenCalledTimes(threads + 1);
+  });
+
   it("recovers a missed durable completion on fallback and stops full polling once settled", async () => {
     const waiting = makeThread("session-1");
     waiting.turns[0]!.trace.status = "waiting_for_tool";

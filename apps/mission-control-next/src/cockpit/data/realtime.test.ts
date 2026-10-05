@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RealtimeEvent } from "@goatcitadel/contracts";
-import { invalidateForEvent } from "./realtime";
+import { invalidateForEvent, realtimeRefreshSignal } from "./realtime";
 import { queryKeys } from "./query-keys";
 
 const base = {
@@ -20,6 +20,18 @@ describe("invalidateForEvent", () => {
     expect(s.invalidate).toHaveBeenCalledWith(["chat"]);
     expect(s.refresh).toHaveBeenCalledWith("chat", expect.objectContaining({ eventType: "chat_thread_updated" }));
     expect(s.unmapped).not.toHaveBeenCalled();
+  });
+
+  it("names the conversation an event belongs to in its refresh signal", () => {
+    const event = { ...base, eventType: "chat_thread_updated", source: "chat", links: { sessionId: "s-9" } };
+    expect(realtimeRefreshSignal(event)).toEqual({
+      reason: "chat_thread_updated",
+      source: "chat",
+      eventType: "chat_thread_updated",
+      eventId: "e1",
+      sessionId: "s-9",
+    });
+    expect(realtimeRefreshSignal({ ...event, links: undefined }).sessionId).toBeUndefined();
   });
 
   it("refreshes nothing for llama.cpp process output", () => {

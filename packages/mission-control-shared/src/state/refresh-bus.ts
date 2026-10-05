@@ -26,6 +26,8 @@ export interface RefreshSignal {
   source?: string;
   eventType?: string;
   eventId?: string;
+  /** The conversation the event belongs to, when it names one; lets Chat skip reloads for others. */
+  sessionId?: string;
 }
 
 type RefreshHandler = (signal: RefreshSignal) => void;
@@ -43,6 +45,7 @@ export function emitRefresh(
     source: input.source,
     eventType: input.eventType,
     eventId: input.eventId,
+    sessionId: input.sessionId,
   };
 
   const handlers = listeners.get(topic);

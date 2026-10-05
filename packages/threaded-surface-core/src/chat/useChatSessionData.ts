@@ -924,6 +924,7 @@ export function useChatSessionData(input: {
         now - lastLocalPrefMutationAtRef.current < 2500,
         thread?.sessionId === selectedSessionId &&
           thread.turns.some((turn) => CHAT_TURN_ACTIVE_STATUSES.some((status) => status === turn.trace.status)),
+        selectedSessionId,
       );
       recordChatRefreshPhase({
         phase: "plan_resolved",
@@ -943,7 +944,8 @@ export function useChatSessionData(input: {
       enabled: !loading,
       coalesceMs: 800,
       signalPriority: (signal) => {
-        const plan = resolveChatRefreshPlan(signal);
+        // Another conversation's event ranks below one about the open conversation in a shared batch.
+        const plan = resolveChatRefreshPlan(signal, false, false, selectedSessionId);
         return (
           (plan.refreshSession === "full" ? 4 : plan.refreshSession === "light" ? 2 : 0) + Number(plan.refreshSidebar)
         );

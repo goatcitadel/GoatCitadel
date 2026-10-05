@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UiNotificationPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { connectEventStream } from "@goatcitadel/mission-control-shared/api/shell-client";
 import { deriveRealtimeRefresh } from "@goatcitadel/mission-control-shared/state/realtime-derived";
+import { emitRefresh } from "@goatcitadel/mission-control-shared/state/refresh-bus";
 import { useShellNotifications } from "./use-shell-notifications";
 import { REALTIME_COMPATIBILITY_DECAY_MS, REALTIME_REPLAY_GAP_DECAY_MS, useEventStream } from "./use-event-stream";
 import { publishOpsSavedBoardRealtimeEvent } from "./ops-saved-board-realtime";
@@ -266,6 +267,23 @@ describe("realtime truth-mode decay (N1)", () => {
     });
     capturedOnEvent?.({ eventId: `e-${Date.now()}-${Math.random()}`, source: "surface" });
   }
+
+  it("names the conversation an event belongs to in its refresh signal", async () => {
+    await act(async () => {
+      root.render(<TruthModeHarness gatewayReady onTruthMode={() => undefined} />);
+    });
+    mockedDeriveRealtimeRefresh.mockReturnValueOnce({
+      topics: ["chat"],
+      truthMode: "authoritative",
+      usedCompatibilityInference: false,
+      signalReason: "chat_thread_updated",
+      signalEventType: "chat_thread_updated",
+    });
+    await act(async () => {
+      capturedOnEvent?.({ eventId: "e-chat", source: "chat", links: { sessionId: "session-9" } });
+    });
+    expect(vi.mocked(emitRefresh)).toHaveBeenCalledWith("chat", expect.objectContaining({ sessionId: "session-9" }));
+  });
 
   it("decays a keyword-only compatibility event back to authoritative after 15s", async () => {
     let truthMode = "authoritative";

@@ -15,7 +15,11 @@ import {
 } from "@goatcitadel/mission-control-shared/state/event-stream-status-store";
 import { decideNotificationDelivery } from "@goatcitadel/mission-control-shared/state/notification-policy";
 import { deriveRealtimeNotification } from "@goatcitadel/mission-control-shared/state/realtime-derived";
-import { emitRefresh, type RefreshTopic } from "@goatcitadel/mission-control-shared/state/refresh-bus";
+import {
+  emitRefresh,
+  type RefreshSignal,
+  type RefreshTopic,
+} from "@goatcitadel/mission-control-shared/state/refresh-bus";
 import type { OperatorInboxResponse } from "@goatcitadel/contracts";
 import { queryKeys } from "./query-keys";
 import { resolveRealtimeEvent } from "./event-map";
@@ -71,17 +75,22 @@ export function invalidateForEvent(event: RealtimeEvent, sink: RealtimeSink): vo
   for (const topic of resolution.effect.refresh) sink.refresh(topic, event);
 }
 
+/** The refresh-bus signal for one live event; it names the conversation so Chat can skip reloads for others. */
+export function realtimeRefreshSignal(event: RealtimeEvent): Omit<RefreshSignal, "topic" | "timestamp"> {
+  return {
+    reason: event.eventType,
+    source: event.source,
+    eventType: event.eventType,
+    eventId: event.eventId,
+    sessionId: event.links?.sessionId,
+  };
+}
+
 function createRealtimeSink(queryClient: QueryClient): { sink: RealtimeSink; dispose: () => void } {
   const batcher = createInvalidationBatcher(queryClient, { minIntervalMs: throttleIntervalFor });
   const lastUnmapped = new Map<RefreshTopic, number>();
   const warned = new Set<string>();
-  const signal = (topic: RefreshTopic, event: RealtimeEvent) =>
-    emitRefresh(topic, {
-      reason: event.eventType,
-      source: event.source,
-      eventType: event.eventType,
-      eventId: event.eventId,
-    });
+  const signal = (topic: RefreshTopic, event: RealtimeEvent) => emitRefresh(topic, realtimeRefreshSignal(event));
   const sink: RealtimeSink = {
     invalidate: batcher.invalidate,
     refresh: signal,

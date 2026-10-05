@@ -146,6 +146,7 @@ export function useEventStream(options: UseEventStreamOptions): UseEventStreamRe
             source: event.source,
             eventType: derivedRefresh.signalEventType,
             eventId: event.eventId,
+            sessionId: event.links?.sessionId,
             timestamp: Date.now(),
           });
         }
