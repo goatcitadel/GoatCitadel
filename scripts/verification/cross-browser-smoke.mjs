@@ -12,9 +12,24 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { chromium, firefox, webkit } from "playwright";
+import { COCKPIT_VISUAL_MANIFEST } from "./lib/cockpit-visual-manifest.mjs";
+import {
+  installCockpitVisualPreferences,
+  waitForCockpitVisualRouteReady,
+} from "./lib/scenarios/cockpit-visual-readiness.mjs";
 import { repoRoot } from "./lib/shared.mjs";
 
-export const SMOKE_PATHS = ["/chat", "/inbox", "/work", "/library", "/system/health", "/settings/general"];
+/**
+ * Each area's landing page with the visual lane's ready checks. Chat opens here without a fixture conversation, so it
+ * waits for the Chat section instead of a transcript.
+ */
+export const SMOKE_ROUTES = [
+  { href: "/chat", readySelector: 'section[aria-label="Chat"]' },
+  ...["/inbox", "/work", "/library", "/system", "/settings/general"].map((href) =>
+    COCKPIT_VISUAL_MANIFEST.find((route) => route.href === href),
+  ),
+];
+const READY_TIMEOUT_MS = 30_000;
 const ENGINES = { chromium, firefox, webkit };
 
 export function parseSmokeArgs(argv) {
@@ -55,7 +70,7 @@ function firstLine(error) {
   return (error instanceof Error ? error.message : String(error)).split("\n")[0];
 }
 
-async function smokeRoute(browser, engine, origin, routePath, outDir) {
+export async function smokeRoute(browser, engine, origin, route, outDir) {
   // A fresh page per route. The cockpit keeps a live event stream open; reusing one page would abort that stream
   // during the next navigation and report the abort as a failed request on the wrong route.
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -68,28 +83,32 @@ async function smokeRoute(browser, engine, origin, routePath, outDir) {
     problems.push(`request failed: ${request.method()} ${new URL(request.url()).pathname}`),
   );
   try {
-    await page.goto(smokeUrl(origin, routePath), { waitUntil: "domcontentloaded" });
-    await page.locator('[data-cockpit-ready="true"]').waitFor({ timeout: 30_000 });
+    // The ready checks below also confirm the theme, and expect dark for a URL without ?theme=light.
+    await installCockpitVisualPreferences(page.context(), { colorScheme: "dark" });
+    await page.goto(smokeUrl(origin, route.href), { waitUntil: "domcontentloaded" });
+    // The ready marker mounts once Gateway access succeeds, while an area can still be a lazy import behind its
+    // "Loading …" placeholder. Wait for the area's own tabs or heading, then for no loading notice on screen.
+    await waitForCockpitVisualRouteReady(page, route, READY_TIMEOUT_MS);
     // The live event stream keeps a request open, so "network idle" never comes; settle briefly instead.
     await page.waitForTimeout(1_500);
-    await page.screenshot({
-      path: path.join(outDir, `${engine}${routePath.replaceAll("/", "-")}.png`),
-      fullPage: true,
-    });
   } catch (error) {
     problems.push(`load failed: ${firstLine(error)}`);
   }
+  // Failed loads keep their screenshot too: it shows where the area stopped.
+  await page
+    .screenshot({ path: path.join(outDir, `${engine}${route.href.replaceAll("/", "-")}.png`), fullPage: true })
+    .catch((error) => problems.push(`screenshot failed: ${firstLine(error)}`));
   // Copy before closing: closing the page aborts its event stream, and that abort is not a finding.
   const observed = [...problems];
   await page.close().catch(() => undefined);
-  return { engine, path: routePath, problems: observed };
+  return { engine, path: route.href, problems: observed };
 }
 
 async function smokeEngine(engine, origin, outDir) {
   const browser = await ENGINES[engine].launch({ headless: true });
   const results = [];
   try {
-    for (const routePath of SMOKE_PATHS) results.push(await smokeRoute(browser, engine, origin, routePath, outDir));
+    for (const route of SMOKE_ROUTES) results.push(await smokeRoute(browser, engine, origin, route, outDir));
   } finally {
     await browser.close();
   }
