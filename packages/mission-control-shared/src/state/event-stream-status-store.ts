@@ -63,6 +63,11 @@ export function resetEventStreamStatus(): void {
   notifyListeners();
 }
 
+/** The current shared stream status, read outside React (for example inside a timer). */
+export function getEventStreamStatus(): EventStreamStatus {
+  return currentStatus;
+}
+
 export function useEventStreamStatus(): EventStreamStatus {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

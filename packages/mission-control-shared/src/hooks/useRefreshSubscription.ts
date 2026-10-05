@@ -2,6 +2,17 @@ import { useEffect, useRef } from "react";
 import type { RefreshSignal, RefreshTopic } from "../state/refresh-bus";
 import { subscribeRefresh } from "../state/refresh-bus";
 import { recordClientDiagnostic } from "../state/dev-diagnostics-store";
+import { getEventStreamStatus } from "../state/event-stream-status-store";
+
+/**
+ * While the shared event stream is open, events already announce changes, so a quiet topic is
+ * quiet, not stale: the fallback poll waits at least this long instead of its normal stale time.
+ */
+export const OPEN_STREAM_FALLBACK_STALE_MS = 600_000;
+
+function fallbackStaleMs(staleMs: number): number {
+  return getEventStreamStatus().state === "open" ? Math.max(staleMs, OPEN_STREAM_FALLBACK_STALE_MS) : staleMs;
+}
 
 interface UseRefreshSubscriptionOptions {
   enabled?: boolean;
@@ -179,7 +190,7 @@ export function useRefreshSubscription(
             return;
           }
           const now = Date.now();
-          if (now - lastSignalAtRef.current < staleMs) {
+          if (now - lastSignalAtRef.current < fallbackStaleMs(staleMs)) {
             return;
           }
           if (now - fallbackPollLastRanAtRef.current < pollIntervalMs) {

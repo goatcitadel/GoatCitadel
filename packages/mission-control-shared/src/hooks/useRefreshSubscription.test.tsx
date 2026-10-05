@@ -2,6 +2,7 @@ import React from "react";
 import { act, create } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { publishEventStreamStatus, resetEventStreamStatus } from "../state/event-stream-status-store";
 import { emitRefresh } from "../state/refresh-bus";
 import { useRefreshSubscription } from "./useRefreshSubscription";
 
@@ -160,6 +161,36 @@ describe("useRefreshSubscription", () => {
       await vi.advanceTimersByTimeAsync(25);
     });
     expect(callback).toHaveBeenCalledOnce();
+    renderer.unmount();
+  });
+
+  it("waits ten minutes before a fallback poll while the event stream is open", async () => {
+    publishEventStreamStatus({ state: "open", reconnectAttempts: 0 });
+    try {
+      const callback = vi.fn();
+      const renderer = create(<Harness callback={callback} options={{ staleMs: 120_000, pollIntervalMs: 60_000 }} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(130_000);
+      });
+      expect(callback).not.toHaveBeenCalled();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(480_000);
+      });
+      expect(callback).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ eventType: "fallback_poll" }));
+      renderer.unmount();
+    } finally {
+      resetEventStreamStatus();
+    }
+  });
+
+  it("polls after the stale time when the event stream is not open", async () => {
+    resetEventStreamStatus();
+    const callback = vi.fn();
+    const renderer = create(<Harness callback={callback} options={{ staleMs: 120_000, pollIntervalMs: 60_000 }} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(130_000);
+    });
+    expect(callback).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ eventType: "fallback_poll" }));
     renderer.unmount();
   });
 
