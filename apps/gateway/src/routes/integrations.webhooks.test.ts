@@ -1983,4 +1983,40 @@ describe("telegram inbound voice webhooks (channelVoiceInboundV1Enabled)", () =>
     expect(transcribeChannelVoice).not.toHaveBeenCalled();
     expect(ingestChannelMessage).not.toHaveBeenCalled();
   });
+
+  it("honours the composed async flag read instead of comparing its promise to true", async () => {
+    // The gateway composition resolves channelVoiceInboundV1Enabled through the async
+    // GatewayService.isFeatureEnabled, so the port answers a Promise<boolean>.
+    const acceptInboundChannelEvent = vi.fn(async (input: { eventType: string; message: { eventId: string } }) => ({
+      accepted: true as const,
+      durableAccepted: true as const,
+      deduped: false,
+      replied: false as const,
+      queued: true,
+      eventType: input.eventType,
+      inboundEventId: `inbound:${input.message.eventId}`,
+    }));
+    const built = await buildVoiceApp({
+      getIntegrationConnection: vi.fn(() => createTelegramVoiceConnection()),
+      isVoiceInboundEnabled: async () => true,
+      hasRunningTurn: vi.fn(() => false),
+      transcribeChannelVoice: vi.fn(),
+      acceptInboundChannelEvent,
+      ingestChannelMessage: vi.fn(),
+      setChatSessionBinding: vi.fn(),
+      respondToExistingChatMessage: vi.fn(),
+      recordDevDiagnostic: vi.fn(),
+    });
+
+    const response = await postVoiceWebhook(built);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ accepted: true, durableAccepted: true });
+    expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatchKind: "voice_agent_turn",
+        voiceRequest: expect.objectContaining({ fileId: "voice-file-640" }),
+      }),
+    );
+  });
 });
