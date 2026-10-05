@@ -79,9 +79,22 @@ const SAFE_STRUCTURED_FIELD_KEYS = new Set([
   "zoneLabel",
 ]);
 
+/** Devices whose last announced capability set is remembered; the oldest is forgotten beyond this. */
+export const MOBILE_HEARTBEAT_DEVICE_LIMIT = 500;
+
 export function createMobileRoutePort(deps: MobileRoutePortDependencies): MobileRoutePort {
   // A device repeats its heartbeat on a timer; only a change in what it can do is news for other windows.
+  // Insertion order is age: re-recording a device moves it to the newest end.
   const lastCapabilitySetByDevice = new Map<string, string>();
+  const rememberCapabilitySet = (deviceKey: string, capabilitySet: string) => {
+    lastCapabilitySetByDevice.delete(deviceKey);
+    lastCapabilitySetByDevice.set(deviceKey, capabilitySet);
+    while (lastCapabilitySetByDevice.size > MOBILE_HEARTBEAT_DEVICE_LIMIT) {
+      const oldest = lastCapabilitySetByDevice.keys().next().value;
+      if (oldest === undefined) break;
+      lastCapabilitySetByDevice.delete(oldest);
+    }
+  };
   return {
     listMobileCapabilities: async (input?: { limit?: number }): Promise<MobileCapabilityListResponse> => {
       const limit = Math.max(1, Math.min(input?.limit ?? 100, MAX_AUDIT_ITEMS));
@@ -148,12 +161,12 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
         capabilities,
         ...actor,
       });
-      const deviceKey = actor.deviceId ?? actor.companionSessionId ?? actor.grantId ?? "unknown";
+      // An actor with no device, session or grant is never deduplicated: anonymous actors share no key.
+      const deviceKey = actor.deviceId ?? actor.companionSessionId ?? actor.grantId;
       const capabilitySet = JSON.stringify(capabilities.map((capability) => capability.capabilityId).sort());
-      if (lastCapabilitySetByDevice.get(deviceKey) === capabilitySet) {
+      if (deviceKey !== undefined && lastCapabilitySetByDevice.get(deviceKey) === capabilitySet) {
         return { accepted: capabilities.length, observedAt };
       }
-      lastCapabilitySetByDevice.set(deviceKey, capabilitySet);
       await deps.publishRealtime("mobile_capability_heartbeat", "mobile", {
         observedAt,
         capabilityCount: capabilities.length,
@@ -161,6 +174,8 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
         deviceId: actor.deviceId,
         companionSessionId: actor.companionSessionId,
       });
+      // Remembered only once announced, so a failed publish is retried by the next heartbeat.
+      if (deviceKey !== undefined) rememberCapabilitySet(deviceKey, capabilitySet);
       return { accepted: capabilities.length, observedAt };
     },
     recordMobileContextAudit: async (

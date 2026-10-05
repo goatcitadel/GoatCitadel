@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MobileContextEnvelope, MobileNativeCapabilityRecord } from "@goatcitadel/contracts";
-import { createMobileRoutePort, sanitizeMobileContextForAudit } from "./mobile-route-service.js";
+import {
+  createMobileRoutePort,
+  MOBILE_HEARTBEAT_DEVICE_LIMIT,
+  sanitizeMobileContextForAudit,
+} from "./mobile-route-service.js";
 
 describe("mobile-route-service", () => {
   it("redacts sensitive structured context fields before audit", () => {
@@ -94,6 +98,40 @@ describe("mobile-route-service", () => {
     await heartbeat(["camera_capture"], { companionSessionId: "companion-2", deviceId: "device-b" });
     expect(publishRealtime).toHaveBeenCalledTimes(3);
     expect(audit.append).toHaveBeenCalledTimes(4);
+  });
+
+  it("announces again after a failed publish, never deduplicates anonymous actors, and forgets the oldest devices", async () => {
+    const audit = { append: vi.fn(async () => undefined), list: vi.fn(async () => []) };
+    const publishRealtime = vi.fn(async () => undefined);
+    const service = createMobileRoutePort({
+      storage: { audit } as never,
+      mobilePush: createMobilePushMock(),
+      mobileApprovalKeys: createMobileApprovalKeysMock(),
+      publishRealtime,
+    });
+    const heartbeat = (actor: Record<string, string>) =>
+      service.recordMobileCapabilityHeartbeat(
+        { observedAt: "2026-05-22T12:00:00.000Z", capabilities: [createCapability("camera_capture")] },
+        actor,
+      );
+
+    publishRealtime.mockRejectedValueOnce(new Error("stream unavailable"));
+    await expect(heartbeat({ deviceId: "device-a" })).rejects.toThrow("stream unavailable");
+    await heartbeat({ deviceId: "device-a" });
+    expect(publishRealtime).toHaveBeenCalledTimes(2);
+
+    await heartbeat({});
+    await heartbeat({});
+    expect(publishRealtime).toHaveBeenCalledTimes(4);
+
+    publishRealtime.mockClear();
+    for (let index = 0; index < MOBILE_HEARTBEAT_DEVICE_LIMIT + 1; index += 1)
+      await heartbeat({ deviceId: `d-${index}` });
+    expect(publishRealtime).toHaveBeenCalledTimes(MOBILE_HEARTBEAT_DEVICE_LIMIT + 1);
+    // d-0 was the oldest entry and was dropped; the newest device is still remembered.
+    await heartbeat({ deviceId: "d-0" });
+    await heartbeat({ deviceId: `d-${MOBILE_HEARTBEAT_DEVICE_LIMIT}` });
+    expect(publishRealtime).toHaveBeenCalledTimes(MOBILE_HEARTBEAT_DEVICE_LIMIT + 2);
   });
 
   it("applies capability list limits after deriving latest records", async () => {
