@@ -111,7 +111,7 @@ export function useCitadelOverview(citadelId: string, navigationKey = "") {
       : null;
   const lifecycle = useDirectoryLifecycle({
     ownerKey: citadelId,
-    available: Boolean(lifecycleTarget) && !state.loading && !state.error && !locked,
+    available: Boolean(lifecycleTarget) && !state.error && !locked,
     checking: state.loading,
     reload,
   });

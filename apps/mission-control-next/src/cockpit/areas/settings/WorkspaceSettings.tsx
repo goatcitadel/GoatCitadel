@@ -58,9 +58,10 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
     !citadels.isError && Array.isArray(citadels.data?.items)
       ? citadels.data.items.find((item) => item.citadelId === citadelId)
       : undefined;
-  const available = ready && !workspaces.isFetching && !citadels.isFetching && parent?.lifecycleStatus === "active";
-  // A refresh briefly withholds actions; say so instead of leaving a control that does nothing.
+  const available = ready && parent?.lifecycleStatus === "active";
+  // A refresh briefly withholds new actions (say so); a confirmed action already checking goes on.
   const checking = ready && (workspaces.isFetching || citadels.isFetching);
+  const canStart = available && !checking;
   const lifecycle = useDirectoryLifecycle({
     checking,
     ownerKey: citadelId,
@@ -77,6 +78,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
     selectedId,
     mode,
     available,
+    checking,
     metadataOnly: true,
     reload: () => workspaces.refetch(),
     onCreated: (created) => {
@@ -105,7 +107,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
         </p>
       </header>
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" disabled={!available || action.locked} onClick={() => setMode("create")}>
+        <Button size="sm" disabled={!canStart || action.locked} onClick={() => setMode("create")}>
           New workspace
         </Button>
         <Button
@@ -161,7 +163,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
                 The workspace changed. Current saved name: {selected?.name}. Current description:{" "}
                 {selected?.description || "None"}.
               </p>
-              <Button size="sm" disabled={!available || action.locked} onClick={() => draft.rebaseToCurrent()}>
+              <Button size="sm" disabled={!canStart || action.locked} onClick={() => draft.rebaseToCurrent()}>
                 Apply draft to current workspace
               </Button>
             </div>
@@ -189,7 +191,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
             <Button
               variant="primary"
               disabled={
-                !available ||
+                !canStart ||
                 action.locked ||
                 !draft.value.name.trim() ||
                 draft.hasRemoteChanges ||
@@ -268,7 +270,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
                     <div className="flex w-full flex-wrap gap-2 sm:w-auto">
                       <Button
                         size="sm"
-                        disabled={!available || locked || action.pending}
+                        disabled={!canStart || locked || action.pending}
                         aria-label={`Edit workspace ${item.name}`}
                         onClick={() => {
                           setSelectedId(item.workspaceId);
@@ -281,7 +283,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
                         size="sm"
                         variant={target.action === "archive" ? "danger" : "secondary"}
                         disabled={
-                          !available || locked || (item.workspaceId === "default" && target.action === "archive")
+                          !canStart || locked || (item.workspaceId === "default" && target.action === "archive")
                         }
                         aria-label={`${target.action === "archive" ? "Archive" : "Restore"} workspace ${item.name}`}
                         onClick={() => lifecycle.request(target)}
@@ -291,7 +293,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
                       <Button
                         size="sm"
                         disabled={
-                          !available ||
+                          !canStart ||
                           locked ||
                           item.lifecycleStatus !== "active" ||
                           item.workspaceId === activeWorkspaceId

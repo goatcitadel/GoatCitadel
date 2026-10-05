@@ -30,11 +30,14 @@ import {
 
 /** Shown beside an action that waits while its directory refreshes (its hook would ignore a click). */
 export const CHECKING_FOR_CHANGES = "Checking for changes…";
+/** Shown when a confirmed action stops before sending because its list was no longer ready. */
+export const DIRECTORY_CHANGED_WHILE_CHECKING = "This list changed while checking. Review it again.";
 
 interface DirectoryLifecycleOptions {
   ownerKey: string;
+  /** The records are loaded and valid (and any parent is active). A refresh alone does not clear it. */
   available: boolean;
-  /** The directory is refreshing; confirm is unavailable until it settles. */
+  /** The directory is refreshing: new reviews and confirm clicks wait, but a confirm already checking goes on. */
   checking?: boolean;
   reload: (kind: "workspace" | "citadel") => Promise<unknown>;
   onConfirmed?: (review: DirectoryLifecycleReview) => void;
@@ -51,8 +54,10 @@ export function useDirectoryLifecycle({
   const [review, setReview] = useState<DirectoryLifecycleReview | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const selected = useRef<DirectoryLifecycleReview | null>(null);
-  const live = useRef({ ownerKey, available, mounted: true, generation: 0 });
+  const live = useRef({ ownerKey, available, checking, mounted: true, generation: 0 });
   live.current.available = available;
+  live.current.checking = checking;
+  const canStart = () => live.current.available && !live.current.checking;
   if (live.current.ownerKey !== ownerKey) {
     live.current.ownerKey = ownerKey;
     live.current.generation += 1;
@@ -71,7 +76,7 @@ export function useDirectoryLifecycle({
   const key = review ? directoryAttemptKey(review) : "";
   const pending = Boolean(key && ["checking", "saving"].includes(workspaceAttempt(key).phase));
   function request(next: DirectoryLifecycleReview) {
-    if (!live.current.available || selected.current || workspaceAttemptLocked(directoryAttemptKey(next))) return;
+    if (!canStart() || selected.current || workspaceAttemptLocked(directoryAttemptKey(next))) return;
     const valid =
       next.kind === "workspace" ? hasWorkspaceBinding(next.record, next.scope) : hasCitadelRecord(next.record);
     if (
@@ -116,7 +121,7 @@ export function useDirectoryLifecycle({
   }
   async function confirm(): Promise<boolean> {
     const target = selected.current;
-    if (!target || !live.current.available || workspaceAttemptLocked(directoryAttemptKey(target))) return false;
+    if (!target || !canStart() || workspaceAttemptLocked(directoryAttemptKey(target))) return false;
     const attemptKey = directoryAttemptKey(target),
       generation = live.current.generation;
     const current = () =>
@@ -125,12 +130,23 @@ export function useDirectoryLifecycle({
       live.current.generation === generation &&
       selected.current === target;
     const inform = (message: string) => setWorkspaceAttempt(attemptKey, { phase: "idle", message });
+    // A background refresh never stops a confirmed request; only a changed owner or a list that is no longer ready.
+    const stillReviewing = () => current() && live.current.available;
+    const stop = () => {
+      inform(DIRECTORY_CHANGED_WHILE_CHECKING);
+      if (current()) {
+        setNotice(DIRECTORY_CHANGED_WHILE_CHECKING);
+        selected.current = null;
+        setReview(null);
+      }
+      return false;
+    };
     setWorkspaceAttempt(attemptKey, { phase: "checking", message: "Reviewing current lifecycle state…" });
     let dispatched = false,
       confirmed = false;
     try {
       const before = await readRecord(target);
-      if (!current() || !live.current.available) return false;
+      if (!stillReviewing()) return stop();
       if (!sameDirectoryRecord(target, before))
         throw new Error("The reviewed record changed. Refresh and review its current revision before trying again.");
       if (target.kind === "workspace") {
@@ -138,7 +154,7 @@ export function useDirectoryLifecycle({
         if (parents.length !== 1 || parents[0]?.lifecycleStatus !== "active")
           throw new Error("This Citadel is unavailable or archived. Refresh before changing its workspace lifecycle.");
       }
-      if (!current() || !live.current.available) return false;
+      if (!stillReviewing()) return stop();
       setWorkspaceAttempt(attemptKey, { phase: "saving", message: "Waiting for the Gateway lifecycle owner…" });
       dispatched = true;
       const receipt =
@@ -211,8 +227,7 @@ export function useDirectoryLifecycle({
       }
       return false;
     } finally {
-      if (!dispatched && workspaceAttempt(attemptKey).phase === "checking")
-        inform("Lifecycle request cancelled before dispatch.");
+      if (!dispatched && workspaceAttempt(attemptKey).phase === "checking") inform(DIRECTORY_CHANGED_WHILE_CHECKING);
       // Confirmed writes stay recorded even if their displaying editor was closed.
       if (confirmed && current()) setReview(null);
     }
@@ -221,8 +236,9 @@ export function useDirectoryLifecycle({
     review,
     pending,
     /** Whether `confirm` would act now; a confirm control must be disabled otherwise. */
-    available,
-    checking: checking && !available,
+    available: available && !checking,
+    /** Only a refresh is holding confirm back; show {@link CHECKING_FOR_CHANGES}. */
+    checking: available && checking,
     notice,
     request,
     cancel,

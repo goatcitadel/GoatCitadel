@@ -269,4 +269,48 @@ describe("native Citadel directory", () => {
     expect(api.updateCitadel).toHaveBeenCalledTimes(1);
     expect(selection.setActiveCitadelId).not.toHaveBeenCalled();
   });
+  it("still sends a confirmed lifecycle change when a live refresh starts while it checks the record", async () => {
+    await render();
+    await click("Archive Citadel Citadel two");
+    const check = deferred<{ items: CitadelRecord[] }>(),
+      refresh = deferred<{ items: CitadelRecord[] }>();
+    api.listCitadels.mockReturnValueOnce(check.promise).mockReturnValueOnce(refresh.promise);
+    const reviewed = structuredClone(rows[1]!);
+    await click("Confirm archive Citadel");
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["settings", "citadels"] });
+    });
+    await settle();
+    await act(async () => {
+      check.resolve({ items: structuredClone(rows) });
+    });
+    await settle();
+    expect(api.archiveCitadel).toHaveBeenCalledExactlyOnceWith("two", reviewed.revision);
+    await act(async () => {
+      refresh.resolve({ items: structuredClone(rows) });
+    });
+    await settle();
+  });
+  it("still sends a confirmed metadata save when a live refresh starts while it checks the record", async () => {
+    await render();
+    await click("Edit Citadel Citadel two");
+    await write("Citadel name", "Renamed two");
+    const check = deferred<{ items: CitadelRecord[] }>(),
+      refresh = deferred<{ items: CitadelRecord[] }>();
+    api.listCitadels.mockReturnValueOnce(check.promise).mockReturnValueOnce(refresh.promise);
+    await click("Save Citadel metadata");
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["settings", "citadels"] });
+    });
+    await settle();
+    await act(async () => {
+      check.resolve({ items: structuredClone(rows) });
+    });
+    await settle();
+    expect(api.updateCitadel).toHaveBeenCalledExactlyOnceWith("two", expect.objectContaining({ name: "Renamed two" }));
+    await act(async () => {
+      refresh.resolve({ items: structuredClone(rows) });
+    });
+    await settle();
+  });
 });

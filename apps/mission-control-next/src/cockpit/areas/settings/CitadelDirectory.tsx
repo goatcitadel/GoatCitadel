@@ -29,8 +29,10 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
     Array.isArray(rows) &&
     rows.every(hasCitadelRecord) &&
     new Set(rows.map((row) => row.citadelId)).size === rows.length;
-  const available = ready && !query.isFetching,
+  // The hooks treat a refresh as "checking", not "unavailable": a confirmed action already checking goes on.
+  const available = ready,
     checking = ready && query.isFetching,
+    canStart = available && !checking,
     records = ready ? rows! : [];
   const selected = records.find((item) => item.citadelId === selectedId) ?? null;
   const editor = useCitadelEditor({
@@ -39,6 +41,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
     selected,
     mode,
     available,
+    checking,
     reload: () => query.refetch(),
     onCreated: (created) => {
       setSelectedId(created.citadelId);
@@ -72,7 +75,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
         </p>
       </header>
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" disabled={!available || editor.locked} onClick={() => setMode("create")}>
+        <Button size="sm" disabled={!canStart || editor.locked} onClick={() => setMode("create")}>
           New Citadel
         </Button>
         <Button
@@ -102,7 +105,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
           editor={editor}
           mode={mode}
           selected={selected}
-          available={available}
+          available={canStart}
           checking={checking}
           onClose={() => setMode(null)}
         />
@@ -183,7 +186,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
                   <div className="flex flex-wrap gap-2">
                     <Button
                       size="sm"
-                      disabled={!available || locked}
+                      disabled={!canStart || locked}
                       aria-label={`Edit Citadel ${record.name}`}
                       onClick={() => {
                         setSelectedId(record.citadelId);
@@ -195,7 +198,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
                     <Button
                       size="sm"
                       variant={target.action === "archive" ? "danger" : "secondary"}
-                      disabled={!available || locked}
+                      disabled={!canStart || locked}
                       aria-label={`${target.action === "archive" ? "Archive" : "Restore"} Citadel ${record.name}`}
                       onClick={() => lifecycle.request(target)}
                     >
@@ -204,7 +207,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
                     <Button
                       size="sm"
                       disabled={
-                        !available ||
+                        !canStart ||
                         locked ||
                         record.lifecycleStatus !== "active" ||
                         record.citadelId === activeCitadelId

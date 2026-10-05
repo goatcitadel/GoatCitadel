@@ -214,6 +214,80 @@ describe("shared directory lifecycle", () => {
     });
     expect(api.archiveWorkspace).not.toHaveBeenCalled();
   });
+  it("keeps a confirmed request going when a background refresh starts during its check", async () => {
+    const read = deferred<{ items: WorkspaceRecord[]; citadelId: string }>();
+    api.fetchWorkspaces.mockReturnValueOnce(read.promise);
+    await request();
+    let pending!: Promise<boolean>;
+    await act(async () => {
+      pending = actions.confirm();
+    });
+    await render({ checking: true });
+    let confirmed!: boolean;
+    await act(async () => {
+      read.resolve({ items: [savedWorkspace], citadelId: "personal" });
+      confirmed = await pending;
+    });
+    expect(confirmed).toBe(true);
+    expect(api.archiveWorkspace).toHaveBeenCalledExactlyOnceWith("one", 3);
+  });
+  it("waits to open or confirm a review while the directory is checking", async () => {
+    await render({ checking: true });
+    expect(actions.available).toBe(false);
+    expect(actions.checking).toBe(true);
+    await request();
+    expect(actions.review).toBeNull();
+    await render({ checking: false });
+    await request();
+    await render({ checking: true });
+    expect(await confirm()).toBe(false);
+    expect(api.fetchWorkspaces).not.toHaveBeenCalled();
+    expect(actions.review).not.toBeNull();
+    await render({ checking: false });
+    expect(actions.available).toBe(true);
+    expect(actions.checking).toBe(false);
+  });
+  it("says so when the list stops being ready during the check, instead of stopping silently", async () => {
+    const read = deferred<{ items: WorkspaceRecord[]; citadelId: string }>();
+    api.fetchWorkspaces.mockReturnValueOnce(read.promise);
+    await request();
+    let pending!: Promise<boolean>;
+    await act(async () => {
+      pending = actions.confirm();
+    });
+    await render({ available: false });
+    await act(async () => {
+      read.resolve({ items: [savedWorkspace], citadelId: "personal" });
+      await pending;
+    });
+    expect(api.archiveWorkspace).not.toHaveBeenCalled();
+    expect(actions.notice).toBe("This list changed while checking. Review it again.");
+    expect(actions.review).toBeNull();
+    expect(actions.attempt(target())).toMatchObject({
+      phase: "idle",
+      message: "This list changed while checking. Review it again.",
+    });
+  });
+  it("leaves a plain message, not a stuck check, when the owner changes during the check", async () => {
+    const read = deferred<{ items: WorkspaceRecord[]; citadelId: string }>();
+    api.fetchWorkspaces.mockReturnValueOnce(read.promise);
+    await request();
+    let pending!: Promise<boolean>;
+    await act(async () => {
+      pending = actions.confirm();
+    });
+    expect(actions.attempt(target()).phase).toBe("checking");
+    await render({ ownerKey: "company" });
+    await act(async () => {
+      read.resolve({ items: [savedWorkspace], citadelId: "personal" });
+      await pending;
+    });
+    expect(api.archiveWorkspace).not.toHaveBeenCalled();
+    expect(actions.attempt(target())).toMatchObject({
+      phase: "idle",
+      message: "This list changed while checking. Review it again.",
+    });
+  });
   it("shares the editor lock across simultaneous confirms and remounts", async () => {
     const write = deferred<WorkspaceRecord>();
     api.archiveWorkspace.mockReturnValue(write.promise);

@@ -101,6 +101,49 @@ afterEach(async () => {
   __resetSessionDraftsForTests();
 });
 describe("shared Citadel metadata owner", () => {
+  it("keeps a confirmed save going when a background refresh starts during its check", async () => {
+    const read = deferred<{ items: CitadelRecord[] }>();
+    api.listCitadels.mockReturnValueOnce(read.promise);
+    await edit();
+    let saving!: Promise<boolean>;
+    await act(async () => {
+      saving = editor.save();
+    });
+    await render({ checking: true });
+    let saved!: boolean;
+    await act(async () => {
+      read.resolve({ items: [canonical] });
+      saved = await saving;
+    });
+    expect(saved).toBe(true);
+    expect(api.updateCitadel).toHaveBeenCalledOnce();
+  });
+  it("waits to start a save while the directory is checking", async () => {
+    await edit();
+    await render({ checking: true });
+    expect(await save()).toBe(false);
+    expect(api.listCitadels).not.toHaveBeenCalled();
+    expect(api.updateCitadel).not.toHaveBeenCalled();
+    await render({ checking: false });
+    expect(await save()).toBe(true);
+  });
+  it("says so when the directory stops being ready during the check", async () => {
+    const read = deferred<{ items: CitadelRecord[] }>();
+    api.listCitadels.mockReturnValueOnce(read.promise);
+    await edit();
+    let saving!: Promise<boolean>;
+    await act(async () => {
+      saving = editor.save();
+    });
+    await render({ available: false });
+    await act(async () => {
+      read.resolve({ items: [canonical] });
+      await saving;
+    });
+    expect(api.updateCitadel).not.toHaveBeenCalled();
+    expect(editor.pending).toBe(false);
+    expect(editor.notice).toBe("This list changed while checking. Review it again.");
+  });
   it("submits normalized metadata with exact revision, clears description, and preserves workspace/lifecycle", async () => {
     await edit("  Updated  ");
     expect(await save()).toBe(true);

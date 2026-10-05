@@ -66,9 +66,11 @@ export function WorkspacesSection({
     data: citadelsData,
     reload: reloadCitadels,
   } = useAsyncLoad(loadCitadels, [loadCitadels]);
+  // A reload is "checking", not "unavailable": new actions wait, a confirmed action already checking goes on.
+  const directoryReady = Boolean(data && citadelsData) && !error && !citadelsError;
   const lifecycle = useDirectoryLifecycle({
     ownerKey: scope,
-    available: !loading && !error && !citadelsLoading && !citadelsError,
+    available: directoryReady,
     checking: loading || citadelsLoading,
     reload: (kind) => (kind === "citadel" ? reloadCitadels() : reload()),
     onConfirmed: () => setInspector(null),
@@ -80,7 +82,8 @@ export function WorkspacesSection({
     selected: selectedCitadel,
     selectedId: selectedCitadelId,
     mode: editor === "citadel-new" ? "create" : editor === "citadel-edit" ? "edit" : null,
-    available: !citadelsLoading && !citadelsError && Array.isArray(citadelsData?.items),
+    available: !citadelsError && Array.isArray(citadelsData?.items),
+    checking: citadelsLoading,
     reload: reloadCitadels,
     onCreated: (created) => {
       setEditor(null);
@@ -102,7 +105,8 @@ export function WorkspacesSection({
     selected: selectedWorkspace,
     selectedId: selectedWorkspaceId,
     mode: editor === "workspace-new" ? "create" : editor === "workspace-edit" ? "edit" : null,
-    available: !loading && !error && !citadelsLoading && !citadelsError,
+    available: directoryReady,
+    checking: loading || citadelsLoading,
     reload,
     onCreated: (created) => {
       setEditor(null);

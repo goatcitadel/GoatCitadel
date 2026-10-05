@@ -18,6 +18,7 @@ import {
   workspaceDraft,
   workspaceReceiptMatches,
 } from "./workspace-editor-state";
+import { DIRECTORY_CHANGED_WHILE_CHECKING } from "./use-directory-lifecycle";
 
 interface WorkspaceEditorOptions {
   citadelId?: string;
@@ -25,7 +26,10 @@ interface WorkspaceEditorOptions {
   selected: WorkspaceRecord | null;
   selectedId: string;
   mode: "create" | "edit" | null;
+  /** The workspace records are loaded and valid and the Citadel is active. A refresh alone does not clear it. */
   available: boolean;
+  /** The directory is refreshing: a new save waits, but a save already checking goes on. */
+  checking?: boolean;
   metadataOnly?: boolean;
   reload: () => Promise<unknown>;
   onCreated?: (workspace: WorkspaceRecord) => void;
@@ -34,6 +38,7 @@ interface WorkspaceEditorOptions {
 /** Shared by classic and cockpit. Retained input and uncertainty survive navigation in this app session. */
 export function useWorkspaceEditor(options: WorkspaceEditorOptions) {
   const { citadelId, citadelName, selected, selectedId, mode, available, reload, onCreated, metadataOnly } = options;
+  const checking = options.checking ?? false;
   const scope = citadelId ?? "legacy";
   const prefix = metadataOnly ? "workspace-metadata" : "workspace";
   const createKey = `${prefix}:${scope}:new`;
@@ -58,20 +63,13 @@ export function useWorkspaceEditor(options: WorkspaceEditorOptions) {
     () => workspaceAttempt(key),
     () => workspaceAttempt(key),
   );
-  const snapshot = JSON.stringify({
-    citadelId,
-    selectedId: mode === "edit" ? selectedId : null,
-    mode,
-    revision: mode === "edit" ? selected?.revision : null,
-    available,
-  });
   const identity = JSON.stringify({ citadelId, selectedId: mode === "edit" ? selectedId : null, mode });
-  const live = useRef({ snapshot, identity, generation: 0, mounted: true });
+  const live = useRef({ available, identity, generation: 0, mounted: true });
   if (live.current.identity !== identity) {
     live.current.identity = identity;
     live.current.generation += 1;
   }
-  live.current.snapshot = snapshot;
+  live.current.available = available;
   useLayoutEffect(() => {
     const lifecycle = live.current;
     lifecycle.mounted = true;
@@ -89,6 +87,10 @@ export function useWorkspaceEditor(options: WorkspaceEditorOptions) {
     const inform = (message: string) => setWorkspaceAttempt(targetKey, { phase: "idle", message });
     if (!citadelId || !available || mode !== kind) {
       inform("Choose an available Citadel before saving workspace metadata.");
+      return false;
+    }
+    if (checking) {
+      inform("This list is still refreshing. Try again in a moment.");
       return false;
     }
     if (!draft.value.name.trim()) {
@@ -110,7 +112,14 @@ export function useWorkspaceEditor(options: WorkspaceEditorOptions) {
     const reviewed = selected ? structuredClone(selected) : undefined;
     const generation = live.current.generation;
     const isSameSelection = () => live.current.mounted && live.current.generation === generation;
-    const isCurrent = () => isSameSelection() && live.current.snapshot === snapshot;
+    // A background refresh never stops a confirmed save; the fresh read and revision-pinned write guard staleness.
+    const isCurrent = () => isSameSelection() && live.current.available;
+    const cancelled = () =>
+      inform(
+        isSameSelection()
+          ? DIRECTORY_CHANGED_WHILE_CHECKING
+          : "Workspace save cancelled because the selection changed.",
+      );
     setWorkspaceAttempt(targetKey, { phase: "checking" });
     let dispatched = false;
     let savedClean: boolean;
@@ -118,7 +127,7 @@ export function useWorkspaceEditor(options: WorkspaceEditorOptions) {
     try {
       const citadels = await listCitadels("all", 500);
       if (!isCurrent()) {
-        inform("Workspace save cancelled because the selected Citadel changed.");
+        cancelled();
         return false;
       }
       if (!citadels.items.some((item) => item.citadelId === citadelId && item.lifecycleStatus === "active")) {
@@ -128,7 +137,7 @@ export function useWorkspaceEditor(options: WorkspaceEditorOptions) {
       if (kind === "edit") {
         const current = await fetchWorkspaces("all", 500, citadelId);
         if (!isCurrent()) {
-          inform("Workspace save cancelled because the selection changed.");
+          cancelled();
           return false;
         }
         const matches = current.items.filter((item) => item.workspaceId === selectedId);
@@ -146,7 +155,7 @@ export function useWorkspaceEditor(options: WorkspaceEditorOptions) {
         }
       }
       if (!isCurrent()) {
-        inform("Workspace save cancelled because the selection changed.");
+        cancelled();
         return false;
       }
       setWorkspaceAttempt(targetKey, { phase: "saving" });
