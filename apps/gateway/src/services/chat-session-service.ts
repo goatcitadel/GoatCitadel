@@ -38,6 +38,7 @@ import {
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import {
+  buildChatSessionActivity,
   buildChatSessionUpdatedPayload,
   deriveChatSessionTitleFromContent,
   splitChatPrefsPatch,
@@ -79,12 +80,13 @@ export async function listChatSessions(
   deps: ChatSessionDependencies,
   query: ChatSessionListQuery = {},
 ): Promise<ChatSessionRecord[]> {
+  const storage = deps.storage;
   const workspaceId = deps.normalizeWorkspaceId(query.workspaceId);
   const scope = query.scope ?? "all";
   const view = query.view ?? "active";
   const includeHidden = query.includeHidden ?? false;
   const limit = query.sessionId !== undefined ? 1 : Math.max(1, Math.min(1000, Math.floor(query.limit ?? 200)));
-  const candidates = await deps.storage.chatSessionLists.listCandidates({
+  const candidates = await storage.chatSessionLists.listCandidates({
     workspaceId,
     sessionId: query.sessionId,
     scope,
@@ -100,22 +102,22 @@ export async function listChatSessions(
   });
   const sessionIds = candidates.slice(0, limit).map((candidate) => candidate.sessionId);
   const candidateOrderBySessionId = new Map(sessionIds.map((sessionId, index) => [sessionId, index]));
-  const sessionsById = await deps.storage.sessions.listBySessionIds(sessionIds);
-  const projects = await deps.storage.chatProjects.list("all", 2000, workspaceId);
+  const sessionsById = await storage.sessions.listBySessionIds(sessionIds);
+  const projects = await storage.chatProjects.list("all", 2000, workspaceId);
   const projectById = new Map(projects.map((project) => [project.projectId, project]));
-  const metaBySessionId = await deps.storage.chatSessionMeta.listBySessionIds(sessionIds);
-  const prefsBySessionId = await deps.storage.chatSessionPrefs.listBySessionIds(sessionIds);
-  const projectLinkBySessionId = await deps.storage.chatSessionProjects.listBySessionIds(sessionIds);
-  const generatedArtifactsBySessionId = await deps.storage.chatGeneratedArtifacts.listBySessionIds(sessionIds);
+  const metaBySessionId = await storage.chatSessionMeta.listBySessionIds(sessionIds);
+  const prefsBySessionId = await storage.chatSessionPrefs.listBySessionIds(sessionIds);
+  const projectLinkBySessionId = await storage.chatSessionProjects.listBySessionIds(sessionIds);
+  const generatedArtifactsBySessionId = await storage.chatGeneratedArtifacts.listBySessionIds(sessionIds);
   const forkRelationshipsBySessionId = new Map(
     await Promise.all(
       sessionIds.map(
         async (sessionId) =>
-          [sessionId, await deps.storage.chatSessionForks.listRelationships(sessionId, workspaceId)] as const,
+          [sessionId, await storage.chatSessionForks.listRelationships(sessionId, workspaceId)] as const,
       ),
     ),
   );
-  const delegationParentBySessionId = await deps.storage.chatDelegationSteps.listParentsByChildSessionIds(
+  const delegationParentBySessionId = await storage.chatDelegationSteps.listParentsByChildSessionIds(
     sessionIds,
     workspaceId,
   );
@@ -237,7 +239,15 @@ export async function listChatSessions(
     return right.sessionId.localeCompare(left.sessionId);
   });
 
-  return records.slice(0, limit);
+  const page = records.slice(0, limit);
+  if (query.includeActivity !== true || page.length === 0) return page;
+  // One read for the whole page; the caller gates this on the session status feature.
+  const summaries = await storage.chatTurnTraces.summarizeBySessionIds(page.map((record) => record.sessionId));
+  const observedAt = new Date().toISOString();
+  return page.map((record) => ({
+    ...record,
+    activity: buildChatSessionActivity(summaries.get(record.sessionId), observedAt),
+  }));
 }
 
 export async function forkChatSessionFromTurn(

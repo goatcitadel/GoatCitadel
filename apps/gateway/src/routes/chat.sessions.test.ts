@@ -368,6 +368,25 @@ describe("chat session routes", () => {
     ).resolves.toMatchObject({ statusCode: 200 });
   });
 
+  it("passes an activity request to the sessions list and returns each session's activity", async () => {
+    const activity = {
+      observedAt: "2026-10-05T10:00:00.000Z",
+      latestTurn: { turnId: "turn-1", status: "running", startedAt: "2026-10-05T09:59:00.000Z" },
+      turnCounts: { queued: 0, running: 1, waiting_for_tool: 0, waiting_for_approval: 0, waiting_for_user_input: 0 },
+    };
+    const chatSessions = createChatSessionsService({
+      listChatSessions: vi.fn(() => [{ sessionId: "sess-1", updatedAt: "2026-05-14T00:00:00.000Z", activity }]),
+    });
+    app = buildApp(chatSessions);
+
+    const listed = await app.inject({ method: "GET", url: "/api/v1/chat/sessions?includeActivity=true" });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().items[0].activity).toEqual(activity);
+    expect(chatSessions.listChatSessions).toHaveBeenCalledWith(expect.objectContaining({ includeActivity: true }));
+    const invalid = await app.inject({ method: "GET", url: "/api/v1/chat/sessions?includeActivity=maybe" });
+    expect(invalid.statusCode).toBe(400);
+  });
+
   it("projects public session titles and assistant or system search previews without mutating service state", async () => {
     const listedSession = {
       sessionId: "sess-secret",

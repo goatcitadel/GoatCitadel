@@ -277,6 +277,9 @@ export function composeChatRouteDependencies(
       return chatSessionService.listChatSessions(ChatSessionDependencies, {
         ...sessionQuery,
         workspaceId: scope.workspaceId,
+        // Same gate as the session status route: turn activity is session status, read once per list.
+        includeActivity:
+          sessionQuery.includeActivity === true && gateway.isFeatureEnabled("chatSessionStatusV1Enabled"),
       });
     },
     listChatTimers: (sessionId) => {

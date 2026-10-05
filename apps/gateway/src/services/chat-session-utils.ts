@@ -1,3 +1,4 @@
+import { CHAT_SESSION_ACTIVITY_COUNT_KEYS } from "@goatcitadel/contracts";
 import type {
   ChatMode,
   ChatProjectRecord,
@@ -5,11 +6,31 @@ import type {
   ChatReflectionMode,
   ChatRetrievalMode,
   ChatCompletionRequest,
+  ChatSessionActivitySummary,
   ChatSessionLifecycleStatus,
   ChatSessionPrefsPatch,
   ChatSessionRecord,
   SessionMeta,
 } from "@goatcitadel/contracts";
+
+/** A session's turn activity in the session status route's shape: every bucket present, latest or null. */
+export function buildChatSessionActivity(
+  summary:
+    | {
+        latest: ChatSessionActivitySummary["latestTurn"];
+        counts: Partial<Record<(typeof CHAT_SESSION_ACTIVITY_COUNT_KEYS)[number], number>>;
+      }
+    | undefined,
+  observedAt: string,
+): ChatSessionActivitySummary {
+  return {
+    observedAt,
+    latestTurn: summary?.latest ?? null,
+    turnCounts: Object.fromEntries(
+      CHAT_SESSION_ACTIVITY_COUNT_KEYS.map((status) => [status, summary?.counts[status] ?? 0]),
+    ) as ChatSessionActivitySummary["turnCounts"],
+  };
+}
 
 export function assertChatSessionActive(sessionId: string, lifecycleStatus: ChatSessionLifecycleStatus): void {
   if (lifecycleStatus === "archived") {
