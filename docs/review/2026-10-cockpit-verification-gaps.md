@@ -73,7 +73,7 @@ Read the result (plan Step 2). Download the run's evidence into `artifacts/verif
 
 ```powershell
 gh run download <run id> -n verification-ux-budgets-nightly-artifacts -D artifacts/verification
-node -e "const fs=require('fs');const p=require('path');const latest=JSON.parse(fs.readFileSync('artifacts/verification/latest-run.json','utf8'));const root=latest.artifactRoot||p.join('artifacts','verification',latest.runId);const m=JSON.parse(fs.readFileSync(p.join(root,'manifest.json'),'utf8'));console.log(root);console.log(JSON.stringify(m.counts||{}));for(const s of m.scenarios||[]){if(s.status!=='passed')console.log(s.status,s.id,JSON.stringify(s.error??s.failure??s.readyError??s.detail??'').slice(0,240));}"
+node -e "const fs=require('fs');const p=require('path');const latest=JSON.parse(fs.readFileSync('artifacts/verification/latest-run.json','utf8'));const root=p.join('artifacts','verification',latest.runId);const m=JSON.parse(fs.readFileSync(p.join(root,'manifest.json'),'utf8'));console.log(root);console.log(JSON.stringify(m.counts||{}));for(const s of m.scenarios||[]){if(s.status!=='passed')console.log(s.status,s.id,JSON.stringify(s.error??s.failure??s.readyError??s.detail??'').slice(0,240));}"
 ```
 
 The command prints the artifact root, the counts and one line per scenario that did not pass. Classify every failure
@@ -96,9 +96,10 @@ Record here: the pass and fail counts, and a table of scenario id, class and evi
   whole release-proof workflow, so a red row there would block tagged releases.
 - **Compared with the release-proof job (plan Step 2):** the pnpm version (10.31.0), Node version (22), build filter,
   Playwright install command, freshness boundary, review command and redaction step match
-  `verification-1-0-release-proof.yml` as it is now. Step names aside, the only difference is that the review lane is
-  written out as `ux-budgets` where the matrix job takes it from the matrix row. As there, the upload runs only after
-  the redaction check passed.
+  `verification-1-0-release-proof.yml` as it is now. Step names aside, the differences are deliberate: the review lane
+  is written out as `ux-budgets` where the matrix job takes it from the matrix row, there are no provider-key secrets
+  (the lane uses the stub model), the `long_list_count` input feeds one environment variable, and the artifact name and
+  14-day retention are this workflow's own. As there, the upload runs only after the redaction check passed.
 - **First run, after merge:** `gh workflow run verification-ux-budgets-nightly.yml --ref main`, then
   `gh run list --workflow verification-ux-budgets-nightly.yml --limit 1`. A workflow dispatched from a branch works
   only once the file exists on the default branch.
@@ -206,7 +207,9 @@ cockpit is served from the same origin, so the URL works as printed. If an engin
 
 Expected: one `ok` or `FAIL` line per engine and area, and a screenshots folder under
 `artifacts/verification/cross-browser-smoke/`. File each `FAIL` that does not also happen in Chromium (check with
-`--engines chromium`) as a new finding. Record the results here.
+`--engines chromium`) as a new finding. Record the results here, replacing the absolute paths the script prints
+(the screenshots folder and Playwright's engine messages) with repo-relative ones: repo hygiene rejects personal paths
+in tracked files.
 
 ### 6. Real browsers by hand, Firefox and Safari (plan Task 7)
 
@@ -292,7 +295,8 @@ Step 2, three model journeys:
   when. Note the installed version first.
 
 Step 1, get a build. Either download the latest `release-installers` workflow artifact (preferred: a local build is
-heavy), or build locally in a clean worktree:
+heavy), or build locally in a clean worktree. That workflow runs only on `v*` tags and manual dispatches, so check the
+artifact's head SHA covers the code under test, or dispatch it on `main` first:
 
 ```powershell
 pnpm package:windows-host --target windows-x64
@@ -312,7 +316,8 @@ On a Mac, with `pnpm package:macos` or the latest artifact, repeat check 3 with 
 ### 10. Gateway outage and recovery (plan Task 11, Steps 1 and 2)
 
 - **Status:** Pending. The operator runs it, in its own sandbox: it stops the sandbox Gateway.
-- **Setup:** `pnpm testbench` running. Open every area once so their code chunks are loaded.
+- **Setup:** `pnpm testbench` running. Open every area except one, so their code chunks are loaded; the GL-13 check
+  below needs one area opened for the first time after the Gateway stops.
 
 Step 1, stop the sandbox Gateway. Use the port printed by the launcher (`Sandbox gateway:`), and confirm the command
 line points at the sandbox runtime before stopping anything:
@@ -450,7 +455,8 @@ Invoke-RestMethod -Method Post -Uri "<gateway>/api/v1/approvals" -Headers @{ "Id
 - [ ] Real models (check 8): a cloud model with tools; a reasoning model with the thinking stream on (set through the
   settings route, not the shell variable) and a Performance profile; a local llama.cpp model with two idle tabs for
   2 minutes.
-- [ ] Packaged app and macOS input (check 9): prefer the latest `release-installers` artifact over a local build, and
+- [ ] Packaged app and macOS input (check 9): prefer a `release-installers` artifact whose head SHA covers the code
+  under test (or dispatch that workflow on `main`) over a local build, and
   note the installed version first. Dark cold start, shortcuts, the Japanese-input Enter, the Gateway-stop banner, and
   the macOS input method on a Mac.
 
