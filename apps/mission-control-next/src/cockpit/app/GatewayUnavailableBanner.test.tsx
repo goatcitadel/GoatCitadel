@@ -23,7 +23,9 @@ describe("Gateway unavailable banner", () => {
     );
     expect(container.textContent).toContain("Sending is paused; your draft is preserved.");
     await act(async () =>
-      root.render(<GatewayUnavailableBanner reachability={{ unavailable: true, lastConfirmedAt: null }} inChat={false} />),
+      root.render(
+        <GatewayUnavailableBanner reachability={{ unavailable: true, lastConfirmedAt: null }} inChat={false} />,
+      ),
     );
     expect(container.textContent).not.toContain("Sending is paused");
     expect(container.textContent).toContain("Reconnecting…");
