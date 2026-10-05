@@ -924,8 +924,8 @@ export function useChatSessionData(input: {
           (plan.refreshSession === "full" ? 4 : plan.refreshSession === "light" ? 2 : 0) + Number(plan.refreshSidebar)
         );
       },
-      staleMs: 20000,
-      pollIntervalMs: 15000,
+      staleMs: 120_000,
+      pollIntervalMs: 60_000,
     },
   );
 

@@ -198,7 +198,7 @@ describe("cockpit owner-backed notifications", () => {
     await emit();
     expect(mocks.warning).not.toHaveBeenCalled();
   });
-  it("cancels an old workspace read even after navigating away and back", async () => {
+  it("ignores an old workspace read after navigating away and back, without reconnecting", async () => {
     let finish!: (value: OperatorInboxResponse) => void;
     mocks.read.mockImplementationOnce(
       () =>
@@ -208,18 +208,17 @@ describe("cockpit owner-backed notifications", () => {
     );
     await render();
     await emit();
-    const signal = mocks.read.mock.calls[0]?.[1]?.signal as AbortSignal;
-    expect(signal.aborted).toBe(false);
     await render({ workspaceId: "other" });
     await render();
-    expect(signal.aborted).toBe(true);
     await act(async () => {
       finish(projection);
       await Promise.resolve();
     });
     expect(mocks.warning).not.toHaveBeenCalled();
+    expect(mocks.connect).toHaveBeenCalledTimes(1);
+    expect(disconnect).not.toHaveBeenCalled();
   });
-  it("aborts separate live reads when notifications are disabled and ignores their late results", async () => {
+  it("replaces a read begun before a later live signal and ignores late results once disabled", async () => {
     const finish: Array<(value: OperatorInboxResponse) => void> = [];
     mocks.read.mockImplementation(
       () =>
@@ -232,14 +231,34 @@ describe("cockpit owner-backed notifications", () => {
     await emit({ ...event, eventId: "second", sequence: 2 });
     const signals = mocks.read.mock.calls.map((call) => call[1].signal as AbortSignal);
     expect(signals).toHaveLength(2);
-    expect(signals[0]).not.toBe(signals[1]);
+    expect(signals[0]?.aborted).toBe(true);
     await render({ enabled: false });
-    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    expect(disconnect).toHaveBeenCalledTimes(1);
     await act(async () => {
       for (const resolve of finish) resolve(projection);
       await Promise.resolve();
     });
     expect(mocks.warning).not.toHaveBeenCalled();
+  });
+  it("shares one Inbox read between toast-worthy events delivered in the same tick (GL-63)", async () => {
+    await render();
+    await act(async () => {
+      onEvent(event, { replayed: false });
+      onEvent({ ...event, eventId: "second", sequence: 2 }, { replayed: false });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(mocks.read).toHaveBeenCalledTimes(1);
+    expect(mocks.warning).toHaveBeenCalledTimes(1);
+  });
+  it("keeps the stream connected when the workspace changes (GL-64)", async () => {
+    await render();
+    await render({ workspaceId: "other" });
+    expect(mocks.connect).toHaveBeenCalledTimes(1);
+    expect(disconnect).not.toHaveBeenCalled();
+  });
+  it("publishes stream status for the shared Chat controller", async () => {
+    await render();
+    expect(mocks.connect).toHaveBeenCalledWith(expect.any(Function), expect.any(Function), expect.any(Function));
   });
   it("does not open a previously shown toast after its workspace changes", async () => {
     await render();

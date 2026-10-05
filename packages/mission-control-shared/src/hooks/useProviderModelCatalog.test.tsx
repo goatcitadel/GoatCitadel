@@ -291,8 +291,8 @@ describe("useProviderModelCatalog", () => {
     expect(refreshMocks.useRefreshSubscription).toHaveBeenCalledWith("chat", expect.any(Function), {
       enabled: true,
       coalesceMs: 900,
-      staleMs: 20000,
-      pollIntervalMs: 20000,
+      staleMs: 120_000,
+      pollIntervalMs: 60_000,
     });
 
     const refreshCallback = refreshMocks.useRefreshSubscription.mock.calls.at(-1)?.[1];

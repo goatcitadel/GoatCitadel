@@ -72,7 +72,7 @@ export function useSessionControlStatus(sessionId: string | null): SessionContro
   // Session control changes (handoff / heartbeat health / revoke) ride the chat
   // refresh topic; a slower system poll keeps a stale banner from lingering.
   useRefreshSubscription("chat", reload);
-  useRefreshSubscription("system", reload, { staleMs: 30_000, pollIntervalMs: 30_000 });
+  useRefreshSubscription("system", reload, { staleMs: 120_000, pollIntervalMs: 60_000 });
 
   return useMemo(() => ({ data, loading, error, reload }), [data, loading, error, reload]);
 }

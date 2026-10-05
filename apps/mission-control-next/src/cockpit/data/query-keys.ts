@@ -29,6 +29,7 @@ export const queryKeys = {
   workTasks: (workspaceId: string): TopicKey => ["tasks", "work-tasks", workspaceId, getGatewayApiBaseUrl()],
   runTrace: (runId: string): TopicKey => ["tasks", "durable-run", runId],
   workSessions: (workspaceId: string): TopicKey => ["chat", "work-history", workspaceId],
+  workActivityAll: (): TopicKey => ["system", "work-activity"],
   workActivity: (workspaceId: string): TopicKey => ["system", "work-activity", workspaceId],
   schedules: (): TopicKey => ["tasks", "schedules"],
   systemActivity: (): TopicKey => ["system", "retained-activity"],
