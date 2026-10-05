@@ -68,13 +68,16 @@ test("bounded response read checker ignores argument-taking methods that share a
         y,
         label,
       );
+      page.text("label");
+      page.text('label');
+      page.text(\`label\`);
       const raw = await response.text( );
     `,
   );
 
   assert.equal(violations.length, 1);
   assert.equal(violations[0].display, ".text()");
-  assert.equal(violations[0].line, 8);
+  assert.equal(violations[0].line, 11);
 });
 
 test("bounded response read checker flags raw response reads in policy-engine", () => {

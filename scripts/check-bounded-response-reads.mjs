@@ -169,6 +169,8 @@ async function main() {
   );
 }
 
+// Blanks comment and string contents but keeps string delimiters, so a string-only argument such as
+// `page.text("label")` still reads as a non-empty argument list to the zero-argument body-read patterns.
 function maskCommentsAndStrings(source) {
   const chars = source.split("");
   let state = "code";
@@ -201,7 +203,6 @@ function maskCommentsAndStrings(source) {
     if (state === "single" || state === "double" || state === "template") {
       const quote = state === "single" ? "'" : state === "double" ? '"' : "`";
       if (char === quote && previous !== "\\") {
-        chars[index] = " ";
         state = "code";
       } else if (char !== "\n" && char !== "\r") {
         chars[index] = " ";
@@ -226,19 +227,16 @@ function maskCommentsAndStrings(source) {
     }
 
     if (char === "'") {
-      chars[index] = " ";
       state = "single";
       continue;
     }
 
     if (char === '"') {
-      chars[index] = " ";
       state = "double";
       continue;
     }
 
     if (char === "`") {
-      chars[index] = " ";
       state = "template";
     }
   }
