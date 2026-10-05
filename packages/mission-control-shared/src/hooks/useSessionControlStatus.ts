@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SessionControlDetailResponse } from "@goatcitadel/contracts";
 import { fetchSessionControlDetail } from "../api/session-control-operator";
+import { RETAINED_RELOAD_WINDOW_MS } from "./retained-reload";
 import { useRefreshSubscription } from "./useRefreshSubscription";
 
 export interface SessionControlStatusState {
@@ -21,6 +22,8 @@ export function useSessionControlStatus(sessionId: string | null): SessionContro
   const [loading, setLoading] = useState(Boolean(sessionId));
   const [error, setError] = useState<string | null>(null);
   const loadSequenceRef = useRef(0);
+  // CH-47: the session last loaded and when, so a retained Chat shown again keeps its status.
+  const lastLoadedRef = useRef<{ sessionId: string; at: number } | null>(null);
 
   const reload = useCallback(async () => {
     if (!sessionId) {
@@ -33,6 +36,7 @@ export function useSessionControlStatus(sessionId: string | null): SessionContro
       const next = await fetchSessionControlDetail(sessionId);
       if (loadSequenceRef.current === loadId) {
         setData(next);
+        lastLoadedRef.current = { sessionId, at: Date.now() };
       }
     } catch {
       if (loadSequenceRef.current === loadId) {
@@ -55,14 +59,22 @@ export function useSessionControlStatus(sessionId: string | null): SessionContro
   useEffect(() => {
     if (!sessionId) {
       loadSequenceRef.current += 1;
+      lastLoadedRef.current = null;
       setData(null);
       setError(null);
       setLoading(false);
       return;
     }
-    setLoading(true);
-    setData(null);
-    setError(null);
+    const last = lastLoadedRef.current;
+    if (last?.sessionId === sessionId) {
+      // The same session shown again: keep its status; re-read in the background once it is old.
+      if (Date.now() - last.at < RETAINED_RELOAD_WINDOW_MS) return;
+    } else {
+      // Only a different session resets what is shown.
+      setLoading(true);
+      setData(null);
+      setError(null);
+    }
     void reload();
     return () => {
       loadSequenceRef.current += 1;

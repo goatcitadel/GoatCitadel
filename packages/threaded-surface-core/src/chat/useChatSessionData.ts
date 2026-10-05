@@ -45,6 +45,7 @@ import { useRefreshSubscription } from "@goatcitadel/mission-control-shared/hook
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import { recordChatRefreshPhase } from "./chat-causality";
 import { resolveChatRefreshPlan } from "./chat-page-pure-helpers";
+import { retainedReloadMode, type RetainedLoad } from "./retained-reload";
 
 export interface CommandCatalogItem {
   command: string;
@@ -246,6 +247,10 @@ export function useChatSessionData(input: {
   const historicalWindowGenerationRef = useRef(0);
   const historicalContinuationGenerationRef = useRef(0);
   const lastLoadedSessionIdRef = useRef<string | null>(null);
+  // CH-47: what each mount effect last loaded, so a retained Chat shown again keeps its data.
+  const sidebarLoadRef = useRef<RetainedLoad | null>(null);
+  const catalogLoadRef = useRef<RetainedLoad | null>(null);
+  const sessionLoadRef = useRef<RetainedLoad | null>(null);
   const refreshSubscriptionStartedAtRef = useRef<number>(0);
   const updateSidebarNextCursor = useCallback((nextCursor: string | null) => {
     sidebarNextCursorRef.current = nextCursor;
@@ -836,6 +841,8 @@ export function useChatSessionData(input: {
   );
 
   useEffect(() => {
+    const key = [loadSidebar, surfaceMode, workspaceId];
+    if (retainedReloadMode(sidebarLoadRef.current, key) === "skip") return;
     let cancelled = false;
     const scope = JSON.stringify([workspaceId, surfaceMode]);
     // A sidebar search/history change must retain the mounted conversation,
@@ -844,7 +851,11 @@ export function useChatSessionData(input: {
     setLoading(needsBootstrap);
     if (needsBootstrap) initializedRef.current = false;
     void loadSidebar()
-      .then(() => !cancelled && setError(null))
+      .then(() => {
+        if (cancelled) return;
+        setError(null);
+        sidebarLoadRef.current = { key, at: Date.now() };
+      })
       .catch((err: Error) => !cancelled && setError(err.message))
       .finally(() => {
         if (!cancelled) {
@@ -861,8 +872,14 @@ export function useChatSessionData(input: {
   // Runtime command, skill and MCP catalogs must not gate conversation discovery.
   // Refresh them independently so a slow catalog also cannot delay sidebar searches.
   useEffect(() => {
+    const key = [loadRuntimeCatalog, surfaceMode, workspaceId];
+    if (retainedReloadMode(catalogLoadRef.current, key) === "skip") return;
     let cancelled = false;
-    void loadRuntimeCatalog().catch((err: Error) => !cancelled && setError(err.message));
+    void loadRuntimeCatalog()
+      .then(() => {
+        if (!cancelled) catalogLoadRef.current = { key, at: Date.now() };
+      })
+      .catch((err: Error) => !cancelled && setError(err.message));
     return () => {
       cancelled = true;
     };
@@ -937,19 +954,25 @@ export function useChatSessionData(input: {
       loadSecondaryGenerationRef.current += 1;
       clearSessionScopedState();
       lastLoadedSessionIdRef.current = null;
+      sessionLoadRef.current = null;
       return;
     }
+    const key = [selectedSessionId, loadSessionState];
+    const mode = retainedReloadMode(sessionLoadRef.current, key);
+    if (mode === "skip") return;
     if (lastLoadedSessionIdRef.current !== selectedSessionId) {
       loadCoreGenerationRef.current += 1;
       loadSecondaryGenerationRef.current += 1;
       clearSessionScopedState();
       lastLoadedSessionIdRef.current = selectedSessionId;
     }
-    void loadSessionState(selectedSessionId, {
-      background: false,
-      includeThread: true,
-      deferSecondary: true,
-    }).catch((err: Error) => setError(err.message));
+    // An older load of the same session refreshes in the background and keeps what is shown.
+    const background = mode === "background";
+    void loadSessionState(selectedSessionId, { background, includeThread: true, deferSecondary: !background })
+      .then(() => {
+        if (lastLoadedSessionIdRef.current === selectedSessionId) sessionLoadRef.current = { key, at: Date.now() };
+      })
+      .catch((err: Error) => setError(err.message));
   }, [clearSessionScopedState, loadSessionState, selectedSessionId, setError]);
 
   return {

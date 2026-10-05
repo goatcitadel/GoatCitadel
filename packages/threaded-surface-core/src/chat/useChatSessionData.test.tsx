@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { Activity, useCallback, useRef, useState } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionRecord, ChatThreadResponse } from "@goatcitadel/contracts";
@@ -967,6 +967,75 @@ describe("useChatSessionData", () => {
     expect(latestHarness?.result.prefs).toBeNull();
     expect(latestHarness?.result.generatedArtifacts).toBeNull();
     expect(latestHarness?.result.secondaryLoading).toBe(false);
+  });
+
+  it("keeps a retained Chat's data when it is shown again, and re-reads in the background after 30 s", async () => {
+    // Past the dev bootstrap cache of earlier tests, which is keyed on the real clock.
+    const start = Date.now() + 3_600_000;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(start);
+    const view = (mode: "visible" | "hidden") => (
+      <Activity mode={mode}>
+        <Harness workspaceId="workspace-retained" />
+      </Activity>
+    );
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(view("visible"));
+      await flushEffects(8);
+    });
+    await act(async () => {
+      await flushEffects(8);
+    });
+    expect(latestHarness?.result.thread?.sessionId).toBe("session-1");
+    const counts = () => ({
+      sessions: fetchChatSessionsMock.mock.calls.length,
+      settings: fetchSettingsMock.mock.calls.length,
+      thread: fetchChatThreadMock.mock.calls.length,
+    });
+    const first = counts();
+    expect(first).toEqual({ sessions: 1, settings: 1, thread: 1 });
+
+    // Away and back within the window: no reload at all.
+    await act(async () => {
+      renderer.update(view("hidden"));
+      await flushEffects(8);
+    });
+    vi.setSystemTime(start + 20_000);
+    await act(async () => {
+      renderer.update(view("visible"));
+      await flushEffects(8);
+    });
+    expect(counts()).toEqual(first);
+    expect(latestHarness?.result.thread?.sessionId).toBe("session-1");
+
+    // Back after the window: one background read each, with the conversation still shown meanwhile.
+    await act(async () => {
+      renderer.update(view("hidden"));
+      await flushEffects(8);
+    });
+    vi.setSystemTime(start + 51_000);
+    let releaseThread!: () => void;
+    fetchChatThreadMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseThread = () => resolve(makeThread("session-1"));
+        }),
+    );
+    await act(async () => {
+      renderer.update(view("visible"));
+      await flushEffects(8);
+    });
+    expect(counts()).toEqual({ sessions: 2, settings: 2, thread: 2 });
+    expect(latestHarness?.result.thread?.sessionId).toBe("session-1");
+    expect(latestHarness?.result.loading).toBe(false);
+    expect(latestHarness?.result.messagesLoading).toBe(false);
+    await act(async () => {
+      releaseThread();
+      await flushEffects(8);
+    });
+    expect(latestHarness?.result.thread?.sessionId).toBe("session-1");
+    await act(async () => renderer.unmount());
   });
 
   it("ignores stale selected-session loads after the selection clears", async () => {
