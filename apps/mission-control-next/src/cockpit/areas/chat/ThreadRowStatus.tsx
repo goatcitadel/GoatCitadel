@@ -16,7 +16,11 @@ export function ThreadRowStatus({ record, checking }: { record?: ThreadActivityR
   return (
     <span
       className="flex items-center gap-1 text-xs text-fg-muted"
-      title={record?.observedAt ? `Gateway status observed ${record.observedAt}` : "A current canonical status read is unavailable."}
+      title={
+        record?.observedAt
+          ? `Gateway status observed ${record.observedAt}`
+          : "A current canonical status read is unavailable."
+      }
     >
       <span aria-hidden="true" className={`size-1.5 shrink-0 rounded-full ${TONE_DOT[shown.tone]}`} />
       <span className="truncate">{label}</span>

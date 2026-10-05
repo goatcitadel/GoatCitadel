@@ -218,7 +218,10 @@ export async function fetchChatProjects(
   if (workspaceId?.trim()) {
     query.set("workspaceId", workspaceId.trim());
   }
-  return request<ChatProjectsResponse>(`/api/v1/chat/projects?${query.toString()}`, options.signal ? { signal: options.signal, cache: "no-store" } : undefined);
+  return request<ChatProjectsResponse>(
+    `/api/v1/chat/projects?${query.toString()}`,
+    options.signal ? { signal: options.signal, cache: "no-store" } : undefined,
+  );
 }
 
 export async function createChatProject(input: {
@@ -295,21 +298,24 @@ export async function hardDeleteChatProject(
   );
 }
 
-export async function fetchChatSessions(input?: {
-  sessionId?: string;
-  scope?: "mission" | "external" | "all";
-  citadelId?: string;
-  workspaceId?: string;
-  projectId?: string;
-  folderId?: string;
-  tag?: string;
-  q?: string;
-  view?: "active" | "archived" | "all";
-  mode?: ChatMode;
-  limit?: number;
-  cursor?: string;
-  includeHidden?: boolean;
-}, options: { signal?: AbortSignal } = {}): Promise<ChatSessionsResponse> {
+export async function fetchChatSessions(
+  input?: {
+    sessionId?: string;
+    scope?: "mission" | "external" | "all";
+    citadelId?: string;
+    workspaceId?: string;
+    projectId?: string;
+    folderId?: string;
+    tag?: string;
+    q?: string;
+    view?: "active" | "archived" | "all";
+    mode?: ChatMode;
+    limit?: number;
+    cursor?: string;
+    includeHidden?: boolean;
+  },
+  options: { signal?: AbortSignal } = {},
+): Promise<ChatSessionsResponse> {
   const query = new URLSearchParams();
   if (input?.sessionId !== undefined) query.set("sessionId", input.sessionId);
   if (input?.scope) query.set("scope", input.scope);
@@ -324,7 +330,10 @@ export async function fetchChatSessions(input?: {
   if (input?.includeHidden !== undefined) query.set("includeHidden", String(input.includeHidden));
   query.set("limit", String(input?.limit ?? 200));
   if (input?.cursor) query.set("cursor", input.cursor);
-  return request<ChatSessionsResponse>(`/api/v1/chat/sessions?${query.toString()}`, options.signal ? { signal: options.signal, cache: "no-store" } : undefined);
+  return request<ChatSessionsResponse>(
+    `/api/v1/chat/sessions?${query.toString()}`,
+    options.signal ? { signal: options.signal, cache: "no-store" } : undefined,
+  );
 }
 
 export async function fetchChatSessionSearch(input: {
@@ -405,7 +414,10 @@ export async function updateChatSession(
   });
 }
 
-export async function fetchChatSessionStatus(sessionId: string, signal?: AbortSignal): Promise<ChatSessionStatusResponse> {
+export async function fetchChatSessionStatus(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<ChatSessionStatusResponse> {
   return request<ChatSessionStatusResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/status`, {
     cache: "no-store",
     signal,
@@ -546,7 +558,10 @@ export async function fetchChatSessionBinding(sessionId: string): Promise<{ item
   );
 }
 
-export async function fetchChatSessionWorkbench(sessionId: string, options?: ChatSessionWorkbenchReadOptions): Promise<{ state: ChatSessionWorkbenchRecord }> {
+export async function fetchChatSessionWorkbench(
+  sessionId: string,
+  options?: ChatSessionWorkbenchReadOptions,
+): Promise<{ state: ChatSessionWorkbenchRecord }> {
   return request<{ state: ChatSessionWorkbenchRecord }>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench${options?.preview ? "?preview=true" : ""}`,
   );
@@ -565,7 +580,10 @@ export async function createChatSessionWorkbenchWorktree(
   );
 }
 
-export async function fetchChatSessionWorkbenchTree(sessionId: string, options?: ChatSessionWorkbenchReadOptions): Promise<ChatSessionWorkbenchTreeResponse> {
+export async function fetchChatSessionWorkbenchTree(
+  sessionId: string,
+  options?: ChatSessionWorkbenchReadOptions,
+): Promise<ChatSessionWorkbenchTreeResponse> {
   return request<ChatSessionWorkbenchTreeResponse>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/tree${options?.preview ? "?preview=true" : ""}`,
   );

@@ -10,8 +10,11 @@ import { statusRecord } from "./thread-activity.test-support";
 
 describe("canonical visible thread activity", () => {
   it("distinguishes latest failure from historical failure and missing/foreign status", () => {
-    const record = statusRecord("s", "w", { latestTurnId: "latest", latestTurn: { turnId: "latest", status: "completed", startedAt: "2026-10-01T00:00:00Z" },
-      durableRuns: [{ runId: "old", status: "failed", workerHealth: "released", recoveryState: "none" }] });
+    const record = statusRecord("s", "w", {
+      latestTurnId: "latest",
+      latestTurn: { turnId: "latest", status: "completed", startedAt: "2026-10-01T00:00:00Z" },
+      durableRuns: [{ runId: "old", status: "failed", workerHealth: "released", recoveryState: "none" }],
+    });
     expect(projectThreadActivity(record, "w", "s").label).toBe("Last turn completed");
     if (record.work.availability !== "available") throw new Error("Fixture work required");
     record.work.value.latestTurn!.status = "failed";
@@ -33,13 +36,25 @@ describe("canonical visible thread activity", () => {
     expect(projectThreadActivity(record, "w", "s").label).toBe("Status unavailable");
   });
   it("runs status reads with concurrency two across every caller", async () => {
-    let active = 0, maximum = 0;
-    const read = vi.fn(async (id: string) => { active++; maximum = Math.max(maximum, active); await Promise.resolve(); active--; return statusRecord(id); });
+    let active = 0,
+      maximum = 0;
+    const read = vi.fn(async (id: string) => {
+      active++;
+      maximum = Math.max(maximum, active);
+      await Promise.resolve();
+      active--;
+      return statusRecord(id);
+    });
     const ids = Array.from({ length: THREAD_ACTIVITY_WINDOW_LIMIT }, (_, i) => "session-" + i);
-    const results = await Promise.all(ids.map((sessionId) =>
-      readThreadActivity({ workspaceId: "w", sessionId, signal: new AbortController().signal, read })));
+    const results = await Promise.all(
+      ids.map((sessionId) =>
+        readThreadActivity({ workspaceId: "w", sessionId, signal: new AbortController().signal, read }),
+      ),
+    );
     expect(maximum).toBe(2);
-    expect(results.every((result) => result.label === "Status unavailable" || result.label === "No recorded turns")).toBe(true);
+    expect(
+      results.every((result) => result.label === "Status unavailable" || result.label === "No recorded turns"),
+    ).toBe(true);
   });
   it("never starts a queued read whose signal aborted while it waited", async () => {
     const limiter = createConcurrencyLimiter(1);

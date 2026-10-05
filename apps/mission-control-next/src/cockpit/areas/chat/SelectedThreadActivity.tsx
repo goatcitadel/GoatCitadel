@@ -10,8 +10,14 @@ export function SelectedThreadActivity({ sessionId }: { sessionId?: string }) {
   const record = activity.records[sessionId];
   const checking = activity.checking.has(sessionId);
   const unavailable = !checking && (!record || record === UNKNOWN_THREAD_ACTIVITY);
-  return <p className="text-xs text-fg-muted md:hidden" aria-label="Selected conversation activity">
-    {record ? threadActivityLabel(record) : checking ? "Checking status" : UNKNOWN_THREAD_ACTIVITY.label}
-    {unavailable || record?.stale ? <button type="button" className="ml-2 text-accent" onClick={() => void activity.refresh()}>Refresh status</button> : null}
-  </p>;
+  return (
+    <p className="text-xs text-fg-muted md:hidden" aria-label="Selected conversation activity">
+      {record ? threadActivityLabel(record) : checking ? "Checking status" : UNKNOWN_THREAD_ACTIVITY.label}
+      {unavailable || record?.stale ? (
+        <button type="button" className="ml-2 text-accent" onClick={() => void activity.refresh()}>
+          Refresh status
+        </button>
+      ) : null}
+    </p>
+  );
 }
