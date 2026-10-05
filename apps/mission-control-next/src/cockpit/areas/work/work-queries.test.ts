@@ -1,11 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  WORK_HISTORY_FALLBACK_MS,
-  WORK_HISTORY_MAX_PAGES,
-  workspaceDurableRunsOptions,
-  workspaceTasksOptions,
-} from "./work-queries";
+import { WORK_HISTORY_FALLBACK_MS, workspaceDurableRunsOptions, workspaceTasksOptions } from "./work-queries";
 
 const api = vi.hoisted(() => ({ fetchTasks: vi.fn(), fetchDurableRunHistory: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/tasks", () => ({ fetchTasks: api.fetchTasks }));
@@ -19,13 +14,13 @@ beforeEach(() => {
 });
 
 describe("Work history queries (WK-13)", () => {
-  it("poll only as a fallback and refetch a bounded number of pages", () => {
+  it("poll only as a fallback and keep every loaded page", () => {
     for (const options of [workspaceTasksOptions("w"), workspaceDurableRunsOptions("w")]) {
       expect(options.refetchInterval).toBe(WORK_HISTORY_FALLBACK_MS);
-      expect(options.maxPages).toBe(WORK_HISTORY_MAX_PAGES);
+      // No backward cursor exists, so a page cap would drop the newest page (the first one loaded).
+      expect(options.maxPages).toBeUndefined();
     }
     expect(WORK_HISTORY_FALLBACK_MS).toBe(120_000);
-    expect(WORK_HISTORY_MAX_PAGES).toBe(5);
   });
 
   it("forwards the query's abort signal to the task read", async () => {

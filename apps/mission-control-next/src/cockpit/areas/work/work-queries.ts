@@ -6,8 +6,6 @@ import { queryKeys } from "../../data/query-keys";
 
 /** A fallback only: realtime `tasks` and `durable` events refresh these histories. */
 export const WORK_HISTORY_FALLBACK_MS = 120_000;
-/** A refetch re-reads at most this many pages, never an unbounded history. */
-export const WORK_HISTORY_MAX_PAGES = 5;
 
 export function workspaceDurableRunsOptions(workspaceId: string) {
   const installation = getGatewayApiBaseUrl();
@@ -25,7 +23,6 @@ export function workspaceDurableRunsOptions(workspaceId: string) {
     },
     getNextPageParam: (last) => last.nextCursor,
     refetchInterval: WORK_HISTORY_FALLBACK_MS,
-    maxPages: WORK_HISTORY_MAX_PAGES,
   });
 }
 
@@ -42,6 +39,5 @@ export function workspaceTasksOptions(workspaceId: string) {
     },
     getNextPageParam: (last) => last.nextCursor,
     refetchInterval: WORK_HISTORY_FALLBACK_MS,
-    maxPages: WORK_HISTORY_MAX_PAGES,
   });
 }
