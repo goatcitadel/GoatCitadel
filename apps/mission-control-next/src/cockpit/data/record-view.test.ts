@@ -1,6 +1,6 @@
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-import { lastVersionNote, recordTime, recordView, type RecordQuery } from "./record-view";
+import { lastVersionNote, recordTime, recordView, type RecordQuery, keepRecordForSameItem } from "./record-view";
 
 const at = new Date(2026, 9, 5, 10, 42).getTime();
 const query = (overrides: Partial<RecordQuery<{ id: string }>>): RecordQuery<{ id: string }> => ({
@@ -75,5 +75,15 @@ describe("recordView", () => {
     expect(recordView(observer.getCurrentResult())).toMatchObject({ record: undefined, phase: "loading" });
     unsubscribe();
     client.clear();
+  });
+});
+
+describe("keepRecordForSameItem", () => {
+  it("keeps the last record only for the same item read again under a new fingerprint", () => {
+    const keep = keepRecordForSameItem(["chat", "inbox-user-input", "w", "item-a", "fingerprint-2"]);
+    expect(keep("record", { queryKey: ["chat", "inbox-user-input", "w", "item-a", "fingerprint-1"] })).toBe("record");
+    expect(keep("record", { queryKey: ["chat", "inbox-user-input", "w", "item-b", "fingerprint-1"] })).toBeUndefined();
+    expect(keep(undefined, { queryKey: ["chat", "inbox-user-input", "w", "item-a", "fingerprint-1"] })).toBeUndefined();
+    expect(keep("record", undefined)).toBeUndefined();
   });
 });

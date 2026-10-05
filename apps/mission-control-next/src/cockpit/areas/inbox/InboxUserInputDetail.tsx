@@ -11,7 +11,13 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
-import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
+import {
+  CHECKING_FOR_CHANGES,
+  keepRecordForSameItem,
+  lastVersionNote,
+  recordAnswered,
+  recordView,
+} from "../../data/record-view";
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
@@ -50,9 +56,11 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const cached = useCachedInboxItem(workspaceId, item.id);
+  const queryKey = ["chat", "inbox-user-input", workspaceId, item.id, item.source.sessionId, cached.fingerprint];
   const query = useQuery({
-    queryKey: ["chat", "inbox-user-input", workspaceId, item.id, item.source.sessionId, cached.fingerprint],
+    queryKey,
     queryFn: () => readCurrentQuestion(item, workspaceId, cached.projection),
+    placeholderData: keepRecordForSameItem(queryKey),
     enabled: Boolean(item.source.sessionId && item.source.turnId && item.source.promptId && cached.projection),
     staleTime: 0,
   });

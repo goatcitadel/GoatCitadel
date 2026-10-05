@@ -7,7 +7,13 @@ import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/oper
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
-import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
+import {
+  CHECKING_FOR_CHANGES,
+  keepRecordForSameItem,
+  lastVersionNote,
+  recordAnswered,
+  recordView,
+} from "../../data/record-view";
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { inboxMatchesWorkspace } from "./inbox-presentation";
 
@@ -66,9 +72,11 @@ export function InboxCapabilityProposalDetail({ item, workspaceId }: { item: Ope
   const scopeRef = useRef(activeWorkspaceId ?? "default");
   scopeRef.current = activeWorkspaceId ?? "default";
   const cached = useCachedInboxItem(workspaceId, item.id);
+  const queryKey = ["capability", "inbox-proposal", workspaceId, item.id, cached.fingerprint];
   const query = useQuery({
-    queryKey: ["capability", "inbox-proposal", workspaceId, item.id, cached.fingerprint],
+    queryKey,
     queryFn: () => readCurrentProposal(item, workspaceId, cached.projection),
+    placeholderData: keepRecordForSameItem(queryKey),
     enabled: Boolean(item.source.proposalId) && item.source.workspaceId === workspaceId && Boolean(cached.projection),
     staleTime: 0,
   });

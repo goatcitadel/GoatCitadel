@@ -4,7 +4,7 @@ import { canonicalJsonString, type ChangePlanRecord, type OperatorInboxItem } fr
 import { confirmChangePlan } from "@goatcitadel/mission-control-shared/api/chat";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { queryKeys } from "../../data/query-keys";
-import { recordView } from "../../data/record-view";
+import { keepRecordForSameItem, recordView } from "../../data/record-view";
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import {
   canReviewInboxConfirmation,
@@ -39,6 +39,7 @@ export function useInboxChangePlan(item: OperatorInboxItem, workspaceId: string,
   const query = useQuery({
     queryKey,
     queryFn: () => readCurrentInboxPlan(item, workspaceId, cached.projection),
+    placeholderData: keepRecordForSameItem(queryKey),
     enabled: Boolean(item.source.planId) && workspaceId === activeWorkspaceId && Boolean(cached.projection),
     staleTime: 0,
   });

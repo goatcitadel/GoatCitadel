@@ -10,7 +10,13 @@ import {
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
-import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
+import {
+  CHECKING_FOR_CHANGES,
+  keepRecordForSameItem,
+  lastVersionNote,
+  recordAnswered,
+  recordView,
+} from "../../data/record-view";
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
@@ -92,6 +98,7 @@ export function InboxImprovementProposalDetail({
   const query = useQuery({
     queryKey,
     queryFn: () => readCurrentReview(item, workspaceId, cached.projection),
+    placeholderData: keepRecordForSameItem(queryKey),
     enabled: Boolean(item.source.proposalId) && Boolean(cached.projection),
     staleTime: 0,
   });

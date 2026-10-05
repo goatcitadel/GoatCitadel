@@ -131,6 +131,37 @@ function button(label: string): HTMLButtonElement {
 }
 
 describe("Inbox Chat question", () => {
+  it("keeps the question on screen while it is checked again after its Inbox item changes", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await seedCachedInbox(client);
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <UiPreferencesProvider>
+            <InboxUserInputDetail item={item} workspaceId="default" />
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(container.textContent).toContain("Safe path");
+    let release!: () => void;
+    api.fetchChatThread.mockImplementationOnce(
+      () => new Promise((resolve) => (release = () => resolve(threadWith(prompt)))),
+    );
+    await act(async () => {
+      client.setQueryData(queryKeys.inbox("default"), { ...projection, items: [{ ...item, summary: "Updated" }] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(api.fetchChatThread).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Safe path");
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.textContent).toContain("Safe path");
+  });
+
   it("reviews a choice, re-reads both owners, then submits the exact answer once", async () => {
     await renderDetail();
     // Opening checks the cached Inbox; only the answer re-reads it.

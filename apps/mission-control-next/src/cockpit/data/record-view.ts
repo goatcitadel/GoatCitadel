@@ -66,3 +66,14 @@ export function lastVersionNote(view: RecordView<unknown>): string | undefined {
 }
 
 export const CHECKING_FOR_CHANGES = "Checking for changes…";
+
+/**
+ * `placeholderData` for a detail keyed on its Inbox item's fingerprint (last key segment): when the same
+ * item changes, its record stays on screen while it is read again (rule 4). Another item never inherits
+ * it, and a reset of the same key still drops it.
+ */
+export function keepRecordForSameItem(queryKey: readonly unknown[]) {
+  const item = JSON.stringify(queryKey.slice(0, -1));
+  return <T>(previous: T | undefined, previousQuery: { queryKey: readonly unknown[] } | undefined): T | undefined =>
+    previousQuery && JSON.stringify(previousQuery.queryKey.slice(0, -1)) === item ? previous : undefined;
+}
