@@ -2,6 +2,7 @@ import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { CHECKING_FOR_CHANGES, lastVersionNote, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { Sheet } from "../../ui/Sheet";
@@ -35,7 +36,10 @@ export function LibraryResources({
     queryFn: () => loadLibraryResources({ kind, workspaceId, citadelId, query, status, cursor: cursors.at(-1) }),
     staleTime: 0,
   });
-  const data = !resourceQuery.isFetching && !resourceQuery.isError ? resourceQuery.data : undefined;
+  // The last good directory window (and an open preview) stays while it is read again.
+  const view = recordView(resourceQuery);
+  const data = view.record;
+  const lastVersion = lastVersionNote(view);
   const selection = data?.items.find((item) => resourceBinding(item) === selected);
   function reset() {
     setSelected(undefined);
@@ -106,12 +110,21 @@ export function LibraryResources({
         ) : null}
         <Button type="submit">Apply filter</Button>
       </form>
-      {resourceQuery.isFetching ? (
+      {view.phase === "loading" ? (
         <p role="status" className="text-sm text-fg-muted">
           Loading {TITLES[kind].toLowerCase()}…
         </p>
+      ) : view.phase === "checking" ? (
+        <p role="status" className="text-sm text-fg-muted">
+          {CHECKING_FOR_CHANGES}
+        </p>
       ) : null}
-      {resourceQuery.isError ? (
+      {resourceQuery.isError && data ? (
+        <p role="alert" className="text-sm text-status-failed">
+          {describeApiError(resourceQuery.error).summary} {lastVersion}
+        </p>
+      ) : null}
+      {resourceQuery.isError && !data ? (
         <EmptyState
           title={`${TITLES[kind]} unavailable`}
           description={describeApiError(resourceQuery.error).summary}

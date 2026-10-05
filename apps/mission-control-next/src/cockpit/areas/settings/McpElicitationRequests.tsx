@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchMcpElicitations } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { McpElicitationResponseForm } from "../../../features/native-routes/settings/McpElicitationResponseForm";
+import { CHECKING_FOR_CHANGES, lastVersionNote, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 
 export function McpElicitationRequests({ workspaceId }: { workspaceId: string }) {
@@ -14,7 +15,10 @@ export function McpElicitationRequests({ workspaceId }: { workspaceId: string })
     enabled: open,
     retry: false,
   });
-  const rows = !query.isFetching && !query.isError && Array.isArray(query.data?.items) ? query.data.items : [];
+  // The loaded list (and an open request) stays while it is read again.
+  const view = recordView(query, (data) => (Array.isArray(data.items) ? data.items : undefined));
+  const rows = view.record ?? [];
+  const lastVersion = lastVersionNote(view);
   const scoped = rows.filter((item) => !item.owner.workspaceId || item.owner.workspaceId === workspaceId);
   const request = scoped.find((item) => item.elicitationId === selected);
   return (
@@ -36,9 +40,18 @@ export function McpElicitationRequests({ workspaceId }: { workspaceId: string })
       >
         Inspect MCP requests
       </Button>
-      {query.isFetching ? <p role="status">Reading MCP requests…</p> : null}
-      {query.isError ? <p role="alert">{describeApiError(query.error).summary}</p> : null}
-      {open && !query.isFetching && !query.isError ? (
+      {view.phase === "loading" ? (
+        <p role="status">Reading MCP requests…</p>
+      ) : view.phase === "checking" ? (
+        <p role="status">{CHECKING_FOR_CHANGES}</p>
+      ) : null}
+      {query.isError ? (
+        <p role="alert">
+          {describeApiError(query.error).summary}
+          {lastVersion ? ` ${lastVersion}` : ""}
+        </p>
+      ) : null}
+      {open && view.record ? (
         <>
           <p>
             Showing up to 20 of {scoped.length} matching records in the loaded list. The Gateway returns at most 200

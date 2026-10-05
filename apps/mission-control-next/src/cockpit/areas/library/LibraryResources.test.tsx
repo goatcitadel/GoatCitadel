@@ -93,12 +93,39 @@ describe("Library resource inspection lifecycle", () => {
     expect(container.textContent).toContain("Visible content");
     expect(container.textContent).not.toContain("Old private content");
   });
-  it("shows an owner error without retaining the previous directory", async () => {
+  it("keeps the last directory beside a failed read and says how old it is", async () => {
     await render();
     await vi.waitFor(() => expect(container.textContent).toContain("Visible file"));
     api.load.mockRejectedValueOnce(new Error("Owner unavailable"));
     await act(async () => button("Refresh files").click());
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
+    expect(container.textContent).toContain("Visible file");
+    expect(container.textContent).toContain("Showing the last version from");
+    expect(container.textContent).not.toContain("Files unavailable");
+  });
+  it("shows the unavailable state when the first read fails", async () => {
+    api.load.mockRejectedValueOnce(new Error("Owner unavailable"));
+    await render();
     await vi.waitFor(() => expect(container.textContent).toContain("Files unavailable"));
-    expect(container.textContent).not.toContain("Visible file");
+  });
+  it("keeps the directory and an open preview while the directory is read again", async () => {
+    await render();
+    await vi.waitFor(() => expect(container.textContent).toContain("Visible file"));
+    await act(async () => button("Inspect").click());
+    expect(container.textContent).toContain("Visible content");
+    const pending = deferred<ResourcePage>();
+    api.load.mockReturnValueOnce(pending.promise);
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["library", "resources"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.textContent).toContain("Checking for changes…");
+    expect(container.textContent).not.toContain("Loading files…");
+    expect(container.textContent).toContain("Visible file");
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+    await act(async () =>
+      pending.resolve({ items: [resource("Visible file")], coverage: "Installation shared files" }),
+    );
+    await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
   });
 });

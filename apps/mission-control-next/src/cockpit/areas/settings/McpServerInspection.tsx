@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { inspectMcpServer } from "../../../features/native-routes/settings/mcp-server-inspection";
+import { CHECKING_FOR_CHANGES, lastVersionNote, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { Sheet } from "../../ui/Sheet";
 import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
@@ -25,7 +26,11 @@ export function McpServerInspection({
     queryFn: () => inspectMcpServer(serverId),
     retry: false,
   });
-  const data = !query.isError && !query.isFetching ? query.data : undefined;
+  // The last inspection (and any open review in its controls) stays while it is read again.
+  const view = recordView(query);
+  const data = view.record;
+  const checking = view.phase === "checking";
+  const lastVersion = lastVersionNote(view);
   return (
     <Sheet
       open
@@ -43,10 +48,15 @@ export function McpServerInspection({
         <Button disabled={query.isFetching} onClick={() => void query.refetch()}>
           Refresh MCP inspection
         </Button>
-        {query.isFetching ? <p role="status">Reading current server and cached inventory…</p> : null}
+        {view.phase === "loading" ? (
+          <p role="status">Reading current server and cached inventory…</p>
+        ) : checking ? (
+          <p role="status">{CHECKING_FOR_CHANGES}</p>
+        ) : null}
         {query.isError ? (
           <p role="alert" className="text-status-failed">
             {describeApiError(query.error).summary}
+            {lastVersion ? ` ${lastVersion}` : ""}
           </p>
         ) : null}
         {data ? (
@@ -126,7 +136,7 @@ export function McpServerInspection({
               server={data.server}
               scope={workspaceId}
               button={(label, click, disabled) => (
-                <Button size="sm" onClick={click} disabled={disabled}>
+                <Button size="sm" onClick={click} disabled={disabled || checking}>
                   {label}
                 </Button>
               )}
@@ -136,7 +146,7 @@ export function McpServerInspection({
               scope={workspaceId}
               onSettled={() => query.refetch()}
               button={(label, click, disabled) => (
-                <Button size="sm" onClick={click} disabled={disabled}>
+                <Button size="sm" onClick={click} disabled={disabled || checking}>
                   {label}
                 </Button>
               )}
@@ -146,7 +156,7 @@ export function McpServerInspection({
               scope={workspaceId}
               onSettled={() => query.refetch()}
               button={(label, click, disabled) => (
-                <Button size="sm" onClick={click} disabled={disabled}>
+                <Button size="sm" onClick={click} disabled={disabled || checking}>
                   {label}
                 </Button>
               )}
