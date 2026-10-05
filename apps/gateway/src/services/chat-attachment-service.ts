@@ -14,7 +14,7 @@ import {
 export interface ChatAttachmentHost {
   readonly config: GatewayRuntimeConfig;
   readonly storage: Pick<Storage, "chatAttachments" | "chatProjects" | "chatSessionMeta" | "chatSessionProjects">;
-  getSession(sessionId: string): unknown;
+  getSession(sessionId: string): Promise<unknown>;
   normalizeWorkspaceId(workspaceId?: string): string;
   publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): Promise<unknown>;
   createMediaJob(input: {
@@ -34,7 +34,7 @@ export async function uploadChatAttachment(
     bytesBase64: string;
   },
 ): Promise<ChatAttachmentRecord> {
-  deps.getSession(input.sessionId);
+  await deps.getSession(input.sessionId);
   const sessionMeta = await deps.storage.chatSessionMeta.ensure(input.sessionId);
   const sessionWorkspaceId = deps.normalizeWorkspaceId(sessionMeta.workspaceId);
   const fileName = sanitizeAttachmentFileName(input.fileName);

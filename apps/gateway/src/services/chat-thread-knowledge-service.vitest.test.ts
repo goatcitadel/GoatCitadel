@@ -111,7 +111,7 @@ function createHost(
 ): ChatThreadKnowledgeDependencies {
   return {
     storage,
-    getSession: overrides.getSession ?? ((sessionId: string) => storage.sessions.getBySessionId(sessionId)),
+    getSession: overrides.getSession ?? (async (sessionId: string) => storage.sessions.getBySessionId(sessionId)),
     readChatAttachmentContent:
       overrides.readChatAttachmentContent ??
       (async (attachmentId: string) => {
@@ -158,6 +158,44 @@ describe("chat-thread-knowledge-service vitest coverage", () => {
 
     await expect(listChatThreadKnowledgeAttachments(host, ` ${session.sessionId} `)).resolves.toHaveLength(1);
     await expect(listChatThreadKnowledgeAttachments(host, "   ")).rejects.toThrow(/sessionId|FIELD_REQUIRED/);
+  });
+
+  it("rejects a missing session before listing, attaching, or removing knowledge", async () => {
+    const { storage, rootDir } = await createStorage();
+    roots.push(rootDir);
+    storages.push(storage);
+    const knowledgeDocsIngest = vi.fn(async () => ({}));
+    const host = createHost(storage, { knowledgeDocsIngest });
+    storage.chatThreadKnowledgeAttachments.create({
+      attachmentId: "knowledge-orphan",
+      sessionId: "sess-missing",
+      sourceType: "url",
+      sourceRef: "https://example.com/orphan",
+      title: "Orphan",
+      retrievalMode: "full_text",
+      ingestStatus: "ready",
+      chunkCount: 1,
+      createdAt: "2026-05-14T00:00:00.000Z",
+      updatedAt: "2026-05-14T00:00:00.000Z",
+    });
+
+    await expect(listChatThreadKnowledgeAttachments(host, "sess-missing")).rejects.toThrow(
+      /^Session sess-missing not found/,
+    );
+    await expect(
+      attachChatThreadKnowledgeAttachment(host, "sess-missing", {
+        url: "https://example.com/runbook",
+        retrievalMode: "full_text",
+      }),
+    ).rejects.toThrow(/^Session sess-missing not found/);
+    await expect(removeChatThreadKnowledgeAttachment(host, "sess-missing", "knowledge-orphan")).rejects.toThrow(
+      /^Session sess-missing not found/,
+    );
+
+    expect(knowledgeDocsIngest).not.toHaveBeenCalled();
+    expect(
+      storage.chatThreadKnowledgeAttachments.listBySession("sess-missing").map((item) => item.attachmentId),
+    ).toEqual(["knowledge-orphan"]);
   });
 
   it("attaches text files as full-text knowledge using decoded file bytes before extracted previews", async () => {

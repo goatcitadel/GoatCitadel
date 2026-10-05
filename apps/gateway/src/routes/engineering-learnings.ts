@@ -57,7 +57,7 @@ export async function engineeringLearningRoutes(fastify: FastifyInstance): Promi
     const query = listQuerySchema.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
     try {
-      return reply.send(fastify.gatewayRuntime.engineeringLearningService.list(query.data));
+      return reply.send(await fastify.gatewayRuntime.engineeringLearningService.list(query.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -69,7 +69,9 @@ export async function engineeringLearningRoutes(fastify: FastifyInstance): Promi
     const rawPaths = query.data.paths;
     const paths = rawPaths === undefined ? undefined : Array.isArray(rawPaths) ? rawPaths : rawPaths.split(",");
     try {
-      return reply.send(fastify.gatewayRuntime.engineeringLearningService.retrieveContext({ ...query.data, paths }));
+      return reply.send(
+        await fastify.gatewayRuntime.engineeringLearningService.retrieveContext({ ...query.data, paths }),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -79,7 +81,7 @@ export async function engineeringLearningRoutes(fastify: FastifyInstance): Promi
     const body = proposalSchema.safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: body.error.flatten() });
     try {
-      return reply.code(201).send(fastify.gatewayRuntime.engineeringLearningService.propose(body.data));
+      return reply.code(201).send(await fastify.gatewayRuntime.engineeringLearningService.propose(body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -87,7 +89,7 @@ export async function engineeringLearningRoutes(fastify: FastifyInstance): Promi
 
   fastify.post("/api/v1/engineering-learnings/maintenance/refresh", async (_request, reply) => {
     try {
-      return reply.send({ staleCount: fastify.gatewayRuntime.engineeringLearningService.refreshAll() });
+      return reply.send({ staleCount: await fastify.gatewayRuntime.engineeringLearningService.refreshAll() });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -97,7 +99,7 @@ export async function engineeringLearningRoutes(fastify: FastifyInstance): Promi
     const params = paramsSchema.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     try {
-      return reply.send(fastify.gatewayRuntime.engineeringLearningService.get(params.data.learningId));
+      return reply.send(await fastify.gatewayRuntime.engineeringLearningService.get(params.data.learningId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -108,7 +110,7 @@ export async function engineeringLearningRoutes(fastify: FastifyInstance): Promi
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     try {
       return reply.send({
-        items: fastify.gatewayRuntime.engineeringLearningService.findOverlaps(params.data.learningId),
+        items: await fastify.gatewayRuntime.engineeringLearningService.findOverlaps(params.data.learningId),
       });
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
