@@ -6,6 +6,11 @@ import {
   buildRouteServicePortMap,
   findUnawaitedRouteServiceCalls,
 } from "./verify-async-gateway-boundary-route-ports.mjs";
+import {
+  buildCompositionGateMap,
+  findUnawaitedCompositionGates,
+  isCompositionModulePath,
+} from "./verify-async-gateway-boundary-composition-gates.mjs";
 
 const GATEWAY_SOURCE_RELATIVE_PATH = "apps/gateway/src";
 const TYPESCRIPT_SOURCE_PATTERN = /\.(?:cts|mts|tsx?|d\.ts)$/u;
@@ -390,7 +395,14 @@ function isStorageDeclaredPromiseCall(checker, call, storageRoot) {
 
 const GATEWAY_ROUTES_PATH_PREFIX = "apps/gateway/src/routes/";
 
-export function scanGatewayPromiseUsage({ checker, sourceFile, filePath, repoRoot, routeServicePortMap }) {
+export function scanGatewayPromiseUsage({
+  checker,
+  sourceFile,
+  filePath,
+  repoRoot,
+  routeServicePortMap,
+  compositionGateMap,
+}) {
   const normalizedFilePath = normalizeRelativePath(filePath);
   const storageRoot = path.join(repoRoot, "packages", "storage");
   const diagnostics = [];
@@ -459,6 +471,17 @@ export function scanGatewayPromiseUsage({ checker, sourceFile, filePath, repoRoo
         finding.node,
         `Route-service promise '${finding.serviceKey}.${finding.methodName}' is ${finding.violation}; ` +
           "await the call (or hand it to Promise.all or a tracked background task) before using its result.",
+      );
+    }
+  }
+
+  if (compositionGateMap && isCompositionModulePath(normalizedFilePath)) {
+    for (const finding of findUnawaitedCompositionGates({ checker, sourceFile, gateMap: compositionGateMap })) {
+      emit(
+        "unawaited_composition_port_gate",
+        finding.node,
+        `Composition-port promise '${finding.receiver}.${finding.methodName}' is ${finding.violation}; ` +
+          "await it before using it as a boolean.",
       );
     }
   }
@@ -645,6 +668,7 @@ export async function verifyAsyncGatewayBoundary({ repoRoot = process.cwd() } = 
   const program = readGatewayProgram(repoRoot, sourceFiles);
   const checker = program.getTypeChecker();
   const routeServicePortMap = buildRouteServicePortMap({ program, checker, repoRoot });
+  const compositionGateMap = buildCompositionGateMap({ program, checker, repoRoot });
   const promiseResults = sourceFiles.map((absolutePath) => {
     const sourceFile = findProgramSourceFile(program, absolutePath);
     if (!sourceFile) {
@@ -656,6 +680,7 @@ export async function verifyAsyncGatewayBoundary({ repoRoot = process.cwd() } = 
       filePath: normalizeRelativePath(path.relative(repoRoot, absolutePath)),
       repoRoot,
       routeServicePortMap,
+      compositionGateMap,
     });
   });
   const diagnostics = [...syntaxResults, ...promiseResults]
