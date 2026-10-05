@@ -145,8 +145,10 @@ export function composeIntegrationChannelRouteDependencies(
   const integrations = createIntegrationRoutePort({
     approveDiscordPairing: (connectionId, pairingId) =>
       integrationChannel.approveDiscordPairing(connectionId, pairingId),
-    createIntegrationConnection: (input, onCommitted) => integrationChannel.createIntegrationConnection(input, onCommitted),
-    deleteIntegrationConnection: (connectionId, expectedRevision, onCommitted) => integrationChannel.deleteIntegrationConnection(connectionId, expectedRevision, onCommitted),
+    createIntegrationConnection: (input, onCommitted) =>
+      integrationChannel.createIntegrationConnection(input, onCommitted),
+    deleteIntegrationConnection: (connectionId, expectedRevision, onCommitted) =>
+      integrationChannel.deleteIntegrationConnection(connectionId, expectedRevision, onCommitted),
     getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
     getIntegrationFormSchema: (catalogId) => {
       if (catalogId.startsWith("external_connector.")) {
@@ -298,7 +300,7 @@ export function composeIntegrationChannelRouteDependencies(
       hasRunningTurn: (sessionId) => gateway.hasRunningTurn(sessionId),
       ingestChannelMessage: (channel, idempotencyKey, input) =>
         gateway.ingestChannelMessage(channel, idempotencyKey, input),
-      isVoiceInboundEnabled: () => gateway.isFeatureEnabled("channelVoiceInboundV1Enabled") === true,
+      isVoiceInboundEnabled: async () => (await gateway.isFeatureEnabled("channelVoiceInboundV1Enabled")) === true,
       transcribeChannelVoice: (input) => channelVoiceInbound.transcribe(input),
       parseChatCommand: (sessionId, commandText, options) => gateway.parseChatCommand(sessionId, commandText, options),
       recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),

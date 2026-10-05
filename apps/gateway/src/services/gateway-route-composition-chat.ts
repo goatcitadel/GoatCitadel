@@ -191,8 +191,8 @@ export function composeChatRouteDependencies(
     },
     createChatSideChat: (sessionId, input) =>
       chatSessionService.createChatSideChat(ChatSessionDependencies, sessionId, input),
-    createChatTimer: (sessionId, input, actorId) => {
-      if (!gateway.isFeatureEnabled("chatTimersV1Enabled")) {
+    createChatTimer: async (sessionId, input, actorId) => {
+      if (!(await gateway.isFeatureEnabled("chatTimersV1Enabled"))) {
         throw new NotFoundError({ entity: "Chat timer", id: sessionId });
       }
       return gateway.chatTimerService.create(sessionId, input, actorId);
@@ -209,8 +209,8 @@ export function composeChatRouteDependencies(
         workspaceId: scope.workspaceId,
       });
     },
-    forkChatSessionFromTurn: (sessionId, turnId, input, actorId) => {
-      if (!gateway.isFeatureEnabled("conversationForksV1Enabled")) {
+    forkChatSessionFromTurn: async (sessionId, turnId, input, actorId) => {
+      if (!(await gateway.isFeatureEnabled("conversationForksV1Enabled"))) {
         throw new NotFoundError({ entity: "Chat session fork", id: turnId });
       }
       return chatSessionService.forkChatSessionFromTurn(ChatSessionDependencies, sessionId, turnId, input, actorId);
@@ -231,8 +231,8 @@ export function composeChatRouteDependencies(
       });
     },
     getChatSessionBinding: (sessionId) => chatSessionService.getChatSessionBinding(ChatSessionDependencies, sessionId),
-    getChatSessionStatus: (sessionId) => {
-      if (!gateway.isFeatureEnabled("chatSessionStatusV1Enabled")) {
+    getChatSessionStatus: async (sessionId) => {
+      if (!(await gateway.isFeatureEnabled("chatSessionStatusV1Enabled"))) {
         throw new NotFoundError({ entity: "Chat session status", id: sessionId });
       }
       return gateway.chatSessionStatusService.getOperatorStatus(sessionId);
@@ -279,8 +279,8 @@ export function composeChatRouteDependencies(
         workspaceId: scope.workspaceId,
       });
     },
-    listChatTimers: (sessionId) => {
-      if (!gateway.isFeatureEnabled("chatTimersV1Enabled")) {
+    listChatTimers: async (sessionId) => {
+      if (!(await gateway.isFeatureEnabled("chatTimersV1Enabled"))) {
         throw new NotFoundError({ entity: "Chat timer", id: sessionId });
       }
       return gateway.chatTimerService.list(sessionId);
@@ -340,8 +340,8 @@ export function composeChatRouteDependencies(
       chatSessionService.unpinChatSession(ChatSessionDependencies, sessionId, expectedRevision),
     updateChatSession: (sessionId, input, expectedRevision) =>
       chatSessionService.updateChatSession(ChatSessionDependencies, sessionId, input, expectedRevision),
-    cancelChatTimer: (sessionId, timerId, expectedRevision) => {
-      if (!gateway.isFeatureEnabled("chatTimersV1Enabled")) {
+    cancelChatTimer: async (sessionId, timerId, expectedRevision) => {
+      if (!(await gateway.isFeatureEnabled("chatTimersV1Enabled"))) {
         throw new NotFoundError({ entity: "Chat timer", id: timerId });
       }
       return gateway.chatTimerService.cancel(sessionId, timerId, expectedRevision);
@@ -571,13 +571,10 @@ export function composeChatRouteDependencies(
     },
     getTurnContextManifestForSession: (sessionId, turnId) =>
       chatMessageRouteRuntime.getTurnContextManifestForSession(chatMessageRouteRuntimeHost, sessionId, turnId),
-    listChatMessagePage: (input) =>
-      chatHistoryService.listChatMessagePage(chatHistoryHost, input),
+    listChatMessagePage: (input) => chatHistoryService.listChatMessagePage(chatHistoryHost, input),
     listChatMessages: (sessionId, limit, cursor) => gateway.listChatMessages(sessionId, limit, cursor),
-    readChatHistoryWindow: (anchor, limit) =>
-      chatHistoryService.readChatHistoryWindow(chatHistoryHost, anchor, limit),
-    readChatHistoryContinuation: (input) =>
-      chatHistoryService.readChatHistoryContinuation(chatHistoryHost, input),
+    readChatHistoryWindow: (anchor, limit) => chatHistoryService.readChatHistoryWindow(chatHistoryHost, anchor, limit),
+    readChatHistoryContinuation: (input) => chatHistoryService.readChatHistoryContinuation(chatHistoryHost, input),
     resumeAgentChatTurnStream: (sessionId, turnId, sinceEventId, signal?: AbortSignal) =>
       gateway.chatTurnRuntime.resumeAgentChatTurnStream(sessionId, turnId, sinceEventId, { abortSignal: signal }),
     retryChatTurn: (sessionId, turnId, input, authenticatedOperator) =>

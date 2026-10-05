@@ -123,11 +123,11 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
         }
         return { ok: true as const };
       },
-      parsePayload: ({ connectionId, request }) => {
+      parsePayload: async ({ connectionId, request }) => {
         const normalized = normalizeWhatsAppWebhookPayloads({
           connectionId,
           payload: request.body,
-          voiceInboundEnabled: fastify.services.integrationWebhooks.isVoiceInboundEnabled?.() === true,
+          voiceInboundEnabled: (await fastify.services.integrationWebhooks.isVoiceInboundEnabled?.()) === true,
         });
         const messages = normalized.filter((event) => event.kind === "message");
         if (messages.length === 0) {
