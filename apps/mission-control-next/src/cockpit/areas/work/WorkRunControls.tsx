@@ -14,6 +14,7 @@ import {
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { sameDurableRecoveryEvidence } from "../../data/durable-run-recovery";
 import { queryKeys } from "../../data/query-keys";
+import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { canControlWorkRun, sameWorkRunEvidence, type WorkRunAction } from "./work-run-control-guard";
@@ -60,22 +61,29 @@ export function WorkRunControls({ runId }: { runId: string }) {
   const [completed, setCompleted] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const runKey = ["tasks", "work-run-controls", runId];
   const query = useQuery({
-    queryKey: ["tasks", "work-run-controls", runId],
+    queryKey: runKey,
     queryFn: () => fetchDurableRun(runId),
     staleTime: 0,
   });
-  const run = query.isError ? undefined : query.data;
+  const view = recordView(query);
+  const checking = view.phase === "checking";
+  const lastVersion = lastVersionNote(view);
+  const run = view.record;
+  // A changed or acted-on run is superseded: drop it while it is read again (T15-M1).
+  const rereadRun = () => void queryClient.resetQueries({ queryKey: runKey, exact: true });
   const letterQuery = useQuery({
     queryKey: ["tasks", "work-run-dead-letter", runId],
     queryFn: () => fetchDurableDeadLetters(200),
     enabled: run?.status === "dead_lettered",
     staleTime: 0,
   });
-  const matchingLetters =
-    !letterQuery.isFetching && !letterQuery.isError
-      ? (letterQuery.data?.items.filter((entry) => entry.runId === runId && !entry.resolvedAt) ?? [])
-      : [];
+  // The last good recovery record stays while the list is read again (T15-M2).
+  const letterView = recordView(letterQuery, (data) =>
+    data.items.filter((entry) => entry.runId === runId && !entry.resolvedAt),
+  );
+  const matchingLetters = letterView.record ?? [];
   const deadLetter = matchingLetters.length === 1 ? matchingLetters[0] : undefined;
   const available = run ? ACTIONS.filter((action) => canControlWorkRun(run, action.id, workspaceId, deadLetter)) : [];
   const admittedChatNeedsNewMutation =
@@ -111,7 +119,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
         setError(
           "The run changed or its recovery record changed. Refresh and review the current record before another action.",
         );
-        void query.refetch();
+        rereadRun();
         if (reviewed.action === "recover") void letterQuery.refetch();
         return;
       }
@@ -126,7 +134,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
       void queryClient.invalidateQueries({ queryKey: queryKeys.runTrace(runId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
       void queryClient.invalidateQueries({ queryKey: ["tasks", "work-run-dead-letter", runId] });
-      void query.refetch();
+      rereadRun();
     } catch (cause) {
       setReviewed(null);
       if (mutationAttempted) {
@@ -162,13 +170,13 @@ export function WorkRunControls({ runId }: { runId: string }) {
           Refresh
         </Button>
       </div>
-      {query.isLoading ? (
+      {view.phase === "loading" ? (
         <p role="status" className="text-fg-muted">
           Checking the current run…
         </p>
-      ) : query.isFetching ? (
+      ) : checking || (run?.status === "dead_lettered" && letterView.phase === "checking") ? (
         <p role="status" className="text-fg-muted">
-          Checking for changes…
+          {CHECKING_FOR_CHANGES}
         </p>
       ) : null}
       {query.isError ? (
@@ -176,13 +184,14 @@ export function WorkRunControls({ runId }: { runId: string }) {
           {describeApiError(query.error).summary}
         </p>
       ) : null}
+      {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {run ? (
         <p className="text-fg-secondary">
-          {query.isFetching ? "Last known owner status" : "Current owner status"}: {run.status}. These controls are
-          available only for runs scoped to the selected workspace.
+          {view.stale ? "Last known owner status" : "Current owner status"}: {run.status}. These controls are available
+          only for runs scoped to the selected workspace.
         </p>
       ) : null}
-      {run?.status === "dead_lettered" && letterQuery.isFetching ? (
+      {run?.status === "dead_lettered" && letterView.phase === "loading" ? (
         <p role="status" className="text-fg-muted">
           Checking the current recovery record…
         </p>
@@ -190,16 +199,15 @@ export function WorkRunControls({ runId }: { runId: string }) {
       {run?.status === "dead_lettered" && letterQuery.isError ? (
         <p role="alert" className="text-status-failed">
           Recovery record unavailable: {describeApiError(letterQuery.error).summary}
+          {letterView.record ? ` ${lastVersionNote(letterView)}` : ""}
         </p>
       ) : null}
-      {run?.status === "dead_lettered" && !letterQuery.isFetching && !letterQuery.isError && !deadLetter ? (
+      {run?.status === "dead_lettered" && recordAnswered(letterView) && letterView.record && !deadLetter ? (
         <p className="text-fg-muted">
           No unique unresolved dead letter was found in the current bounded owner list. Review recovery in Ops.
         </p>
       ) : null}
-      {run &&
-      available.length === 0 &&
-      !(run.status === "dead_lettered" && (letterQuery.isFetching || letterQuery.isError || !deadLetter)) ? (
+      {run && available.length === 0 && !(run.status === "dead_lettered" && !deadLetter) ? (
         <p className="text-fg-muted">
           {admittedChatNeedsNewMutation
             ? "This admitted Chat run needs a new mutation instead of manual replay."
@@ -214,7 +222,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
               key={entry.id}
               size="sm"
               variant={entry.id === "cancel" || entry.id === "retry" || entry.id === "recover" ? "danger" : "secondary"}
-              disabled={pending}
+              disabled={pending || checking || letterView.phase === "checking"}
               onClick={() => {
                 setReviewed({ run, action: entry.id, deadLetter });
                 setError("");
@@ -257,7 +265,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
                 ? "danger"
                 : "primary"
             }
-            disabled={pending || scopeRef.current !== workspaceId}
+            disabled={pending || scopeRef.current !== workspaceId || checking || letterView.phase === "checking"}
             onClick={() => void requestAction()}
           >
             Confirm {reviewed?.action ?? "action"}
