@@ -9,7 +9,7 @@ describe("cockpit query client", () => {
     const offline = new ApiRequestError("Network error", { kind: "network", method: "GET", path: "/x" });
     expect(shouldRetryQuery(0, notFound)).toBe(false);
     expect(shouldRetryQuery(0, offline)).toBe(true);
-    expect(shouldRetryQuery(2, offline)).toBe(false);
+    expect(shouldRetryQuery(1, offline)).toBe(false);
   });
 
   it("uses thirty-second staleness and topic-prefixed keys", () => {

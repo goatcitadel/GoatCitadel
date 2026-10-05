@@ -15,7 +15,14 @@ let root: Root;
 let container: HTMLDivElement;
 function Probe({ streamState }: { streamState: EventStreamConnectionState }) {
   const connection = useGatewayReachability(true, streamState);
-  return <div data-unavailable={connection.unavailable} data-last-confirmed={connection.lastConfirmedAt ?? ""} />;
+  return (
+    <div
+      data-unavailable={connection.unavailable}
+      data-last-confirmed={connection.lastConfirmedAt ?? ""}
+      data-checking={connection.checking}
+      data-last-checked={connection.lastCheckedAt ?? ""}
+    />
+  );
 }
 
 beforeEach(() => {
@@ -28,6 +35,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("Gateway reachability", () => {
@@ -51,5 +59,41 @@ describe("Gateway reachability", () => {
     await act(async () => vi.advanceTimersByTimeAsync(5_000));
     expect(container.firstElementChild?.getAttribute("data-unavailable")).toBe("false");
     expect(container.firstElementChild?.getAttribute("data-last-confirmed")).not.toBe("");
+  });
+
+  it("does not probe from a hidden tab and probes once when the tab becomes visible", async () => {
+    vi.useFakeTimers();
+    let visibility: DocumentVisibilityState = "hidden";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    api.fetchOnboardingState.mockRejectedValue(Object.assign(new Error("offline"), { kind: "network" }));
+    await act(async () => root.render(<Probe streamState="retrying" />));
+    await act(async () => vi.advanceTimersByTimeAsync(20_000));
+    expect(api.fetchOnboardingState).not.toHaveBeenCalled();
+    visibility = "visible";
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(api.fetchOnboardingState).toHaveBeenCalledOnce();
+    expect(container.firstElementChild?.getAttribute("data-unavailable")).toBe("true");
+  });
+
+  it("reports a probe in flight and when it last finished", async () => {
+    let finish!: (error: Error) => void;
+    api.fetchOnboardingState.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          finish = reject;
+        }),
+    );
+    await act(async () => root.render(<Probe streamState="error" />));
+    expect(container.firstElementChild?.getAttribute("data-checking")).toBe("true");
+    expect(container.firstElementChild?.getAttribute("data-last-checked")).toBe("");
+    await act(async () => {
+      finish(Object.assign(new Error("offline"), { kind: "network" }));
+      await Promise.resolve();
+    });
+    expect(container.firstElementChild?.getAttribute("data-checking")).toBe("false");
+    expect(container.firstElementChild?.getAttribute("data-last-checked")).not.toBe("");
+    expect(container.firstElementChild?.getAttribute("data-unavailable")).toBe("true");
   });
 });

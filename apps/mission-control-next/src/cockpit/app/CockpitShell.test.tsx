@@ -164,15 +164,21 @@ describe("CockpitShell", () => {
         </QueryClientProvider>,
       ),
     );
-    expect(container.querySelector('main [role="alert"]')).toBeNull();
+    expect(container.querySelector("[data-gateway-banner]")).toBeNull();
     await act(async () =>
       root.render(
         <QueryClientProvider client={client}>
-          <CockpitShell streamState="retrying" gatewayReachability={{ unavailable: true, lastConfirmedAt: null }} />
+          <CockpitShell
+            streamState="retrying"
+            gatewayReachability={{ unavailable: true, lastConfirmedAt: null, checking: false, lastCheckedAt: null }}
+          />
         </QueryClientProvider>,
       ),
     );
-    const alert = container.querySelector('main [role="alert"]');
+    const alert = container.querySelector("[data-gateway-banner]");
+    expect(alert?.getAttribute("role")).toBe("alert");
+    // Above the scrolling area, so it never scrolls away and phones see it.
+    expect(alert?.closest("#main-content")).toBeNull();
     // Only Chat sends, so other areas must not claim that sending is paused.
     expect(alert?.textContent).toContain("Gateway unavailable. What you see here may be out of date.");
     expect(alert?.textContent).not.toContain("Sending is paused");
@@ -183,12 +189,20 @@ describe("CockpitShell", () => {
         <QueryClientProvider client={client}>
           <CockpitShell
             streamState="retrying"
-            gatewayReachability={{ unavailable: true, lastConfirmedAt: null, retry }}
+            gatewayReachability={{
+              unavailable: true,
+              lastConfirmedAt: null,
+              checking: false,
+              lastCheckedAt: null,
+              retry,
+            }}
           />
         </QueryClientProvider>,
       ),
     );
-    const check = [...container.querySelectorAll("main button")].find((b) => b.textContent?.trim() === "Check again");
+    const check = [...container.querySelectorAll("[data-gateway-banner] button")].find(
+      (b) => b.textContent?.trim() === "Check again",
+    );
     await act(async () => (check as HTMLButtonElement).click());
     expect(retry).toHaveBeenCalledOnce();
     client.clear();

@@ -2,7 +2,7 @@ import type { GatewayAccessViewState } from "../../app/use-gateway-access";
 import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
 import { Button } from "../ui/Button";
 import { EmptyState } from "../ui/EmptyState";
-import { GATEWAY_START_HINT } from "./use-gateway-reachability";
+import { currentGatewayHost, gatewayStartHint } from "./gateway-host-hint";
 
 export function CockpitAccessGate({
   access,
@@ -29,7 +29,7 @@ export function CockpitAccessGate({
       ? "Continue in the classic view to complete gateway access. The cockpit uses the same access state."
       : checking
         ? "Checking gateway access."
-        : `It may not be running. ${GATEWAY_START_HINT} This page retries automatically.`;
+        : `It may not be running. ${gatewayStartHint(currentGatewayHost())} This page retries automatically.`;
   return (
     <main className="flex h-dvh items-center justify-center bg-canvas">
       <EmptyState

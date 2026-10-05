@@ -109,6 +109,10 @@ function CockpitShellContent({
   return (
     <InspectorProvider>
       <div className="flex h-dvh flex-col bg-canvas text-fg">
+        {/* Above the scrolling row, so the outage notice never scrolls away and phones see it. */}
+        {gatewayReachability?.unavailable ? (
+          <GatewayUnavailableBanner reachability={gatewayReachability} inChat={area === "chat"} />
+        ) : null}
         <div className="flex min-h-0 flex-1">
           {!firstRun ? (
             <Sidebar
@@ -128,9 +132,6 @@ function CockpitShellContent({
                 : "min-w-0 flex-1 overflow-y-auto"
             }
           >
-            {gatewayReachability?.unavailable ? (
-              <GatewayUnavailableBanner reachability={gatewayReachability} inChat={area === "chat"} />
-            ) : null}
             {retainedChat.current.visited ? (
               <Activity key={chatScope} mode={area === "chat" ? "visible" : "hidden"}>
                 {/* A new route query, such as the palette's New chat, retries a failed Chat. */}
