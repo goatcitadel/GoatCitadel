@@ -7,7 +7,11 @@ import { ProviderManagementSettings } from "./ProviderManagementSettings";
 import { __resetProviderMutationStateForTests } from "../../../features/native-routes/settings/sections/provider-mutation-state";
 import { __resetSettingsChangesForTests } from "../../../features/native-routes/settings/use-settings-change";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
-import { __resetFormDirtyRegistryForTests } from "../../../features/native-routes/library/use-form-dirty";
+import {
+  __resetFormDirtyRegistryForTests,
+  getDirtySectionActions,
+  getDirtySectionKeys,
+} from "../../../features/native-routes/library/use-form-dirty";
 
 const api = vi.hoisted(() => ({
   fetchLlmConfig: vi.fn(),
@@ -396,5 +400,22 @@ describe("native provider owner composition", () => {
     expect(button("Review provider profile").disabled).toBe(true);
     await fill("Provider label", "Fixture renamed");
     expect(button("Review provider profile").disabled).toBe(false);
+  });
+  it("settles a formatting-only draft when a leave dialog saves it, without sending it", async () => {
+    await render();
+    await click("Edit provider profile");
+    await fill("Provider label", "Fixture ");
+    // The cockpit-wide leave dialog's "Save and continue" calls the save owner the editor registered.
+    const [key] = getDirtySectionKeys().filter((entry) => entry.startsWith("provider:"));
+    expect(key).toBeDefined();
+    let saved: boolean | undefined;
+    await act(async () => {
+      saved = await getDirtySectionActions(key!)?.onSave?.();
+    });
+    expect(saved).toBe(true);
+    expect(api.patchSettings).not.toHaveBeenCalled();
+    expect(api.createChangePlan).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Nothing to save. The saved provider already matches.");
+    expect(getDirtySectionKeys().filter((entry) => entry.startsWith("provider:"))).toEqual([]);
   });
 });
