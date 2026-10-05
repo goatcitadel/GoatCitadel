@@ -43,10 +43,17 @@ vi.mock("../areas/chat/ChatArea", () => ({
     return <p>Chat content</p>;
   },
 }));
-vi.mock("../areas/system/system-health-sources", () => ({
-  loadSystemHealthSources: vi.fn(async () => {
+const health = vi.hoisted(() => ({
+  sources: vi.fn(async () => {
     throw new Error("Health owner unavailable in shell fixture.");
   }),
+  digest: vi.fn(async () => {
+    throw new Error("Health owner unavailable in shell fixture.");
+  }),
+}));
+vi.mock("../areas/system/system-health-sources", () => ({
+  loadSystemHealthSources: health.sources,
+  loadSystemHealthDigest: health.digest,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
@@ -302,7 +309,7 @@ describe("CockpitShell", () => {
   it("defaults tablet navigation to the rail and leaves editor Ctrl+B untouched", async () => {
     vi.stubGlobal("matchMedia", (media: string) => ({
       media,
-      matches: media === "(640px <= width < 1024px)",
+      matches: media === "(640px <= width < 1024px)" || media === "(min-width: 640px)",
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     }));
@@ -323,6 +330,65 @@ describe("CockpitShell", () => {
     });
     expect(sidebar.getAttribute("data-collapsed")).toBe("true");
     input.remove();
+    client.clear();
+  });
+
+  it("says the system is being checked, then offers a retry when the checks are unavailable (NV-04)", async () => {
+    let fail!: () => void;
+    health.digest.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          fail = () => reject(new Error("Health owner unavailable in shell fixture."));
+        }),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={client}>
+          <CockpitShell />
+        </QueryClientProvider>,
+      );
+    });
+    const sidebar = () => container.querySelector('[aria-label="Cockpit sidebar"]')!;
+    expect(sidebar().textContent).toContain("Checking system…");
+    expect(sidebar().textContent).not.toContain("System checks unavailable");
+    const calls = health.digest.mock.calls.length;
+    await act(async () => {
+      fail();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await vi.waitFor(() => expect(sidebar().textContent).toContain("System checks unavailable"));
+    const retry = [...sidebar().querySelectorAll("button")].find((node) => node.textContent === "Retry")!;
+    expect(retry).toBeDefined();
+    await act(async () => retry.click());
+    expect(health.digest.mock.calls.length).toBe(calls + 1);
+    expect(health.sources).not.toHaveBeenCalled();
+    client.clear();
+  });
+
+  it("renders no sidebar on phones and shows the status strip in the tab bar instead (NV-13)", async () => {
+    vi.stubGlobal("matchMedia", (media: string) => ({
+      media,
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    health.sources.mockClear();
+    health.digest.mockClear();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={client}>
+          <CockpitShell streamState="open" />
+        </QueryClientProvider>,
+      );
+    });
+    expect(container.querySelector('[aria-label="Cockpit sidebar"]')).toBeNull();
+    const strip = container.querySelector('[aria-label="System status"]');
+    expect(strip).not.toBeNull();
+    expect(strip!.textContent).toContain("Updates connected");
+    expect(health.sources).not.toHaveBeenCalled();
+    expect(health.digest).toHaveBeenCalledTimes(1);
     client.clear();
   });
 

@@ -1,4 +1,3 @@
-import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { useQuery } from "@tanstack/react-query";
 import type { DurableRunRecord } from "@goatcitadel/contracts";
 import { fetchDurableRunHistory } from "@goatcitadel/mission-control-shared/api/durable";
@@ -79,11 +78,20 @@ const DOT_CLASS = {
 /**
  * One shared read per installation and workspace. It keeps the last good summary while it is read
  * again or after a failed read (NV-19), and polls only while work is running; events refresh it otherwise.
- * `overlay` pins the dot to the icon's corner on the collapsed rail so it never squeezes the icon.
+ * It reads whenever it is rendered: the shell renders it in the sidebar or, on phones, in the Work tab.
+ * `overlay` pins the dot to the icon's corner on the collapsed rail so it never squeezes the icon;
+ * `showCount` shows the running count instead of a dot (the phone Work tab).
  */
-export function WorkRunningIndicator({ workspaceId, overlay = false }: { workspaceId: string; overlay?: boolean }) {
+export function WorkRunningIndicator({
+  workspaceId,
+  overlay = false,
+  showCount = false,
+}: {
+  workspaceId: string;
+  overlay?: boolean;
+  showCount?: boolean;
+}) {
   const installation = getGatewayApiBaseUrl();
-  const visible = useMediaQuery("(min-width: 640px)");
   const query = useQuery({
     queryKey: ["tasks", "sidebar-recent-work", installation, workspaceId],
     queryFn: async ({ signal }) => {
@@ -92,13 +100,13 @@ export function WorkRunningIndicator({ workspaceId, overlay = false }: { workspa
         throw new Error("The running-work view is no longer current.");
       return page;
     },
-    enabled: visible && Boolean(workspaceId),
+    enabled: Boolean(workspaceId),
     staleTime: 30_000,
     refetchInterval: (current) =>
       summarizeRecentRunningWork(current.state.data, workspaceId).state === "running" ? 30_000 : false,
   });
   const view = recordView(query, (page) => summarizeRecentRunningWork(page, workspaceId));
-  const summary = visible && getGatewayApiBaseUrl() === installation ? (view.record ?? unavailable) : unavailable;
+  const summary = getGatewayApiBaseUrl() === installation ? (view.record ?? unavailable) : unavailable;
   const stale = summary !== unavailable && (view.stale || query.isStale) && view.checkedAt !== undefined;
   const title = stale ? `${summary.label} · as of ${recordTime(view.checkedAt!)}` : summary.label;
   return (
@@ -108,7 +116,14 @@ export function WorkRunningIndicator({ workspaceId, overlay = false }: { workspa
       title={title}
       className={overlay ? "absolute right-1 top-1 inline-flex items-center" : "ml-auto inline-flex items-center"}
     >
-      {summary.state !== "none" ? (
+      {showCount && summary.state === "running" && summary.count ? (
+        <span
+          aria-hidden="true"
+          className="min-w-4 rounded-full border border-status-running bg-raised px-0.5 text-center text-xs font-semibold text-fg"
+        >
+          {summary.count}
+        </span>
+      ) : summary.state !== "none" ? (
         <span
           aria-hidden="true"
           className={`size-2 shrink-0 rounded-full ${summary.state === "running" ? DOT_CLASS.running : DOT_CLASS.unknown}`}

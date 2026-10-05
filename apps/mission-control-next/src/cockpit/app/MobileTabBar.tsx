@@ -1,5 +1,7 @@
 import { useRef, useState } from "react";
 import { Activity, Inbox, LayoutGrid, Library, MessageSquare, MoreHorizontal, Search, Settings } from "lucide-react";
+import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
+import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
 import {
@@ -14,6 +16,8 @@ import { ScopeSwitcher } from "./ScopeSwitcher";
 import { Sheet } from "../ui/Sheet";
 import { useCockpitRoute } from "./use-cockpit-route";
 import { useCockpitPreload } from "./use-cockpit-preload";
+import { MobileStatusStrip } from "./MobileStatusStrip";
+import { WorkRunningIndicator } from "./WorkRunningIndicator";
 
 const TABS = [
   { area: "chat", label: "Chat", path: "/chat", Icon: MessageSquare },
@@ -22,7 +26,15 @@ const TABS = [
   { area: "library", label: "Library", path: "/library", Icon: Library },
 ] as const;
 
-export function MobileTabBar({ onOpenPalette }: { onOpenPalette: () => void }) {
+export function MobileTabBar({
+  onOpenPalette,
+  streamState = "closed",
+}: {
+  onOpenPalette: () => void;
+  streamState?: EventStreamConnectionState;
+}) {
+  // The status strip and the Work count read only on phones, where the sidebar is not rendered.
+  const phone = !useMediaQuery("(min-width: 640px)");
   const { isTransitionPending } = useCockpitNavigation();
   const shellSwitch = useCockpitShellSwitch();
   const { area: current, navigate } = useCockpitRoute();
@@ -42,50 +54,56 @@ export function MobileTabBar({ onOpenPalette }: { onOpenPalette: () => void }) {
   };
   return (
     <>
-      <nav
-        aria-label="Areas on small screens"
-        className="flex shrink-0 border-t border-line-subtle bg-raised sm:hidden"
-      >
-        {TABS.map(({ area, label, path, Icon }) => (
+      <div className="shrink-0 border-t border-line-subtle bg-raised sm:hidden">
+        {phone ? <MobileStatusStrip workspaceId={workspaceId} streamState={streamState} /> : null}
+        <nav aria-label="Areas on small screens" className="flex">
+          {TABS.map(({ area, label, path, Icon }) => (
+            <button
+              key={area}
+              type="button"
+              aria-current={current === area ? "page" : undefined}
+              aria-label={area === "inbox" && inboxCount ? inboxNavigationLabel(inboxCount) : undefined}
+              aria-describedby={area === "work" && phone ? "cockpit-work-running-summary" : undefined}
+              onClick={() => navigate(path)}
+              onPointerEnter={() => preload(area)}
+              onFocus={() => preload(area)}
+              onPointerDown={() => preload(area)}
+              className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 py-1 text-xs text-fg-muted aria-[current=page]:text-fg"
+            >
+              <span className="relative">
+                <Icon aria-hidden="true" className="size-5" />
+                {area === "inbox" && inboxCount ? (
+                  <span
+                    title={inboxCountTitle(inboxCount)}
+                    className="absolute -right-3 -top-1 min-w-4 rounded-full bg-accent px-0.5 text-center text-xs font-semibold text-accent-ink"
+                  >
+                    {inboxCount}
+                  </span>
+                ) : null}
+                {area === "work" && phone ? (
+                  <span className="absolute -right-3 -top-1">
+                    <WorkRunningIndicator workspaceId={workspaceId} showCount />
+                  </span>
+                ) : null}
+              </span>
+              {label}
+            </button>
+          ))}
           <button
-            key={area}
+            ref={moreButton}
             type="button"
-            aria-current={current === area ? "page" : undefined}
-            aria-label={area === "inbox" && inboxCount ? inboxNavigationLabel(inboxCount) : undefined}
-            onClick={() => navigate(path)}
-            onPointerEnter={() => preload(area)}
-            onFocus={() => preload(area)}
-            onPointerDown={() => preload(area)}
-            className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 py-1 text-xs text-fg-muted aria-[current=page]:text-fg"
+            aria-label="More areas and settings"
+            aria-expanded={moreOpen}
+            onClick={() => {
+              if (!isTransitionPending()) setMoreOpen(true);
+            }}
+            className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 py-1 text-xs text-fg-muted"
           >
-            <span className="relative">
-              <Icon aria-hidden="true" className="size-5" />
-              {area === "inbox" && inboxCount ? (
-                <span
-                  title={inboxCountTitle(inboxCount)}
-                  className="absolute -right-3 -top-1 min-w-4 rounded-full bg-accent px-0.5 text-center text-xs font-semibold text-accent-ink"
-                >
-                  {inboxCount}
-                </span>
-              ) : null}
-            </span>
-            {label}
+            <MoreHorizontal aria-hidden="true" className="size-5" />
+            More
           </button>
-        ))}
-        <button
-          ref={moreButton}
-          type="button"
-          aria-label="More areas and settings"
-          aria-expanded={moreOpen}
-          onClick={() => {
-            if (!isTransitionPending()) setMoreOpen(true);
-          }}
-          className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 py-1 text-xs text-fg-muted"
-        >
-          <MoreHorizontal aria-hidden="true" className="size-5" />
-          More
-        </button>
-      </nav>
+        </nav>
+      </div>
       <Sheet open={moreOpen} onOpenChange={setMoreOpen} title="More">
         <div className="grid gap-1">
           <button

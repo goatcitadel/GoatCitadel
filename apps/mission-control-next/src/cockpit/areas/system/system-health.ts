@@ -47,7 +47,7 @@ export function deriveSystemHealthChecks(
         ];
 
   const models = (() => {
-    if (sources.llama.state === "unavailable" || sources.npu.state === "unavailable")
+    if (sources.llama.state !== "current" || sources.npu.state !== "current")
       return unknown(
         "models",
         "Managed local models",
@@ -77,6 +77,7 @@ export function deriveSystemHealthChecks(
   })();
 
   const channels = (() => {
+    if (sources.channels.state === "deferred") return null;
     if (sources.channels.state === "unavailable")
       return unknown("channels", "Channels", "Channel runtime status could not be read.", "/settings/channels");
     const { enabledCount, checked } = sources.channels.value;
@@ -110,7 +111,7 @@ export function deriveSystemHealthChecks(
   })();
 
   const integrations = (() => {
-    if (sources.connections.state === "unavailable")
+    if (sources.connections.state !== "current")
       return unknown(
         "integrations",
         "Integrations",
@@ -146,6 +147,7 @@ export function deriveSystemHealthChecks(
   })();
 
   const workers = (() => {
+    if (sources.workers.state === "deferred") return null;
     if (sources.workers.state === "unavailable")
       return unknown(
         "remote_workers",
@@ -212,5 +214,11 @@ export function deriveSystemHealthChecks(
               "/settings/general#updates",
             );
 
-  return [...base, models, channels, integrations, updateCheck, workers];
+  // A deferred check runs on System › Health; it is left out here, never counted as missing proof.
+  return [...base, models, channels, integrations, updateCheck, workers].filter((check) => check !== null);
+}
+
+/** True when the checks came from the digest, so channel and worker checks were left to System › Health. */
+export function hasDeferredHealthChecks(sources: SystemHealthSources): boolean {
+  return sources.channels.state === "deferred" || sources.workers.state === "deferred";
 }

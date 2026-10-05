@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DesktopUpdateStatus } from "@goatcitadel/contracts";
 import { summarizeHealthChecks } from "./health-overview";
-import { deriveSystemHealthChecks } from "./system-health";
+import { deriveSystemHealthChecks, hasDeferredHealthChecks } from "./system-health";
 import type { SystemHealthSources } from "./system-health-sources";
 
 const missing: SystemHealthSources = {
@@ -66,5 +66,22 @@ describe("complete cockpit health projection", () => {
     }
     expect(checks.find((check) => check.id === "updates")?.status.label).toBe("Desktop app only");
     expect(checks.find((check) => check.id === "backups")?.status.label).toBe("Verified");
+  });
+
+  it("leaves deferred channel and worker checks to System › Health without counting them as missing proof", () => {
+    const sources = {
+      ...missing,
+      llama: { state: "current", value: { enabled: false, healthy: false, processState: "stopped" } },
+      npu: { state: "current", value: { enabled: false, healthy: false, processState: "stopped" } },
+      connections: { state: "current", value: [] },
+      channels: { state: "deferred" },
+      workers: { state: "deferred" },
+    } as unknown as SystemHealthSources;
+    expect(hasDeferredHealthChecks(sources)).toBe(true);
+    expect(hasDeferredHealthChecks(missing)).toBe(false);
+    const ids = deriveSystemHealthChecks(sources, null, "verified").map((check) => check.id);
+    expect(ids).not.toContain("channels");
+    expect(ids).not.toContain("remote_workers");
+    expect(ids).toContain("models");
   });
 });

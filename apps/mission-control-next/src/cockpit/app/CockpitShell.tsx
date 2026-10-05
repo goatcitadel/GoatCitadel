@@ -56,6 +56,8 @@ function CockpitShellContent({
   if (area === "chat") retainedChat.current.visited = true;
   const [paletteOpen, setPaletteOpen] = useState(false);
   const tablet = useMediaQuery("(640px <= width < 1024px)");
+  // NV-13: phones get the tab bar and its status strip; the hidden sidebar must not keep reading.
+  const wide = useMediaQuery("(min-width: 640px)");
   const [collapseOverride, setCollapseOverride] = useState<boolean | null>(null);
   const sidebarCollapsed = collapseOverride ?? tablet;
 
@@ -114,7 +116,7 @@ function CockpitShellContent({
           <GatewayUnavailableBanner reachability={gatewayReachability} inChat={area === "chat"} />
         ) : null}
         <div className="flex min-h-0 flex-1">
-          {!firstRun ? (
+          {!firstRun && wide ? (
             <Sidebar
               onOpenPalette={() => {
                 if (!isTransitionPending()) setPaletteOpen(true);
@@ -185,6 +187,7 @@ function CockpitShellContent({
             onOpenPalette={() => {
               if (!isTransitionPending()) setPaletteOpen(true);
             }}
+            streamState={streamState}
           />
         ) : null}
       </div>

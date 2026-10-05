@@ -156,48 +156,20 @@ it("ignores a superseded in-flight read on return and reuses the cached summary 
     client.clear();
   }
 });
-it("does not read or revalidate the CSS-hidden phone rail", async () => {
+it("reads whenever it is rendered, at any width, and shows the running count on the phone Work tab", async () => {
   width = 390;
-  read.mockResolvedValue({ items: [] });
+  read.mockResolvedValue({ items: [run()] });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
+  const view = await mount(<WorkRunningIndicator workspaceId="a" showCount />, client);
   try {
-    await act(async () => {
-      root.render(
-        <QueryClientProvider client={client}>
-          <WorkRunningIndicator workspaceId="a" />
-        </QueryClientProvider>,
-      );
-    });
-    await act(async () => {
-      await client.invalidateQueries({ queryKey: ["tasks"] });
-    });
-    expect(read).not.toHaveBeenCalled();
-    await act(async () => {
-      width = 800;
-      media.dispatchEvent(new Event("change"));
-    });
-    expect(read).toHaveBeenCalledTimes(1);
     await vi.waitFor(() =>
-      expect(container.textContent).toContain("No queued or running interactive Chat/plan work recorded"),
+      expect(view.container.querySelector("[data-work-running]")?.getAttribute("data-work-running")).toBe("running"),
     );
-    await act(async () => {
-      width = 390;
-      media.dispatchEvent(new Event("change"));
-    });
-    await act(async () => {
-      await client.invalidateQueries({ queryKey: ["tasks"] });
-    });
     expect(read).toHaveBeenCalledTimes(1);
-    expect(container.querySelector("[data-work-running]")?.getAttribute("data-work-running")).toBe("unknown");
+    expect(view.container.querySelector('[data-work-running] [aria-hidden="true"]')?.textContent).toBe("1");
+    expect(view.container.textContent).toContain("1 queued or running interactive Chat/plan record");
   } finally {
-    await act(async () => {
-      root.unmount();
-    });
-    container.remove();
-    client.clear();
+    await view.unmount();
   }
 });
 
