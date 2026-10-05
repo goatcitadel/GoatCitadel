@@ -78,6 +78,9 @@ it("shows each conversation's status from the sessions list without a status rea
   expect(rows[0]).toContain("Working");
   expect(rows[1]).toContain("Waiting on you");
   expect(rows[2]).toContain("Status unavailable");
+  expect(host.querySelectorAll("li")[2]?.querySelector("[title]")?.getAttribute("title")).toBe(
+    "The current status could not be read.",
+  );
   expect(mocks.status).not.toHaveBeenCalled();
 });
 

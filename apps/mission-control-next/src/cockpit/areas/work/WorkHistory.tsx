@@ -47,7 +47,7 @@ export function WorkHistory() {
           <h1 className="font-display text-xl font-semibold text-fg">Work history</h1>
           <p className="text-sm text-fg-secondary">Saved workspace runs, conversations, and recent activity signals.</p>
           <p className="mt-1 text-xs text-fg-muted">
-            Activity signals are retained for a limited window. Open a conversation or run for its durable record.
+            Activity signals are retained for a limited window. Open a conversation or run for its full saved record.
           </p>
         </div>
         <Button

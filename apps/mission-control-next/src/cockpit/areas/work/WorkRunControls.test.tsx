@@ -179,11 +179,11 @@ describe("Work run controls", () => {
     expect(api.recoverDurableDeadLetter).toHaveBeenCalledWith("dead-a");
   });
 
-  it("hides recovery when the bounded owner list lacks a unique unresolved dead letter", async () => {
+  it("hides recovery when the recent recovery list lacks a single unresolved failed delivery", async () => {
     api.fetchDurableRun.mockResolvedValue({ ...run, status: "dead_lettered" });
     api.fetchDurableDeadLetters.mockResolvedValue({ items: [] });
     await renderControls();
-    expect(container.textContent).toContain("No unique unresolved dead letter");
+    expect(container.textContent).toContain("No single unresolved failed delivery");
     expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Recover")).toBe(false);
   });
 
@@ -224,12 +224,12 @@ describe("Work run controls", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(container.textContent).toContain("Checking for changes…");
-    expect(container.textContent).toContain("Last known owner status:");
+    expect(container.textContent).toContain("Last known status:");
     expect(button("Pause")).toBeDefined();
     expect(button("Pause").disabled).toBe(true);
     await act(async () => release());
     await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
-    expect(container.textContent).toContain("Current owner status:");
+    expect(container.textContent).toContain("Current status:");
     expect(button("Pause").disabled).toBe(false);
   });
 
@@ -255,7 +255,7 @@ describe("Work run controls", () => {
     api.fetchDurableRun.mockRejectedValueOnce(new Error("Gateway offline"));
     await invalidateAll(client);
     await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
-    expect(container.textContent).toContain("Last known owner status: running");
+    expect(container.textContent).toContain("Last known status: running");
     expect(container.textContent).toContain("Showing the last version from");
     expect(button("Pause")).toBeDefined();
   });
@@ -277,7 +277,7 @@ describe("Work run controls", () => {
     });
     expect(container.textContent).toContain("Checking for changes…");
     expect(container.textContent).not.toContain("Checking the current recovery record…");
-    expect(container.textContent).not.toContain("No unique unresolved dead letter");
+    expect(container.textContent).not.toContain("No single unresolved failed delivery");
     expect(button("Recover").disabled).toBe(true);
     await act(async () => release());
     await vi.waitFor(() => expect(button("Recover").disabled).toBe(false));

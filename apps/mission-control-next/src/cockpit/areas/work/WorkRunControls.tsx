@@ -187,8 +187,8 @@ export function WorkRunControls({ runId }: { runId: string }) {
       {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {run ? (
         <p className="text-fg-secondary">
-          {view.stale ? "Last known owner status" : "Current owner status"}: {run.status}. These controls are available
-          only for runs scoped to the selected workspace.
+          {view.stale ? "Last known status" : "Current status"}: {run.status}. These controls are available only for
+          runs scoped to the selected workspace.
         </p>
       ) : null}
       {run?.status === "dead_lettered" && letterView.phase === "loading" ? (
@@ -204,7 +204,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
       ) : null}
       {run?.status === "dead_lettered" && recordAnswered(letterView) && letterView.record && !deadLetter ? (
         <p className="text-fg-muted">
-          No unique unresolved dead letter was found in the current bounded owner list. Review recovery in Ops.
+          No single unresolved failed delivery for this run is in the recent recovery list. Review recovery in Ops.
         </p>
       ) : null}
       {run && available.length === 0 && !(run.status === "dead_lettered" && !deadLetter) ? (
@@ -212,7 +212,7 @@ export function WorkRunControls({ runId }: { runId: string }) {
           {admittedChatNeedsNewMutation
             ? "This admitted Chat run needs a new mutation instead of manual replay."
             : "No direct control is available from this run state or workspace."}{" "}
-          Inspect the owner record in Ops.
+          See its full record in Ops.
         </p>
       ) : null}
       {run && available.length > 0 && !completed && !outcomeUncertain ? (

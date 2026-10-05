@@ -88,7 +88,7 @@ export async function searchThreads(
 /** Filters the Inbox the cockpit already keeps; it never reads the Inbox itself. */
 export function searchInbox(result: OperatorInboxResponse, scope: PaletteScope, text: string): PaletteSourceResult {
   if (!inboxMatchesWorkspace(result, scope.workspaceId))
-    throw new Error("The Inbox projection does not match this workspace.");
+    throw new Error("This Inbox belongs to a different workspace.");
   const count = inboxKnownCount(result);
   const hasReadGap = result.coverage.some((source) => source.state === "partial" || source.state === "unavailable");
   const hasDefinedLimit = result.coverage.some((source) => source.state === "limited");
@@ -98,17 +98,17 @@ export function searchInbox(result: OperatorInboxResponse, scope: PaletteScope, 
       .map((item) => ({
         id: item.id,
         label: item.title,
-        description: `${inboxItemKindLabel(item.kind)} · Review the current owner before acting`,
+        description: `${inboxItemKindLabel(item.kind)} · Open it to check the latest state before acting`,
         target: {
           href: `/inbox?${new URLSearchParams({ shell: "cockpit", workspaceId: scope.workspaceId, item: item.id })}`,
         },
       })),
     coverage: `${count.known} known workspace items. ${
       count.complete
-        ? "Current projection; resolved items may disappear."
+        ? "Current list; resolved items may disappear."
         : hasReadGap || !hasDefinedLimit
           ? "Coverage is incomplete; more items may be missing."
-          : "Inbox has a defined scope; other work stays in its owner."
+          : "The Inbox covers a set range; find other work in its own area."
     }`,
   };
 }

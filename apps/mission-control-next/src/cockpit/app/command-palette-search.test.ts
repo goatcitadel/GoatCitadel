@@ -115,6 +115,7 @@ describe("palette Gateway object search", () => {
     expect(group.items).toHaveLength(5);
     expect(group.items[0]?.target).toEqual({ href: "/inbox?shell=cockpit&workspaceId=workspace-a&item=approval%3A0" });
     expect(group.coverage).toContain("Coverage is incomplete");
+    expect(group.items[0]?.description).toBe("Approval · Open it to check the latest state before acting");
   });
 
   it("describes a defined Inbox scope and refuses another workspace's Inbox", () => {
@@ -123,9 +124,13 @@ describe("palette Gateway object search", () => {
       coverage: [{ source: "runtime_health", state: "limited", detail: "Other checks remain in System." }],
     } as Partial<OperatorInboxResponse>);
     const result = searchInbox(limited, scope, "needle");
-    expect(result.coverage).toContain("Inbox has a defined scope");
+    expect(result.coverage).toContain("The Inbox covers a set range; find other work in its own area.");
     expect(result.coverage).not.toContain("Coverage is incomplete");
-    expect(() => searchInbox(inbox({ workspaceId: "other" }), scope, "needle")).toThrow("does not match");
+    expect(() => searchInbox(inbox({ workspaceId: "other" }), scope, "needle")).toThrow(
+      "This Inbox belongs to a different workspace.",
+    );
+    for (const text of [result.coverage, ...result.items.map((item) => item.description)])
+      expect(text).not.toMatch(/owner|projection/u);
   });
 
   it("filters the cached capability catalog without reading it", () => {
