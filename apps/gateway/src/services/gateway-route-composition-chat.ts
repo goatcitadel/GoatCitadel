@@ -571,13 +571,10 @@ export function composeChatRouteDependencies(
     },
     getTurnContextManifestForSession: (sessionId, turnId) =>
       chatMessageRouteRuntime.getTurnContextManifestForSession(chatMessageRouteRuntimeHost, sessionId, turnId),
-    listChatMessagePage: (input) =>
-      chatHistoryService.listChatMessagePage(chatHistoryHost, input),
+    listChatMessagePage: (input) => chatHistoryService.listChatMessagePage(chatHistoryHost, input),
     listChatMessages: (sessionId, limit, cursor) => gateway.listChatMessages(sessionId, limit, cursor),
-    readChatHistoryWindow: (anchor, limit) =>
-      chatHistoryService.readChatHistoryWindow(chatHistoryHost, anchor, limit),
-    readChatHistoryContinuation: (input) =>
-      chatHistoryService.readChatHistoryContinuation(chatHistoryHost, input),
+    readChatHistoryWindow: (anchor, limit) => chatHistoryService.readChatHistoryWindow(chatHistoryHost, anchor, limit),
+    readChatHistoryContinuation: (input) => chatHistoryService.readChatHistoryContinuation(chatHistoryHost, input),
     resumeAgentChatTurnStream: (sessionId, turnId, sinceEventId, signal?: AbortSignal) =>
       gateway.chatTurnRuntime.resumeAgentChatTurnStream(sessionId, turnId, sinceEventId, { abortSignal: signal }),
     retryChatTurn: (sessionId, turnId, input, authenticatedOperator) =>
