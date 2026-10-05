@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { ChatToolRunRecord, ChatCompletionRequest, ChatUserInputPromptRecord } from "@goatcitadel/contracts";
 import { extractPrimaryUserTaskContent } from "../chat-agent-prompt-lab-contract.js";
-export { detectDocumentArtifactIntent, detectPresentationArtifactIntent } from "../chat-artifact-intent.js";
+export {
+  detectDocumentArtifactIntent,
+  detectPresentationArtifactIntent,
+  detectPresentationPdfOutputIntent,
+} from "../chat-artifact-intent.js";
 
 const SAFE_WRITE_FALLBACK_DIR = "./workspace/goatcitadel_out";
 const WRITE_DESTINATION_PROMPT_TITLE = "Choose artifact destination";

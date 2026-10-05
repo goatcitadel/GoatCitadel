@@ -9,6 +9,7 @@ import {
   mergeWorkspaceFileDownloadContent,
   detectDocumentArtifactIntent,
   detectPresentationArtifactIntent,
+  detectPresentationPdfOutputIntent,
 } from "./artifact-write-helpers.js";
 
 const research = `# Dating Across a Large Age Gap
@@ -69,6 +70,26 @@ describe("artifact creation intent", () => {
 
   it("retains an explicit presentation request after reviewing source material", () => {
     expect(detectPresentationArtifactIntent("Review these notes and create a PowerPoint deck.")).toBe(true);
+  });
+
+  it.each([
+    "find me fun things to do around my area, 91303, tonight, and put it into a powerpoint deck style but saved as a pdf",
+    "Make a slide deck and export it as a PDF.",
+    "Create a PowerPoint presentation as a PDF.",
+    "Build a pitch deck in PDF format.",
+  ])("recognizes a presentation delivered as a PDF: %s", (content) => {
+    expect(detectPresentationArtifactIntent(content)).toBe(true);
+    expect(detectPresentationPdfOutputIntent(content)).toBe(true);
+  });
+
+  it.each([
+    "Create a PowerPoint deck.",
+    "Turn report.pdf into a PowerPoint deck.",
+    "Make a slide deck about PDF accessibility.",
+    "Create a PDF report.",
+    "Summarize the PDF and make slides.",
+  ])("does not treat a PDF input or non-deck PDF as a PDF deck: %s", (content) => {
+    expect(detectPresentationPdfOutputIntent(content)).toBe(false);
   });
 });
 

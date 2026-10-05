@@ -48,6 +48,15 @@ export function detectPresentationArtifactIntent(content: string): boolean {
   );
 }
 
+/** "Put it in a deck, saved as a PDF": a presentation whose requested output
+ * format is PDF. Named input files ("turn report.pdf into slides") are sources,
+ * not the output format. */
+export function detectPresentationPdfOutputIntent(content: string): boolean {
+  if (!detectPresentationArtifactIntent(content)) return false;
+  const prose = stripArtifactFileNames(artifactRequestProse(content));
+  return artifactRequestObjects(prose).some(({ object }) => /\bpdfs?\b/u.test(object));
+}
+
 function artifactRequestObjects(prose: string): Array<{ verb: string; object: string }> {
   // Input names in "write a summary of report.pdf" describe the source. Check
   // the requested output before its subject/source phrase, while permitting
@@ -68,12 +77,7 @@ function artifactRequestObjects(prose: string): Array<{ verb: string; object: st
 /** File formats and names identify inputs as well as outputs. An inspection
  * request alone must not synthesize a file-writing tool or artifact obligation. */
 export function hasArtifactInspectionOnlyIntent(content: string): boolean {
-  const prose = content
-    .toLowerCase()
-    .replace(/(["'`])[^"'`\r\n]*\.(?:pdf|docx?|pptx?|txt|md|markdown|csv|json|html?)\1/gu, " ")
-    .replace(/\S+/gu, (token) =>
-      /\.(?:pdf|docx?|pptx?|txt|md|markdown|csv|json|html?)(?=$|[.,;:!?)\]])/u.test(token) ? " " : token,
-    );
+  const prose = stripArtifactFileNames(content.toLowerCase());
   const inspection =
     /\b(?:read|inspect|review|summari[sz]e|explain|analy[sz]e|compare|describe|check|parse|validate|open)\b/u.test(
       prose,
@@ -82,4 +86,12 @@ export function hasArtifactInspectionOnlyIntent(content: string): boolean {
     prose,
   );
   return inspection && !creation;
+}
+
+function stripArtifactFileNames(prose: string): string {
+  return prose
+    .replace(/(["'`])[^"'`\r\n]*\.(?:pdf|docx?|pptx?|txt|md|markdown|csv|json|html?)\1/gu, " ")
+    .replace(/\S+/gu, (token) =>
+      /\.(?:pdf|docx?|pptx?|txt|md|markdown|csv|json|html?)(?=$|[.,;:!?)\]])/u.test(token) ? " " : token,
+    );
 }

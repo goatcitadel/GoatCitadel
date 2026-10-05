@@ -176,6 +176,7 @@ import {
   buildWriteDestinationUserInputPrompt,
   detectDocumentArtifactIntent,
   detectPresentationArtifactIntent,
+  detectPresentationPdfOutputIntent,
   getExecutedWorkspaceFileWriteReceipt,
   isWriteDestinationTool,
   isWriteJailBlockReason,
@@ -2001,6 +2002,7 @@ export class ChatTurnAgentRunner {
       time: detectTimeIntent(executionIntentContent),
       localFile: detectLocalFileIntent(executionIntentContent),
       presentationArtifact: presentationArtifactIntent,
+      presentationPdf: presentationArtifactIntent && detectPresentationPdfOutputIntent(executionIntentContent),
       documentArtifact:
         !suppressPromptLabCodeArtifactTools &&
         executionProfile !== "sustained_local_coding" &&
@@ -5812,6 +5814,9 @@ export class ChatTurnAgentRunner {
     }
     const presentationAttempts = toolRuns.filter((run) => run.toolName === "presentations.create");
     const verifiedPresentationWrite = presentationAttempts.some(hasVerifiedPresentationArtifactWrite);
+    // "A deck, saved as a PDF" is satisfied by a verified PDF file; the deck
+    // guard must not overwrite that answer with a missing-PowerPoint failure.
+    const verifiedPdfDeckDocumentWrite = intents.presentationPdf && toolRuns.some(hasVerifiedPdfDocumentArtifactWrite);
     if (
       !approvalPayload &&
       !pendingUserInput &&
@@ -5820,17 +5825,25 @@ export class ChatTurnAgentRunner {
       !toolUseClosed &&
       !durableFanoutWaiting &&
       intents.presentationArtifact &&
-      !verifiedPresentationWrite
+      !verifiedPresentationWrite &&
+      !verifiedPdfDeckDocumentWrite
     ) {
       const lastAttempt = presentationAttempts.at(-1);
       const failureClass: ChatTurnFailureClass = lastAttempt?.status === "blocked" ? "tool_blocked" : "tool_failed";
       const failureMessage =
-        lastAttempt?.error ?? "The requested PowerPoint presentation did not produce a verified file artifact.";
+        lastAttempt?.error ??
+        (intents.presentationPdf
+          ? "The requested PDF slide deck did not produce a verified file artifact."
+          : "The requested PowerPoint presentation did not produce a verified file artifact.");
       assistantContent = [
         lastAttempt
           ? mergePresentationArtifactDeliveryContent("", lastAttempt)
-          : "I could not create the requested PowerPoint presentation artifact.",
-        "No downloadable PowerPoint was produced.",
+          : intents.presentationPdf
+            ? "I could not create the requested PDF slide deck."
+            : "I could not create the requested PowerPoint presentation artifact.",
+        intents.presentationPdf
+          ? "No downloadable PDF slide deck was produced."
+          : "No downloadable PowerPoint was produced.",
       ].join("\n\n");
       finalStatus = "failed";
       finalFailure = buildChatTurnFailureRecord(failureClass, failureMessage);
@@ -16608,6 +16621,14 @@ function hasVerifiedPresentationArtifactWrite(run: ChatToolRunRecord): boolean {
     Number.isFinite(result.bytesWritten) &&
     result.bytesWritten > 0
   );
+}
+
+function hasVerifiedPdfDocumentArtifactWrite(run: ChatToolRunRecord): boolean {
+  if (run.toolName !== "documents.create") {
+    return false;
+  }
+  const receipt = getExecutedWorkspaceFileWriteReceipt(run);
+  return Boolean(receipt && /\.pdf$/iu.test(receipt.artifactPath));
 }
 
 function buildResearchArtifactSearchReuseResult(run: ChatToolRunRecord): Record<string, unknown> {
