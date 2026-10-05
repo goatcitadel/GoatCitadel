@@ -187,6 +187,7 @@ describe("shared provider mutation ownership", () => {
   it("retains an ambiguous dispatch lock after unmount and blocks routing and credential deletion too", async () => {
     api.patchSettings.mockRejectedValue(new Error("Lost reply"));
     await render();
+    await act(async () => profile.setProviderDraft((draft) => ({ ...draft, label: "Updated" })));
     await act(async () => {
       await profile.handleSaveProvider();
     });
@@ -210,6 +211,7 @@ describe("shared provider mutation ownership", () => {
   ] as const)("never retries a %s conflict marker nested=%s", async (marker, nested) => {
     api.patchSettings.mockRejectedValue(conflict(marker, nested));
     await render();
+    await act(async () => profile.setProviderDraft((draft) => ({ ...draft, label: "Updated" })));
     await act(async () => {
       await profile.handleSaveProvider();
     });
@@ -219,9 +221,11 @@ describe("shared provider mutation ownership", () => {
   it("keeps an exact precommit revision conflict retryable without claiming a saved profile", async () => {
     api.patchSettings.mockRejectedValue(conflict());
     await render();
+    await act(async () => profile.setProviderDraft((draft) => ({ ...draft, label: "Updated" })));
     await act(async () => {
       await profile.handleSaveProvider();
     });
+    expect(api.patchSettings).toHaveBeenCalledOnce();
     expect(profile.mutation.uncertain).toBeUndefined();
     expect(onSaved).not.toHaveBeenCalled();
     expect(isProviderPrecommitConflict(conflict(), 7)).toBe(true);
@@ -231,6 +235,8 @@ describe("shared provider mutation ownership", () => {
     async (kind) => {
       view = kind === "routing" ? "routing" : kind === "profile" ? "editor" : "trust";
       await render();
+      if (kind === "profile")
+        await act(async () => profile.setProviderDraft((draft) => ({ ...draft, label: "Updated" })));
       if (kind === "credential") await act(async () => credentials.setSecretValue("synthetic-fixture-value"));
       if (kind === "removal")
         await act(async () => credentials.setPendingDeleteSecret({ providerId: "fixture", label: "Fixture" }));

@@ -179,6 +179,13 @@ export function useProviderProfileEditor({
       setNotice({ tone: "warning", message: saveOperationError ?? "Review this provider edit before saving." });
       return false;
     }
+    if (!sendsChanges) {
+      // Only formatting differs, so saving would send the saved profile again, which can conflict and lock
+      // provider changes. Settle the draft here instead, for Review, Save and the leave dialog alike.
+      providerEditor.discard();
+      setNotice({ tone: "info", message: "Nothing to save. The saved provider already matches." });
+      return true;
+    }
     const submitted = providerEditor.value;
     const editorIdentity = currentEditor.current;
     const isCurrent = captureEditor();
