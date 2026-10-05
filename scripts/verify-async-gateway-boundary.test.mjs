@@ -624,6 +624,10 @@ test("reply-send scan flags Promise payloads passed directly or nested in Fastif
           reply.send(enabled ? { items: service.list() } : { items: [] });
           return reply.send(cached ?? { learning: service.get(id) });
         }
+        export async function castHidesPromise(id: string): Promise<unknown> {
+          reply.send(service.get(id) as unknown as Learning);
+          return reply.send({ learning: (service.get(id) as unknown) as Learning });
+        }
         export async function helperReply(target: FastifyReply, id: string): Promise<unknown> {
           return target.code(200).send({ learning: (service.get(id)) as Promise<Learning> });
         }
@@ -638,7 +642,7 @@ test("reply-send scan flags Promise payloads passed directly or nested in Fastif
     const replySendDiagnostics = result.diagnostics.filter(
       (diagnostic) => diagnostic.code === "promise_sent_to_fastify_reply",
     );
-    assert.equal(replySendDiagnostics.length, 13);
+    assert.equal(replySendDiagnostics.length, 15);
     assert.ok(replySendDiagnostics.every((diagnostic) => diagnostic.filePath.endsWith("routes/learnings.ts")));
     assert.ok(replySendDiagnostics.some((diagnostic) => diagnostic.message.includes("serializes")));
 
@@ -653,7 +657,7 @@ test("reply-send scan flags Promise payloads passed directly or nested in Fastif
       replySendDiagnostics.every((diagnostic) => diagnostic.line !== routePortDiagnostics[0]?.line),
       "a route-port finding must not be double-reported as a reply-send finding",
     );
-    assert.equal(result.diagnostics.length, 14);
+    assert.equal(result.diagnostics.length, 16);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -702,6 +706,10 @@ test("reply-send scan allows awaited, resolved, synchronous, and non-reply paylo
         ): Promise<unknown> {
           reply.send(enabled ? { items: await service.list() } : { items: [] });
           return reply.send(cached ?? { learning: await service.get(id) });
+        }
+        export async function awaitedThenCast(id: string): Promise<unknown> {
+          reply.send((await service.get(id)) as unknown as { id: string });
+          return reply.send({ learning: (await service.get(id))! as Learning });
         }
         export function synchronousPayload(id: string): unknown {
           return reply.send({ learning: service.describe(id), items: [service.describe(id)] });

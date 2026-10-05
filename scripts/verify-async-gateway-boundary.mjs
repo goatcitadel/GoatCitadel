@@ -421,11 +421,16 @@ function isFastifyReplySendCall(checker, call) {
 // directly or as a value nested inside an object/array literal payload
 // (including literals selected by ?:, ??, ||, or &&).
 function collectPromisePayloads(checker, expression, found = []) {
-  if (isExactPromiseType(checker, checker.getTypeAtLocation(expression))) {
+  // A type assertion (`promise as unknown as Row`) can hide the Promise from
+  // the outer type, so the expression beneath the casts is checked as well.
+  const inner = unwrapExpression(expression);
+  if (
+    isExactPromiseType(checker, checker.getTypeAtLocation(expression)) ||
+    (inner !== expression && isExactPromiseType(checker, checker.getTypeAtLocation(inner)))
+  ) {
     found.push(expression);
     return found;
   }
-  const inner = unwrapExpression(expression);
   if (ts.isConditionalExpression(inner)) {
     collectPromisePayloads(checker, inner.whenTrue, found);
     collectPromisePayloads(checker, inner.whenFalse, found);
