@@ -24,7 +24,8 @@ describe("idle-traffic budgets", () => {
   it("keeps the idle target of 6 requests a minute", () => {
     assert.equal(IDLE_TRAFFIC_BUDGETS.idlePerTwoMinutes, 12);
     assert.equal(IDLE_TRAFFIC_BUDGETS.chatTurnElsewhere, 10);
-    assert.ok(IDLE_TRAFFIC_BUDGETS.openChat >= 20);
+    // Measured 46 on GitHub run 37358779646; the bootstrap reductions belong to W4/W8.
+    assert.equal(IDLE_TRAFFIC_BUDGETS.openChat, 48);
   });
 });
 

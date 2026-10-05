@@ -9,8 +9,11 @@ export const IDLE_TRAFFIC_BUDGETS = Object.freeze({
   /** Target: an idle tab makes at most 6 requests a minute, whatever other tabs do. */
   idlePerTwoMinutes: 12,
   chatTurnElsewhere: 10,
-  /** Target 20; if the first GitHub run measures more, this becomes the measured value + 2. */
-  openChat: 20,
+  /**
+   * Target 20. GitHub run 37358779646 measured 46 (61 before W1), so this is the measured value + 2. The
+   * remaining reads are the Chat bootstrap itself, which W4 and W8 reduce.
+   */
+  openChat: 48,
 });
 export const EVENT_STREAM_PATH = "/api/v1/events/stream";
 const IDLE_WINDOW_MS = 120_000;
