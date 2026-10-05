@@ -389,11 +389,12 @@ describe("chat session routes", () => {
       url: "/api/v1/chat/document-patch-proposals/missing?workspaceId=workspace-a",
     });
     expect(missing.statusCode).toBe(404);
-    const foreign = await app.inject({
-      method: "GET",
-      url: "/api/v1/chat/document-patch-proposals/proposal-1?workspaceId=workspace-b",
-    });
-    expect(foreign.statusCode).toBe(404);
+    // Workspace scoping is the service's job (covered by its own test); the route must forward the
+    // requested workspace exactly, never a default.
+    expect(getDocumentPatchProposal.mock.calls).toEqual([
+      ["proposal-1", "workspace-a"],
+      ["missing", "workspace-a"],
+    ]);
     const unscoped = await app.inject({ method: "GET", url: "/api/v1/chat/document-patch-proposals/proposal-1" });
     expect(unscoped.statusCode).toBe(400);
   });
