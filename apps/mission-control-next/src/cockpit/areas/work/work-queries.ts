@@ -10,8 +10,12 @@ export function workspaceDurableRunsOptions(workspaceId: string) {
     queryKey: queryKeys.durableRunHistory(workspaceId),
     initialPageParam: "",
     queryFn: async ({ pageParam, signal }) => {
-      const page = await fetchDurableRunHistory({ workspaceId, limit: 100, cursor: pageParam || undefined }, { signal });
-      if (signal.aborted || getGatewayApiBaseUrl() !== installation) throw new Error("The work view is no longer current.");
+      const page = await fetchDurableRunHistory(
+        { workspaceId, limit: 100, cursor: pageParam || undefined },
+        { signal },
+      );
+      if (signal.aborted || getGatewayApiBaseUrl() !== installation)
+        throw new Error("The work view is no longer current.");
       return page;
     },
     getNextPageParam: (last) => last.nextCursor,
@@ -26,7 +30,8 @@ export function workspaceTasksOptions(workspaceId: string) {
     initialPageParam: "",
     queryFn: async ({ pageParam, signal }) => {
       const page = await fetchTasks(undefined, workspaceId, { limit: 200, cursor: pageParam || undefined });
-      if (signal.aborted || getGatewayApiBaseUrl() !== installation) throw new Error("The task view is no longer current.");
+      if (signal.aborted || getGatewayApiBaseUrl() !== installation)
+        throw new Error("The task view is no longer current.");
       return page;
     },
     getNextPageParam: (last) => last.nextCursor,

@@ -182,8 +182,12 @@ export function LibraryResources({
           ) : null}
         </>
       ) : null}
-      <ClassicOwnerLink className="text-sm font-medium text-accent hover:underline" href={`/library/${kind}?shell=classic`}
-        scope={JSON.stringify([workspaceId, citadelId, kind])} label={`Open ${TITLES[kind].toLowerCase()} management`} />
+      <ClassicOwnerLink
+        className="text-sm font-medium text-accent hover:underline"
+        href={`/library/${kind}?shell=classic`}
+        scope={JSON.stringify([workspaceId, citadelId, kind])}
+        label={`Open ${TITLES[kind].toLowerCase()} management`}
+      />
       <Sheet
         open={Boolean(selection)}
         onOpenChange={(open) => {

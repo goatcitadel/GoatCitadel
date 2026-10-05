@@ -21,7 +21,12 @@ import { deriveSystemHealthChecks } from "../areas/system/system-health";
 import { backupTrustFromInbox } from "../areas/system/backup-trust";
 import { loadSystemHealthSources } from "../areas/system/system-health-sources";
 import { useDesktopUpdates } from "../../features/desktop-updates/desktop-update-bridge";
-import { inboxCountLabel, inboxCountTitle, inboxMatchesWorkspace, inboxNavigationLabel } from "../areas/inbox/inbox-presentation";
+import {
+  inboxCountLabel,
+  inboxCountTitle,
+  inboxMatchesWorkspace,
+  inboxNavigationLabel,
+} from "../areas/inbox/inbox-presentation";
 import { useOperatorInbox } from "../data/use-operator-inbox";
 import { WorkRunningIndicator } from "./WorkRunningIndicator";
 import { ScopeSwitcher } from "./ScopeSwitcher";
@@ -88,7 +93,9 @@ export function Sidebar({
         deriveSystemHealthChecks(
           health.data,
           desktopUpdates,
-          backupTrustFromInbox(!inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId) ? inbox.data : undefined),
+          backupTrustFromInbox(
+            !inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId) ? inbox.data : undefined,
+          ),
         ),
       )
     : { label: "System checks unavailable", tone: "neutral" as const };
@@ -182,9 +189,13 @@ export function Sidebar({
         <span aria-hidden="true" className={`size-2 rounded-full ${stream.tone}`} />
         <span className={collapsed ? "sr-only" : "flex-1"}>{stream.label}</span>
         <Menu>
-          <MenuTrigger aria-label="Settings and account" className="rounded-md p-1 text-fg-muted hover:bg-sunken"
-            onPointerEnter={() => preload("settings")} onFocus={() => preload("settings")}
-            onPointerDown={() => preload("settings")}>
+          <MenuTrigger
+            aria-label="Settings and account"
+            className="rounded-md p-1 text-fg-muted hover:bg-sunken"
+            onPointerEnter={() => preload("settings")}
+            onFocus={() => preload("settings")}
+            onPointerDown={() => preload("settings")}
+          >
             <Settings aria-hidden="true" className="size-4" />
           </MenuTrigger>
           <MenuContent align="end">

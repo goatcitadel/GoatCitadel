@@ -18,23 +18,41 @@ export function currentCapabilityProposal(
   workspaceId: string,
 ): CapabilityProposalDetailRecord | null {
   const proposal = detail.proposal;
-  if (!inboxMatchesWorkspace(projection, workspaceId)
-    || item.kind !== "capability_proposal" || item.group !== "proposals"
-    || item.source.workspaceId !== workspaceId || !item.source.proposalId
-    || item.id !== `capability_proposal:${item.source.proposalId}`
-    || proposal.proposalId !== item.source.proposalId
-    || proposal.payload.workspaceId !== workspaceId || !ACTIVE_STATUSES.has(proposal.status)
-    || proposal.createdAt !== item.createdAt || proposal.updatedAt !== item.updatedAt
-    || !projection.items.some((record) => record.id === item.id && record.kind === item.kind
-      && record.group === item.group && record.source.workspaceId === workspaceId
-      && record.source.proposalId === item.source.proposalId && record.updatedAt === item.updatedAt)) return null;
+  if (
+    !inboxMatchesWorkspace(projection, workspaceId) ||
+    item.kind !== "capability_proposal" ||
+    item.group !== "proposals" ||
+    item.source.workspaceId !== workspaceId ||
+    !item.source.proposalId ||
+    item.id !== `capability_proposal:${item.source.proposalId}` ||
+    proposal.proposalId !== item.source.proposalId ||
+    proposal.payload.workspaceId !== workspaceId ||
+    !ACTIVE_STATUSES.has(proposal.status) ||
+    proposal.createdAt !== item.createdAt ||
+    proposal.updatedAt !== item.updatedAt ||
+    !projection.items.some(
+      (record) =>
+        record.id === item.id &&
+        record.kind === item.kind &&
+        record.group === item.group &&
+        record.source.workspaceId === workspaceId &&
+        record.source.proposalId === item.source.proposalId &&
+        record.updatedAt === item.updatedAt,
+    )
+  )
+    return null;
   return detail;
 }
 
-async function readCurrentProposal(item: OperatorInboxItem, workspaceId: string): Promise<CapabilityProposalDetailRecord | null> {
-  if (item.kind !== "capability_proposal" || item.source.workspaceId !== workspaceId || !item.source.proposalId) return null;
+async function readCurrentProposal(
+  item: OperatorInboxItem,
+  workspaceId: string,
+): Promise<CapabilityProposalDetailRecord | null> {
+  if (item.kind !== "capability_proposal" || item.source.workspaceId !== workspaceId || !item.source.proposalId)
+    return null;
   const projection = await fetchOperatorInbox(workspaceId);
-  if (!inboxMatchesWorkspace(projection, workspaceId) || !projection.items.some((record) => record.id === item.id)) return null;
+  if (!inboxMatchesWorkspace(projection, workspaceId) || !projection.items.some((record) => record.id === item.id))
+    return null;
   const detail = await fetchCapabilityProposal(item.source.proposalId);
   return currentCapabilityProposal(item, projection, detail, workspaceId);
 }
@@ -52,21 +70,54 @@ export function InboxCapabilityProposalDetail({ item, workspaceId }: { item: Ope
   const current = query.isFetching || query.isError || scopeRef.current !== workspaceId ? null : query.data;
   const proposal = current?.proposal;
 
-  return <section aria-label="Current capability proposal" className="space-y-3 border-t border-line-subtle pt-3 text-sm">
-    <div className="flex items-center justify-between gap-2">
-      <h3 className="font-display font-semibold text-fg">Current capability proposal</h3>
-      <Button size="sm" disabled={query.isFetching || !item.source.proposalId} onClick={() => void query.refetch()}>Refresh</Button>
-    </div>
-    {scopeRef.current !== workspaceId ? <p role="alert" className="text-fg-secondary">The selected workspace changed. Open this item again in the current Inbox.</p> : null}
-    {query.isFetching ? <p role="status" className="text-fg-muted">Loading the current proposal…</p> : null}
-    {query.isError ? <p role="alert" className="text-status-failed">{describeApiError(query.error).summary}</p> : null}
-    {!query.isFetching && !query.isError && !proposal && scopeRef.current === workspaceId
-      ? <p className="text-fg-muted">This proposal is no longer in the selected workspace Inbox. Open Library for its current status.</p> : null}
-    {proposal ? <div className="space-y-2 text-fg-secondary">
-      <p className="text-xs text-fg-muted">{humanizeToken(proposal.proposalKind)} proposal · {humanizeToken(proposal.status)}</p>
-      {proposal.candidateId ? <p>A candidate is linked to this proposal. Review its current version and lifecycle in Library before requesting promotion.</p> : null}
-      <p className="text-xs text-fg-muted">{current.events.length} recorded {current.events.length === 1 ? "event" : "events"}. Proposal review here does not activate a capability.</p>
-      <p className="text-xs text-fg-muted">Decisions for this proposal are unavailable in Inbox. Candidate promotion uses the governed Library flow.</p>
-    </div> : null}
-  </section>;
+  return (
+    <section aria-label="Current capability proposal" className="space-y-3 border-t border-line-subtle pt-3 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="font-display font-semibold text-fg">Current capability proposal</h3>
+        <Button size="sm" disabled={query.isFetching || !item.source.proposalId} onClick={() => void query.refetch()}>
+          Refresh
+        </Button>
+      </div>
+      {scopeRef.current !== workspaceId ? (
+        <p role="alert" className="text-fg-secondary">
+          The selected workspace changed. Open this item again in the current Inbox.
+        </p>
+      ) : null}
+      {query.isFetching ? (
+        <p role="status" className="text-fg-muted">
+          Loading the current proposal…
+        </p>
+      ) : null}
+      {query.isError ? (
+        <p role="alert" className="text-status-failed">
+          {describeApiError(query.error).summary}
+        </p>
+      ) : null}
+      {!query.isFetching && !query.isError && !proposal && scopeRef.current === workspaceId ? (
+        <p className="text-fg-muted">
+          This proposal is no longer in the selected workspace Inbox. Open Library for its current status.
+        </p>
+      ) : null}
+      {proposal ? (
+        <div className="space-y-2 text-fg-secondary">
+          <p className="text-xs text-fg-muted">
+            {humanizeToken(proposal.proposalKind)} proposal · {humanizeToken(proposal.status)}
+          </p>
+          {proposal.candidateId ? (
+            <p>
+              A candidate is linked to this proposal. Review its current version and lifecycle in Library before
+              requesting promotion.
+            </p>
+          ) : null}
+          <p className="text-xs text-fg-muted">
+            {current.events.length} recorded {current.events.length === 1 ? "event" : "events"}. Proposal review here
+            does not activate a capability.
+          </p>
+          <p className="text-xs text-fg-muted">
+            Decisions for this proposal are unavailable in Inbox. Candidate promotion uses the governed Library flow.
+          </p>
+        </div>
+      ) : null}
+    </section>
+  );
 }

@@ -46,27 +46,34 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
   const label = item.kind === "dead_letter" ? "Recover run" : "Retry run";
 
   async function requestRecovery() {
-    if (!reviewed || locked.current || pending || outcomeUncertain || completed || scopeRef.current !== workspaceId) return;
+    if (!reviewed || locked.current || pending || outcomeUncertain || completed || scopeRef.current !== workspaceId)
+      return;
     locked.current = true;
     setPending(true);
     setError("");
     let mutationAttempted = false;
     try {
       const latest = await readRecoveryEvidence(item);
-      if (scopeRef.current !== workspaceId || !canRequestRunRecovery(item, latest, workspaceId)
-        || !sameRunRecoveryEvidence(reviewed, latest)) {
+      if (
+        scopeRef.current !== workspaceId ||
+        !canRequestRunRecovery(item, latest, workspaceId) ||
+        !sameRunRecoveryEvidence(reviewed, latest)
+      ) {
         setReviewed(null);
         setError("The run or dead letter changed. Refresh the current record before requesting recovery.");
         void query.refetch();
         return;
       }
       mutationAttempted = true;
-      const result = item.kind === "dead_letter"
-        ? await recoverDurableDeadLetter(item.source.deadLetterId!)
-        : await retryDurableRun(item.source.runId!, { reason: "operator_inbox_retry" });
+      const result =
+        item.kind === "dead_letter"
+          ? await recoverDurableDeadLetter(item.source.deadLetterId!)
+          : await retryDurableRun(item.source.runId!, { reason: "operator_inbox_retry" });
       setReviewed(null);
       setCompleted(true);
-      setNotice(`Gateway recorded the request; the run is ${result.status}. Inspect the current run to verify execution and effects.`);
+      setNotice(
+        `Gateway recorded the request; the run is ${result.status}. Inspect the current run to verify execution and effects.`,
+      );
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.durableRuns() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.runTrace(result.runId) });
@@ -74,7 +81,9 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
       setReviewed(null);
       if (mutationAttempted) {
         setOutcomeUncertain(true);
-        setError(`Recovery outcome is uncertain. Inspect the current run in Ops before taking another action. ${describeApiError(cause).summary}`);
+        setError(
+          `Recovery outcome is uncertain. Inspect the current run in Ops before taking another action. ${describeApiError(cause).summary}`,
+        );
       } else {
         setError(`Could not check the current run. ${describeApiError(cause).summary}`);
       }
@@ -84,33 +93,113 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
     }
   }
 
-  return <section aria-label="Current run recovery" className="space-y-3 border-t border-line-subtle pt-3 text-sm">
-    <div className="flex items-center justify-between gap-2">
-      <h3 className="font-display font-semibold text-fg">Current run</h3>
-      <Button size="sm" disabled={query.isFetching || pending} onClick={() => { setReviewed(null); setError(""); void query.refetch(); }}>Refresh</Button>
-    </div>
-    {query.isFetching ? <p role="status" className="text-fg-muted">Loading the current run…</p> : null}
-    {query.isError ? <p role="alert" className="text-status-failed">{describeApiError(query.error).summary}</p> : null}
-    {!item.source.runId ? <p role="alert" className="text-status-failed">This Inbox item has no run ID.</p> : null}
-    {evidence ? <>
-      <p className="text-fg-secondary">Workflow: {evidence.run.workflowKey}. Status: {evidence.run.status}. Attempts: {evidence.run.attemptCount} of {evidence.run.maxAttempts}.</p>
-      {item.kind === "dead_letter" && !evidence.deadLetter ? <p className="text-fg-muted">The dead letter was not found in the current bounded owner list. Open Ops for its current record.</p> : null}
-      {!eligible ? <p className="text-fg-muted">This item cannot be recovered here from the current owner record. Admitted Chat runs need a new mutation; other runs may need an owner review or have exhausted their retry budget.</p> : null}
-    </> : null}
-    {eligible && !scopeChanged && !completed && !outcomeUncertain ? <>
-      <p className="text-xs text-fg-muted">Recovery can rerun steps and external effects. Gateway policy and workflow checks still decide whether this request is allowed.</p>
-      <Button size="sm" variant="danger" disabled={pending} onClick={() => { setReviewed(evidence!); setNotice(""); setError(""); }}>{label}</Button>
-    </> : null}
-    {scopeChanged ? <p role="alert" className="text-fg-secondary">The selected workspace changed. Open this item again in the current Inbox.</p> : null}
-    {pending ? <p role="status" className="text-fg-muted">Checking the owner record and requesting recovery…</p> : null}
-    {notice ? <p role="status" className="text-status-done">{notice}</p> : null}
-    {error ? <p role="alert" className="text-status-failed">{error}</p> : null}
-    <Dialog open={Boolean(reviewed)} onOpenChange={(open) => { if (!open && !pending) setReviewed(null); }}
-      title={`${label} from Inbox`} description="This request may rerun steps or external effects. Review the current run and its prior effects before continuing.">
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="danger" disabled={pending || scopeChanged} onClick={() => void requestRecovery()}>Confirm {label.toLowerCase()}</Button>
-        <Button size="sm" disabled={pending} onClick={() => setReviewed(null)}>Cancel</Button>
+  return (
+    <section aria-label="Current run recovery" className="space-y-3 border-t border-line-subtle pt-3 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="font-display font-semibold text-fg">Current run</h3>
+        <Button
+          size="sm"
+          disabled={query.isFetching || pending}
+          onClick={() => {
+            setReviewed(null);
+            setError("");
+            void query.refetch();
+          }}
+        >
+          Refresh
+        </Button>
       </div>
-    </Dialog>
-  </section>;
+      {query.isFetching ? (
+        <p role="status" className="text-fg-muted">
+          Loading the current run…
+        </p>
+      ) : null}
+      {query.isError ? (
+        <p role="alert" className="text-status-failed">
+          {describeApiError(query.error).summary}
+        </p>
+      ) : null}
+      {!item.source.runId ? (
+        <p role="alert" className="text-status-failed">
+          This Inbox item has no run ID.
+        </p>
+      ) : null}
+      {evidence ? (
+        <>
+          <p className="text-fg-secondary">
+            Workflow: {evidence.run.workflowKey}. Status: {evidence.run.status}. Attempts: {evidence.run.attemptCount}{" "}
+            of {evidence.run.maxAttempts}.
+          </p>
+          {item.kind === "dead_letter" && !evidence.deadLetter ? (
+            <p className="text-fg-muted">
+              The dead letter was not found in the current bounded owner list. Open Ops for its current record.
+            </p>
+          ) : null}
+          {!eligible ? (
+            <p className="text-fg-muted">
+              This item cannot be recovered here from the current owner record. Admitted Chat runs need a new mutation;
+              other runs may need an owner review or have exhausted their retry budget.
+            </p>
+          ) : null}
+        </>
+      ) : null}
+      {eligible && !scopeChanged && !completed && !outcomeUncertain ? (
+        <>
+          <p className="text-xs text-fg-muted">
+            Recovery can rerun steps and external effects. Gateway policy and workflow checks still decide whether this
+            request is allowed.
+          </p>
+          <Button
+            size="sm"
+            variant="danger"
+            disabled={pending}
+            onClick={() => {
+              setReviewed(evidence!);
+              setNotice("");
+              setError("");
+            }}
+          >
+            {label}
+          </Button>
+        </>
+      ) : null}
+      {scopeChanged ? (
+        <p role="alert" className="text-fg-secondary">
+          The selected workspace changed. Open this item again in the current Inbox.
+        </p>
+      ) : null}
+      {pending ? (
+        <p role="status" className="text-fg-muted">
+          Checking the owner record and requesting recovery…
+        </p>
+      ) : null}
+      {notice ? (
+        <p role="status" className="text-status-done">
+          {notice}
+        </p>
+      ) : null}
+      {error ? (
+        <p role="alert" className="text-status-failed">
+          {error}
+        </p>
+      ) : null}
+      <Dialog
+        open={Boolean(reviewed)}
+        onOpenChange={(open) => {
+          if (!open && !pending) setReviewed(null);
+        }}
+        title={`${label} from Inbox`}
+        description="This request may rerun steps or external effects. Review the current run and its prior effects before continuing."
+      >
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="danger" disabled={pending || scopeChanged} onClick={() => void requestRecovery()}>
+            Confirm {label.toLowerCase()}
+          </Button>
+          <Button size="sm" disabled={pending} onClick={() => setReviewed(null)}>
+            Cancel
+          </Button>
+        </div>
+      </Dialog>
+    </section>
+  );
 }

@@ -213,22 +213,35 @@ export function useChatSessionData(input: {
   const loadCoreGenerationRef = useRef(0);
   const loadSecondaryGenerationRef = useRef(0);
   const loadSidebarGenerationRef = useRef(0);
-  const sidebarScopeKey = JSON.stringify([workspaceId, input.viewIdentity, surfaceMode, historyView, searchQuery, input.routeSessionId]);
+  const sidebarScopeKey = JSON.stringify([
+    workspaceId,
+    input.viewIdentity,
+    surfaceMode,
+    historyView,
+    searchQuery,
+    input.routeSessionId,
+  ]);
   const sidebarScope = useRef({ key: sidebarScopeKey });
   if (sidebarScope.current.key !== sidebarScopeKey) sidebarScope.current = { key: sidebarScopeKey };
   const renderedSidebarScope = sidebarScope.current;
   const routeSelectionKey = JSON.stringify([workspaceId, input.viewIdentity, surfaceMode, input.routeSessionId]);
   const routeSelection = useRef({ key: routeSelectionKey, applied: false });
-  if (routeSelection.current.key !== routeSelectionKey) routeSelection.current = { key: routeSelectionKey, applied: false };
+  if (routeSelection.current.key !== routeSelectionKey)
+    routeSelection.current = { key: routeSelectionKey, applied: false };
   const renderedRouteSelection = routeSelection.current;
   const sidebarMounted = useRef(true);
   const sidebarExactRead = useRef<{ scope: typeof renderedSidebarScope; controller: AbortController } | null>(null);
-  useEffect(() => () => {
-    if (sidebarExactRead.current?.scope === renderedSidebarScope) sidebarExactRead.current.controller.abort();
-  }, [renderedSidebarScope]);
+  useEffect(
+    () => () => {
+      if (sidebarExactRead.current?.scope === renderedSidebarScope) sidebarExactRead.current.controller.abort();
+    },
+    [renderedSidebarScope],
+  );
   useEffect(() => {
     sidebarMounted.current = true;
-    return () => { sidebarMounted.current = false; };
+    return () => {
+      sidebarMounted.current = false;
+    };
   }, []);
   const historicalWindowGenerationRef = useRef(0);
   const historicalContinuationGenerationRef = useRef(0);
@@ -259,7 +272,9 @@ export function useChatSessionData(input: {
       sidebarExactRead.current?.controller.abort();
       const controller = new AbortController();
       sidebarExactRead.current = { scope: renderedSidebarScope, controller };
-      const isCurrent = () => sidebarMounted.current && sidebarScope.current === renderedSidebarScope &&
+      const isCurrent = () =>
+        sidebarMounted.current &&
+        sidebarScope.current === renderedSidebarScope &&
         generation === loadSidebarGenerationRef.current;
       const trimmedSearchQuery = searchQuery.trim();
       const sessionLimit = resolveSidebarSessionLimit(nextHistoryView, trimmedSearchQuery);
@@ -288,11 +303,26 @@ export function useChatSessionData(input: {
         setSidebarLoadingMore(true);
         try {
           const nextSessions = trimmedSearchQuery
-            ? await fetchChatSessionSearch({ query: trimmedSearchQuery, mode: "discovery", view: nextHistoryView,
-              limit: sessionLimit, workspaceId, cursor, surface: surfaceMode }).then<ChatSessionsResponse>(response => ({
-              items: response.items.map(item => ({ ...item.session, searchHits: item.hits })), nextCursor: response.nextCursor,
-            }))
-            : await fetchChatSessions({ scope: "all", view: nextHistoryView, limit: sessionLimit, workspaceId, cursor, mode: surfaceMode });
+            ? await fetchChatSessionSearch({
+                query: trimmedSearchQuery,
+                mode: "discovery",
+                view: nextHistoryView,
+                limit: sessionLimit,
+                workspaceId,
+                cursor,
+                surface: surfaceMode,
+              }).then<ChatSessionsResponse>((response) => ({
+                items: response.items.map((item) => ({ ...item.session, searchHits: item.hits })),
+                nextCursor: response.nextCursor,
+              }))
+            : await fetchChatSessions({
+                scope: "all",
+                view: nextHistoryView,
+                limit: sessionLimit,
+                workspaceId,
+                cursor,
+                mode: surfaceMode,
+              });
           if (!isCurrent()) return;
           setSessions((current) => {
             if (!isCurrent()) return current;
@@ -367,15 +397,30 @@ export function useChatSessionData(input: {
       }
       if (!isCurrent()) return;
       const requestedSessionId = !trimmedSearchQuery ? input.routeSessionId?.trim() : undefined;
-      if (requestedSessionId && !nextSessions.items.some(item => item.sessionId === requestedSessionId)) {
+      if (requestedSessionId && !nextSessions.items.some((item) => item.sessionId === requestedSessionId)) {
         // A deep link may be older than the first page. Read only that exact,
         // visible, scoped owner; a missing/foreign response must never select a recent Chat.
-        const exact = await fetchChatSessions({ sessionId: requestedSessionId, workspaceId, scope: "mission",
-          view: nextHistoryView, mode: surfaceMode, limit: 1 }, { signal: controller.signal });
+        const exact = await fetchChatSessions(
+          {
+            sessionId: requestedSessionId,
+            workspaceId,
+            scope: "mission",
+            view: nextHistoryView,
+            mode: surfaceMode,
+            limit: 1,
+          },
+          { signal: controller.signal },
+        );
         if (!isCurrent()) return;
         const record = exact.items[0];
-        if (exact.items.length !== 1 || record?.sessionId !== requestedSessionId || record.workspaceId !== workspaceId
-          || record.scope !== "mission" || record.lifecycleStatus !== nextHistoryView || record.includeInHistory === false) {
+        if (
+          exact.items.length !== 1 ||
+          record?.sessionId !== requestedSessionId ||
+          record.workspaceId !== workspaceId ||
+          record.scope !== "mission" ||
+          record.lifecycleStatus !== nextHistoryView ||
+          record.includeInHistory === false
+        ) {
           throw new Error("The requested conversation is unavailable in this workspace and history view.");
         }
         nextSessions = { ...nextSessions, items: [...nextSessions.items, record] };
@@ -402,7 +447,17 @@ export function useChatSessionData(input: {
           : (nextSessions.items[0]?.sessionId ?? null);
       });
     },
-    [historyView, input.routeSessionId, renderedRouteSelection, renderedSidebarScope, searchQuery, setSelectedSessionId, surfaceMode, updateSidebarNextCursor, workspaceId],
+    [
+      historyView,
+      input.routeSessionId,
+      renderedRouteSelection,
+      renderedSidebarScope,
+      searchQuery,
+      setSelectedSessionId,
+      surfaceMode,
+      updateSidebarNextCursor,
+      workspaceId,
+    ],
   );
 
   const openHistoricalWindow = useCallback(
@@ -806,7 +861,9 @@ export function useChatSessionData(input: {
   useEffect(() => {
     let cancelled = false;
     void loadRuntimeCatalog().catch((err: Error) => !cancelled && setError(err.message));
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [loadRuntimeCatalog, setError, surfaceMode, workspaceId]);
 
   useEffect(() => {
