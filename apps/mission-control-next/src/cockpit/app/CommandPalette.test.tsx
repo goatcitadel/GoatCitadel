@@ -17,7 +17,9 @@ const controls = vi.hoisted(() => ({
   search: { groups: [] as PaletteSearchGroup[], loading: false, error: undefined as string | undefined },
   attempt: undefined as undefined | { state: string; message: string; mode: string; sessionId?: string },
 }));
-vi.mock("./use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: controls.navigate, requestTransition: controls.transition }) }));
+vi.mock("./use-cockpit-route", () => ({
+  useCockpitRoute: () => ({ navigate: controls.navigate, requestTransition: controls.transition }),
+}));
 vi.mock("./use-cockpit-shell-switch", () => ({
   useCockpitShellSwitch: () => ({ request: controls.switchShell, feedback: null }),
 }));
@@ -53,8 +55,10 @@ let container: HTMLDivElement;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  controls.transition.mockImplementation((action: (review: { isCurrent: () => boolean; signal: AbortSignal; navigate: typeof controls.navigate }) => void) =>
-    action({ isCurrent: () => true, signal: new AbortController().signal, navigate: controls.navigate }));
+  controls.transition.mockImplementation(
+    (action: (review: { isCurrent: () => boolean; signal: AbortSignal; navigate: typeof controls.navigate }) => void) =>
+      action({ isCurrent: () => true, signal: new AbortController().signal, navigate: controls.navigate }),
+  );
   controls.search = { groups: [], loading: false, error: undefined };
   controls.attempt = undefined;
   container = document.createElement("div");
@@ -76,7 +80,12 @@ describe("CommandPalette", () => {
   });
 
   it("does not replay a confirmed creation that was already opened before this palette open", () => {
-    const opened = { state: "confirmed", message: "Conversation created and independently verified.", mode: "chat", sessionId: "s1" };
+    const opened = {
+      state: "confirmed",
+      message: "Conversation created and independently verified.",
+      mode: "chat",
+      sessionId: "s1",
+    };
     controls.attempt = opened;
     act(() => root.render(<CommandPalette open={false} onOpenChange={() => undefined} />));
     act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
