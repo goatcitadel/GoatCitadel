@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { CHECKING_FOR_CHANGES, lastVersionNote, recordView } from "../../data/record-view";
 import { readInboxSourceContext } from "./inbox-source-context";
 
 export function InboxSourceContext({ item, workspaceId }: { item: OperatorInboxItem; workspaceId: string }) {
@@ -20,9 +21,9 @@ export function InboxSourceContext({ item, workspaceId }: { item: OperatorInboxI
     item.updatedAt,
     sessionId,
   ]);
-  const viewRef = useRef({ key });
-  if (viewRef.current.key !== key) viewRef.current = { key };
-  const view = viewRef.current;
+  const selectionRef = useRef({ key });
+  if (selectionRef.current.key !== key) selectionRef.current = { key };
+  const selection = selectionRef.current;
   const mounted = useRef(false);
   useLayoutEffect(() => {
     mounted.current = true;
@@ -45,21 +46,23 @@ export function InboxSourceContext({ item, workspaceId }: { item: OperatorInboxI
         workspaceId,
         sessionId!,
         signal,
-        () => mounted.current && viewRef.current === view && getGatewayApiBaseUrl() === installation,
+        () => mounted.current && selectionRef.current === selection && getGatewayApiBaseUrl() === installation,
       ),
   });
-  const message = !query.isFetching && !query.isError && eligible ? query.data : undefined;
+  const view = recordView(query);
+  const message = eligible ? view.record : undefined;
+  const lastVersion = eligible ? lastVersionNote(view) : undefined;
   return (
     <section aria-label="Source conversation context" className="rounded-md border border-line bg-sunken p-3">
       <h3 className="text-sm font-medium text-fg">Most recent stored message</h3>
       <p className="mt-1 text-xs text-fg-muted">
         Current conversation context; the decision above still requires its own exact review.
       </p>
-      {query.isFetching ? (
+      {view.phase === "loading" ? (
         <p role="status" className="mt-2 text-xs text-fg-muted">
           Reading source conversation…
         </p>
-      ) : !eligible || query.isError || message === undefined ? (
+      ) : message === undefined ? (
         <p className="mt-2 text-xs text-fg-muted">Source conversation context unavailable.</p>
       ) : message === null ? (
         <p className="mt-2 text-xs text-fg-muted">No stored messages were returned.</p>
@@ -74,6 +77,12 @@ export function InboxSourceContext({ item, workspaceId }: { item: OperatorInboxI
           </blockquote>
         </>
       )}
+      {eligible && view.phase === "checking" ? (
+        <p role="status" className="mt-2 text-xs text-fg-muted">
+          {CHECKING_FOR_CHANGES}
+        </p>
+      ) : null}
+      {lastVersion ? <p className="mt-2 text-xs text-fg-muted">{lastVersion}</p> : null}
     </section>
   );
 }

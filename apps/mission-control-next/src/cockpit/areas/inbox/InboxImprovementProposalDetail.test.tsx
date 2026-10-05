@@ -112,7 +112,57 @@ async function render() {
   await settle();
 }
 
+/** Make the next review read hang, invalidate, and let the refetch status reach React. */
+async function startRecheck() {
+  let release!: () => void;
+  api.fetchCuratorReviewItem.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = () => resolve(review);
+      }),
+  );
+  await act(async () => {
+    void client.invalidateQueries({ queryKey: ["improvement"] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  return async () => {
+    await act(async () => release());
+    await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+  };
+}
+
 describe("Inbox improvement proposal review", () => {
+  it("keeps the review and its decisions, disabled, while it is rechecked", async () => {
+    await render();
+    const finish = await startRecheck();
+    expect(container.textContent).toContain("Checking for changes…");
+    expect(container.textContent).toContain("Improve routing");
+    expect(button("Keep proposal").disabled).toBe(true);
+    await finish();
+    expect(button("Keep proposal").disabled).toBe(false);
+  });
+
+  it("keeps an open decision review open while it is rechecked", async () => {
+    await render();
+    await act(async () => button("Keep proposal").click());
+    const finish = await startRecheck();
+    expect(button("Confirm keep").disabled).toBe(true);
+    await finish();
+    expect(button("Confirm keep").disabled).toBe(false);
+  });
+
+  it("keeps the review beside a failed recheck", async () => {
+    await render();
+    api.fetchCuratorReviewItem.mockRejectedValueOnce(new Error("Gateway offline"));
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["improvement"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
+    expect(container.textContent).toContain("Improve routing");
+    expect(container.textContent).toContain("Showing the last version from");
+  });
+
   it("requires a current scoped, ready and clean owner record", () => {
     expect(canDecideImprovementProposal(item, review, "workspace-a", "approve")).toBe(true);
     expect(
@@ -145,7 +195,8 @@ describe("Inbox improvement proposal review", () => {
     await act(async () => button("Confirm keep").click());
     await settle();
     expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(1);
-    expect(api.fetchCuratorReviewItem).toHaveBeenCalledTimes(2);
+    // Open, the decision's re-read, then the decided record is reset and read once more.
+    expect(api.fetchCuratorReviewItem).toHaveBeenCalledTimes(3);
     expect(api.approveImprovementCandidate).toHaveBeenCalledWith("candidate-a", {
       reviewPrecondition: review.reviewPrecondition,
     });

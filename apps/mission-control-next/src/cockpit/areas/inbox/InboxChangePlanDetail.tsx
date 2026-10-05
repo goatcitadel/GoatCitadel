@@ -5,6 +5,7 @@ import {
   presentRiskLevel,
 } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { StatusBadge } from "../../ui/StatusBadge";
@@ -15,7 +16,8 @@ import { InboxSettingsContinuation } from "./InboxSettingsContinuation";
 export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInboxItem; workspaceId: string }) {
   const { activeWorkspaceId } = useUiPreferences();
   const control = useInboxChangePlan(item, workspaceId, activeWorkspaceId ?? "default");
-  const { query, plan, scopeChanged, review, pending, completed, result, error, canConfirm } = control;
+  const { query, view, checking, plan, scopeChanged, review, pending, completed, result, error, canConfirm } = control;
+  const lastVersion = lastVersionNote(view);
   const confirmation = plan?.requiredAction?.kind === "confirmation" ? plan.requiredAction : undefined;
   const reviewedAction = review?.requiredAction?.kind === "confirmation" ? review.requiredAction : undefined;
 
@@ -36,9 +38,13 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
           This Inbox item has no change-plan ID. Open its owner to review the current record.
         </p>
       ) : null}
-      {query.isFetching ? (
+      {view.phase === "loading" ? (
         <p role="status" className="text-fg-muted">
           Loading the current change plan…
+        </p>
+      ) : checking ? (
+        <p role="status" className="text-fg-muted">
+          {CHECKING_FOR_CHANGES}
         </p>
       ) : null}
       {query.isError ? (
@@ -46,7 +52,8 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
           {describeApiError(query.error).summary}
         </p>
       ) : null}
-      {!query.isFetching && !query.isError && !plan ? (
+      {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
+      {recordAnswered(view) && !plan ? (
         <p className="text-fg-muted">
           This change plan is no longer waiting in the selected workspace. Open its owner to inspect the current status.
         </p>
@@ -82,7 +89,7 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
             <Button
               size="sm"
               variant={plan.risk === "danger" || confirmation?.purpose === "rollback" ? "danger" : "primary"}
-              disabled={pending}
+              disabled={pending || checking}
               onClick={control.openReview}
             >
               Review {confirmation?.purpose === "rollback" ? "rollback" : "confirmation"}
@@ -141,7 +148,7 @@ export function InboxChangePlanDetail({ item, workspaceId }: { item: OperatorInb
           <Button
             size="sm"
             variant={review?.risk === "danger" || reviewedAction?.purpose === "rollback" ? "danger" : "primary"}
-            disabled={pending || scopeChanged}
+            disabled={pending || scopeChanged || checking}
             onClick={() => void control.confirm()}
           >
             Confirm {reviewedAction?.purpose === "rollback" ? "rollback" : "change"}

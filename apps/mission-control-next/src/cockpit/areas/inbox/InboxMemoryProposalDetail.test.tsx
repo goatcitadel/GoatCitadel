@@ -91,6 +91,26 @@ async function render() {
     ),
   );
   await settle();
+  return client;
+}
+
+/** Make the next proposal read hang, invalidate, and let the refetch status reach React. */
+async function startRecheck(client: QueryClient) {
+  let release!: () => void;
+  api.fetchTraceMemoryCandidate.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = () => resolve(candidate);
+      }),
+  );
+  await act(async () => {
+    void client.invalidateQueries({ queryKey: ["memory"] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  return async () => {
+    await act(async () => release());
+    await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+  };
 }
 
 describe("Inbox memory proposal review", () => {
@@ -127,10 +147,43 @@ describe("Inbox memory proposal review", () => {
     expect(api.promoteTraceMemoryCandidate).not.toHaveBeenCalled();
     await act(async () => button("Confirm promotion").click());
     await settle();
-    expect(api.fetchTraceMemoryCandidate).toHaveBeenCalledTimes(2);
+    // Open, the decision's re-read, then the decided record is reset and read once more.
+    expect(api.fetchTraceMemoryCandidate).toHaveBeenCalledTimes(3);
     expect(api.promoteTraceMemoryCandidate).toHaveBeenCalledWith("candidate-a");
     expect(container.textContent).toContain("Gateway promoted the proposal");
     expect(container.textContent).not.toContain("Promote to memory");
+  });
+
+  it("keeps the proposal and its decisions, disabled, while it is rechecked", async () => {
+    const client = await render();
+    const finish = await startRecheck(client);
+    expect(container.textContent).toContain("Checking for changes…");
+    expect(container.textContent).toContain("Proposed insight: Use the project style guide.");
+    expect(button("Promote to memory").disabled).toBe(true);
+    expect(button("Reject proposal").disabled).toBe(true);
+    await finish();
+    expect(button("Promote to memory").disabled).toBe(false);
+  });
+
+  it("keeps an open decision review open while the proposal is rechecked", async () => {
+    const client = await render();
+    await act(async () => button("Promote to memory").click());
+    const finish = await startRecheck(client);
+    expect(button("Confirm promotion").disabled).toBe(true);
+    await finish();
+    expect(button("Confirm promotion").disabled).toBe(false);
+  });
+
+  it("keeps the proposal beside a failed recheck", async () => {
+    const client = await render();
+    api.fetchTraceMemoryCandidate.mockRejectedValueOnce(new Error("Gateway offline"));
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["memory"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
+    expect(container.textContent).toContain("Proposed insight: Use the project style guide.");
+    expect(container.textContent).toContain("Showing the last version from");
   });
 
   it("does not mutate when the current proposal changed", async () => {

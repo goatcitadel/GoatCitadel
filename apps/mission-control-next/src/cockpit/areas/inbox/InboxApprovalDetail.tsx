@@ -5,6 +5,7 @@ import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { buildApprovalEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { presentApprovalStatus, presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { approvalExpiryLabel, approvalExplanationLine } from "./approval-preview";
@@ -37,9 +38,11 @@ export function InboxApprovalDetail({
     setDecisionNotice(notice);
     void queryClient.resetQueries({ queryKey, exact: true });
   };
-  const record = query.isError ? undefined : query.data;
+  const view = recordView(query);
+  const checking = view.phase === "checking";
+  const lastVersion = lastVersionNote(view);
   // Only a pending approval is waiting here; a decided one is reviewed in Approvals.
-  const approval = record?.status === "pending" ? record : undefined;
+  const approval = view.record?.status === "pending" ? view.record : undefined;
   const evidence = approval ? buildApprovalEvidenceModel(approval.preview) : null;
   return (
     <section aria-label="Current approval" className="space-y-3 border-t border-line-subtle pt-3 text-sm">
@@ -56,13 +59,13 @@ export function InboxApprovalDetail({
           Refresh
         </Button>
       </div>
-      {query.isLoading ? (
+      {view.phase === "loading" ? (
         <p role="status" className="text-fg-muted">
           Loading the current approval…
         </p>
-      ) : query.isFetching ? (
+      ) : checking ? (
         <p role="status" className="text-fg-muted">
-          Checking for changes…
+          {CHECKING_FOR_CHANGES}
         </p>
       ) : null}
       {query.isError ? (
@@ -70,12 +73,13 @@ export function InboxApprovalDetail({
           {describeApiError(query.error).summary}
         </p>
       ) : null}
+      {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {decisionNotice ? (
         <p role="status" className="text-fg-secondary">
           {decisionNotice}
         </p>
       ) : null}
-      {!query.isFetching && !query.isError && !approval ? (
+      {recordAnswered(view) && !approval ? (
         <p className="text-fg-muted">
           This approval is no longer waiting. Open Approvals for the current record and outcome.
         </p>
@@ -143,6 +147,7 @@ export function InboxApprovalDetail({
               approval={approval}
               workspaceId={workspaceId}
               focusAction={focusAction}
+              checking={checking}
               onResolved={rereadSettled}
               onInvalidated={() => rereadSettled("The approval changed. Review the refreshed record before deciding.")}
             />

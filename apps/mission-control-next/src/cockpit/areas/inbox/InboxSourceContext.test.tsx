@@ -93,3 +93,29 @@ it("aborts old selection and refuses its late content across Citadel ABA and unm
   );
   expect(mocks.read.mock.calls.at(-1)![3]()).toBe(false);
 });
+it("keeps the stored message while it is read again, and beside a failed read", async () => {
+  await render();
+  await vi.waitFor(() => expect(host.textContent).toContain("Exact public context"));
+  let finish!: (value: InboxSourceMessage) => void;
+  mocks.read.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  await act(async () => {
+    void client.invalidateQueries();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(host.textContent).toContain("Checking for changes…");
+  expect(host.textContent).toContain("Exact public context");
+  expect(host.textContent).not.toContain("Reading source conversation…");
+  await act(async () => finish(message));
+  await vi.waitFor(() => expect(host.textContent).not.toContain("Checking for changes…"));
+  mocks.read.mockRejectedValueOnce(new Error("Gateway offline"));
+  await act(async () => {
+    void client.invalidateQueries();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  await vi.waitFor(() => expect(host.textContent).toContain("Showing the last version from"));
+  expect(host.textContent).toContain("Exact public context");
+});

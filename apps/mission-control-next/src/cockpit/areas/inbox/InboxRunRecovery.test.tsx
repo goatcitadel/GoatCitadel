@@ -82,6 +82,26 @@ async function renderRecovery(inboxItem = item) {
     if (inboxItem.kind === "dead_letter") await Promise.allSettled([api.fetchDurableDeadLetter.mock.results[0]?.value]);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
+  return client;
+}
+
+/** Make the next run read hang, invalidate, and let the refetch status reach React. */
+async function startRecheck(client: QueryClient) {
+  let release!: () => void;
+  api.fetchDurableRun.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = () => resolve(run);
+      }),
+  );
+  await act(async () => {
+    void client.invalidateQueries({ queryKey: ["tasks"] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  return async () => {
+    await act(async () => release());
+    await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+  };
 }
 
 function button(label: string): HTMLButtonElement {
@@ -91,12 +111,44 @@ function button(label: string): HTMLButtonElement {
 }
 
 describe("Inbox run recovery", () => {
+  it("keeps the run and its retry, disabled, while it is rechecked", async () => {
+    const client = await renderRecovery();
+    const finish = await startRecheck(client);
+    expect(container.textContent).toContain("Checking for changes…");
+    expect(container.textContent).toContain("Workflow: maintenance.repair");
+    expect(button("Retry run").disabled).toBe(true);
+    await finish();
+    expect(button("Retry run").disabled).toBe(false);
+  });
+
+  it("keeps an open retry review open while the run is rechecked", async () => {
+    const client = await renderRecovery();
+    await act(async () => button("Retry run").click());
+    const finish = await startRecheck(client);
+    expect(button("Confirm retry run").disabled).toBe(true);
+    await finish();
+    expect(button("Confirm retry run").disabled).toBe(false);
+  });
+
+  it("keeps the run beside a failed recheck", async () => {
+    const client = await renderRecovery();
+    api.fetchDurableRun.mockRejectedValueOnce(new Error("Gateway offline"));
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["tasks"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
+    expect(container.textContent).toContain("Workflow: maintenance.repair");
+    expect(container.textContent).toContain("Showing the last version from");
+  });
+
   it("confirms, rereads the owner, then requests retry once", async () => {
     await renderRecovery();
     await act(async () => button("Retry run").click());
     expect(api.retryDurableRun).not.toHaveBeenCalled();
     await act(async () => button("Confirm retry run").click());
-    expect(api.fetchDurableRun).toHaveBeenCalledTimes(2);
+    // Open, the request's re-read, then the superseded run is reset and read once more.
+    expect(api.fetchDurableRun).toHaveBeenCalledTimes(3);
     expect(api.retryDurableRun).toHaveBeenCalledOnce();
     expect(api.retryDurableRun).toHaveBeenCalledWith("run-a", { reason: "operator_inbox_retry" });
     expect(container.textContent).toContain("Inspect the current run to verify execution and effects");

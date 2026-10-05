@@ -9,6 +9,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/memory";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
+import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { canResolveInboxMemoryProposal } from "./memory-proposal-guard";
@@ -39,14 +40,20 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
   const [outcomeUncertain, setOutcomeUncertain] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const queryKey = ["memory", "candidate", workspaceId, candidateId];
   const query = useQuery({
-    queryKey: ["memory", "candidate", workspaceId, candidateId],
+    queryKey,
     queryFn: ({ signal }) => readCandidate(workspaceId, candidateId!, signal),
     enabled: Boolean(candidateId),
     staleTime: 0,
   });
   const scopeChanged = scopeRef.current !== workspaceId;
-  const candidate = query.isFetching || query.isError ? undefined : (query.data ?? undefined);
+  const view = recordView(query);
+  const checking = view.phase === "checking";
+  const lastVersion = lastVersionNote(view);
+  const candidate = view.record ?? undefined;
+  // A decided or changed proposal is superseded: drop it while it is read again (T15-M1).
+  const rereadSuperseded = () => void queryClient.resetQueries({ queryKey, exact: true });
   const eligible = Boolean(
     candidate && !scopeChanged && canResolveInboxMemoryProposal(item, candidate, candidate, workspaceId),
   );
@@ -74,7 +81,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
       ) {
         setReview(null);
         setError("The proposal changed or left the pending queue. Refresh its current record before deciding.");
-        void query.refetch();
+        rereadSuperseded();
         return;
       }
       mutationAttempted = true;
@@ -102,6 +109,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
       }
       setReview(null);
       setCompleted(true);
+      rereadSuperseded();
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
     } catch (cause) {
       setReview(null);
@@ -140,9 +148,13 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
           This Inbox item has no proposal ID. Open Memory for the current record.
         </p>
       ) : null}
-      {query.isFetching ? (
+      {view.phase === "loading" ? (
         <p role="status" className="text-fg-muted">
           Loading the current proposal…
+        </p>
+      ) : checking ? (
+        <p role="status" className="text-fg-muted">
+          {CHECKING_FOR_CHANGES}
         </p>
       ) : null}
       {query.isError ? (
@@ -150,7 +162,8 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
           {describeApiError(query.error).summary}
         </p>
       ) : null}
-      {!query.isFetching && !query.isError && candidateId && !candidate ? (
+      {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
+      {recordAnswered(view) && candidateId && !candidate ? (
         <p className="text-fg-muted">This proposal is no longer waiting. Open Memory to check its current status.</p>
       ) : null}
       {candidate && candidate.workspaceId === workspaceId ? (
@@ -183,13 +196,17 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
       ) : null}
       {eligible && !completed && !outcomeUncertain ? (
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" disabled={pending} onClick={() => setReview({ candidate: candidate!, action: "promote" })}>
+          <Button
+            size="sm"
+            disabled={pending || checking}
+            onClick={() => setReview({ candidate: candidate!, action: "promote" })}
+          >
             Promote to memory
           </Button>
           <Button
             size="sm"
             variant="danger"
-            disabled={pending}
+            disabled={pending || checking}
             onClick={() => setReview({ candidate: candidate!, action: "reject" })}
           >
             Reject proposal
@@ -227,7 +244,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
           <Button
             size="sm"
             variant={review?.action === "reject" ? "danger" : "primary"}
-            disabled={pending || scopeChanged}
+            disabled={pending || scopeChanged || checking}
             onClick={() => void resolve()}
           >
             Confirm {review?.action === "promote" ? "promotion" : "rejection"}

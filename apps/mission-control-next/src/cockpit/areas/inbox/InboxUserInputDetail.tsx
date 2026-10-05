@@ -11,6 +11,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
+import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
@@ -56,7 +57,10 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
     staleTime: 0,
   });
   const scopeChanged = scopeRef.current !== workspaceId;
-  const prompt = query.isError ? undefined : query.data;
+  const view = recordView(query);
+  const checking = view.phase === "checking";
+  const lastVersion = lastVersionNote(view);
+  const prompt = view.record;
   const canAnswer = Boolean(prompt && !prompt.secureConfiguration && !scopeChanged && !completed && !outcomeUncertain);
   const selectedOption = prompt?.options?.find((option) => option.optionId === selectedOptionId);
   const hasAnswer = prompt?.kind === "single_select" ? Boolean(selectedOption) : Boolean(textValue.trim());
@@ -165,13 +169,13 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
           This Inbox item has no complete question owner. Open Chat to review it.
         </p>
       ) : null}
-      {query.isLoading ? (
+      {view.phase === "loading" ? (
         <p role="status" className="text-fg-muted">
           Loading the current question…
         </p>
-      ) : query.isFetching ? (
+      ) : checking ? (
         <p role="status" className="text-fg-muted">
-          Checking for changes…
+          {CHECKING_FOR_CHANGES}
         </p>
       ) : null}
       {query.isError ? (
@@ -179,7 +183,8 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
           {describeApiError(query.error).summary}
         </p>
       ) : null}
-      {!query.isFetching && !query.isError && !prompt ? (
+      {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
+      {recordAnswered(view) && !prompt ? (
         <p className="text-fg-muted">
           This question is no longer waiting in the selected workspace. Open Chat to inspect its current state.
         </p>
@@ -211,7 +216,7 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
                     name={`inbox-answer-${prompt.promptId}`}
                     value={option.optionId}
                     checked={selectedOptionId === option.optionId}
-                    disabled={pending}
+                    disabled={pending || checking}
                     onChange={() => setSelectedOptionId(option.optionId)}
                   />
                   <span>
@@ -247,7 +252,7 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
             </label>
           ) : null}
           {canAnswer ? (
-            <Button variant="primary" disabled={!hasAnswer || pending} onClick={prepareAnswer}>
+            <Button variant="primary" disabled={!hasAnswer || pending || checking} onClick={prepareAnswer}>
               Review answer
             </Button>
           ) : null}
@@ -280,7 +285,7 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
           {answerPreview}
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button variant="primary" disabled={pending || scopeChanged} onClick={() => void submitAnswer()}>
+          <Button variant="primary" disabled={pending || scopeChanged || checking} onClick={() => void submitAnswer()}>
             Confirm answer
           </Button>
           <Button disabled={pending} onClick={() => setReview(null)}>

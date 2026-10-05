@@ -7,6 +7,7 @@ import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/oper
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
+import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { inboxMatchesWorkspace } from "./inbox-presentation";
 
@@ -71,7 +72,10 @@ export function InboxCapabilityProposalDetail({ item, workspaceId }: { item: Ope
     enabled: Boolean(item.source.proposalId) && item.source.workspaceId === workspaceId && Boolean(cached.projection),
     staleTime: 0,
   });
-  const current = query.isFetching || query.isError || scopeRef.current !== workspaceId ? null : query.data;
+  const scopeChanged = scopeRef.current !== workspaceId;
+  const view = recordView(query);
+  const lastVersion = lastVersionNote(view);
+  const current = scopeChanged ? null : view.record;
   const proposal = current?.proposal;
 
   return (
@@ -82,14 +86,18 @@ export function InboxCapabilityProposalDetail({ item, workspaceId }: { item: Ope
           Refresh
         </Button>
       </div>
-      {scopeRef.current !== workspaceId ? (
+      {scopeChanged ? (
         <p role="alert" className="text-fg-secondary">
           The selected workspace changed. Open this item again in the current Inbox.
         </p>
       ) : null}
-      {query.isFetching ? (
+      {view.phase === "loading" ? (
         <p role="status" className="text-fg-muted">
           Loading the current proposal…
+        </p>
+      ) : view.phase === "checking" ? (
+        <p role="status" className="text-fg-muted">
+          {CHECKING_FOR_CHANGES}
         </p>
       ) : null}
       {query.isError ? (
@@ -97,7 +105,8 @@ export function InboxCapabilityProposalDetail({ item, workspaceId }: { item: Ope
           {describeApiError(query.error).summary}
         </p>
       ) : null}
-      {!query.isFetching && !query.isError && !proposal && scopeRef.current === workspaceId ? (
+      {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
+      {recordAnswered(view) && !proposal && !scopeChanged ? (
         <p className="text-fg-muted">
           This proposal is no longer in the selected workspace Inbox. Open Library for its current status.
         </p>

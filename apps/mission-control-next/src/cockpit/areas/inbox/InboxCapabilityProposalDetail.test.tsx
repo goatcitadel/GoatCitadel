@@ -97,6 +97,34 @@ describe("Inbox capability proposal detail", () => {
     expect(container.textContent).not.toContain("workspace-a");
   });
 
+  it("keeps the proposal while it is read again, and beside a failed read", async () => {
+    await render();
+    let release!: () => void;
+    api.fetchCapabilityProposal.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(detail);
+        }),
+    );
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["capability"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.textContent).toContain("Checking for changes…");
+    expect(container.textContent).toContain("A candidate is linked to this proposal");
+    expect(container.textContent).not.toContain("Loading the current proposal…");
+    await act(async () => release());
+    await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+    api.fetchCapabilityProposal.mockRejectedValueOnce(new Error("Gateway offline"));
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["capability"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
+    expect(container.textContent).toContain("A candidate is linked to this proposal");
+    expect(container.textContent).toContain("Showing the last version from");
+  });
+
   it("does not fetch global proposal detail for a foreign or missing Inbox item", async () => {
     api.fetchOperatorInbox.mockResolvedValueOnce({ ...projection, items: [] });
     await render();

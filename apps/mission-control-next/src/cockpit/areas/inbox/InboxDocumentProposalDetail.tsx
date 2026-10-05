@@ -10,6 +10,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
+import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
@@ -52,14 +53,20 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
   const [result, setResult] = useState<DocumentPatchProposalRecord | null>(null);
   const [error, setError] = useState("");
   const cached = useCachedInboxItem(workspaceId, item.id);
+  const queryKey = ["chat", "document-proposal", workspaceId, item.source.proposalId, cached.fingerprint];
   const query = useQuery({
-    queryKey: ["chat", "document-proposal", workspaceId, item.source.proposalId, cached.fingerprint],
+    queryKey,
     queryFn: ({ signal }) => readCurrentProposal(item, workspaceId, cached.projection, signal),
     enabled: Boolean(item.source.proposalId) && Boolean(cached.projection),
     staleTime: 0,
   });
   const scopeChanged = scopeRef.current !== workspaceId;
-  const proposal = query.isFetching || query.isError ? undefined : query.data;
+  const view = recordView(query);
+  const checking = view.phase === "checking";
+  const lastVersion = lastVersionNote(view);
+  const proposal = view.record;
+  // A decided or changed proposal is superseded: drop it while it is read again (T15-M1).
+  const rereadSuperseded = () => void queryClient.resetQueries({ queryKey, exact: true });
   const reviewable = canReviewInboxDocumentProposal(proposal ?? undefined);
   const canDecide = reviewable && !scopeChanged && !completed && !outcomeUncertain;
 
@@ -87,7 +94,7 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
       ) {
         setReview(null);
         setError("The document proposal changed or left the pending queue. Refresh its current diff before deciding.");
-        void query.refetch();
+        rereadSuperseded();
         return;
       }
       mutationAttempted = true;
@@ -114,6 +121,7 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
       setReview(null);
       setResult(updated);
       setCompleted(true);
+      rereadSuperseded();
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
     } catch (cause) {
       setReview(null);
@@ -152,9 +160,13 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
           This Inbox item has no proposal ID. Open its owner to review it.
         </p>
       ) : null}
-      {query.isFetching ? (
+      {view.phase === "loading" ? (
         <p role="status" className="text-fg-muted">
           Loading the current proposal and diff…
+        </p>
+      ) : checking ? (
+        <p role="status" className="text-fg-muted">
+          {CHECKING_FOR_CHANGES}
         </p>
       ) : null}
       {query.isError ? (
@@ -162,7 +174,8 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
           {describeApiError(query.error).summary}
         </p>
       ) : null}
-      {!query.isFetching && !query.isError && !proposal ? (
+      {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
+      {recordAnswered(view) && !proposal ? (
         <p className="text-fg-muted">This proposal is no longer waiting. Open its owner for the latest status.</p>
       ) : null}
       {scopeChanged ? (
@@ -197,12 +210,16 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
               <Button
                 size="sm"
                 variant="danger"
-                disabled={pending}
+                disabled={pending || checking}
                 onClick={() => setReview({ proposal, decision: "apply" })}
               >
                 Review apply
               </Button>
-              <Button size="sm" disabled={pending} onClick={() => setReview({ proposal, decision: "reject" })}>
+              <Button
+                size="sm"
+                disabled={pending || checking}
+                onClick={() => setReview({ proposal, decision: "reject" })}
+              >
                 Review rejection
               </Button>
             </div>
@@ -249,7 +266,7 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
           <Button
             size="sm"
             variant={review?.decision === "apply" ? "danger" : "primary"}
-            disabled={pending || scopeChanged}
+            disabled={pending || scopeChanged || checking}
             onClick={() => void decide()}
           >
             Confirm {review?.decision === "apply" ? "apply" : "rejection"}

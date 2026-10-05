@@ -16,14 +16,18 @@ vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({
 const notFound = () => new ApiRequestError("API error 404", { kind: "http", method: "GET", path: "/x", status: 404 });
 vi.mock("./InboxApprovalActions", () => ({
   InboxApprovalActions: ({
+    checking,
     onResolved,
     onInvalidated,
   }: {
+    checking?: boolean;
     onResolved: (message: string) => void;
     onInvalidated: () => void;
   }) => (
     <>
-      <button type="button">Decision controls</button>
+      <button type="button" disabled={checking}>
+        Decision controls
+      </button>
       <button type="button" onClick={() => onResolved("Approved decision recorded.")}>
         Record decision
       </button>
@@ -56,6 +60,8 @@ const item: OperatorInboxItem = {
 };
 
 let root: Root;
+const decisionControls = () =>
+  [...container.querySelectorAll("button")].find((button) => button.textContent === "Decision controls")!;
 let container: HTMLDivElement;
 let client: QueryClient;
 
@@ -108,9 +114,35 @@ describe("Inbox approval detail", () => {
     });
     expect(container.textContent).toContain("Checking for changes…");
     expect(container.textContent).toContain("Decision controls");
+    expect(decisionControls().disabled).toBe(true);
     expect(container.textContent).not.toContain("Loading the current approval…");
     await act(async () => release());
     await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+    expect(decisionControls().disabled).toBe(false);
+  });
+
+  it("keeps the approval beside a failed recheck and says how old it is", async () => {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <InboxApprovalDetail item={item} workspaceId="default" />
+        </QueryClientProvider>,
+      ),
+    );
+    await settleUntil(() => Boolean(container.textContent?.includes("Decision controls")));
+    api.fetchApproval.mockRejectedValueOnce(
+      new ApiRequestError("API error 503", { kind: "http", method: "GET", path: "/x", status: 503 }),
+    );
+    await act(async () => {
+      void client.invalidateQueries();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await settleUntil(() => Boolean(container.querySelector('[role="alert"]')));
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    expect(container.textContent).toContain("Decision controls");
+    expect(container.textContent).toContain("pnpm test");
+    expect(container.textContent).toMatch(/Showing the last version from \d/);
+    expect(container.textContent).not.toContain("no longer waiting");
   });
 
   it.each([

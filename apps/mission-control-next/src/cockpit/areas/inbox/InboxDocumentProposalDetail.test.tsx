@@ -111,6 +111,26 @@ async function renderDetail(inboxItem = item, cachedInbox: OperatorInboxResponse
     if (api.fetchDocumentPatchProposal.mock.results[0]) await api.fetchDocumentPatchProposal.mock.results[0].value;
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
+  return client;
+}
+
+/** Make the next proposal read hang, invalidate, and let the refetch status reach React. */
+async function startRecheck(client: QueryClient) {
+  let release!: () => void;
+  api.fetchDocumentPatchProposal.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = () => resolve({ item: proposal });
+      }),
+  );
+  await act(async () => {
+    void client.invalidateQueries({ queryKey: ["chat", "document-proposal"] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  return async () => {
+    await act(async () => release());
+    await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+  };
 }
 
 function button(label: string): HTMLButtonElement {
@@ -134,9 +154,9 @@ describe("Inbox document proposal", () => {
     await act(async () => button("Review apply").click());
     expect(api.applyDocumentPatchProposal).not.toHaveBeenCalled();
     await act(async () => button("Confirm apply").click());
-    // The decision re-reads the Inbox once and the proposal again.
+    // The decision re-reads the Inbox once and the proposal again, then the decided record is reset and read.
     expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(1);
-    expect(api.fetchDocumentPatchProposal).toHaveBeenCalledTimes(2);
+    expect(api.fetchDocumentPatchProposal).toHaveBeenCalledTimes(3);
     expect(api.applyDocumentPatchProposal).toHaveBeenCalledWith("proposal-a", "default");
     expect(container.textContent).toContain("Gateway recorded this document proposal as applied");
   });
@@ -182,6 +202,51 @@ describe("Inbox document proposal", () => {
     expect(container.textContent).toContain("too large for bounded Inbox review");
     expect(container.textContent).not.toContain("Review apply");
     expect(container.querySelector("pre")?.textContent?.length).toBeLessThanOrEqual(4_000);
+  });
+
+  it("keeps the diff and its decisions, disabled, while the proposal is rechecked", async () => {
+    const client = await renderDetail();
+    const finish = await startRecheck(client);
+    expect(container.textContent).toContain("Checking for changes…");
+    expect(container.textContent).toContain("+After");
+    expect(container.textContent).not.toContain("Loading the current proposal");
+    expect(button("Review apply").disabled).toBe(true);
+    expect(button("Review rejection").disabled).toBe(true);
+    await finish();
+    expect(button("Review apply").disabled).toBe(false);
+  });
+
+  it("keeps an open review open while the proposal is rechecked", async () => {
+    const client = await renderDetail();
+    await act(async () => button("Review apply").click());
+    const finish = await startRecheck(client);
+    expect(button("Confirm apply").disabled).toBe(true);
+    await finish();
+    expect(button("Confirm apply").disabled).toBe(false);
+  });
+
+  it("keeps the diff beside a failed recheck", async () => {
+    const client = await renderDetail();
+    api.fetchDocumentPatchProposal.mockRejectedValueOnce(new Error("Gateway offline"));
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["chat", "document-proposal"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
+    expect(container.textContent).toContain("+After");
+    expect(container.textContent).toContain("Showing the last version from");
+  });
+
+  it("drops the decided proposal instead of showing it beside the outcome", async () => {
+    await renderDetail();
+    await act(async () => button("Review apply").click());
+    api.fetchDocumentPatchProposal
+      .mockResolvedValueOnce({ item: proposal })
+      .mockResolvedValue({ item: { ...proposal, state: "applied" } });
+    await act(async () => button("Confirm apply").click());
+    await vi.waitFor(() => expect(container.textContent).toContain("This proposal is no longer waiting."));
+    expect(container.textContent).toContain("Gateway recorded this document proposal as applied");
+    expect(container.textContent).not.toContain("+After");
   });
 
   it("locks another decision after an uncertain owner response", async () => {

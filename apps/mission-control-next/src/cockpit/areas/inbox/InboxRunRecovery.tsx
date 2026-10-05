@@ -10,6 +10,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/durable";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
+import { CHECKING_FOR_CHANGES, lastVersionNote, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { canRequestRunRecovery, sameRunRecoveryEvidence, type RunRecoveryEvidence } from "./run-recovery-guard";
@@ -37,14 +38,20 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
   const [completed, setCompleted] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const queryKey = ["tasks", "inbox-recovery", workspaceId, item.id];
   const query = useQuery({
-    queryKey: ["tasks", "inbox-recovery", workspaceId, item.id],
+    queryKey,
     queryFn: () => readRecoveryEvidence(item),
     enabled: Boolean(item.source.runId),
     staleTime: 0,
   });
   const scopeChanged = scopeRef.current !== workspaceId;
-  const evidence = query.isFetching || query.isError ? undefined : query.data;
+  const view = recordView(query);
+  const checking = view.phase === "checking";
+  const lastVersion = lastVersionNote(view);
+  const evidence = view.record;
+  // A recovered or changed run is superseded: drop it while it is read again (T15-M1).
+  const rereadSuperseded = () => void queryClient.resetQueries({ queryKey, exact: true });
   const eligible = Boolean(evidence && canRequestRunRecovery(item, evidence, workspaceId));
   const label = item.kind === "dead_letter" ? "Recover run" : "Retry run";
 
@@ -64,7 +71,7 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
       ) {
         setReviewed(null);
         setError("The run or dead letter changed. Refresh the current record before requesting recovery.");
-        void query.refetch();
+        rereadSuperseded();
         return;
       }
       mutationAttempted = true;
@@ -77,6 +84,7 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
       setNotice(
         `Gateway recorded the request; the run is ${result.status}. Inspect the current run to verify execution and effects.`,
       );
+      rereadSuperseded();
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.durableRuns() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.runTrace(result.runId) });
@@ -112,9 +120,13 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
           Refresh
         </Button>
       </div>
-      {query.isFetching ? (
+      {view.phase === "loading" ? (
         <p role="status" className="text-fg-muted">
           Loading the current run…
+        </p>
+      ) : checking ? (
+        <p role="status" className="text-fg-muted">
+          {CHECKING_FOR_CHANGES}
         </p>
       ) : null}
       {query.isError ? (
@@ -122,6 +134,7 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
           {describeApiError(query.error).summary}
         </p>
       ) : null}
+      {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {!item.source.runId ? (
         <p role="alert" className="text-status-failed">
           This Inbox item has no run ID.
@@ -155,7 +168,7 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
           <Button
             size="sm"
             variant="danger"
-            disabled={pending}
+            disabled={pending || checking}
             onClick={() => {
               setReviewed(evidence!);
               setNotice("");
@@ -195,7 +208,12 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
         description="This request may rerun steps or external effects. Review the current run and its prior effects before continuing."
       >
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="danger" disabled={pending || scopeChanged} onClick={() => void requestRecovery()}>
+          <Button
+            size="sm"
+            variant="danger"
+            disabled={pending || scopeChanged || checking}
+            onClick={() => void requestRecovery()}
+          >
             Confirm {label.toLowerCase()}
           </Button>
           <Button size="sm" disabled={pending} onClick={() => setReviewed(null)}>

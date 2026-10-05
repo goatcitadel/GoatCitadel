@@ -10,6 +10,7 @@ import {
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
+import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
@@ -87,14 +88,20 @@ export function InboxImprovementProposalDetail({
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const cached = useCachedInboxItem(workspaceId, item.id);
+  const queryKey = ["improvement", "inbox-review", workspaceId, item.source.proposalId, cached.fingerprint];
   const query = useQuery({
-    queryKey: ["improvement", "inbox-review", workspaceId, item.source.proposalId, cached.fingerprint],
+    queryKey,
     queryFn: () => readCurrentReview(item, workspaceId, cached.projection),
     enabled: Boolean(item.source.proposalId) && Boolean(cached.projection),
     staleTime: 0,
   });
   const scopeChanged = scopeRef.current !== workspaceId;
-  const current = query.isFetching || query.isError ? null : query.data;
+  const view = recordView(query);
+  const checking = view.phase === "checking";
+  const lastVersion = lastVersionNote(view);
+  const current = view.record;
+  // A decided or changed proposal is superseded: drop it while it is read again (T15-M1).
+  const rereadSuperseded = () => void queryClient.resetQueries({ queryKey, exact: true });
 
   async function decide() {
     if (
@@ -121,7 +128,7 @@ export function InboxImprovementProposalDetail({
       ) {
         setReviewing(null);
         setError("The proposal or its action readiness changed. Refresh its current review before deciding.");
-        void query.refetch();
+        rereadSuperseded();
         return;
       }
       mutationAttempted = true;
@@ -147,6 +154,7 @@ export function InboxImprovementProposalDetail({
           ? "Gateway approved the reviewed candidate. Activation is a separate governed action."
           : "Gateway rejected the reviewed candidate.",
       );
+      rereadSuperseded();
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
     } catch (cause) {
       setReviewing(null);
@@ -183,9 +191,13 @@ export function InboxImprovementProposalDetail({
           This item has no candidate ID. Open Curator for its current record.
         </p>
       ) : null}
-      {query.isFetching ? (
+      {view.phase === "loading" ? (
         <p role="status" className="text-fg-muted">
           Loading the current review…
+        </p>
+      ) : checking ? (
+        <p role="status" className="text-fg-muted">
+          {CHECKING_FOR_CHANGES}
         </p>
       ) : null}
       {query.isError ? (
@@ -193,7 +205,8 @@ export function InboxImprovementProposalDetail({
           {describeApiError(query.error).summary}
         </p>
       ) : null}
-      {!query.isFetching && !query.isError && !current ? (
+      {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
+      {recordAnswered(view) && !current ? (
         <p className="text-fg-muted">
           The proposal is no longer in the selected workspace Inbox. Open Curator for its current status.
         </p>
@@ -234,7 +247,7 @@ export function InboxImprovementProposalDetail({
                     key={decision}
                     size="sm"
                     variant={decision === "reject" ? "danger" : "primary"}
-                    disabled={pending}
+                    disabled={pending || checking}
                     onClick={() => setReviewing({ review: current, decision })}
                   >
                     {decision === "approve" ? "Keep proposal" : "Discard proposal"}
@@ -278,7 +291,7 @@ export function InboxImprovementProposalDetail({
           <Button
             size="sm"
             variant={reviewing?.decision === "reject" ? "danger" : "primary"}
-            disabled={pending || scopeChanged}
+            disabled={pending || scopeChanged || checking}
             onClick={() => void decide()}
           >
             Confirm {reviewing?.decision === "approve" ? "keep" : "discard"}

@@ -269,7 +269,68 @@ describe("Inbox Chat question", () => {
     });
     expect(container.textContent).toContain("Checking for changes…");
     expect(container.querySelector('input[type="radio"]')).not.toBeNull();
+    expect(container.querySelector<HTMLInputElement>('input[type="radio"]')!.disabled).toBe(true);
+    expect(button("Review answer").disabled).toBe(true);
     await act(async () => release());
     await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+    expect(container.querySelector<HTMLInputElement>('input[type="radio"]')!.disabled).toBe(false);
+  });
+
+  it("keeps the answer review open while the question is rechecked", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await seedCachedInbox(client);
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <UiPreferencesProvider>
+            <InboxUserInputDetail item={item} workspaceId="default" />
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.querySelector('input[type="radio"]')).not.toBeNull());
+    await act(async () => container.querySelector<HTMLInputElement>('input[type="radio"]')!.click());
+    await act(async () => button("Review answer").click());
+    expect(button("Confirm answer").disabled).toBe(false);
+    let release!: () => void;
+    api.fetchChatThread.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(threadWith(prompt));
+        }),
+    );
+    await act(async () => {
+      void client.invalidateQueries();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.textContent).toContain("Checking for changes…");
+    expect(button("Confirm answer").disabled).toBe(true);
+    await act(async () => release());
+    await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+    expect(button("Confirm answer").disabled).toBe(false);
+  });
+
+  it("keeps the question beside a failed recheck", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await seedCachedInbox(client);
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <UiPreferencesProvider>
+            <InboxUserInputDetail item={item} workspaceId="default" />
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.querySelector('input[type="radio"]')).not.toBeNull());
+    api.fetchChatThread.mockRejectedValueOnce(new Error("Gateway offline"));
+    await act(async () => {
+      void client.invalidateQueries();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
+    expect(container.textContent).toContain("Which route should run?");
+    expect(container.textContent).toContain("Showing the last version from");
+    expect(container.textContent).not.toContain("no longer waiting");
   });
 });
