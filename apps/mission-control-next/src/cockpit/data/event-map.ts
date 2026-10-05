@@ -172,25 +172,37 @@ const SOURCE_RULES = new Map<string, Rule>([
 export const IGNORED_SOURCES: ReadonlySet<string> = new Set(["notifications", "mobile"]);
 export const MAPPED_SOURCES: ReadonlySet<string> = new Set(SOURCE_RULES.keys());
 
+/** Every topic the shared stream refreshes after a replay gap ("surface" is the removed catch-all). */
+const REPLAY_GAP_TOPICS: readonly RefreshTopic[] = [
+  "chat",
+  "approvals",
+  "tasks",
+  "system",
+  "skills",
+  "memory",
+  "improvement",
+  "integrations",
+  "files",
+  "quality",
+  "tools",
+  "mcp",
+  "agents",
+  "npu",
+  "llamaCpp",
+  "dashboard",
+];
 const REPLAY_GAP_EFFECT = effect(
   [
-    ["chat"],
-    ["approvals"],
-    ["tasks"],
-    ["system"],
-    ["skills"],
-    ["memory"],
-    ["improvement"],
+    ...REPLAY_GAP_TOPICS.map((topic): QueryKey => [topic]),
     ["capability"],
     ["change-plan"],
     ["library"],
     ["settings"],
-    ["quality"],
     ["surface"],
     ["cockpit"],
     ["work"],
   ],
-  ["chat", "approvals", "tasks", "system", "skills", "memory", "improvement", "integrations", "files"],
+  REPLAY_GAP_TOPICS,
 );
 
 /** Resolves a live event to what it changes. Unknown sources fall back to keyword topics, never a catch-all. */

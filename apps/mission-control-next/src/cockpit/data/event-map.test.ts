@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RealtimeEvent, RealtimeEventType } from "@goatcitadel/contracts";
+import { deriveRealtimeRefresh } from "@goatcitadel/mission-control-shared/state/realtime-derived";
 import { resolveRealtimeEvent } from "./event-map";
 import { queryKeys, SETTINGS_READER_KEYS } from "./query-keys";
 
@@ -135,10 +136,18 @@ describe("resolveRealtimeEvent", () => {
     expect(resolveRealtimeEvent(event("constructor", "system")).kind).toBe("unmapped");
   });
 
-  it("replay gaps refresh every owner", () => {
-    const result = resolveRealtimeEvent(event("replay_gap", "gateway", { payload: { kind: "replay_gap" } }));
+  it("replay gaps refresh every owner the shared stream does, keys and topics", () => {
+    const gap = event("replay_gap", "gateway", { payload: { kind: "replay_gap" } });
+    const result = resolveRealtimeEvent(gap);
     expect(result.kind).toBe("mapped");
-    if (result.kind === "mapped") expect(result.effect.keys).toContainEqual(["chat"]);
+    const effect = result.kind === "mapped" ? result.effect : { keys: [], refresh: [] };
+    // "surface" was the removed catch-all; its cockpit readers (boards) refresh under "dashboard".
+    const shared = deriveRealtimeRefresh(gap).topics.filter((topic) => topic !== "surface");
+    for (const topic of [...shared, "dashboard" as const]) {
+      expect(effect.refresh, topic).toContain(topic);
+      expect(effect.keys, topic).toContainEqual([topic]);
+    }
+    expect(effect.refresh).not.toContain("surface");
   });
 });
 
