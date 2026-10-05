@@ -65,6 +65,37 @@ describe("mobile-route-service", () => {
     expect(publishRealtime).toHaveBeenCalledWith("mobile_capability_heartbeat", "mobile", expect.any(Object));
   });
 
+  it("audits every heartbeat but announces a device's capabilities only when they change", async () => {
+    const audit = { append: vi.fn(async () => undefined), list: vi.fn(async () => []) };
+    const publishRealtime = vi.fn();
+    const service = createMobileRoutePort({
+      storage: { audit } as never,
+      mobilePush: createMobilePushMock(),
+      mobileApprovalKeys: createMobileApprovalKeysMock(),
+      publishRealtime,
+    });
+    const deviceA = { companionSessionId: "companion-1", deviceId: "device-a" };
+    const heartbeat = (ids: MobileNativeCapabilityRecord["capabilityId"][], actor = deviceA) =>
+      service.recordMobileCapabilityHeartbeat(
+        { observedAt: "2026-05-22T12:00:00.000Z", capabilities: ids.map((id) => createCapability(id)) },
+        actor,
+      );
+
+    await heartbeat(["location_context", "camera_capture"]);
+    await heartbeat(["camera_capture", "location_context"]);
+    expect(publishRealtime).toHaveBeenCalledOnce();
+    await heartbeat(["camera_capture"]);
+    expect(publishRealtime).toHaveBeenCalledTimes(2);
+    expect(publishRealtime).toHaveBeenLastCalledWith(
+      "mobile_capability_heartbeat",
+      "mobile",
+      expect.objectContaining({ capabilityIds: ["camera_capture"], deviceId: "device-a" }),
+    );
+    await heartbeat(["camera_capture"], { companionSessionId: "companion-2", deviceId: "device-b" });
+    expect(publishRealtime).toHaveBeenCalledTimes(3);
+    expect(audit.append).toHaveBeenCalledTimes(4);
+  });
+
   it("applies capability list limits after deriving latest records", async () => {
     const records: Record<string, unknown>[] = [
       {

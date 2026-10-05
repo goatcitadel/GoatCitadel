@@ -80,6 +80,8 @@ const SAFE_STRUCTURED_FIELD_KEYS = new Set([
 ]);
 
 export function createMobileRoutePort(deps: MobileRoutePortDependencies): MobileRoutePort {
+  // A device repeats its heartbeat on a timer; only a change in what it can do is news for other windows.
+  const lastCapabilitySetByDevice = new Map<string, string>();
   return {
     listMobileCapabilities: async (input?: { limit?: number }): Promise<MobileCapabilityListResponse> => {
       const limit = Math.max(1, Math.min(input?.limit ?? 100, MAX_AUDIT_ITEMS));
@@ -146,6 +148,12 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
         capabilities,
         ...actor,
       });
+      const deviceKey = actor.deviceId ?? actor.companionSessionId ?? actor.grantId ?? "unknown";
+      const capabilitySet = JSON.stringify(capabilities.map((capability) => capability.capabilityId).sort());
+      if (lastCapabilitySetByDevice.get(deviceKey) === capabilitySet) {
+        return { accepted: capabilities.length, observedAt };
+      }
+      lastCapabilitySetByDevice.set(deviceKey, capabilitySet);
       await deps.publishRealtime("mobile_capability_heartbeat", "mobile", {
         observedAt,
         capabilityCount: capabilities.length,

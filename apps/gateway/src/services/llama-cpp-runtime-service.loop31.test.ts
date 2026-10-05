@@ -75,6 +75,23 @@ describe("llama.cpp runtime loop31 coverage tails", () => {
     expect(events).toEqual([{ eventType: "llamacpp_test_event", payload: { ok: true } }]);
   });
 
+  it("keeps llama-server output out of the event stream but remembers the latest stderr line", async () => {
+    const rootDir = await makeTempDir();
+    const events: string[] = [];
+    const service = new LlamaCppRuntimeService({
+      rootDir,
+      config: createConfig(),
+      onEvent: (eventType) => events.push(eventType),
+    });
+    const record = (service as unknown as { recordProcessOutput(stream: string, chunk: Buffer): void })
+      .recordProcessOutput;
+    record.call(service, "stdout", Buffer.from("srv  log_server_r: request: GET /health 127.0.0.1 200\n"));
+    record.call(service, "stderr", Buffer.from("main: model failed to load\n"));
+
+    expect(events).toEqual([]);
+    expect((service as unknown as { lastError?: string }).lastError).toBe("main: model failed to load");
+  });
+
   it("advises with model-size evidence and preserves unreadable model warnings", async () => {
     const rootDir = await makeTempDir();
     const modelPath = path.join(rootDir, "models", "oversized.gguf");
