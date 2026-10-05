@@ -1,6 +1,9 @@
 import { Dialog } from "../../ui/Dialog";
 import { Button } from "../../ui/Button";
-import type { useDirectoryLifecycle } from "../../../features/native-routes/settings/use-directory-lifecycle";
+import {
+  CHECKING_FOR_CHANGES,
+  type useDirectoryLifecycle,
+} from "../../../features/native-routes/settings/use-directory-lifecycle";
 import { directoryRecordId } from "../../../features/native-routes/settings/directory-lifecycle-binding";
 
 export function DirectoryLifecycleReview({ lifecycle }: { lifecycle: ReturnType<typeof useDirectoryLifecycle> }) {
@@ -45,7 +48,7 @@ export function DirectoryLifecycleReview({ lifecycle }: { lifecycle: ReturnType<
           <div className="flex flex-wrap gap-2">
             <Button
               variant={review.action === "archive" ? "danger" : "primary"}
-              disabled={lifecycle.pending}
+              disabled={lifecycle.pending || !lifecycle.available}
               onClick={() => void lifecycle.confirm()}
             >
               Confirm {review.action} {kind}
@@ -53,6 +56,11 @@ export function DirectoryLifecycleReview({ lifecycle }: { lifecycle: ReturnType<
             <Button disabled={lifecycle.pending} onClick={lifecycle.cancel}>
               Cancel
             </Button>
+            {lifecycle.checking && !lifecycle.pending ? (
+              <span role="status" className="self-center text-xs text-fg-muted">
+                {CHECKING_FOR_CHANGES}
+              </span>
+            ) : null}
           </div>
         </div>
       ) : null}

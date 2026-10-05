@@ -7,8 +7,17 @@ import { __resetSessionDraftsForTests } from "../../../features/native-routes/li
 import { __resetWorkspaceAttemptsForTests } from "../../../features/native-routes/settings/workspace-editor-state";
 import { WorkspaceSettings } from "./WorkspaceSettings";
 import type { ReactNode } from "react";
-vi.mock("../../ui/Dialog", () => ({ Dialog: ({ open, children, title }: { open: boolean; children: ReactNode; title: string }) => open ? <div role="dialog" aria-label={title}>{children}</div> : null }));
-vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => ({ setActiveCitadelId: vi.fn(), setActiveWorkspaceId: vi.fn() }) }));
+vi.mock("../../ui/Dialog", () => ({
+  Dialog: ({ open, children, title }: { open: boolean; children: ReactNode; title: string }) =>
+    open ? (
+      <div role="dialog" aria-label={title}>
+        {children}
+      </div>
+    ) : null,
+}));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
+  useUiPreferences: () => ({ setActiveCitadelId: vi.fn(), setActiveWorkspaceId: vi.fn() }),
+}));
 
 const api = vi.hoisted(() => ({
   fetchWorkspaces: vi.fn(),
@@ -68,7 +77,18 @@ beforeEach(() => {
   items = [record("one")];
   api.fetchWorkspaces.mockImplementation(async () => ({ citadelId: "personal", items }));
   api.listCitadels.mockResolvedValue({
-    items: [{ citadelId: "personal", revision: "a".repeat(64), slug: "personal", kind: "personal", name: "Personal", lifecycleStatus: "active", createdAt: "2026-09-30T00:00:00.000Z", updatedAt: "2026-09-30T00:00:00.000Z" }],
+    items: [
+      {
+        citadelId: "personal",
+        revision: "a".repeat(64),
+        slug: "personal",
+        kind: "personal",
+        name: "Personal",
+        lifecycleStatus: "active",
+        createdAt: "2026-09-30T00:00:00.000Z",
+        updatedAt: "2026-09-30T00:00:00.000Z",
+      },
+    ],
   });
   api.updateWorkspace.mockImplementation(async (id: string, body: { name: string; description: string }) => {
     items = items.map((item) => (item.workspaceId === id ? { ...item, ...body, revision: item.revision + 1 } : item));
@@ -91,7 +111,9 @@ describe("native workspace directory", () => {
   it("includes native lifecycle and Citadel management with an explicit governance link", async () => {
     await mount();
     expect(text(view.root)).toContain("Citadel directory");
-    expect(text(view.root.findByProps({ href: "/library/citadel-overview?shell=classic" }))).toBe("Open Citadel governance");
+    expect(text(view.root.findByProps({ href: "/library/citadel-overview?shell=classic" }))).toBe(
+      "Open Citadel governance",
+    );
     expect(api.updateWorkspace).not.toHaveBeenCalled();
     expect(api.createWorkspace).not.toHaveBeenCalled();
   });
@@ -157,14 +179,47 @@ describe("native workspace directory", () => {
     expect(input("Workspace name").props.value).toBe("Retained");
     expect(button("Save workspace metadata").props.disabled).toBe(true);
   });
+  it("does not offer a lifecycle confirm while the directory is refreshing", async () => {
+    await mount();
+    await click(button("Archive"));
+    let release!: () => void;
+    api.fetchWorkspaces.mockImplementationOnce(
+      () => new Promise((resolve) => (release = () => resolve({ citadelId: "personal", items }))),
+    );
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["settings", "workspaces"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(button("Confirm archive workspace").props.disabled).toBe(true);
+    expect(text(view.root)).toContain("Checking for changes…");
+
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(button("Confirm archive workspace").props.disabled).toBe(false);
+    expect(text(view.root)).not.toContain("Checking for changes…");
+    api.archiveWorkspace.mockImplementation(async (id: string, revision: number) => {
+      items = items.map((item) =>
+        item.workspaceId === id ? { ...item, lifecycleStatus: "archived", revision: revision + 1 } : item,
+      );
+      return items.find((item) => item.workspaceId === id);
+    });
+    await click(button("Confirm archive workspace"));
+    expect(api.archiveWorkspace).toHaveBeenCalledExactlyOnceWith("one", 1);
+  });
+
   it("requires a lifecycle review, preserves drafts on cancel, and locks editing after an unknown outcome", async () => {
-    await mount(); await click(button("Edit metadata"));
+    await mount();
+    await click(button("Edit metadata"));
     await act(async () => input("Workspace name").props.onChange({ target: { value: "Keep draft" } }));
     await click(button("Archive"));
     expect(text(view.root)).toContain("Stored work is retained");
     expect(api.archiveWorkspace).not.toHaveBeenCalled();
-    await click(button("Cancel")); expect(input("Workspace name").props.value).toBe("Keep draft");
-    await click(button("Archive")); api.archiveWorkspace.mockRejectedValue(new Error("response lost"));
+    await click(button("Cancel"));
+    expect(input("Workspace name").props.value).toBe("Keep draft");
+    await click(button("Archive"));
+    api.archiveWorkspace.mockRejectedValue(new Error("response lost"));
     await click(button("Confirm archive workspace"));
     expect(api.archiveWorkspace).toHaveBeenCalledExactlyOnceWith("one", 1);
     expect(button("Archive").props.disabled).toBe(true);

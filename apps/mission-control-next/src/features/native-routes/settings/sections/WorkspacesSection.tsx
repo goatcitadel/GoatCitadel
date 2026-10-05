@@ -24,7 +24,7 @@ import { DetailInspector } from "../../../../components/DetailInspector";
 import { FocusedDetail } from "../../shared/FocusedDetail";
 import { formatDateTime } from "../helpers/input-format";
 import { useWorkspaceEditor } from "../use-workspace-editor";
-import { useDirectoryLifecycle } from "../use-directory-lifecycle";
+import { CHECKING_FOR_CHANGES, useDirectoryLifecycle } from "../use-directory-lifecycle";
 import { directoryRecordId, type DirectoryLifecycleReview } from "../directory-lifecycle-binding";
 import { useCitadelEditor } from "../use-citadel-editor";
 import { CITADEL_KINDS } from "../citadel-editor-binding";
@@ -69,6 +69,7 @@ export function WorkspacesSection({
   const lifecycle = useDirectoryLifecycle({
     ownerKey: scope,
     available: !loading && !error && !citadelsLoading && !citadelsError,
+    checking: loading || citadelsLoading,
     reload: (kind) => (kind === "citadel" ? reloadCitadels() : reload()),
     onConfirmed: () => setInspector(null),
   });
@@ -703,8 +704,10 @@ export function WorkspacesSection({
           ". " +
           (lifecycle.review?.action === "archive"
             ? "The record stays in the archived view. Stored work is retained; any retained edit draft for this record will be discarded after confirmation."
-            : "Restore this record to the active directory. Your current selection is retained.")
+            : "Restore this record to the active directory. Your current selection is retained.") +
+          (lifecycle.checking ? " " + CHECKING_FOR_CHANGES : "")
         }
+        confirmDisabled={!lifecycle.available}
         confirmLabel={
           "Confirm " +
           (lifecycle.review?.action ?? "archive") +

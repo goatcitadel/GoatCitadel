@@ -28,14 +28,25 @@ import {
   workspaceAttemptsVersion,
 } from "./workspace-editor-state";
 
+/** Shown beside an action that waits while its directory refreshes (its hook would ignore a click). */
+export const CHECKING_FOR_CHANGES = "Checking for changes…";
+
 interface DirectoryLifecycleOptions {
   ownerKey: string;
   available: boolean;
+  /** The directory is refreshing; confirm is unavailable until it settles. */
+  checking?: boolean;
   reload: (kind: "workspace" | "citadel") => Promise<unknown>;
   onConfirmed?: (review: DirectoryLifecycleReview) => void;
 }
 /** Revision-bound lifecycle requests, shared across shells and workspace editors. */
-export function useDirectoryLifecycle({ ownerKey, available, reload, onConfirmed }: DirectoryLifecycleOptions) {
+export function useDirectoryLifecycle({
+  ownerKey,
+  available,
+  checking = false,
+  reload,
+  onConfirmed,
+}: DirectoryLifecycleOptions) {
   useSyncExternalStore(subscribeWorkspaceAttempts, workspaceAttemptsVersion, workspaceAttemptsVersion);
   const [review, setReview] = useState<DirectoryLifecycleReview | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -209,6 +220,9 @@ export function useDirectoryLifecycle({ ownerKey, available, reload, onConfirmed
   return {
     review,
     pending,
+    /** Whether `confirm` would act now; a confirm control must be disabled otherwise. */
+    available,
+    checking: checking && !available,
     notice,
     request,
     cancel,

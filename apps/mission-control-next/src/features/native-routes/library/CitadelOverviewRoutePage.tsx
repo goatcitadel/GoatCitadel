@@ -6,6 +6,7 @@ import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
 import { humanizeEnumToken } from "../shared/native-helpers";
 import { DetailInspector } from "../../../components/DetailInspector";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { CHECKING_FOR_CHANGES } from "../settings/use-directory-lifecycle";
 import { useCitadelOverview } from "./use-citadel-overview";
 import { routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
@@ -394,8 +395,9 @@ export function CitadelOverviewRoutePage({
         className="mc-next-citadel-confirmation"
         open={Boolean(lifecycle.review)}
         title={lifecycle.review?.action === "restore" ? "Restore Citadel?" : "Archive Citadel?"}
-        message={`${lifecycle.review?.record.name ?? activeCitadelName} · ${lifecycle.review?.kind === "citadel" ? lifecycle.review.record.citadelId : ""} · Reviewed profile revision ${lifecycle.review?.record.revision ?? "Unavailable"}. ${lifecycle.review?.action === "restore" ? "Restore this record to the active directory. Your current selection stays as saved." : "The record stays in the archived directory. Stored work and your Charter draft are retained; any retained Citadel profile edit draft will be discarded after confirmation."}`}
+        message={`${lifecycle.review?.record.name ?? activeCitadelName} · ${lifecycle.review?.kind === "citadel" ? lifecycle.review.record.citadelId : ""} · Reviewed profile revision ${lifecycle.review?.record.revision ?? "Unavailable"}. ${lifecycle.review?.action === "restore" ? "Restore this record to the active directory. Your current selection stays as saved." : "The record stays in the archived directory. Stored work and your Charter draft are retained; any retained Citadel profile edit draft will be discarded after confirmation."}${lifecycle.checking ? ` ${CHECKING_FOR_CHANGES}` : ""}`}
         confirmLabel={lifecycle.review?.action === "restore" ? "Restore Citadel" : "Archive Citadel"}
+        confirmDisabled={!lifecycle.available}
         danger={lifecycle.review?.action === "archive"}
         pending={lifecycle.pending}
         disableDismiss={lifecycle.pending}

@@ -30,6 +30,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
     rows.every(hasCitadelRecord) &&
     new Set(rows.map((row) => row.citadelId)).size === rows.length;
   const available = ready && !query.isFetching,
+    checking = ready && query.isFetching,
     records = ready ? rows! : [];
   const selected = records.find((item) => item.citadelId === selectedId) ?? null;
   const editor = useCitadelEditor({
@@ -47,6 +48,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
   const lifecycle = useDirectoryLifecycle({
     ownerKey: activeCitadelId,
     available,
+    checking,
     reload: () => query.refetch(),
     onConfirmed: (review) => {
       if (review.kind === "citadel" && review.record.citadelId === selectedId) setMode(null);
@@ -101,6 +103,7 @@ export function CitadelDirectory({ activeCitadelId }: { activeCitadelId: string 
           mode={mode}
           selected={selected}
           available={available}
+          checking={checking}
           onClose={() => setMode(null)}
         />
       ) : null}

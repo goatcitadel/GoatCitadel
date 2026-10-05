@@ -5,7 +5,10 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useWorkspaceEditor } from "../../../features/native-routes/settings/use-workspace-editor";
 import { hasWorkspaceBinding } from "../../../features/native-routes/settings/workspace-editor-state";
-import { useDirectoryLifecycle } from "../../../features/native-routes/settings/use-directory-lifecycle";
+import {
+  CHECKING_FOR_CHANGES,
+  useDirectoryLifecycle,
+} from "../../../features/native-routes/settings/use-directory-lifecycle";
 import type { DirectoryLifecycleReview as LifecycleReview } from "../../../features/native-routes/settings/directory-lifecycle-binding";
 import { DirectoryLifecycleReview } from "./DirectoryLifecycleReview";
 import { CitadelDirectory } from "./CitadelDirectory";
@@ -56,7 +59,10 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
       ? citadels.data.items.find((item) => item.citadelId === citadelId)
       : undefined;
   const available = ready && !workspaces.isFetching && !citadels.isFetching && parent?.lifecycleStatus === "active";
+  // A refresh briefly withholds actions; say so instead of leaving a control that does nothing.
+  const checking = ready && (workspaces.isFetching || citadels.isFetching);
   const lifecycle = useDirectoryLifecycle({
+    checking,
     ownerKey: citadelId,
     available,
     reload: () => workspaces.refetch(),
@@ -194,6 +200,11 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
               {mode === "create" ? "Create workspace" : "Save workspace metadata"}
             </Button>
             <Button onClick={() => setMode(null)}>Close editor{draft.isDirty ? " and keep draft" : ""}</Button>
+            {checking ? (
+              <span role="status" className="self-center text-xs text-fg-muted">
+                {CHECKING_FOR_CHANGES}
+              </span>
+            ) : null}
           </div>
           <p className="text-xs text-fg-muted">Drafts are retained while this app stays open.</p>
         </div>
