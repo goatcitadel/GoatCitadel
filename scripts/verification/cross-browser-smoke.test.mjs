@@ -56,17 +56,27 @@ test("gives every area a ready check of its own", () => {
   }
 });
 
-// Stands in for a Playwright browser. The area stays on its loading placeholder unless `settles`.
-function fakeBrowser({ settles }) {
+// Stands in for a Playwright browser. The area stays on its loading placeholder unless `settles`, and the page
+// receives `responses` while it loads.
+function fakeBrowser({ settles, responses = [] }) {
   const calls = [];
+  const listeners = {};
   let current = "";
   const waitFor = (step) => ({ first: () => ({ waitFor: async () => calls.push(step) }) });
   const page = {
-    on: () => undefined,
+    on: (event, listener) => {
+      listeners[event] = listener;
+    },
     context: () => ({ addInitScript: async () => calls.push("theme") }),
     goto: async (url) => {
       current = url;
       calls.push("goto");
+      for (const [status, method, path] of responses)
+        listeners.response?.({
+          status: () => status,
+          url: () => new URL(path, url).toString(),
+          request: () => ({ method: () => method }),
+        });
     },
     url: () => current,
     waitForFunction: async (fn) => {
@@ -107,4 +117,18 @@ test("fails an area still on its loading placeholder and keeps the screenshot", 
   const result = await smokeRoute(browser, "firefox", "http://127.0.0.1:5173", work, "screenshots");
   assert.deepEqual(result.problems, ["load failed: page.waitForFunction: Timeout 30000ms exceeded."]);
   assert.ok(calls.includes("screenshot"));
+});
+
+test("reports HTTP error responses, which Playwright does not count as failed requests", async () => {
+  const { browser } = fakeBrowser({
+    settles: true,
+    responses: [
+      [200, "GET", "/api/v1/tasks"],
+      [304, "GET", "/brand/favicon.svg"],
+      [404, "GET", "/api/v1/tasks/task-a"],
+      [503, "POST", "/api/v1/llm/status?probe=1"],
+    ],
+  });
+  const result = await smokeRoute(browser, "firefox", "http://127.0.0.1:5173", work, "screenshots");
+  assert.deepEqual(result.problems, ["HTTP 404: GET /api/v1/tasks/task-a", "HTTP 503: POST /api/v1/llm/status"]);
 });

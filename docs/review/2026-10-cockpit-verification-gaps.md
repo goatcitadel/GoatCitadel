@@ -190,8 +190,8 @@ once locally at the new count. Until then the `long_list_count` input is wired, 
   (`/chat`, `/inbox`, `/work`, `/library`, `/system` and `/settings/general`, each with `?shell=cockpit`) in a fresh
   page. It waits until the area itself has loaded, using the visual lane's ready checks: the area's own tabs or
   heading, and no "Loading …" notice left on screen. An area still on its loading placeholder after 30 seconds fails.
-  It reports page errors, console errors and failed requests, with one screenshot per area, failed loads included. It
-  exits 1 when any area reports a problem. Every other repository lane uses only Chromium, so this is the first Firefox
+  It reports page errors, console errors, failed requests and HTTP error responses (status 400 or higher), with one
+  screenshot per area, failed loads included. It exits 1 when any area reports a problem. Every other repository lane uses only Chromium, so this is the first Firefox
   and WebKit coverage.
 - **Approval needed first:** installing the engines downloads browser binaries for the Playwright package the
   repository already uses. Nothing in this PR downloads them.

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Loads every cockpit area in Firefox and WebKit against a running stack and reports page
- * errors, console errors and failed requests. Dev-only: start a sandbox with `pnpm testbench`.
+ * errors, console errors, failed requests and HTTP error responses. Dev-only: start a sandbox
+ * with `pnpm testbench`.
  *
  * The engines are a separate download the operator approves first:
  *   pnpm exec playwright install firefox webkit
@@ -82,6 +83,12 @@ export async function smokeRoute(browser, engine, origin, route, outDir) {
   page.on("requestfailed", (request) =>
     problems.push(`request failed: ${request.method()} ${new URL(request.url()).pathname}`),
   );
+  // An HTTP error status arrives as a normal response, not `requestfailed`, and whether the console also shows it
+  // depends on the engine.
+  page.on("response", (response) => {
+    if (response.status() >= 400)
+      problems.push(`HTTP ${response.status()}: ${response.request().method()} ${new URL(response.url()).pathname}`);
+  });
   try {
     // The ready checks below also confirm the theme, and expect dark for a URL without ?theme=light.
     await installCockpitVisualPreferences(page.context(), { colorScheme: "dark" });
