@@ -79,6 +79,25 @@ function createRouteDependencyHarness() {
   });
 }
 
+/** Mirrors the durable/approval-effect workers: startWorker() re-arms even after stopWorker(). */
+function createRestartableWorker() {
+  let markStopped!: () => void;
+  const worker = {
+    running: false,
+    stopped: new Promise<void>((resolve) => {
+      markStopped = resolve;
+    }),
+    startWorker: vi.fn(() => {
+      worker.running = true;
+    }),
+    stopWorker: vi.fn(async () => {
+      worker.running = false;
+      markStopped();
+    }),
+  };
+  return worker;
+}
+
 function createDeferredInitHarness(overrides: Record<string, unknown> = {}) {
   const gateway = createGatewayHarness({
     configGenerationService: {
@@ -323,6 +342,84 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     expect(midCloseGateway.configGenerationService.completeRuntimeOwnerReconciliation).toHaveBeenCalled();
     expect(midCloseGateway.durableRunService.startWorker).not.toHaveBeenCalled();
     expect(midCloseGateway.promptPackService.resumeInterruptedBenchmarkRuns).not.toHaveBeenCalled();
+  });
+
+  // Local mode hands deferred init a no-op shared-host reservation whose signal
+  // never aborts, so `closing` is the only shutdown truth it can observe. close()
+  // stops workers before it waits for this task; a worker started afterwards
+  // outlives storage and its poll timer keeps the process alive.
+  it.each<[string, (gateway: ReturnType<typeof createDeferredInitHarness>, beginClose: () => Promise<void>) => void]>([
+    [
+      "heartbeat occurrence recovery",
+      (gateway, beginClose) => {
+        gateway.heartbeatOccurrenceService.recoverAll = vi.fn(async () => {
+          await beginClose();
+          return { scanned: 0, busy: 0, reclaimed: 0, resumed: 0, terminal: 0, closed: 0 };
+        });
+      },
+    ],
+    [
+      "interrupted Chat turn reconciliation",
+      (gateway, beginClose) => {
+        gateway.isFeatureEnabled = vi.fn(() => false);
+        gateway.reconcileInterruptedChatTurnsOnBoot = vi.fn(beginClose);
+      },
+    ],
+    [
+      "interrupted media job resume",
+      (gateway, beginClose) => {
+        gateway.resumeInterruptedMediaJobs = vi.fn(beginClose);
+      },
+    ],
+  ])("starts nothing after close() lands during %s and leaves workers stopped", async (_step, landShutdown) => {
+    const durableWorker = createRestartableWorker();
+    const approvalWorker = createRestartableWorker();
+    const gateway = createDeferredInitHarness({
+      criticalInitComplete: true,
+      durableRunService: {
+        ...durableWorker,
+        resumeRunsWaitingForAutonomyKillSwitch: vi.fn(),
+      },
+      approvalEffectsService: approvalWorker,
+      startChatTimerScheduler: vi.fn(),
+      startMobilePushDeliverySchedulerIfCredentialed: vi.fn(),
+      mcpStdioSessions: { close: vi.fn() },
+      chatProactiveService: { stopScheduler: vi.fn() },
+      inboundChannelEventService: { start: vi.fn(async () => undefined), close: vi.fn() },
+      promptPackService: { resumeInterruptedBenchmarkRuns: vi.fn(), close: vi.fn() },
+      orchestrationWorktreeService: { close: vi.fn() },
+      assemblyService: { close: vi.fn(async () => undefined) },
+    });
+    gateway.storage.close = vi.fn(async () => undefined);
+    let shutdown: Promise<void> | undefined;
+    landShutdown(gateway, async () => {
+      shutdown = GatewayService.prototype.close.call(gateway);
+      await durableWorker.stopped;
+    });
+
+    await GatewayService.prototype.startDeferredInit.call(gateway, new AbortController().signal);
+    await shutdown;
+
+    const closeBeganAt = gateway.mcpStdioSessions.close.mock.invocationCallOrder[0];
+    expect(closeBeganAt).toBeDefined();
+    const starts = {
+      proactiveScheduler: gateway.startProactiveScheduler,
+      maintenanceScheduler: gateway.startMaintenanceScheduler,
+      chatTimerScheduler: gateway.startChatTimerScheduler,
+      orchestrationWorktreeReapScheduler: gateway.startOrchestrationWorktreeReapScheduler,
+      mobilePushDeliveryScheduler: gateway.startMobilePushDeliverySchedulerIfCredentialed,
+      durableWorker: gateway.durableRunService.startWorker,
+      approvalEffectsWorker: gateway.approvalEffectsService.startWorker,
+      providerCatalogPrewarm: gateway.scheduleProviderCatalogPrewarm,
+    };
+    for (const [name, start] of Object.entries(starts)) {
+      for (const startedAt of start.mock.invocationCallOrder) {
+        expect(startedAt, `${name} started after close() began`).toBeLessThan(closeBeganAt);
+      }
+    }
+    expect(durableWorker.running).toBe(false);
+    expect(approvalWorker.running).toBe(false);
+    expect(gateway.storage.close).toHaveBeenCalledOnce();
   });
 
   it("tracks deferred init failures and removes the failed task from background work", async () => {

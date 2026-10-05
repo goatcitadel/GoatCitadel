@@ -4100,6 +4100,12 @@ export class GatewayService {
         count: expiredUnboundTurnAdmissionIds.length,
       });
     }
+    // Re-check `closing`, not just the signal, immediately before every start
+    // below. Local mode hands this task a no-op shared-host reservation whose
+    // signal never aborts, and close() stops schedulers and workers before it
+    // waits for this task, so anything started after close() began would
+    // outlive storage and keep the process alive.
+    if (this.closing || signal?.aborted) return;
     this.startProactiveScheduler();
     if (!maintenanceSchedulerDisabled) {
       this.startMaintenanceScheduler();
@@ -4115,7 +4121,7 @@ export class GatewayService {
     if (!(await this.isFeatureEnabled("chatTurnInterruptionRecoveryV1Disabled"))) {
       await this.reconcileInterruptedChatTurnsOnBoot();
     }
-    if (signal?.aborted) return;
+    if (this.closing || signal?.aborted) return;
     this.durableRunService.startWorker();
     const cronRecovery = await this.cronAutomationService.recoverPendingAgentTurnCronRuns();
     if (cronRecovery.errors.length > 0) {
@@ -4136,9 +4142,10 @@ export class GatewayService {
         });
       }
     }
-    if (signal?.aborted) return;
+    if (this.closing || signal?.aborted) return;
     this.approvalEffectsService.startWorker();
     await Promise.all([this.resumeInterruptedMediaJobs(), this.resumeInterruptedPromptPackRuns()]);
+    if (this.closing || signal?.aborted) return;
     // Pre-warm LLM model catalogs for configured providers in the background.
     this.scheduleProviderCatalogPrewarm();
 
