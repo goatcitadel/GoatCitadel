@@ -22,7 +22,7 @@ Both prerequisites are met on the base commit (plan Task 1, Step 1):
 
 | Check | Status | New findings | Notes |
 |---|---|---|---|
-| UX-budgets lane on main | Pending: CI after merge | | Measured by the nightly workflow's first run, not locally (check 1). Before the repair the review measured 24 failures on `522f84708` and 27 after the cockpit follow-through, out of 118 scenarios. |
+| UX-budgets lane on main | Passed | | First run 37252605006 on `5db055cce`: 118 of 118 in about 10 minutes (check 1). Before the repair the review measured 24 failures on `522f84708` and 27 after the cockpit follow-through, out of 118 scenarios. |
 | Nightly CI wiring | Pending: CI after merge | | `verification-ux-budgets-nightly.yml` is in this PR and is not gating. Its first run happens after merge (check 2). |
 | SY-02 fresh-install re-test | Pending: operator | | Needs a fresh `pnpm testbench` sandbox (check 3). |
 | Large data (1,000 records) | Pending: CI after merge, once the proof is count-aware | | The count override landed. The long-lists proof still asserts 105 records in places, so another count fails on harness assumptions (check 4). |
@@ -61,7 +61,13 @@ Each check below records the setup used, what was done, what was observed, and l
 
 ### 1. UX-budgets lane on main (plan Task 2)
 
-- **Status:** Pending. CI runs it after merge.
+- **Status:** Passed.
+- **Result:** the first run of the nightly workflow, 37252605006 (manual dispatch on `main` at `5db055cce`,
+  2026-10-05), passed 118 of 118 scenarios in about 10 minutes.
+- **Since then:** the scheduled run 37342769144 on `ca943e265` passed 117 of 118. The one failure,
+  `ux-budgets.cockpit-chat-thread-actions.mobile`, timed out waiting for a long-thread turn to appear. The same
+  scenario passed in the next run (37358779646, a branch run). Classified as a timing flake, not reproduced; watch
+  it in the following nightlies before treating it as a product finding.
 - **Who:** CI, through the first run of the nightly workflow (check 2).
 - **Why not locally:** a local `pnpm verify:ux:budgets` takes 30+ minutes of heavy load on the operator's PC. The
   workflow is not gating, so landing it before it is green is safe.

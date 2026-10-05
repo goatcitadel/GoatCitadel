@@ -684,6 +684,30 @@ Notes:
 - Repository inference is legacy compatibility-only. Protected approval/session/task/orchestration/auth-device event types must fail loudly when explicit metadata is omitted.
 - If a compatibility shim remains for non-protected legacy callers, it must emit diagnostics and be removable without changing the protected producer contract.
 
+Publishing rules:
+- A read never announces itself. A `GET` route publishes only after it persisted a real state transition (for
+  example an expired Code Mode run settled on read). `apps/gateway/src/get-routes-publish-sweep.test.ts` injects
+  every registered `GET` route twice on a fresh runtime and fails if any publishes.
+- Runtime-status events publish only when the observable status changes. `GET /api/v1/llamacpp/status` keeps
+  probing, but `llamacpp_refreshed` is published only when the status signature differs from the last announced
+  one; per-probe fields (`updatedAt`, `lastError`, the lease probe timestamp) are excluded.
+- llama-server process output (`llamacpp_stdout`, `llamacpp_stderr`) is not published to the stream; the runtime
+  keeps it for its own status (`lastError`).
+- The mobile capability heartbeat is audited on every call and published only when a device's capability set
+  changes.
+
+Consumers:
+- The cockpit maps each event to the readers it affects through an explicit table keyed by the event's `source`
+  (`apps/mission-control-next/src/cockpit/data/event-map.ts`). An unmapped source falls back to a throttled topic
+  refresh (at most once every 5 s per topic) with a development warning, and health and directory readers refresh
+  at most once every 5 s. Tests fail when a contract event type or a Gateway publish source is neither mapped nor
+  explicitly ignored.
+- Runtime settings have no event of their own. A governed settings change is announced through its change plan
+  (`evolution_control_plane` events whose `targetOwnerId` is `runtime_settings…`), and the cockpit refreshes every
+  settings reader on those. A settings save that does not go through a change plan publishes nothing.
+- Shared fallback polling (`useRefreshSubscription`) waits at least ten minutes between polls while the event stream
+  is open; the stream is the source of truth then, and replay gaps refresh every owner.
+
 ## Linkage Rules
 
 When a runtime action emits multiple records, link them explicitly instead of recovering relationships from nested payloads.
