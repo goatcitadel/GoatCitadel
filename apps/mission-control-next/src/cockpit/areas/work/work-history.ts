@@ -1,5 +1,5 @@
 import type { ChatSessionRecord, RealtimeEvent } from "@goatcitadel/contracts";
-import { presentEventType } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { describeActivity } from "../system/activity-sentences";
 
 export interface WorkHistoryEntry {
   id: string;
@@ -31,7 +31,7 @@ export function projectWorkHistory(
     (event): WorkHistoryEntry => ({
       id: `activity:${event.eventId}`,
       kind: "activity",
-      title: presentEventType(event.eventType),
+      title: describeActivity(event).sentence,
       at: event.timestamp,
       ...(event.links?.sessionId
         ? { href: `/chat?sessionId=${encodeURIComponent(event.links.sessionId)}&shell=cockpit` }

@@ -34,5 +34,7 @@ describe("work history", () => {
     expect(history.omittedUnscopedEvents).toBe(2);
     expect(history.entries.map((entry) => entry.id)).toEqual(["activity:event-a", "conversation:session-a"]);
     expect(history.entries[0]?.href).toContain("sessionId=session-a");
+    // Activity rows read as the same sentences as System › Activity.
+    expect(history.entries[0]?.title).toBe("An approval is waiting for you");
   });
 });

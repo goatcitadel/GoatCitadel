@@ -18,7 +18,7 @@ type Rule = (event: RealtimeEvent) => EventEffect | "ignore" | undefined;
 const effect = (keys: readonly QueryKey[], refresh: readonly RefreshTopic[]): EventEffect => ({ keys, refresh });
 
 /** Many owners publish `eventType: "system"` and name the real signal in `payload.type`. */
-function eventKind(event: RealtimeEvent): string {
+export function realtimeEventKind(event: RealtimeEvent): string {
   const payloadType = event.payload?.type;
   return event.eventType === "system" && typeof payloadType === "string" ? payloadType : event.eventType;
 }
@@ -130,7 +130,8 @@ const SOURCE_RULES = new Map<string, Rule>([
   ["npu", () => effect([queryKeys.healthAll()], ["npu"])],
   [
     "llamacpp",
-    (e) => (LLAMACPP_STATUS_TYPES.has(eventKind(e)) ? effect([queryKeys.healthAll()], ["llamaCpp"]) : undefined),
+    (e) =>
+      LLAMACPP_STATUS_TYPES.has(realtimeEventKind(e)) ? effect([queryKeys.healthAll()], ["llamaCpp"]) : undefined,
   ],
   ["promptLab", () => effect([["quality"]], ["quality"])],
   [
@@ -148,7 +149,7 @@ const SOURCE_RULES = new Map<string, Rule>([
   [
     "system",
     (e) => {
-      const kind = eventKind(e);
+      const kind = realtimeEventKind(e);
       if (kind.startsWith("addon_")) return effect([queryKeys.capabilities()], ["skills"]);
       return SYSTEM_SOURCE_TYPES.get(kind) ?? SYSTEM_SOURCE_TYPES.get(e.eventType);
     },
@@ -182,7 +183,7 @@ const REPLAY_GAP_EFFECT = effect(
 export function resolveRealtimeEvent(event: RealtimeEvent): EventResolution {
   if (event.payload?.kind === "replay_gap") return { kind: "mapped", effect: REPLAY_GAP_EFFECT };
   if (event.eventAuthority === "durable_history") return { kind: "ignored" };
-  if (IGNORED_TYPES.has(eventKind(event)) || IGNORED_SOURCES.has(event.source)) return { kind: "ignored" };
+  if (IGNORED_TYPES.has(realtimeEventKind(event)) || IGNORED_SOURCES.has(event.source)) return { kind: "ignored" };
   const result = SOURCE_RULES.get(event.source)?.(event);
   if (result === "ignore") return { kind: "ignored" };
   if (result) return { kind: "mapped", effect: result };
