@@ -1078,13 +1078,13 @@ describe("composeChatRouteDependencies", () => {
   it("preserves history owner receivers and checks scope before projection for every history route", async () => {
     const calls: string[] = [];
     const gateway = Object.assign(createGateway(), {
-      ensureChatMessageProjection: vi.fn(async function(this: unknown, sessionId: string) {
+      ensureChatMessageProjection: vi.fn(async function (this: unknown, sessionId: string) {
         expect(this).toBe(gateway);
         calls.push(`project:${sessionId}`);
       }),
     });
     Object.assign(gateway.storage.chatSessionMeta, {
-      get: async function(this: unknown, sessionId: string) {
+      get: async function (this: unknown, sessionId: string) {
         expect(this).toBe(gateway.storage.chatSessionMeta);
         calls.push(`scope:${sessionId}`);
         return { sessionId, workspaceId: "workspace-1" };
@@ -1112,18 +1112,33 @@ describe("composeChatRouteDependencies", () => {
     const deps = composeChatRouteDependencies(gateway as never);
     const scope = { workspaceId: "workspace-1", sessionId: "session-1" };
     const anchor = { ...scope, messageId: "message-1", sequence: 4 };
-    const continuation = { ...scope, direction: "older" as const, cursorMessageId: "message-1",
-      cursorSequence: 4, snapshotMaxSequence: 9 };
+    const continuation = {
+      ...scope,
+      direction: "older" as const,
+      cursorMessageId: "message-1",
+      cursorSequence: 4,
+      snapshotMaxSequence: 9,
+    };
     await deps.chatMessages.listChatMessagePage(scope);
     expect(await deps.chatMessages.readChatHistoryWindow(anchor, 7)).toEqual({ anchor, limit: 7 });
     expect(await deps.chatMessages.readChatHistoryContinuation(continuation)).toEqual(continuation);
-    expect(calls).toEqual(["scope:session-1", "project:session-1", "page",
-      "scope:session-1", "project:session-1", "window",
-      "scope:session-1", "project:session-1", "continuation"]);
+    expect(calls).toEqual([
+      "scope:session-1",
+      "project:session-1",
+      "page",
+      "scope:session-1",
+      "project:session-1",
+      "window",
+      "scope:session-1",
+      "project:session-1",
+      "continuation",
+    ]);
     calls.length = 0;
     await expect(deps.chatMessages.listChatMessagePage({ ...scope, workspaceId: "foreign" })).rejects.toThrow();
     await expect(deps.chatMessages.readChatHistoryWindow({ ...anchor, workspaceId: "foreign" })).rejects.toThrow();
-    await expect(deps.chatMessages.readChatHistoryContinuation({ ...continuation, workspaceId: "foreign" })).rejects.toThrow();
+    await expect(
+      deps.chatMessages.readChatHistoryContinuation({ ...continuation, workspaceId: "foreign" }),
+    ).rejects.toThrow();
     expect(calls).toEqual(["scope:session-1", "scope:session-1", "scope:session-1"]);
   });
 });
