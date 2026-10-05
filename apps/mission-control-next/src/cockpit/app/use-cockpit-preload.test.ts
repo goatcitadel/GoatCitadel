@@ -46,7 +46,11 @@ it("warms only the first bounded pages and shares them with the board", async ()
   expect(mocks.runs).toHaveBeenCalledOnce();
   expect(mocks.runs.mock.calls[0]?.[0]).toEqual({ workspaceId: "a", limit: 100, cursor: undefined });
   expect(mocks.tasks).toHaveBeenCalledOnce();
-  expect(mocks.tasks).toHaveBeenCalledWith(undefined, "a", { limit: 200, cursor: undefined });
+  expect(mocks.tasks).toHaveBeenCalledWith(undefined, "a", {
+    limit: 200,
+    cursor: undefined,
+    signal: expect.any(AbortSignal),
+  });
 });
 
 it("keeps cached pagination intact and still obeys owner invalidation", async () => {
