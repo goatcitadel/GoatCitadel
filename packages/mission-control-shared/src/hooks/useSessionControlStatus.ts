@@ -70,7 +70,10 @@ export function useSessionControlStatus(sessionId: string | null): SessionContro
       // The same session shown again: keep its status; re-read in the background once it is old.
       if (Date.now() - last.at < RETAINED_RELOAD_WINDOW_MS) return;
     } else {
-      // Only a different session resets what is shown.
+      // Only a different session resets what is shown. What was loaded no longer matches what is shown,
+      // so a quick switch back must load again instead of keeping this cleared state (X → Y → X).
+      lastLoadedRef.current = null;
+      loadSequenceRef.current += 1;
       setLoading(true);
       setData(null);
       setError(null);

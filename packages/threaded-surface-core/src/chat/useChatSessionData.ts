@@ -251,6 +251,8 @@ export function useChatSessionData(input: {
   const sidebarLoadRef = useRef<RetainedLoad | null>(null);
   const catalogLoadRef = useRef<RetainedLoad | null>(null);
   const sessionLoadRef = useRef<RetainedLoad | null>(null);
+  // Counts conversation switches; a load begun before the latest switch never marks itself loaded.
+  const sessionSwitchRef = useRef(0);
   const refreshSubscriptionStartedAtRef = useRef<number>(0);
   const updateSidebarNextCursor = useCallback((nextCursor: string | null) => {
     sidebarNextCursorRef.current = nextCursor;
@@ -961,19 +963,25 @@ export function useChatSessionData(input: {
       return;
     }
     const key = [selectedSessionId, loadSessionState];
-    const mode = retainedReloadMode(sessionLoadRef.current, key);
-    if (mode === "skip") return;
     if (lastLoadedSessionIdRef.current !== selectedSessionId) {
+      // A different conversation: retire every load begun for the previous one and forget what was
+      // loaded, so a quick switch back (X → Y → X) loads again instead of skipping onto a cleared view.
       loadCoreGenerationRef.current += 1;
       loadSecondaryGenerationRef.current += 1;
+      sessionSwitchRef.current += 1;
       clearSessionScopedState();
       lastLoadedSessionIdRef.current = selectedSessionId;
+      sessionLoadRef.current = null;
     }
+    // The skip applies only when the last completed load is of the conversation shown now.
+    const mode = retainedReloadMode(sessionLoadRef.current, key);
+    if (mode === "skip") return;
     // An older load of the same session refreshes in the background and keeps what is shown.
     const background = mode === "background";
+    const switchGeneration = sessionSwitchRef.current;
     void loadSessionState(selectedSessionId, { background, includeThread: true, deferSecondary: !background })
       .then(() => {
-        if (lastLoadedSessionIdRef.current === selectedSessionId) sessionLoadRef.current = { key, at: Date.now() };
+        if (sessionSwitchRef.current === switchGeneration) sessionLoadRef.current = { key, at: Date.now() };
       })
       .catch((err: Error) => setError(err.message));
   }, [clearSessionScopedState, loadSessionState, selectedSessionId, setError]);

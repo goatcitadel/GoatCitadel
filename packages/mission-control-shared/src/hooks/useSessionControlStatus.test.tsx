@@ -134,6 +134,47 @@ describe("useSessionControlStatus", () => {
     }
   });
 
+  it("reloads the first session after a quick switch away and back, and drops the superseded read", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-05T10:00:00Z"));
+      apiMocks.fetchSessionControlDetail.mockResolvedValueOnce(externalDetail());
+      let releaseOther!: () => void;
+      apiMocks.fetchSessionControlDetail.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseOther = () => resolve(operatorDetail());
+          }),
+      );
+      apiMocks.fetchSessionControlDetail.mockResolvedValueOnce(externalDetail());
+      let latest: HookValue | undefined;
+      let renderer!: ReactTestRenderer;
+      await act(async () => {
+        renderer = create(<Harness sessionId="session-1" onValue={(value) => (latest = value)} />);
+      });
+      await flush();
+      expect(latest?.data?.control.ownerKind).toBe("external_companion");
+
+      vi.setSystemTime(new Date("2026-10-05T10:00:05Z"));
+      await act(async () => renderer.update(<Harness sessionId="session-2" onValue={(value) => (latest = value)} />));
+      await flush();
+      vi.setSystemTime(new Date("2026-10-05T10:00:10Z"));
+      await act(async () => renderer.update(<Harness sessionId="session-1" onValue={(value) => (latest = value)} />));
+      await flush();
+
+      expect(apiMocks.fetchSessionControlDetail).toHaveBeenNthCalledWith(3, "session-1");
+      expect(latest?.loading).toBe(false);
+      expect(latest?.data?.control.ownerKind).toBe("external_companion");
+      await act(async () => releaseOther());
+      await flush();
+      // The other session's late answer never replaces the selected session's lock.
+      expect(latest?.data?.control.ownerKind).toBe("external_companion");
+      await act(async () => renderer.unmount());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("loads the control detail for the selected session", async () => {
     apiMocks.fetchSessionControlDetail.mockResolvedValueOnce(operatorDetail());
     let latest: HookValue | undefined;

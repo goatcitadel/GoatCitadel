@@ -1047,6 +1047,49 @@ describe("useChatSessionData", () => {
     await act(async () => renderer.unmount());
   });
 
+  it("reloads a conversation after a quick switch away and back, and drops the other one's late load", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 7_200_000);
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness workspaceId="workspace-switch-back" initialSelectedSessionId="session-1" />);
+      await flushEffects(8);
+    });
+    await act(async () => {
+      await flushEffects(8);
+    });
+    expect(latestHarness?.result.thread?.sessionId).toBe("session-1");
+
+    let releaseOther!: () => void;
+    fetchChatThreadMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseOther = () => resolve(makeThread("session-2"));
+        }),
+    );
+    await act(async () => {
+      latestHarness?.setSelectedSessionId("session-2");
+      await flushEffects(8);
+    });
+    vi.setSystemTime(Date.now() + 5_000);
+    await act(async () => {
+      latestHarness?.setSelectedSessionId("session-1");
+      await flushEffects(8);
+    });
+    await act(async () => {
+      await flushEffects(8);
+    });
+    expect(fetchChatThreadMock.mock.calls.map(([id]) => id)).toEqual(["session-1", "session-2", "session-1"]);
+    expect(latestHarness?.result.thread?.sessionId).toBe("session-1");
+
+    await act(async () => {
+      releaseOther();
+      await flushEffects(8);
+    });
+    expect(latestHarness?.result.thread?.sessionId).toBe("session-1");
+    await act(async () => renderer.unmount());
+  });
+
   it("ignores stale selected-session loads after the selection clears", async () => {
     let resolveThread!: (value: ChatThreadResponse) => void;
     fetchChatThreadMock.mockReturnValueOnce(
