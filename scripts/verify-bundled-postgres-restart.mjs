@@ -11,6 +11,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const gatewaySupervisor = path.join(repoRoot, "apps", "gateway", "dist", "dev-supervisor.js");
 const gatewayHealthTimeoutMs = 180_000;
 const processStopTimeoutMs = 20_000;
+const processStdioDrainTimeoutMs = 5_000;
 const windowsCmd = "C:\\Windows\\System32\\cmd.exe";
 
 let runtimeRoot;
@@ -184,6 +185,11 @@ function startSupervisor(env) {
 }
 
 async function stopSupervisor(handle) {
+  await terminateSupervisor(handle);
+  await releaseSupervisorStdio(handle);
+}
+
+async function terminateSupervisor(handle) {
   if (handle.child.exitCode !== null || handle.child.signalCode !== null) {
     return;
   }
@@ -203,6 +209,21 @@ async function stopSupervisor(handle) {
       throw new Error(`Supervisor PID ${handle.child.pid} did not exit.`);
     }
   }
+}
+
+// The supervisor runs the gateway with inherited stdio, so these pipes stay open while ANY
+// descendant lives, not just the supervisor. A gateway that outlived it kept this script's event
+// loop alive after its own cleanup finished (run 37227800147 hung ~28 minutes that way). Allow a
+// short drain for the supervisor's last output, then detach the pipes and fail loudly instead.
+async function releaseSupervisorStdio(handle) {
+  if (await waitForStdioClose(handle.child, processStdioDrainTimeoutMs)) {
+    return;
+  }
+  handle.child.stdout?.destroy();
+  handle.child.stderr?.destroy();
+  throw new Error(
+    `Supervisor PID ${handle.child.pid} exited, but a descendant kept its stdout/stderr open for ${processStdioDrainTimeoutMs}ms: a gateway process outlived the supervisor.`,
+  );
 }
 
 async function waitForHealth(gatewayUrl, handle) {
@@ -423,6 +444,23 @@ function waitForExit(child, timeoutMs) {
       resolve(true);
     };
     child.once("exit", onExit);
+  });
+}
+
+function waitForStdioClose(child, timeoutMs) {
+  if ([child.stdout, child.stderr].every((stream) => !stream || stream.closed)) {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      child.off("close", onClose);
+      resolve(false);
+    }, timeoutMs);
+    const onClose = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    child.once("close", onClose);
   });
 }
 

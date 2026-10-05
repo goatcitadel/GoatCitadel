@@ -386,4 +386,92 @@ describe("dev supervisor coverage", () => {
       }
     }
   });
+
+  it("SIGKILLs the gateway process group when a descendant outlives the pnpm leader on POSIX", async () => {
+    // The supervised child is `pnpm exec tsx src/main.ts`: its pid is the pnpm wrapper and the
+    // process-group id. pnpm exits on SIGTERM at once while tsx and the real gateway stay in its
+    // group; when the gateway's own shutdown hangs, the group must still be SIGKILLed or the
+    // orphan holds the inherited stdio pipe open and wedges whatever is reading it.
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      let leaderAlive = true;
+      let groupAlive = true;
+      const killSpy = vi.spyOn(process, "kill").mockImplementation((pid: number, signal?: string | number) => {
+        const targetAlive = pid === 12345 ? leaderAlive : pid === -12345 ? groupAlive : true;
+        if (!targetAlive) {
+          throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+        }
+        if (signal === "SIGTERM" || signal === "SIGKILL") {
+          leaderAlive = false;
+        }
+        if (pid === -12345 && signal === "SIGKILL") {
+          groupAlive = false;
+        }
+        return true;
+      });
+
+      await import("./dev-supervisor.js");
+      await vi.waitFor(() => {
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("gateway online in"));
+      });
+      process.emit("SIGINT");
+      await vi.waitFor(() => {
+        expect(process.exitCode).toBe(0);
+      });
+
+      expect(killSpy).toHaveBeenCalledWith(-12345, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(-12345, "SIGKILL");
+      expect(groupAlive).toBe(false);
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
+  });
+
+  it("finishes a POSIX stop as soon as the gateway process group exits instead of sleeping out the grace", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      process.env.GOATCITADEL_GATEWAY_STOP_GRACE_MS = "5000";
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      let groupAlive = true;
+      const killSpy = vi.spyOn(process, "kill").mockImplementation((pid: number, signal?: string | number) => {
+        if ((pid === 12345 || pid === -12345) && !groupAlive) {
+          throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+        }
+        if (pid === -12345 && signal === "SIGTERM") {
+          groupAlive = false;
+        }
+        return true;
+      });
+
+      await import("./dev-supervisor.js");
+      await vi.waitFor(() => {
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("gateway online in"));
+      });
+      const stopStartedAt = Date.now();
+      process.emit("SIGINT");
+      await vi.waitFor(
+        () => {
+          expect(process.exitCode).toBe(0);
+        },
+        { timeout: 4_000 },
+      );
+
+      expect(Date.now() - stopStartedAt).toBeLessThan(2_000);
+      expect(killSpy).toHaveBeenCalledWith(-12345, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-12345, "SIGKILL");
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
+  });
 });

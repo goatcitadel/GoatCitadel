@@ -24,6 +24,7 @@ import {
   shouldBuildGatewayProjectReferences,
   shouldIgnoreWatchedEntryName,
   shouldUseWorkspaceTypeScriptGraph,
+  terminateProcessGroup,
   writeReferenceSignatureCache,
 } from "./dev-supervisor-helpers.js";
 import {
@@ -70,6 +71,8 @@ const restartCircuitOpenMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_RES
 // the longest await in a restart, so it is also the window a shutdown signal is most likely
 // to land in — keep it tunable so tests can collapse it instead of racing a fixed 1.2s.
 const stopGraceMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_STOP_GRACE_MS, 1200);
+// The grace period is an upper bound: group liveness is polled so a clean exit returns at once.
+const stopPollMs = 50;
 const referenceBuildMode = resolveReferenceBuildMode(process.env.GOATCITADEL_GATEWAY_REFERENCE_BUILD);
 const useWorkspaceTypeScriptGraph = shouldUseWorkspaceTypeScriptGraph();
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -470,18 +473,19 @@ async function stopChild(reason: string): Promise<void> {
     if (process.platform === "win32") {
       spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
     } else {
-      try {
-        process.kill(-pid, "SIGTERM");
-      } catch {
-        running.kill("SIGTERM");
-      }
-      await sleep(stopGraceMs);
-      if (isProcessAlive(pid)) {
-        try {
-          process.kill(-pid, "SIGKILL");
-        } catch {
-          running.kill("SIGKILL");
-        }
+      const outcome = await terminateProcessGroup({
+        pgid: pid,
+        graceMs: stopGraceMs,
+        pollMs: stopPollMs,
+        signalLeader: (signal) => {
+          running.kill(signal);
+        },
+      });
+      if (outcome === "killed") {
+        log.warn("gateway process group outlived the stop grace period; sent SIGKILL", {
+          pid,
+          graceMs: stopGraceMs,
+        });
       }
     }
   } catch {
@@ -594,15 +598,6 @@ async function isPortOpen(): Promise<boolean> {
     socket.once("error", () => finish(false));
     socket.setTimeout(1_000, () => finish(false));
   });
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function computeSignature(): Promise<string> {
