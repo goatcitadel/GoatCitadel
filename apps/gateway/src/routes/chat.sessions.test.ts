@@ -417,6 +417,47 @@ describe("chat session routes", () => {
     expect(invalid.statusCode).toBe(400);
   });
 
+  it("passes an activity request to session search and keeps each result session's activity", async () => {
+    const activity = {
+      observedAt: "2026-10-05T10:00:00.000Z",
+      latestTurn: { turnId: "turn-1", status: "waiting_for_approval", startedAt: "2026-10-05T09:59:00.000Z" },
+      turnCounts: { queued: 0, running: 0, waiting_for_tool: 0, waiting_for_approval: 1, waiting_for_user_input: 0 },
+    };
+    const chatSessions = createChatSessionsService({
+      searchChatSessions: vi.fn(() => ({
+        query: "deploy",
+        mode: "discovery",
+        items: [
+          {
+            session: { sessionId: "sess-1", updatedAt: "2026-05-14T00:00:00.000Z", activity },
+            hits: [],
+            matchedFields: ["title"],
+            score: 8,
+          },
+        ],
+      })),
+    });
+    app = buildApp(chatSessions);
+
+    const searched = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/session-search?query=deploy&includeActivity=true",
+    });
+    expect(searched.statusCode).toBe(200);
+    expect(searched.json().items[0].session.activity).toEqual(activity);
+    expect(chatSessions.searchChatSessions).toHaveBeenCalledWith(expect.objectContaining({ includeActivity: true }));
+    const plain = await app.inject({ method: "GET", url: "/api/v1/chat/session-search?query=deploy" });
+    expect(plain.statusCode).toBe(200);
+    expect(chatSessions.searchChatSessions).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ includeActivity: expect.anything() }),
+    );
+    const invalid = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/session-search?query=deploy&includeActivity=maybe",
+    });
+    expect(invalid.statusCode).toBe(400);
+  });
+
   it("projects public session titles and assistant or system search previews without mutating service state", async () => {
     const listedSession = {
       sessionId: "sess-secret",

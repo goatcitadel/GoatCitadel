@@ -49,6 +49,10 @@ const searchChatSessionsSchema = z.object({
     .enum(["true", "false", "1", "0"])
     .transform((value) => value === "true" || value === "1")
     .optional(),
+  includeActivity: z
+    .enum(["true", "false", "1", "0"])
+    .transform((value) => value === "true" || value === "1")
+    .optional(),
 });
 
 const sessionParamsSchema = z.object({

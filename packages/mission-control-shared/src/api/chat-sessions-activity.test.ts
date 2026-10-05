@@ -18,4 +18,17 @@ describe("fetchChatSessions activity", () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("includeActivity=true");
     expect(String(fetchMock.mock.calls[1]?.[0])).not.toContain("includeActivity");
   });
+
+  it("asks session search for turn activity only when requested", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ items: [], query: "deploy", mode: "discovery", generatedAt: "2026-10-05T10:00:00.000Z" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { fetchChatSessionSearch } = await import("./chat");
+    await fetchChatSessionSearch({ query: "deploy", workspaceId: "workspace-a", includeActivity: true });
+    await fetchChatSessionSearch({ query: "deploy", workspaceId: "workspace-a" });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/v1/chat/session-search?");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("includeActivity=true");
+    expect(String(fetchMock.mock.calls[1]?.[0])).not.toContain("includeActivity");
+  });
 });

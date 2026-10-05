@@ -4,7 +4,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
-import { createChatSession, listChatSessions, type ChatSessionDependencies } from "./chat-session-service.js";
+import {
+  createChatSession,
+  listChatSessions,
+  searchChatSessions,
+  type ChatSessionDependencies,
+} from "./chat-session-service.js";
 import { ChatSessionStatusService } from "./chat-session-status-service.js";
 import { projectChatSessionForPublic } from "./chat-secret-projection.js";
 
@@ -102,6 +107,28 @@ describe("sessions list activity (CH-08)", () => {
     trace(session.sessionId, "working", "2026-10-05T10:01:00.000Z", "running");
     const items = await listChatSessions(deps, { workspaceId: "workspace-1" });
     expect(items[0]?.activity).toBeUndefined();
+  });
+
+  it("returns turn activity with session search results only when asked", async () => {
+    const { deps, trace } = harness();
+    const busy = await createChatSession(deps, { workspaceId: "workspace-1", title: "Deploy plan" });
+    await createChatSession(deps, { workspaceId: "workspace-1", title: "Unrelated" });
+    trace(busy.sessionId, "asking", "2026-10-05T10:02:00.000Z", "waiting_for_approval");
+
+    const searched = await searchChatSessions(deps, {
+      query: "deploy",
+      workspaceId: "workspace-1",
+      includeActivity: true,
+    });
+    expect(searched.items.map((item) => item.session.sessionId)).toEqual([busy.sessionId]);
+    expect(searched.items[0]?.session.activity?.latestTurn).toMatchObject({
+      turnId: "asking",
+      status: "waiting_for_approval",
+    });
+    expect(searched.items[0]?.session.activity?.turnCounts.waiting_for_approval).toBe(1);
+
+    const plain = await searchChatSessions(deps, { query: "deploy", workspaceId: "workspace-1" });
+    expect(plain.items[0]?.session.activity).toBeUndefined();
   });
 
   it("keeps activity in the public projection", () => {

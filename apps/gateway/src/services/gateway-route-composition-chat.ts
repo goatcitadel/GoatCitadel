@@ -340,6 +340,8 @@ export function composeChatRouteDependencies(
       return chatSessionService.searchChatSessions(ChatSessionDependencies, {
         ...searchInput,
         workspaceId: scope.workspaceId,
+        // The same gate as the sessions list: turn activity is session status.
+        includeActivity: searchInput.includeActivity === true && gateway.isFeatureEnabled("chatSessionStatusV1Enabled"),
       });
     },
     setChatSessionBinding: (input) => chatSessionService.setChatSessionBinding(ChatSessionDependencies, input),

@@ -349,6 +349,8 @@ export async function fetchChatSessionSearch(input: {
   limit?: number;
   cursor?: string;
   includeHidden?: boolean;
+  /** Ask for each result's turn activity, so a list can show status without one read per row. */
+  includeActivity?: boolean;
 }): Promise<ChatSessionSearchResponse> {
   const query = new URLSearchParams();
   query.set("query", input.query);
@@ -358,6 +360,7 @@ export async function fetchChatSessionSearch(input: {
   if (input.workspaceId) query.set("workspaceId", input.workspaceId);
   if (input.surface) query.set("surface", input.surface);
   if (input.includeHidden !== undefined) query.set("includeHidden", String(input.includeHidden));
+  if (input.includeActivity) query.set("includeActivity", "true");
   query.set("limit", String(input.limit ?? 20));
   if (input.cursor) query.set("cursor", input.cursor);
   return request<ChatSessionSearchResponse>(`/api/v1/chat/session-search?${query.toString()}`);

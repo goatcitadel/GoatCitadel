@@ -328,6 +328,8 @@ export interface ChatSessionSearchQuery {
   limit?: number;
   cursor?: string;
   includeHidden?: boolean;
+  /** Return each result session's turn activity (`ChatSessionRecord.activity`) when session status is enabled. */
+  includeActivity?: boolean;
 }
 
 export interface ChatSessionSearchResult {

@@ -549,6 +549,8 @@ export async function searchChatSessions(
     limit: limit + 1,
     cursor: input.cursor,
     includeHidden: input.includeHidden ?? false,
+    // The list reads the page's turn activity in one query; each result keeps it on its session.
+    includeActivity: input.includeActivity === true,
   });
   const normalizedQuery = query.toLowerCase();
   const items: ChatSessionSearchResult[] = [];

@@ -465,9 +465,14 @@ describe("useChatSessionData", () => {
   });
 
   it("uses search and archive limits and honors preferred session ids when reloading the sidebar", async () => {
+    const activity = {
+      observedAt: "2026-10-05T10:00:00.000Z",
+      latestTurn: null,
+      turnCounts: { queued: 0, running: 1, waiting_for_tool: 0, waiting_for_approval: 0, waiting_for_user_input: 0 },
+    };
     fetchChatSessionSearchMock.mockResolvedValueOnce({
       items: [
-        { session: makeSession("archived-1"), matchedFields: [], hits: [] },
+        { session: { ...makeSession("archived-1"), activity }, matchedFields: [], hits: [] },
         { session: makeSession("archived-2"), matchedFields: [], hits: [] },
       ],
     });
@@ -491,9 +496,13 @@ describe("useChatSessionData", () => {
       limit: 200,
       workspaceId: "workspace-search",
       surface: undefined,
+      // Searched rows show their status from the results, not one status read per row.
+      includeActivity: true,
     });
     expect(fetchChatSessionsMock).not.toHaveBeenCalled();
     expect(latestHarness?.selectedSessionId).toBe("archived-1");
+    // The searched row keeps the activity its result carried, so the rail can show its status.
+    expect(latestHarness?.result.sessions?.items[0]?.activity).toEqual(activity);
 
     fetchChatSessionSearchMock.mockResolvedValueOnce({
       items: [{ session: makeSession("archived-2"), matchedFields: [], hits: [] }],
@@ -1236,6 +1245,7 @@ describe("useChatSessionData", () => {
       workspaceId: "workspace-search-cursor",
       cursor: "search-page-two",
       surface: undefined,
+      includeActivity: true,
     });
     expect(latestHarness!.result.sessions?.items.map((item) => item.sessionId)).toEqual(["search-one", "search-two"]);
     expect(latestHarness!.result.sessions?.items[1]?.searchHits).toEqual([{ source: "title", excerpt: "search-two" }]);
@@ -1270,6 +1280,8 @@ describe("useChatSessionData", () => {
         view: "active",
         mode: undefined,
         limit: 1,
+        // A linked conversation shows its status from this read.
+        includeActivity: true,
       },
       { signal: expect.any(AbortSignal) },
     ]);

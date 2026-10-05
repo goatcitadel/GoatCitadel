@@ -316,6 +316,7 @@ export function useChatSessionData(input: {
                 workspaceId,
                 cursor,
                 surface: surfaceMode,
+                includeActivity: true,
               }).then<ChatSessionsResponse>((response) => ({
                 items: response.items.map((item) => ({ ...item.session, searchHits: item.hits })),
                 nextCursor: response.nextCursor,
@@ -378,6 +379,7 @@ export function useChatSessionData(input: {
                     limit: sessionLimit,
                     workspaceId,
                     surface: surfaceMode,
+                    includeActivity: true,
                   }).then<ChatSessionsResponse>((response) => ({
                     items: response.items.map((item) => ({
                       ...item.session,
@@ -415,6 +417,7 @@ export function useChatSessionData(input: {
             view: nextHistoryView,
             mode: surfaceMode,
             limit: 1,
+            includeActivity: true,
           },
           { signal: controller.signal },
         );
