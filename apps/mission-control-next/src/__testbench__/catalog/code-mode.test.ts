@@ -60,6 +60,38 @@ describe("Code Mode run", () => {
     );
   });
 
+  it("is blocked, not failed, when the gateway fails closed for lack of an isolation runner", async () => {
+    const sandbox = { required: true, available: false, checksFailed: ["best_effort_host_disabled"] };
+    mocks.fetchCodeModeRun.mockResolvedValueOnce({
+      runId: "cm-1",
+      status: "failed",
+      error: "Code Mode sandbox failed closed on win32: best_effort_host_disabled.",
+      codeHash: SHA,
+      codeArtifact: { sha256: SHA },
+      sandbox,
+    });
+    await expect(findCheck(codeModeChecks, "code-mode.run").run(makeTestContext())).resolves.toEqual({
+      status: "blocked",
+      summary:
+        "No usable Code Mode isolation runner on this machine (best_effort_host_disabled); the gateway failed closed as designed.",
+      evidence: sandbox,
+    });
+  });
+
+  it("still fails a failed run whose isolation runner was available", async () => {
+    mocks.fetchCodeModeRun.mockResolvedValueOnce({
+      runId: "cm-1",
+      status: "failed",
+      error: "guest error",
+      codeHash: SHA,
+      codeArtifact: { sha256: SHA },
+      sandbox: { required: true, available: true, checksFailed: [] },
+    });
+    await expect(findCheck(codeModeChecks, "code-mode.run").run(makeTestContext())).rejects.toThrow(
+      "The run ended failed: guest error.",
+    );
+  });
+
   it("fails naming the status when the run is rejected", async () => {
     mocks.fetchCodeModeRun.mockResolvedValueOnce({
       runId: "cm-1",

@@ -43,6 +43,15 @@ export const codeModeChecks: readonly CheckDef[] = [
           { signal: ctx.signal, timeoutMs: 90_000, intervalMs: 1_000, label: "The Code Mode run finishing" },
         ),
       );
+      const sandbox = finished.sandbox;
+      if (finished.status === "failed" && sandbox?.required === true && !sandbox.available) {
+        // The gateway refused to run without an isolation runner on this machine: correct behavior, not a fault.
+        return {
+          status: "blocked",
+          summary: `No usable Code Mode isolation runner on this machine (${sandbox.checksFailed.join(", ") || "no reason given"}); the gateway failed closed as designed.`,
+          evidence: sandbox,
+        };
+      }
       ensure(
         finished.status === "completed",
         `The run ended ${finished.status}${finished.error ? `: ${finished.error}` : ""}.`,
