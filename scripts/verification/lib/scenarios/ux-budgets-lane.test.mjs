@@ -164,7 +164,10 @@ describe("UX budget lane wiring", () => {
     ]);
   });
   it("selects actual shell geometry and bounded list owner proofs", () => {
-    assert.deepEqual(selectCockpitOwnerProofs(["shell-controls", "long-lists"]), [runCockpitShellControlsProof, runCockpitLongListsProof]);
+    assert.deepEqual(selectCockpitOwnerProofs(["shell-controls", "long-lists"]), [
+      runCockpitShellControlsProof,
+      runCockpitLongListsProof,
+    ]);
     const source = readFileSync(new URL("./ux-budget-owner-extensions.mjs", import.meta.url), "utf8");
     assert.match(source, /await runCockpitShellControlsProof\(/);
     assert.match(source, /await runCockpitLongListsProof\(/);
