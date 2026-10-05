@@ -31,6 +31,8 @@ export interface ResourceQuery {
   query: string;
   status: string;
   cursor?: string;
+  /** Checked between reads; the Library owners themselves take no signal. */
+  signal?: AbortSignal;
 }
 
 function memoryScope(item: MemoryItemRecord): string | undefined | null {
@@ -78,7 +80,8 @@ export function resourceBinding(resource: LibraryResource) {
 }
 
 export async function loadLibraryResources(input: ResourceQuery): Promise<ResourcePage> {
-  const { kind, workspaceId, citadelId, query, status, cursor } = input;
+  const { kind, workspaceId, citadelId, query, status, cursor, signal } = input;
+  signal?.throwIfAborted();
   if (!workspaceId.trim() || !citadelId.trim())
     throw new Error("Choose a workspace and Citadel before reading Library resources.");
   if (kind === "memory") {

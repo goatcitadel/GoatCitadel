@@ -339,19 +339,22 @@ export async function fetchChatSessions(
   );
 }
 
-export async function fetchChatSessionSearch(input: {
-  query: string;
-  mode?: ChatSessionSearchMode;
-  view?: "active" | "archived" | "all";
-  citadelId?: string;
-  workspaceId?: string;
-  surface?: ChatMode;
-  limit?: number;
-  cursor?: string;
-  includeHidden?: boolean;
-  /** Ask for each result's turn activity, so a list can show status without one read per row. */
-  includeActivity?: boolean;
-}): Promise<ChatSessionSearchResponse> {
+export async function fetchChatSessionSearch(
+  input: {
+    query: string;
+    mode?: ChatSessionSearchMode;
+    view?: "active" | "archived" | "all";
+    citadelId?: string;
+    workspaceId?: string;
+    surface?: ChatMode;
+    limit?: number;
+    cursor?: string;
+    includeHidden?: boolean;
+    /** Ask for each result's turn activity, so a list can show status without one read per row. */
+    includeActivity?: boolean;
+  },
+  options: { signal?: AbortSignal } = {},
+): Promise<ChatSessionSearchResponse> {
   const query = new URLSearchParams();
   query.set("query", input.query);
   if (input.mode) query.set("mode", input.mode);
@@ -363,7 +366,10 @@ export async function fetchChatSessionSearch(input: {
   if (input.includeActivity) query.set("includeActivity", "true");
   query.set("limit", String(input.limit ?? 20));
   if (input.cursor) query.set("cursor", input.cursor);
-  return request<ChatSessionSearchResponse>(`/api/v1/chat/session-search?${query.toString()}`);
+  return request<ChatSessionSearchResponse>(
+    `/api/v1/chat/session-search?${query.toString()}`,
+    options.signal ? { signal: options.signal, cache: "no-store" } : undefined,
+  );
 }
 
 export async function createChatSession(

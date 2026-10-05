@@ -74,6 +74,22 @@ afterEach(() => {
 });
 
 describe("CommandPalette", () => {
+  it("shows each source still searching on its own, keeping other groups", () => {
+    controls.search.groups = [
+      { id: "threads", label: "Conversations", items: [], coverage: "", searching: true },
+      {
+        id: "notes",
+        label: "Library notes",
+        items: [{ id: "n1", label: "Needle note", description: "Note", target: { href: "/library/notes" } }],
+        coverage: "Bounded window.",
+      },
+    ];
+    act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    const threads = document.querySelector<HTMLElement>('section[aria-label="Conversations search coverage"]')!;
+    expect(threads.textContent).toContain("Searching…");
+    expect(threads.textContent).not.toContain("No matches");
+    expect(document.body.textContent).toContain("Needle note");
+  });
   it("keeps the last known Gateway default while it is read again and beside a failed read", () => {
     controls.read = { isFetching: true, isError: false, dataUpdatedAt: Date.now() };
     act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
