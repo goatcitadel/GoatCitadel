@@ -72,6 +72,9 @@ try {
   if (supervisor) {
     await stopSupervisor(supervisor).catch((error) => {
       process.stderr.write(`[bundled-postgres-restart] failed to stop test supervisor: ${formatError(error)}\n`);
+      // The restarted supervisor is only stopped here, after PASS: a gateway that outlives it must still fail the
+      // lane, or the hang this proof guards against would exit successfully.
+      process.exitCode = 1;
     });
   }
   if (containerName && runtimeRoot) {
