@@ -7,6 +7,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { hasCitadelRecord } from "../../features/native-routes/settings/directory-lifecycle-binding";
 import { hasWorkspaceBinding } from "../../features/native-routes/settings/workspace-editor-state";
+import { recordView } from "../data/record-view";
 import { cockpitHref, readCockpitHistory, subscribeCockpitHistory } from "./cockpit-history";
 import { useCockpitNavigation } from "./cockpit-navigation-context";
 import { useCockpitRoute } from "./use-cockpit-route";
@@ -56,25 +57,25 @@ export function useCockpitScope(
     enabled: open && Boolean(choice.citadelId),
     staleTime: 0,
   });
-  const citadelRecords = citadels.data?.items;
-  const workspaceRecords = workspaces.data?.items;
-  const citadelsReady =
-    !citadels.isFetching &&
-    !citadels.isError &&
+  // The last good directory stays listed while it is read again; switching re-reads it anyway.
+  const citadelView = recordView(citadels, (data) => data.items);
+  const workspaceView = recordView(workspaces, (data) => data.items);
+  const checking = citadelView.phase === "checking" || workspaceView.phase === "checking";
+  const citadelRecords = citadelView.record;
+  const workspaceRecords = workspaceView.record;
+  const citadelsListed =
     Array.isArray(citadelRecords) &&
     citadelRecords.every((item) => hasCitadelRecord(item) && item.lifecycleStatus === "active") &&
     new Set(citadelRecords.map((item) => item.citadelId)).size === citadelRecords.length;
-  const workspacesReady =
+  const workspacesListed =
     Boolean(choice.citadelId) &&
-    !workspaces.isFetching &&
-    !workspaces.isError &&
     Array.isArray(workspaceRecords) &&
     workspaceRecords.every(
       (item) => hasWorkspaceBinding(item, choice.citadelId) && item.lifecycleStatus === "active",
     ) &&
     new Set(workspaceRecords.map((item) => item.workspaceId)).size === workspaceRecords.length;
-  const availableCitadels = citadelsReady ? citadelRecords! : [];
-  const availableWorkspaces = workspacesReady ? workspaceRecords! : [];
+  const availableCitadels = citadelsListed ? citadelRecords! : [];
+  const availableWorkspaces = workspacesListed ? workspaceRecords! : [];
   function select(citadelId: string, workspaceId: string) {
     if (
       isTransitionPending() ||
@@ -161,8 +162,9 @@ export function useCockpitScope(
     isTransitionPending,
     citadels: availableCitadels,
     workspaces: availableWorkspaces,
-    ready: citadelsReady && workspacesReady,
-    loading: citadels.isFetching || workspaces.isFetching,
+    ready: citadelsListed && workspacesListed && !checking && !citadels.isError && !workspaces.isError,
+    loading: citadelView.phase === "loading" || workspaceView.phase === "loading",
+    checking,
     directoryError:
       citadels.isError || workspaces.isError ? "The scope directory is unavailable. Reopen to retry." : "",
     busy: feedback.token === renderedToken && feedback.busy,

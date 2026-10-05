@@ -14,6 +14,7 @@ import { useInspector } from "./inspector";
 import { useCommandPaletteSearch } from "./use-command-palette-search";
 import { useCommandNewChat } from "./use-command-new-chat";
 import { useWorkspaceName } from "../data/use-workspace-name";
+import { lastVersionNote, recordView } from "../data/record-view";
 import {
   CommandPaletteCoverage,
   CommandPaletteResults,
@@ -38,7 +39,9 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     enabled: open,
     staleTime: 0,
   });
-  const currentConfig = open && !config.isFetching && !config.isError ? config.data : undefined;
+  const configView = recordView(config);
+  const currentConfig = open ? configView.record : undefined;
+  const configAge = lastVersionNote(configView);
   useEffect(() => {
     if (!open) setQuery("");
   }, [open]);
@@ -157,7 +160,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                     Choose default model…
                     <span className="block break-words text-xs text-fg-secondary">
                       {currentConfig
-                        ? `Gateway default: ${currentConfig.activeProviderId} / ${currentConfig.activeModel}.`
+                        ? `Gateway default: ${currentConfig.activeProviderId} / ${currentConfig.activeModel}.${configAge ? ` ${configAge}` : ""}`
                         : config.isError
                           ? "Gateway default unavailable."
                           : "Reading Gateway default…"}{" "}

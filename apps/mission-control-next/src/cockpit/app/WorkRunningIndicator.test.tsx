@@ -98,7 +98,7 @@ it("never publishes a prior workspace response into the new scope, and shares no
   }
 });
 
-it("keeps a returning workspace unavailable until its new signalled read settles, including cache and in-flight ABA", async () => {
+it("ignores a superseded in-flight read on return and reuses the cached summary on remount", async () => {
   const resolve: Array<(page: DurableRunHistoryPage) => void> = [];
   read.mockImplementation(() => new Promise((done) => resolve.push(done)));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -145,12 +145,9 @@ it("keeps a returning workspace unavailable until its new signalled read settles
     await act(async () => {
       root.render(render("a"));
     });
-    expect(read).toHaveBeenCalledTimes(4);
-    expect(state()).toBe("unknown");
-    await act(async () => {
-      resolve[3]!({ items: [run("foreign")] });
-    });
-    expect(state()).toBe("unknown");
+    // Every mount shares the one cached read; a fresh summary is not read again.
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(state()).toBe("none");
   } finally {
     await act(async () => {
       root.unmount();
@@ -201,5 +198,111 @@ it("does not read or revalidate the CSS-hidden phone rail", async () => {
     });
     container.remove();
     client.clear();
+  }
+});
+
+async function mount(children: React.ReactNode, client: QueryClient) {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(<QueryClientProvider client={client}>{children}</QueryClientProvider>);
+  });
+  return {
+    container,
+    async unmount() {
+      await act(async () => root.unmount());
+      container.remove();
+      client.clear();
+    },
+  };
+}
+
+it("shares one read between the rail and the collapsed rail", async () => {
+  read.mockResolvedValue({ items: [run()] });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = await mount(
+    <>
+      <WorkRunningIndicator workspaceId="a" />
+      <WorkRunningIndicator workspaceId="a" overlay />
+    </>,
+    client,
+  );
+  try {
+    await vi.waitFor(() => expect(view.container.querySelectorAll('[data-work-running="running"]')).toHaveLength(2));
+    expect(read).toHaveBeenCalledTimes(1);
+  } finally {
+    await view.unmount();
+  }
+});
+
+it("keeps the last summary while it is read again and dates it after a failed read (NV-19)", async () => {
+  read.mockResolvedValueOnce({ items: [run()] });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = await mount(<WorkRunningIndicator workspaceId="a" />, client);
+  const node = () => view.container.querySelector<HTMLElement>("[data-work-running]")!;
+  try {
+    await vi.waitFor(() => expect(node().dataset.workRunning).toBe("running"));
+    let release!: () => void;
+    read.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ items: [run()] });
+        }),
+    );
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["tasks"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(node().dataset.workRunning).toBe("running");
+    expect(node().title).toMatch(/· as of /);
+    await act(async () => release());
+    await vi.waitFor(() => expect(node().title).not.toMatch(/· as of /));
+    read.mockRejectedValueOnce(new Error("Gateway offline"));
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["tasks"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(3));
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(node().dataset.workRunning).toBe("running");
+    expect(node().title).toMatch(/1 queued or running .* · as of /);
+  } finally {
+    await view.unmount();
+  }
+});
+
+it("polls only while work is running and draws each state distinctly", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  read.mockResolvedValueOnce({ items: [run()] });
+  const view = await mount(<WorkRunningIndicator workspaceId="a" />, client);
+  const node = () => view.container.querySelector<HTMLElement>("[data-work-running]")!;
+  const interval = () => {
+    const query = client.getQueryCache().findAll({ queryKey: ["tasks", "sidebar-recent-work"] })[0]!;
+    // refetchInterval is an observer option, so the cached query's options type omits it.
+    const option = (query.options as { refetchInterval?: number | false | ((q: typeof query) => number | false) })
+      .refetchInterval;
+    return typeof option === "function" ? option(query) : option;
+  };
+  try {
+    await vi.waitFor(() => expect(node().dataset.workRunning).toBe("running"));
+    expect(interval()).toBe(30_000);
+    expect(node().querySelector('[aria-hidden="true"]')?.className).toContain("animate-pulse-live");
+    read.mockResolvedValueOnce({ items: [] });
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["tasks"] });
+    });
+    await vi.waitFor(() => expect(node().dataset.workRunning).toBe("none"));
+    expect(interval()).toBe(false);
+    expect(node().querySelector('[aria-hidden="true"]')).toBeNull();
+    read.mockResolvedValueOnce({ items: [], nextCursor: "more" });
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["tasks"] });
+    });
+    await vi.waitFor(() => expect(node().dataset.workRunning).toBe("unknown"));
+    expect(interval()).toBe(false);
+    expect(node().querySelector('[aria-hidden="true"]')?.className).toContain("bg-transparent");
+  } finally {
+    await view.unmount();
   }
 });

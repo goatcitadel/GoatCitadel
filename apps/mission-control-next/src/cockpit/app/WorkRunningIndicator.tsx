@@ -1,10 +1,10 @@
-import { useId, useRef } from "react";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { useQuery } from "@tanstack/react-query";
 import type { DurableRunRecord } from "@goatcitadel/contracts";
 import { fetchDurableRunHistory } from "@goatcitadel/mission-control-shared/api/durable";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { durableRunWorkspaceId } from "../data/durable-run-scope";
+import { recordTime, recordView } from "../data/record-view";
 import { projectWorkBoard } from "../areas/work/work-board";
 
 const STATUSES = new Set([
@@ -71,44 +71,50 @@ export function summarizeRecentRunningWork(page: unknown, workspaceId: string) {
   return { state: "none", count: 0, label: "No queued or running interactive Chat/plan work recorded" };
 }
 
-/** `overlay` pins the dot to the icon's corner on the collapsed rail so it never squeezes the icon. */
+const DOT_CLASS = {
+  running: "bg-status-running animate-pulse-live",
+  unknown: "border border-status-neutral bg-transparent",
+} as const;
+
+/**
+ * One shared read per installation and workspace. It keeps the last good summary while it is read
+ * again or after a failed read (NV-19), and polls only while work is running; events refresh it otherwise.
+ * `overlay` pins the dot to the icon's corner on the collapsed rail so it never squeezes the icon.
+ */
 export function WorkRunningIndicator({ workspaceId, overlay = false }: { workspaceId: string; overlay?: boolean }) {
   const installation = getGatewayApiBaseUrl();
   const visible = useMediaQuery("(min-width: 640px)");
-  const instance = useId();
-  const identity = JSON.stringify([installation, workspaceId, visible]);
-  const view = useRef({ identity, generation: 0 });
-  if (view.current.identity !== identity) view.current = { identity, generation: view.current.generation + 1 };
-  const renderedView = view.current;
   const query = useQuery({
-    queryKey: ["tasks", "sidebar-recent-work", installation, workspaceId, instance, renderedView.generation],
+    queryKey: ["tasks", "sidebar-recent-work", installation, workspaceId],
     queryFn: async ({ signal }) => {
       const page = await fetchDurableRunHistory({ workspaceId, limit: 100 }, { signal });
-      if (signal.aborted || view.current !== renderedView || getGatewayApiBaseUrl() !== installation)
+      if (signal.aborted || getGatewayApiBaseUrl() !== installation)
         throw new Error("The running-work view is no longer current.");
       return page;
     },
     enabled: visible && Boolean(workspaceId),
     staleTime: 30_000,
-    gcTime: 0,
-    refetchOnMount: "always",
+    refetchInterval: (current) =>
+      summarizeRecentRunningWork(current.state.data, workspaceId).state === "running" ? 30_000 : false,
   });
-  const summary =
-    visible && !query.isError && !query.isFetching && !query.isStale && getGatewayApiBaseUrl() === installation
-      ? summarizeRecentRunningWork(query.data, workspaceId)
-      : unavailable;
+  const view = recordView(query, (page) => summarizeRecentRunningWork(page, workspaceId));
+  const summary = visible && getGatewayApiBaseUrl() === installation ? (view.record ?? unavailable) : unavailable;
+  const stale = summary !== unavailable && (view.stale || query.isStale) && view.checkedAt !== undefined;
+  const title = stale ? `${summary.label} · as of ${recordTime(view.checkedAt!)}` : summary.label;
   return (
     <span
       id="cockpit-work-running-summary"
       data-work-running={summary.state}
-      title={summary.label}
+      title={title}
       className={overlay ? "absolute right-1 top-1 inline-flex items-center" : "ml-auto inline-flex items-center"}
     >
-      <span
-        aria-hidden="true"
-        className={`size-2 shrink-0 rounded-full ${summary.state === "running" ? "bg-status-running" : "bg-status-neutral"}`}
-      />
-      <span className="sr-only">{summary.label}</span>
+      {summary.state !== "none" ? (
+        <span
+          aria-hidden="true"
+          className={`size-2 shrink-0 rounded-full ${summary.state === "running" ? DOT_CLASS.running : DOT_CLASS.unknown}`}
+        />
+      ) : null}
+      <span className="sr-only">{title}</span>
     </span>
   );
 }

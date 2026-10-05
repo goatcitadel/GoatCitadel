@@ -163,6 +163,53 @@ describe("cockpit scope owner", () => {
     expect(mocks.currentCitadel).toHaveBeenCalledTimes(1);
     expect(mocks.currentCitadel.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
   });
+  it("keeps the last known Citadel name while the Citadel is read again (NV-03)", async () => {
+    await render();
+    const trigger = () => document.querySelector('[aria-label="Change Citadel and workspace"]')?.textContent;
+    await vi.waitFor(() => expect(trigger()).toContain("Personal operations"));
+    let release!: () => void;
+    mocks.currentCitadel.mockImplementationOnce(
+      (id) =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({
+              citadelId: id,
+              revision: citadel(id).revision,
+              record: { ...citadel(id), name: "Personal operations" },
+              charter: null,
+              chambers: [],
+            });
+        }),
+    );
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["system", "directory", "active-citadel"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(mocks.currentCitadel).toHaveBeenCalledTimes(2);
+    expect(trigger()).toContain("Personal operations");
+    expect(trigger()).not.toContain("Reading Citadel");
+    await act(async () => release());
+  });
+  it("keeps the scope choices listed while the directory is read again", async () => {
+    await render();
+    let release!: () => void;
+    mocks.citadels.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ items: [citadel("cit-a"), citadel("cit-b")] });
+        }),
+    );
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["system", "directory", "scope-citadels"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(owner.checking).toBe(true);
+    expect(owner.loading).toBe(false);
+    expect(owner.ready).toBe(false);
+    expect(owner.citadels.map((item) => item.citadelId)).toEqual(["cit-a", "cit-b"]);
+    await act(async () => release());
+    await vi.waitFor(() => expect(owner.ready).toBe(true));
+  });
   it("withholds a foreign or unavailable current Citadel name", async () => {
     mocks.currentCitadel.mockResolvedValue({
       citadelId: "foreign",

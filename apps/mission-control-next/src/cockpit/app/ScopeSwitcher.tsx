@@ -4,6 +4,7 @@ import { getCitadelStructureSnapshot } from "@goatcitadel/mission-control-shared
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { hasCitadelRecord } from "../../features/native-routes/settings/directory-lifecycle-binding";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { CHECKING_FOR_CHANGES, recordView } from "../data/record-view";
 import { readCockpitHistory } from "./cockpit-history";
 import { Compass } from "lucide-react";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -81,16 +82,18 @@ export function ScopeSwitcher({
     });
     return () => window.cancelAnimationFrame(frame);
   });
-  const record = activeCitadel.data?.record;
-  const citadelName = activeCitadel.isFetching
-    ? "Reading Citadel..."
-    : !activeCitadel.isError &&
-        activeCitadel.data?.citadelId === activeCitadelId &&
-        hasCitadelRecord(record) &&
-        record.citadelId === activeCitadelId &&
-        record.lifecycleStatus === "active"
-      ? record.name
-      : "Citadel unavailable";
+  // NV-03: the last known Citadel name stays during a refetch; "Reading" only before the first answer.
+  const citadelView = recordView(activeCitadel);
+  const record = citadelView.record?.record;
+  const citadelName =
+    citadelView.phase === "loading"
+      ? "Reading Citadel..."
+      : citadelView.record?.citadelId === activeCitadelId &&
+          hasCitadelRecord(record) &&
+          record.citadelId === activeCitadelId &&
+          record.lifecycleStatus === "active"
+        ? record.name
+        : "Citadel unavailable";
   return (
     <>
       {!hideTrigger ? (
@@ -190,6 +193,10 @@ export function ScopeSwitcher({
           {owner.loading ? (
             <p role="status" className="text-sm text-fg-muted">
               Loading active scope choices...
+            </p>
+          ) : owner.checking ? (
+            <p role="status" className="text-sm text-fg-muted">
+              {CHECKING_FOR_CHANGES}
             </p>
           ) : null}
           {owner.directoryError ? (
