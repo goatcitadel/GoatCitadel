@@ -3,16 +3,19 @@ import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { fetchRealtimeEvents } from "@goatcitadel/mission-control-shared/api/system";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { useEventStreamStatus } from "@goatcitadel/mission-control-shared/hooks/useEventStreamStatus";
 import { presentEventType } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { ACTIVITY_FALLBACK_MS } from "../../data/activity-feed";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 
 export function SystemActivity() {
+  const streamOpen = useEventStreamStatus().state === "open";
   const events = useQuery({
     queryKey: queryKeys.systemActivity(),
     queryFn: () => fetchRealtimeEvents(100),
-    refetchInterval: 30_000,
+    refetchInterval: streamOpen ? false : ACTIVITY_FALLBACK_MS,
   });
   return (
     <section className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">

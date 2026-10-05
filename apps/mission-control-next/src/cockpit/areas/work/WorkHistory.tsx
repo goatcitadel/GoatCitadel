@@ -5,7 +5,9 @@ import { RefreshCw } from "lucide-react";
 import { fetchChatSessions } from "@goatcitadel/mission-control-shared/api/chat";
 import { fetchRealtimeEvents } from "@goatcitadel/mission-control-shared/api/system";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { useEventStreamStatus } from "@goatcitadel/mission-control-shared/hooks/useEventStreamStatus";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { ACTIVITY_FALLBACK_MS } from "../../data/activity-feed";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
@@ -27,10 +29,12 @@ export function WorkHistory() {
     queryFn: () => fetchChatSessions({ scope: "mission", workspaceId, view: "all", limit: 100 }),
     refetchInterval: 60_000,
   });
+  // Live events are appended to this list while the stream is open; polling is only a fallback.
+  const streamOpen = useEventStreamStatus().state === "open";
   const activity = useQuery({
     queryKey: queryKeys.workActivity(workspaceId),
     queryFn: () => fetchRealtimeEvents(100),
-    refetchInterval: 30_000,
+    refetchInterval: streamOpen ? false : ACTIVITY_FALLBACK_MS,
   });
   const history =
     !sessions.isError && !activity.isError && sessions.data && activity.data

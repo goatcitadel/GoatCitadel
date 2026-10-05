@@ -10,6 +10,9 @@ import { fetchTasksByView } from "@goatcitadel/mission-control-shared/api/tasks"
 import { projectUsageCostSummary } from "@goatcitadel/mission-control-shared/content/cost-summary";
 import { Button } from "../../ui/Button";
 
+/** Dashboard widgets are summaries; realtime events refresh their sources, so a minute is enough. */
+export const DASHBOARD_REFRESH_MS = 60_000;
+
 interface WidgetFrameProps {
   title: string;
   source: string;
@@ -82,7 +85,7 @@ function AgenticRunsWidget({ workspaceId }: { workspaceId: string }) {
   const query = useQuery({
     queryKey: ["tasks", "dashboard-agentic", workspaceId],
     queryFn: () => fetchAgenticRuns({ workspaceId, limit: 200 }),
-    refetchInterval: 30_000,
+    refetchInterval: DASHBOARD_REFRESH_MS,
   });
   const runs = query.data?.items ?? [];
   const active = runs.filter((run) =>
@@ -118,7 +121,7 @@ function ApprovalsWidget({ workspaceId }: { workspaceId: string }) {
   const query = useQuery({
     queryKey: ["approvals", "dashboard-queue", workspaceId],
     queryFn: () => fetchApprovals({ status: "pending", workspaceId, limit: 200 }),
-    refetchInterval: 30_000,
+    refetchInterval: DASHBOARD_REFRESH_MS,
   });
   const approvals = query.data?.items.filter((approval) => approval.linkage?.workspaceId === workspaceId) ?? [];
   const highRisk = approvals.filter(
@@ -153,7 +156,7 @@ function RuntimeWidget() {
   const query = useQuery({
     queryKey: ["system", "dashboard-runtime"],
     queryFn: fetchHealthSummary,
-    refetchInterval: 30_000,
+    refetchInterval: DASHBOARD_REFRESH_MS,
   });
   const health = query.data;
   const memoryUsed = health?.systemVitals.memoryUsedBytes;
@@ -189,7 +192,7 @@ function TasksWidget({ workspaceId }: { workspaceId: string }) {
   const query = useQuery({
     queryKey: ["tasks", "dashboard-task-status", workspaceId],
     queryFn: () => fetchTasksByView("active", undefined, workspaceId, { limit: 200 }),
-    refetchInterval: 30_000,
+    refetchInterval: DASHBOARD_REFRESH_MS,
   });
   const tasks = query.data?.items ?? [];
   const inFlight = tasks.filter((task) =>
@@ -223,7 +226,7 @@ function UsageWidget() {
   const query = useQuery({
     queryKey: ["system", "dashboard-cost", "day"],
     queryFn: () => fetchCostSummary("day"),
-    refetchInterval: 60_000,
+    refetchInterval: DASHBOARD_REFRESH_MS,
   });
   const summary = query.data;
   const projection = summary ? projectUsageCostSummary(summary) : null;

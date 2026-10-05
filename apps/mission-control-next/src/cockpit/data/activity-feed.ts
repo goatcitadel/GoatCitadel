@@ -3,6 +3,8 @@ import type { RealtimeEvent } from "@goatcitadel/mission-control-shared/api/shel
 import { queryKeys } from "./query-keys";
 
 const RETAINED_LIMIT = 100;
+/** While the stream is open, live events extend the activity reads; polling them is only a fallback. */
+export const ACTIVITY_FALLBACK_MS = 120_000;
 interface ActivityPage {
   items: RealtimeEvent[];
   nextCursor?: string;

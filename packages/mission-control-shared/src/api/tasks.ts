@@ -23,6 +23,8 @@ interface FetchTasksOptions {
   citadelId?: string;
   limit?: number;
   cursor?: string;
+  /** Aborts the read when its query is superseded or cancelled. */
+  signal?: AbortSignal;
 }
 
 export async function fetchTasks(
@@ -43,7 +45,10 @@ export async function fetchTasks(
   if (workspaceId?.trim()) {
     query.set("workspaceId", workspaceId.trim());
   }
-  return request<{ items: TaskRecord[]; nextCursor?: string }>(`/api/v1/tasks?${query.toString()}`);
+  return request<{ items: TaskRecord[]; nextCursor?: string }>(
+    `/api/v1/tasks?${query.toString()}`,
+    options.signal ? { signal: options.signal } : undefined,
+  );
 }
 
 export async function fetchTasksByView(

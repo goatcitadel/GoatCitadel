@@ -90,6 +90,10 @@ describe("Work task board", () => {
     if (!more) throw new Error("Missing pagination control");
     await act(async () => more.click());
     await vi.waitFor(() => expect(container.textContent).toContain("Second task"));
-    expect(fetchTasks).toHaveBeenCalledWith(undefined, "workspace-a", { limit: 200, cursor: "cursor-2" });
+    expect(fetchTasks).toHaveBeenCalledWith(undefined, "workspace-a", {
+      limit: 200,
+      cursor: "cursor-2",
+      signal: expect.any(AbortSignal),
+    });
   });
 });
