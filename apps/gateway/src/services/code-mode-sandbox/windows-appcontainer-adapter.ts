@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { CodeModeSandboxConfig } from "../../config.js";
@@ -136,11 +137,29 @@ function isAppContainerCapable(osRelease: string): boolean {
   return major > 6 || (major === 6 && minor >= 2);
 }
 
+/** CreateAppContainerProfile rejects names longer than 64 characters with E_INVALIDARG. */
+export const APPCONTAINER_PROFILE_NAME_MAX_LENGTH = 64;
+const APPCONTAINER_PROFILE_PREFIX = "GoatCitadel.CodeMode.";
+
+/**
+ * A per-run AppContainer profile name within the Windows limit. Short run ids stay readable; longer ones (every
+ * `code-run-<uuid>` id is 45 characters, 66 with the prefix) use a SHA-256 prefix of the run id, so each run still
+ * gets its own profile.
+ */
+export function buildAppContainerProfileName(runId: string): string {
+  const readable = `${APPCONTAINER_PROFILE_PREFIX}${runId.replace(/[^A-Za-z0-9_.-]/g, "_")}`;
+  if (readable.length <= APPCONTAINER_PROFILE_NAME_MAX_LENGTH) {
+    return readable;
+  }
+  const digest = createHash("sha256").update(runId, "utf8").digest("hex");
+  return `${APPCONTAINER_PROFILE_PREFIX}${digest.slice(0, APPCONTAINER_PROFILE_NAME_MAX_LENGTH - APPCONTAINER_PROFILE_PREFIX.length)}`;
+}
+
 function buildPowerShellLauncher(input: CodeModeSandboxLaunchInput, nodeArguments: string[]): string {
   rejectUnsafeProfilePath(input.runTempRoot);
   rejectUnsafeProfilePath(input.nodePath);
   rejectUnsafeProfilePath(input.harnessPath);
-  const profileName = `GoatCitadel.CodeMode.${input.runId.replace(/[^A-Za-z0-9_.-]/g, "_")}`;
+  const profileName = buildAppContainerProfileName(input.runId);
   return String.raw`$ErrorActionPreference = 'Stop'
 $profileName = ${quotePowerShell(profileName)}
 $displayName = 'GoatCitadel Code Mode'

@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CodeModeSandboxConfig } from "../../config.js";
-import { WindowsAppContainerSandboxAdapter } from "./windows-appcontainer-adapter.js";
+import {
+  APPCONTAINER_PROFILE_NAME_MAX_LENGTH,
+  buildAppContainerProfileName,
+  WindowsAppContainerSandboxAdapter,
+} from "./windows-appcontainer-adapter.js";
 
 const tempRoots: string[] = [];
 
@@ -126,6 +130,39 @@ describe("WindowsAppContainerSandboxAdapter", () => {
       expect.arrayContaining(["win32_adapter_present", "win32_powershell_present"]),
     );
     expect(metadata.checksFailed).toContain("win32_appcontainer_os_unsupported");
+  });
+});
+
+describe("buildAppContainerProfileName", () => {
+  // Real run ids are `code-run-<uuid>`: 66 characters with the prefix, over the 64-character Windows limit.
+  const realRunId = "code-run-ebf8bbce-d348-4cd5-915f-8de74d8cfc38";
+
+  it("keeps a short run id readable", () => {
+    expect(buildAppContainerProfileName("run appcontainer")).toBe("GoatCitadel.CodeMode.run_appcontainer");
+  });
+
+  it("keeps a real run id within the Windows limit, stable per run and distinct across runs", () => {
+    const name = buildAppContainerProfileName(realRunId);
+    expect(name.length).toBeLessThanOrEqual(APPCONTAINER_PROFILE_NAME_MAX_LENGTH);
+    expect(name).toMatch(/^GoatCitadel\.CodeMode\.[0-9a-f]+$/);
+    expect(buildAppContainerProfileName(realRunId)).toBe(name);
+    expect(buildAppContainerProfileName("code-run-0f8c2a52-6d0e-4b8e-9d55-2c1f7a3e9b10")).not.toBe(name);
+  });
+
+  it("writes the bounded name into the launcher for a real run id", async () => {
+    const root = await createTempRoot();
+    const adapter = new WindowsAppContainerSandboxAdapter({
+      platform: "win32",
+      osRelease: "10.0.22631",
+      resolveCommand: (command) => (command === "pwsh.exe" ? "C:\\Program Files\\PowerShell\\7\\pwsh.exe" : undefined),
+    });
+    adapter.probe(baseConfig());
+    await fs.writeFile(path.join(root, "harness.mjs"), "process.exit(0);\n", "utf8");
+    await adapter.prepareLaunch({ ...launchInput(root), runId: realRunId });
+    const launcher = await fs.readFile(path.join(root, "run", "code-mode-appcontainer-launcher.ps1"), "utf8");
+    const profileName = /^\$profileName = '([^']*)'$/m.exec(launcher)?.[1];
+    expect(profileName).toBe(buildAppContainerProfileName(realRunId));
+    expect(profileName?.length).toBeLessThanOrEqual(APPCONTAINER_PROFILE_NAME_MAX_LENGTH);
   });
 });
 
