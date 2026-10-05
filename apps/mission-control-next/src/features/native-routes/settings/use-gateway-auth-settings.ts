@@ -137,8 +137,10 @@ export function useGatewayAuthSettings(options: {
       epoch = live.current.epoch;
     const current = () =>
       live.current.mounted && live.current.epoch === epoch && getGatewayApiBaseUrl() === installation;
-    let secret = credential.trim(),
-      dispatched = false,
+    // Blanking a local copy would not scrub anything: the render closure still holds `credential`, which the
+    // editor clears through its own state (js/useless-assignment-to-local flagged the former `secret = ""`).
+    const secret = credential.trim();
+    let dispatched = false,
       responseReceived = false,
       acknowledged = false;
     setReview(null);
@@ -168,7 +170,6 @@ export function useGatewayAuthSettings(options: {
           : {}),
       });
       responseReceived = true;
-      secret = "";
       if (getGatewayApiBaseUrl() !== installation) throw new Error("Gateway installation changed.");
       const receipt = updated.changePlanReceipt;
       if (receipt) {

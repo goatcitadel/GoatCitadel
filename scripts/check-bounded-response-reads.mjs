@@ -41,11 +41,13 @@ const BOUNDED_BY_CONSTRUCTION_METHODS = new Set(["text", "json", "arrayBuffer"])
 const bareFetchPattern = /\bfetch\s*\(/g;
 
 const bodyReadPatterns = [
-  { method: "text", display: ".text()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*text\s*\(/g },
-  { method: "json", display: ".json()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*json\s*\(/g },
-  { method: "arrayBuffer", display: ".arrayBuffer()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*arrayBuffer\s*\(/g },
-  { method: "blob", display: ".blob()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*blob\s*\(/g },
-  { method: "formData", display: ".formData()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*formData\s*\(/g },
+  // Response body readers take no arguments, so only zero-argument calls are matched; this keeps
+  // unrelated APIs such as the PDF writer's `page.text(x, y, label, style)` out of the guard.
+  { method: "text", display: ".text()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*text\s*\(\s*\)/g },
+  { method: "json", display: ".json()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*json\s*\(\s*\)/g },
+  { method: "arrayBuffer", display: ".arrayBuffer()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*arrayBuffer\s*\(\s*\)/g },
+  { method: "blob", display: ".blob()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*blob\s*\(\s*\)/g },
+  { method: "formData", display: ".formData()", regex: /\b[$A-Z_a-z][$\w]*\s*\.\s*formData\s*\(\s*\)/g },
   {
     method: "body.getReader",
     display: ".body.getReader()",
@@ -167,6 +169,8 @@ async function main() {
   );
 }
 
+// Blanks comment and string contents but keeps string delimiters, so a string-only argument such as
+// `page.text("label")` still reads as a non-empty argument list to the zero-argument body-read patterns.
 function maskCommentsAndStrings(source) {
   const chars = source.split("");
   let state = "code";
@@ -199,7 +203,6 @@ function maskCommentsAndStrings(source) {
     if (state === "single" || state === "double" || state === "template") {
       const quote = state === "single" ? "'" : state === "double" ? '"' : "`";
       if (char === quote && previous !== "\\") {
-        chars[index] = " ";
         state = "code";
       } else if (char !== "\n" && char !== "\r") {
         chars[index] = " ";
@@ -224,19 +227,16 @@ function maskCommentsAndStrings(source) {
     }
 
     if (char === "'") {
-      chars[index] = " ";
       state = "single";
       continue;
     }
 
     if (char === '"') {
-      chars[index] = " ";
       state = "double";
       continue;
     }
 
     if (char === "`") {
-      chars[index] = " ";
       state = "template";
     }
   }

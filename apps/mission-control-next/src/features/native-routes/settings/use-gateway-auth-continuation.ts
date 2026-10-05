@@ -97,8 +97,10 @@ export function useGatewayAuthContinuation(
       reviewedAction = actionFor(intent)!;
     const current = () =>
       live.current.mounted && live.current.epoch === epoch && control.key === `access:${getGatewayApiBaseUrl()}:auth`;
-    let secret = credential.trim(),
-      dispatched = false,
+    // Blanking a local copy would not scrub anything: the render closure still holds `credential`, which is
+    // cleared through setCredential (js/useless-assignment-to-local flagged the former `secret = ""`).
+    const secret = credential.trim();
+    let dispatched = false,
       acknowledged = false;
     setMessage(null);
     try {
@@ -134,7 +136,6 @@ export function useGatewayAuthContinuation(
               { workspaceId: "default" },
               { expectedRevision: intent.revision, actionNonce: reviewedAction.actionNonce },
             );
-      secret = "";
       requireAuthPlan(next, pending.submitted as GatewayAuthValues, pending.baseRevision);
       if (
         binding(next) !== binding(intent) ||

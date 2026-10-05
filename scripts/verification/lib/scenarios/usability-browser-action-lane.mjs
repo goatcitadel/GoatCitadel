@@ -5988,7 +5988,7 @@ async function waitForExactCompletedChatTurn(
 
 async function waitForExactChatTurnStatus(state, expected) {
   const deadline = Date.now() + ACTION_TIMEOUT_MS;
-  let latestStatus = "missing";
+  let latestStatus; // Always assigned before the loop can exit (js/useless-assignment-to-local).
   do {
     const thread = await checkedRequest(
       state.gatewayUrl,
