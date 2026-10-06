@@ -28,17 +28,28 @@ const LIBRARY_SOURCES = RESOURCE_KINDS.map((kind) => ({
 }));
 
 /**
+ * Each source's results sit under its owner's key prefix, so the owner's realtime refresh (chat for
+ * conversations, the Library resource prefix for each kind) re-reads an open palette too.
+ */
+function paletteSourceKey(id: string, workspaceId: string, citadelId: string, text: string) {
+  const owner = id === "threads" ? ["chat"] : ["library", "resources", id];
+  return [...owner, "palette-search", workspaceId, citadelId, text] as const;
+}
+
+/**
  * One source's cached, cancellable read for the settled text. Each source has its own `useQuery`:
  * `useQueries` builds a new observer when a key changes, which would drop the earlier wave.
  */
 function useSourceRead(id: string, read: SourceRead, scope: PaletteScope, text: string, enabled: boolean) {
   const { workspaceId, citadelId } = scope;
   return useQuery<PaletteSourceResult>({
-    queryKey: ["palette", id, workspaceId, citadelId, text],
+    queryKey: paletteSourceKey(id, workspaceId, citadelId, text),
     queryFn: ({ signal }) => read({ workspaceId, citadelId }, text, signal),
     // Keep the previous wave on screen, but never across a workspace or Citadel change.
     placeholderData: (previous: PaletteSourceResult | undefined, previousQuery?: Query<PaletteSourceResult>) =>
-      previousQuery?.queryKey[2] === workspaceId && previousQuery.queryKey[3] === citadelId ? previous : undefined,
+      previousQuery?.queryKey.at(-3) === workspaceId && previousQuery.queryKey.at(-2) === citadelId
+        ? previous
+        : undefined,
     staleTime: SEARCH_STALE_MS,
     enabled,
   });

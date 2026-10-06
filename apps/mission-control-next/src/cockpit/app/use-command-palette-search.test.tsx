@@ -220,3 +220,22 @@ describe("cancellable cached palette search (NV-12)", () => {
     expect(api.sessions).not.toHaveBeenCalled();
   });
 });
+
+describe("palette sources follow their owners' refreshes", () => {
+  it("re-reads conversations on a chat refresh and a Library source on its owner's refresh", async () => {
+    await render();
+    await settle();
+    const sessionsBefore = api.sessions.mock.calls.length;
+    const memoryReads = () =>
+      api.resources.mock.calls.filter((call) => (call[0] as { kind: string }).kind === "memory").length;
+    const memoryBefore = memoryReads();
+    expect(sessionsBefore).toBeGreaterThan(0);
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["chat"] });
+      await client.invalidateQueries({ queryKey: ["library", "resources", "memory"] });
+    });
+    await settle(0);
+    expect(api.sessions.mock.calls.length).toBe(sessionsBefore + 1);
+    expect(memoryReads()).toBe(memoryBefore + 1);
+  });
+});
