@@ -3,13 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const testFileDir = path.dirname(fileURLToPath(import.meta.url));
 import {
   buildGatewayStartCommandForPlatform,
   formatSignatureEntry,
+  isProcessGroupAlive,
   isWatchableSourceFile,
+  type ProcessSignalSender,
   pruneFailureTimestamps,
   readPositiveInt,
   readReferenceSignatureCache,
@@ -20,8 +22,177 @@ import {
   shouldBuildGatewayProjectReferences,
   shouldIgnoreWatchedEntryName,
   shouldUseWorkspaceTypeScriptGraph,
+  terminateProcessGroup,
   writeReferenceSignatureCache,
 } from "./dev-supervisor-helpers.js";
+
+function errno(code: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`kill ${code}`), { code });
+}
+
+function createVirtualClock(): { now: () => number; sleep: (ms: number) => Promise<void>; sleeps: number[] } {
+  let nowMs = 0;
+  const sleeps: number[] = [];
+  return {
+    now: () => nowMs,
+    sleep: async (ms: number) => {
+      sleeps.push(ms);
+      nowMs += ms;
+    },
+    sleeps,
+  };
+}
+
+/**
+ * A fake POSIX process table for one supervised child spawned with `detached: true`: the
+ * group leader is the `pnpm exec` wrapper (its pid is the group id) and the rest of the
+ * group is tsx plus the real gateway. pnpm exits on SIGTERM at once; the descendants take
+ * `descendantExitAfterSigtermMs` to finish shutting down (Infinity models a shutdown that
+ * never completes), and only SIGKILL ends them sooner.
+ */
+function createFakeProcessGroup(
+  clock: { now: () => number },
+  pgid: number,
+  descendantExitAfterSigtermMs: number,
+): {
+  sendSignal: ProcessSignalSender;
+  sent: Array<[number, NodeJS.Signals | 0]>;
+  isLeaderAlive: () => boolean;
+  isGroupAlive: () => boolean;
+} {
+  const sent: Array<[number, NodeJS.Signals | 0]> = [];
+  let leaderAlive = true;
+  let descendantsExitAt = Number.POSITIVE_INFINITY;
+  const isGroupAlive = () => leaderAlive || clock.now() < descendantsExitAt;
+  return {
+    sendSignal: (pid, signal) => {
+      sent.push([pid, signal]);
+      const targetAlive = pid === pgid ? leaderAlive : pid === -pgid ? isGroupAlive() : false;
+      if (!targetAlive) {
+        throw errno("ESRCH");
+      }
+      if (signal === "SIGTERM" || signal === "SIGKILL") {
+        leaderAlive = false;
+      }
+      if (pid === -pgid && signal === "SIGTERM") {
+        descendantsExitAt = Math.min(descendantsExitAt, clock.now() + descendantExitAfterSigtermMs);
+      }
+      if (pid === -pgid && signal === "SIGKILL") {
+        descendantsExitAt = clock.now();
+      }
+    },
+    sent,
+    isLeaderAlive: () => leaderAlive,
+    isGroupAlive,
+  };
+}
+
+describe("dev supervisor process-group stop", () => {
+  it("treats a process group as alive while any member can still be signalled", () => {
+    expect(isProcessGroupAlive(4242, () => {})).toBe(true);
+    expect(
+      isProcessGroupAlive(4242, () => {
+        throw errno("ESRCH");
+      }),
+    ).toBe(false);
+    // EPERM means the group exists but is not ours to signal; it is not proof that it exited.
+    expect(
+      isProcessGroupAlive(4242, () => {
+        throw errno("EPERM");
+      }),
+    ).toBe(true);
+
+    const probes: Array<[number, NodeJS.Signals | 0]> = [];
+    isProcessGroupAlive(4242, (pid, signal) => {
+      probes.push([pid, signal]);
+    });
+    expect(probes).toEqual([[-4242, 0]]);
+  });
+
+  it("SIGKILLs the group when the leader exits on SIGTERM but a descendant outlives the grace period", async () => {
+    const clock = createVirtualClock();
+    const group = createFakeProcessGroup(clock, 4242, Number.POSITIVE_INFINITY);
+    const signalLeader = vi.fn();
+
+    const outcome = await terminateProcessGroup({
+      pgid: 4242,
+      graceMs: 1200,
+      pollMs: 50,
+      signalLeader,
+      sendSignal: group.sendSignal,
+      sleep: clock.sleep,
+      now: clock.now,
+    });
+
+    expect(group.sent[0]).toEqual([-4242, "SIGTERM"]);
+    // The CI hang: only pnpm died, so a leader-liveness check saw nothing left to kill.
+    expect(group.isLeaderAlive()).toBe(false);
+    expect(outcome).toBe("killed");
+    expect(group.sent.at(-1)).toEqual([-4242, "SIGKILL"]);
+    expect(clock.now()).toBe(1200);
+    expect(group.isGroupAlive()).toBe(false);
+    expect(signalLeader).not.toHaveBeenCalled();
+  });
+
+  it("does not SIGKILL or wait once the whole group has exited", async () => {
+    const clock = createVirtualClock();
+    const group = createFakeProcessGroup(clock, 4242, 0);
+
+    const outcome = await terminateProcessGroup({
+      pgid: 4242,
+      graceMs: 1200,
+      pollMs: 50,
+      signalLeader: vi.fn(),
+      sendSignal: group.sendSignal,
+      sleep: clock.sleep,
+      now: clock.now,
+    });
+
+    expect(outcome).toBe("exited");
+    expect(group.sent.map(([, signal]) => signal)).not.toContain("SIGKILL");
+    expect(clock.sleeps).toEqual([]);
+  });
+
+  it("returns as soon as the group exits inside the grace period instead of sleeping it out", async () => {
+    const clock = createVirtualClock();
+    const group = createFakeProcessGroup(clock, 4242, 300);
+
+    const outcome = await terminateProcessGroup({
+      pgid: 4242,
+      graceMs: 1200,
+      pollMs: 50,
+      signalLeader: vi.fn(),
+      sendSignal: group.sendSignal,
+      sleep: clock.sleep,
+      now: clock.now,
+    });
+
+    expect(outcome).toBe("exited");
+    expect(clock.now()).toBe(300);
+    expect(clock.sleeps.every((ms) => ms <= 50)).toBe(true);
+    expect(group.sent.map(([, signal]) => signal)).not.toContain("SIGKILL");
+  });
+
+  it("signals the leader directly when the group itself refuses the signal", async () => {
+    const clock = createVirtualClock();
+    const signalLeader = vi.fn();
+
+    const outcome = await terminateProcessGroup({
+      pgid: 4242,
+      graceMs: 100,
+      pollMs: 50,
+      signalLeader,
+      sendSignal: () => {
+        throw errno("EPERM");
+      },
+      sleep: clock.sleep,
+      now: clock.now,
+    });
+
+    expect(outcome).toBe("killed");
+    expect(signalLeader.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+  });
+});
 
 describe("dev supervisor helper decisions", () => {
   it("normalizes health probes for wildcard binds without changing explicit hosts", () => {

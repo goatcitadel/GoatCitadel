@@ -98,6 +98,76 @@ export function buildGatewayStartCommandForPlatform(
   };
 }
 
+export type ProcessSignalSender = (pid: number, signal: NodeJS.Signals | 0) => void;
+
+export type ProcessGroupStopOutcome = "exited" | "killed";
+
+/**
+ * True while any member of process group `pgid` survives. A negative pid addresses the whole
+ * group and signal 0 only checks deliverability, so the probe keeps succeeding after the group
+ * leader exits for as long as a descendant that stayed in the group is alive.
+ */
+export function isProcessGroupAlive(pgid: number, sendSignal: ProcessSignalSender = sendProcessSignal): boolean {
+  try {
+    sendSignal(-pgid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the group exists but is not ours to signal; it is not evidence that it exited.
+    return (error as NodeJS.ErrnoException | undefined)?.code === "EPERM";
+  }
+}
+
+/**
+ * Stop a POSIX child spawned with `detached: true` through its whole process group: SIGTERM,
+ * wait up to `graceMs` for every member to exit, then SIGKILL the group if anything survives.
+ *
+ * Escalation follows group liveness, never leader liveness. The supervised gateway runs as
+ * `pnpm exec tsx src/main.ts`, so the leader is the pnpm wrapper, which exits on SIGTERM at once
+ * while tsx and the real gateway stay in its group. A leader-only check skipped SIGKILL whenever
+ * the gateway's own shutdown hung, orphaning it with the supervisor's inherited stdio still open.
+ */
+export async function terminateProcessGroup(options: {
+  pgid: number;
+  graceMs: number;
+  pollMs: number;
+  /** Fallback when the group refuses a signal: deliver it to the leader process alone. */
+  signalLeader: (signal: NodeJS.Signals) => void;
+  sendSignal?: ProcessSignalSender;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}): Promise<ProcessGroupStopOutcome> {
+  const sendSignal = options.sendSignal ?? sendProcessSignal;
+  const sleep = options.sleep ?? defaultSleep;
+  const now = options.now ?? Date.now;
+  const signalGroup = (signal: NodeJS.Signals) => {
+    try {
+      sendSignal(-options.pgid, signal);
+    } catch {
+      options.signalLeader(signal);
+    }
+  };
+
+  signalGroup("SIGTERM");
+  const deadline = now() + options.graceMs;
+  while (isProcessGroupAlive(options.pgid, sendSignal)) {
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) {
+      signalGroup("SIGKILL");
+      return "killed";
+    }
+    await sleep(Math.min(options.pollMs, remainingMs));
+  }
+  return "exited";
+}
+
+function sendProcessSignal(pid: number, signal: NodeJS.Signals | 0): void {
+  process.kill(pid, signal);
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function shouldUseWorkspaceTypeScriptGraph(env: NodeJS.ProcessEnv = process.env): boolean {
   return isTruthyEnv(env.GOATCITADEL_DEV_WORKSPACE_TSC_GRAPH) || isTruthyEnv(env.GOATCITADEL_DEV_TS7);
 }
