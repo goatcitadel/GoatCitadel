@@ -52,13 +52,19 @@ describe("describeActivity (SY-01)", () => {
     );
   });
 
-  it("marks operational signals and the status-refresh family as background", () => {
+  it("marks only the status-refresh family as background", () => {
     expect(describeActivity(event("llamacpp_refreshed")).operational).toBe(true);
     expect(describeActivity(event("inbox.changed")).operational).toBe(true);
     expect(describeActivity(event("proactive_tick")).operational).toBe(true);
     expect(describeActivity(event("npu_refreshed")).operational).toBe(true);
-    expect(describeActivity(event("task_created", { eventClass: "operational_signal" })).operational).toBe(true);
+    expect(describeActivity(event("channel_activity_updated")).operational).toBe(true);
     expect(describeActivity(event("approval_created")).operational).toBe(false);
+  });
+
+  it("keeps real actions visible even when published as operational signals", () => {
+    for (const kind of ["workspace_created", "workspace_archived", "backup_created", "task_created"]) {
+      expect(describeActivity(event(kind, { eventClass: "operational_signal" })).operational).toBe(false);
+    }
   });
 
   it("never shows an enum slug", () => {

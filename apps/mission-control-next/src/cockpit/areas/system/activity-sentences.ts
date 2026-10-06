@@ -49,7 +49,18 @@ const TITLED: Readonly<Record<string, (title: string) => string>> = {
   chat_session_title_updated: (title) => `A conversation was renamed “${title}”`,
 };
 
-const STATUS_REFRESH = new Set(["llamacpp_refreshed", "inbox.changed"]);
+/**
+ * Only known status refreshes are background. The event class alone is not enough: workspace, backup and
+ * task actions are also published as operational signals, and they are what this page is for.
+ */
+const STATUS_REFRESH = new Set([
+  "llamacpp_refreshed",
+  "inbox.changed",
+  "channel_activity_updated",
+  "mobile_capability_heartbeat",
+  "remote_worker_changed",
+  "remote_worker_assignment_changed",
+]);
 
 function isStatusRefresh(kind: string): boolean {
   return STATUS_REFRESH.has(kind) || kind.startsWith("proactive_") || kind.startsWith("npu_");
@@ -62,7 +73,7 @@ export function describeActivity(event: RealtimeEvent): ActivitySentence {
   const titled = title ? TITLED[kind] : undefined;
   return {
     sentence: titled ? titled(title) : (SENTENCES[kind] ?? presentEventType(kind)),
-    operational: event.eventClass === "operational_signal" || isStatusRefresh(kind),
+    operational: isStatusRefresh(kind),
   };
 }
 
