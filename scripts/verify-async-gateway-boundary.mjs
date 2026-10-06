@@ -421,6 +421,16 @@ function isFastifyReplySendCall(checker, call) {
   );
 }
 
+// Payload-only widening of isExactPromiseType: a PromiseLike-typed helper can
+// still hand back a native pending Promise, which reply.send() serializes as
+// `{}`. The floating and storage rules keep their exact-Promise semantics.
+function isPendingPayloadType(checker, type) {
+  if (type.isUnion()) return type.types.some((member) => isPendingPayloadType(checker, member));
+  if (isExactPromiseType(checker, type)) return true;
+  const apparent = checker.getApparentType(type);
+  return (apparent.aliasSymbol ?? apparent.getSymbol())?.getName() === "PromiseLike";
+}
+
 // Fastify serializes a pending Promise payload as `{}` and its rejection
 // escapes the handler's try/catch, so a Promise must never reach reply.send()
 // directly or as a value nested inside an object/array literal payload
@@ -430,8 +440,8 @@ function collectPromisePayloads(checker, expression, found = []) {
   // the outer type, so the expression beneath the casts is checked as well.
   const inner = unwrapExpression(expression);
   if (
-    isExactPromiseType(checker, checker.getTypeAtLocation(expression)) ||
-    (inner !== expression && isExactPromiseType(checker, checker.getTypeAtLocation(inner)))
+    isPendingPayloadType(checker, checker.getTypeAtLocation(expression)) ||
+    (inner !== expression && isPendingPayloadType(checker, checker.getTypeAtLocation(inner)))
   ) {
     found.push(expression);
     return found;

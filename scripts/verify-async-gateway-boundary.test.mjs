@@ -576,6 +576,10 @@ const REPLY_SEND_FIXTURE_PRELUDE = `
   };
   declare const reply: FastifyReply;
   declare const service: EngineeringLearningService;
+  // A typed helper whose PromiseLike contract hides a native pending Promise.
+  function loadLearningLike(id: string): PromiseLike<Learning> {
+    return service.get(id);
+  }
 `;
 
 test("reply-send scan flags Promise payloads passed directly or nested in Fastify reply.send", async () => {
@@ -624,6 +628,10 @@ test("reply-send scan flags Promise payloads passed directly or nested in Fastif
           reply.send(enabled ? { items: service.list() } : { items: [] });
           return reply.send(cached ?? { learning: service.get(id) });
         }
+        export async function promiseLikeHelper(id: string): Promise<unknown> {
+          reply.send(loadLearningLike(id));
+          return reply.send({ learning: loadLearningLike(id) });
+        }
         export async function castHidesPromise(id: string): Promise<unknown> {
           reply.send(service.get(id) as unknown as Learning);
           return reply.send({ learning: (service.get(id) as unknown) as Learning });
@@ -642,7 +650,7 @@ test("reply-send scan flags Promise payloads passed directly or nested in Fastif
     const replySendDiagnostics = result.diagnostics.filter(
       (diagnostic) => diagnostic.code === "promise_sent_to_fastify_reply",
     );
-    assert.equal(replySendDiagnostics.length, 15);
+    assert.equal(replySendDiagnostics.length, 17);
     assert.ok(replySendDiagnostics.every((diagnostic) => diagnostic.filePath.endsWith("routes/learnings.ts")));
     assert.ok(replySendDiagnostics.some((diagnostic) => diagnostic.message.includes("serializes")));
 
@@ -657,7 +665,7 @@ test("reply-send scan flags Promise payloads passed directly or nested in Fastif
       replySendDiagnostics.every((diagnostic) => diagnostic.line !== routePortDiagnostics[0]?.line),
       "a route-port finding must not be double-reported as a reply-send finding",
     );
-    assert.equal(result.diagnostics.length, 16);
+    assert.equal(result.diagnostics.length, 18);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -706,6 +714,10 @@ test("reply-send scan allows awaited, resolved, synchronous, and non-reply paylo
         ): Promise<unknown> {
           reply.send(enabled ? { items: await service.list() } : { items: [] });
           return reply.send(cached ?? { learning: await service.get(id) });
+        }
+        export async function awaitedPromiseLikeHelper(id: string): Promise<unknown> {
+          reply.send(await loadLearningLike(id));
+          return reply.send({ learning: await loadLearningLike(id) });
         }
         export async function awaitedThenCast(id: string): Promise<unknown> {
           reply.send((await service.get(id)) as unknown as { id: string });
