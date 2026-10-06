@@ -15,7 +15,7 @@ const FULL_TEXT_ATTACHMENT_READ_CONCURRENCY = 4;
 
 export interface ChatThreadKnowledgeDependencies {
   readonly storage: Pick<Storage, "chatAttachments" | "chatThreadKnowledgeAttachments" | "gatewaySql" | "knowledge">;
-  getSession(sessionId: string): unknown;
+  getSession(sessionId: string): Promise<unknown>;
   readChatAttachmentContent(attachmentId: string): Promise<{ bytes: Buffer; record: ChatAttachmentRecord }>;
   knowledgeDocsIngest(input: {
     sourceType: "url";
@@ -54,7 +54,7 @@ export async function listChatThreadKnowledgeAttachments(
   if (!normalizedSessionId) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "sessionId" });
   }
-  deps.getSession(normalizedSessionId);
+  await deps.getSession(normalizedSessionId);
   return await deps.storage.chatThreadKnowledgeAttachments.listBySession(normalizedSessionId);
 }
 
@@ -67,7 +67,7 @@ export async function attachChatThreadKnowledgeAttachment(
   if (!normalizedSessionId) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "sessionId" });
   }
-  deps.getSession(normalizedSessionId);
+  await deps.getSession(normalizedSessionId);
   const namespace = buildThreadKnowledgeNamespace(normalizedSessionId);
   const now = new Date().toISOString();
 
@@ -275,7 +275,7 @@ export async function removeChatThreadKnowledgeAttachment(
   if (!normalizedAttachmentId) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "attachmentId" });
   }
-  deps.getSession(normalizedSessionId);
+  await deps.getSession(normalizedSessionId);
   const current = await deps.storage.chatThreadKnowledgeAttachments.get(normalizedAttachmentId);
   if (current.sessionId !== normalizedSessionId) {
     throw new ValidationError({ message: "Thread knowledge attachment does not belong to this session." });

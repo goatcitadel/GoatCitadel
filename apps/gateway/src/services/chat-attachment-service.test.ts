@@ -74,7 +74,7 @@ async function createHost(
     host: {
       config,
       storage,
-      getSession: vi.fn(() => ({ sessionId: "sess-1" })),
+      getSession: vi.fn(async () => ({ sessionId: "sess-1" })),
       normalizeWorkspaceId: vi.fn((value?: string) => value?.trim() || "default"),
       publishRealtime: vi.fn(),
       createMediaJob: vi.fn(),
@@ -248,6 +248,27 @@ describe("chat-attachment-service", () => {
       }),
     ).rejects.toThrow(/20MB/i);
     expect(storage.chatAttachments.listBySession("sess-1")).toEqual([]);
+    expect(host.publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("rejects an upload for a missing session before creating session metadata", async () => {
+    const { host, rootDir, storage } = await createHost();
+    roots.push(rootDir);
+    storages.push(storage);
+    host.getSession = vi.fn(async (sessionId: string) => storage.sessions.getBySessionId(sessionId));
+    const ensureMeta = vi.spyOn(storage.chatSessionMeta, "ensure");
+
+    await expect(
+      uploadChatAttachment(host, {
+        sessionId: "sess-missing",
+        fileName: "note.txt",
+        mimeType: "text/plain",
+        bytesBase64: Buffer.from("note").toString("base64"),
+      }),
+    ).rejects.toThrow(/^Session sess-missing not found/);
+    expect(ensureMeta).not.toHaveBeenCalled();
+    expect(storage.chatSessionMeta.get("sess-missing")).toBeUndefined();
+    expect(storage.chatAttachments.listBySession("sess-missing")).toEqual([]);
     expect(host.publishRealtime).not.toHaveBeenCalled();
   });
 

@@ -161,7 +161,7 @@ export type IntegrationWebhookRouteLike = {
    * (integration-webhook-route-service.ts), so the real gateway composition
    * cannot silently drop them.
    */
-  isVoiceInboundEnabled?: () => boolean;
+  isVoiceInboundEnabled?: () => boolean | Promise<boolean>;
   transcribeChannelVoice?: (input: ChannelVoiceInboundRequest) => Promise<ChannelVoiceTranscriptionResult>;
   /**
    * Canonical production ingress owner. When present, provider callbacks return

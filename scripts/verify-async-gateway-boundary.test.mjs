@@ -771,6 +771,276 @@ test("route-port scan fails loud when an any-typed port method has no scanner-vi
   }
 });
 
+async function writeCompositionGateFixture(repoRoot, { extraPortMembers = "" } = {}) {
+  const gatewayRoot = path.join(repoRoot, "apps", "gateway");
+  const servicesDir = path.join(gatewayRoot, "src", "services");
+  await mkdir(servicesDir, { recursive: true });
+  await writeFile(
+    path.join(gatewayRoot, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        target: "ES2022",
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        strict: true,
+        skipLibCheck: true,
+        noEmit: true,
+      },
+      include: ["src/**/*.ts"],
+    }),
+    "utf8",
+  );
+  await writeFile(
+    path.join(servicesDir, "gateway-service.ts"),
+    `
+      export class GatewayService {
+        public async isFeatureEnabled(flag: string): Promise<boolean> {
+          return flag.length > 0;
+        }
+        public async requireFeatureEnabled(flag: string): Promise<void> {
+          if (flag.length === 0) throw new Error("disabled");
+        }
+        public isShuttingDown(): boolean {
+          return false;
+        }
+        public async hasRunningTurn(sessionId: string): Promise<boolean> {
+          return sessionId.length > 0;
+        }
+      }
+    `,
+    "utf8",
+  );
+  // Mirrors the production port: members typed through RouteDependencyMethod
+  // resolve to the erased \`(...args: any[]) => any\` route-port method.
+  await writeFile(
+    path.join(servicesDir, "gateway-route-composition-port.ts"),
+    `
+      type RouteMethod = (...args: any[]) => any;
+      interface GatewayRouteServiceDependencies {
+        toolsInvoke: Record<"isFeatureEnabled" | "isShuttingDown" | "orphanedMethod", RouteMethod>;
+        integrations: Record<"requireFeatureEnabled", RouteMethod>;
+      }
+      type RouteDependencyMethod<
+        TDomain extends keyof GatewayRouteServiceDependencies,
+        TMethod extends keyof GatewayRouteServiceDependencies[TDomain],
+      > = GatewayRouteServiceDependencies[TDomain][TMethod];
+
+      export interface GatewayRouteCompositionPort {
+        isFeatureEnabled: RouteDependencyMethod<"toolsInvoke", "isFeatureEnabled">;
+        isShuttingDown: RouteDependencyMethod<"toolsInvoke", "isShuttingDown">;
+        requireFeatureEnabled: RouteDependencyMethod<"integrations", "requireFeatureEnabled">;
+        hasRunningTurn(sessionId: string): Promise<boolean>;
+        ${extraPortMembers}
+      }
+    `,
+    "utf8",
+  );
+  return servicesDir;
+}
+
+function compositionGateDiagnostics(result) {
+  return result.diagnostics.filter((diagnostic) => diagnostic.code === "unawaited_composition_port_gate");
+}
+
+test("composition-gate scan flags every boolean shape of an unawaited async GatewayService read", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-async-gateway-composition-gates-"));
+  try {
+    const servicesDir = await writeCompositionGateFixture(repoRoot);
+    await writeFile(
+      path.join(servicesDir, "gateway-route-composition-widgets.ts"),
+      `
+        import type { GatewayRouteCompositionPort } from "./gateway-route-composition-port.js";
+
+        declare class NotFoundError extends Error {}
+        declare function listSessions(input: { includeActivity: boolean }): Promise<unknown[]>;
+
+        export function buildWidgetsDependencies(gateway: GatewayRouteCompositionPort) {
+          return {
+            negated: async () => {
+              if (!gateway.isFeatureEnabled("chatTimersV1Enabled")) throw new NotFoundError("off");
+            },
+            strictTrue: () => gateway.isFeatureEnabled("channelVoiceInboundV1Enabled") === true,
+            strictNotFalse: () => gateway.isFeatureEnabled("channelVoiceInboundV1Enabled") !== false,
+            ifCondition: async () => {
+              if (gateway.isFeatureEnabled("conversationForksV1Enabled")) return "on";
+              return "off";
+            },
+            andOperand: async (query: { includeActivity?: boolean }) =>
+              listSessions({
+                includeActivity: query.includeActivity === true && gateway.isFeatureEnabled("chatSessionStatusV1Enabled"),
+              }),
+            ternaryCondition: () => (gateway.isFeatureEnabled("chatTimersV1Enabled") ? "on" : "off"),
+            typedPortMethod: (sessionId: string) => !gateway.hasRunningTurn(sessionId),
+            viaLocal: async () => {
+              const enabled = gateway.isFeatureEnabled("chatTimersV1Enabled");
+              if (!enabled) throw new NotFoundError("off");
+            },
+          };
+        }
+
+        export function buildPickedDependencies(
+          gateway: Pick<GatewayRouteCompositionPort, "isFeatureEnabled"> & { label: string },
+        ) {
+          const { isFeatureEnabled } = gateway;
+          return {
+            picked: () => (gateway.isFeatureEnabled("chatTimersV1Enabled") || gateway.label === "x"),
+            destructured: () => !isFeatureEnabled("chatTimersV1Enabled"),
+          };
+        }
+      `,
+      "utf8",
+    );
+
+    const result = await verifyAsyncGatewayBoundary({ repoRoot });
+    const findings = compositionGateDiagnostics(result);
+    const messages = findings.map((diagnostic) => diagnostic.message);
+    const expectFinding = (fragment) =>
+      assert.ok(
+        messages.some((message) => message.includes(fragment)),
+        `expected a finding containing ${JSON.stringify(fragment)}; got:\n${messages.join("\n")}`,
+      );
+    expectFinding("'gateway.isFeatureEnabled' is negated with '!'");
+    expectFinding("compared with '==='");
+    expectFinding("compared with '!=='");
+    expectFinding("used as a condition");
+    expectFinding("used as the right operand of '&&'");
+    expectFinding("'gateway.hasRunningTurn' is negated");
+    expectFinding("via a local variable");
+    expectFinding("used as the left operand of '||'");
+    expectFinding("'gateway.isFeatureEnabled' is negated with '!'");
+    assert.equal(findings.length, 10, messages.join("\n"));
+    assert.ok(findings.every((diagnostic) => diagnostic.filePath.endsWith("gateway-route-composition-widgets.ts")));
+    assert.deepEqual(
+      result.diagnostics.filter((diagnostic) => diagnostic.code !== "unawaited_composition_port_gate"),
+      [],
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("composition-gate scan catches the pre-#291 chat and voice-inbound gates verbatim", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-async-gateway-composition-pre291-"));
+  try {
+    const servicesDir = await writeCompositionGateFixture(repoRoot);
+    // Verbatim shapes from origin/main ca943e265 before PR #291.
+    await writeFile(
+      path.join(servicesDir, "gateway-route-composition-chat.ts"),
+      `
+        import type { GatewayRouteCompositionPort } from "./gateway-route-composition-port.js";
+
+        declare class NotFoundError extends Error {}
+
+        export function buildChatDependencies(gateway: GatewayRouteCompositionPort) {
+          return {
+            listChatTimers: async () => {
+              if (!gateway.isFeatureEnabled("chatTimersV1Enabled")) {
+                throw new NotFoundError("Chat timers are disabled.");
+              }
+              return [];
+            },
+          };
+        }
+      `,
+      "utf8",
+    );
+    await writeFile(
+      path.join(servicesDir, "gateway-route-composition-integrations.ts"),
+      `
+        import type { GatewayRouteCompositionPort } from "./gateway-route-composition-port.js";
+
+        export function buildVoiceInbound(gateway: GatewayRouteCompositionPort) {
+          return {
+            isVoiceInboundEnabled: () => gateway.isFeatureEnabled("channelVoiceInboundV1Enabled") === true,
+          };
+        }
+      `,
+      "utf8",
+    );
+
+    const findings = compositionGateDiagnostics(await verifyAsyncGatewayBoundary({ repoRoot }));
+    assert.deepEqual(
+      findings.map((diagnostic) => [path.basename(diagnostic.filePath), diagnostic.line]),
+      [
+        ["gateway-route-composition-chat.ts", 9],
+        ["gateway-route-composition-integrations.ts", 6],
+      ],
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("composition-gate scan allows awaited, thunked, sync, and out-of-scope shapes", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-async-gateway-composition-ok-"));
+  try {
+    const servicesDir = await writeCompositionGateFixture(repoRoot);
+    const okSource = `
+      import type { GatewayRouteCompositionPort } from "./gateway-route-composition-port.js";
+
+      declare class NotFoundError extends Error {}
+      declare function listSessions(input: { includeActivity: boolean }): Promise<unknown[]>;
+
+      export function buildOkDependencies(gateway: GatewayRouteCompositionPort) {
+        return {
+          negatedAwait: async () => {
+            if (!(await gateway.isFeatureEnabled("chatTimersV1Enabled"))) throw new NotFoundError("off");
+          },
+          strictAwait: async () => (await gateway.isFeatureEnabled("channelVoiceInboundV1Enabled")) === true,
+          andAwait: async (query: { includeActivity?: boolean }) =>
+            listSessions({
+              includeActivity:
+                query.includeActivity === true && (await gateway.isFeatureEnabled("chatSessionStatusV1Enabled")),
+            }),
+          awaitedLogical: async (flag: boolean) => await (flag && gateway.isFeatureEnabled("chatTimersV1Enabled")),
+          asyncReturnedLogical: async (flag: boolean) => flag && gateway.isFeatureEnabled("chatTimersV1Enabled"),
+          ternaryAwait: async () => ((await gateway.isFeatureEnabled("chatTimersV1Enabled")) ? "on" : "off"),
+          thunk: () => gateway.isFeatureEnabled("memoryLifecycleAdminV1Enabled"),
+          gate: () => gateway.requireFeatureEnabled("documentEditingV1Enabled"),
+          syncMethod: () => !gateway.isShuttingDown() && gateway.isShuttingDown() === false,
+          awaitedLocal: async () => {
+            const pending = gateway.isFeatureEnabled("chatTimersV1Enabled");
+            if (!(await pending)) throw new NotFoundError("off");
+          },
+          chained: () => gateway.isFeatureEnabled("chatTimersV1Enabled").then((enabled) => !enabled),
+        };
+      }
+    `;
+    await writeFile(path.join(servicesDir, "gateway-route-composition-ok.ts"), okSource, "utf8");
+    // The rule is scoped to composition modules; other services keep the
+    // type-aware floating rules only.
+    await writeFile(
+      path.join(servicesDir, "unrelated-service.ts"),
+      `
+        import type { GatewayRouteCompositionPort } from "./gateway-route-composition-port.js";
+        export const outOfScope = (gateway: GatewayRouteCompositionPort) =>
+          !gateway.isFeatureEnabled("chatTimersV1Enabled");
+      `,
+      "utf8",
+    );
+
+    const result = await verifyAsyncGatewayBoundary({ repoRoot });
+    assert.deepEqual(result.diagnostics, []);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("composition-gate scan fails loud when an erased port method has no GatewayService signature", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-async-gateway-composition-unmapped-"));
+  try {
+    await writeCompositionGateFixture(repoRoot, {
+      extraPortMembers: 'orphanedMethod: RouteDependencyMethod<"toolsInvoke", "orphanedMethod">;',
+    });
+    await assert.rejects(
+      () => verifyAsyncGatewayBoundary({ repoRoot }),
+      (error) => error instanceof Error && /could not classify orphanedMethod/u.test(error.message),
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("repository scanner includes production TypeScript and excludes test and spec files", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-async-gateway-boundary-"));
   const gatewaySource = path.join(repoRoot, "apps", "gateway", "src");
