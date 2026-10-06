@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ChangePlanRecord, OperatorInboxItem, OperatorInboxResponse } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboxChangePlanDetail } from "./InboxChangePlanDetail";
+import { queryKeys } from "../../data/query-keys";
 import { __resetInboxChangePlanAttemptsForTests } from "./use-inbox-change-plan";
 import { __resetSettingsApprovalContinuationsForTests } from "../../../features/native-routes/settings/use-settings-approval-continuation";
 
@@ -147,6 +148,8 @@ afterEach(() => {
   client.clear();
 });
 async function render(item = data.item, strict = false) {
+  // The Inbox area keeps the Inbox cached; the detail reads that copy instead of fetching it again.
+  client.setQueryData(queryKeys.inbox("workspace-a"), data.projection);
   const content = (
     <QueryClientProvider client={client}>
       <InboxChangePlanDetail item={item} workspaceId="workspace-a" />

@@ -6,10 +6,14 @@ import { preloadCockpitDestination } from "./use-cockpit-preload";
 
 const mocks = vi.hoisted(() => ({
   installation: "http://gateway-a.invalid",
-  runs: vi.fn(), tasks: vi.fn(), code: vi.fn(),
+  runs: vi.fn(),
+  tasks: vi.fn(),
+  code: vi.fn(),
 }));
 vi.mock("./area-loaders", () => ({ preloadCockpitArea: mocks.code }));
-vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({ getGatewayApiBaseUrl: () => mocks.installation }));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({
+  getGatewayApiBaseUrl: () => mocks.installation,
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/durable", () => ({ fetchDurableRunHistory: mocks.runs }));
 vi.mock("@goatcitadel/mission-control-shared/api/tasks", () => ({ fetchTasks: mocks.tasks }));
 
@@ -21,7 +25,10 @@ beforeEach(() => {
   mocks.tasks.mockResolvedValue({ items: [], nextCursor: "more-tasks" });
   client = createCockpitQueryClient();
 });
-afterEach(() => { client.clear(); vi.unstubAllGlobals(); });
+afterEach(() => {
+  client.clear();
+  vi.unstubAllGlobals();
+});
 
 async function warmed() {
   await vi.waitFor(() => {
@@ -39,7 +46,11 @@ it("warms only the first bounded pages and shares them with the board", async ()
   expect(mocks.runs).toHaveBeenCalledOnce();
   expect(mocks.runs.mock.calls[0]?.[0]).toEqual({ workspaceId: "a", limit: 100, cursor: undefined });
   expect(mocks.tasks).toHaveBeenCalledOnce();
-  expect(mocks.tasks).toHaveBeenCalledWith(undefined, "a", { limit: 200, cursor: undefined });
+  expect(mocks.tasks).toHaveBeenCalledWith(undefined, "a", {
+    limit: 200,
+    cursor: undefined,
+    signal: expect.any(AbortSignal),
+  });
 });
 
 it("keeps cached pagination intact and still obeys owner invalidation", async () => {
@@ -65,7 +76,12 @@ it("partitions preloaded pages by workspace and Gateway", async () => {
 
 it("rejects a late read begun under the previous Gateway", async () => {
   let resolve!: (page: { items: [] }) => void;
-  mocks.tasks.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+  mocks.tasks.mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
   const oldOptions = workspaceTasksOptions("a");
   const pending = client.fetchInfiniteQuery({ ...oldOptions, retry: false });
   const rejected = expect(pending).rejects.toThrow("no longer current");

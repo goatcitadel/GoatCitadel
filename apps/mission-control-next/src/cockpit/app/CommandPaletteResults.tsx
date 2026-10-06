@@ -43,20 +43,26 @@ export function CommandPaletteCoverage({ groups }: { groups: PaletteSearchGroup[
           {group.error}
         </p>
       ) : null}
-      {!group.items.length && !group.error ? (
+      {group.searching ? (
+        <p role="status" className="px-3 py-1 text-xs text-fg-muted">
+          Searching…
+        </p>
+      ) : !group.items.length && !group.error ? (
         <p className="px-3 py-1 text-xs text-fg-muted">No matches in this source’s returned window.</p>
       ) : null}
-      <details
-        className="px-3 py-1 text-xs text-fg-muted"
-        onKeyDown={(event) => {
-          // Let the native disclosure activate without cmdk submitting its selected command.
-          // Escape and navigation shortcuts still reach their existing owners.
-          if (event.key === "Enter" || event.key === " ") event.stopPropagation();
-        }}
-      >
-        <summary>Search coverage</summary>
-        <p className="mt-1 break-words">{group.coverage}</p>
-      </details>
+      {group.searching ? null : (
+        <details
+          className="px-3 py-1 text-xs text-fg-muted"
+          onKeyDown={(event) => {
+            // Let the native disclosure activate without cmdk submitting its selected command.
+            // Escape and navigation shortcuts still reach their existing owners.
+            if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+          }}
+        >
+          <summary>Search coverage</summary>
+          <p className="mt-1 break-words">{group.coverage}</p>
+        </details>
+      )}
     </section>
   ));
 }

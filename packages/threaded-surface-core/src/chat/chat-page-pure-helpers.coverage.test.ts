@@ -75,8 +75,14 @@ describe("chat-page-pure-helpers coverage", () => {
       refreshSession: "full",
     });
     expect(resolveChatRefreshPlan({ eventType: "chat_thread_updated", reason: "assistant", source: "sse" })).toEqual({
-      refreshSidebar: false,
+      refreshSidebar: true,
       refreshSession: "full",
+    });
+    expect(
+      resolveChatRefreshPlan({ eventType: "approval_created", reason: "approval_created", source: "approvals" }),
+    ).toEqual({
+      refreshSidebar: true,
+      refreshSession: "none",
     });
     expect(
       resolveChatRefreshPlan({ eventType: "chat_session_title_updated", reason: "rename", source: "sse" }),
@@ -120,6 +126,30 @@ describe("chat-page-pure-helpers coverage", () => {
       refreshSidebar: false,
       refreshSession: "none",
     });
+  });
+
+  it("reloads the open thread only for events about the open conversation", () => {
+    const other = { eventType: "chat_thread_updated", reason: "chat_thread_updated", source: "chat", sessionId: "s-2" };
+    expect(resolveChatRefreshPlan(other, false, false, "s-1")).toEqual({
+      refreshSidebar: true,
+      refreshSession: "none",
+    });
+    expect(resolveChatRefreshPlan({ ...other, sessionId: "s-1" }, false, false, "s-1")).toEqual({
+      refreshSidebar: true,
+      refreshSession: "full",
+    });
+    expect(resolveChatRefreshPlan({ ...other, sessionId: undefined }, false, false, "s-1")).toEqual({
+      refreshSidebar: true,
+      refreshSession: "full",
+    });
+    expect(
+      resolveChatRefreshPlan(
+        { eventType: "custom", reason: "retrieval policy", source: "prefs", sessionId: "s-2" },
+        false,
+        false,
+        "s-1",
+      ),
+    ).toEqual({ refreshSidebar: false, refreshSession: "none" });
   });
 
   it("describes confirmable capability actions and destructive session deletion", () => {

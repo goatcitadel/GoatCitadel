@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { ConflictError, ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { registerChatSessionRoutes } from "./chat.sessions.js";
 
 describe("chat session routes", () => {
@@ -366,6 +366,97 @@ describe("chat session routes", () => {
         url: "/api/v1/chat/sessions/sess-1/knowledge-attachments/attachment-1",
       }),
     ).resolves.toMatchObject({ statusCode: 200 });
+  });
+
+  it("reads one document proposal by id within its workspace", async () => {
+    const proposal = { proposalId: "proposal-1", workspaceId: "workspace-a", state: "pending" };
+    const getDocumentPatchProposal = vi.fn(async (proposalId: string, workspaceId: string) => {
+      if (proposalId !== "proposal-1" || workspaceId !== "workspace-a") {
+        throw new NotFoundError({ entity: "Document patch proposal", id: proposalId });
+      }
+      return proposal;
+    });
+    app = buildApp(createChatSessionsService({ getDocumentPatchProposal }));
+
+    const found = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/document-patch-proposals/proposal-1?workspaceId=workspace-a",
+    });
+    expect(found.statusCode).toBe(200);
+    expect(found.json()).toEqual({ item: proposal });
+    const missing = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/document-patch-proposals/missing?workspaceId=workspace-a",
+    });
+    expect(missing.statusCode).toBe(404);
+    // Workspace scoping is the service's job (covered by its own test); the route must forward the
+    // requested workspace exactly, never a default.
+    expect(getDocumentPatchProposal.mock.calls).toEqual([
+      ["proposal-1", "workspace-a"],
+      ["missing", "workspace-a"],
+    ]);
+    const unscoped = await app.inject({ method: "GET", url: "/api/v1/chat/document-patch-proposals/proposal-1" });
+    expect(unscoped.statusCode).toBe(400);
+  });
+
+  it("passes an activity request to the sessions list and returns each session's activity", async () => {
+    const activity = {
+      observedAt: "2026-10-05T10:00:00.000Z",
+      latestTurn: { turnId: "turn-1", status: "running", startedAt: "2026-10-05T09:59:00.000Z" },
+      turnCounts: { queued: 0, running: 1, waiting_for_tool: 0, waiting_for_approval: 0, waiting_for_user_input: 0 },
+    };
+    const chatSessions = createChatSessionsService({
+      listChatSessions: vi.fn(() => [{ sessionId: "sess-1", updatedAt: "2026-05-14T00:00:00.000Z", activity }]),
+    });
+    app = buildApp(chatSessions);
+
+    const listed = await app.inject({ method: "GET", url: "/api/v1/chat/sessions?includeActivity=true" });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().items[0].activity).toEqual(activity);
+    expect(chatSessions.listChatSessions).toHaveBeenCalledWith(expect.objectContaining({ includeActivity: true }));
+    const invalid = await app.inject({ method: "GET", url: "/api/v1/chat/sessions?includeActivity=maybe" });
+    expect(invalid.statusCode).toBe(400);
+  });
+
+  it("passes an activity request to session search and keeps each result session's activity", async () => {
+    const activity = {
+      observedAt: "2026-10-05T10:00:00.000Z",
+      latestTurn: { turnId: "turn-1", status: "waiting_for_approval", startedAt: "2026-10-05T09:59:00.000Z" },
+      turnCounts: { queued: 0, running: 0, waiting_for_tool: 0, waiting_for_approval: 1, waiting_for_user_input: 0 },
+    };
+    const chatSessions = createChatSessionsService({
+      searchChatSessions: vi.fn(() => ({
+        query: "deploy",
+        mode: "discovery",
+        items: [
+          {
+            session: { sessionId: "sess-1", updatedAt: "2026-05-14T00:00:00.000Z", activity },
+            hits: [],
+            matchedFields: ["title"],
+            score: 8,
+          },
+        ],
+      })),
+    });
+    app = buildApp(chatSessions);
+
+    const searched = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/session-search?query=deploy&includeActivity=true",
+    });
+    expect(searched.statusCode).toBe(200);
+    expect(searched.json().items[0].session.activity).toEqual(activity);
+    expect(chatSessions.searchChatSessions).toHaveBeenCalledWith(expect.objectContaining({ includeActivity: true }));
+    const plain = await app.inject({ method: "GET", url: "/api/v1/chat/session-search?query=deploy" });
+    expect(plain.statusCode).toBe(200);
+    expect(chatSessions.searchChatSessions).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ includeActivity: expect.anything() }),
+    );
+    const invalid = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/session-search?query=deploy&includeActivity=maybe",
+    });
+    expect(invalid.statusCode).toBe(400);
   });
 
   it("projects public session titles and assistant or system search previews without mutating service state", async () => {

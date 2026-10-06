@@ -5,6 +5,7 @@ import {
   assertDurableChildWatcherIdBounds,
   assertDurableChildWatcherRunIdBounds,
   DURABLE_CHILD_WATCHER_LIMITS,
+  NotFoundError,
   ValidationError,
 } from "@goatcitadel/contracts";
 import { resolveApprovalActorId } from "./approvals.js";
@@ -18,14 +19,20 @@ const listQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(500).default(50),
 });
 
-const runListQuerySchema = listQuerySchema.extend({
-  workspaceId: z.string().min(1).max(200).refine(isBoundedScopeId, "Invalid workspace scope").optional(),
-  cursor: z.string().min(1).max(1024).optional(),
-}).superRefine((value, context) => {
-  if (value.cursor !== undefined && value.workspaceId === undefined) {
-    context.addIssue({ code: "custom", path: ["workspaceId"], message: "workspaceId is required for history pagination" });
-  }
-});
+const runListQuerySchema = listQuerySchema
+  .extend({
+    workspaceId: z.string().min(1).max(200).refine(isBoundedScopeId, "Invalid workspace scope").optional(),
+    cursor: z.string().min(1).max(1024).optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.cursor !== undefined && value.workspaceId === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["workspaceId"],
+        message: "workspaceId is required for history pagination",
+      });
+    }
+  });
 
 const durableRunIdSchema = z
   .string()
@@ -217,9 +224,11 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send(projectDurableRouteResponse({ error: parsed.error.flatten() }));
     }
     try {
-      return projectDurableRouteResponse(parsed.data.workspaceId === undefined
-        ? { items: await durable.listRuns(parsed.data.limit) }
-        : await durable.listRunHistory({ ...parsed.data, workspaceId: parsed.data.workspaceId }));
+      return projectDurableRouteResponse(
+        parsed.data.workspaceId === undefined
+          ? { items: await durable.listRuns(parsed.data.limit) }
+          : await durable.listRunHistory({ ...parsed.data, workspaceId: parsed.data.workspaceId }),
+      );
     } catch (error) {
       if (error instanceof ValidationError) return reply.code(400).send(projectDurableRouteResponse(error.toJSON()));
       throw error;
@@ -234,6 +243,20 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     return projectDurableRouteResponse({
       items: await durable.listDeadLetters(parsed.data.limit),
     });
+  });
+
+  fastify.get("/api/v1/durable/dead-letters/:entryId", operatorOnly, async (request, reply) => {
+    const params = deadLetterParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send(projectDurableRouteResponse({ error: params.error.flatten() }));
+    }
+    try {
+      return reply.send(projectDurableRouteResponse(await durable.getDeadLetter(params.data.entryId)));
+    } catch (error) {
+      const notFound = error instanceof NotFoundError || /not found/i.test((error as Error)?.message ?? "");
+      if (!notFound) throw error;
+      return reply.code(404).send(projectDurableRouteResponse({ error: (error as Error).message }));
+    }
   });
 
   fastify.get("/api/v1/durable/runs/:runId/checkpoints", operatorOnly, async (request, reply) => {

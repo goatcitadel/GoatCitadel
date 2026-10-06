@@ -239,6 +239,14 @@ export interface ChatGeneratedArtifactRecord {
   updatedAt: string;
 }
 
+/** Turn activity returned with a sessions list, in the same shape the session status route uses. */
+export interface ChatSessionActivitySummary {
+  /** One timestamp per list response. */
+  observedAt: string;
+  latestTurn: { turnId: string; status: ChatTurnLifecycleStatus; startedAt: string; finishedAt?: string } | null;
+  turnCounts: Record<(typeof CHAT_SESSION_ACTIVITY_COUNT_KEYS)[number], number>;
+}
+
 export interface ChatSessionRecord {
   sessionId: string;
   revision: number;
@@ -272,6 +280,8 @@ export interface ChatSessionRecord {
   goalTurnBudget?: number;
   goalTurnsUsed?: number;
   goalSetAt?: string;
+  /** Present only when the list was requested with includeActivity and session status is enabled. */
+  activity?: ChatSessionActivitySummary;
 }
 
 export interface ChatSessionCreateInput {
@@ -302,6 +312,8 @@ export interface ChatSessionListQuery {
   limit?: number;
   cursor?: string;
   includeHidden?: boolean;
+  /** Return each session's turn activity (`ChatSessionRecord.activity`) when session status is enabled. */
+  includeActivity?: boolean;
 }
 
 export type ChatSessionSearchMode = "discovery" | "scroll" | "browse";
@@ -316,6 +328,8 @@ export interface ChatSessionSearchQuery {
   limit?: number;
   cursor?: string;
   includeHidden?: boolean;
+  /** Return each result session's turn activity (`ChatSessionRecord.activity`) when session status is enabled. */
+  includeActivity?: boolean;
 }
 
 export interface ChatSessionSearchResult {
@@ -1159,6 +1173,9 @@ export const CHAT_TURN_ACTIVE_STATUSES = [
   "waiting_for_approval",
   "waiting_for_user_input",
 ] as const satisfies ChatTurnLifecycleStatus[];
+
+/** The turn statuses a sessions list counts per session; the same buckets as session status `turnCounts`. */
+export const CHAT_SESSION_ACTIVITY_COUNT_KEYS = CHAT_TURN_ACTIVE_STATUSES;
 
 export const CHAT_TURN_TERMINAL_STATUSES = [
   "completed",

@@ -1,17 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  createConcurrencyLimiter,
-  projectThreadActivity,
-  readThreadActivity,
-  THREAD_ACTIVITY_WINDOW_LIMIT,
-  threadActivityLabel,
-} from "./thread-activity";
+import { describe, expect, it } from "vitest";
+import type { ChatSessionRecord } from "@goatcitadel/contracts";
+import { projectSessionActivity, projectThreadActivity, threadActivityLabel } from "./thread-activity";
 import { statusRecord } from "./thread-activity.test-support";
 
 describe("canonical visible thread activity", () => {
   it("distinguishes latest failure from historical failure and missing/foreign status", () => {
-    const record = statusRecord("s", "w", { latestTurnId: "latest", latestTurn: { turnId: "latest", status: "completed", startedAt: "2026-10-01T00:00:00Z" },
-      durableRuns: [{ runId: "old", status: "failed", workerHealth: "released", recoveryState: "none" }] });
+    const record = statusRecord("s", "w", {
+      latestTurnId: "latest",
+      latestTurn: { turnId: "latest", status: "completed", startedAt: "2026-10-01T00:00:00Z" },
+      durableRuns: [{ runId: "old", status: "failed", workerHealth: "released", recoveryState: "none" }],
+    });
     expect(projectThreadActivity(record, "w", "s").label).toBe("Last turn completed");
     if (record.work.availability !== "available") throw new Error("Fixture work required");
     record.work.value.latestTurn!.status = "failed";
@@ -32,27 +30,29 @@ describe("canonical visible thread activity", () => {
     record.work.value.turnCounts.running = -1;
     expect(projectThreadActivity(record, "w", "s").label).toBe("Status unavailable");
   });
-  it("runs status reads with concurrency two across every caller", async () => {
-    let active = 0, maximum = 0;
-    const read = vi.fn(async (id: string) => { active++; maximum = Math.max(maximum, active); await Promise.resolve(); active--; return statusRecord(id); });
-    const ids = Array.from({ length: THREAD_ACTIVITY_WINDOW_LIMIT }, (_, i) => "session-" + i);
-    const results = await Promise.all(ids.map((sessionId) =>
-      readThreadActivity({ workspaceId: "w", sessionId, signal: new AbortController().signal, read })));
-    expect(maximum).toBe(2);
-    expect(results.every((result) => result.label === "Status unavailable" || result.label === "No recorded turns")).toBe(true);
-  });
-  it("never starts a queued read whose signal aborted while it waited", async () => {
-    const limiter = createConcurrencyLimiter(1);
-    const pending: Array<() => void> = [];
-    const first = limiter(() => new Promise<void>((resolve) => pending.push(resolve)));
-    const controller = new AbortController();
-    const second = vi.fn(async () => "started");
-    const queued = limiter(second, controller.signal);
-    controller.abort();
-    pending[0]!();
-    await first;
-    await expect(queued).rejects.toThrow(/cancelled/);
-    expect(second).not.toHaveBeenCalled();
+  it("reads the same labels from the activity a sessions list returns", () => {
+    const counts = { queued: 0, running: 0, waiting_for_tool: 0, waiting_for_approval: 0, waiting_for_user_input: 0 };
+    const session = (activity?: ChatSessionRecord["activity"]) => ({ sessionId: "s", activity }) as ChatSessionRecord;
+    const observedAt = "2026-10-05T10:00:00Z";
+    expect(projectSessionActivity(session())).toEqual({ label: "Status unavailable", tone: "neutral" });
+    expect(projectSessionActivity(session({ observedAt, latestTurn: null, turnCounts: counts })).label).toBe(
+      "No recorded turns",
+    );
+    expect(
+      projectSessionActivity(session({ observedAt, latestTurn: null, turnCounts: { ...counts, running: 1 } })),
+    ).toEqual({ label: "Working", tone: "running", observedAt });
+    expect(
+      projectSessionActivity(
+        session({ observedAt, latestTurn: null, turnCounts: { ...counts, waiting_for_user_input: 1 } }),
+      ).label,
+    ).toBe("Waiting on you");
+    const latestTurn = { turnId: "t", status: "failed" as const, startedAt: "2026-10-05T09:59:00Z" };
+    expect(projectSessionActivity(session({ observedAt, latestTurn, turnCounts: counts })).label).toBe(
+      "Last turn failed",
+    );
+    expect(projectSessionActivity(session({ observedAt: "not a time", latestTurn, turnCounts: counts })).label).toBe(
+      "Status unavailable",
+    );
   });
   it("dates a status once it is no longer current", () => {
     const fresh = { label: "Working", tone: "running" as const, observedAt: "2026-10-01T10:42:00Z" };

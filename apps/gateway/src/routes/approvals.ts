@@ -85,6 +85,9 @@ const listQuerySchema = z.object({
   workspaceId: z.string().min(1).optional(),
 });
 
+const approvalParamsSchema = z.object({ approvalId: z.string().trim().min(1).max(256) });
+const getQuerySchema = z.object({ workspaceId: z.string().min(1).optional() });
+
 const MAX_REMOTE_APPROVAL_TOKEN_LENGTH = 4096;
 const REMOTE_APPROVAL_CREATE_TOKEN_HEADER = "x-goatcitadel-approval-create-token";
 
@@ -182,6 +185,24 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
       );
     } catch (error) {
       await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/approvals/:approvalId", operatorOrCompanion, async (request, reply) => {
+    const params = approvalParamsSchema.safeParse(request.params);
+    const query = getQuerySchema.safeParse(request.query ?? {});
+    if (!params.success || !query.success) {
+      return reply.code(400).send({ error: "Invalid approval read." });
+    }
+    try {
+      if (request.authActorSource === "companion") {
+        reply.header("Cache-Control", "private, no-store");
+      }
+      return reply.send(
+        projectApprovalPublicResponse(await approvals.getApproval(params.data.approvalId, query.data.workspaceId)),
+      );
+    } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
   });

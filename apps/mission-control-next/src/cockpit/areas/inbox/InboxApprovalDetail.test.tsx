@@ -4,20 +4,30 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ApprovalRequest, OperatorInboxItem } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { InboxApprovalDetail } from "./InboxApprovalDetail";
 
-const api = vi.hoisted(() => ({ fetchApprovals: vi.fn() }));
+const api = vi.hoisted(() => ({ fetchApproval: vi.fn(), fetchApprovals: vi.fn(), fetchOperatorInbox: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({ fetchApproval: api.fetchApproval }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ fetchApprovals: api.fetchApprovals }));
+vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({
+  fetchOperatorInbox: api.fetchOperatorInbox,
+}));
+const notFound = () => new ApiRequestError("API error 404", { kind: "http", method: "GET", path: "/x", status: 404 });
 vi.mock("./InboxApprovalActions", () => ({
   InboxApprovalActions: ({
+    checking,
     onResolved,
     onInvalidated,
   }: {
+    checking?: boolean;
     onResolved: (message: string) => void;
     onInvalidated: () => void;
   }) => (
     <>
-      <button type="button">Decision controls</button>
+      <button type="button" disabled={checking}>
+        Decision controls
+      </button>
       <button type="button" onClick={() => onResolved("Approved decision recorded.")}>
         Record decision
       </button>
@@ -50,6 +60,8 @@ const item: OperatorInboxItem = {
 };
 
 let root: Root;
+const decisionControls = () =>
+  [...container.querySelectorAll("button")].find((button) => button.textContent === "Decision controls")!;
 let container: HTMLDivElement;
 let client: QueryClient;
 
@@ -62,8 +74,10 @@ async function settleUntil(done: () => boolean) {
 }
 
 beforeEach(() => {
+  api.fetchApproval.mockReset();
   api.fetchApprovals.mockReset();
-  api.fetchApprovals.mockResolvedValue({ items: [approval] });
+  api.fetchOperatorInbox.mockReset();
+  api.fetchApproval.mockResolvedValue(approval);
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.append(container);
@@ -87,10 +101,10 @@ describe("Inbox approval detail", () => {
     );
     await vi.waitFor(() => expect(container.textContent).toContain("Decision controls"));
     let release!: () => void;
-    api.fetchApprovals.mockImplementationOnce(
+    api.fetchApproval.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          release = () => resolve({ items: [approval] });
+          release = () => resolve(approval);
         }),
     );
     await act(async () => {
@@ -100,9 +114,35 @@ describe("Inbox approval detail", () => {
     });
     expect(container.textContent).toContain("Checking for changes…");
     expect(container.textContent).toContain("Decision controls");
+    expect(decisionControls().disabled).toBe(true);
     expect(container.textContent).not.toContain("Loading the current approval…");
     await act(async () => release());
     await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+    expect(decisionControls().disabled).toBe(false);
+  });
+
+  it("keeps the approval beside a failed recheck and says how old it is", async () => {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <InboxApprovalDetail item={item} workspaceId="default" />
+        </QueryClientProvider>,
+      ),
+    );
+    await settleUntil(() => Boolean(container.textContent?.includes("Decision controls")));
+    api.fetchApproval.mockRejectedValueOnce(
+      new ApiRequestError("API error 503", { kind: "http", method: "GET", path: "/x", status: 503 }),
+    );
+    await act(async () => {
+      void client.invalidateQueries();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await settleUntil(() => Boolean(container.querySelector('[role="alert"]')));
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    expect(container.textContent).toContain("Decision controls");
+    expect(container.textContent).toContain("pnpm test");
+    expect(container.textContent).toMatch(/Showing the last version from \d/);
+    expect(container.textContent).not.toContain("no longer waiting");
   });
 
   it.each([
@@ -119,10 +159,10 @@ describe("Inbox approval detail", () => {
     await settleUntil(() => Boolean(container.textContent?.includes("Decision controls")));
     expect(container.textContent).toContain("Decision controls");
     let release!: () => void;
-    api.fetchApprovals.mockImplementationOnce(
+    api.fetchApproval.mockImplementationOnce(
       () =>
-        new Promise((resolve) => {
-          release = () => resolve({ items: [] });
+        new Promise((_resolve, reject) => {
+          release = () => reject(notFound());
         }),
     );
     await act(async () => {
@@ -134,8 +174,43 @@ describe("Inbox approval detail", () => {
     expect(container.textContent).not.toContain("Decision controls");
     expect([...container.querySelectorAll('[role="status"]')].map((node) => node.textContent)).toContain(notice);
     await act(async () => release());
-    await settleUntil(() => Boolean(container.textContent?.includes("not found in the first page")));
-    expect(container.textContent).toContain("not found in the first page");
+    await settleUntil(() => Boolean(container.textContent?.includes("no longer waiting")));
+    expect(container.textContent).toContain("This approval is no longer waiting.");
     expect(container.textContent).toContain(notice);
+  });
+
+  it("opens with one read of the approval by id and no Inbox or queue read", async () => {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <InboxApprovalDetail item={item} workspaceId="default" />
+        </QueryClientProvider>,
+      ),
+    );
+    await settleUntil(() => Boolean(container.textContent?.includes("Decision controls")));
+    expect(api.fetchApproval).toHaveBeenCalledExactlyOnceWith("approval-a", {
+      workspaceId: "default",
+      signal: expect.any(AbortSignal),
+    });
+    expect(api.fetchApprovals).not.toHaveBeenCalled();
+    expect(api.fetchOperatorInbox).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a missing approval", () => api.fetchApproval.mockRejectedValue(notFound())],
+    ["a decided approval", () => api.fetchApproval.mockResolvedValue({ ...approval, status: "approved" })],
+  ])("says %s is no longer waiting and offers no decision", async (_label, arrange) => {
+    arrange();
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <InboxApprovalDetail item={item} workspaceId="default" />
+        </QueryClientProvider>,
+      ),
+    );
+    await settleUntil(() => Boolean(container.textContent?.includes("no longer waiting")));
+    expect(container.textContent).toContain("This approval is no longer waiting.");
+    expect(container.textContent).not.toContain("Decision controls");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 });

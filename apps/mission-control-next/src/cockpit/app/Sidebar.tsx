@@ -12,43 +12,29 @@ import {
 } from "lucide-react";
 import { fetchWorkspaces } from "@goatcitadel/mission-control-shared/api/workspaces";
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
-import type { StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
 import { queryKeys } from "../data/query-keys";
-import { summarizeHealthChecks } from "../areas/system/health-overview";
-import { deriveSystemHealthChecks } from "../areas/system/system-health";
-import { backupTrustFromInbox } from "../areas/system/backup-trust";
-import { loadSystemHealthSources } from "../areas/system/system-health-sources";
-import { useDesktopUpdates } from "../../features/desktop-updates/desktop-update-bridge";
-import { inboxCountLabel, inboxCountTitle, inboxMatchesWorkspace, inboxNavigationLabel } from "../areas/inbox/inbox-presentation";
+import {
+  inboxCountLabel,
+  inboxCountTitle,
+  inboxMatchesWorkspace,
+  inboxNavigationLabel,
+} from "../areas/inbox/inbox-presentation";
 import { useOperatorInbox } from "../data/use-operator-inbox";
 import { WorkRunningIndicator } from "./WorkRunningIndicator";
 import { ScopeSwitcher } from "./ScopeSwitcher";
+import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { Kbd } from "../ui/Kbd";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/Menu";
 import { COCKPIT_AREAS } from "./routes";
 import { useCockpitRoute } from "./use-cockpit-route";
 import { useCockpitPreload } from "./use-cockpit-preload";
+import { useHealthDigestStatus } from "./use-health-digest";
+import { HEALTH_TONE_BG, STREAM_STATUS } from "./stream-status";
 
 const AREA_ICONS = { chat: MessageSquare, inbox: Inbox, work: LayoutGrid, library: Library, system: Activity } as const;
-
-const STREAM_STATUS: Readonly<Record<EventStreamConnectionState, { label: string; tone: string }>> = {
-  connecting: { label: "Connecting to updates", tone: "bg-status-waiting" },
-  open: { label: "Updates connected", tone: "bg-status-done" },
-  retrying: { label: "Reconnecting to updates", tone: "bg-status-waiting" },
-  error: { label: "Updates unavailable", tone: "bg-status-failed" },
-  closed: { label: "Updates disconnected", tone: "bg-status-neutral" },
-};
-
-const HEALTH_TONE_BG: Readonly<Record<StatusTone, string>> = {
-  running: "bg-status-running",
-  waiting: "bg-status-waiting",
-  done: "bg-status-done",
-  failed: "bg-status-failed",
-  neutral: "bg-status-neutral",
-};
 
 export function Sidebar({
   onOpenPalette,
@@ -70,12 +56,8 @@ export function Sidebar({
     queryFn: () => fetchWorkspaces("active", 200, activeCitadelId),
   });
   const workspaceId = activeWorkspaceId ?? "default";
-  const health = useQuery({
-    queryKey: queryKeys.health(workspaceId),
-    queryFn: () => loadSystemHealthSources(workspaceId),
-    refetchInterval: 60_000,
-  });
-  const desktopUpdates = useDesktopUpdates();
+  // NV-09: the four-read digest, not the full System › Health fan-out.
+  const healthStatus = useHealthDigestStatus(workspaceId, true);
   const inbox = useOperatorInbox(workspaceId);
   const inboxCount = inboxCountLabel(
     !inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId) ? inbox.data : undefined,
@@ -83,15 +65,6 @@ export function Sidebar({
   const workspaceName =
     workspaces.data?.items.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? "Workspace";
   const stream = STREAM_STATUS[streamState];
-  const healthStatus = health.data
-    ? summarizeHealthChecks(
-        deriveSystemHealthChecks(
-          health.data,
-          desktopUpdates,
-          backupTrustFromInbox(!inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId) ? inbox.data : undefined),
-        ),
-      )
-    : { label: "System checks unavailable", tone: "neutral" as const };
 
   return (
     <aside
@@ -165,26 +138,41 @@ export function Sidebar({
         })}
       </nav>
       <div className="flex-1" />
-      <a
-        href="/system"
-        onPointerEnter={() => preload("system")}
-        onFocus={() => preload("system")}
-        onClick={(event) => {
-          event.preventDefault();
-          navigate("/system");
-        }}
-        className="flex items-center gap-2 px-2 py-1 text-xs text-fg-muted hover:text-fg"
-      >
-        <span aria-hidden="true" className={`size-2 rounded-full ${HEALTH_TONE_BG[healthStatus.tone]}`} />
-        <span className={collapsed ? "sr-only" : ""}>{healthStatus.label}</span>
-      </a>
+      {healthStatus.phase === "unavailable" ? (
+        <div className={`flex items-center gap-2 py-1 text-xs text-fg-muted ${collapsed ? "flex-col" : "px-2"}`}>
+          <span aria-hidden="true" className="size-2 rounded-full bg-status-neutral" />
+          <span className={collapsed ? "sr-only" : "flex-1"}>{healthStatus.label}</span>
+          <Button size="sm" variant="ghost" onClick={healthStatus.retry}>
+            Retry
+          </Button>
+        </div>
+      ) : (
+        <a
+          href="/system"
+          title={healthStatus.title}
+          onPointerEnter={() => preload("system")}
+          onFocus={() => preload("system")}
+          onClick={(event) => {
+            event.preventDefault();
+            navigate("/system");
+          }}
+          className="flex items-center gap-2 px-2 py-1 text-xs text-fg-muted hover:text-fg"
+        >
+          <span aria-hidden="true" className={`size-2 rounded-full ${HEALTH_TONE_BG[healthStatus.tone]}`} />
+          <span className={collapsed ? "sr-only" : ""}>{healthStatus.label}</span>
+        </a>
+      )}
       <div className={`flex items-center gap-2 py-1.5 text-xs text-fg-muted ${collapsed ? "flex-col" : "px-2"}`}>
         <span aria-hidden="true" className={`size-2 rounded-full ${stream.tone}`} />
         <span className={collapsed ? "sr-only" : "flex-1"}>{stream.label}</span>
         <Menu>
-          <MenuTrigger aria-label="Settings and account" className="rounded-md p-1 text-fg-muted hover:bg-sunken"
-            onPointerEnter={() => preload("settings")} onFocus={() => preload("settings")}
-            onPointerDown={() => preload("settings")}>
+          <MenuTrigger
+            aria-label="Settings and account"
+            className="rounded-md p-1 text-fg-muted hover:bg-sunken"
+            onPointerEnter={() => preload("settings")}
+            onFocus={() => preload("settings")}
+            onPointerDown={() => preload("settings")}
+          >
             <Settings aria-hidden="true" className="size-4" />
           </MenuTrigger>
           <MenuContent align="end">

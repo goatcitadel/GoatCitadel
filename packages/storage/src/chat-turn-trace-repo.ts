@@ -132,6 +132,10 @@ export class ChatTurnTraceRepository {
   private readonly deleteByTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly listSiblingsByParentTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
   private readonly getByTurnIdsStmtCache = new Map<number, ReturnType<DatabaseClient["prepare"]>>();
+  private readonly activitySummaryStmtCache = new Map<
+    number,
+    { latest: ReturnType<DatabaseClient["prepare"]>; counts: ReturnType<DatabaseClient["prepare"]> }
+  >();
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_turn_traces WHERE turn_id = ?");
@@ -392,7 +396,11 @@ export class ChatTurnTraceRepository {
   }
 
   /** Completed turn traces across all sessions, oldest first — used by background consolidation watermark scans. */
-  public listCompletedSince(sinceIso: string, limit = 200, after?: { startedAt: string; turnId: string }): ChatTurnTraceRecord[] {
+  public listCompletedSince(
+    sinceIso: string,
+    limit = 200,
+    after?: { startedAt: string; turnId: string },
+  ): ChatTurnTraceRecord[] {
     const rows = toChatTurnTraceRows(
       this.listCompletedSinceStmt.all({
         sinceIso,
@@ -483,6 +491,61 @@ export class ChatTurnTraceRepository {
     `);
     this.getByTurnIdsStmtCache.set(size, stmt);
     return stmt;
+  }
+
+  /**
+   * The latest turn and the active-turn counts for many sessions at once, so a sessions list can show
+   * each session's activity without one status read per row. Sessions without a turn are absent.
+   */
+  public summarizeBySessionIds(sessionIds: string[]): Map<string, ChatTurnActivitySummary> {
+    const uniqueSessionIds = [...new Set(sessionIds.map((item) => item.trim()).filter(Boolean))];
+    const summaries = new Map<string, ChatTurnActivitySummary>();
+    for (let index = 0; index < uniqueSessionIds.length; index += 400) {
+      const batch = uniqueSessionIds.slice(index, index + 400);
+      const statements = this.getActivitySummaryStmts(batch.length);
+      for (const row of statements.latest.all(...batch) as ActivityLatestRow[]) {
+        summaries.set(row.session_id, {
+          latest: {
+            turnId: row.turn_id,
+            status: row.status as ChatTurnTraceRecord["status"],
+            startedAt: row.started_at,
+            ...(row.finished_at ? { finishedAt: row.finished_at } : {}),
+          },
+          counts: {},
+        });
+      }
+      for (const row of statements.counts.all(...batch, ...CHAT_TURN_ACTIVE_STATUSES) as ActivityCountRow[]) {
+        const summary = summaries.get(row.session_id);
+        if (summary) summary.counts[row.status as ChatTurnActiveStatus] = Number(row.n);
+      }
+    }
+    return summaries;
+  }
+
+  private getActivitySummaryStmts(size: number) {
+    const cached = this.activitySummaryStmtCache.get(size);
+    if (cached) return cached;
+    const placeholders = new Array(size).fill("?").join(", ");
+    const statusPlaceholders = CHAT_TURN_ACTIVE_STATUSES.map(() => "?").join(", ");
+    const statements = {
+      latest: this.db.prepare(`
+        SELECT session_id, turn_id, status, started_at, finished_at FROM (
+          SELECT session_id, turn_id, status, started_at, finished_at,
+                 ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY started_at DESC, turn_id DESC) AS rn
+          FROM chat_turn_traces
+          WHERE session_id IN (${placeholders})
+        ) ranked
+        WHERE rn = 1
+      `),
+      counts: this.db.prepare(`
+        SELECT session_id, status, COUNT(*) AS n
+        FROM chat_turn_traces
+        WHERE session_id IN (${placeholders}) AND status IN (${statusPlaceholders})
+        GROUP BY session_id, status
+      `),
+    };
+    this.activitySummaryStmtCache.set(size, statements);
+    return statements;
   }
 
   public deleteByTurnIds(sessionId: string, turnIds: string[]): number {
@@ -740,6 +803,27 @@ export function attachTurnTraceDetails(
     executionPlan: details.executionPlan ?? trace.executionPlan,
     capabilityUpgradeSuggestions: details.capabilityUpgradeSuggestions ?? trace.capabilityUpgradeSuggestions,
   };
+}
+
+type ChatTurnActiveStatus = (typeof CHAT_TURN_ACTIVE_STATUSES)[number];
+
+export interface ChatTurnActivitySummary {
+  latest: { turnId: string; status: ChatTurnTraceRecord["status"]; startedAt: string; finishedAt?: string };
+  counts: Partial<Record<ChatTurnActiveStatus, number>>;
+}
+
+interface ActivityLatestRow {
+  session_id: string;
+  turn_id: string;
+  status: string;
+  started_at: string;
+  finished_at: string | null;
+}
+
+interface ActivityCountRow {
+  session_id: string;
+  status: string;
+  n: number | string;
 }
 
 function toChatTurnTraceRow(value: unknown): ChatTurnTraceRow | undefined {

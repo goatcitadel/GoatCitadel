@@ -6,6 +6,7 @@ import type { ChangePlanRecord, OperatorInboxItem, OperatorInboxResponse } from 
 import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboxChangePlanDetail } from "./InboxChangePlanDetail";
+import { queryKeys } from "../../data/query-keys";
 import { __resetInboxChangePlanAttemptsForTests } from "./use-inbox-change-plan";
 
 const api = vi.hoisted(() => ({ fetchOperatorInbox: vi.fn(), fetchChangePlan: vi.fn(), confirmChangePlan: vi.fn() }));
@@ -109,6 +110,9 @@ afterEach(() => {
 
 async function renderDetail(inboxItem = item) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  // The Inbox area keeps the Inbox cached; seed it from the mocked owner read, then forget that read.
+  client.setQueryData(queryKeys.inbox("default"), await api.fetchOperatorInbox("default"));
+  api.fetchOperatorInbox.mockClear();
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -119,10 +123,29 @@ async function renderDetail(inboxItem = item) {
     ),
   );
   await act(async () => {
-    await api.fetchOperatorInbox.mock.results[0]?.value;
     if (api.fetchChangePlan.mock.results[0]) await api.fetchChangePlan.mock.results[0].value;
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
+  return client;
+}
+
+/** Make the next plan read hang, invalidate the detail, and let the refetch status reach React. */
+async function startRecheck(client: QueryClient) {
+  let release!: () => void;
+  api.fetchChangePlan.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = () => resolve(plan);
+      }),
+  );
+  await act(async () => {
+    void client.invalidateQueries({ queryKey: ["change-plan"] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  return async () => {
+    await act(async () => release());
+    await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+  };
 }
 
 function button(label: string): HTMLButtonElement {
@@ -132,6 +155,39 @@ function button(label: string): HTMLButtonElement {
 }
 
 describe("Inbox change-plan confirmation", () => {
+  it("keeps the plan and its confirmation, disabled, while it is rechecked", async () => {
+    const client = await renderDetail();
+    const finish = await startRecheck(client);
+    expect(container.textContent).toContain("Checking for changes…");
+    expect(container.textContent).toContain("The current Chat model changes.");
+    expect(container.textContent).not.toContain("Loading the current change plan…");
+    expect(button("Review confirmation").disabled).toBe(true);
+    await finish();
+    expect(button("Review confirmation").disabled).toBe(false);
+  });
+
+  it("keeps an open confirmation review open while the plan is rechecked", async () => {
+    const client = await renderDetail();
+    await act(async () => button("Review confirmation").click());
+    const finish = await startRecheck(client);
+    expect(document.body.textContent).toContain("Apply this exact Chat model change.");
+    expect(button("Confirm change").disabled).toBe(true);
+    await finish();
+    expect(button("Confirm change").disabled).toBe(false);
+  });
+
+  it("keeps the plan beside a failed recheck", async () => {
+    const client = await renderDetail();
+    api.fetchChangePlan.mockRejectedValueOnce(new Error("Gateway offline"));
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["change-plan"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
+    expect(container.textContent).toContain("The current Chat model changes.");
+    expect(container.textContent).toContain("Showing the last version from");
+  });
+
   it("reviews impact, re-reads projection and plan, and sends the exact revision and nonce once", async () => {
     await renderDetail();
     expect(container.textContent).toContain("The current Chat model changes.");
@@ -139,8 +195,10 @@ describe("Inbox change-plan confirmation", () => {
     expect(document.body.textContent).toContain("Apply this exact Chat model change.");
     expect(api.confirmChangePlan).not.toHaveBeenCalled();
     await act(async () => button("Confirm change").click());
-    expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(2);
-    expect(api.fetchChangePlan).toHaveBeenCalledTimes(2);
+    // Opening checked the cached Inbox; only the confirmation re-read it.
+    expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(1);
+    // Open, the confirmation's re-read, then the confirmed revision is reset and read once more.
+    expect(api.fetchChangePlan).toHaveBeenCalledTimes(3);
     expect(api.confirmChangePlan).toHaveBeenCalledOnce();
     expect(api.confirmChangePlan).toHaveBeenCalledWith(
       "plan-a",

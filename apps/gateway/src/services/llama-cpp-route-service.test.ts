@@ -18,7 +18,7 @@ describe("llama.cpp route service facade", () => {
       getHuggingFaceDownloadStatus: vi.fn((jobId: string) => ({ jobId, state: "running" })),
       getStatus: vi.fn(() => status),
       listModels: vi.fn(() => [{ id: "llama-3" }]),
-      refresh: vi.fn(async () => ({ ...status, refreshed: true })),
+      refresh: vi.fn(async () => ({ ...status, refreshed: true, healthy: true })),
       start: vi.fn(async (source: string) => ({ ...status, source })),
       startHuggingFaceDownload: vi.fn((input: unknown) => ({ jobId: "download-1", input })),
       stop: vi.fn(async (source: string) => ({ running: false, source })),
@@ -72,7 +72,7 @@ describe("llama.cpp route service facade", () => {
     expect(llamaCppRuntime.stop).toHaveBeenCalledWith("api");
     expect(publishRealtime).toHaveBeenCalledWith("system", "llamacpp", {
       type: "llamacpp_refreshed",
-      status: { ...status, refreshed: true },
+      status: { ...status, refreshed: true, healthy: true },
     });
     expect(publishRealtime).toHaveBeenCalledWith("system", "llamacpp", {
       type: "llamacpp_started",
@@ -207,6 +207,107 @@ describe("llama.cpp route service facade", () => {
       expect(publishRealtime).toHaveBeenCalledExactlyOnceWith("system", "llamacpp", {
         type: "llamacpp_refreshed",
         status: released,
+      });
+    });
+  });
+
+  describe("last announced status (T2-M3)", () => {
+    const steady = {
+      enabled: true,
+      desiredState: "running",
+      processState: "running",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      healthy: true,
+      activeModelId: "gemma-local",
+      updatedAt: "2026-10-03T00:00:00.000Z",
+    };
+    const failed = (at: string) => ({ ...steady, healthy: false, processState: "error", updatedAt: at });
+
+    it("announces a change once, then stays silent while it holds", async () => {
+      const runtime = {
+        getStatus: vi.fn(() => steady),
+        refresh: vi
+          .fn()
+          .mockResolvedValueOnce(failed("2026-10-03T00:00:05.000Z"))
+          .mockResolvedValueOnce(failed("2026-10-03T00:00:10.000Z")),
+      };
+      const publishRealtime = vi.fn(async () => undefined);
+      const service = createLlamaCppRoutePort({
+        llamaCppRuntime: runtime as never,
+        setup: {} as never,
+        publishRealtime,
+      });
+
+      await service.refreshLlamaCppRuntime();
+      await service.refreshLlamaCppRuntime();
+      expect(publishRealtime).toHaveBeenCalledExactlyOnceWith("system", "llamacpp", {
+        type: "llamacpp_refreshed",
+        status: failed("2026-10-03T00:00:05.000Z"),
+      });
+    });
+
+    it("announces one change once when two reads overlap", async () => {
+      const pending: Array<(value: unknown) => void> = [];
+      const runtime = {
+        getStatus: vi.fn(() => steady),
+        refresh: vi.fn(() => new Promise((resolve) => pending.push(resolve))),
+      };
+      const publishRealtime = vi.fn(async () => undefined);
+      const service = createLlamaCppRoutePort({
+        llamaCppRuntime: runtime as never,
+        setup: {} as never,
+        publishRealtime,
+      });
+
+      const first = service.refreshLlamaCppRuntime();
+      const second = service.refreshLlamaCppRuntime();
+      for (const resolve of pending) resolve(failed("2026-10-03T00:00:05.000Z"));
+      await Promise.all([first, second]);
+      expect(publishRealtime).toHaveBeenCalledOnce();
+    });
+
+    it("announces a change another probe absorbed before this read", async () => {
+      let current: Record<string, unknown> = steady;
+      const runtime = {
+        getStatus: vi.fn(() => current),
+        refresh: vi.fn(async () => current),
+      };
+      const publishRealtime = vi.fn(async () => undefined);
+      const service = createLlamaCppRoutePort({
+        llamaCppRuntime: runtime as never,
+        setup: {} as never,
+        publishRealtime,
+      });
+
+      await service.refreshLlamaCppRuntime();
+      expect(publishRealtime).not.toHaveBeenCalled();
+      current = failed("2026-10-03T00:00:05.000Z"); // an idle-shutdown or lease probe changed the runtime
+      await service.refreshLlamaCppRuntime();
+      expect(publishRealtime).toHaveBeenCalledExactlyOnceWith("system", "llamacpp", {
+        type: "llamacpp_refreshed",
+        status: current,
+      });
+    });
+
+    it("counts a start or stop as announced", async () => {
+      const stopped = { ...steady, desiredState: "stopped", processState: "stopped", healthy: false };
+      const runtime = {
+        getStatus: vi.fn(() => steady),
+        stop: vi.fn(async () => stopped),
+        refresh: vi.fn(async () => ({ ...stopped, updatedAt: "2026-10-03T00:00:05.000Z" })),
+      };
+      const publishRealtime = vi.fn(async () => undefined);
+      const service = createLlamaCppRoutePort({
+        llamaCppRuntime: runtime as never,
+        setup: {} as never,
+        publishRealtime,
+      });
+
+      await service.stopLlamaCppRuntime();
+      await service.refreshLlamaCppRuntime();
+      expect(publishRealtime).toHaveBeenCalledExactlyOnceWith("system", "llamacpp", {
+        type: "llamacpp_stopped",
+        status: stopped,
       });
     });
   });

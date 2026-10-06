@@ -5,25 +5,54 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CuratorReviewItem, OperatorInboxItem, OperatorInboxResponse } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canDecideImprovementProposal, InboxImprovementProposalDetail } from "./InboxImprovementProposalDetail";
+import { queryKeys } from "../../data/query-keys";
 
 const api = vi.hoisted(() => ({
-  fetchCuratorReviewItem: vi.fn(), approveImprovementCandidate: vi.fn(), rejectImprovementCandidate: vi.fn(), fetchOperatorInbox: vi.fn(),
+  fetchCuratorReviewItem: vi.fn(),
+  approveImprovementCandidate: vi.fn(),
+  rejectImprovementCandidate: vi.fn(),
+  fetchOperatorInbox: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/improvement", () => api);
-vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({ fetchOperatorInbox: api.fetchOperatorInbox }));
-vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => ({ activeWorkspaceId: "workspace-a" }) }));
+vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({
+  fetchOperatorInbox: api.fetchOperatorInbox,
+}));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
+  useUiPreferences: () => ({ activeWorkspaceId: "workspace-a" }),
+}));
 
 const item: OperatorInboxItem = {
-  id: "improvement_proposal:candidate-a", kind: "improvement_proposal", group: "proposals", title: "Review improvement proposal",
-  summary: "Improve routing", createdAt: "2026-09-28T00:00:00.000Z",
-  source: { workspaceId: "workspace-a", proposalId: "candidate-a" }, href: "/library/curator?shell=classic",
+  id: "improvement_proposal:candidate-a",
+  kind: "improvement_proposal",
+  group: "proposals",
+  title: "Review improvement proposal",
+  summary: "Improve routing",
+  createdAt: "2026-09-28T00:00:00.000Z",
+  source: { workspaceId: "workspace-a", proposalId: "candidate-a" },
+  href: "/library/curator?shell=classic",
 };
 const review = {
-  candidate: { candidateId: "candidate-a", workspaceId: "workspace-a", currentRevisionId: "revision-a", summary: "Improve routing", status: "ready_for_approval", updatedAt: "2026-09-28T00:00:00.000Z" },
+  candidate: {
+    candidateId: "candidate-a",
+    workspaceId: "workspace-a",
+    currentRevisionId: "revision-a",
+    summary: "Improve routing",
+    status: "ready_for_approval",
+    updatedAt: "2026-09-28T00:00:00.000Z",
+  },
   currentRevision: { candidateId: "candidate-a", revisionId: "revision-a", changeHash: "hash-a" },
-  reviewPrecondition: { workspaceId: "workspace-a", expectedStatus: "ready_for_approval", expectedRevisionId: "revision-a", expectedChangeHash: "hash-a" },
-  evidence: [], risk: "low", callableImpact: "none", corruptionStatus: "clean",
-  actionStatuses: { approve: "ready", reject: "ready" }, disabledReasons: {},
+  reviewPrecondition: {
+    workspaceId: "workspace-a",
+    expectedStatus: "ready_for_approval",
+    expectedRevisionId: "revision-a",
+    expectedChangeHash: "hash-a",
+  },
+  evidence: [],
+  risk: "low",
+  callableImpact: "none",
+  corruptionStatus: "clean",
+  actionStatuses: { approve: "ready", reject: "ready" },
+  disabledReasons: {},
 } as unknown as CuratorReviewItem;
 const projection = { workspaceId: "workspace-a", items: [item] } as OperatorInboxResponse;
 
@@ -35,46 +64,151 @@ const button = (label: string) => {
   if (!found) throw new Error(`Missing button: ${label}`);
   return found;
 };
-const settle = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); }); };
+const settle = async () => {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+};
 
 beforeEach(() => {
   api.fetchCuratorReviewItem.mockReset().mockResolvedValue(review);
   api.fetchOperatorInbox.mockReset().mockResolvedValue(projection);
-  api.approveImprovementCandidate.mockReset().mockResolvedValue({ action: "approve", status: "approved", review: { ...review, candidate: { ...review.candidate, status: "approved" } } });
-  api.rejectImprovementCandidate.mockReset().mockResolvedValue({ action: "reject", status: "rejected", review: { ...review, candidate: { ...review.candidate, status: "rejected" } } });
+  api.approveImprovementCandidate.mockReset().mockResolvedValue({
+    action: "approve",
+    status: "approved",
+    review: { ...review, candidate: { ...review.candidate, status: "approved" } },
+  });
+  api.rejectImprovementCandidate.mockReset().mockResolvedValue({
+    action: "reject",
+    status: "rejected",
+    review: { ...review, candidate: { ...review.candidate, status: "rejected" } },
+  });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  container = document.createElement("div"); document.body.appendChild(container); root = createRoot(container);
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
 });
-afterEach(() => { act(() => root.unmount()); container.remove(); client.clear(); });
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+  client.clear();
+});
+
+/** The Inbox area keeps the Inbox cached; seed it from the mocked owner read, then forget that read. */
+async function seedCachedInbox(workspaceId: string) {
+  client.setQueryData(queryKeys.inbox(workspaceId), await api.fetchOperatorInbox(workspaceId));
+  api.fetchOperatorInbox.mockClear();
+}
 
 async function render() {
-  await act(async () => root.render(<QueryClientProvider client={client}><InboxImprovementProposalDetail item={item} workspaceId="workspace-a" /></QueryClientProvider>));
+  await seedCachedInbox("workspace-a");
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <InboxImprovementProposalDetail item={item} workspaceId="workspace-a" />
+      </QueryClientProvider>,
+    ),
+  );
   await settle();
 }
 
+/** Make the next review read hang, invalidate, and let the refetch status reach React. */
+async function startRecheck() {
+  let release!: () => void;
+  api.fetchCuratorReviewItem.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = () => resolve(review);
+      }),
+  );
+  await act(async () => {
+    void client.invalidateQueries({ queryKey: ["improvement"] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  return async () => {
+    await act(async () => release());
+    await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+  };
+}
+
 describe("Inbox improvement proposal review", () => {
+  it("keeps the review and its decisions, disabled, while it is rechecked", async () => {
+    await render();
+    const finish = await startRecheck();
+    expect(container.textContent).toContain("Checking for changes…");
+    expect(container.textContent).toContain("Improve routing");
+    expect(button("Keep proposal").disabled).toBe(true);
+    await finish();
+    expect(button("Keep proposal").disabled).toBe(false);
+  });
+
+  it("keeps an open decision review open while it is rechecked", async () => {
+    await render();
+    await act(async () => button("Keep proposal").click());
+    const finish = await startRecheck();
+    expect(button("Confirm keep").disabled).toBe(true);
+    await finish();
+    expect(button("Confirm keep").disabled).toBe(false);
+  });
+
+  it("keeps the review beside a failed recheck", async () => {
+    await render();
+    api.fetchCuratorReviewItem.mockRejectedValueOnce(new Error("Gateway offline"));
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["improvement"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
+    expect(container.textContent).toContain("Improve routing");
+    expect(container.textContent).toContain("Showing the last version from");
+  });
+
   it("requires a current scoped, ready and clean owner record", () => {
     expect(canDecideImprovementProposal(item, review, "workspace-a", "approve")).toBe(true);
-    expect(canDecideImprovementProposal(item, { ...review, candidate: { ...review.candidate, workspaceId: "workspace-b" } }, "workspace-a", "approve")).toBe(false);
-    expect(canDecideImprovementProposal(item, { ...review, corruptionStatus: "corrupt" }, "workspace-a", "approve")).toBe(false);
-    expect(canDecideImprovementProposal(item, { ...review, actionStatuses: { ...review.actionStatuses, approve: "blocked" } }, "workspace-a", "approve")).toBe(false);
+    expect(
+      canDecideImprovementProposal(
+        item,
+        { ...review, candidate: { ...review.candidate, workspaceId: "workspace-b" } },
+        "workspace-a",
+        "approve",
+      ),
+    ).toBe(false);
+    expect(
+      canDecideImprovementProposal(item, { ...review, corruptionStatus: "corrupt" }, "workspace-a", "approve"),
+    ).toBe(false);
+    expect(
+      canDecideImprovementProposal(
+        item,
+        { ...review, actionStatuses: { ...review.actionStatuses, approve: "blocked" } },
+        "workspace-a",
+        "approve",
+      ),
+    ).toBe(false);
   });
 
   it("confirms keep only after fresh Inbox and owner reads", async () => {
     await render();
+    // Opening checks the cached Inbox; only the decision re-reads it.
+    expect(api.fetchOperatorInbox).not.toHaveBeenCalled();
     await act(async () => button("Keep proposal").click());
     expect(api.approveImprovementCandidate).not.toHaveBeenCalled();
     await act(async () => button("Confirm keep").click());
     await settle();
-    expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(2);
-    expect(api.fetchCuratorReviewItem).toHaveBeenCalledTimes(2);
-    expect(api.approveImprovementCandidate).toHaveBeenCalledWith("candidate-a", { reviewPrecondition: review.reviewPrecondition });
+    expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(1);
+    // Open, the decision's re-read, then the decided record is reset and read once more.
+    expect(api.fetchCuratorReviewItem).toHaveBeenCalledTimes(3);
+    expect(api.approveImprovementCandidate).toHaveBeenCalledWith("candidate-a", {
+      reviewPrecondition: review.reviewPrecondition,
+    });
     expect(container.textContent).toContain("Activation is a separate governed action");
   });
 
   it("withholds a decision if the reviewed candidate changed", async () => {
     await render();
-    api.fetchCuratorReviewItem.mockResolvedValueOnce({ ...review, candidate: { ...review.candidate, summary: "Changed" } });
+    api.fetchCuratorReviewItem.mockResolvedValueOnce({
+      ...review,
+      candidate: { ...review.candidate, summary: "Changed" },
+    });
     await act(async () => button("Discard proposal").click());
     await act(async () => button("Confirm discard").click());
     await settle();
@@ -99,20 +233,41 @@ describe("Inbox improvement proposal review", () => {
     expect(container.textContent).toContain("Improve routing");
     expect(container.textContent).toContain("Update the Gateway");
     expect([...container.querySelectorAll("button")].map((entry) => entry.textContent)).not.toContain("Keep proposal");
-    expect([...container.querySelectorAll("button")].map((entry) => entry.textContent)).not.toContain("Discard proposal");
+    expect([...container.querySelectorAll("button")].map((entry) => entry.textContent)).not.toContain(
+      "Discard proposal",
+    );
     expect(api.approveImprovementCandidate).not.toHaveBeenCalled();
     expect(api.rejectImprovementCandidate).not.toHaveBeenCalled();
   });
 
   it("withholds an owner binding that differs from the displayed candidate revision", () => {
-    expect(canDecideImprovementProposal(item, { ...review, reviewPrecondition: { ...review.reviewPrecondition!, expectedChangeHash: "new-hash" } }, "workspace-a", "approve")).toBe(false);
-    expect(canDecideImprovementProposal(item, { ...review, reviewPrecondition: { ...review.reviewPrecondition!, workspaceId: "workspace-b" } }, "workspace-a", "reject")).toBe(false);
+    expect(
+      canDecideImprovementProposal(
+        item,
+        { ...review, reviewPrecondition: { ...review.reviewPrecondition!, expectedChangeHash: "new-hash" } },
+        "workspace-a",
+        "approve",
+      ),
+    ).toBe(false);
+    expect(
+      canDecideImprovementProposal(
+        item,
+        { ...review, reviewPrecondition: { ...review.reviewPrecondition!, workspaceId: "workspace-b" } },
+        "workspace-a",
+        "reject",
+      ),
+    ).toBe(false);
   });
 
   it("locks a receipt for a different candidate revision without claiming the reviewed version was saved", async () => {
-    api.approveImprovementCandidate.mockResolvedValue({ action: "approve", status: "approved", review: {
-      ...review, candidate: { ...review.candidate, status: "approved", currentRevisionId: "revision-b" },
-    } });
+    api.approveImprovementCandidate.mockResolvedValue({
+      action: "approve",
+      status: "approved",
+      review: {
+        ...review,
+        candidate: { ...review.candidate, status: "approved", currentRevisionId: "revision-b" },
+      },
+    });
     await render();
     await act(async () => button("Keep proposal").click());
     await act(async () => button("Confirm keep").click());

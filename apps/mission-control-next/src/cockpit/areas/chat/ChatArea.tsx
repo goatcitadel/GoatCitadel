@@ -250,7 +250,7 @@ export function ChatAreaView({
             />
           </div>
           <ChatMobileConversationSelect rail={input.sessionRail} onOpenFilters={() => setFiltersOpen(true)} />
-          <SelectedThreadActivity sessionId={selectedSessionId} />
+          <SelectedThreadActivity session={session} />
           <Button
             size="sm"
             className="md:hidden max-sm:h-11 max-sm:px-4"

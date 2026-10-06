@@ -6,8 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { ChatBlockers } from "./ChatBlockers";
 
-const api = vi.hoisted(() => ({ fetchApprovals: vi.fn() }));
-vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
+const api = vi.hoisted(() => ({ fetchApproval: vi.fn(), fetchApprovals: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({ fetchApproval: api.fetchApproval }));
+vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ fetchApprovals: api.fetchApprovals }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: "default" }),
 }));
@@ -21,18 +22,14 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  api.fetchApprovals.mockResolvedValue({
-    items: [
-      {
-        approvalId: "approval/1",
-        kind: "tool_invoke",
-        status: "pending",
-        riskLevel: "danger",
-        payload: {},
-        preview: { commands: ["pnpm test"] },
-        createdAt: "2026-10-01T00:00:00Z",
-      },
-    ],
+  api.fetchApproval.mockResolvedValue({
+    approvalId: "approval/1",
+    kind: "tool_invoke",
+    status: "pending",
+    riskLevel: "danger",
+    payload: {},
+    preview: { commands: ["pnpm test"] },
+    createdAt: "2026-10-01T00:00:00Z",
   });
 });
 
@@ -40,6 +37,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   client.clear();
+  api.fetchApproval.mockReset();
   api.fetchApprovals.mockReset();
 });
 
@@ -98,18 +96,14 @@ describe("Chat blockers", () => {
   });
 
   it("loads persisted evidence for nuclear risk before its review", async () => {
-    api.fetchApprovals.mockResolvedValue({
-      items: [
-        {
-          approvalId: "approval/1",
-          kind: "tool_invoke",
-          status: "pending",
-          riskLevel: "nuclear",
-          payload: {},
-          preview: { commands: ["rm -rf build"] },
-          createdAt: "2026-10-01T00:00:00Z",
-        },
-      ],
+    api.fetchApproval.mockResolvedValue({
+      approvalId: "approval/1",
+      kind: "tool_invoke",
+      status: "pending",
+      riskLevel: "nuclear",
+      payload: {},
+      preview: { commands: ["rm -rf build"] },
+      createdAt: "2026-10-01T00:00:00Z",
     });
     await act(async () =>
       root.render(
@@ -131,7 +125,15 @@ describe("Chat blockers", () => {
         </QueryClientProvider>,
       ),
     );
-    await vi.waitFor(() => expect(api.fetchApprovals).toHaveBeenCalledOnce());
+    // One read of this approval by id, under the key the Inbox detail shares (IN-11); no queue read.
+    await vi.waitFor(() =>
+      expect(api.fetchApproval).toHaveBeenCalledExactlyOnceWith("approval/1", {
+        workspaceId: "default",
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(api.fetchApprovals).not.toHaveBeenCalled();
+    expect(client.getQueryData(["approvals", "record", "default", "approval/1"])).toBeTruthy();
     const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval");
     await act(async () => review?.click());
     await vi.waitFor(() => expect(document.body.textContent).toContain("rm -rf build"));
@@ -139,18 +141,14 @@ describe("Chat blockers", () => {
   });
 
   it("loads persisted evidence for a risk level this build does not know", async () => {
-    api.fetchApprovals.mockResolvedValue({
-      items: [
-        {
-          approvalId: "approval/1",
-          kind: "tool_invoke",
-          status: "pending",
-          riskLevel: "critical_infra",
-          payload: {},
-          preview: { commands: ["kubectl delete ns prod"] },
-          createdAt: "2026-10-01T00:00:00Z",
-        },
-      ],
+    api.fetchApproval.mockResolvedValue({
+      approvalId: "approval/1",
+      kind: "tool_invoke",
+      status: "pending",
+      riskLevel: "critical_infra",
+      payload: {},
+      preview: { commands: ["kubectl delete ns prod"] },
+      createdAt: "2026-10-01T00:00:00Z",
     });
     await act(async () =>
       root.render(
@@ -172,7 +170,15 @@ describe("Chat blockers", () => {
         </QueryClientProvider>,
       ),
     );
-    await vi.waitFor(() => expect(api.fetchApprovals).toHaveBeenCalledOnce());
+    // One read of this approval by id, under the key the Inbox detail shares (IN-11); no queue read.
+    await vi.waitFor(() =>
+      expect(api.fetchApproval).toHaveBeenCalledExactlyOnceWith("approval/1", {
+        workspaceId: "default",
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(api.fetchApprovals).not.toHaveBeenCalled();
+    expect(client.getQueryData(["approvals", "record", "default", "approval/1"])).toBeTruthy();
     expect(container.textContent).toContain("Critical infra");
     const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval");
     await act(async () => review?.click());

@@ -163,13 +163,21 @@ describe("ChatTurnTraceRepository", () => {
       repo.create(baseTrace({ turnId: "turn-running" }));
       const since = "2026-03-26T00:00:00.000Z";
       const first = repo.listCompletedSince(since, 2);
-      assert.deepEqual(first.map(t => t.turnId), ["turn-a", "turn-b"]);
+      assert.deepEqual(
+        first.map((t) => t.turnId),
+        ["turn-a", "turn-b"],
+      );
       const last = first[1]!;
       const next = repo.listCompletedSince(since, 2, { startedAt: last.startedAt, turnId: last.turnId });
-      assert.deepEqual(next.map(t => t.turnId), ["turn-c"]);
+      assert.deepEqual(
+        next.map((t) => t.turnId),
+        ["turn-c"],
+      );
       assert.deepEqual(repo.listCompletedSince(since, 2, { startedAt: next[0]!.startedAt, turnId: "turn-c" }), []);
       assert.deepEqual(repo.listCompletedSince(last.startedAt, 2), []);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   });
 
   it("rolls back a newly inserted trace when its post-insert read fails", () => {
@@ -951,5 +959,50 @@ describe("ChatTurnTraceRepository", () => {
 
     assert.equal(repo.listActive(2).length, 2);
     assert.equal(repo.listActive().length, 3);
+  });
+
+  it("summarizes turn activity for many sessions in one read", () => {
+    const { repo } = createStore();
+    const trace = (turnId: string, sessionId: string, startedAt: string, status: ChatTurnTraceCreateInput["status"]) =>
+      repo.create(baseTrace({ turnId, sessionId, userMessageId: `user-${turnId}`, startedAt, status }));
+    trace("a-1", "session-a", "2026-10-05T10:00:00.000Z", "running");
+    trace("a-2", "session-a", "2026-10-05T10:00:01.000Z", "running");
+    repo.patch("a-2", { status: "completed", finishedAt: "2026-10-05T10:00:02.000Z" });
+    trace("a-3", "session-a", "2026-10-05T10:00:03.000Z", "waiting_for_approval");
+    trace("b-1", "session-b", "2026-10-05T09:00:00.000Z", "running");
+    repo.patch("b-1", { status: "failed", finishedAt: "2026-10-05T09:00:01.000Z" });
+    trace("c-1", "session-c", "2026-10-05T08:00:00.000Z", "queued");
+
+    const summary = repo.summarizeBySessionIds(["session-a", "session-b", "session-missing"]);
+
+    assert.deepEqual(summary.get("session-a"), {
+      latest: { turnId: "a-3", status: "waiting_for_approval", startedAt: "2026-10-05T10:00:03.000Z" },
+      counts: { running: 1, waiting_for_approval: 1 },
+    });
+    assert.deepEqual(summary.get("session-b"), {
+      latest: {
+        turnId: "b-1",
+        status: "failed",
+        startedAt: "2026-10-05T09:00:00.000Z",
+        finishedAt: "2026-10-05T09:00:01.000Z",
+      },
+      counts: {},
+    });
+    assert.equal(summary.has("session-missing"), false);
+    assert.equal(summary.has("session-c"), false);
+    assert.equal(repo.summarizeBySessionIds([]).size, 0);
+  });
+
+  it("summarizes sessions beyond one statement's placeholder chunk", () => {
+    const { repo } = createStore();
+    const sessionIds = Array.from({ length: 450 }, (_, index) => `session-${index}`);
+    for (const sessionId of sessionIds) {
+      repo.create(
+        baseTrace({ turnId: `turn-${sessionId}`, sessionId, userMessageId: `user-${sessionId}`, status: "queued" }),
+      );
+    }
+    const summary = repo.summarizeBySessionIds(sessionIds);
+    assert.equal(summary.size, 450);
+    assert.deepEqual(summary.get("session-449")?.counts, { queued: 1 });
   });
 });

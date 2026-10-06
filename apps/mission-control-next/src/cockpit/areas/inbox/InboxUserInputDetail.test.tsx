@@ -11,6 +11,7 @@ import type {
 import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboxUserInputDetail } from "./InboxUserInputDetail";
+import { queryKeys } from "../../data/query-keys";
 
 const api = vi.hoisted(() => ({
   fetchOperatorInbox: vi.fn(),
@@ -99,8 +100,15 @@ afterEach(() => {
   container.remove();
 });
 
+/** The Inbox area keeps the Inbox cached; seed it from the mocked owner read, then forget that read. */
+async function seedCachedInbox(client: QueryClient) {
+  client.setQueryData(queryKeys.inbox("default"), await api.fetchOperatorInbox("default"));
+  api.fetchOperatorInbox.mockClear();
+}
+
 async function renderDetail(inboxItem = item) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await seedCachedInbox(client);
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -111,7 +119,6 @@ async function renderDetail(inboxItem = item) {
     ),
   );
   await act(async () => {
-    await api.fetchOperatorInbox.mock.results[0]?.value;
     if (api.fetchChatThread.mock.results[0]) await api.fetchChatThread.mock.results[0].value;
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
@@ -124,8 +131,41 @@ function button(label: string): HTMLButtonElement {
 }
 
 describe("Inbox Chat question", () => {
+  it("keeps the question on screen while it is checked again after its Inbox item changes", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await seedCachedInbox(client);
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <UiPreferencesProvider>
+            <InboxUserInputDetail item={item} workspaceId="default" />
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(container.textContent).toContain("Safe path");
+    let release!: () => void;
+    api.fetchChatThread.mockImplementationOnce(
+      () => new Promise((resolve) => (release = () => resolve(threadWith(prompt)))),
+    );
+    await act(async () => {
+      client.setQueryData(queryKeys.inbox("default"), { ...projection, items: [{ ...item, summary: "Updated" }] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(api.fetchChatThread).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Safe path");
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.textContent).toContain("Safe path");
+  });
+
   it("reviews a choice, re-reads both owners, then submits the exact answer once", async () => {
     await renderDetail();
+    // Opening checks the cached Inbox; only the answer re-reads it.
+    expect(api.fetchOperatorInbox).not.toHaveBeenCalled();
     const radio = container.querySelector<HTMLInputElement>('input[type="radio"]');
     if (!radio) throw new Error("Missing option");
     await act(async () => radio.click());
@@ -133,7 +173,7 @@ describe("Inbox Chat question", () => {
     expect(document.body.textContent).toContain("Safe path");
     expect(api.answerChatUserInputPrompt).not.toHaveBeenCalled();
     await act(async () => button("Confirm answer").click());
-    expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(2);
+    expect(api.fetchOperatorInbox).toHaveBeenCalledTimes(1);
     expect(api.fetchChatThread).toHaveBeenCalledTimes(2);
     expect(api.answerChatUserInputPrompt).toHaveBeenCalledOnce();
     expect(api.answerChatUserInputPrompt).toHaveBeenCalledWith("session-a", "turn-a", "prompt-a", {
@@ -235,6 +275,7 @@ describe("Inbox Chat question", () => {
 
   it("keeps the answer form while the question is rechecked", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await seedCachedInbox(client);
     await act(async () =>
       root.render(
         <QueryClientProvider client={client}>
@@ -259,7 +300,68 @@ describe("Inbox Chat question", () => {
     });
     expect(container.textContent).toContain("Checking for changes…");
     expect(container.querySelector('input[type="radio"]')).not.toBeNull();
+    expect(container.querySelector<HTMLInputElement>('input[type="radio"]')!.disabled).toBe(true);
+    expect(button("Review answer").disabled).toBe(true);
     await act(async () => release());
     await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+    expect(container.querySelector<HTMLInputElement>('input[type="radio"]')!.disabled).toBe(false);
+  });
+
+  it("keeps the answer review open while the question is rechecked", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await seedCachedInbox(client);
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <UiPreferencesProvider>
+            <InboxUserInputDetail item={item} workspaceId="default" />
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.querySelector('input[type="radio"]')).not.toBeNull());
+    await act(async () => container.querySelector<HTMLInputElement>('input[type="radio"]')!.click());
+    await act(async () => button("Review answer").click());
+    expect(button("Confirm answer").disabled).toBe(false);
+    let release!: () => void;
+    api.fetchChatThread.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(threadWith(prompt));
+        }),
+    );
+    await act(async () => {
+      void client.invalidateQueries();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.textContent).toContain("Checking for changes…");
+    expect(button("Confirm answer").disabled).toBe(true);
+    await act(async () => release());
+    await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
+    expect(button("Confirm answer").disabled).toBe(false);
+  });
+
+  it("keeps the question beside a failed recheck", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await seedCachedInbox(client);
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <UiPreferencesProvider>
+            <InboxUserInputDetail item={item} workspaceId="default" />
+          </UiPreferencesProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.querySelector('input[type="radio"]')).not.toBeNull());
+    api.fetchChatThread.mockRejectedValueOnce(new Error("Gateway offline"));
+    await act(async () => {
+      void client.invalidateQueries();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
+    expect(container.textContent).toContain("Which route should run?");
+    expect(container.textContent).toContain("Showing the last version from");
+    expect(container.textContent).not.toContain("no longer waiting");
   });
 });

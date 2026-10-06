@@ -16,8 +16,11 @@ const controls = vi.hoisted(() => ({
   create: vi.fn(),
   search: { groups: [] as PaletteSearchGroup[], loading: false, error: undefined as string | undefined },
   attempt: undefined as undefined | { state: string; message: string; mode: string; sessionId?: string },
+  read: { isFetching: false, isError: false, dataUpdatedAt: 0 },
 }));
-vi.mock("./use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: controls.navigate, requestTransition: controls.transition }) }));
+vi.mock("./use-cockpit-route", () => ({
+  useCockpitRoute: () => ({ navigate: controls.navigate, requestTransition: controls.transition }),
+}));
 vi.mock("./use-cockpit-shell-switch", () => ({
   useCockpitShellSwitch: () => ({ request: controls.switchShell, feedback: null }),
 }));
@@ -33,8 +36,8 @@ vi.mock("@tanstack/react-query", () => ({
       activeModel: "recorded-model",
       items: [{ workspaceId: "workspace-a", name: "Research" }],
     },
-    isFetching: false,
-    isError: false,
+    isPending: false,
+    ...controls.read,
   }),
 }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
@@ -53,10 +56,13 @@ let container: HTMLDivElement;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  controls.transition.mockImplementation((action: (review: { isCurrent: () => boolean; signal: AbortSignal; navigate: typeof controls.navigate }) => void) =>
-    action({ isCurrent: () => true, signal: new AbortController().signal, navigate: controls.navigate }));
+  controls.transition.mockImplementation(
+    (action: (review: { isCurrent: () => boolean; signal: AbortSignal; navigate: typeof controls.navigate }) => void) =>
+      action({ isCurrent: () => true, signal: new AbortController().signal, navigate: controls.navigate }),
+  );
   controls.search = { groups: [], loading: false, error: undefined };
   controls.attempt = undefined;
+  controls.read = { isFetching: false, isError: false, dataUpdatedAt: 0 };
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -68,6 +74,34 @@ afterEach(() => {
 });
 
 describe("CommandPalette", () => {
+  it("shows each source still searching on its own, keeping other groups", () => {
+    controls.search.groups = [
+      { id: "threads", label: "Conversations", items: [], coverage: "", searching: true },
+      {
+        id: "notes",
+        label: "Library notes",
+        items: [{ id: "n1", label: "Needle note", description: "Note", target: { href: "/library/notes" } }],
+        coverage: "Bounded window.",
+      },
+    ];
+    act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    const threads = document.querySelector<HTMLElement>('section[aria-label="Conversations search coverage"]')!;
+    expect(threads.textContent).toContain("Searching…");
+    expect(threads.textContent).not.toContain("No matches");
+    expect(document.body.textContent).toContain("Needle note");
+  });
+  it("keeps the last known Gateway default while it is read again and beside a failed read", () => {
+    controls.read = { isFetching: true, isError: false, dataUpdatedAt: Date.now() };
+    act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    expect(document.body.textContent).toContain("Gateway default: local / recorded-model.");
+    expect(document.body.textContent).not.toContain("Reading Gateway default…");
+    controls.read = { isFetching: false, isError: true, dataUpdatedAt: Date.now() };
+    act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    expect(document.body.textContent).toContain(
+      "Gateway default: local / recorded-model. Showing the last version from",
+    );
+  });
+
   it("names the workspace instead of printing its id", () => {
     act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
     const text = document.querySelector('[role="dialog"]')!.textContent ?? "";
@@ -76,7 +110,12 @@ describe("CommandPalette", () => {
   });
 
   it("does not replay a confirmed creation that was already opened before this palette open", () => {
-    const opened = { state: "confirmed", message: "Conversation created and independently verified.", mode: "chat", sessionId: "s1" };
+    const opened = {
+      state: "confirmed",
+      message: "Conversation created and independently verified.",
+      mode: "chat",
+      sessionId: "s1",
+    };
     controls.attempt = opened;
     act(() => root.render(<CommandPalette open={false} onOpenChange={() => undefined} />));
     act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));

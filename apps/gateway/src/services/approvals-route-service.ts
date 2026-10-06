@@ -4,6 +4,7 @@ type ApprovalsRoutePort = Pick<
   ApprovalRuntime,
   | "createApproval"
   | "createApprovalRemoteActionToken"
+  | "getApproval"
   | "getApprovalReplay"
   | "listApprovals"
   | "listApprovalsPage"
@@ -25,6 +26,10 @@ export class ApprovalsRouteService {
     workspaceId?: Parameters<ApprovalsRoutePort["listApprovals"]>[2],
   ) {
     return this.approvals.listApprovals(status, limit, workspaceId);
+  }
+
+  public getApproval(approvalId: string, workspaceId?: string) {
+    return this.approvals.getApproval(approvalId, workspaceId);
   }
 
   public listApprovalsPage(input: Parameters<ApprovalsRoutePort["listApprovalsPage"]>[0]) {

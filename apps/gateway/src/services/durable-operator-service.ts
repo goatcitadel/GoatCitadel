@@ -26,6 +26,7 @@ export interface DurableOperatorServiceDeps {
     | "listDurableRuns"
     | "listDurableRunHistory"
     | "listDurableDeadLetters"
+    | "getDurableDeadLetter"
     | "listDurableRunCheckpoints"
     | "createDurableRun"
     | "getDurableRun"
@@ -85,6 +86,10 @@ export class DurableOperatorService {
 
   public async listDeadLetters(limit = 50): Promise<DurableDeadLetterRecord[]> {
     return this.deps.durableRunService.listDurableDeadLetters(limit);
+  }
+
+  public async getDeadLetter(deadLetterId: string): Promise<DurableDeadLetterRecord> {
+    return this.deps.durableRunService.getDurableDeadLetter(deadLetterId);
   }
 
   public async listRunCheckpoints(runId: string, limit = 200): Promise<DurableCheckpointRecord[]> {
@@ -170,13 +175,14 @@ export class DurableOperatorService {
       async () => {
         if (run.status === "queued") await this.deps.durableRunService.requestRunProcessing(runId);
       },
-      () => this.enqueueRunHook(run, "orchestration.retry.scheduled", runId, {
-        runId,
-        reason,
-        actorId,
-        status: run.status,
-        attemptCount: run.attemptCount,
-      }),
+      () =>
+        this.enqueueRunHook(run, "orchestration.retry.scheduled", runId, {
+          runId,
+          reason,
+          actorId,
+          status: run.status,
+          attemptCount: run.attemptCount,
+        }),
     ]);
   }
 
@@ -193,12 +199,13 @@ export class DurableOperatorService {
     if (result.outcome === "woke" && result.run) {
       return this.afterWakeCommit("Durable run wake", result, [
         ...(options.deferProcessing ? [] : [() => this.deps.durableRunService.requestRunProcessing(runId)]),
-        () => this.enqueueRunHook(result.run!, "orchestration.run.woken", runId, {
-          runId,
-          eventKey: event.eventKey,
-          correlationId: event.correlationId,
-          payload: event.payload ?? {},
-        }),
+        () =>
+          this.enqueueRunHook(result.run!, "orchestration.run.woken", runId, {
+            runId,
+            eventKey: event.eventKey,
+            correlationId: event.correlationId,
+            payload: event.payload ?? {},
+          }),
       ]);
     }
     return result;

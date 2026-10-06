@@ -59,8 +59,7 @@ afterEach(() => {
   container.remove();
 });
 
-async function renderControls() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+async function renderControls(client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -80,6 +79,15 @@ async function renderControls() {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
+  return client;
+}
+
+/** Invalidate everything and let the refetch status reach React. */
+async function invalidateAll(client: QueryClient) {
+  await act(async () => {
+    void client.invalidateQueries();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 }
 
 function button(label: string): HTMLButtonElement {
@@ -158,7 +166,7 @@ describe("Work run controls", () => {
     });
     await renderControls();
     expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Retry")).toBe(false);
-    expect(container.textContent).toContain("new mutation instead of manual replay");
+    expect(container.textContent).toContain("can't be retried from here. Send the request again in its conversation.");
   });
 
   it("recovers the exact unresolved dead letter only after a fresh owner read", async () => {
@@ -171,11 +179,11 @@ describe("Work run controls", () => {
     expect(api.recoverDurableDeadLetter).toHaveBeenCalledWith("dead-a");
   });
 
-  it("hides recovery when the bounded owner list lacks a unique unresolved dead letter", async () => {
+  it("hides recovery when the recent recovery list lacks a single unresolved failed delivery", async () => {
     api.fetchDurableRun.mockResolvedValue({ ...run, status: "dead_lettered" });
     api.fetchDurableDeadLetters.mockResolvedValue({ items: [] });
     await renderControls();
-    expect(container.textContent).toContain("No unique unresolved dead letter");
+    expect(container.textContent).toContain("No single unresolved failed delivery");
     expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Recover")).toBe(false);
   });
 
@@ -216,10 +224,62 @@ describe("Work run controls", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(container.textContent).toContain("Checking for changes…");
-    expect(container.textContent).toContain("Last known owner status:");
+    expect(container.textContent).toContain("Last known status:");
     expect(button("Pause")).toBeDefined();
+    expect(button("Pause").disabled).toBe(true);
     await act(async () => release());
     await vi.waitFor(() => expect(container.textContent).not.toContain("Checking for changes…"));
-    expect(container.textContent).toContain("Current owner status:");
+    expect(container.textContent).toContain("Current status:");
+    expect(button("Pause").disabled).toBe(false);
+  });
+
+  it("keeps an open action review open while the run is rechecked", async () => {
+    const client = await renderControls();
+    await act(async () => button("Pause").click());
+    let release!: () => void;
+    api.fetchDurableRun.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(run);
+        }),
+    );
+    await invalidateAll(client);
+    expect(document.body.textContent).toContain("Pause this run?");
+    expect(button("Confirm pause").disabled).toBe(true);
+    await act(async () => release());
+    await vi.waitFor(() => expect(button("Confirm pause").disabled).toBe(false));
+  });
+
+  it("keeps the run beside a failed recheck", async () => {
+    const client = await renderControls();
+    api.fetchDurableRun.mockRejectedValueOnce(new Error("Gateway offline"));
+    await invalidateAll(client);
+    await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
+    expect(container.textContent).toContain("Last known status: running");
+    expect(container.textContent).toContain("Showing the last version from");
+    expect(button("Pause")).toBeDefined();
+  });
+
+  it("keeps the dead letter and Recover while the recovery record is rechecked", async () => {
+    api.fetchDurableRun.mockResolvedValue({ ...run, status: "dead_lettered" });
+    const client = await renderControls();
+    expect(button("Recover").disabled).toBe(false);
+    let release!: () => void;
+    api.fetchDurableDeadLetters.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ items: [letter] });
+        }),
+    );
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["tasks", "work-run-dead-letter"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.textContent).toContain("Checking for changes…");
+    expect(container.textContent).not.toContain("Checking the current recovery record…");
+    expect(container.textContent).not.toContain("No single unresolved failed delivery");
+    expect(button("Recover").disabled).toBe(true);
+    await act(async () => release());
+    await vi.waitFor(() => expect(button("Recover").disabled).toBe(false));
   });
 });

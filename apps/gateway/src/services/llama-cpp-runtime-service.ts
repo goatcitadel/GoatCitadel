@@ -673,19 +673,8 @@ export class LlamaCppRuntimeService {
     this.ownedProcessTree = { child, pid: child.pid };
     this.ownership = "owned";
 
-    child.stdout?.on("data", (chunk) => {
-      const message = chunk.toString("utf8").trim();
-      if (message) {
-        this.emit("llamacpp_stdout", { message });
-      }
-    });
-    child.stderr?.on("data", (chunk) => {
-      const message = chunk.toString("utf8").trim();
-      if (message) {
-        this.lastError = message.slice(0, 500);
-        this.emit("llamacpp_stderr", { message });
-      }
-    });
+    child.stdout?.on("data", (chunk) => this.recordProcessOutput("stdout", chunk));
+    child.stderr?.on("data", (chunk) => this.recordProcessOutput("stderr", chunk));
     child.on("exit", (code, signal) => {
       const isCurrentProcess = this.process === child;
       if (isCurrentProcess) {
@@ -1410,6 +1399,17 @@ export class LlamaCppRuntimeService {
         // unhandled failure while reporting the first one.
       }
     });
+  }
+
+  /**
+   * llama-server output is drained and its latest stderr line kept as `lastError`, but it is not
+   * published: one retained event per log chunk flooded the activity feed and, through health
+   * refreshes, could make llama-server log again.
+   */
+  private recordProcessOutput(stream: "stdout" | "stderr", chunk: Buffer): void {
+    if (stream !== "stderr") return;
+    const message = chunk.toString("utf8").trim();
+    if (message) this.lastError = message.slice(0, 500);
   }
 
   private emit(eventType: string, payload: Record<string, unknown>): void {

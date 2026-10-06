@@ -1,203 +1,175 @@
 import { describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
-import { invalidateForEvent } from "./realtime";
+import type { RealtimeEvent } from "@goatcitadel/contracts";
+import { subscribeRefresh, type RefreshSignal } from "@goatcitadel/mission-control-shared/state/refresh-bus";
+import { createRealtimeSink, invalidateForEvent, realtimeRefreshSignal, UNMAPPED_TOPIC_INTERVAL_MS } from "./realtime";
 import { queryKeys } from "./query-keys";
 
-describe("cockpit realtime invalidation", () => {
-  const invalidation = {
-    eventId: "inbox.changed:owner",
-    sequence: 3,
-    timestamp: "2026-09-30T14:00:00.000Z",
-    eventType: "inbox.changed",
-    source: "operator_inbox",
-    eventClass: "operational_signal" as const,
-    eventAuthority: "retained_stream" as const,
-    links: { workspaceId: "workspace-a" },
-    payload: { sourceEventId: "owner", family: "approvals", scope: "workspace" },
-  };
+const base = {
+  eventId: "e1",
+  sequence: 1,
+  timestamp: "2026-10-05T10:00:00.000Z",
+  eventAuthority: "retained_stream",
+  eventClass: "domain_fact",
+  payload: {},
+} as const;
+const sink = () => ({ invalidate: vi.fn(), refresh: vi.fn(), unmapped: vi.fn() });
 
-  it("refreshes only the exact scoped Inbox query from its dedicated signal", () => {
-    const queryClient = new QueryClient();
-    const spy = vi.spyOn(queryClient, "invalidateQueries");
-    expect(invalidateForEvent(queryClient, invalidation)).toEqual([]);
-    expect(spy).toHaveBeenCalledExactlyOnceWith({ queryKey: ["approvals", "operator-inbox", "workspace-a"] });
+describe("invalidateForEvent", () => {
+  it("bridges a mapped chat event into the refresh bus", () => {
+    const s = sink();
+    invalidateForEvent({ ...base, eventType: "chat_thread_updated", source: "chat" }, s);
+    expect(s.invalidate).toHaveBeenCalledWith(["chat"]);
+    expect(s.refresh).toHaveBeenCalledWith("chat", expect.objectContaining({ eventType: "chat_thread_updated" }));
+    expect(s.unmapped).not.toHaveBeenCalled();
   });
 
-  it("refreshes all Inbox queries only for an explicitly unscoped signal", () => {
-    const queryClient = new QueryClient();
-    const spy = vi.spyOn(queryClient, "invalidateQueries");
-    invalidateForEvent(queryClient, {
-      ...invalidation,
-      links: {},
-      payload: { ...invalidation.payload, scope: "all_workspaces" },
-    });
-    expect(spy).toHaveBeenCalledExactlyOnceWith({ queryKey: ["approvals", "operator-inbox"] });
-  });
-
-  it.each([
-    { source: "other" },
-    { eventAuthority: "durable_history" },
-    { eventAuthority: "derived_projection" },
-    { eventClass: "ui_notification" },
-    { links: {} },
-    { links: { workspaceId: " " } },
-    { payload: { scope: "all_workspaces" } },
-    { payload: { scope: "unknown" } },
-  ])("rejects malformed or non-current Inbox signal scope %j", (overrides) => {
-    const queryClient = new QueryClient();
-    const spy = vi.spyOn(queryClient, "invalidateQueries");
-    invalidateForEvent(queryClient, { ...invalidation, ...overrides } as typeof invalidation);
-    expect(spy).not.toHaveBeenCalled();
-  });
-
-  it("invalidates queries for each event owner topic", () => {
-    const queryClient = new QueryClient();
-    const spy = vi.spyOn(queryClient, "invalidateQueries");
-    const topics = invalidateForEvent(queryClient, {
-      eventId: "e-1",
-      sequence: 1,
+  it("names the conversation an event belongs to in its refresh signal", () => {
+    const event = { ...base, eventType: "chat_thread_updated", source: "chat", links: { sessionId: "s-9" } };
+    expect(realtimeRefreshSignal(event)).toEqual({
+      reason: "chat_thread_updated",
+      source: "chat",
       eventType: "chat_thread_updated",
-      source: "chat",
-      timestamp: "2026-09-28T00:00:00.000Z",
-      links: { sessionId: "s-1" },
-      payload: {},
-    } as never);
-    expect(topics).toContain("chat");
-    expect(spy).toHaveBeenCalledWith({ queryKey: ["chat"] });
-  });
-
-  it("refreshes Work and Inbox from a retained run link", () => {
-    const queryClient = new QueryClient();
-    const spy = vi.spyOn(queryClient, "invalidateQueries");
-    const topics = invalidateForEvent(queryClient, {
-      eventId: "run-1",
-      sequence: 2,
-      eventType: "run_failed",
-      source: "durable",
-      timestamp: "2026-09-28T00:00:00.000Z",
-      eventAuthority: "retained_stream",
-      links: { runId: "r-1" },
-      payload: {},
+      eventId: "e1",
+      sessionId: "s-9",
     });
-    expect(topics).toContain("tasks");
-    expect(spy).toHaveBeenCalledWith({ queryKey: ["tasks"] });
-    expect(spy).toHaveBeenCalledWith({ queryKey: ["approvals", "operator-inbox"] });
+    expect(realtimeRefreshSignal({ ...event, links: undefined }).sessionId).toBeUndefined();
   });
 
-  it("refreshes Inbox for a proposal transition without an owner topic", () => {
-    const queryClient = new QueryClient();
-    const spy = vi.spyOn(queryClient, "invalidateQueries");
-    invalidateForEvent(queryClient, {
-      eventId: "proposal-1",
+  it("refreshes nothing for llama.cpp process output", () => {
+    const s = sink();
+    invalidateForEvent({ ...base, eventType: "llamacpp_stderr", source: "llamacpp" }, s);
+    invalidateForEvent({ ...base, eventType: "llamacpp_stdout", source: "llamacpp" }, s);
+    expect(s.invalidate).not.toHaveBeenCalled();
+    expect(s.refresh).not.toHaveBeenCalled();
+    expect(s.unmapped).not.toHaveBeenCalled();
+  });
+
+  // The Gateway publishes llama.cpp events in two real shapes: route lifecycle with eventType "system"
+  // and the type in payload.type, and runtime events with the runtime's own type as eventType.
+  it("refreshes only the health readers for both llama.cpp status shapes", () => {
+    for (const shape of [
+      { eventType: "system", payload: { type: "llamacpp_refreshed" } },
+      { eventType: "llamacpp_exited", payload: { unexpected: true, code: 1 } },
+    ]) {
+      const s = sink();
+      invalidateForEvent({ ...base, ...shape, source: "llamacpp" }, s);
+      expect(s.invalidate).toHaveBeenCalledExactlyOnceWith(queryKeys.healthAll());
+      expect(s.refresh).toHaveBeenCalledExactlyOnceWith("llamaCpp", expect.anything());
+    }
+  });
+
+  it("ignores durable-history replays", () => {
+    const s = sink();
+    invalidateForEvent({ ...base, eventType: "system", source: "llamacpp", eventAuthority: "durable_history" }, s);
+    invalidateForEvent(
+      { ...base, eventType: "change_plan_updated", source: "chat", eventAuthority: "durable_history" },
+      s,
+    );
+    expect(s.invalidate).not.toHaveBeenCalled();
+    expect(s.refresh).not.toHaveBeenCalled();
+  });
+
+  it("refreshes Work and the Inbox from a durable run signal", () => {
+    const s = sink();
+    invalidateForEvent({ ...base, eventType: "system", source: "durable", links: { runId: "r-1" } }, s);
+    expect(s.invalidate).toHaveBeenCalledWith(["tasks"]);
+    expect(s.invalidate).toHaveBeenCalledWith(queryKeys.inboxAll());
+  });
+
+  it("refreshes the Inbox for a proposal and a pending approval", () => {
+    const proposal = sink();
+    invalidateForEvent({ ...base, eventType: "capability_proposal_created", source: "capabilities" }, proposal);
+    expect(proposal.invalidate).toHaveBeenCalledWith(queryKeys.inboxAll());
+    const approval = sink();
+    invalidateForEvent(
+      { ...base, eventType: "approval_created", source: "approvals", links: { approvalId: "a" } },
+      approval,
+    );
+    expect(approval.invalidate).toHaveBeenCalledWith(["approvals"]);
+  });
+
+  it("sends an unmapped event to the throttled topic fallback, never to surface", () => {
+    const s = sink();
+    invalidateForEvent({ ...base, eventType: "x_new", source: "x_owner", links: { taskId: "t" } }, s);
+    expect(s.unmapped).toHaveBeenCalledWith("tasks", expect.anything());
+    expect(s.unmapped).not.toHaveBeenCalledWith("surface", expect.anything());
+    expect(s.invalidate).not.toHaveBeenCalled();
+  });
+
+  describe("inbox.changed", () => {
+    const invalidation: RealtimeEvent = {
+      eventId: "inbox.changed:owner",
       sequence: 3,
-      eventType: "capability_proposal_created",
-      source: "capabilities",
-      timestamp: "2026-09-28T00:00:00.000Z",
+      timestamp: "2026-09-30T14:00:00.000Z",
+      eventType: "inbox.changed",
+      source: "operator_inbox",
+      eventClass: "operational_signal",
       eventAuthority: "retained_stream",
-      payload: {},
+      links: { workspaceId: "ws-1" },
+      payload: { sourceEventId: "owner", family: "approvals", scope: "workspace" },
+    };
+
+    it("keeps inbox.changed workspace scoping", () => {
+      const s = sink();
+      invalidateForEvent(invalidation, s);
+      expect(s.invalidate).toHaveBeenCalledExactlyOnceWith(queryKeys.inbox("ws-1"));
+      expect(s.refresh).not.toHaveBeenCalled();
     });
-    expect(spy).toHaveBeenCalledWith({ queryKey: ["approvals", "operator-inbox"] });
+
+    it("refreshes all Inbox queries only for an explicitly unscoped signal", () => {
+      const s = sink();
+      invalidateForEvent(
+        { ...invalidation, links: {}, payload: { ...invalidation.payload, scope: "all_workspaces" } },
+        s,
+      );
+      expect(s.invalidate).toHaveBeenCalledExactlyOnceWith(queryKeys.inboxAll());
+    });
+
+    it.each([
+      { source: "other" },
+      { eventAuthority: "durable_history" },
+      { eventAuthority: "derived_projection" },
+      { eventClass: "ui_notification" },
+      { links: {} },
+      { links: { workspaceId: " " } },
+      { payload: { scope: "all_workspaces" } },
+      { payload: { scope: "unknown" } },
+    ])("rejects malformed or non-current Inbox signal scope %j", (overrides) => {
+      const s = sink();
+      invalidateForEvent({ ...invalidation, ...overrides } as RealtimeEvent, s);
+      expect(s.invalidate).not.toHaveBeenCalled();
+      expect(s.unmapped).not.toHaveBeenCalled();
+    });
   });
+});
 
-  it("refreshes Inbox when a pending approval is published", () => {
+describe("unmapped event throttle", () => {
+  it("gives events inside the window one trailing refresh at its end instead of dropping them", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const signals: RefreshSignal[] = [];
+    const off = subscribeRefresh("tasks", (signal) => signals.push(signal));
     const queryClient = new QueryClient();
-    const spy = vi.spyOn(queryClient, "invalidateQueries");
-    invalidateForEvent(queryClient, {
-      eventId: "approval-1",
-      sequence: 5,
-      eventType: "approval_requested",
-      source: "approvals",
-      timestamp: "2026-09-28T00:00:00.000Z",
-      eventAuthority: "retained_stream",
-      links: { approvalId: "a-1" },
-      payload: {},
-    });
-    expect(spy).toHaveBeenCalledWith({ queryKey: ["approvals", "operator-inbox"] });
-  });
-
-  it("does not refresh Inbox from durable history replay", () => {
-    const queryClient = new QueryClient();
-    const spy = vi.spyOn(queryClient, "invalidateQueries");
-    invalidateForEvent(queryClient, {
-      eventId: "history-1",
-      sequence: 4,
-      eventType: "change_plan_updated",
-      source: "chat",
-      timestamp: "2026-09-28T00:00:00.000Z",
-      eventAuthority: "durable_history",
-      payload: {},
-    });
-    expect(spy).not.toHaveBeenCalledWith({ queryKey: ["approvals", "operator-inbox"] });
-  });
-
-  // The Gateway publishes llama.cpp events in two real shapes:
-  // - route lifecycle (llama-cpp-route-service.ts): eventType "system", with the type in payload.type
-  //   ("llamacpp_refreshed" | "llamacpp_started" | "llamacpp_stopped");
-  // - runtime events (gateway-service.ts onEvent): the runtime's own type as eventType
-  //   ("llamacpp_stdout" | "llamacpp_stderr" | "llamacpp_exited" | ...).
-  it("refreshes only the health readers for a llama.cpp runtime signal", () => {
-    const queryClient = new QueryClient();
-    const spy = vi.spyOn(queryClient, "invalidateQueries");
-    const topics = invalidateForEvent(queryClient, {
-      eventId: "llama-1",
-      sequence: 6,
-      eventType: "system",
-      source: "llamacpp",
-      timestamp: "2026-10-03T00:00:00.000Z",
-      eventAuthority: "retained_stream",
-      payload: { type: "llamacpp_refreshed", status: { healthy: true, activeModelId: "gemma-local" } },
-    });
-    expect(topics).toEqual([]);
-    expect(spy).toHaveBeenCalledExactlyOnceWith({ queryKey: ["system", "health"] });
-  });
-
-  it("ignores replayed llama.cpp history", () => {
-    const queryClient = new QueryClient();
-    const spy = vi.spyOn(queryClient, "invalidateQueries");
-    invalidateForEvent(queryClient, {
-      eventId: "llama-2",
-      sequence: 7,
-      eventType: "system",
-      source: "llamacpp",
-      timestamp: "2026-10-03T00:00:00.000Z",
-      eventAuthority: "durable_history",
-      payload: { type: "llamacpp_refreshed" },
-    });
-    expect(spy).not.toHaveBeenCalled();
-  });
-
-  it.each(["llamacpp_stdout", "llamacpp_stderr"])(
-    "never refreshes health for llama-server output (%s)",
-    (eventType) => {
-      const queryClient = new QueryClient();
-      const spy = vi.spyOn(queryClient, "invalidateQueries");
-      expect(
-        invalidateForEvent(queryClient, {
-          eventId: `log-${eventType}`,
-          sequence: 8,
-          eventType,
-          source: "llamacpp",
-          timestamp: "2026-10-03T00:00:00.000Z",
-          eventAuthority: "retained_stream",
-          payload: { message: "srv  log_server_r: request: GET /health 127.0.0.1 200" },
-        }),
-      ).toEqual([]);
-      expect(spy).not.toHaveBeenCalled();
-    },
-  );
-
-  it("refreshes the health query the readers actually use when llama-server exits", () => {
-    const queryClient = new QueryClient();
-    queryClient.setQueryData(queryKeys.health("workspace-a"), { checks: [] });
-    invalidateForEvent(queryClient, {
-      eventId: "llama-exit",
-      sequence: 9,
-      eventType: "llamacpp_exited",
-      source: "llamacpp",
-      timestamp: "2026-10-03T00:00:00.000Z",
-      eventAuthority: "retained_stream",
-      payload: { unexpected: true, code: 1 },
-    });
-    expect(queryClient.getQueryState(queryKeys.health("workspace-a"))?.isInvalidated).toBe(true);
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const { sink, dispose } = createRealtimeSink(queryClient);
+    const unmapped = (eventId: string) =>
+      ({ ...base, eventId, eventType: "x_new", source: "x_owner", links: { taskId: "t" } }) as RealtimeEvent;
+    try {
+      sink.unmapped("tasks", unmapped("a"));
+      sink.unmapped("tasks", unmapped("b"));
+      sink.unmapped("tasks", unmapped("c"));
+      expect(signals.map((signal) => signal.eventId)).toEqual(["a"]);
+      await vi.advanceTimersByTimeAsync(UNMAPPED_TOPIC_INTERVAL_MS);
+      expect(signals.map((signal) => signal.eventId)).toEqual(["a", "c"]);
+      await vi.advanceTimersByTimeAsync(UNMAPPED_TOPIC_INTERVAL_MS * 2);
+      expect(signals).toHaveLength(2);
+      expect(invalidate.mock.calls.filter(([filters]) => filters?.queryKey?.[0] === "tasks")).toHaveLength(2);
+    } finally {
+      dispose();
+      off();
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

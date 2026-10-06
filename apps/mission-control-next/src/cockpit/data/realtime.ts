@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
-import { createInvalidationBatcher } from "./invalidation-batcher";
+import { createInvalidationBatcher, throttleIntervalFor } from "./invalidation-batcher";
 import { toast } from "sonner";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
@@ -9,71 +9,160 @@ import {
   type EventStreamConnectionState,
   type RealtimeEvent,
 } from "@goatcitadel/mission-control-shared/api/shell-client";
-import { decideNotificationDelivery } from "@goatcitadel/mission-control-shared/state/notification-policy";
 import {
-  deriveRealtimeNotification,
-  deriveRealtimeRefresh,
-} from "@goatcitadel/mission-control-shared/state/realtime-derived";
-import type { RefreshTopic } from "@goatcitadel/mission-control-shared/state/refresh-bus";
+  publishEventStreamStatus,
+  resetEventStreamStatus,
+} from "@goatcitadel/mission-control-shared/state/event-stream-status-store";
+import { decideNotificationDelivery } from "@goatcitadel/mission-control-shared/state/notification-policy";
+import { deriveRealtimeNotification } from "@goatcitadel/mission-control-shared/state/realtime-derived";
+import {
+  emitRefresh,
+  type RefreshSignal,
+  type RefreshTopic,
+} from "@goatcitadel/mission-control-shared/state/refresh-bus";
+import type { OperatorInboxResponse } from "@goatcitadel/contracts";
 import { queryKeys } from "./query-keys";
+import { resolveRealtimeEvent } from "./event-map";
+import { appendRetainedActivity } from "./activity-feed";
 import { inboxItemLocation, resolveInboxNotificationItem } from "./inbox-notification";
 import { useCockpitRoute } from "../app/use-cockpit-route";
 import { playOperatorAttentionSound } from "@goatcitadel/mission-control-shared/state/operator-attention";
 import type { UiNotificationPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { showBrowserNotification } from "../../app/browser-notification";
 
-export function invalidateForEvent(
-  queryClient: QueryClient,
-  event: RealtimeEvent,
-  invalidate: (queryKey: QueryKey) => void = (queryKey) => void queryClient.invalidateQueries({ queryKey }),
-): RefreshTopic[] {
-  if (event.eventType === "inbox.changed") {
-    if (
-      event.source !== "operator_inbox" ||
-      event.eventAuthority !== "retained_stream" ||
-      event.eventClass !== "operational_signal"
-    )
-      return [];
-    const workspaceId = event.links?.workspaceId;
-    if (
-      event.payload.scope === "workspace" &&
-      typeof workspaceId === "string" &&
-      workspaceId.trim() === workspaceId &&
-      workspaceId
-    ) {
-      invalidate(queryKeys.inbox(workspaceId));
-    } else if (event.payload.scope === "all_workspaces" && workspaceId === undefined) {
-      invalidate(["approvals", "operator-inbox"]);
-    }
-    return [];
-  }
-  if (event.source === "llamacpp") {
-    // Status and lifecycle signals change what the health readers show. Raw llama-server output
-    // (one event per log chunk) does not, and refreshing health on it would probe llama-server,
-    // which can log again.
-    const processOutput = event.eventType === "llamacpp_stdout" || event.eventType === "llamacpp_stderr";
-    if (!processOutput && event.eventAuthority !== "durable_history") invalidate(queryKeys.healthAll());
-    return [];
-  }
-  const { topics } = deriveRealtimeRefresh(event, { defaultTopics: ["surface"] });
-  for (const topic of topics) invalidate([topic]);
-  if (topics.some((topic) => topic === "tools" || topic === "mcp" || topic === "agents")) {
-    invalidate(queryKeys.capabilities());
-  }
-  const inboxOwnerSignal =
-    event.eventAuthority !== "durable_history" &&
-    (event.eventType === "inbox.changed" ||
-      event.eventType.includes("proposal") ||
-      event.eventType.includes("change_plan") ||
-      event.eventType.includes("user_input"));
+/**
+ * An event the map does not know refreshes its keyword topics at most once every five seconds per topic;
+ * events inside the window share one trailing refresh when it ends.
+ */
+export const UNMAPPED_TOPIC_INTERVAL_MS = 5_000;
+
+export interface RealtimeSink {
+  invalidate: (queryKey: QueryKey) => void;
+  refresh: (topic: RefreshTopic, event: RealtimeEvent) => void;
+  unmapped: (topic: RefreshTopic, event: RealtimeEvent) => void;
+}
+
+function invalidateForInboxSignal(event: RealtimeEvent, sink: RealtimeSink): void {
   if (
-    event.eventAuthority !== "durable_history" &&
-    (inboxOwnerSignal ||
-      topics.some((topic) => ["approvals", "tasks", "memory", "skills", "improvement", "system"].includes(topic)))
+    event.source !== "operator_inbox" ||
+    event.eventAuthority !== "retained_stream" ||
+    event.eventClass !== "operational_signal"
+  )
+    return;
+  const workspaceId = event.links?.workspaceId;
+  if (
+    event.payload.scope === "workspace" &&
+    typeof workspaceId === "string" &&
+    workspaceId.trim() === workspaceId &&
+    workspaceId
   ) {
-    invalidate(["approvals", "operator-inbox"]);
+    sink.invalidate(queryKeys.inbox(workspaceId));
+  } else if (event.payload.scope === "all_workspaces" && workspaceId === undefined) {
+    sink.invalidate(queryKeys.inboxAll());
   }
-  return topics;
+}
+
+/** Routes one live event to the query prefixes and refresh topics it changes (see `event-map.ts`). */
+export function invalidateForEvent(event: RealtimeEvent, sink: RealtimeSink): void {
+  if (event.eventType === "inbox.changed") {
+    invalidateForInboxSignal(event, sink);
+    return;
+  }
+  const resolution = resolveRealtimeEvent(event);
+  if (resolution.kind === "ignored") return;
+  if (resolution.kind === "unmapped") {
+    for (const topic of resolution.topics) sink.unmapped(topic, event);
+    return;
+  }
+  for (const key of resolution.effect.keys) sink.invalidate(key);
+  for (const topic of resolution.effect.refresh) sink.refresh(topic, event);
+}
+
+/** The refresh-bus signal for one live event; it names the conversation so Chat can skip reloads for others. */
+export function realtimeRefreshSignal(event: RealtimeEvent): Omit<RefreshSignal, "topic" | "timestamp"> {
+  return {
+    reason: event.eventType,
+    source: event.source,
+    eventType: event.eventType,
+    eventId: event.eventId,
+    sessionId: event.links?.sessionId,
+  };
+}
+
+/** Exported for tests. An unmapped event inside its topic's window gets one trailing refresh, never a drop. */
+export function createRealtimeSink(queryClient: QueryClient): { sink: RealtimeSink; dispose: () => void } {
+  const batcher = createInvalidationBatcher(queryClient, { minIntervalMs: throttleIntervalFor });
+  const lastUnmapped = new Map<RefreshTopic, number>();
+  const trailingUnmapped = new Map<RefreshTopic, { timer: ReturnType<typeof setTimeout>; event: RealtimeEvent }>();
+  const warned = new Set<string>();
+  const signal = (topic: RefreshTopic, event: RealtimeEvent) => emitRefresh(topic, realtimeRefreshSignal(event));
+  const sink: RealtimeSink = {
+    invalidate: batcher.invalidate,
+    refresh: signal,
+    unmapped: (topic, event) => {
+      const id = `${event.source}:${event.eventType}`;
+      if (import.meta.env.DEV && !warned.has(id)) {
+        warned.add(id);
+        // eslint-disable-next-line no-console
+        console.warn(`Unmapped realtime event ${id}; refreshing ${topic} (throttled).`);
+      }
+      const wait = (lastUnmapped.get(topic) ?? -Infinity) + UNMAPPED_TOPIC_INTERVAL_MS - Date.now();
+      if (wait <= 0) {
+        refreshUnmapped(topic, event);
+        return;
+      }
+      const trailing = trailingUnmapped.get(topic);
+      if (trailing) {
+        trailing.event = event;
+        return;
+      }
+      const entry = {
+        event,
+        timer: setTimeout(() => {
+          trailingUnmapped.delete(topic);
+          refreshUnmapped(topic, entry.event);
+        }, wait),
+      };
+      trailingUnmapped.set(topic, entry);
+    },
+  };
+  function refreshUnmapped(topic: RefreshTopic, event: RealtimeEvent) {
+    lastUnmapped.set(topic, Date.now());
+    batcher.invalidate([topic]);
+    signal(topic, event);
+  }
+  const dispose = () => {
+    for (const { timer } of trailingUnmapped.values()) clearTimeout(timer);
+    trailingUnmapped.clear();
+    batcher.dispose();
+  };
+  return { sink, dispose };
+}
+
+/**
+ * Reads the Inbox through the query cache for a toast decision. A read already in flight began before
+ * this event and may miss it, so it is replaced (its waiters receive the new result). Events delivered
+ * in the same tick share one read, and a batched Inbox invalidation joins it instead of starting another.
+ */
+function createInboxReader(queryClient: QueryClient) {
+  const tickReads = new Map<string, Promise<OperatorInboxResponse>>();
+  return (workspaceId: string): Promise<OperatorInboxResponse> => {
+    const pending = tickReads.get(workspaceId);
+    if (pending) return pending;
+    const queryKey = queryKeys.inbox(workspaceId);
+    const inFlight = queryClient.getQueryCache().find({ queryKey, exact: true });
+    if (inFlight?.state.fetchStatus === "fetching") void inFlight.cancel({ silent: true });
+    const read = queryClient.fetchQuery({
+      queryKey,
+      queryFn: ({ signal }) => fetchOperatorInbox(workspaceId, { signal }),
+      staleTime: 0,
+    });
+    tickReads.set(workspaceId, read);
+    setTimeout(() => {
+      if (tickReads.get(workspaceId) === read) tickReads.delete(workspaceId);
+    }, 0);
+    return read;
+  };
 }
 
 function pageFocused(): boolean {
@@ -101,90 +190,97 @@ export function useCockpitRealtime(input: {
   const preferencesRef = useRef(input.notificationPreferences);
   preferencesRef.current = input.notificationPreferences;
   const { queryClient, enabled, workspaceId } = input;
+  // The workspace is read through a ref so switching it never reconnects the stream (GL-64). Its own
+  // generation still retires reads and toasts begun for an earlier visit, even after coming back.
+  const workspaceRef = useRef({ id: workspaceId, generation: 0 });
+  if (workspaceRef.current.id !== workspaceId) {
+    workspaceRef.current = { id: workspaceId, generation: workspaceRef.current.generation + 1 };
+  }
   const installation = getGatewayApiBaseUrl();
-  const currentScope = useRef({ installation, workspaceId, enabled, generation: 0 });
-  if (
-    currentScope.current.installation !== installation ||
-    currentScope.current.workspaceId !== workspaceId ||
-    currentScope.current.enabled !== enabled
-  ) {
-    currentScope.current = { installation, workspaceId, enabled, generation: currentScope.current.generation + 1 };
+  const currentScope = useRef({ installation, enabled, generation: 0 });
+  if (currentScope.current.installation !== installation || currentScope.current.enabled !== enabled) {
+    currentScope.current = { installation, enabled, generation: currentScope.current.generation + 1 };
   }
   useEffect(() => {
     if (!enabled) return;
     let active = true;
     const generation = currentScope.current.generation;
     const delivered = new Set<string>();
-    const pendingReads = new Set<AbortController>();
-    const batcher = createInvalidationBatcher(queryClient);
+    const { sink, dispose } = createRealtimeSink(queryClient);
+    const readInbox = createInboxReader(queryClient);
     const isCurrent = () =>
       active &&
       currentScope.current.enabled &&
       currentScope.current.generation === generation &&
       currentScope.current.installation === installation &&
       getGatewayApiBaseUrl() === installation;
-    const disconnect = connectEventStream((event, delivery) => {
-      if (!isCurrent()) return;
-      invalidateForEvent(queryClient, event, batcher.invalidate);
-      const notification = deriveRealtimeNotification(event);
-      const decision = decideNotificationDelivery(notification, {
-        replayed: delivery.replayed,
-        eventSessionId: event.links?.sessionId,
-        visibleSessionId: visibleSessionIdRef.current,
-        pageFocused: pageFocused(),
-      });
-      if (!notification || !decision.toast) return;
-      // The shared HTTP client also coalesces GETs below the query cache. A scoped
-      // signal requests a separate owner read begun after this live event.
-      const read = new AbortController();
-      pendingReads.add(read);
-      void fetchOperatorInbox(workspaceId, { signal: read.signal })
-        .then((projection) => {
-          if (!isCurrent()) return;
-          const item = resolveInboxNotificationItem(projection, event, notification, workspaceId);
-          if (!item || delivered.has(item.id)) return;
-          const focused = pageFocused();
-          const preferences = preferencesRef.current;
-          const deliveryDecision = decideNotificationDelivery(notification, {
-            replayed: delivery.replayed,
-            eventSessionId: item.source.sessionId,
-            visibleSessionId: visibleSessionIdRef.current,
-            pageFocused: focused,
-          });
-          if (!deliveryDecision.toast || (preferences.onlyWhenUnfocused && focused)) return;
-          delivered.add(item.id);
-          const open = () => {
-            if (isCurrent()) navigateRef.current(inboxItemLocation(item));
-          };
-          const id = `inbox:${workspaceId}:${item.id}`;
-          const show =
-            notification.tone === "error" ? toast.error : notification.tone === "warning" ? toast.warning : toast;
-          if (preferences.toastsEnabled)
-            show(item.title, {
-              id,
-              description: item.summary,
-              duration: notification.tone === "error" ? Infinity : 6_000,
-              action: { label: "Open Inbox item", onClick: open },
-            });
-          if (deliveryDecision.sound) void playOperatorAttentionSound(notification.soundCue, preferences.soundMode);
-          if (deliveryDecision.desktop && preferences.desktopEnabled && document.visibilityState === "hidden") {
-            showBrowserNotification(item.title, notification.tone, { tag: id, onClick: open });
-          }
-        })
-        .catch(() => {
-          /* Ignore failed owner reads; a retained signal must not become a current item. */
-        })
-        .finally(() => {
-          pendingReads.delete(read);
+    const disconnect = connectEventStream(
+      (event, delivery) => {
+        if (!isCurrent()) return;
+        invalidateForEvent(event, sink);
+        if (event.eventAuthority !== "durable_history") {
+          appendRetainedActivity(queryClient, event, queryKeys.systemActivity());
+          appendRetainedActivity(queryClient, event, queryKeys.workActivityAll());
+        }
+        const notification = deriveRealtimeNotification(event);
+        const decision = decideNotificationDelivery(notification, {
+          replayed: delivery.replayed,
+          eventSessionId: event.links?.sessionId,
+          visibleSessionId: visibleSessionIdRef.current,
+          pageFocused: pageFocused(),
         });
-    }, setStreamState);
+        if (!notification || !decision.toast) return;
+        const { id: scopeWorkspaceId, generation: workspaceGeneration } = workspaceRef.current;
+        const isCurrentWorkspace = () =>
+          isCurrent() &&
+          workspaceRef.current.id === scopeWorkspaceId &&
+          workspaceRef.current.generation === workspaceGeneration;
+        void readInbox(scopeWorkspaceId)
+          .then((projection) => {
+            if (!isCurrentWorkspace()) return;
+            const item = resolveInboxNotificationItem(projection, event, notification, scopeWorkspaceId);
+            if (!item || delivered.has(item.id)) return;
+            const focused = pageFocused();
+            const preferences = preferencesRef.current;
+            const deliveryDecision = decideNotificationDelivery(notification, {
+              replayed: delivery.replayed,
+              eventSessionId: item.source.sessionId,
+              visibleSessionId: visibleSessionIdRef.current,
+              pageFocused: focused,
+            });
+            if (!deliveryDecision.toast || (preferences.onlyWhenUnfocused && focused)) return;
+            delivered.add(item.id);
+            const open = () => {
+              if (isCurrentWorkspace()) navigateRef.current(inboxItemLocation(item));
+            };
+            const id = `inbox:${scopeWorkspaceId}:${item.id}`;
+            const show =
+              notification.tone === "error" ? toast.error : notification.tone === "warning" ? toast.warning : toast;
+            if (preferences.toastsEnabled)
+              show(item.title, {
+                id,
+                description: item.summary,
+                duration: notification.tone === "error" ? Infinity : 6_000,
+                action: { label: "Open Inbox item", onClick: open },
+              });
+            if (deliveryDecision.sound) void playOperatorAttentionSound(notification.soundCue, preferences.soundMode);
+            if (deliveryDecision.desktop && preferences.desktopEnabled && document.visibilityState === "hidden") {
+              showBrowserNotification(item.title, notification.tone, { tag: id, onClick: open });
+            }
+          })
+          .catch(() => {
+            /* Ignore failed owner reads; a retained signal must not become a current item. */
+          });
+      },
+      setStreamState,
+      publishEventStreamStatus,
+    );
     return () => {
       active = false;
-      batcher.dispose();
-      for (const read of pendingReads) read.abort();
-      pendingReads.clear();
+      dispose();
       disconnect();
+      resetEventStreamStatus();
     };
-  }, [queryClient, enabled, installation, workspaceId]);
+  }, [queryClient, enabled, installation]);
   return enabled ? streamState : "closed";
 }

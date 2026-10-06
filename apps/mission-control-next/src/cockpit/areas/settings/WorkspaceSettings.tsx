@@ -5,7 +5,10 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useWorkspaceEditor } from "../../../features/native-routes/settings/use-workspace-editor";
 import { hasWorkspaceBinding } from "../../../features/native-routes/settings/workspace-editor-state";
-import { useDirectoryLifecycle } from "../../../features/native-routes/settings/use-directory-lifecycle";
+import {
+  CHECKING_FOR_CHANGES,
+  useDirectoryLifecycle,
+} from "../../../features/native-routes/settings/use-directory-lifecycle";
 import type { DirectoryLifecycleReview as LifecycleReview } from "../../../features/native-routes/settings/directory-lifecycle-binding";
 import { DirectoryLifecycleReview } from "./DirectoryLifecycleReview";
 import { CitadelDirectory } from "./CitadelDirectory";
@@ -20,7 +23,12 @@ export interface WorkspaceSettingsProps {
 }
 
 export function WorkspaceSettings(props: WorkspaceSettingsProps) {
-  return <><WorkspaceDirectory key={`workspaces:${props.citadelId}`} {...props} /><CitadelDirectory key={`citadels:${props.citadelId}`} activeCitadelId={props.citadelId} /></>;
+  return (
+    <>
+      <WorkspaceDirectory key={`workspaces:${props.citadelId}`} {...props} />
+      <CitadelDirectory key={`citadels:${props.citadelId}`} activeCitadelId={props.citadelId} />
+    </>
+  );
 }
 
 function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: WorkspaceSettingsProps) {
@@ -50,12 +58,18 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
     !citadels.isError && Array.isArray(citadels.data?.items)
       ? citadels.data.items.find((item) => item.citadelId === citadelId)
       : undefined;
-  const available = ready && !workspaces.isFetching && !citadels.isFetching && parent?.lifecycleStatus === "active";
+  const available = ready && parent?.lifecycleStatus === "active";
+  // A refresh briefly withholds new actions (say so); a confirmed action already checking goes on.
+  const checking = ready && (workspaces.isFetching || citadels.isFetching);
+  const canStart = available && !checking;
   const lifecycle = useDirectoryLifecycle({
+    checking,
     ownerKey: citadelId,
     available,
     reload: () => workspaces.refetch(),
-    onConfirmed: (review) => { if (review.kind === "workspace" && review.record.workspaceId === selectedId) setMode(null); },
+    onConfirmed: (review) => {
+      if (review.kind === "workspace" && review.record.workspaceId === selectedId) setMode(null);
+    },
   });
   const action = useWorkspaceEditor({
     citadelId,
@@ -64,6 +78,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
     selectedId,
     mode,
     available,
+    checking,
     metadataOnly: true,
     reload: () => workspaces.refetch(),
     onCreated: (created) => {
@@ -92,7 +107,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
         </p>
       </header>
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" disabled={!available || action.locked} onClick={() => setMode("create")}>
+        <Button size="sm" disabled={!canStart || action.locked} onClick={() => setMode("create")}>
           New workspace
         </Button>
         <Button
@@ -148,7 +163,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
                 The workspace changed. Current saved name: {selected?.name}. Current description:{" "}
                 {selected?.description || "None"}.
               </p>
-              <Button size="sm" disabled={!available || action.locked} onClick={() => draft.rebaseToCurrent()}>
+              <Button size="sm" disabled={!canStart || action.locked} onClick={() => draft.rebaseToCurrent()}>
                 Apply draft to current workspace
               </Button>
             </div>
@@ -176,7 +191,7 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
             <Button
               variant="primary"
               disabled={
-                !available ||
+                !canStart ||
                 action.locked ||
                 !draft.value.name.trim() ||
                 draft.hasRemoteChanges ||
@@ -187,6 +202,11 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
               {mode === "create" ? "Create workspace" : "Save workspace metadata"}
             </Button>
             <Button onClick={() => setMode(null)}>Close editor{draft.isDirty ? " and keep draft" : ""}</Button>
+            {checking ? (
+              <span role="status" className="self-center text-xs text-fg-muted">
+                {CHECKING_FOR_CHANGES}
+              </span>
+            ) : null}
           </div>
           <p className="text-xs text-fg-muted">Drafts are retained while this app stays open.</p>
         </div>
@@ -201,7 +221,11 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
           Waiting for the Gateway workspace owner…
         </p>
       ) : null}
-      {lifecycle.notice ? <p role="status" className="text-sm text-fg-secondary">{lifecycle.notice}</p> : null}
+      {lifecycle.notice ? (
+        <p role="status" className="text-sm text-fg-secondary">
+          {lifecycle.notice}
+        </p>
+      ) : null}
       {ready ? (
         <>
           <label className="block text-sm text-fg-secondary">
@@ -222,41 +246,77 @@ function WorkspaceDirectory({ citadelId, citadelName, activeWorkspaceId }: Works
           </p>
           <ul className="space-y-2">
             {filtered.slice(0, limit).map((item) => {
-              const target: LifecycleReview = { kind: "workspace", scope: citadelId, record: item,
-                action: item.lifecycleStatus === "active" ? "archive" : "restore" };
-              const locked = lifecycle.locked(target), attempt = lifecycle.attempt(target);
+              const target: LifecycleReview = {
+                kind: "workspace",
+                scope: citadelId,
+                record: item,
+                action: item.lifecycleStatus === "active" ? "archive" : "restore",
+              };
+              const locked = lifecycle.locked(target),
+                attempt = lifecycle.attempt(target);
               return (
-              <li key={item.workspaceId} className="rounded-md border border-line-subtle bg-sunken p-3">
-                <div className="flex flex-col items-start justify-between gap-2 sm:flex-row">
-                  <div className="min-w-0 flex-1">
-                    <h4 className="break-words text-sm font-semibold text-fg">{item.name}</h4>
-                    <p className="mt-1 text-xs text-fg-muted">
-                      {item.lifecycleStatus === "active" ? "Active" : "Archived"}
-                      {item.workspaceId === activeWorkspaceId ? " · Current workspace" : ""}
-                    </p>
-                    <p className="mt-1 break-words text-sm text-fg-secondary">{item.description || "No description"}</p>
+                <li key={item.workspaceId} className="rounded-md border border-line-subtle bg-sunken p-3">
+                  <div className="flex flex-col items-start justify-between gap-2 sm:flex-row">
+                    <div className="min-w-0 flex-1">
+                      <h4 className="break-words text-sm font-semibold text-fg">{item.name}</h4>
+                      <p className="mt-1 text-xs text-fg-muted">
+                        {item.lifecycleStatus === "active" ? "Active" : "Archived"}
+                        {item.workspaceId === activeWorkspaceId ? " · Current workspace" : ""}
+                      </p>
+                      <p className="mt-1 break-words text-sm text-fg-secondary">
+                        {item.description || "No description"}
+                      </p>
+                    </div>
+                    <div className="flex w-full flex-wrap gap-2 sm:w-auto">
+                      <Button
+                        size="sm"
+                        disabled={!canStart || locked || action.pending}
+                        aria-label={`Edit workspace ${item.name}`}
+                        onClick={() => {
+                          setSelectedId(item.workspaceId);
+                          setMode("edit");
+                        }}
+                      >
+                        Edit metadata
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={target.action === "archive" ? "danger" : "secondary"}
+                        disabled={
+                          !canStart || locked || (item.workspaceId === "default" && target.action === "archive")
+                        }
+                        aria-label={`${target.action === "archive" ? "Archive" : "Restore"} workspace ${item.name}`}
+                        onClick={() => lifecycle.request(target)}
+                      >
+                        {target.action === "archive" ? "Archive" : "Restore"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={
+                          !canStart ||
+                          locked ||
+                          item.lifecycleStatus !== "active" ||
+                          item.workspaceId === activeWorkspaceId
+                        }
+                        aria-label={`Make active workspace ${item.name}`}
+                        onClick={() => setActiveWorkspaceId(item.workspaceId)}
+                      >
+                        Make active
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex w-full flex-wrap gap-2 sm:w-auto"><Button
-                    size="sm"
-                    disabled={!available || locked || action.pending}
-                    aria-label={`Edit workspace ${item.name}`}
-                    onClick={() => {
-                      setSelectedId(item.workspaceId);
-                      setMode("edit");
-                    }}
-                  >
-                    Edit metadata
-                  </Button><Button size="sm" variant={target.action === "archive" ? "danger" : "secondary"}
-                    disabled={!available || locked || (item.workspaceId === "default" && target.action === "archive")}
-                    aria-label={`${target.action === "archive" ? "Archive" : "Restore"} workspace ${item.name}`}
-                    onClick={() => lifecycle.request(target)}>{target.action === "archive" ? "Archive" : "Restore"}</Button>
-                    <Button size="sm" disabled={!available || locked || item.lifecycleStatus !== "active" || item.workspaceId === activeWorkspaceId}
-                      aria-label={`Make active workspace ${item.name}`} onClick={() => setActiveWorkspaceId(item.workspaceId)}>Make active</Button></div>
-                </div>
-                {attempt.message && ["checking", "saving", "uncertain"].includes(attempt.phase)
-                  ? <p role={attempt.phase === "uncertain" ? "alert" : "status"} className="mt-2 text-sm text-status-waiting">{attempt.message}</p> : null}
-                {item.workspaceId === "default" ? <p className="mt-2 text-xs text-fg-muted">The default workspace cannot be archived.</p> : null}
-              </li>
+                  {attempt.message && ["checking", "saving", "uncertain"].includes(attempt.phase) ? (
+                    <p
+                      role={attempt.phase === "uncertain" ? "alert" : "status"}
+                      className="mt-2 text-sm text-status-waiting"
+                    >
+                      {attempt.message}
+                    </p>
+                  ) : null}
+                  {item.workspaceId === "default" ? (
+                    <p className="mt-2 text-xs text-fg-muted">The default workspace cannot be archived.</p>
+                  ) : null}
+                </li>
               );
             })}
           </ul>

@@ -202,15 +202,34 @@ export async function fetchDurableRuns(limit = 100): Promise<{ items: DurableRun
   return request<{ items: DurableRunRecord[] }>(`/api/v1/durable/runs?limit=${Math.max(1, Math.min(limit, 500))}`);
 }
 
-export async function fetchDurableRunHistory(query: DurableRunHistoryQuery, options?: { signal?: AbortSignal }): Promise<DurableRunHistoryPage> {
+export async function fetchDurableRunHistory(
+  query: DurableRunHistoryQuery,
+  options?: { signal?: AbortSignal },
+): Promise<DurableRunHistoryPage> {
   const params = new URLSearchParams({ workspaceId: query.workspaceId });
   if (query.limit !== undefined) params.set("limit", String(query.limit));
   if (query.cursor !== undefined) params.set("cursor", query.cursor);
-  return request<DurableRunHistoryPage>(`/api/v1/durable/runs?${params.toString()}`, options?.signal ? { signal: options.signal, cache: "no-store" } : undefined);
+  return request<DurableRunHistoryPage>(
+    `/api/v1/durable/runs?${params.toString()}`,
+    options?.signal ? { signal: options.signal, cache: "no-store" } : undefined,
+  );
 }
 
 export async function fetchDurableDeadLetters(limit = 100): Promise<{ items: DurableDeadLetterRecord[] }> {
-  return request<{ items: DurableDeadLetterRecord[] }>(`/api/v1/durable/dead-letters?limit=${Math.max(1, Math.min(limit, 500))}`);
+  return request<{ items: DurableDeadLetterRecord[] }>(
+    `/api/v1/durable/dead-letters?limit=${Math.max(1, Math.min(limit, 500))}`,
+  );
+}
+
+/** One stopped run's dead letter by id. */
+export async function fetchDurableDeadLetter(
+  deadLetterId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<DurableDeadLetterRecord> {
+  return request<DurableDeadLetterRecord>(
+    `/api/v1/durable/dead-letters/${encodeURIComponent(deadLetterId)}`,
+    options.signal ? { signal: options.signal } : undefined,
+  );
 }
 
 export async function fetchObserveRunTrace(runId: string): Promise<ObserveRunTraceResponse> {

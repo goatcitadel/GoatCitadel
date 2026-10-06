@@ -794,6 +794,10 @@ export class DurableRunService {
     return await this.ctx.storage.durableRuns.listDeadLetters(limit);
   }
 
+  async getDurableDeadLetter(deadLetterId: string): Promise<DurableDeadLetterRecord> {
+    return await this.ctx.storage.durableRuns.getDeadLetterById(deadLetterId);
+  }
+
   async listDurableRunCheckpoints(runId: string, limit = 200): Promise<DurableCheckpointRecord[]> {
     return await this.ctx.storage.durableRuns.listCheckpoints(runId, limit);
   }

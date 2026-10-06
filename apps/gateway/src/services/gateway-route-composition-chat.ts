@@ -263,6 +263,10 @@ export function composeChatRouteDependencies(
         workspaceId: scope.workspaceId,
       });
     },
+    getDocumentPatchProposal: async (proposalId, workspaceId) => {
+      await gateway.requireFeatureEnabled("documentEditingV1Enabled");
+      return getDocumentEditing().getProposal(proposalId, workspaceId);
+    },
     listDocumentPatchProposals: async (input) => {
       await gateway.requireFeatureEnabled("documentEditingV1Enabled");
       return getDocumentEditing().listProposals(input);
@@ -277,6 +281,10 @@ export function composeChatRouteDependencies(
       return chatSessionService.listChatSessions(ChatSessionDependencies, {
         ...sessionQuery,
         workspaceId: scope.workspaceId,
+        // Same gate as the session status route: turn activity is session status, read once per list.
+        // The flag read is async: an un-awaited Promise is never `true`, so activity would never be returned.
+        includeActivity:
+          sessionQuery.includeActivity === true && (await gateway.isFeatureEnabled("chatSessionStatusV1Enabled")),
       });
     },
     listChatTimers: async (sessionId) => {
@@ -333,6 +341,9 @@ export function composeChatRouteDependencies(
       return chatSessionService.searchChatSessions(ChatSessionDependencies, {
         ...searchInput,
         workspaceId: scope.workspaceId,
+        // The same gate as the sessions list: turn activity is session status.
+        includeActivity:
+          searchInput.includeActivity === true && (await gateway.isFeatureEnabled("chatSessionStatusV1Enabled")),
       });
     },
     setChatSessionBinding: (input) => chatSessionService.setChatSessionBinding(ChatSessionDependencies, input),

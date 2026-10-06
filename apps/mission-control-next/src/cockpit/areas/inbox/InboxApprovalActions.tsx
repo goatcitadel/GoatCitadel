@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ApprovalRequest, OperatorInboxItem } from "@goatcitadel/contracts";
-import { fetchApprovals, resolveApproval } from "@goatcitadel/mission-control-shared/api/client";
+import { resolveApproval } from "@goatcitadel/mission-control-shared/api/client";
+import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
@@ -10,6 +11,7 @@ import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { canResolveInboxApproval, inboxApprovalReviewKey, matchesInboxApprovalDecision } from "./inbox-approval-guard";
+import { nullWhenMissing } from "./inbox-record-read";
 import {
   beginInboxApprovalAttempt,
   releaseInboxApprovalCheck,
@@ -22,6 +24,8 @@ interface InboxApprovalActionsProps {
   approval: ApprovalRequest;
   workspaceId: string;
   focusAction?: "approve" | "deny";
+  /** The record is being checked again: keep the controls (and any open dialog) but disable them. */
+  checking?: boolean;
   onResolved: (message: string) => void;
   onInvalidated: () => void;
 }
@@ -43,6 +47,7 @@ function ApprovalDecisionReview({
   approval,
   workspaceId,
   focusAction,
+  checking = false,
   onResolved,
   onInvalidated,
   activeWorkspaceId,
@@ -78,11 +83,11 @@ function ApprovalDecisionReview({
     let mutationAttempted = false;
     let resolvedMessage: string | undefined;
     try {
-      const latest = await fetchApprovals({ status: "pending", workspaceId, limit: 200 });
+      const latest = await nullWhenMissing(fetchApproval(approval.approvalId, { workspaceId }));
       // A different selection, workspace, or reviewed record unmounts this review.
       // Cancel before dispatch; after dispatch retain the original action's outcome.
       if (!current.current) return;
-      const record = latest.items.find((entry) => entry.approvalId === approval.approvalId);
+      const record = latest ?? undefined;
       if (!canResolveInboxApproval(item, approval, record, workspaceId)) {
         setError("This approval changed or is no longer in the current pending queue. Refresh it before deciding.");
         onInvalidated();
@@ -157,7 +162,7 @@ function ApprovalDecisionReview({
               expiresAt: approval.expiresAt,
             }}
             reviewedApproval={approval}
-            pending={Boolean(attempt)}
+            pending={Boolean(attempt) || checking}
             onApprove={() => void decide("approve")}
           />
         </span>
@@ -166,7 +171,7 @@ function ApprovalDecisionReview({
           type="button"
           size="sm"
           variant="danger"
-          disabled={Boolean(attempt)}
+          disabled={Boolean(attempt) || checking}
           onClick={() => setDenyOpen(true)}
         >
           Deny
@@ -186,8 +191,8 @@ function ApprovalDecisionReview({
         <summary className="cursor-pointer font-medium text-fg-secondary">How this decision works</summary>
         <div className="mt-1 space-y-1">
           <p>
-            The current pending record is checked again before either decision. Approval alone does not prove the
-            action ran.
+            The current pending record is checked again before either decision. Approval alone does not prove the action
+            ran.
           </p>
           <p>
             To change this request, open its source and submit a new request. Editing an approval withdraws the original
@@ -202,7 +207,7 @@ function ApprovalDecisionReview({
         description="The pending action will not be authorized by this decision."
       >
         <div className="flex gap-2">
-          <Button variant="danger" disabled={Boolean(attempt)} onClick={() => void decide("reject")}>
+          <Button variant="danger" disabled={Boolean(attempt) || checking} onClick={() => void decide("reject")}>
             Confirm deny
           </Button>
           <Button disabled={pending} onClick={() => setDenyOpen(false)}>

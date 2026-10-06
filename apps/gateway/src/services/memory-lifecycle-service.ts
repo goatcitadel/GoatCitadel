@@ -1,4 +1,10 @@
-import { detectNearDuplicateMemoryItems, detectRetrievalGaps, calculateLexicalOverlap, resolveBenchmarkRetrievalStrategy, buildMemoryBenchmarkCoverageNote } from "./memory-retrieval-quality.js";
+import {
+  detectNearDuplicateMemoryItems,
+  detectRetrievalGaps,
+  calculateLexicalOverlap,
+  resolveBenchmarkRetrievalStrategy,
+  buildMemoryBenchmarkCoverageNote,
+} from "./memory-retrieval-quality.js";
 /* eslint-disable max-lines -- MemoryLifecycleService centralizes memory lifecycle writes, write-gate evidence, and structured memory governance until repository ownership is split. */
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -2740,7 +2746,10 @@ export class MemoryLifecycleService {
     }));
   }
 
-  public composeContext(input: MemoryContextComposeRequest, usageLineage?: TrustedUtilityModelUsageLineage): Promise<MemoryContextPack> {
+  public composeContext(
+    input: MemoryContextComposeRequest,
+    usageLineage?: TrustedUtilityModelUsageLineage,
+  ): Promise<MemoryContextPack> {
     return usageLineage ? this.deps.context.compose(input, usageLineage) : this.deps.context.compose(input);
   }
 
@@ -3095,6 +3104,20 @@ export class MemoryLifecycleService {
       workspaceId: record.workspaceId,
     });
     return record;
+  }
+
+  /**
+   * One trace-memory proposal, read like the list: the same feature gate, and only within its workspace
+   * (another workspace's proposal answers not found, as the workspace list would omit it).
+   */
+  public async getTraceMemoryCandidate(candidateId: string, workspaceId?: string): Promise<TraceMemoryCandidateRecord> {
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    await this.ensureTraceCandidateSchema();
+    const candidate = await this.requireTraceMemoryCandidate(candidateId);
+    if (normalizeStructuredWorkspaceId(candidate.workspaceId) !== normalizeStructuredWorkspaceId(workspaceId)) {
+      throw new NotFoundError({ entity: "memory_trace_candidate", id: candidateId });
+    }
+    return candidate;
   }
 
   public async listTraceMemoryCandidates(
@@ -3688,7 +3711,10 @@ export class MemoryLifecycleService {
     return this.deps.maintenance.listRecommendations(workspaceId, limit);
   }
 
-  public async acceptMaintenanceRecommendation(recommendationId: string, input: MemoryMaintenanceRecommendationAcceptInput): Promise<{
+  public async acceptMaintenanceRecommendation(
+    recommendationId: string,
+    input: MemoryMaintenanceRecommendationAcceptInput,
+  ): Promise<{
     recommendation: MemoryMaintenanceRecommendationRecord;
     policy: MemoryMaintenancePolicyRecord;
   }> {

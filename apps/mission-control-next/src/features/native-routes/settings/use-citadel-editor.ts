@@ -11,6 +11,7 @@ import {
   CITADEL_KINDS,
 } from "./citadel-editor-binding";
 import { directoryLifecycleConflict, hasCitadelRecord, sameDirectoryRecord } from "./directory-lifecycle-binding";
+import { DIRECTORY_CHANGED_WHILE_CHECKING } from "./use-directory-lifecycle";
 import {
   setWorkspaceAttempt,
   subscribeWorkspaceAttempts,
@@ -23,7 +24,10 @@ interface CitadelEditorOptions {
   selected: CitadelRecord | null;
   selectedId: string;
   mode: "create" | "edit" | null;
+  /** The Citadel records are loaded and valid. A refresh alone does not clear it. */
   available: boolean;
+  /** The directory is refreshing: a new save waits, but a save already checking goes on. */
+  checking?: boolean;
   reload: () => Promise<unknown>;
   onCreated?: (record: CitadelRecord) => void;
 }
@@ -34,6 +38,7 @@ export function useCitadelEditor({
   selectedId,
   mode,
   available,
+  checking = false,
   reload,
   onCreated,
 }: CitadelEditorOptions) {
@@ -77,7 +82,7 @@ export function useCitadelEditor({
   async function submit(kind: "create" | "edit"): Promise<boolean> {
     const targetKey = kind === "create" ? createKey : editKey,
       draft = kind === "create" ? createDraft : editDraft;
-    if (workspaceAttemptLocked(targetKey) || mode !== kind || !available) return false;
+    if (workspaceAttemptLocked(targetKey) || mode !== kind || !available || checking) return false;
     const inform = (message: string, rejectedRevision?: string) =>
       setWorkspaceAttempt(targetKey, { phase: "idle", message, rejectedRevision });
     if (!draft.value.name.trim() || !citadelRequestedSlug(draft.value) || !CITADEL_KINDS.includes(draft.value.kind)) {
@@ -99,14 +104,16 @@ export function useCitadelEditor({
     const generation = live.current.generation;
     const current = () =>
       live.current.mounted && live.current.identity === identity && live.current.generation === generation;
+    // A background refresh never stops a confirmed save; only a changed owner or a directory that is no longer ready.
+    const stillSaving = () => current() && live.current.available;
     let dispatched = false,
       acknowledged: CitadelRecord | undefined,
       saved: boolean;
     setWorkspaceAttempt(targetKey, { phase: "checking", message: "Checking the current Citadel directory…" });
     try {
       const directory = await listCitadels("all", 500);
-      if (!current() || !live.current.available) {
-        inform("Citadel save cancelled before dispatch.");
+      if (!stillSaving()) {
+        inform(DIRECTORY_CHANGED_WHILE_CHECKING);
         return false;
       }
       if (!Array.isArray(directory.items)) throw new Error("Citadel directory is unavailable.");
@@ -135,8 +142,8 @@ export function useCitadelEditor({
         inform("That Citadel slug is already in use. Choose a different slug.");
         return false;
       }
-      if (!current() || !live.current.available) {
-        inform("Citadel save cancelled before dispatch.");
+      if (!stillSaving()) {
+        inform(DIRECTORY_CHANGED_WHILE_CHECKING);
         return false;
       }
       setWorkspaceAttempt(targetKey, { phase: "saving", message: "Waiting for the Gateway Citadel owner…" });

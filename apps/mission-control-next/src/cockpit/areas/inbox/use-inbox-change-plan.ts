@@ -4,6 +4,8 @@ import { canonicalJsonString, type ChangePlanRecord, type OperatorInboxItem } fr
 import { confirmChangePlan } from "@goatcitadel/mission-control-shared/api/chat";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { queryKeys } from "../../data/query-keys";
+import { keepRecordForSameItem, recordView } from "../../data/record-view";
+import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import {
   canReviewInboxConfirmation,
   readCurrentInboxPlan,
@@ -32,10 +34,13 @@ function subscribe(listener: () => void) {
 export function useInboxChangePlan(item: OperatorInboxItem, workspaceId: string, activeWorkspaceId: string) {
   const queryClient = useQueryClient();
   const itemKey = canonicalJsonString(item);
+  const cached = useCachedInboxItem(workspaceId, item.id);
+  const queryKey = ["change-plan", "inbox-detail", workspaceId, itemKey, cached.fingerprint];
   const query = useQuery({
-    queryKey: ["change-plan", "inbox-detail", workspaceId, itemKey],
-    queryFn: () => readCurrentInboxPlan(item, workspaceId),
-    enabled: Boolean(item.source.planId) && workspaceId === activeWorkspaceId,
+    queryKey,
+    queryFn: () => readCurrentInboxPlan(item, workspaceId, cached.projection),
+    placeholderData: keepRecordForSameItem(queryKey),
+    enabled: Boolean(item.source.planId) && workspaceId === activeWorkspaceId && Boolean(cached.projection),
     staleTime: 0,
   });
   const identity = canonicalJsonString([workspaceId, activeWorkspaceId, itemKey, query.data]);
@@ -62,7 +67,10 @@ export function useInboxChangePlan(item: OperatorInboxItem, workspaceId: string,
     () => undefined,
   );
   const scopeChanged = workspaceId !== activeWorkspaceId;
-  const plan = query.isFetching || query.isError || scopeChanged ? undefined : query.data;
+  // The last good plan stays (with its open review) while it is checked again; a confirmed one is reset.
+  const view = recordView(query);
+  const checking = view.phase === "checking";
+  const plan = scopeChanged ? undefined : (view.record ?? undefined);
   const review =
     target?.identity === identity && target.generation === lifecycle.current.generation ? target.plan : undefined;
   const pending = attempt?.state === "checking" || attempt?.state === "submitted";
@@ -135,6 +143,8 @@ export function useInboxChangePlan(item: OperatorInboxItem, workspaceId: string,
       requireInboxConfirmationReceipt(review, updated);
       recorded = true;
       publish(key, { state: "recorded", actionNonce, result: updated });
+      // The confirmed revision is superseded: drop it while it is read again (T15-M1).
+      void queryClient.resetQueries({ queryKey, exact: true });
       // Refresh the old canonical scope even if its detail has been closed.
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
       if (current()) setTarget(undefined);
@@ -151,6 +161,8 @@ export function useInboxChangePlan(item: OperatorInboxItem, workspaceId: string,
 
   return {
     query,
+    view,
+    checking,
     identity,
     plan,
     scopeChanged,

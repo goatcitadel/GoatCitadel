@@ -52,6 +52,18 @@ export async function fetchApprovals(
   return request<ApprovalsResponse>(`/api/v1/approvals${query.size > 0 ? `?${query.toString()}` : ""}`);
 }
 
+/** One approval by id; a workspace-scoped read answers not found for another workspace's approval. */
+export async function fetchApproval(
+  approvalId: string,
+  options: { workspaceId?: string; signal?: AbortSignal } = {},
+): Promise<ApprovalRequest> {
+  const query = options.workspaceId?.trim() ? `?workspaceId=${encodeURIComponent(options.workspaceId.trim())}` : "";
+  return request<ApprovalRequest>(
+    `/api/v1/approvals/${encodeURIComponent(approvalId)}${query}`,
+    options.signal ? { signal: options.signal } : undefined,
+  );
+}
+
 export async function resolveApproval(
   approvalId: string,
   decision: "approve" | "reject",
@@ -170,13 +182,19 @@ export async function updatePermissionProfile(
   profileId: string,
   input: Omit<PermissionProfileUpdateInput, "updatedBy">,
 ): Promise<PermissionProfileSnapshotRecord> {
-  return request<PermissionProfileSnapshotRecord>(`/api/v1/tools/permission-profiles/${encodeURIComponent(profileId)}`, {
-    method: "PATCH",
-    body: JSON.stringify(input),
-  });
+  return request<PermissionProfileSnapshotRecord>(
+    `/api/v1/tools/permission-profiles/${encodeURIComponent(profileId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
-export async function archivePermissionProfile(profileId: string, input: PermissionProfileArchiveInput): Promise<{ archived: boolean; profileId: string }> {
+export async function archivePermissionProfile(
+  profileId: string,
+  input: PermissionProfileArchiveInput,
+): Promise<{ archived: boolean; profileId: string }> {
   return request<{ archived: boolean; profileId: string }>(
     `/api/v1/tools/permission-profiles/${encodeURIComponent(profileId)}/archive`,
     {
@@ -195,9 +213,12 @@ export async function activatePermissionProfile(
   });
 }
 
-export async function reviewPermissionProfileSelection(input: PermissionProfileSelectionReviewRequest): Promise<PermissionProfileSelectionReview> {
+export async function reviewPermissionProfileSelection(
+  input: PermissionProfileSelectionReviewRequest,
+): Promise<PermissionProfileSelectionReview> {
   return request<PermissionProfileSelectionReview>("/api/v1/tools/permission-profiles/selection-review", {
-    method: "POST", body: JSON.stringify(input),
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 

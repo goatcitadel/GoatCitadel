@@ -658,8 +658,8 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
     {
       enabled: true,
       coalesceMs: 900,
-      staleMs: 20000,
-      pollIntervalMs: 20000,
+      staleMs: 120_000,
+      pollIntervalMs: 60_000,
     },
   );
 

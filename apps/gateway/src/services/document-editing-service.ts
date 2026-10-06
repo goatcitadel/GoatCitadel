@@ -38,6 +38,11 @@ export class DocumentEditingService {
     return { items: await this.deps.storage.documentPatchProposals.list({ ...input, limit: 200 }) };
   }
 
+  /** One proposal, only within its workspace (another workspace's proposal answers not found). */
+  public async getProposal(proposalId: string, workspaceId: string): Promise<DocumentPatchProposalRecord> {
+    return this.requireProposalScope(proposalId, workspaceId);
+  }
+
   public async createProposal(
     input: CreateDocumentPatchProposalRequest & { sessionId?: string },
     actorId: string,

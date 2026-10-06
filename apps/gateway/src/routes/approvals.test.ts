@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance } from "fastify";
+import { NotFoundError } from "@goatcitadel/contracts";
 import { approvalsRoutes, resolveApprovalActorId } from "./approvals.js";
 
 const APPROVAL_ID = "3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d";
@@ -172,6 +173,51 @@ describe("approvals routes", () => {
       cursor: "cursor-1",
       workspaceId: "workspace-a",
     });
+  });
+
+  it("reads one approval by id with the list's projection, scope and access", async () => {
+    const rawApproval = createSensitiveApproval();
+    const getApproval = vi.fn(async (approvalId: string, workspaceId?: string) => {
+      if (approvalId !== APPROVAL_ID || workspaceId === "workspace-other") {
+        throw new NotFoundError({ entity: "Approval", id: approvalId });
+      }
+      return rawApproval;
+    });
+    const built = buildApp({ getApproval });
+    app = built.app;
+    await app.register(approvalsRoutes);
+
+    const found = await app.inject({ method: "GET", url: `/api/v1/approvals/${APPROVAL_ID}?workspaceId=workspace-a` });
+    expect(found.statusCode).toBe(200);
+    expect(found.json().approvalId).toBe(APPROVAL_ID);
+    expect(getApproval).toHaveBeenCalledWith(APPROVAL_ID, "workspace-a");
+    expectSecretSafeApprovalProjection(found.json());
+    expectRawApprovalUnchanged(rawApproval);
+    expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
+
+    expect((await app.inject({ method: "GET", url: "/api/v1/approvals/missing-approval" })).statusCode).toBe(404);
+    expect(
+      (await app.inject({ method: "GET", url: `/api/v1/approvals/${APPROVAL_ID}?workspaceId=workspace-other` }))
+        .statusCode,
+    ).toBe(404);
+  });
+
+  it("rejects an unauthenticated approval read the same way the list does", async () => {
+    const getApproval = vi.fn();
+    const listApprovalsPage = vi.fn();
+    const requireOperatorAuth = vi.fn(
+      async (_request: unknown, reply: { code: (status: number) => { send: (body: unknown) => unknown } }) =>
+        reply.code(401).send({ error: "Operator authentication required." }),
+    );
+    const built = buildApp({ getApproval, listApprovalsPage }, requireOperatorAuth);
+    app = built.app;
+    await app.register(approvalsRoutes);
+
+    const byId = await app.inject({ method: "GET", url: `/api/v1/approvals/${APPROVAL_ID}` });
+    const list = await app.inject({ method: "GET", url: "/api/v1/approvals" });
+    expect(byId.statusCode).toBe(401);
+    expect(byId.statusCode).toBe(list.statusCode);
+    expect(getApproval).not.toHaveBeenCalled();
   });
 
   it("allows a paired general companion to review the redacted pending queue without operator auth", async () => {

@@ -109,9 +109,21 @@ export interface RevealGeneratedArtifactInput {
 }
 
 export function resolveChatRefreshPlan(
-  signal: Pick<RefreshSignal, "eventType" | "reason" | "source">,
+  signal: Pick<RefreshSignal, "eventType" | "reason" | "source" | "sessionId">,
   recentLocalPrefMutation = false,
   hasActiveTurn = false,
+  selectedSessionId?: string | null,
+): ChatRefreshPlan {
+  const plan = resolveChatRefreshPlanForSignal(signal, recentLocalPrefMutation, hasActiveTurn);
+  // An event about another conversation never reloads the open one; the list may still change.
+  const otherConversation = Boolean(signal.sessionId) && signal.sessionId !== (selectedSessionId ?? undefined);
+  return otherConversation && plan.refreshSession !== "none" ? { ...plan, refreshSession: "none" } : plan;
+}
+
+function resolveChatRefreshPlanForSignal(
+  signal: Pick<RefreshSignal, "eventType" | "reason" | "source">,
+  recentLocalPrefMutation: boolean,
+  hasActiveTurn: boolean,
 ): ChatRefreshPlan {
   const eventType = (signal.eventType ?? "").toLowerCase();
   const haystack = `${signal.reason} ${signal.eventType ?? ""} ${signal.source ?? ""}`.toLowerCase();
@@ -130,9 +142,17 @@ export function resolveChatRefreshPlan(
     };
   }
   if (eventType === "chat_thread_updated") {
+    // The sessions list carries each conversation's status, so it reloads too (coalesced by the subscription).
     return {
-      refreshSidebar: false,
+      refreshSidebar: true,
       refreshSession: "full",
+    };
+  }
+  if ((signal.source ?? "").toLowerCase() === "approvals") {
+    // A conversation waiting on (or released from) an approval changes the status the sessions list shows.
+    return {
+      refreshSidebar: true,
+      refreshSession: "none",
     };
   }
   if (eventType === "chat_session_title_updated") {

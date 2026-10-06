@@ -7,9 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboxApprovalActions } from "./InboxApprovalActions";
 import { __resetInboxApprovalAttemptsForTests } from "./inbox-approval-attempts";
 
-const api = vi.hoisted(() => ({ fetchApprovals: vi.fn(), resolveApproval: vi.fn() }));
+const api = vi.hoisted(() => ({ fetchApproval: vi.fn(), resolveApproval: vi.fn() }));
 const preferences = vi.hoisted(() => ({ activeWorkspaceId: "default" }));
-vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
+vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ resolveApproval: api.resolveApproval }));
+vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({ fetchApproval: api.fetchApproval }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => preferences }));
 
 const approval: ApprovalRequest = {
@@ -39,9 +40,9 @@ let client: QueryClient;
 beforeEach(() => {
   __resetInboxApprovalAttemptsForTests();
   preferences.activeWorkspaceId = "default";
-  api.fetchApprovals.mockReset();
+  api.fetchApproval.mockReset();
   api.resolveApproval.mockReset();
-  api.fetchApprovals.mockResolvedValue({ items: [approval] });
+  api.fetchApproval.mockResolvedValue(approval);
   api.resolveApproval.mockResolvedValue({ approval: { ...approval, status: "approved" }, effects: [] });
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -129,13 +130,13 @@ describe("Inbox approval decisions", () => {
     await act(async () => button("Review approval").click());
     expect(api.resolveApproval).not.toHaveBeenCalled();
     await act(async () => button("Approve once").click());
-    expect(api.fetchApprovals).toHaveBeenCalledWith({ status: "pending", workspaceId: "default", limit: 200 });
+    expect(api.fetchApproval).toHaveBeenCalledWith("approval-a", { workspaceId: "default" });
     expect(api.resolveApproval).toHaveBeenCalledWith("approval-a", "approve");
     expect(onResolved).toHaveBeenCalledWith(expect.stringContaining("Follow-on execution needs separate verification"));
   });
 
   it("refuses a changed action even after confirmation", async () => {
-    api.fetchApprovals.mockResolvedValue({ items: [{ ...approval, preview: { targets: ["other.txt"] } }] });
+    api.fetchApproval.mockResolvedValue({ ...approval, preview: { targets: ["other.txt"] } });
     const { onInvalidated } = renderActions(approval);
     await act(async () => button("Review approval").click());
     await act(async () => button("Approve once").click());
@@ -155,7 +156,7 @@ describe("Inbox approval decisions", () => {
   });
 
   it("allows another check when the owner read fails before a mutation", async () => {
-    api.fetchApprovals.mockRejectedValue(new Error("Connection lost"));
+    api.fetchApproval.mockRejectedValue(new Error("Connection lost"));
     renderActions(approval);
     await act(async () => button("Review approval").click());
     await act(async () => button("Approve once").click());
@@ -173,8 +174,8 @@ describe("Inbox approval decisions", () => {
   it.each(["workspace", "selection", "same-id evidence", "unmount"])(
     "cancels before POST when %s changes during the owner read",
     async (change) => {
-      const read = deferred<{ items: ApprovalRequest[] }>();
-      api.fetchApprovals.mockReturnValue(read.promise);
+      const read = deferred<ApprovalRequest>();
+      api.fetchApproval.mockReturnValue(read.promise);
       const callbacks = renderActions(approval);
       await approve();
       if (change === "workspace") {
@@ -191,7 +192,7 @@ describe("Inbox approval decisions", () => {
       } else {
         act(() => root.render(null));
       }
-      await act(async () => read.resolve({ items: [approval] }));
+      await act(async () => read.resolve(approval));
       expect(api.resolveApproval).not.toHaveBeenCalled();
       expect(callbacks.onResolved).not.toHaveBeenCalled();
       expect(callbacks.onInvalidated).not.toHaveBeenCalled();
@@ -297,17 +298,17 @@ describe("Inbox approval decisions", () => {
 
   it("requires the typed nuclear confirmation, then rereads the same pending owner record before approval", async () => {
     const nuclear: ApprovalRequest = { ...approval, riskLevel: "nuclear" };
-    api.fetchApprovals.mockResolvedValue({ items: [nuclear] });
+    api.fetchApproval.mockResolvedValue(nuclear);
     api.resolveApproval.mockResolvedValue({ approval: { ...nuclear, status: "approved" }, effects: [] });
     const { onResolved } = renderActions(nuclear);
     await act(async () => button("Review approval").click());
     expect(button("Approve once").disabled).toBe(true);
     await typeConfirmation("approve");
     expect(button("Approve once").disabled).toBe(false);
-    expect(api.fetchApprovals).not.toHaveBeenCalled();
+    expect(api.fetchApproval).not.toHaveBeenCalled();
     expect(api.resolveApproval).not.toHaveBeenCalled();
     await act(async () => button("Approve once").click());
-    expect(api.fetchApprovals).toHaveBeenCalledWith({ status: "pending", workspaceId: "default", limit: 200 });
+    expect(api.fetchApproval).toHaveBeenCalledWith("approval-a", { workspaceId: "default" });
     expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve");
     expect(onResolved).toHaveBeenCalledWith(expect.stringContaining("decision recorded"));
   });
@@ -321,7 +322,7 @@ describe("Inbox approval decisions", () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () => button("Review approval").click());
     expect(button("Approve once").disabled).toBe(true);
-    expect(api.fetchApprovals).not.toHaveBeenCalled();
+    expect(api.fetchApproval).not.toHaveBeenCalled();
     expect(api.resolveApproval).not.toHaveBeenCalled();
   });
 
@@ -329,12 +330,12 @@ describe("Inbox approval decisions", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-30T00:00:00Z"));
     const reviewed = { ...approval, expiresAt: "2026-09-30T00:00:01Z" };
-    const read = deferred<{ items: ApprovalRequest[] }>();
-    api.fetchApprovals.mockReturnValue(read.promise);
+    const read = deferred<ApprovalRequest>();
+    api.fetchApproval.mockReturnValue(read.promise);
     renderActions(reviewed);
     await approve();
     vi.setSystemTime(new Date("2026-09-30T00:00:02Z"));
-    await act(async () => read.resolve({ items: [reviewed] }));
+    await act(async () => read.resolve(reviewed));
     expect(api.resolveApproval).not.toHaveBeenCalled();
   });
 });

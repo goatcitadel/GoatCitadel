@@ -7,6 +7,7 @@ type DurableRoutePort = Pick<
   | "getDiagnostics"
   | "getRun"
   | "listDeadLetters"
+  | "getDeadLetter"
   | "listRunCheckpoints"
   | "listRunTimeline"
   | "watchChildRun"
@@ -42,6 +43,10 @@ export class DurableRouteService {
 
   public listDeadLetters(limit: number) {
     return this.durable.listDeadLetters(limit);
+  }
+
+  public getDeadLetter(deadLetterId: string) {
+    return this.durable.getDeadLetter(deadLetterId);
   }
 
   public listRunCheckpoints(runId: string, limit: number) {

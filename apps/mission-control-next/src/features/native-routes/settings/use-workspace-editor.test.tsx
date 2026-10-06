@@ -152,6 +152,50 @@ describe("shared workspace editor", () => {
     expect(action.notice).toContain("unavailable or archived");
     expect(api.createWorkspace).not.toHaveBeenCalled();
   });
+  it("keeps a confirmed save going when a background refresh starts during its check", async () => {
+    await draft();
+    const read = deferred<{ items: WorkspaceRecord[]; citadelId: string }>();
+    api.fetchWorkspaces.mockReturnValueOnce(read.promise);
+    let pending!: Promise<boolean>;
+    await act(async () => {
+      pending = action.save();
+    });
+    await render({ checking: true });
+    let saved!: boolean;
+    await act(async () => {
+      read.resolve({ citadelId: "personal", items: [canonical] });
+      saved = await pending;
+    });
+    expect(saved).toBe(true);
+    expect(api.updateWorkspace).toHaveBeenCalledOnce();
+  });
+  it("waits to start a save while the directory is checking", async () => {
+    await draft();
+    await render({ checking: true });
+    await act(async () => expect(await action.save()).toBe(false));
+    expect(api.listCitadels).not.toHaveBeenCalled();
+    expect(api.updateWorkspace).not.toHaveBeenCalled();
+    expect(action.pending).toBe(false);
+    await render({ checking: false });
+    await act(async () => expect(await action.save()).toBe(true));
+  });
+  it("says so when the directory stops being ready during the check", async () => {
+    await draft();
+    const read = deferred<{ items: WorkspaceRecord[]; citadelId: string }>();
+    api.fetchWorkspaces.mockReturnValueOnce(read.promise);
+    let pending!: Promise<boolean>;
+    await act(async () => {
+      pending = action.save();
+    });
+    await render({ available: false });
+    await act(async () => {
+      read.resolve({ citadelId: "personal", items: [canonical] });
+      await pending;
+    });
+    expect(api.updateWorkspace).not.toHaveBeenCalled();
+    expect(action.pending).toBe(false);
+    expect(action.notice).toBe("This list changed while checking. Review it again.");
+  });
   it("cancels a late preflight after a Citadel switch, including a switch back", async () => {
     await draft();
     const read = deferred<{ items: WorkspaceRecord[] }>();

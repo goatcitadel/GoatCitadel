@@ -218,7 +218,10 @@ export async function fetchChatProjects(
   if (workspaceId?.trim()) {
     query.set("workspaceId", workspaceId.trim());
   }
-  return request<ChatProjectsResponse>(`/api/v1/chat/projects?${query.toString()}`, options.signal ? { signal: options.signal, cache: "no-store" } : undefined);
+  return request<ChatProjectsResponse>(
+    `/api/v1/chat/projects?${query.toString()}`,
+    options.signal ? { signal: options.signal, cache: "no-store" } : undefined,
+  );
 }
 
 export async function createChatProject(input: {
@@ -295,21 +298,26 @@ export async function hardDeleteChatProject(
   );
 }
 
-export async function fetchChatSessions(input?: {
-  sessionId?: string;
-  scope?: "mission" | "external" | "all";
-  citadelId?: string;
-  workspaceId?: string;
-  projectId?: string;
-  folderId?: string;
-  tag?: string;
-  q?: string;
-  view?: "active" | "archived" | "all";
-  mode?: ChatMode;
-  limit?: number;
-  cursor?: string;
-  includeHidden?: boolean;
-}, options: { signal?: AbortSignal } = {}): Promise<ChatSessionsResponse> {
+export async function fetchChatSessions(
+  input?: {
+    sessionId?: string;
+    scope?: "mission" | "external" | "all";
+    citadelId?: string;
+    workspaceId?: string;
+    projectId?: string;
+    folderId?: string;
+    tag?: string;
+    q?: string;
+    view?: "active" | "archived" | "all";
+    mode?: ChatMode;
+    limit?: number;
+    cursor?: string;
+    includeHidden?: boolean;
+    /** Ask for each session's turn activity, so a list can show status without one read per row. */
+    includeActivity?: boolean;
+  },
+  options: { signal?: AbortSignal } = {},
+): Promise<ChatSessionsResponse> {
   const query = new URLSearchParams();
   if (input?.sessionId !== undefined) query.set("sessionId", input.sessionId);
   if (input?.scope) query.set("scope", input.scope);
@@ -322,22 +330,31 @@ export async function fetchChatSessions(input?: {
   if (input?.view) query.set("view", input.view);
   if (input?.mode) query.set("mode", input.mode);
   if (input?.includeHidden !== undefined) query.set("includeHidden", String(input.includeHidden));
+  if (input?.includeActivity) query.set("includeActivity", "true");
   query.set("limit", String(input?.limit ?? 200));
   if (input?.cursor) query.set("cursor", input.cursor);
-  return request<ChatSessionsResponse>(`/api/v1/chat/sessions?${query.toString()}`, options.signal ? { signal: options.signal, cache: "no-store" } : undefined);
+  return request<ChatSessionsResponse>(
+    `/api/v1/chat/sessions?${query.toString()}`,
+    options.signal ? { signal: options.signal, cache: "no-store" } : undefined,
+  );
 }
 
-export async function fetchChatSessionSearch(input: {
-  query: string;
-  mode?: ChatSessionSearchMode;
-  view?: "active" | "archived" | "all";
-  citadelId?: string;
-  workspaceId?: string;
-  surface?: ChatMode;
-  limit?: number;
-  cursor?: string;
-  includeHidden?: boolean;
-}): Promise<ChatSessionSearchResponse> {
+export async function fetchChatSessionSearch(
+  input: {
+    query: string;
+    mode?: ChatSessionSearchMode;
+    view?: "active" | "archived" | "all";
+    citadelId?: string;
+    workspaceId?: string;
+    surface?: ChatMode;
+    limit?: number;
+    cursor?: string;
+    includeHidden?: boolean;
+    /** Ask for each result's turn activity, so a list can show status without one read per row. */
+    includeActivity?: boolean;
+  },
+  options: { signal?: AbortSignal } = {},
+): Promise<ChatSessionSearchResponse> {
   const query = new URLSearchParams();
   query.set("query", input.query);
   if (input.mode) query.set("mode", input.mode);
@@ -346,9 +363,13 @@ export async function fetchChatSessionSearch(input: {
   if (input.workspaceId) query.set("workspaceId", input.workspaceId);
   if (input.surface) query.set("surface", input.surface);
   if (input.includeHidden !== undefined) query.set("includeHidden", String(input.includeHidden));
+  if (input.includeActivity) query.set("includeActivity", "true");
   query.set("limit", String(input.limit ?? 20));
   if (input.cursor) query.set("cursor", input.cursor);
-  return request<ChatSessionSearchResponse>(`/api/v1/chat/session-search?${query.toString()}`);
+  return request<ChatSessionSearchResponse>(
+    `/api/v1/chat/session-search?${query.toString()}`,
+    options.signal ? { signal: options.signal, cache: "no-store" } : undefined,
+  );
 }
 
 export async function createChatSession(
@@ -405,7 +426,10 @@ export async function updateChatSession(
   });
 }
 
-export async function fetchChatSessionStatus(sessionId: string, signal?: AbortSignal): Promise<ChatSessionStatusResponse> {
+export async function fetchChatSessionStatus(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<ChatSessionStatusResponse> {
   return request<ChatSessionStatusResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/status`, {
     cache: "no-store",
     signal,
@@ -546,7 +570,10 @@ export async function fetchChatSessionBinding(sessionId: string): Promise<{ item
   );
 }
 
-export async function fetchChatSessionWorkbench(sessionId: string, options?: ChatSessionWorkbenchReadOptions): Promise<{ state: ChatSessionWorkbenchRecord }> {
+export async function fetchChatSessionWorkbench(
+  sessionId: string,
+  options?: ChatSessionWorkbenchReadOptions,
+): Promise<{ state: ChatSessionWorkbenchRecord }> {
   return request<{ state: ChatSessionWorkbenchRecord }>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench${options?.preview ? "?preview=true" : ""}`,
   );
@@ -565,7 +592,10 @@ export async function createChatSessionWorkbenchWorktree(
   );
 }
 
-export async function fetchChatSessionWorkbenchTree(sessionId: string, options?: ChatSessionWorkbenchReadOptions): Promise<ChatSessionWorkbenchTreeResponse> {
+export async function fetchChatSessionWorkbenchTree(
+  sessionId: string,
+  options?: ChatSessionWorkbenchReadOptions,
+): Promise<ChatSessionWorkbenchTreeResponse> {
   return request<ChatSessionWorkbenchTreeResponse>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/tree${options?.preview ? "?preview=true" : ""}`,
   );
@@ -874,6 +904,17 @@ export async function listDocumentPatchProposals(input: {
   if (input.sessionId) query.set("sessionId", input.sessionId);
   if (input.state) query.set("state", input.state);
   return request<DocumentPatchProposalListResponse>(`/api/v1/chat/document-patch-proposals?${query.toString()}`);
+}
+
+/** One document proposal by id, within its workspace. */
+export async function fetchDocumentPatchProposal(
+  proposalId: string,
+  options: { workspaceId: string; signal?: AbortSignal },
+): Promise<DocumentPatchProposalResponse> {
+  return request<DocumentPatchProposalResponse>(
+    `/api/v1/chat/document-patch-proposals/${encodeURIComponent(proposalId)}?workspaceId=${encodeURIComponent(options.workspaceId)}`,
+    options.signal ? { signal: options.signal } : undefined,
+  );
 }
 
 export async function createDocumentPatchProposal(

@@ -53,6 +53,8 @@ jobs:
           node scripts/check-mission-control-next-cockpit-classes.mjs
           node --test scripts/check-mission-control-next-cockpit-copy.test.mjs
           node scripts/check-mission-control-next-cockpit-copy.mjs
+          node --test scripts/check-mission-control-next-cockpit-refetch.test.mjs
+          node scripts/check-mission-control-next-cockpit-refetch.mjs
           node scripts/check-mission-control-next-token-drift.mjs
           node --test scripts/check-mission-control-next-contrast.test.mjs
           node scripts/check-mission-control-next-contrast.mjs
