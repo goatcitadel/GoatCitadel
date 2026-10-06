@@ -393,6 +393,79 @@ function isStorageDeclaredPromiseCall(checker, call, storageRoot) {
   );
 }
 
+const FASTIFY_REPLY_TYPE_NAME = "FastifyReply";
+const PAYLOAD_SELECTING_OPERATORS = new Set([
+  ts.SyntaxKind.QuestionQuestionToken,
+  ts.SyntaxKind.BarBarToken,
+  ts.SyntaxKind.AmpersandAmpersandToken,
+  ts.SyntaxKind.CommaToken,
+]);
+
+function isFastifyReplyType(type) {
+  if (type.isUnionOrIntersection()) return type.types.some(isFastifyReplyType);
+  const symbol = type.aliasSymbol ?? type.getSymbol();
+  return symbol?.getName() === FASTIFY_REPLY_TYPE_NAME;
+}
+
+function isFastifyReplySendCall(checker, call) {
+  const callee = unwrapExpression(call.expression);
+  const access = accessedProperty(callee);
+  if (access?.name !== "send") return false;
+  if (isFastifyReplyType(checker.getTypeAtLocation(access.owner))) return true;
+  const symbol = ts.isPropertyAccessExpression(callee) ? checker.getSymbolAtLocation(callee.name) : undefined;
+  return Boolean(
+    symbol?.declarations?.some(
+      (declaration) =>
+        ts.isInterfaceDeclaration(declaration.parent) && declaration.parent.name.text === FASTIFY_REPLY_TYPE_NAME,
+    ),
+  );
+}
+
+// Payload-only widening of isExactPromiseType: a PromiseLike-typed helper can
+// still hand back a native pending Promise, which reply.send() serializes as
+// `{}`. The floating and storage rules keep their exact-Promise semantics.
+function isPendingPayloadType(checker, type) {
+  if (type.isUnion()) return type.types.some((member) => isPendingPayloadType(checker, member));
+  if (isExactPromiseType(checker, type)) return true;
+  const apparent = checker.getApparentType(type);
+  return (apparent.aliasSymbol ?? apparent.getSymbol())?.getName() === "PromiseLike";
+}
+
+// Fastify serializes a pending Promise payload as `{}` and its rejection
+// escapes the handler's try/catch, so a Promise must never reach reply.send()
+// directly or as a value nested inside an object/array literal payload
+// (including literals selected by ?:, ??, ||, or &&).
+function collectPromisePayloads(checker, expression, found = []) {
+  // A type assertion (`promise as unknown as Row`) can hide the Promise from
+  // the outer type, so the expression beneath the casts is checked as well.
+  const inner = unwrapExpression(expression);
+  if (
+    isPendingPayloadType(checker, checker.getTypeAtLocation(expression)) ||
+    (inner !== expression && isPendingPayloadType(checker, checker.getTypeAtLocation(inner)))
+  ) {
+    found.push(expression);
+    return found;
+  }
+  if (ts.isConditionalExpression(inner)) {
+    collectPromisePayloads(checker, inner.whenTrue, found);
+    collectPromisePayloads(checker, inner.whenFalse, found);
+  } else if (ts.isBinaryExpression(inner) && PAYLOAD_SELECTING_OPERATORS.has(inner.operatorToken.kind)) {
+    if (inner.operatorToken.kind !== ts.SyntaxKind.CommaToken) collectPromisePayloads(checker, inner.left, found);
+    collectPromisePayloads(checker, inner.right, found);
+  } else if (ts.isObjectLiteralExpression(inner)) {
+    for (const property of inner.properties) {
+      if (ts.isPropertyAssignment(property)) collectPromisePayloads(checker, property.initializer, found);
+      else if (ts.isShorthandPropertyAssignment(property)) collectPromisePayloads(checker, property.name, found);
+      else if (ts.isSpreadAssignment(property)) collectPromisePayloads(checker, property.expression, found);
+    }
+  } else if (ts.isArrayLiteralExpression(inner)) {
+    for (const element of inner.elements) {
+      collectPromisePayloads(checker, ts.isSpreadElement(element) ? element.expression : element, found);
+    }
+  }
+  return found;
+}
+
 const GATEWAY_ROUTES_PATH_PREFIX = "apps/gateway/src/routes/";
 
 export function scanGatewayPromiseUsage({
@@ -408,6 +481,7 @@ export function scanGatewayPromiseUsage({
   const diagnostics = [];
   const emitted = new Set();
   const floatingExpressionCalls = new Set();
+  const replySendPromisePayloads = [];
 
   const emit = (code, node, message) => {
     const start = node.getStart(sourceFile, false);
@@ -454,10 +528,15 @@ export function scanGatewayPromiseUsage({
       );
     }
 
+    if (ts.isCallExpression(node) && isFastifyReplySendCall(checker, node)) {
+      for (const argument of node.arguments) collectPromisePayloads(checker, argument, replySendPromisePayloads);
+    }
+
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
 
+  const routeServiceFindingNodes = new Set();
   if (routeServicePortMap && normalizedFilePath.startsWith(GATEWAY_ROUTES_PATH_PREFIX)) {
     const findings = findUnawaitedRouteServiceCalls({
       checker,
@@ -466,6 +545,7 @@ export function scanGatewayPromiseUsage({
       ignoreCalls: floatingExpressionCalls,
     });
     for (const finding of findings) {
+      routeServiceFindingNodes.add(finding.node);
       emit(
         "unawaited_route_service_call",
         finding.node,
@@ -484,6 +564,18 @@ export function scanGatewayPromiseUsage({
           "await it before using it as a boolean.",
       );
     }
+  }
+
+  for (const payload of replySendPromisePayloads) {
+    // A Promise-typed (class-backed) route-service call sent unawaited is
+    // already reported, with its service name, by the route-port rule.
+    if (routeServiceFindingNodes.has(unwrapExpression(payload))) continue;
+    emit(
+      "promise_sent_to_fastify_reply",
+      payload,
+      "Fastify reply.send() serializes a pending Promise as {} and its rejection escapes the route's error " +
+        "handling; await the value before sending it (directly or nested in the payload).",
+    );
   }
 
   return diagnostics.sort(

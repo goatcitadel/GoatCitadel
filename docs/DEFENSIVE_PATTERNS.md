@@ -24,6 +24,12 @@ Any seam that erases signatures to `any` (factory indirection, `(...args: any[])
 
 Origin: gateway route-service ports (`route-service-factory.ts`) shipped `{"items":{}}` bodies and a feature-gate that returned 200 instead of 403 (#227 family, guard shipped 2026-08-10).
 
+## A sent Promise is not a response
+
+Passing a call's result into another call satisfies `tsc` even when that result is a pending Promise. Fastify's `reply.send(promise)` serializes it as `{}`, and its rejection escapes the handler's `try`/`catch` instead of becoming a 404 or 400. Await every value before it reaches `reply.send`, including values nested in the payload object. `pnpm verify:gateway:async-boundary` rejects Promise-typed `reply.send` payloads in Gateway production source when they are passed directly or nested in object/array literals; a payload object first built in a variable is not walked, so await before building it.
+
+Origin: engineering-learning routes sent `{}` and leaked unhandled rejections for missing ids (#292, guard extended 2026-10-05).
+
 ## Report orthogonal outcomes independently
 
 A result can be several things at once — a process can time out AND exit 0 because it trapped the signal; a stream can be truncated AND redacted. Surface each independent fact (`timedOut`, `exitCode`, `stdoutTruncated`, `redactionCount`) as its own field; never nest one flag's report inside another's branch, or a caller reads a cut-short run as a clean success.
