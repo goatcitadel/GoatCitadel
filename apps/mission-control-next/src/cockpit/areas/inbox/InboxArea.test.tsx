@@ -5,7 +5,7 @@ import { VirtuosoMockContext } from "react-virtuoso";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ApprovalRequest, OperatorInboxItem, OperatorInboxResponse } from "@goatcitadel/contracts";
-import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { UiPreferencesProvider, useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InspectorPanel, InspectorProvider } from "../../app/inspector";
 import { InboxArea } from "./InboxArea";
@@ -80,10 +80,22 @@ vi.mock("../../data/use-operator-inbox", () => ({
   useCachedInboxItem: () => ({ projection: (inboxMock.result as { data?: unknown })?.data, fingerprint: "cached" }),
 }));
 
+let scopePreferences: ReturnType<typeof useUiPreferences>;
+function WorkspaceProbe() {
+  scopePreferences = useUiPreferences();
+  return null;
+}
 let root: Root;
 let container: HTMLDivElement;
 
 beforeEach(() => {
+  // These existing list/keyboard tests exercise the docked desktop layout.
+  vi.stubGlobal("matchMedia", (media: string) => ({
+    media,
+    matches: false,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
   switchShellMock.mockReset().mockResolvedValue("cancelled");
   __resetInboxViewedUpdatesForTests();
   inboxMock.installation = "http://localhost:8787";
@@ -128,6 +140,7 @@ async function renderUpdates(client: QueryClient, panel = true, area = true) {
     root.render(
       <QueryClientProvider client={client}>
         <UiPreferencesProvider>
+          <WorkspaceProbe />
           <CockpitNavigationProvider>
             <InspectorProvider>
               <VirtuosoMockContext.Provider value={{ viewportHeight: 350, itemHeight: 140 }}>
@@ -692,5 +705,43 @@ it("keeps triage selection and owner focus beyond the window without resolving a
   );
   expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
   expect(switchShellMock).not.toHaveBeenCalled();
+  client.clear();
+});
+
+it("opens an exact approval link even outside the Inbox projection", async () => {
+  inboxMock.result = {
+    data: { ...projection, items: [] },
+    isLoading: false,
+    isError: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  };
+  window.history.replaceState(null, "", "/inbox?workspaceId=default&item=approval%3Atest&shell=cockpit");
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await renderUpdates(client);
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Review the file write."));
+  expect(apiMocks.fetchApproval).toHaveBeenCalledWith("test", expect.objectContaining({ workspaceId: "default" }));
+  expect(container.querySelector("[data-inbox-owner]")?.getAttribute("href")).toContain("approvalId=test");
+  expect(switchShellMock).not.toHaveBeenCalled();
+  client.clear();
+});
+
+it.each(["workspace", "history"])("reopens the exact linked approval after a new %s lifetime", async (lifetime) => {
+  window.history.replaceState(null, "", "/inbox?workspaceId=default&item=approval%3Atest&shell=cockpit");
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await renderUpdates(client);
+  expect(container.querySelector('[aria-label="Inspector: Review file write"]')).not.toBeNull();
+  if (lifetime === "workspace") {
+    await act(async () => scopePreferences.setActiveWorkspaceId("other"));
+    expect(container.querySelector('[aria-label="Inspector: Review file write"]')).toBeNull();
+    await act(async () => scopePreferences.setActiveWorkspaceId("default"));
+  } else {
+    await act(async () => {
+      window.history.pushState(null, "", window.location.href + "#record");
+      window.dispatchEvent(new Event("goatcitadel:cockpit-location"));
+    });
+  }
+  expect(container.querySelector('[aria-label="Inspector: Review file write"]')).not.toBeNull();
+  expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
   client.clear();
 });

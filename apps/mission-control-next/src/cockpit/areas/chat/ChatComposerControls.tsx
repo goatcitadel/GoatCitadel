@@ -1,9 +1,9 @@
 import { useState } from "react";
+import { Popover } from "radix-ui";
 import { SlidersHorizontal } from "lucide-react";
 import type { ChatWebMode } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
-import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 
 type Controls = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -36,7 +36,7 @@ type Controls = Pick<
 >;
 
 const THINKING_LEVELS = ["off", "minimal", "standard", "extended", "deep", "max", "ultra"] as const;
-const OPTIONS_ID = "cockpit-chat-composer-options";
+
 const WEB_MODES: readonly { value: ChatWebMode; label: string }[] = [
   { value: "auto", label: "Auto" },
   { value: "off", label: "Off" },
@@ -47,17 +47,9 @@ const WEB_MODES: readonly { value: ChatWebMode; label: string }[] = [
 export function ChatComposerControls({ props }: { props: Controls }) {
   const selectedProvider = props.providerOptions.find((provider) => provider.providerId === props.selectedProviderId);
   const disabled = props.historicalReadOnly || props.sending;
-  // Phones keep Attach visible and fold the route and mode controls behind one toggle, so they
-  // do not wrap into three rows above the draft.
-  const phone = useMediaQuery("(max-width: 639px)");
   const [optionsOpen, setOptionsOpen] = useState(false);
-  const webLabel = WEB_MODES.find((mode) => mode.value === props.currentWebMode)?.label ?? "Auto";
-  const optionsSummary = [
-    props.selectedModel || "No model",
-    humanizeToken(props.currentThinkingLevel),
-    `Web ${webLabel}`,
-  ].join(" · ");
-  const options = (
+  const optionsSummary = [props.selectedModel || "Choose model", humanizeToken(props.currentThinkingLevel)].join(" · ");
+  const modelOptions = (
     <>
       <label className="flex items-center gap-1">
         Provider
@@ -66,7 +58,7 @@ export function ChatComposerControls({ props }: { props: Controls }) {
           value={props.selectedProviderId ?? ""}
           disabled={disabled || props.modelSwitchDisabled}
           onChange={(event) => props.onRequestProviderChange(event.target.value)}
-          className="max-w-32 rounded-md border border-line bg-canvas px-1 py-1 text-fg max-sm:min-h-11 max-sm:max-w-none"
+          className="max-w-32 rounded-md border border-line bg-canvas px-1 py-1 text-fg max-sm:min-h-11 max-sm:max-w-full"
         >
           <option value="">Choose</option>
           {props.selectedProviderId && !selectedProvider ? (
@@ -87,7 +79,7 @@ export function ChatComposerControls({ props }: { props: Controls }) {
           value={props.selectedModel ?? ""}
           disabled={disabled || props.modelSwitchDisabled || !selectedProvider}
           onChange={(event) => props.onRequestModelChange(event.target.value)}
-          className="max-w-36 rounded-md border border-line bg-canvas px-1 py-1 text-fg max-sm:min-h-11 max-sm:max-w-none"
+          className="max-w-36 rounded-md border border-line bg-canvas px-1 py-1 text-fg max-sm:min-h-11 max-sm:max-w-full"
         >
           <option value="">Choose</option>
           {props.selectedModel && !selectedProvider?.models.includes(props.selectedModel) ? (
@@ -125,6 +117,16 @@ export function ChatComposerControls({ props }: { props: Controls }) {
       >
         {props.activePersonality?.name ?? "Personality"}
       </button>
+      {selectedProvider?.contextWindowTokens ? (
+        <span className="ml-auto">
+          {new Intl.NumberFormat().format(selectedProvider.contextWindowTokens)} token context limit
+        </span>
+      ) : null}
+    </>
+  );
+  const modeOptions = (
+    <>
+      {" "}
       <button
         type="button"
         aria-pressed={props.planningMode === "advisory"}
@@ -159,11 +161,6 @@ export function ChatComposerControls({ props }: { props: Controls }) {
       >
         Review
       </button>
-      {selectedProvider?.contextWindowTokens ? (
-        <span className="ml-auto">
-          {new Intl.NumberFormat().format(selectedProvider.contextWindowTokens)} token context limit
-        </span>
-      ) : null}
     </>
   );
   return (
@@ -215,7 +212,7 @@ export function ChatComposerControls({ props }: { props: Controls }) {
       />
       <div
         aria-label="Composer controls"
-        className="cockpit-chat-controls flex min-w-0 flex-wrap items-center gap-2 pb-1 text-xs text-fg-muted sm:flex-nowrap sm:overflow-x-auto"
+        className="cockpit-chat-controls flex min-w-0 flex-wrap items-center gap-2 pb-1 text-xs text-fg-muted"
       >
         <button
           type="button"
@@ -226,34 +223,35 @@ export function ChatComposerControls({ props }: { props: Controls }) {
         >
           + Attach
         </button>
-        {phone ? (
-          <button
-            type="button"
-            aria-expanded={optionsOpen}
-            aria-controls={OPTIONS_ID}
-            onClick={() => setOptionsOpen((open) => !open)}
-            className="inline-flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-md border border-line px-3 text-left text-fg-secondary hover:border-line-strong aria-[expanded=true]:border-accent"
-          >
-            <SlidersHorizontal aria-hidden="true" className="size-4 shrink-0" />
-            <span className="font-medium text-fg">Options</span>
-            <span aria-hidden="true" className="min-w-0 truncate text-fg-muted">
-              {optionsSummary}
-            </span>
-          </button>
-        ) : (
-          options
-        )}
+        <Popover.Root open={optionsOpen} onOpenChange={setOptionsOpen}>
+          <Popover.Trigger asChild>
+            <button
+              type="button"
+              aria-label="Model and reasoning options"
+              className="inline-flex min-h-9 min-w-0 max-w-64 items-center gap-2 max-sm:max-w-full max-sm:basis-1/2 max-sm:flex-1 rounded-md border border-line px-2 text-left text-fg-secondary hover:border-line-strong max-sm:min-h-11"
+            >
+              <SlidersHorizontal aria-hidden="true" className="size-4 shrink-0" />
+              <span className="min-w-0 truncate">{optionsSummary}</span>
+            </button>
+          </Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Content
+              side="top"
+              align="start"
+              sideOffset={8}
+              className="z-50 w-80 max-w-full space-y-3 rounded-lg border border-line bg-overlay p-3 text-xs text-fg shadow-overlay"
+            >
+              <h3 className="text-sm font-semibold">Model and reasoning</h3>
+              <div className="flex flex-wrap items-center gap-3">{modelOptions}</div>
+              <p className="text-fg-muted">Effort support depends on the selected model.</p>
+              <Popover.Close className="min-h-9 rounded-md border border-line px-3" type="button">
+                Done
+              </Popover.Close>
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
+        {modeOptions}
       </div>
-      {phone && optionsOpen ? (
-        <div
-          id={OPTIONS_ID}
-          aria-label="Model and mode options"
-          role="group"
-          className="mb-2 flex flex-wrap items-center gap-2 text-xs text-fg-muted"
-        >
-          {options}
-        </div>
-      ) : null}
     </>
   );
 }

@@ -23,9 +23,6 @@ import { SelectedThreadActivity } from "./SelectedThreadActivity";
 import { ThreadList } from "./ThreadList";
 import { useInspector } from "../../app/inspector";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
-import { buildClassicOwnerUrl } from "../../../app/classic-owner-url";
-import { useShellHandoff } from "../../../app/use-shell-handoff";
-import { ShellSwitchFeedback } from "../../app/use-cockpit-shell-switch";
 import { ChatOwnerNavigationBoundary } from "./ChatOwnerNavigationBoundary";
 import { useChatOwnerNavigation } from "./use-chat-owner-navigation";
 import { ChatTimerPanel } from "../../../features/threaded-surface/ChatTimerPanel";
@@ -56,11 +53,10 @@ export function ChatArea({
   const { activeWorkspaceId, activeCitadelId } = useUiPreferences();
   // `search` is the page the views show: while a Back move is held, the live URL names its target.
   const { navigate, search } = useCockpitRoute();
-  const handoff = useShellHandoff([activeCitadelId, activeWorkspaceId]);
+
   const conversationNavigation = useChatOwnerNavigation(activeWorkspaceId ?? "default", activeCitadelId);
   return (
     <div className="cockpit-chat-host flex min-h-0 min-w-0 flex-1 flex-col">
-      <ShellSwitchFeedback owner={handoff} />
       <MissionThreadedControllerHost
         workspaceId={activeWorkspaceId ?? "default"}
         surface="chat"
@@ -70,11 +66,11 @@ export function ChatArea({
         routeSearch={search}
         onNavigateSurface={conversationNavigation.request}
         onOpenApprovals={(approvalId) =>
-          approvalId
-            ? handoff.request("classic", {
-                href: buildClassicOwnerUrl(`/ops/approvals?approvalId=${encodeURIComponent(approvalId)}`),
-              })
-            : navigate("/inbox?shell=cockpit")
+          navigate(
+            approvalId
+              ? `/inbox?item=approval:${encodeURIComponent(approvalId)}&workspaceId=${encodeURIComponent(activeWorkspaceId ?? "default")}&shell=cockpit`
+              : "/inbox?shell=cockpit",
+          )
         }
         onOpenTasks={() => navigate("/work?shell=cockpit")}
         onOpenStartHere={() => navigate("/settings/first-run?shell=cockpit")}
@@ -82,7 +78,7 @@ export function ChatArea({
         onOpenProviderSettings={() => navigate("/settings/models?shell=cockpit#providers")}
         onOpenLocalAiSettings={() => navigate("/settings/models?shell=cockpit#local-ai")}
         onOpenLibraryArtifacts={() => navigate("/library/artifacts?shell=cockpit")}
-        onOpenLibraryImports={() => handoff.request("classic", { href: buildClassicOwnerUrl("/library/knowledge") })}
+        onOpenLibraryImports={() => navigate("/library/knowledge?shell=cockpit")}
         onOpenOpsRuntime={() => navigate("/system/health?shell=cockpit")}
         renderSurface={(input: MissionThreadedRenderSurfaceInput) => (
           <ChatOwnerNavigationBoundary input={input} owner={conversationNavigation}>
@@ -320,6 +316,7 @@ export function ChatAreaView({
         ) : active ? (
           <div className="cockpit-chat-content flex min-h-0 flex-1 flex-col">
             <ChatTranscript
+              gatewayUnavailable={gatewayUnavailable}
               props={active}
               receipt={input.changePlanReceipt}
               onInspectTurn={(turnId) => openInspector(turnId, "turn")}

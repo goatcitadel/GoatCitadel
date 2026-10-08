@@ -244,7 +244,10 @@ describe("cockpit text composer", () => {
   it("opens personality settings when no presence record is attached", async () => {
     const props = composerProps();
     await act(async () => root.render(<ChatTextComposer props={props} />));
-    const button = container.querySelector('button[aria-label="Open personality settings"]') as HTMLButtonElement;
+    await act(async () =>
+      (container.querySelector('button[aria-label="Model and reasoning options"]') as HTMLButtonElement).click(),
+    );
+    const button = document.body.querySelector('button[aria-label="Open personality settings"]') as HTMLButtonElement;
     expect(button.textContent?.trim()).toBe("Personality");
     await act(async () => button.click());
     expect(props.onOpenPersonalitiesSettings).toHaveBeenCalledOnce();
@@ -252,7 +255,7 @@ describe("cockpit text composer", () => {
       root.render(<ChatTextComposer props={composerProps({ onOpenPersonalitiesSettings: undefined })} />),
     );
     expect(
-      (container.querySelector('button[aria-label="Open personality settings"]') as HTMLButtonElement).disabled,
+      (document.body.querySelector('button[aria-label="Open personality settings"]') as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 
@@ -295,7 +298,10 @@ describe("cockpit text composer", () => {
     expect(props.onSend).toHaveBeenCalledOnce();
     await act(async () => (container.querySelector('button[aria-label="Remove a.txt"]') as HTMLButtonElement).click());
     expect(props.onRemoveAttachment).toHaveBeenCalledWith("a");
-    const select = container.querySelector('select[aria-label="Model"]') as HTMLSelectElement;
+    await act(async () =>
+      (container.querySelector('button[aria-label="Model and reasoning options"]') as HTMLButtonElement).click(),
+    );
+    const select = document.body.querySelector('select[aria-label="Model"]') as HTMLSelectElement;
     await act(async () => {
       select.value = "model-b";
       select.dispatchEvent(new Event("change", { bubbles: true }));

@@ -1,12 +1,13 @@
 import { WindowedRecordList, type WindowedRecordListHandle } from "../../ui/WindowedRecordList";
 import { InboxSourceContext } from "./InboxSourceContext";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
 import { RefreshCw } from "lucide-react";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { describeOperatorInboxError } from "../../data/operator-inbox-error";
 import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { readCockpitHistory, subscribeCockpitHistory } from "../../app/cockpit-history";
 import { useInspector } from "../../app/inspector";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { useOperatorInbox } from "../../data/use-operator-inbox";
@@ -34,7 +35,8 @@ function RecordViewedUpdate({ onOpened }: { onOpened: () => void }) {
 }
 
 export function InboxArea() {
-  const { activeWorkspaceId } = useUiPreferences();
+  const { activeWorkspaceId, activeCitadelId } = useUiPreferences();
+  const history = useSyncExternalStore(subscribeCockpitHistory, readCockpitHistory, () => "server");
   const workspaceId = activeWorkspaceId ?? "default";
   const { search } = useCockpitRoute();
   const params = new URLSearchParams(search);
@@ -152,18 +154,46 @@ export function InboxArea() {
   );
 
   useEffect(() => {
-    const key = JSON.stringify([workspaceId, linkedWorkspace, linkedItem]);
+    const key = JSON.stringify([installation, activeCitadelId, workspaceId, linkedWorkspace, linkedItem, history]);
     if (!linkedItem) {
       handledLink.current = null;
       return;
     }
-    if (!projection || inbox.isFetching || linkedWorkspace !== workspaceId || handledLink.current === key) return;
-    const item = projection.items.find((entry) => entry.id === linkedItem);
+    if (linkedWorkspace !== workspaceId) {
+      handledLink.current = null;
+      return;
+    }
+    if (handledLink.current === key) return;
+    // A URL is navigation, not authority. The detail re-reads the scoped canonical record.
+    const item =
+      projection?.items.find((entry) => entry.id === linkedItem) ??
+      (linkedItem.startsWith("approval:") && linkedItem.length > 9
+        ? {
+            id: linkedItem,
+            kind: "approval" as const,
+            group: "needs_decision" as const,
+            title: "Approval",
+            summary: "Review the current approval record.",
+            createdAt: "",
+            source: { workspaceId, approvalId: linkedItem.slice(9) },
+            href: `/ops/approvals?approvalId=${encodeURIComponent(linkedItem.slice(9))}&workspaceId=${encodeURIComponent(workspaceId)}&shell=classic`,
+          }
+        : undefined);
     if (!item) return;
     handledLink.current = key;
     setSelectedId(item.id);
     inspect(item);
-  }, [projection, inbox.isFetching, inspect, workspaceId, linkedItem, linkedWorkspace]);
+  }, [
+    projection,
+    inbox.isFetching,
+    inspect,
+    installation,
+    activeCitadelId,
+    workspaceId,
+    linkedItem,
+    linkedWorkspace,
+    history,
+  ]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -229,6 +259,7 @@ export function InboxArea() {
       linkedWorkspace === workspaceId &&
       projection &&
       !inbox.isFetching &&
+      !linkedItem.startsWith("approval:") &&
       !projection.items.some((item) => item.id === linkedItem) ? (
         <p role="status" className="text-sm text-fg-muted">
           The linked item is no longer in the current Inbox. It may have been resolved or moved outside this view’s

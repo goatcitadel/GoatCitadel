@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { Maximize2, Minimize2, X } from "lucide-react";
 import {
   useCallback,
   useContext,
@@ -13,6 +13,7 @@ import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMedi
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { IconButton } from "../ui/IconButton";
+import { Dialog } from "../ui/Dialog";
 import { Sheet } from "../ui/Sheet";
 import { readCockpitHistory, subscribeCockpitHistory } from "./cockpit-history";
 import { InspectorResizeHandle } from "./InspectorResizeHandle";
@@ -132,36 +133,90 @@ export function useInspector(): InspectorApi {
 export function InspectorPanel() {
   const { content, close } = useInspector();
   const isPhone = useMediaQuery("(width < 640px)");
+  const overlay = useMediaQuery("(width < 1280px)");
   const [width, setWidth] = useState(384);
+  const [expanded, setExpanded] = useState(false);
+  const opened = useRef(false);
+  const focusTarget = useRef<HTMLElement | null>(null);
+  if (content && !opened.current)
+    focusTarget.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  opened.current = Boolean(content);
+  useEffect(() => {
+    if (!content) setExpanded(false);
+  }, [content]);
   if (!content) return null;
+  const body = (
+    <div
+      data-inspector-body="true"
+      aria-label={`Inspector: ${content.title}`}
+      className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3"
+    >
+      {content.body}
+    </div>
+  );
   if (isPhone)
     return (
       <Sheet
         open
-        onOpenChange={(opened) => {
-          if (!opened) close();
+        onOpenChange={(value) => {
+          if (!value) close();
         }}
         title={content.title}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          if (focusTarget.current?.isConnected) focusTarget.current.focus();
+        }}
       >
-        <div data-inspector-body="true" aria-label={`Inspector: ${content.title}`} className="space-y-3">
-          {content.body}
-        </div>
+        {body}
       </Sheet>
+    );
+  if (overlay || expanded)
+    return (
+      <Dialog
+        open
+        title={content.title}
+        description="Review the selected details."
+        contentClassName="inset-y-4 flex max-w-5xl flex-col"
+        closeLabel="Close inspector"
+        actions={
+          !overlay ? (
+            <IconButton
+              label="Restore docked inspector"
+              icon={<Minimize2 className="size-4" aria-hidden="true" />}
+              onClick={() => setExpanded(false)}
+            />
+          ) : undefined
+        }
+        onOpenChange={(value) => {
+          if (!value) close();
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          if (focusTarget.current?.isConnected) focusTarget.current.focus();
+        }}
+      >
+        {body}
+      </Dialog>
     );
   return (
     <aside
       aria-label={`Inspector: ${content.title}`}
       style={{ width }}
-      className="cockpit-inspector relative flex max-w-full shrink-0 flex-col border-l border-line-subtle bg-raised max-md:fixed max-md:inset-y-0 max-md:right-0 max-md:z-40 max-md:shadow-overlay"
+      className="cockpit-inspector relative flex max-w-full shrink-0 flex-col border-l border-line-subtle bg-raised"
     >
       <InspectorResizeHandle width={width} onChange={setWidth} />
       <header className="flex h-12 items-center justify-between border-b border-line-subtle px-3">
         <h2 className="text-sm font-medium text-fg">{content.title}</h2>
-        <IconButton label="Close inspector" icon={<X className="size-4" aria-hidden="true" />} onClick={close} />
+        <div className="flex gap-1">
+          <IconButton
+            label="Expand inspector"
+            icon={<Maximize2 className="size-4" aria-hidden="true" />}
+            onClick={() => setExpanded(true)}
+          />
+          <IconButton label="Close inspector" icon={<X className="size-4" aria-hidden="true" />} onClick={close} />
+        </div>
       </header>
-      <div data-inspector-body="true" className="min-h-0 flex-1 overflow-y-auto p-3">
-        {content.body}
-      </div>
+      {body}
     </aside>
   );
 }

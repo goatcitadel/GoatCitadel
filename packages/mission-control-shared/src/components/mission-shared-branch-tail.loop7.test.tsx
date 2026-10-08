@@ -3,9 +3,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { act, create } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildDynamicCatalog } from "../pixel-office/layout/furnitureCatalog";
-import { layoutToSeats, migrateLayoutColors } from "../pixel-office/layout/layoutSerializer";
-import { Direction, TileType, type OfficeLayout, type SpriteData } from "../pixel-office/types";
 import { CommandPalette } from "./CommandPalette";
 import { GatewayAccessGate } from "./GatewayAccessGate";
 import { Panel } from "./Panel";
@@ -73,69 +70,6 @@ class EmptyDialogElement extends FakeElement {
   contains() {
     return false;
   }
-}
-
-const sprite: SpriteData = [["#000000"]];
-
-function buildLoop7Assets() {
-  const catalog = [
-    {
-      id: "DESK_FRONT",
-      label: "Desk",
-      category: "desks",
-      width: 1,
-      height: 1,
-      footprintW: 1,
-      footprintH: 1,
-      isDesk: true,
-    },
-    {
-      id: "CHAIR_LEFT",
-      label: "Left chair",
-      category: "chairs",
-      width: 1,
-      height: 1,
-      footprintW: 1,
-      footprintH: 1,
-      isDesk: false,
-      orientation: "left",
-    },
-    {
-      id: "CHAIR_SIDE",
-      label: "Side chair",
-      category: "chairs",
-      width: 1,
-      height: 1,
-      footprintW: 1,
-      footprintH: 1,
-      isDesk: false,
-      orientation: "side",
-    },
-    {
-      id: "CHAIR_NONE",
-      label: "Plain chair",
-      category: "chairs",
-      width: 1,
-      height: 1,
-      footprintW: 1,
-      footprintH: 1,
-      isDesk: false,
-    },
-    {
-      id: "COUCH",
-      label: "Couch",
-      category: "chairs",
-      width: 2,
-      height: 1,
-      footprintW: 2,
-      footprintH: 1,
-      isDesk: false,
-    },
-  ];
-  return {
-    catalog,
-    sprites: Object.fromEntries(catalog.map((item) => [item.id, sprite])),
-  };
 }
 
 function installWindow(search = "") {
@@ -211,7 +145,6 @@ describe("mission-control-shared branch-tail coverage", () => {
     shellMocks.pollGatewayDeviceAccessRequestStatus.mockReset();
     shellMocks.persistGatewayAuthState.mockReset();
     shellMocks.clearGatewayAuthState.mockReset();
-    expect(buildDynamicCatalog(buildLoop7Assets())).toBe(true);
   });
 
   afterEach(() => {
@@ -219,44 +152,6 @@ describe("mission-control-shared branch-tail coverage", () => {
     vi.restoreAllMocks();
     Reflect.deleteProperty(globalThis, "document");
     Reflect.deleteProperty(globalThis, "HTMLElement");
-  });
-
-  it("maps layout seats across explicit, adjacent-desk, default, and multi-seat branches", () => {
-    const seats = layoutToSeats([
-      { uid: "left", type: "CHAIR_LEFT", col: 4, row: 4 },
-      { uid: "side", type: "CHAIR_SIDE", col: 5, row: 4 },
-      { uid: "desk-left", type: "DESK_FRONT", col: 1, row: 2 },
-      { uid: "adjacent", type: "CHAIR_NONE", col: 2, row: 2 },
-      { uid: "plain", type: "CHAIR_NONE", col: 8, row: 8 },
-      { uid: "couch", type: "COUCH", col: 10, row: 3 },
-    ]);
-
-    expect(seats.get("left")?.facingDir).toBe(Direction.LEFT);
-    expect(seats.get("side")?.facingDir).toBe(Direction.RIGHT);
-    expect(seats.get("adjacent")?.facingDir).toBe(Direction.LEFT);
-    expect(seats.get("plain")?.facingDir).toBe(Direction.DOWN);
-    expect(seats.get("couch")).toMatchObject({ seatCol: 10, seatRow: 3 });
-    expect(seats.get("couch:1")).toMatchObject({ seatCol: 11, seatRow: 3 });
-  });
-
-  it("migrates legacy layout tiles, colors, voids, and retired furniture IDs", () => {
-    const migrated = migrateLayoutColors({
-      version: 1,
-      cols: 4,
-      rows: 2,
-      tiles: [0, 1, 2, 3, 4, 5, TileType.VOID, 8 as never],
-      furniture: [
-        { uid: "drop", type: "lamp", col: 0, row: 0 },
-        { uid: "legacy", type: "desk", col: 1, row: 1 },
-      ],
-    } satisfies OfficeLayout);
-
-    expect(migrated.tiles[7]).toBe(TileType.VOID);
-    expect(migrated.tileColors?.[3]).toEqual({ h: 280, s: 40, b: -5, c: 0 });
-    expect(migrated.tileColors?.[4]).toEqual({ h: 35, s: 25, b: 10, c: 0 });
-    expect(migrated.tileColors?.[5]).toEqual({ h: 0, s: 0, b: 0, c: 0 });
-    expect(migrated.tileColors?.[6]).toBeNull();
-    expect(migrated.furniture).toEqual([{ uid: "legacy", type: "DESK_FRONT", col: 1, row: 1 }]);
   });
 
   it("handles command-palette focus fallbacks without activating missing selections", async () => {

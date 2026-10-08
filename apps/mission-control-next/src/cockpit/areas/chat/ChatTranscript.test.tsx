@@ -34,7 +34,10 @@ vi.mock("react-virtuoso", () => ({
   }: {
     data: ChatThreadTurnRecord[];
     itemContent: (index: number, turn: ChatThreadTurnRecord) => ReactNode;
-    components: { Footer?: ComponentType<{ context?: unknown }>; EmptyPlaceholder?: ComponentType };
+    components: {
+      Footer?: ComponentType<{ context?: unknown }>;
+      EmptyPlaceholder?: ComponentType<{ context?: unknown }>;
+    };
     context?: unknown;
     computeItemKey?: (index: number, turn: ChatThreadTurnRecord) => string;
     followOutput?: boolean | string | ((atBottom: boolean) => boolean | string);
@@ -50,7 +53,7 @@ vi.mock("react-virtuoso", () => ({
         {data.map((turn, index) => (
           <div key={computeItemKey?.(index, turn) ?? index}>{itemContent(index, turn)}</div>
         ))}
-        {!data.length && EmptyPlaceholder ? <EmptyPlaceholder /> : null}
+        {!data.length && EmptyPlaceholder ? <EmptyPlaceholder context={context} /> : null}
         {Footer ? <Footer context={context} /> : null}
       </div>
     );
@@ -78,6 +81,11 @@ function turn(turnId: string, selected: boolean, status: "completed" | "failed" 
 function sessionProps(turns: ChatThreadTurnRecord[]): MissionThreadedActiveSessionSurfaceProps {
   return {
     selectedSessionId: "session-1",
+    draft: "",
+    onDraftChange: vi.fn(),
+    loading: false,
+    historicalReadOnly: false,
+    sending: false,
     thread: { sessionId: "session-1", turns },
     followOutput: true,
     hasActiveStream: false,
@@ -481,7 +489,7 @@ describe("ChatTranscript", () => {
     await act(async () =>
       (container.querySelector('[aria-label="Inspect turn details"]') as HTMLButtonElement).click(),
     );
-    expect(container.textContent).toContain("Cost: $0.01");
+    expect(document.body.textContent).toContain("Cost: $0.01");
   });
 
   it("keeps failed turns visible with a recovery handoff", async () => {
@@ -544,7 +552,7 @@ describe("ChatTranscript", () => {
         </InspectorProvider>,
       ),
     );
-    expect(container.textContent).toContain("No messages yet");
+    expect(container.querySelector('[aria-label="Conversation starters"]')).not.toBeNull();
     expect(container.querySelectorAll('[aria-label="Conversation turn"]')).toHaveLength(0);
   });
 
@@ -670,4 +678,31 @@ describe("ChatTranscript", () => {
     expect(onOpenArtifact).toHaveBeenCalledWith("artifact-turn", "artifact-1");
     expect(onOpenGeneratedArtifact).not.toHaveBeenCalled();
   });
+});
+
+it("offers starters only after an editable empty conversation has loaded", async () => {
+  const props = {
+    ...sessionProps([]),
+    loading: false,
+    historicalReadOnly: false,
+    sending: false,
+    draft: "",
+    onDraftChange: vi.fn(),
+  };
+  await act(async () =>
+    renderWithProviders(
+      <InspectorProvider>
+        <ChatTranscript props={props} />
+      </InspectorProvider>,
+    ),
+  );
+  expect(container.textContent).toContain("Explain this project");
+  await act(async () =>
+    renderWithProviders(
+      <InspectorProvider>
+        <ChatTranscript props={{ ...props, loading: true }} />
+      </InspectorProvider>,
+    ),
+  );
+  expect(container.textContent).not.toContain("Explain this project");
 });

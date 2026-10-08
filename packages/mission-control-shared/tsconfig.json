@@ -20,7 +20,6 @@
     "src/**/*.coverage.test.tsx",
     "src/components/OfficeCanvas.tsx",
     "src/components/OfficeCanvasErrorBoundary.tsx",
-    "src/components/PixelOfficeCanvas.tsx",
     "src/components/ResizablePaneLayout.tsx",
     "src/components/OperatorSplitLayout.tsx"
   ],

@@ -26,6 +26,13 @@ function Probe() {
 }
 
 beforeEach(() => {
+  // Existing docked-panel tests explicitly use a desktop viewport.
+  vi.stubGlobal("matchMedia", (media: string) => ({
+    media,
+    matches: false,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
   installation.value = "http://inspector.invalid";
   window.history.replaceState(null, "", "/chat?sessionId=current&shell=cockpit");
   container = document.createElement("div");
@@ -259,4 +266,69 @@ describe("inspector", () => {
     });
     expect(document.querySelector('[aria-label="Inspector: Run"]')).not.toBeNull();
   });
+});
+
+it("uses a modal inspector on tablet widths", async () => {
+  vi.stubGlobal("matchMedia", (media: string) => ({
+    media,
+    matches: media === "(width < 1280px)",
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
+  await act(async () =>
+    root.render(
+      <InspectorProvider>
+        <Probe />
+        <InspectorPanel />
+      </InspectorProvider>,
+    ),
+  );
+  await act(async () => api.open({ title: "Run", body: <button type="button">Evidence</button> }));
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  expect(container.querySelector("aside.cockpit-inspector")).toBeNull();
+});
+it("expands a docked inspector without discarding selection", async () => {
+  await act(async () =>
+    root.render(
+      <InspectorProvider>
+        <Probe />
+        <InspectorPanel />
+      </InspectorProvider>,
+    ),
+  );
+  await act(async () => api.open({ title: "Run", body: <p>Canonical evidence</p> }));
+  const expand = container.querySelector<HTMLButtonElement>('[aria-label="Expand inspector"]');
+  expect(expand).not.toBeNull();
+  await act(async () => expand!.click());
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Canonical evidence");
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Restore docked inspector"]')!.click());
+  expect(container.textContent).toContain("Canonical evidence");
+});
+
+it("restores phone inspection focus to its originating control", async () => {
+  vi.stubGlobal("matchMedia", (media: string) => ({
+    media,
+    matches: media === "(width < 640px)" || media === "(width < 1280px)",
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
+  await act(async () =>
+    root.render(
+      <InspectorProvider>
+        <Probe />
+        <button type="button" onClick={() => api.open({ title: "Run", body: <button type="button">Evidence</button> })}>
+          Inspect phone
+        </button>
+        <InspectorPanel />
+      </InspectorProvider>,
+    ),
+  );
+  const trigger = container.querySelector<HTMLButtonElement>("button")!;
+  trigger.focus();
+  await act(async () => trigger.click());
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Close sheet"]')!.click());
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  });
+  expect(document.activeElement).toBe(trigger);
 });

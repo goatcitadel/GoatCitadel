@@ -7,12 +7,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { InboxApprovalDetail } from "./InboxApprovalDetail";
 
-const api = vi.hoisted(() => ({ fetchApproval: vi.fn(), fetchApprovals: vi.fn(), fetchOperatorInbox: vi.fn() }));
+const api = vi.hoisted(() => ({
+  fetchApproval: vi.fn(),
+  fetchApprovals: vi.fn(),
+  fetchOperatorInbox: vi.fn(),
+  fetchDurableRun: vi.fn(),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({ fetchApproval: api.fetchApproval }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ fetchApprovals: api.fetchApprovals }));
 vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({
   fetchOperatorInbox: api.fetchOperatorInbox,
 }));
+vi.mock("@goatcitadel/mission-control-shared/api/durable", () => ({ fetchDurableRun: api.fetchDurableRun }));
 const notFound = () => new ApiRequestError("API error 404", { kind: "http", method: "GET", path: "/x", status: 404 });
 vi.mock("./InboxApprovalActions", () => ({
   InboxApprovalActions: ({
@@ -213,4 +219,39 @@ describe("Inbox approval detail", () => {
     expect(container.textContent).not.toContain("Decision controls");
     expect(container.querySelector('[role="alert"]')).toBeNull();
   });
+});
+
+it("retains decided approval evidence without decision controls", async () => {
+  api.fetchApproval.mockResolvedValue({ ...approval, status: "approved" });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <InboxApprovalDetail item={item} workspaceId="default" />
+      </QueryClientProvider>,
+    ),
+  );
+  await settleUntil(() => Boolean(container.textContent?.includes("Approved")));
+  expect(container.textContent).toContain("Approved");
+  expect(container.textContent).toContain("pnpm test");
+  expect(container.textContent).not.toContain("Decision controls");
+});
+
+it("shows linked execution independently of the approved decision", async () => {
+  api.fetchApproval.mockResolvedValue({
+    ...approval,
+    status: "approved",
+    linkage: { workspaceId: "default", durableRunId: "run-a" },
+  });
+  api.fetchDurableRun.mockResolvedValue({ runId: "run-a", status: "waiting", payload: { workspaceId: "default" } });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <InboxApprovalDetail item={item} workspaceId="default" />
+      </QueryClientProvider>,
+    ),
+  );
+  await settleUntil(() => Boolean(container.textContent?.includes("Run status: Waiting")));
+  expect(container.textContent).toContain("Run status: Waiting");
+  expect(container.textContent).toContain("Approved");
+  expect(container.textContent).not.toContain("Decision controls");
 });

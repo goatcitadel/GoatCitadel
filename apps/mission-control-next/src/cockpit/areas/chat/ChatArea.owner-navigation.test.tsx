@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatArea } from "./ChatArea";
+import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { useSessionDraft, __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetFormDirtyRegistryForTests } from "../../../features/native-routes/library/use-form-dirty";
 
@@ -51,6 +52,11 @@ async function render() {
     root.render(
       <>
         <ChatArea />
+        <ClassicOwnerLink
+          href="/ops/approvals?approvalId=specialist"
+          scope={JSON.stringify([mocks.preferences.activeCitadelId, mocks.preferences.activeWorkspaceId])}
+          label="Open specialist fallback"
+        />
         <DraftProbe />
       </>,
     );
@@ -105,7 +111,7 @@ describe("cockpit Chat owner navigation", () => {
     expect(mocks.switchShell).not.toHaveBeenCalled();
   });
 
-  it("passes exact specialist paths through the shared guarded handoff", async () => {
+  it("opens exact approvals and knowledge through native Cockpit navigation", async () => {
     const assign = vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
     await render();
     await act(async () => {
@@ -114,16 +120,12 @@ describe("cockpit Chat owner navigation", () => {
     await act(async () => {
       mocks.hostProps!.onOpenLibraryImports();
     });
-    expect(mocks.switchShell.mock.calls.map(([shell, options]) => [shell, options.href])).toEqual([
-      ["classic", "/ops/approvals?approvalId=approval%2Fone%3Ftwo&shell=classic&shellScope=visit"],
-      ["classic", "/library/knowledge?shell=classic&shellScope=visit"],
+    expect(mocks.navigate.mock.calls.map(([href]) => href)).toEqual([
+      "/inbox?item=approval:approval%2Fone%3Ftwo&workspaceId=workspace-a&shell=cockpit",
+      "/library/knowledge?shell=cockpit",
     ]);
-    for (const [, options] of mocks.switchShell.mock.calls) {
-      expect(options.isCurrent()).toBe(true);
-      expect(options.signal).toBeInstanceOf(AbortSignal);
-    }
+    expect(mocks.switchShell).not.toHaveBeenCalled();
     expect(assign).not.toHaveBeenCalled();
-    expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
   it("shows the shared draft-leave review and prevents stale scope continuation", async () => {
@@ -132,7 +134,7 @@ describe("cockpit Chat owner navigation", () => {
       draft.setValue({ name: "Unsaved" });
     });
     await act(async () => {
-      mocks.hostProps!.onOpenLibraryImports();
+      (document.querySelector('a[aria-label="Open specialist fallback"]') as HTMLAnchorElement).click();
     });
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Unsaved changes");
     const oldKeep = [...document.querySelectorAll("button")].find(
@@ -158,10 +160,10 @@ describe("cockpit Chat owner navigation", () => {
     mocks.switchShell.mockRejectedValueOnce(new Error("synthetic import failure"));
     await render();
     await act(async () => {
-      mocks.hostProps!.onOpenLibraryImports();
+      (document.querySelector('a[aria-label="Open specialist fallback"]') as HTMLAnchorElement).click();
     });
     expect(container.querySelector('[role="alert"]')?.textContent).toBe(
-      "The view could not open. Your current drafts are still available.",
+      "The owner view could not open. Your current drafts are still available.",
     );
     expect(window.location.pathname).toBe("/chat");
   });

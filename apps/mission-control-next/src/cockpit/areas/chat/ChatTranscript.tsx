@@ -1,3 +1,4 @@
+import { ChatConversationStarters } from "./ChatConversationStarters";
 import { useCallback, useMemo, useRef, type RefObject } from "react";
 import { Virtuoso } from "react-virtuoso";
 import { isChatTurnTerminalStatus, type ChatThreadTurnRecord } from "@goatcitadel/contracts";
@@ -154,6 +155,7 @@ function Turn({
 type TranscriptFooterContext = {
   props: MissionThreadedActiveSessionSurfaceProps;
   receipt?: MissionThreadedRenderSurfaceInput["changePlanReceipt"];
+  gatewayUnavailable?: boolean;
   preview: ReturnType<typeof useChatStreamingPreviewSnapshot>;
   pendingTurnId: string | null | undefined;
   hasPreviewTurn: boolean;
@@ -165,8 +167,24 @@ type TranscriptFooterContext = {
   jumpToLatest: () => void;
 };
 
-function ChatTranscriptEmpty() {
-  return <p className="p-5 text-center text-sm text-fg-muted">No messages yet. Write the first message below.</p>;
+function ChatTranscriptEmpty({ context }: { context?: TranscriptFooterContext }) {
+  const props = context?.props;
+  if (
+    !props ||
+    props.loading ||
+    context?.gatewayUnavailable ||
+    !props.selectedSessionId ||
+    !props.thread ||
+    props.hasActiveStream ||
+    props.optimisticUserMessage ||
+    context?.pendingTurnId
+  )
+    return (
+      <p className="p-5 text-center text-sm text-fg-muted">
+        {props?.loading ? "Loading messages…" : "No messages in this view."}
+      </p>
+    );
+  return <ChatConversationStarters props={props} />;
 }
 
 function ChatTranscriptFooter({ context }: { context?: TranscriptFooterContext }) {
@@ -234,12 +252,14 @@ const IGNORE_BOTTOM_STATE = () => {};
 
 export function ChatTranscript({
   props,
+  gatewayUnavailable,
   receipt,
   onInspectTurn,
   onInspectRun,
   onOpenArtifact,
 }: {
   props: MissionThreadedActiveSessionSurfaceProps;
+  gatewayUnavailable?: boolean;
   receipt?: MissionThreadedRenderSurfaceInput["changePlanReceipt"];
   onInspectTurn?: (turnId: string) => void;
   onInspectRun?: (turnId: string) => void;
@@ -348,6 +368,7 @@ export function ChatTranscript({
         components={TRANSCRIPT_COMPONENTS}
         context={{
           props,
+          gatewayUnavailable,
           receipt,
           preview,
           pendingTurnId,

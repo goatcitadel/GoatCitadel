@@ -1,4 +1,10 @@
 import {
+  createAbortError,
+  createChatStreamPendingStep,
+  normalizeToolActivityHeartbeatMs,
+  type ChatStreamPendingStep,
+} from "./chat-turn-agent-runner/stream-pending-step.js";
+import {
   projectToolResultForModel,
   projectHistoryMessagesForModel,
   projectToolRunsForModel,
@@ -105,7 +111,7 @@ import {
   looksLikePromptLabPromptPackMarkdownImportPrompt,
   looksLikePromptLabPromptPackOperatorSurfacePrompt,
 } from "./prompt-pack-prompt-lab-detectors.js";
-import { observePromptSettlement, type PromptSettlement } from "./prompt-settlement.js";
+import { observePromptSettlement } from "./prompt-settlement.js";
 import {
   isPromptLabHarnessContent,
   looksLikeRepoGroundedInspectionPrompt,
@@ -1760,7 +1766,7 @@ export class ChatTurnAgentRunner {
     );
     const announcedToolRunIds = new Set<string>();
     const activitySequences = new Map<string, number>();
-    let pendingStep: ChatStreamPendingStep | undefined;
+    let pendingStep: ChatStreamPendingStep<ChatStreamChunkDraft> | undefined;
     let probeImmediately = true;
 
     try {
@@ -16657,101 +16663,6 @@ function buildResearchArtifactSearchReuseResult(run: ChatToolRunRecord): Record<
       reusedFromToolRunId: run.toolRunId,
       instruction:
         "This identical search is already settled. Use it now, or run only a materially different gap-closing search before creating the presentation.",
-    },
-  };
-}
-
-function createAbortError(message: string): Error {
-  const error = new Error(message);
-  error.name = "AbortError";
-  return error;
-}
-
-type ChatStreamStepOrToolActivityTick = { kind: "step"; step: IteratorResult<ChatStreamChunkDraft> } | { kind: "tick" };
-
-interface ChatStreamPendingStep {
-  wait(delayMs: number, signal?: AbortSignal): Promise<ChatStreamStepOrToolActivityTick>;
-  observe(): Promise<PromptSettlement<IteratorResult<ChatStreamChunkDraft>>>;
-}
-
-type ChatStreamPendingStepSettlement =
-  | { kind: "step"; step: IteratorResult<ChatStreamChunkDraft> }
-  | { kind: "error"; error: Error };
-
-function normalizeToolActivityHeartbeatMs(value: number | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(10, Math.floor(value)) : 5_000;
-}
-
-function createChatStreamPendingStep(nextStep: Promise<IteratorResult<ChatStreamChunkDraft>>): ChatStreamPendingStep {
-  let settlement: ChatStreamPendingStepSettlement | undefined;
-  const waiters = new Set<(value: ChatStreamPendingStepSettlement) => void>();
-  const settle = (value: ChatStreamPendingStepSettlement): void => {
-    if (settlement) {
-      return;
-    }
-    settlement = value;
-    for (const waiter of waiters) {
-      waiter(value);
-    }
-    waiters.clear();
-  };
-
-  // Attach exactly one settlement pair to the inner next() promise. Repeated
-  // heartbeat ticks therefore do not accumulate handlers on a long-running
-  // tool promise.
-  void nextStep.then(
-    (step) => settle({ kind: "step", step }),
-    (error: unknown) => settle({ kind: "error", error: error instanceof Error ? error : new Error(String(error)) }),
-  );
-
-  return {
-    observe: () => observePromptSettlement(nextStep),
-    wait: (delayMs, signal) => {
-      if (settlement) {
-        return settlement.kind === "error" ? Promise.reject(settlement.error) : Promise.resolve(settlement);
-      }
-      return new Promise((resolve, reject) => {
-        let finished = false;
-        let abortTimeoutId: NodeJS.Timeout | undefined;
-        const cleanup = (): void => {
-          if (abortTimeoutId) {
-            clearTimeout(abortTimeoutId);
-          }
-          clearTimeout(timeoutId);
-          signal?.removeEventListener("abort", onAbort);
-          waiters.delete(onSettlement);
-        };
-        const finish = (action: () => void): void => {
-          if (finished) {
-            return;
-          }
-          finished = true;
-          cleanup();
-          action();
-        };
-        const onAbort = (): void => {
-          // Give the inner runner one microtask/macrotask turn to emit its
-          // canonical cancelled trace. An abort-ignorant tool still cannot
-          // hold the wrapper: the zero-delay fallback rejects promptly.
-          abortTimeoutId ??= setTimeout(() => finish(() => reject(createAbortError("Chat turn cancelled"))), 0);
-        };
-        const onSettlement = (value: ChatStreamPendingStepSettlement): void =>
-          finish(() => {
-            if (value.kind === "error") {
-              reject(value.error);
-              return;
-            }
-            resolve(value);
-          });
-
-        waiters.add(onSettlement);
-        if (signal?.aborted) {
-          onAbort();
-        } else {
-          signal?.addEventListener("abort", onAbort, { once: true });
-        }
-        const timeoutId = setTimeout(() => finish(() => resolve({ kind: "tick" })), delayMs);
-      });
     },
   };
 }

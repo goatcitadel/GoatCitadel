@@ -10,6 +10,8 @@ import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { approvalExpiryLabel, approvalExplanationLine } from "./approval-preview";
 import { InboxApprovalActions } from "./InboxApprovalActions";
+import { InboxApprovalOutcome } from "./InboxApprovalOutcome";
+import { queryKeys } from "../../data/query-keys";
 import { nullWhenMissing } from "./inbox-record-read";
 
 export function InboxApprovalDetail({
@@ -37,12 +39,16 @@ export function InboxApprovalDetail({
   const rereadSettled = (notice: string) => {
     setDecisionNotice(notice);
     void queryClient.resetQueries({ queryKey, exact: true });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
+    const runId = query.data?.linkage?.durableRunId;
+    if (runId) void queryClient.invalidateQueries({ queryKey: queryKeys.runTrace(runId) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.durableRunHistory(workspaceId) });
   };
   const view = recordView(query);
   const checking = view.phase === "checking";
   const lastVersion = lastVersionNote(view);
-  // Only a pending approval is waiting here; a decided one is reviewed in Approvals.
-  const approval = view.record?.status === "pending" ? view.record : undefined;
+  // Retain decided records as evidence; only pending records expose decisions.
+  const approval = view.record;
   const evidence = approval ? buildApprovalEvidenceModel(approval.preview) : null;
   return (
     <section aria-label="Current approval" className="space-y-3 border-t border-line-subtle pt-3 text-sm">
@@ -80,9 +86,7 @@ export function InboxApprovalDetail({
         </p>
       ) : null}
       {recordAnswered(view) && !approval ? (
-        <p className="text-fg-muted">
-          This approval is no longer waiting. Open Approvals for the current record and outcome.
-        </p>
+        <p className="text-fg-muted">This approval is no longer waiting. The current record could not be found.</p>
       ) : null}
       {approval ? (
         <>
@@ -141,7 +145,9 @@ export function InboxApprovalDetail({
             </p>
           )}
           {approval.rollbackNote ? <p className="text-fg-secondary">Recovery: {approval.rollbackNote}</p> : null}
-          {evidence ? (
+          {approval.status !== "pending" ? <p className="text-fg-muted">This approval is no longer waiting.</p> : null}
+          <InboxApprovalOutcome approval={approval} workspaceId={workspaceId} />
+          {evidence && approval.status === "pending" ? (
             <InboxApprovalActions
               item={item}
               approval={approval}
@@ -153,7 +159,7 @@ export function InboxApprovalDetail({
             />
           ) : null}
           <p className="text-xs text-fg-muted">
-            This is the current record for this workspace. The full decision and follow-on record remain in Approvals.
+            This is the current approval record. A decision alone does not prove its action ran.
           </p>
         </>
       ) : null}
