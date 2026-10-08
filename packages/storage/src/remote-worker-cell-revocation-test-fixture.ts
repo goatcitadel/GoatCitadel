@@ -2,7 +2,7 @@ import { seedProtectedFenceHarness } from "./remote-worker-protected-fence-fixtu
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { it } from "node:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DatabaseClient } from "./db.js";
@@ -118,15 +118,15 @@ export function registerCellRevocationTests(boundary: "worker" | "mesh_authority
       );
     };
     it(`cell ${kind} rejects ${boundary} revocation on SQLite`, { timeout: 480_000 }, () => {
-      const db = createDatabase({
-        dbPath: kind.endsWith("capacity staging")
-          ? join(mkdtempSync(join(tmpdir(), "gc-native-capacity-staging-")), "proof.db")
-          : ":memory:",
-      });
+      const stagingDir = kind.endsWith("capacity staging")
+        ? mkdtempSync(join(tmpdir(), "gc-native-capacity-staging-"))
+        : undefined;
+      const db = createDatabase({ dbPath: stagingDir ? join(stagingDir, "proof.db") : ":memory:" });
       try {
         verify(db, `sqlite-cell-${boundary}`);
       } finally {
         db.close();
+        if (stagingDir) rmSync(stagingDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       }
     });
     postgresIt(

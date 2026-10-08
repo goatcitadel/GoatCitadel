@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -10,8 +10,10 @@ import { connectMcpServer, disconnectMcpServer } from "./mcp-server-admin-servic
 import { McpStaticEnvironmentService, assertMcpStaticEnvironmentCurrent } from "./mcp-static-environment-service.js";
 
 const opened: AsyncStorage[] = [];
+const roots: string[] = [];
 afterEach(async () => {
   for (const storage of opened.splice(0)) await storage.close();
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 const review = (server: McpServerRecord) => ({
   expectedRevision: server.revision!,
@@ -19,6 +21,7 @@ const review = (server: McpServerRecord) => ({
 });
 async function fixture(empty = false) {
   const root = mkdtempSync(path.join(os.tmpdir(), "gc-mcp-connection-review-"));
+  roots.push(root);
   const storage = createSqliteAsyncStorage(
     new Storage({
       dbPath: ":memory:",

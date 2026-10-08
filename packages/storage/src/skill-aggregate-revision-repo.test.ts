@@ -1,8 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { ConflictError, ValidationError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
@@ -10,17 +6,11 @@ import {
   SkillAggregateRevisionRepository,
   type SkillAggregateRevisionMutation,
 } from "./skill-aggregate-revision-repo.js";
-import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
-      fs.rmSync(candidate, { force: true });
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function assertWriteConflict(
   action: () => unknown,
@@ -40,12 +30,11 @@ function assertWriteConflict(
 }
 
 function createSharedClients(): { dbPath: string; clientA: DatabaseClient; clientB: DatabaseClient } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-skill-aggregate-cas-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
+  const dbPath = tempDbs.path("goatcitadel-skill-aggregate-cas");
   return {
     dbPath,
-    clientA: createDatabase({ dbPath }),
-    clientB: createDatabase({ dbPath }),
+    clientA: tempDbs.open({ dbPath }),
+    clientB: tempDbs.open({ dbPath }),
   };
 }
 
@@ -188,7 +177,7 @@ describe("SkillAggregateRevisionRepository", () => {
   });
 
   it("lazily fences unbackfilled aggregates without persisting failed stale initialization", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     try {
       const revisions = new SkillAggregateRevisionRepository(db);
       assert.equal(revisions.get("activation_policy", "global"), undefined);
@@ -225,7 +214,7 @@ describe("SkillAggregateRevisionRepository", () => {
   });
 
   it("locks multi-aggregate mutations in deterministic order and rolls them back atomically", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     try {
       db.exec("CREATE TABLE skill_batch_probe (probe_id TEXT PRIMARY KEY, value TEXT NOT NULL)");
       db.prepare("INSERT INTO skill_batch_probe (probe_id, value) VALUES ('batch', 'initial')").run();

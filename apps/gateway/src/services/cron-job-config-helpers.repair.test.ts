@@ -1,9 +1,21 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadCronJobsFromConfig, type CronJobConfigHost } from "./cron-job-config-helpers.js";
+
+const tempRoots: string[] = [];
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+function tempRoot(prefix: string): string {
+  const root = mkdtempSync(path.join(tmpdir(), prefix));
+  tempRoots.push(root);
+  return root;
+}
 
 function buildHost(rootDir: string, reconcileSpec: ReturnType<typeof vi.fn>): CronJobConfigHost {
   return {
@@ -26,7 +38,7 @@ async function writeConfig(rootDir: string, payload: unknown): Promise<void> {
 
 describe("loadCronJobsFromConfig — repair + tolerance", () => {
   it("skips malformed rows and still hydrates valid rows (does not throw)", async () => {
-    const rootDir = mkdtempSync(path.join(tmpdir(), "cron-malformed-"));
+    const rootDir = tempRoot("cron-malformed-");
     const valid = {
       jobId: "valid-job",
       name: "Valid",
@@ -59,7 +71,7 @@ describe("loadCronJobsFromConfig — repair + tolerance", () => {
   });
 
   it("does not throw when the cron config file is unparseable JSON", async () => {
-    const rootDir = mkdtempSync(path.join(tmpdir(), "cron-bad-json-"));
+    const rootDir = tempRoot("cron-bad-json-");
     await fs.mkdir(path.join(rootDir, "config"), { recursive: true });
     await fs.writeFile(path.join(rootDir, "config", "cron-jobs.json"), "{ not json", "utf8");
 
@@ -71,7 +83,7 @@ describe("loadCronJobsFromConfig — repair + tolerance", () => {
   });
 
   it("emits a structured warning to stderr when JSON parsing fails", async () => {
-    const rootDir = mkdtempSync(path.join(tmpdir(), "cron-bad-json-warn-"));
+    const rootDir = tempRoot("cron-bad-json-warn-");
     await fs.mkdir(path.join(rootDir, "config"), { recursive: true });
     await fs.writeFile(path.join(rootDir, "config", "cron-jobs.json"), "{ not json", "utf8");
 
@@ -99,7 +111,7 @@ describe("loadCronJobsFromConfig — repair + tolerance", () => {
   });
 
   it("ignores non-array payloads (neither array nor { jobs: [] })", async () => {
-    const rootDir = mkdtempSync(path.join(tmpdir(), "cron-shape-"));
+    const rootDir = tempRoot("cron-shape-");
     await writeConfig(rootDir, { jobs: "not an array" });
 
     const upsert = vi.fn();
@@ -110,7 +122,7 @@ describe("loadCronJobsFromConfig — repair + tolerance", () => {
   });
 
   it("drops stale legacy nextRunAt telemetry from the canonical spec", async () => {
-    const rootDir = mkdtempSync(path.join(tmpdir(), "cron-stale-"));
+    const rootDir = tempRoot("cron-stale-");
     // schedule = every day at 09:00 UTC; persisted nextRunAt is far in the past.
     const stale = {
       jobId: "daily-report",
@@ -131,7 +143,7 @@ describe("loadCronJobsFromConfig — repair + tolerance", () => {
   });
 
   it("drops unparseable legacy nextRunAt telemetry from the canonical spec", async () => {
-    const rootDir = mkdtempSync(path.join(tmpdir(), "cron-bad-next-"));
+    const rootDir = tempRoot("cron-bad-next-");
     const job = {
       jobId: "daily-bad-next",
       name: "Daily Bad Next",
@@ -151,7 +163,7 @@ describe("loadCronJobsFromConfig — repair + tolerance", () => {
   });
 
   it("drops future legacy nextRunAt telemetry from the canonical spec", async () => {
-    const rootDir = mkdtempSync(path.join(tmpdir(), "cron-future-"));
+    const rootDir = tempRoot("cron-future-");
     const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     const job = {
       jobId: "daily-future",
@@ -172,7 +184,7 @@ describe("loadCronJobsFromConfig — repair + tolerance", () => {
   });
 
   it("keeps timezone-aware schedules while dropping their legacy nextRunAt telemetry", async () => {
-    const rootDir = mkdtempSync(path.join(tmpdir(), "cron-tz-"));
+    const rootDir = tempRoot("cron-tz-");
     // Mirrors PRIVATE_BETA_BACKUP_SCHEDULE_LABEL shape.
     const job = {
       jobId: "private-beta-backup",

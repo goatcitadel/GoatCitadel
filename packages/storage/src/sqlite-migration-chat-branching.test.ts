@@ -1,30 +1,16 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { __sqliteInternals, createDatabase } from "./sqlite.js";
+import { __sqliteInternals } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 describe("sqlite chat branching migration", () => {
   it("creates chat_session_prefs before branching migration touches it", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-missing-chat-prefs-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
+    const dbPath = tempDbs.path("goatcitadel-missing-chat-prefs");
 
     const legacy = new DatabaseSync(dbPath);
     legacy.exec(`
@@ -77,7 +63,7 @@ describe("sqlite chat branching migration", () => {
     }
     legacy.close();
 
-    const db = createDatabase({ dbPath });
+    const db = tempDbs.open({ dbPath });
     const prefTable = db
       .prepare(
         `
@@ -97,8 +83,7 @@ describe("sqlite chat branching migration", () => {
   });
 
   it("backfills planning mode, parent turn ids, and branch state without loading rows in JS", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-legacy-chat-branch-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
+    const dbPath = tempDbs.path("goatcitadel-legacy-chat-branch");
 
     const legacy = new DatabaseSync(dbPath);
     legacy.exec(`
@@ -198,7 +183,7 @@ describe("sqlite chat branching migration", () => {
     `);
     legacy.close();
 
-    const db = createDatabase({ dbPath });
+    const db = tempDbs.open({ dbPath });
 
     const prefRow = db
       .prepare(

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -114,7 +113,7 @@ describe("Skill Hub lifecycle foundation schema parity", () => {
   });
 
   it("installs the paired SQLite migration with composite lineage and immutable tables", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-hx413-schema-${randomUUID()}.db`);
+    const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-hx413-schema-")), "test.db");
     const db = createDatabase({ dbPath });
     try {
       const lifecycleMigration = db.prepare("SELECT version, name FROM schema_migrations WHERE version = 165").get<{
@@ -168,9 +167,7 @@ describe("Skill Hub lifecycle foundation schema parity", () => {
       assert.equal(triggers.filter((item) => item.name.includes("operation_settlements")).length, 2);
     } finally {
       db.close();
-      fs.rmSync(dbPath, { force: true });
-      fs.rmSync(`${dbPath}-wal`, { force: true });
-      fs.rmSync(`${dbPath}-shm`, { force: true });
+      fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });

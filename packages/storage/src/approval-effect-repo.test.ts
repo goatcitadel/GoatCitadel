@@ -1,32 +1,18 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { Worker } from "node:worker_threads";
 import { ApprovalEffectRepository, buildApprovalEffectIdempotencyKey } from "./approval-effect-repo.js";
 import { GovernanceJourneyEventRepository } from "./governance-journey-event-repo.js";
 import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup noise
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepoWithDb(): { repo: ApprovalEffectRepository; db: ReturnType<typeof createDatabase> } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-approval-effect-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-approval-effect");
+  const db = tempDbs.open({ dbPath });
   return {
     repo: new ApprovalEffectRepository(db),
     db,
@@ -424,10 +410,9 @@ describe("ApprovalEffectRepository", () => {
   });
 
   it("uses the database clock for claim, heartbeat, and reclaim across skewed workers", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-approval-effect-clock-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const dbA = createDatabase({ dbPath });
-    const dbB = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-approval-effect-clock");
+    const dbA = tempDbs.open({ dbPath });
+    const dbB = tempDbs.open({ dbPath });
     const workerA = new ApprovalEffectRepository(dbA);
     const workerB = new ApprovalEffectRepository(dbB);
     insertApproval(dbA, "approval-clock");
@@ -869,9 +854,8 @@ describe("ApprovalEffectRepository", () => {
   });
 
   it("serializes concurrent SQLite observability batches into one predecessor chain", async () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-approval-effect-concurrent-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-approval-effect-concurrent");
+    const db = tempDbs.open({ dbPath });
     const repo = new ApprovalEffectRepository(db);
     const approvalId = "approval-observability-concurrent";
     insertApproval(db, approvalId);

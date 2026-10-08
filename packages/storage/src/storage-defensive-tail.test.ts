@@ -6,7 +6,6 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Storage } from "./index.js";
-import { createDatabase } from "./sqlite.js";
 import type { DatabaseClient } from "./db.js";
 import { AgentProfileRepository } from "./agent-profile-repo.js";
 import { ApprovalEventRepository } from "./approval-event-repo.js";
@@ -47,8 +46,9 @@ import { safeJsonParse } from "./safe-json.js";
 import { sanitizeParamsForServerEncoding } from "./postgres/server-encoding.js";
 import { normalizePromptPackPolicyV3 } from "./prompt-pack-policy.js";
 import { DEFAULT_PROMPT_PACK_POLICY_V3 } from "@goatcitadel/contracts";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 const createdDirs: string[] = [];
 const storageInstances: Storage[] = [];
 
@@ -62,15 +62,7 @@ afterEach(() => {
       // ignore cleanup noise
     }
   }
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup noise
-    }
-  }
+  tempDbs.cleanup();
   for (const dir of createdDirs.splice(0)) {
     try {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -81,9 +73,8 @@ afterEach(() => {
 });
 
 function createDb(label: string): DatabaseClient {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-${label}-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  return createDatabase({ dbPath });
+  const dbPath = tempDbs.path(`goatcitadel-${label}`);
+  return tempDbs.open({ dbPath });
 }
 
 function createStorage(): Storage {

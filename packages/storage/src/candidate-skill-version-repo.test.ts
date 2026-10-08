@@ -1,32 +1,18 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { CandidateSkillVersionRecord, CapabilityArtifactRecord } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
-import { createDatabase } from "./sqlite.js";
 import { CandidateSkillVersionRepository } from "./candidate-skill-version-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup noise
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createStore(): { db: DatabaseClient; repo: CandidateSkillVersionRepository } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-candidate-skill-version-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-candidate-skill-version");
+  const db = tempDbs.open({ dbPath });
   return { db, repo: new CandidateSkillVersionRepository(db) };
 }
 

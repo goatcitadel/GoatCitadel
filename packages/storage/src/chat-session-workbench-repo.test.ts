@@ -1,32 +1,17 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { ChatProjectRepository } from "./chat-project-repo.js";
 import { ChatSessionWorkbenchRepository, sanitizeWorkbenchRelativePath } from "./chat-session-workbench-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup noise
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 describe("ChatSessionWorkbenchRepository", () => {
   it("ensures default workbench state and patches runtime metadata", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-session-workbench-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-chat-session-workbench");
+    const db = tempDbs.open({ dbPath });
     const projects = new ChatProjectRepository(db);
     const repo = new ChatSessionWorkbenchRepository(db);
     const project = projects.create(
@@ -96,9 +81,8 @@ describe("ChatSessionWorkbenchRepository", () => {
   });
 
   it("persists and normalizes packageManager", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-session-workbench-pm-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-chat-session-workbench-pm");
+    const db = tempDbs.open({ dbPath });
     const repo = new ChatSessionWorkbenchRepository(db);
 
     const initial = repo.ensure("sess-pm", "2026-05-01T00:00:00.000Z");
@@ -124,9 +108,8 @@ describe("ChatSessionWorkbenchRepository", () => {
       assert.throws(() => sanitizeWorkbenchRelativePath(value), /Invalid workbench path/);
     }
 
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-session-workbench-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-chat-session-workbench");
+    const db = tempDbs.open({ dbPath });
     const repo = new ChatSessionWorkbenchRepository(db);
     assert.equal(repo.get("missing-session"), undefined);
     assert.equal(repo.ensure("sess-missing-row").sessionId, "sess-missing-row");

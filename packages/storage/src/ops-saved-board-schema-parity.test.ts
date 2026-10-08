@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -113,7 +112,7 @@ describe("HX-410 trusted ops saved board schema parity", () => {
       db.close();
     }
 
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-hx410-sparse-${randomUUID()}.db`);
+    const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-hx410-sparse-")), "test.db");
     try {
       const sparse = new DatabaseSync(dbPath);
       sparse.exec(`
@@ -135,7 +134,7 @@ describe("HX-410 trusted ops saved board schema parity", () => {
       );
       sparse.close();
     } finally {
-      for (const suffix of ["", "-wal", "-shm"]) fs.rmSync(`${dbPath}${suffix}`, { force: true });
+      fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });

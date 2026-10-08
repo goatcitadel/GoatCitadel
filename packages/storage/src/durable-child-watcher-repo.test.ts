@@ -1,7 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
@@ -13,24 +10,15 @@ import { DURABLE_CHILD_WATCHER_LIMITS, type DurableChildStateChangedPayload } fr
 import { DurableRunEventRepository } from "./durable-run-event-repo.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
-import { createDatabase, __sqliteInternals } from "./sqlite.js";
+import { __sqliteInternals } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // Ignore cleanup failures on Windows after a failed test.
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepos(dbPath = createDbPath()) {
-  const db = createDatabase({ dbPath });
+  const db = tempDbs.open({ dbPath });
   const runs = new DurableRunRepository(db);
   return {
     dbPath,
@@ -42,8 +30,7 @@ function createRepos(dbPath = createDbPath()) {
 }
 
 function createDbPath(): string {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-child-watchers-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
+  const dbPath = tempDbs.path("goatcitadel-child-watchers");
   return dbPath;
 }
 
@@ -94,15 +81,33 @@ describe("DurableChildWatcherRepository", () => {
       runs.updateRun({ runId: childRunId, status: "completed", finishedAt, updatedAt: finishedAt });
     }
     seedRun(runs, "child-running");
-    watchers.create({ watcherId: "watcher-running", parentRunId: "parent-run", childRunId: "child-running", source: "chat_delegation" });
+    watchers.create({
+      watcherId: "watcher-running",
+      parentRunId: "parent-run",
+      childRunId: "child-running",
+      source: "chat_delegation",
+    });
 
     const recent = watchers.listRecentCompletedDelegations("workspace-a", "2026-07-13T00:00:00.000Z", 2);
-    assert.deepEqual(recent.map((entry) => [entry.watcher.watcherId, entry.finishedAt]), [
-      ["watcher-latest", "2026-07-14T00:00:02.000Z"],
-      ["watcher-first", "2026-07-14T00:00:01.000Z"],
-    ]);
-    assert.deepEqual(watchers.listRecentCompletedDelegations("workspace-a", "2026-07-13T00:00:00.000Z", 1).map((entry) => entry.watcher.watcherId), ["watcher-latest"]);
-    assert.deepEqual(watchers.listRecentCompletedDelegations("workspace-b", "2026-07-13T00:00:00.000Z", 1).map((entry) => entry.watcher.watcherId), ["watcher-foreign-latest"]);
+    assert.deepEqual(
+      recent.map((entry) => [entry.watcher.watcherId, entry.finishedAt]),
+      [
+        ["watcher-latest", "2026-07-14T00:00:02.000Z"],
+        ["watcher-first", "2026-07-14T00:00:01.000Z"],
+      ],
+    );
+    assert.deepEqual(
+      watchers
+        .listRecentCompletedDelegations("workspace-a", "2026-07-13T00:00:00.000Z", 1)
+        .map((entry) => entry.watcher.watcherId),
+      ["watcher-latest"],
+    );
+    assert.deepEqual(
+      watchers
+        .listRecentCompletedDelegations("workspace-b", "2026-07-13T00:00:00.000Z", 1)
+        .map((entry) => entry.watcher.watcherId),
+      ["watcher-foreign-latest"],
+    );
   });
 
   it("projects historical child transitions exactly once in sequence order", () => {

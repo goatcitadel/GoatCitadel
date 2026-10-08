@@ -1,30 +1,15 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { IdempotencyRepository } from "./idempotency-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(): IdempotencyRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-idempotency-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-idempotency");
+  const db = tempDbs.open({ dbPath });
   return new IdempotencyRepository(db);
 }
 
@@ -42,12 +27,7 @@ describe("IdempotencyRepository", () => {
       status: "accepted",
     });
 
-    repo.markProcessed(
-      "/api/v1/events",
-      "idem-1",
-      "accepted",
-      "2026-03-05T10:00:01.000Z",
-    );
+    repo.markProcessed("/api/v1/events", "idem-1", "accepted", "2026-03-05T10:00:01.000Z");
 
     const row = repo.find("/api/v1/events", "idem-1");
     assert.equal(row?.eventId, "evt-1");

@@ -1,30 +1,15 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 describe("sqlite approvals migration", () => {
   it("adds explanation columns to legacy approvals table", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-legacy-approvals-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
+    const dbPath = tempDbs.path("goatcitadel-legacy-approvals");
 
     const legacy = new DatabaseSync(dbPath);
     legacy.exec(`
@@ -43,7 +28,7 @@ describe("sqlite approvals migration", () => {
     `);
     legacy.close();
 
-    const db = createDatabase({ dbPath });
+    const db = tempDbs.open({ dbPath });
     const rows = db.prepare("PRAGMA table_info(approvals)").all() as Array<{ name: string }>;
     const columns = new Set(rows.map((row) => row.name));
 

@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -46,13 +45,7 @@ const files: string[] = [];
 afterEach(async () => {
   for (const storage of opened.splice(0)) await storage.close();
   for (const file of files.splice(0)) {
-    for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
-      try {
-        fs.rmSync(candidate, { force: true });
-      } catch {
-        // Best-effort test cleanup.
-      }
-    }
+    fs.rmSync(path.dirname(file), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -386,7 +379,7 @@ function createHarness(
     ) => DeepAsyncRepository<GovernedRemediationRepository>;
   } = {},
 ) {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-remediation-coordinator-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-remediation-coordinator-")), "test.db");
   files.push(dbPath);
   const db = createDatabase({ dbPath });
   const storage = new Storage({
@@ -398,8 +391,8 @@ function createHarness(
   const asyncStorage = createSqliteAsyncStorage(storage);
   opened.push(asyncStorage);
   const repository = storage.governedRemediations;
-  const asyncRepository = input.decorateRepository?.(asyncStorage.governedRemediations)
-    ?? asyncStorage.governedRemediations;
+  const asyncRepository =
+    input.decorateRepository?.(asyncStorage.governedRemediations) ?? asyncStorage.governedRemediations;
   const events: string[] = [];
   const owner = input.owner ?? new FakeConfigurationOwner(events);
   const parent = input.parent ?? new FakeDurableParent(events);
@@ -520,17 +513,18 @@ describe("GovernedRemediationCoordinator v2 authority", () => {
   it("waits for asynchronous creation to persist before resolving the command", async () => {
     const pendingWrite = barrier();
     const harness = createHarness({
-      decorateRepository: (repository) => new Proxy(repository, {
-        get(target, property, receiver) {
-          if (property === "createState") {
-            return async (...args: Parameters<typeof repository.createState>) => {
-              await pendingWrite.wait();
-              return repository.createState(...args);
-            };
-          }
-          return Reflect.get(target, property, receiver);
-        },
-      }),
+      decorateRepository: (repository) =>
+        new Proxy(repository, {
+          get(target, property, receiver) {
+            if (property === "createState") {
+              return async (...args: Parameters<typeof repository.createState>) => {
+                await pendingWrite.wait();
+                return repository.createState(...args);
+              };
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        }),
     });
     let settled = false;
     const creation = harness.coordinator.start(startInput()).then((result) => {
@@ -1151,8 +1145,9 @@ describe("GovernedRemediationCoordinator completion callback seam", () => {
     };
     await harness.coordinator.start(startInput());
     expect((await proceed(harness)).record.state).toBe("completed");
-    await expect(harness.coordinator.completionNoticeFor("remediation-1"))
-      .rejects.toThrow("settlement evidence temporarily unavailable");
+    await expect(harness.coordinator.completionNoticeFor("remediation-1")).rejects.toThrow(
+      "settlement evidence temporarily unavailable",
+    );
     expect(notices).toEqual([]);
     expect(harness.owner.rawApplyCalls).toBe(1);
     failTerminalRead = false;

@@ -1,32 +1,17 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
 import type { DatabaseClient, DbStatement } from "./db.js";
-import { createDatabase } from "./sqlite.js";
 import type { ChatSessionMetaPatchInput } from "./chat-session-meta-repo.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup noise
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createStore(): { db: DatabaseClient; repo: ChatSessionMetaRepository } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-meta-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-chat-meta");
+  const db = tempDbs.open({ dbPath });
   return { db, repo: new ChatSessionMetaRepository(db) };
 }
 
@@ -166,13 +151,19 @@ describe("ChatSessionMetaRepository", () => {
     const repo = createRepo();
     repo.ensure("sess-1", "2026-03-26T00:00:00.000Z", "workspace-a");
     const archived = repo.patch("sess-1", {
-      lifecycleStatus: "archived", archivedAt: "2026-03-26T00:00:00.000Z",
+      lifecycleStatus: "archived",
+      archivedAt: "2026-03-26T00:00:00.000Z",
     });
     const omitted = repo.patchWithRevision("sess-1", { title: "Later title" }, archived.revision);
     assert.equal(omitted.archivedAt, "2026-03-26T00:00:00.000Z");
-    const restored = repo.patchWithRevision("sess-1", {
-      lifecycleStatus: "active", archivedAt: null,
-    }, omitted.revision);
+    const restored = repo.patchWithRevision(
+      "sess-1",
+      {
+        lifecycleStatus: "active",
+        archivedAt: null,
+      },
+      omitted.revision,
+    );
     assert.equal(restored.lifecycleStatus, "active");
     assert.equal(restored.archivedAt, undefined);
     assert.equal(repo.get("sess-1")?.archivedAt, undefined);

@@ -1,34 +1,19 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import type { DatabaseClient, DbStatement } from "./db.js";
-import { createDatabase } from "./sqlite.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
 import { IntegrationConnectionRepository } from "./integration-connection-repo.js";
 import { MeshRepository } from "./mesh-repo.js";
 import { WorkspaceHookRepository } from "./workspace-hook-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // Best-effort cleanup for temp SQLite files.
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createDb(label: string) {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-${label}-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  return createDatabase({ dbPath });
+  const dbPath = tempDbs.path(`goatcitadel-${label}`);
+  return tempDbs.open({ dbPath });
 }
 
 function webhookAction(url = "https://example.test/hook") {

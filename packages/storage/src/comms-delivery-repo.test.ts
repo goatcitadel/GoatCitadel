@@ -1,45 +1,47 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
+import { createHash } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import { CommsDeliveryRepository } from "./comms-delivery-repo.js";
+import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup failures in transient test databases
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(): CommsDeliveryRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-comms-delivery-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  return new CommsDeliveryRepository(createDatabase({ dbPath }));
+  const dbPath = tempDbs.path("goatcitadel-comms-delivery");
+  return new CommsDeliveryRepository(tempDbs.open({ dbPath }));
 }
 
 describe("CommsDeliveryRepository", () => {
   it("restores delivery diagnostics from the canonical persisted payload", () => {
     const repo = createRepo();
-    const diagnostics = { chunking: { mode: "none", partCount: 1, originalCodePointLength: 5,
-      maxPartUtf16Length: 4096, parts: [{ partIndex: 0, codePointLength: 5, utf16Length: 5 }] } };
-    const queued = repo.createQueued({ connectionId: "conn", channelKey: "telegram", target: "-123456",
-      payload: { message: "hello", deliveryDiagnostics: diagnostics } });
+    const diagnostics = {
+      chunking: {
+        mode: "none",
+        partCount: 1,
+        originalCodePointLength: 5,
+        maxPartUtf16Length: 4096,
+        parts: [{ partIndex: 0, codePointLength: 5, utf16Length: 5 }],
+      },
+    };
+    const queued = repo.createQueued({
+      connectionId: "conn",
+      channelKey: "telegram",
+      target: "-123456",
+      payload: { message: "hello", deliveryDiagnostics: diagnostics },
+    });
     repo.markSent(queued.deliveryId, "ack");
     assert.deepEqual(repo.getById(queued.deliveryId)?.deliveryDiagnostics, diagnostics);
     assert.deepEqual(repo.list()[0]?.deliveryDiagnostics, diagnostics);
-    const malformed = repo.createQueued({ connectionId: "conn", channelKey: "telegram", target: "-123456",
-      payload: { deliveryDiagnostics: ["invalid"] } });
+    const malformed = repo.createQueued({
+      connectionId: "conn",
+      channelKey: "telegram",
+      target: "-123456",
+      payload: { deliveryDiagnostics: ["invalid"] },
+    });
     assert.equal(repo.getById(malformed.deliveryId)?.deliveryDiagnostics, undefined);
   });
 
@@ -159,10 +161,9 @@ describe("CommsDeliveryRepository", () => {
   });
 
   it("atomically claims a due delivery across repository instances", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-comms-delivery-claim-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const firstDb = createDatabase({ dbPath });
-    const secondDb = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-comms-delivery-claim");
+    const firstDb = tempDbs.open({ dbPath });
+    const secondDb = tempDbs.open({ dbPath });
     const firstRepo = new CommsDeliveryRepository(firstDb) as CommsDeliveryRepository & {
       claimAttempt(
         deliveryId: string,
@@ -226,10 +227,9 @@ describe("CommsDeliveryRepository", () => {
   });
 
   it("does not let an expired recovery snapshot overwrite a delivery completed by its owner", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-comms-delivery-quarantine-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const ownerDb = createDatabase({ dbPath });
-    const recoveryDb = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-comms-delivery-quarantine");
+    const ownerDb = tempDbs.open({ dbPath });
+    const recoveryDb = tempDbs.open({ dbPath });
     const ownerRepo = new CommsDeliveryRepository(ownerDb);
     const recoveryRepo = new CommsDeliveryRepository(recoveryDb);
     try {
@@ -274,10 +274,9 @@ describe("CommsDeliveryRepository", () => {
   });
 
   it("fences a late owner completion after recovery quarantines its expired claim", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-comms-delivery-late-owner-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const ownerDb = createDatabase({ dbPath });
-    const recoveryDb = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-comms-delivery-late-owner");
+    const ownerDb = tempDbs.open({ dbPath });
+    const recoveryDb = tempDbs.open({ dbPath });
     const ownerRepo = new CommsDeliveryRepository(ownerDb);
     const recoveryRepo = new CommsDeliveryRepository(recoveryDb);
     try {

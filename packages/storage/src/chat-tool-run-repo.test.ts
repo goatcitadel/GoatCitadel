@@ -1,33 +1,19 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { TOOL_EFFECT_CLASSIFICATION_VERSION } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
-import { __sqliteInternals, createDatabase } from "./sqlite.js";
+import { __sqliteInternals } from "./sqlite.js";
 import { ChatToolRunRepository } from "./chat-tool-run-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup noise
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createStore(): { db: DatabaseClient; dbPath: string; repo: ChatToolRunRepository } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-tool-run-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-chat-tool-run");
+  const db = tempDbs.open({ dbPath });
   return { db, dbPath, repo: new ChatToolRunRepository(db) };
 }
 
@@ -259,7 +245,7 @@ describe("ChatToolRunRepository", () => {
     );
     raw.close();
 
-    const reopened = createDatabase({ dbPath });
+    const reopened = tempDbs.open({ dbPath });
     const projected = new ChatToolRunRepository(reopened).get("legacy-run");
     assert.equal(projected.effectPotential, "unknown");
     assert.equal(projected.effectDisposition, "unknown");

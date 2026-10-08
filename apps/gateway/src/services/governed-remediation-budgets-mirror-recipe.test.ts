@@ -42,19 +42,10 @@ import {
 
 const cleanupRoots: string[] = [];
 const openedDatabases: DatabaseClient[] = [];
-const databaseFiles: string[] = [];
 
 afterEach(async () => {
+  // Close before removing the roots: on Windows an open SQLite handle blocks deletion.
   for (const db of openedDatabases.splice(0)) db.close();
-  for (const file of databaseFiles.splice(0)) {
-    for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
-      try {
-        fsSync.rmSync(candidate, { force: true });
-      } catch {
-        // Best-effort test cleanup.
-      }
-    }
-  }
   await Promise.all(cleanupRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
@@ -329,8 +320,9 @@ async function createHarness(
   const journal = new GovernedBudgetsMirrorJournalStore(root);
   const owner = new GovernedBudgetsMirrorRecipeOwner({ rootDir: root, configGeneration: service, port, journal });
   const registry = new GovernedRemediationRecipeRegistry([governedBudgetsMirrorRecipeRegistration(owner)]);
-  const dbPath = path.join(os.tmpdir(), `goat-budgets-mirror-${randomUUID()}.db`);
-  databaseFiles.push(dbPath);
+  const dbRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-budgets-mirror-db-"));
+  cleanupRoots.push(dbRoot);
+  const dbPath = path.join(dbRoot, "test.db");
   const db = createDatabase({ dbPath });
   openedDatabases.push(db);
   const repository = new GovernedRemediationRepository(db);

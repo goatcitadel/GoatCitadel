@@ -1,31 +1,16 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { ImportedAgentCatalogRepository } from "./imported-agent-catalog-repo.js";
 import type { ImportedAgentCatalogRecord } from "@goatcitadel/contracts";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup failures in tests
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(): ImportedAgentCatalogRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-agent-catalog-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  return new ImportedAgentCatalogRepository(createDatabase({ dbPath }));
+  const dbPath = tempDbs.path("goatcitadel-agent-catalog");
+  return new ImportedAgentCatalogRepository(tempDbs.open({ dbPath }));
 }
 
 function buildRecord(overrides: Partial<ImportedAgentCatalogRecord> = {}): ImportedAgentCatalogRecord {

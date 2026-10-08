@@ -1,31 +1,16 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { PromptPackScoreRepository } from "./prompt-pack-score-repo.js";
 import type { DatabaseClient } from "./db.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup errors
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createStore(): { db: DatabaseClient; repo: PromptPackScoreRepository } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-prompt-pack-score-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-prompt-pack-score");
+  const db = tempDbs.open({ dbPath });
   return { db, repo: new PromptPackScoreRepository(db) };
 }
 

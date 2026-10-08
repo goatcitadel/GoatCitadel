@@ -1,26 +1,12 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
-import { createDatabase } from "./sqlite.js";
 import { PersonalOpsInMemoryRepository, PersonalOpsStorageRepository } from "./personal-ops-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup errors
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 describe("PersonalOpsInMemoryRepository notes", () => {
   it("scopes notes by workspace and archives notes without deleting the record", () => {
@@ -45,16 +31,23 @@ describe("PersonalOpsInMemoryRepository notes", () => {
     assert.equal(alpha.body, "Follow up with team");
     assert.deepEqual(alpha.tags, ["work"]);
     assert.deepEqual(alpha.sourceRefs, ["chat:1"]);
-    assert.deepEqual(repo.listNotes({ workspaceId: "alpha" }).map((note) => note.noteId), [alpha.noteId]);
-    assert.deepEqual(repo.listNotes({ workspaceId: "beta" }).map((note) => note.noteId), [beta.noteId]);
+    assert.deepEqual(
+      repo.listNotes({ workspaceId: "alpha" }).map((note) => note.noteId),
+      [alpha.noteId],
+    );
+    assert.deepEqual(
+      repo.listNotes({ workspaceId: "beta" }).map((note) => note.noteId),
+      [beta.noteId],
+    );
 
     const archived = repo.archiveNote(alpha.noteId, { workspaceId: "alpha" }, "2026-06-05T12:10:00.000Z");
     assert.equal(archived.lifecycleStatus, "archived");
     assert.equal(archived.archivedAt, "2026-06-05T12:10:00.000Z");
     assert.deepEqual(repo.listNotes({ workspaceId: "alpha" }), []);
-    assert.deepEqual(repo.listNotes({ workspaceId: "alpha", lifecycleStatus: "archived" }).map((note) => note.noteId), [
-      alpha.noteId,
-    ]);
+    assert.deepEqual(
+      repo.listNotes({ workspaceId: "alpha", lifecycleStatus: "archived" }).map((note) => note.noteId),
+      [alpha.noteId],
+    );
     assert.throws(() => repo.archiveNote(alpha.noteId, { workspaceId: "beta" }), NotFoundError);
   });
 
@@ -119,18 +112,16 @@ describe("PersonalOpsInMemoryRepository reminders", () => {
     assert.equal(alpha.title, "Review release notes");
     assert.equal(alpha.dueAt, "2026-06-06T15:30:00.000Z");
     assert.equal(alpha.sourceRef, "chat:release");
-    assert.deepEqual(repo.listReminders({ workspaceId: "alpha" }).map((reminder) => reminder.reminderId), [
-      alpha.reminderId,
-    ]);
-    assert.deepEqual(repo.listReminders({ workspaceId: "beta" }).map((reminder) => reminder.reminderId), [
-      beta.reminderId,
-    ]);
-
-    const completed = repo.completeReminder(
-      alpha.reminderId,
-      { workspaceId: "alpha" },
-      "2026-06-05T12:15:00.000Z",
+    assert.deepEqual(
+      repo.listReminders({ workspaceId: "alpha" }).map((reminder) => reminder.reminderId),
+      [alpha.reminderId],
     );
+    assert.deepEqual(
+      repo.listReminders({ workspaceId: "beta" }).map((reminder) => reminder.reminderId),
+      [beta.reminderId],
+    );
+
+    const completed = repo.completeReminder(alpha.reminderId, { workspaceId: "alpha" }, "2026-06-05T12:15:00.000Z");
     assert.equal(completed.status, "completed");
     assert.equal(completed.updatedAt, "2026-06-05T12:15:00.000Z");
     assert.deepEqual(repo.listReminders({ workspaceId: "alpha" }), []);
@@ -160,9 +151,8 @@ describe("PersonalOpsInMemoryRepository reminders", () => {
 
 describe("PersonalOpsStorageRepository", () => {
   it("persists notes and reminders across repository instances", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-personal-ops-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const firstDb = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-personal-ops");
+    const firstDb = tempDbs.open({ dbPath });
     const firstRepo = new PersonalOpsStorageRepository(firstDb);
     const note = firstRepo.createNote(
       {
@@ -185,14 +175,18 @@ describe("PersonalOpsStorageRepository", () => {
     );
     firstDb.close();
 
-    const secondDb = createDatabase({ dbPath });
+    const secondDb = tempDbs.open({ dbPath });
     const secondRepo = new PersonalOpsStorageRepository(secondDb);
 
-    assert.deepEqual(secondRepo.listNotes({ workspaceId: "workspace-1" }).map((item) => item.noteId), [note.noteId]);
+    assert.deepEqual(
+      secondRepo.listNotes({ workspaceId: "workspace-1" }).map((item) => item.noteId),
+      [note.noteId],
+    );
     assert.deepEqual(secondRepo.getNote(note.noteId).tags, ["release"]);
-    assert.deepEqual(secondRepo.listReminders({ workspaceId: "workspace-1" }).map((item) => item.reminderId), [
-      reminder.reminderId,
-    ]);
+    assert.deepEqual(
+      secondRepo.listReminders({ workspaceId: "workspace-1" }).map((item) => item.reminderId),
+      [reminder.reminderId],
+    );
     assert.equal(secondRepo.getReminder(reminder.reminderId).sourceRef, note.noteId);
     secondDb.close();
   });

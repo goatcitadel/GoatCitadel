@@ -1,30 +1,15 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { CapabilityScopeRepository } from "./capability-scope-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(): CapabilityScopeRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-capscope-repo-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  return new CapabilityScopeRepository(createDatabase({ dbPath }));
+  const dbPath = tempDbs.path("goatcitadel-capscope-repo");
+  return new CapabilityScopeRepository(tempDbs.open({ dbPath }));
 }
 
 describe("CapabilityScopeRepository", () => {
@@ -58,7 +43,10 @@ describe("CapabilityScopeRepository", () => {
       { resourceRef: "b", enabled: false },
     ]);
     assert.equal(result.length, 2);
-    const refs = repo.list("workspace", "default", "skill").map((r) => r.resourceRef).sort();
+    const refs = repo
+      .list("workspace", "default", "skill")
+      .map((r) => r.resourceRef)
+      .sort();
     assert.deepEqual(refs, ["a", "b"]);
   });
 

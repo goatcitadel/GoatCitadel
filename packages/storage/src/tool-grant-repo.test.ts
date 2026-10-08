@@ -1,36 +1,22 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { ToolGrantRepository } from "./tool-grant-repo.js";
 import type { DbStatement } from "./db.js";
+import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(): ToolGrantRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-tool-grants-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-tool-grants");
+  const db = tempDbs.open({ dbPath });
   return new ToolGrantRepository(db);
 }
 
 function createRepoAtPath(dbPath: string): ToolGrantRepository {
-  return new ToolGrantRepository(createDatabase({ dbPath }));
+  return new ToolGrantRepository(tempDbs.open({ dbPath }));
 }
 
 describe("ToolGrantRepository", () => {
@@ -315,8 +301,7 @@ describe("ToolGrantRepository", () => {
   });
 
   it("rechecks revocation in the consume UPDATE after a stale read", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-tool-grants-race-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
+    const dbPath = tempDbs.path("goatcitadel-tool-grants-race");
     const consumer = createRepoAtPath(dbPath);
     const revoker = createRepoAtPath(dbPath);
     const grant = consumer.create({

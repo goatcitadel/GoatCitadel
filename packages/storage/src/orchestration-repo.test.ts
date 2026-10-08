@@ -1,40 +1,25 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { __sqliteInternals, createDatabase } from "./sqlite.js";
+import { createDatabase, __sqliteInternals } from "./sqlite.js";
 import { OrchestrationRepository } from "./orchestration-repo.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
 import type { OrchestrationPlan, OrchestrationRun } from "@goatcitadel/contracts";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(): OrchestrationRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-orch-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-orch");
+  const db = tempDbs.open({ dbPath });
   return new OrchestrationRepository(db);
 }
 
 function createRepoWithDb(): { db: ReturnType<typeof createDatabase>; repo: OrchestrationRepository } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-orch-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-orch");
+  const db = tempDbs.open({ dbPath });
   return { db, repo: new OrchestrationRepository(db) };
 }
 
@@ -320,8 +305,7 @@ describe("OrchestrationRepository", () => {
   });
 
   it("backfills legacy global plans into non-default run workspaces during migration", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-orch-legacy-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
+    const dbPath = tempDbs.path("goatcitadel-orch-legacy");
     const legacy = new DatabaseSync(dbPath);
     legacy.exec(`
       CREATE TABLE schema_migrations (
@@ -421,7 +405,7 @@ describe("OrchestrationRepository", () => {
       .run("run-legacy", "plan-legacy", "paused", "2026-02-27T00:00:00.000Z", "workspace-a", "durable-run");
     legacy.close();
 
-    const db = createDatabase({ dbPath });
+    const db = tempDbs.open({ dbPath });
     const repo = new OrchestrationRepository(db);
 
     assert.equal(repo.getPlan("plan-legacy", "default").goal, "legacy");

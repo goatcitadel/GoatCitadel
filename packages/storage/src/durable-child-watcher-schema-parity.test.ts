@@ -1,27 +1,16 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
-import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    fs.rmSync(file, { force: true });
-    fs.rmSync(`${file}-wal`, { force: true });
-    fs.rmSync(`${file}-shm`, { force: true });
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 describe("durable child watcher schema parity", () => {
   it("installs the sequence ledger and watcher cursor schema on SQLite", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-watcher-parity-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-watcher-parity");
+    const db = tempDbs.open({ dbPath });
 
     const eventColumns = db.prepare("PRAGMA table_info(durable_run_events)").all<{ name: string }>();
     assert.ok(eventColumns.some((column) => column.name === "sequence"));

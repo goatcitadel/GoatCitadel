@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,9 +21,7 @@ const files: string[] = [];
 afterEach(() => {
   for (const db of opened.splice(0)) db.close();
   for (const file of files.splice(0)) {
-    fs.rmSync(file, { force: true });
-    fs.rmSync(`${file}-wal`, { force: true });
-    fs.rmSync(`${file}-shm`, { force: true });
+    fs.rmSync(path.dirname(file), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -102,7 +100,7 @@ describe("SkillHubArtifactRepository", () => {
 });
 
 function createStore(): { db: DatabaseClient; artifacts: SkillHubArtifactRepository } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-skill-hub-artifact-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-skill-hub-artifact-")), "test.db");
   files.push(dbPath);
   const db = createDatabase({ dbPath });
   opened.push(db);

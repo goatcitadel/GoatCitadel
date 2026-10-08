@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,7 +21,7 @@ const clients: DatabaseClient[] = [];
 afterEach(() => {
   for (const client of clients.splice(0)) client.close();
   for (const file of files.splice(0)) {
-    for (const suffix of ["", "-wal", "-shm"]) fs.rmSync(`${file}${suffix}`, { force: true });
+    fs.rmSync(path.dirname(file), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -47,7 +46,7 @@ function createInput(overrides: Partial<OpsSavedBoardCreateInput> = {}): OpsSave
 }
 
 function fileDatabase(): { dbPath: string; first: DatabaseClient; second: DatabaseClient } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-ops-board-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-ops-board-")), "test.db");
   files.push(dbPath);
   const first = createDatabase({ dbPath });
   const second = createDatabase({ dbPath });

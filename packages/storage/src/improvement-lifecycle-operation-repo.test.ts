@@ -1,8 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
   computeImprovementLifecycleRequestSha256,
@@ -12,29 +8,20 @@ import {
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { ImprovementLifecycleOperationRepository } from "./improvement-lifecycle-operation-repo.js";
-import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 const openedDatabases: DatabaseClient[] = [];
 const OBSERVED_SHA = "b".repeat(64);
 
 afterEach(() => {
   for (const db of openedDatabases.splice(0)) db.close();
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // Best-effort cleanup only.
-    }
-  }
+  tempDbs.cleanup();
 });
 
 function createStore(): { db: DatabaseClient; repo: ImprovementLifecycleOperationRepository } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-improvement-lifecycle-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-improvement-lifecycle");
+  const db = tempDbs.open({ dbPath });
   openedDatabases.push(db);
   return { db, repo: new ImprovementLifecycleOperationRepository(db) };
 }

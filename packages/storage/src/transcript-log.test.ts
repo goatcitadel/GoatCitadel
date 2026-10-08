@@ -122,27 +122,32 @@ describe("TranscriptLog sanitization", () => {
     createdDirs.push(transcriptsDir);
     const dbPath = path.join(transcriptsDir, "db.sqlite");
     const db = createDatabase({ dbPath });
-    const quarantine = new StateValidationQuarantineRepository(db);
-    const log = new TranscriptLog(transcriptsDir, { quarantine });
+    try {
+      const quarantine = new StateValidationQuarantineRepository(db);
+      const log = new TranscriptLog(transcriptsDir, { quarantine });
 
-    const sessionId = "session-sanitize";
-    const transcriptPath = path.join(transcriptsDir, `${sessionId}.jsonl`);
-    await fs.promises.writeFile(
-      transcriptPath,
-      [JSON.stringify(buildEvent(sessionId, 0)), "{not json", JSON.stringify(buildEvent(sessionId, 1))].join("\n") +
-        "\n",
-      "utf8",
-    );
+      const sessionId = "session-sanitize";
+      const transcriptPath = path.join(transcriptsDir, `${sessionId}.jsonl`);
+      await fs.promises.writeFile(
+        transcriptPath,
+        [JSON.stringify(buildEvent(sessionId, 0)), "{not json", JSON.stringify(buildEvent(sessionId, 1))].join("\n") +
+          "\n",
+        "utf8",
+      );
 
-    const events = await log.read(sessionId);
-    assert.equal(events.length, 2);
-    assert.equal(events[0]?.eventId, "event-0");
-    assert.equal(events[1]?.eventId, "event-1");
-    assert.equal(quarantine.count(), 1);
-    const entry0 = quarantine.list(10)[0];
-    assert.ok(entry0);
-    assert.equal(entry0.store, "transcript.jsonl");
-    assert.match(entry0.rowId, new RegExp(sessionId));
+      const events = await log.read(sessionId);
+      assert.equal(events.length, 2);
+      assert.equal(events[0]?.eventId, "event-0");
+      assert.equal(events[1]?.eventId, "event-1");
+      assert.equal(quarantine.count(), 1);
+      const entry0 = quarantine.list(10)[0];
+      assert.ok(entry0);
+      assert.equal(entry0.store, "transcript.jsonl");
+      assert.match(entry0.rowId, new RegExp(sessionId));
+    } finally {
+      // Close before afterEach removes the dir: Windows cannot delete an open SQLite file.
+      db.close();
+    }
   });
 });
 

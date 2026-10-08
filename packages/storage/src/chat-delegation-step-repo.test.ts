@@ -1,34 +1,19 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
 import type { ChatCitationRecord } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
-import { createDatabase } from "./sqlite.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import { ChatDelegationStepRepository } from "./chat-delegation-step-repo.js";
 import { ToolGrantRepository } from "./tool-grant-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup noise
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createStore(): { db: DatabaseClient; dbPath: string; repo: ChatDelegationStepRepository } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-delegation-step-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-chat-delegation-step");
+  const db = tempDbs.open({ dbPath });
   return { db, dbPath, repo: new ChatDelegationStepRepository(db) };
 }
 
@@ -131,7 +116,8 @@ describe("ChatDelegationStepRepository", () => {
     assert.equal(minimal.citations, undefined);
     assert.equal(minimal.degradedHandoffStepIds, undefined);
     assert.throws(
-      () => db.prepare("UPDATE chat_delegation_steps SET instruction_snapshot_json = '{}' WHERE step_id = ?").run("step-b"),
+      () =>
+        db.prepare("UPDATE chat_delegation_steps SET instruction_snapshot_json = '{}' WHERE step_id = ?").run("step-b"),
       /delegation step instruction snapshot cannot change/,
     );
 
@@ -229,7 +215,7 @@ describe("ChatDelegationStepRepository", () => {
     );
     db.close();
 
-    const restartedDb = createDatabase({ dbPath });
+    const restartedDb = tempDbs.open({ dbPath });
     try {
       const rawScope = restartedDb
         .prepare("SELECT scope_control_json FROM chat_delegation_steps WHERE step_id = ?")
@@ -1216,16 +1202,20 @@ describe("ChatDelegationStepRepository", () => {
       status: "running",
       childSessionId: "child-1",
     });
-    db.prepare(`
+    db.prepare(
+      `
       UPDATE chat_delegation_steps
       SET dispatch_claim_token = ?, dispatch_claim_expires_at = ?
       WHERE step_id = ?
-    `).run("active-claim", "2099-01-01T00:00:00.000Z", "active");
-    db.prepare(`
+    `,
+    ).run("active-claim", "2099-01-01T00:00:00.000Z", "active");
+    db.prepare(
+      `
       UPDATE chat_delegation_steps
       SET dispatch_claim_token = ?, dispatch_claim_expires_at = ?
       WHERE step_id = ?
-    `).run("expired-claim", "2000-01-01T00:00:00.000Z", "expired");
+    `,
+    ).run("expired-claim", "2000-01-01T00:00:00.000Z", "expired");
 
     assert.equal(repo.failUnownedPreAdmission({ ...input, stepId: "pending" })?.status, "failed");
     assert.equal(repo.failUnownedPreAdmission({ ...input, stepId: "active" }), undefined);

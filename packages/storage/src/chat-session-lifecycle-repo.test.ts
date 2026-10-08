@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 import { Worker } from "node:worker_threads";
 import { NotFoundError } from "@goatcitadel/contracts";
@@ -291,7 +290,7 @@ describe("ChatSessionLifecycleRepository SQLite", () => {
   });
 
   it("permits exactly one winner when two workers reactivate the same terminal generation", async () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-lifecycle-race-${randomUUID()}.db`);
+    const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-lifecycle-race-")), "test.db");
     const db = createDatabase({ dbPath });
     const lifecycle = new ChatSessionLifecycleRepository(db);
     lifecycle.initialize({
@@ -346,9 +345,7 @@ describe("ChatSessionLifecycleRepository SQLite", () => {
       );
       verify.close();
     } finally {
-      fs.rmSync(dbPath, { force: true });
-      fs.rmSync(`${dbPath}-wal`, { force: true });
-      fs.rmSync(`${dbPath}-shm`, { force: true });
+      fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });

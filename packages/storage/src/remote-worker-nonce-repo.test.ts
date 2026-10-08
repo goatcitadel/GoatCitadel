@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, describe, it } from "node:test";
 import {
   REMOTE_WORKER_PROTOCOL_VERSION,
@@ -16,23 +13,15 @@ import {
 import type { DatabaseClient } from "./db.js";
 import { RemoteWorkerAdmissionRepository } from "./remote-worker-admission-repo.js";
 import { RemoteWorkerNonceRepository } from "./remote-worker-nonce-repo.js";
-import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
 const clients: DatabaseClient[] = [];
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 const D = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 
 afterEach(() => {
   for (const client of clients.splice(0)) client.close();
-  for (const file of createdFiles.splice(0)) {
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try {
-        fs.rmSync(`${file}${suffix}`, { force: true });
-      } catch {
-        // ignore
-      }
-    }
-  }
+  tempDbs.cleanup();
 });
 
 function manifest(seed: string): RemoteWorkerRuntimeManifest {
@@ -176,7 +165,7 @@ function freshNonce(
 }
 
 function harness(dbPath = ":memory:") {
-  const db = createDatabase({ dbPath });
+  const db = tempDbs.open({ dbPath });
   clients.push(db);
   return { db, admission: new RemoteWorkerAdmissionRepository(db), nonces: new RemoteWorkerNonceRepository(db) };
 }
@@ -362,18 +351,17 @@ describe("RemoteWorkerNonceRepository (SQLite)", () => {
   });
 
   it("preserves replay rejection across a database restart", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-nonce-restart-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
+    const dbPath = tempDbs.path("goatcitadel-nonce-restart");
     const nonce = freshNonce("restart-nonce");
     let authority: RemoteWorkerNonceAuthority;
     {
-      const db = createDatabase({ dbPath });
+      const db = tempDbs.open({ dbPath });
       const admission = new RemoteWorkerAdmissionRepository(db);
       authority = seedBootstrapAuthority(admission, "restart");
       assert.equal(new RemoteWorkerNonceRepository(db).consume({ authority, ...nonce }), true);
       db.close();
     }
-    const reopened = createDatabase({ dbPath });
+    const reopened = tempDbs.open({ dbPath });
     clients.push(reopened);
     assert.equal(new RemoteWorkerNonceRepository(reopened).consume({ authority, ...nonce }), false);
   });

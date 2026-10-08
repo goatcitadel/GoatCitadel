@@ -1,41 +1,27 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
 import { canonicalJsonString } from "@goatcitadel/contracts";
-import { createDatabase } from "./sqlite.js";
 import type { DatabaseClient } from "./db.js";
 import { ApprovalRepository, type DeterministicDetachedApprovalCreateInput } from "./approval-repo.js";
+import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(): ApprovalRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-approval-repo-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
+  const dbPath = tempDbs.path("goatcitadel-approval-repo");
   return createRepoAtPath(dbPath);
 }
 
 function createRepoAtPath(dbPath: string): ApprovalRepository {
-  const db = createDatabase({ dbPath });
+  const db = tempDbs.open({ dbPath });
   return new ApprovalRepository(db);
 }
 
 function createInMemoryHarness(): { db: DatabaseClient; repo: ApprovalRepository } {
-  const db = createDatabase({ dbPath: ":memory:" });
+  const db = tempDbs.open({ dbPath: ":memory:" });
   return { db, repo: new ApprovalRepository(db) };
 }
 
@@ -149,21 +135,31 @@ describe("ApprovalRepository", () => {
   it("finds a scoped approval beyond the legacy global over-fetch window", () => {
     const { db, repo } = createInMemoryHarness();
     const scoped = repo.create({
-      kind: "shell.exec", riskLevel: "danger", payload: { command: "scoped" },
-      preview: { command: "scoped" }, linkage: { workspaceId: "workspace-a" },
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "scoped" },
+      preview: { command: "scoped" },
+      linkage: { workspaceId: "workspace-a" },
     });
     db.prepare("UPDATE approvals SET created_at = @createdAt WHERE approval_id = @approvalId").run({
-      createdAt: "2020-01-01T00:00:00.000Z", approvalId: scoped.approvalId,
+      createdAt: "2020-01-01T00:00:00.000Z",
+      approvalId: scoped.approvalId,
     });
     for (let index = 0; index < 1001; index += 1) {
       repo.create({
-        kind: "shell.exec", riskLevel: "danger", payload: { command: `foreign-${index}` },
-        preview: { command: `foreign-${index}` }, linkage: { workspaceId: "workspace-b" },
+        kind: "shell.exec",
+        riskLevel: "danger",
+        payload: { command: `foreign-${index}` },
+        preview: { command: `foreign-${index}` },
+        linkage: { workspaceId: "workspace-b" },
       });
     }
 
     const page = repo.listPage({ status: "pending", limit: 200, workspaceId: "workspace-a" });
-    assert.deepEqual(page.items.map((item) => item.approvalId), [scoped.approvalId]);
+    assert.deepEqual(
+      page.items.map((item) => item.approvalId),
+      [scoped.approvalId],
+    );
     assert.equal(page.nextCursor, undefined);
   });
 
@@ -525,9 +521,8 @@ describe("ApprovalRepository", () => {
   });
 
   it("uses the approval expiry sweep index for representative pending history", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-approval-expiry-plan-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-approval-expiry-plan");
+    const db = tempDbs.open({ dbPath });
     const insert = db.prepare(`
       INSERT INTO approvals (
         approval_id, kind, risk_level, status, linkage_json, payload_json, preview_json,
@@ -806,8 +801,7 @@ describe("ApprovalRepository", () => {
   });
 
   it("allows only one concurrent resolver to win the same approval", async () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-approval-repo-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
+    const dbPath = tempDbs.path("goatcitadel-approval-repo");
     const creatorRepo = createRepoAtPath(dbPath);
     const resolverA = createRepoAtPath(dbPath);
     const resolverB = createRepoAtPath(dbPath);
@@ -841,8 +835,7 @@ describe("ApprovalRepository", () => {
   });
 
   it("allows only one concurrent expiry reconciler to win an expired approval", async () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-approval-expiry-repo-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
+    const dbPath = tempDbs.path("goatcitadel-approval-expiry-repo");
     const creatorRepo = createRepoAtPath(dbPath);
     const resolverA = createRepoAtPath(dbPath);
     const resolverB = createRepoAtPath(dbPath);

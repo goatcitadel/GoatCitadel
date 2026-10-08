@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { ConflictError } from "@goatcitadel/contracts";
 import { createDatabase } from "./sqlite.js";
 import { ManagedSourceInstallRepository } from "./managed-source-install-repo.js";
@@ -11,7 +10,7 @@ import { ManagedSourceInstallRepository } from "./managed-source-install-repo.js
 const files: string[] = [];
 afterEach(() => {
   for (const file of files.splice(0)) {
-    for (const candidate of [file, `${file}-wal`, `${file}-shm`]) fs.rmSync(candidate, { force: true });
+    fs.rmSync(path.dirname(file), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -29,7 +28,7 @@ function fixture(repo: ManagedSourceInstallRepository, label: string) {
 
 describe("ManagedSourceInstallRepository", () => {
   it("keeps candidate registration CAS-bound and permits only one active v1 install", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-managed-source-${randomUUID()}.db`);
+    const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-managed-source-")), "test.db");
     files.push(dbPath);
     const database = createDatabase({ dbPath });
     const repo = new ManagedSourceInstallRepository(database);

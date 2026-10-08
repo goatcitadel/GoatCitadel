@@ -1,38 +1,25 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { ChatMessageRecord } from "@goatcitadel/contracts";
 import type { DatabaseClient, DbStatement } from "./db.js";
-import { createDatabase } from "./sqlite.js";
 import { ChatMessageRepository } from "./chat-message-repo.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
+import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(): ChatMessageRepository {
   return createRepoWithDb().repo;
 }
 
 function createRepoWithDb(): { repo: ChatMessageRepository; db: ReturnType<typeof createDatabase> } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-messages-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-chat-messages");
+  const db = tempDbs.open({ dbPath });
   return { repo: new ChatMessageRepository(db), db };
 }
 
@@ -738,9 +725,8 @@ describe("ChatMessageRepository", () => {
 
 describe("ChatMessageRepository sanitization", () => {
   it("quarantines a chat message whose parts_json is malformed and falls back to undefined parts", () => {
-    const dbPath = path.join(os.tmpdir(), `gc-chat-parts-sanitize-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("gc-chat-parts-sanitize");
+    const db = tempDbs.open({ dbPath });
     const quarantine = new StateValidationQuarantineRepository(db);
     const repo = new ChatMessageRepository(db, { quarantine });
 
@@ -769,9 +755,8 @@ describe("ChatMessageRepository sanitization", () => {
   });
 
   it("quarantines a chat message whose attachments_json is malformed and falls back to undefined attachments", () => {
-    const dbPath = path.join(os.tmpdir(), `gc-chat-attach-sanitize-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("gc-chat-attach-sanitize");
+    const db = tempDbs.open({ dbPath });
     const quarantine = new StateValidationQuarantineRepository(db);
     const repo = new ChatMessageRepository(db, { quarantine });
 

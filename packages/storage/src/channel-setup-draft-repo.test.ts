@@ -1,30 +1,15 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { ChannelSetupDraftRepository } from "./channel-setup-draft-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup failures
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(): ChannelSetupDraftRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-channel-drafts-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-channel-drafts");
+  const db = tempDbs.open({ dbPath });
   return new ChannelSetupDraftRepository(db);
 }
 

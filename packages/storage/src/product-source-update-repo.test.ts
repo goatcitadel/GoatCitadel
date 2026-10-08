@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { afterEach, describe, it } from "node:test";
 import { createDatabase } from "./sqlite.js";
 import { ProductSourceUpdateRepository } from "./product-source-update-repo.js";
@@ -13,15 +12,13 @@ const B = "b".repeat(64);
 
 afterEach(() => {
   for (const file of created.splice(0)) {
-    fs.rmSync(file, { force: true });
-    fs.rmSync(`${file}-wal`, { force: true });
-    fs.rmSync(`${file}-shm`, { force: true });
+    fs.rmSync(path.dirname(file), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
 describe("ProductSourceUpdateRepository", () => {
   it("persists immutable manifests and an append-only CAS journal", () => {
-    const file = path.join(os.tmpdir(), `goatcitadel-source-update-${randomUUID()}.db`);
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-source-update-")), "test.db");
     created.push(file);
     const db = createDatabase({ dbPath: file });
     const repository = new ProductSourceUpdateRepository(db);

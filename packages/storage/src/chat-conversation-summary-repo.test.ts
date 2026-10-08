@@ -1,31 +1,17 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { buildChatCompactionStateKey, ChatConversationSummaryRepository } from "./chat-conversation-summary-repo.js";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
+import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup noise
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(): ChatConversationSummaryRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-conversation-summary-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-chat-conversation-summary");
+  const db = tempDbs.open({ dbPath });
   return new ChatConversationSummaryRepository(db);
 }
 
@@ -89,10 +75,9 @@ describe("ChatConversationSummaryRepository", () => {
   });
 
   it("keeps exact-window and monotonic-state writes idempotent across two database writers", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-conversation-summary-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const firstDb = createDatabase({ dbPath });
-    const secondDb = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-chat-conversation-summary");
+    const firstDb = tempDbs.open({ dbPath });
+    const secondDb = tempDbs.open({ dbPath });
     try {
       const first = new ChatConversationSummaryRepository(firstDb);
       const second = new ChatConversationSummaryRepository(secondDb);

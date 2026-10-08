@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import type { ApprovalCreateInput, ApprovalRequest } from "@goatcitadel/contracts";
 import {
   ApprovalRepository,
@@ -23,9 +22,7 @@ const NOW = new Date("2026-07-14T06:00:00.000Z");
 
 afterEach(() => {
   for (const file of createdFiles.splice(0)) {
-    for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
-      fs.rmSync(candidate, { force: true });
-    }
+    fs.rmSync(path.dirname(file), { recursive: true, force: true });
   }
 });
 
@@ -400,7 +397,7 @@ describe("ChatCompactionBreakerActionService", () => {
 });
 
 function createFixture() {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-compaction-action-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-compaction-action-")), "test.db");
   createdFiles.push(dbPath);
   const db = createDatabase({ dbPath });
   return { db, repo: new ChatConversationSummaryRepository(db) };

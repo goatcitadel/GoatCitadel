@@ -1,31 +1,15 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { ApprovalInboxRepository } from "./approval-inbox-repo.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
-import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const dbPaths: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const dbPath of dbPaths.splice(0)) {
-    try {
-      fs.rmSync(dbPath, { force: true });
-      fs.rmSync(`${dbPath}-wal`, { force: true });
-      fs.rmSync(`${dbPath}-shm`, { force: true });
-    } catch {
-      // Ignore SQLite sidecar cleanup races on Windows.
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function db() {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-storage-loop30-${randomUUID()}.db`);
-  dbPaths.push(dbPath);
-  return createDatabase({ dbPath });
+  return tempDbs.open({ dbPath: tempDbs.path("goatcitadel-storage-loop30") });
 }
 
 describe("storage loop 30 branch tails", () => {

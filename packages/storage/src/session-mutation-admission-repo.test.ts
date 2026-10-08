@@ -2,11 +2,16 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { describe, it } from "node:test";
 import { Worker } from "node:worker_threads";
 import { canonicalJsonString } from "@goatcitadel/contracts";
-import { createRemediationParentFixture, createRemediationParentState, createRemediationReleaseFixture, createRemediationResumeFixture } from "./governed-remediation-parent-reservation-fixture.js";
+import {
+  createRemediationParentFixture,
+  createRemediationParentState,
+  createRemediationReleaseFixture,
+  createRemediationResumeFixture,
+} from "./governed-remediation-parent-reservation-fixture.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
 import { createSqliteAsyncStorage } from "./async-storage.js";
 import { Storage } from "./index.js";
@@ -28,32 +33,52 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
     try {
       const { repo, resume, resolution, runId, turnId } = createRemediationResumeFixture(db);
       const runs = new DurableRunRepository(db);
-      for (const patch of [{ requesterActorId: "foreign" }, { stateRevision: 5 }, { verificationReceiptId: "missing" },
-        { expectedReservedRunVersion: 2 }, { promptId: "foreign" }, { operationId: "foreign" }]) {
+      for (const patch of [
+        { requesterActorId: "foreign" },
+        { stateRevision: 5 },
+        { verificationReceiptId: "missing" },
+        { expectedReservedRunVersion: 2 },
+        { promptId: "foreign" },
+        { operationId: "foreign" },
+      ]) {
         assert.throws(() => repo.resumeDurableChatRemediation({ ...resume, ...patch }));
       }
-      db.exec("CREATE TRIGGER test_resume_seal_failure BEFORE INSERT ON chat_turn_user_input_continuation_seals BEGIN SELECT RAISE(ABORT, 'injected resume seal failure'); END");
+      db.exec(
+        "CREATE TRIGGER test_resume_seal_failure BEFORE INSERT ON chat_turn_user_input_continuation_seals BEGIN SELECT RAISE(ABORT, 'injected resume seal failure'); END",
+      );
       assert.throws(() => repo.resumeDurableChatRemediation(resume), /injected resume seal failure/u);
       assert.equal(runs.getRun(runId)?.version, 3);
       assert.equal(runs.getRun(runId)?.status, "waiting");
-      assert.equal(db.prepare("SELECT count(*) AS count FROM governed_remediation_parent_resolutions").get<{ count: number }>()?.count, 0);
+      assert.equal(
+        db.prepare("SELECT count(*) AS count FROM governed_remediation_parent_resolutions").get<{ count: number }>()
+          ?.count,
+        0,
+      );
       assert.throws(() => runs.updateRun({ runId, status: "queued", expectedVersion: 3 }));
       db.exec("DROP TRIGGER test_resume_seal_failure");
       const result = repo.resumeDurableChatRemediation(resume);
       assert.equal(result.resultingRunVersion, 4);
       assert.equal(result.replayed, false);
       assert.equal(runs.getRun(runId)?.status, "queued");
-      assert.equal(db.prepare("SELECT pending_user_input_json FROM chat_turn_traces WHERE turn_id = @turnId")
-        .get<{ pending_user_input_json: string | null }>({ turnId })?.pending_user_input_json, null);
+      assert.equal(
+        db
+          .prepare("SELECT pending_user_input_json FROM chat_turn_traces WHERE turn_id = @turnId")
+          .get<{ pending_user_input_json: string | null }>({ turnId })?.pending_user_input_json,
+        null,
+      );
       repo.requireExactDurableTurnPayloadIdentity({ ...resolution.admissionIdentity, durableRunId: runId });
-      const responses = runs.getRun(runId)?.payload.userInputResponses as Array<{ runtimeRemediationReceipt?: { resolutionId: string } }>;
+      const responses = runs.getRun(runId)?.payload.userInputResponses as Array<{
+        runtimeRemediationReceipt?: { resolutionId: string };
+      }>;
       assert.equal(responses.length, 1);
       assert.equal(responses[0]?.runtimeRemediationReceipt?.resolutionId, result.resolutionId);
       runs.updateRun({ runId, status: "running", expectedVersion: 4 });
       assert.deepEqual(repo.resumeDurableChatRemediation(resume), { ...result, replayed: true });
       assert.throws(() => repo.resumeDurableChatRemediation({ ...resume, operationId: "other" }));
       assert.equal(runs.getRun(runId)?.version, 5);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   });
 
   it("requires canonical repair resolution evidence even for a correctly sealed resume reference", () => {
@@ -62,29 +87,58 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
       const fixture = createRemediationParentFixture(db);
       const identity = fixture.resolution.admissionIdentity;
       const answeredAt = new Date().toISOString();
-      const response = { promptId: fixture.resolution.promptId, kind: "text", title: "Repair", question: "Continue?", answeredAt,
+      const response = {
+        promptId: fixture.resolution.promptId,
+        kind: "text",
+        title: "Repair",
+        question: "Continue?",
+        answeredAt,
         response: { kind: "text", text: "The runtime completed and verified the requested repair." },
-        runtimeRemediationReceipt: { schemaVersion: "goatcitadel.remediation-resume-reference.v1",
-          resolutionId: "missing-resolution", remediationId: fixture.input.remediationId, verificationReceiptId: "missing-verification" } };
-      const material = { version: 1, admissionId: identity.admissionId, sessionIncarnationId: identity.sessionIncarnationId,
-        workspaceId: identity.workspaceId, sessionId: identity.sessionId, turnId: identity.turnId, durableRunId: fixture.runId,
-        promptId: fixture.resolution.promptId, eventKey: "chat.user_input.resolved", correlationId: fixture.resolution.promptId,
-        resumeRecordSha256: sha256(canonicalJsonString(response)), responderActorId: "operator-a", responderAuthActorSource: "token",
-        waitingRunVersion: 2, queuedRunVersion: 3, resolvedAt: answeredAt };
-      db.prepare(`INSERT INTO chat_turn_user_input_continuation_seals (seal_id, version, admission_id, session_incarnation_id,
+        runtimeRemediationReceipt: {
+          schemaVersion: "goatcitadel.remediation-resume-reference.v1",
+          resolutionId: "missing-resolution",
+          remediationId: fixture.input.remediationId,
+          verificationReceiptId: "missing-verification",
+        },
+      };
+      const material = {
+        version: 1,
+        admissionId: identity.admissionId,
+        sessionIncarnationId: identity.sessionIncarnationId,
+        workspaceId: identity.workspaceId,
+        sessionId: identity.sessionId,
+        turnId: identity.turnId,
+        durableRunId: fixture.runId,
+        promptId: fixture.resolution.promptId,
+        eventKey: "chat.user_input.resolved",
+        correlationId: fixture.resolution.promptId,
+        resumeRecordSha256: sha256(canonicalJsonString(response)),
+        responderActorId: "operator-a",
+        responderAuthActorSource: "token",
+        waitingRunVersion: 2,
+        queuedRunVersion: 3,
+        resolvedAt: answeredAt,
+      };
+      db.prepare(
+        `INSERT INTO chat_turn_user_input_continuation_seals (seal_id, version, admission_id, session_incarnation_id,
         workspace_id, session_id, turn_id, durable_run_id, prompt_id, event_key, correlation_id, resume_record_sha256,
         responder_actor_id, responder_auth_actor_source, waiting_run_version, queued_run_version, resolved_at, material_sha256)
         VALUES (@sealId, @version, @admissionId, @sessionIncarnationId, @workspaceId, @sessionId, @turnId,
           @durableRunId, @promptId, @eventKey, @correlationId, @resumeRecordSha256, @responderActorId,
-          @responderAuthActorSource, @waitingRunVersion, @queuedRunVersion, @resolvedAt, @materialSha256)`)
-        .run({ ...material, sealId: "forged-repair-seal", materialSha256: sha256(canonicalJsonString(material)) });
+          @responderAuthActorSource, @waitingRunVersion, @queuedRunVersion, @resolvedAt, @materialSha256)`,
+      ).run({ ...material, sealId: "forged-repair-seal", materialSha256: sha256(canonicalJsonString(material)) });
       const run = new DurableRunRepository(db).getRun(fixture.runId);
       db.prepare("UPDATE durable_runs SET payload_json = @payload WHERE run_id = @runId").run({
-        runId: fixture.runId, payload: canonicalJsonString({ ...run!.payload, userInputResponses: [response] }),
+        runId: fixture.runId,
+        payload: canonicalJsonString({ ...run!.payload, userInputResponses: [response] }),
       });
-      assert.throws(() => fixture.repo.requireExactDurableTurnPayloadIdentity({ ...identity, durableRunId: fixture.runId }),
-        /no exact canonical resolution evidence/u);
-    } finally { db.close(); }
+      assert.throws(
+        () => fixture.repo.requireExactDurableTurnPayloadIdentity({ ...identity, durableRunId: fixture.runId }),
+        /no exact canonical resolution evidence/u,
+      );
+    } finally {
+      db.close();
+    }
   });
 
   it("remediation release accepts an exact settled rollback receipt", () => {
@@ -95,14 +149,18 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
       const runs = new DurableRunRepository(db);
       assert.equal(runs.getRun(runId)?.status, "waiting");
       assert.equal(runs.updateRun({ runId, status: "queued", expectedVersion: 4 }).version, 5);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   });
 
   it("remediation release atomically retires a no-effect fence and replays after later run progress", () => {
     const db = createDatabase({ dbPath: ":memory:" });
     try {
       const { repo, release, resolution, runId } = createRemediationReleaseFixture(db);
-      db.exec("CREATE TRIGGER test_release_insert_failure BEFORE INSERT ON governed_remediation_parent_resolutions BEGIN SELECT RAISE(ABORT, 'injected release failure'); END");
+      db.exec(
+        "CREATE TRIGGER test_release_insert_failure BEFORE INSERT ON governed_remediation_parent_resolutions BEGIN SELECT RAISE(ABORT, 'injected release failure'); END",
+      );
       assert.throws(() => repo.releaseDurableChatRemediation(release), /injected release failure/u);
       const runs = new DurableRunRepository(db);
       assert.equal(runs.getRun(runId)?.version, 3);
@@ -117,7 +175,9 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
       assert.deepEqual(repo.releaseDurableChatRemediation(release), { ...released, replayed: true });
       assert.throws(() => repo.releaseDurableChatRemediation({ ...release, operationId: "different-operation" }));
       assert.equal(runs.getRun(runId)?.version, 5);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   });
 
   it("remediation release refuses uncertain effects and mismatched authority", () => {
@@ -125,14 +185,25 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
       const db = createDatabase({ dbPath: ":memory:" });
       try {
         const { repo, release, runId } = createRemediationReleaseFixture(db, uncertain);
-        for (const patch of [{ requesterActorId: "foreign" }, { stateRevision: 3 }, { failureId: "missing" },
-          { expectedReservedRunVersion: 2 }, { failureId: null }]) {
+        for (const patch of [
+          { requesterActorId: "foreign" },
+          { stateRevision: 3 },
+          { failureId: "missing" },
+          { expectedReservedRunVersion: 2 },
+          { failureId: null },
+        ]) {
           assert.throws(() => repo.releaseDurableChatRemediation({ ...release, ...patch }));
         }
         if (uncertain) assert.throws(() => repo.releaseDurableChatRemediation(release), /release evidence/u);
         assert.equal(new DurableRunRepository(db).getRun(runId)?.version, 3);
-        assert.equal(db.prepare("SELECT count(*) AS count FROM governed_remediation_parent_resolutions").get<{ count: number }>()?.count, 0);
-      } finally { db.close(); }
+        assert.equal(
+          db.prepare("SELECT count(*) AS count FROM governed_remediation_parent_resolutions").get<{ count: number }>()
+            ?.count,
+          0,
+        );
+      } finally {
+        db.close();
+      }
     }
   });
 
@@ -142,21 +213,41 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
       try {
         const fixture = createRemediationParentFixture(db);
         makeContinuationPromptSecure(db, fixture, {
-          targetId: "search.brave", expiresAt: "2099-08-07T00:00:00.000Z",
+          targetId: "search.brave",
+          expiresAt: "2099-08-07T00:00:00.000Z",
         });
         if (firstOwner === "remediation") {
           fixture.repo.reserveDurableChatRemediation(fixture.input);
-          assert.throws(() => fixture.repo.reserveDurableChatSecureConfiguration(
-            secureConfigurationReservationInput(fixture, "search.brave", 3)), /remediation reservation/u);
-          assert.equal(db.prepare("SELECT COUNT(*) AS count FROM chat_turn_secure_configuration_reservations").get<{ count: number }>()?.count, 0);
+          assert.throws(
+            () =>
+              fixture.repo.reserveDurableChatSecureConfiguration(
+                secureConfigurationReservationInput(fixture, "search.brave", 3),
+              ),
+            /remediation reservation/u,
+          );
+          assert.equal(
+            db
+              .prepare("SELECT COUNT(*) AS count FROM chat_turn_secure_configuration_reservations")
+              .get<{ count: number }>()?.count,
+            0,
+          );
         } else {
-          fixture.repo.reserveDurableChatSecureConfiguration(secureConfigurationReservationInput(fixture, "search.brave", 2));
+          fixture.repo.reserveDurableChatSecureConfiguration(
+            secureConfigurationReservationInput(fixture, "search.brave", 2),
+          );
           const input = createRemediationParentState(db, fixture.input, "repair-after-secure", 3);
           assert.throws(() => fixture.repo.reserveDurableChatRemediation(input), /reservation authority changed/u);
-          assert.equal(db.prepare("SELECT COUNT(*) AS count FROM governed_remediation_parent_reservations").get<{ count: number }>()?.count, 0);
+          assert.equal(
+            db
+              .prepare("SELECT COUNT(*) AS count FROM governed_remediation_parent_reservations")
+              .get<{ count: number }>()?.count,
+            0,
+          );
         }
         assert.equal(new DurableRunRepository(db).getRun(fixture.runId)?.version, 3);
-      } finally { db.close(); }
+      } finally {
+        db.close();
+      }
     }
   });
 
@@ -165,15 +256,25 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
     try {
       const { repo, input, resolution } = createRemediationParentFixture(db);
       repo.reserveDurableChatRemediation(input);
-      assert.throws(() => repo.resolveDurableChatUserInput({ ...resolution, expectedWaitingRunVersion: 3 }),
-        /remediation reservation/u);
+      assert.throws(
+        () => repo.resolveDurableChatUserInput({ ...resolution, expectedWaitingRunVersion: 3 }),
+        /remediation reservation/u,
+      );
       for (const status of ["queued", "running"] as const) {
-        assert.throws(() => new DurableRunRepository(db).updateRun({ runId: input.durableRunId, status, expectedVersion: 3 }));
+        assert.throws(() =>
+          new DurableRunRepository(db).updateRun({ runId: input.durableRunId, status, expectedVersion: 3 }),
+        );
       }
       assert.equal(new DurableRunRepository(db).getRun(input.durableRunId)?.version, 3);
       assert.equal(new DurableRunRepository(db).getRun(input.durableRunId)?.status, "waiting");
-      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM chat_turn_user_input_continuation_seals").get<{ count: number }>()?.count, 0);
-    } finally { db.close(); }
+      assert.equal(
+        db.prepare("SELECT COUNT(*) AS count FROM chat_turn_user_input_continuation_seals").get<{ count: number }>()
+          ?.count,
+        0,
+      );
+    } finally {
+      db.close();
+    }
   });
 
   it("remediation parent reservation atomically fences the admitted run and replays once", () => {
@@ -186,11 +287,17 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
       assert.deepEqual(repo.reserveDurableChatRemediation(input), { ...first, replayed: true });
       assert.equal(new DurableRunRepository(db).getRun(input.durableRunId)?.version, 3);
       assert.throws(() => repo.reserveDurableChatRemediation({ ...input, effectId: "other-effect" }));
-      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM governed_remediation_parent_reservations").get<{ count: number }>()?.count, 1);
+      assert.equal(
+        db.prepare("SELECT COUNT(*) AS count FROM governed_remediation_parent_reservations").get<{ count: number }>()
+          ?.count,
+        1,
+      );
       const competing = createRemediationParentState(db, input, "remediation-second", 3);
       assert.throws(() => repo.reserveDurableChatRemediation(competing));
       assert.equal(new DurableRunRepository(db).getRun(input.durableRunId)?.version, 3);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   });
 
   it("remediation parent reservation rejects changed authority and rolls back failed ledger writes", () => {
@@ -198,18 +305,31 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
     try {
       const { repo, input } = createRemediationParentFixture(db);
       for (const patch of [
-        { requesterActorId: "foreign-actor" }, { workspaceId: "foreign-workspace" },
-        { recipeSha256: "b".repeat(64) }, { stateRevision: 1 },
-        { operationId: "foreign-operation" }, { blockedCheckpointId: "missing-checkpoint" },
-        { expectedWaitingRunVersion: 3 }, { sessionIncarnationId: "foreign-incarnation" },
-      ]) assert.throws(() => repo.reserveDurableChatRemediation({ ...input, ...patch }));
-      db.exec("CREATE TRIGGER test_remediation_insert_failure BEFORE INSERT ON governed_remediation_parent_reservations BEGIN SELECT RAISE(ABORT, 'injected reservation failure'); END");
+        { requesterActorId: "foreign-actor" },
+        { workspaceId: "foreign-workspace" },
+        { recipeSha256: "b".repeat(64) },
+        { stateRevision: 1 },
+        { operationId: "foreign-operation" },
+        { blockedCheckpointId: "missing-checkpoint" },
+        { expectedWaitingRunVersion: 3 },
+        { sessionIncarnationId: "foreign-incarnation" },
+      ])
+        assert.throws(() => repo.reserveDurableChatRemediation({ ...input, ...patch }));
+      db.exec(
+        "CREATE TRIGGER test_remediation_insert_failure BEFORE INSERT ON governed_remediation_parent_reservations BEGIN SELECT RAISE(ABORT, 'injected reservation failure'); END",
+      );
       assert.throws(() => repo.reserveDurableChatRemediation(input), /injected reservation failure/u);
       assert.equal(new DurableRunRepository(db).getRun(input.durableRunId)?.version, 2);
-      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM governed_remediation_parent_reservations").get<{ count: number }>()?.count, 0);
+      assert.equal(
+        db.prepare("SELECT COUNT(*) AS count FROM governed_remediation_parent_reservations").get<{ count: number }>()
+          ?.count,
+        0,
+      );
       db.exec("DROP TRIGGER test_remediation_insert_failure");
       assert.equal(repo.reserveDurableChatRemediation(input).replayed, false);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   });
 
   it("remediation parent reservation preserves its checkpoint through terminal and disk-budget pruning", () => {
@@ -218,15 +338,24 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
       const { repo, input } = createRemediationParentFixture(db);
       repo.reserveDurableChatRemediation(input);
       const runs = new DurableRunRepository(db);
-      runs.createCheckpoint({ runId: input.durableRunId, checkpointKind: "run_completed",
-        state: { disposable: true }, createdAt: "2099-01-01T00:00:00.000Z" });
+      runs.createCheckpoint({
+        runId: input.durableRunId,
+        checkpointKind: "run_completed",
+        state: { disposable: true },
+        createdAt: "2099-01-01T00:00:00.000Z",
+      });
       runs.updateRun({ runId: input.durableRunId, status: "completed", expectedVersion: 3 });
       const pruned = runs.pruneCheckpoints({ keepPerRun: 1, diskBudgetBytes: 0 });
       assert.equal(pruned.prunedAged, 1);
       assert.ok(pruned.finalBytes > pruned.diskBudgetBytes);
-      assert.deepEqual(runs.listCheckpoints(input.durableRunId).map((row) => row.checkpointId), [input.blockedCheckpointId]);
+      assert.deepEqual(
+        runs.listCheckpoints(input.durableRunId).map((row) => row.checkpointId),
+        [input.blockedCheckpointId],
+      );
       assert.equal(runs.pruneCheckpoints({ keepPerRun: 1, diskBudgetBytes: 0 }).prunedAged, 0);
-    } finally { db.close(); }
+    } finally {
+      db.close();
+    }
   });
   it("persists a content-free exact admission and append-only lifecycle evidence", () => {
     const db = createDatabase({ dbPath: ":memory:" });
@@ -556,7 +685,7 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
   });
 
   it("recovers an active durable admission after restart and closes it exactly once", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-admission-restart-${randomUUID()}.db`);
+    const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-admission-restart-")), "test.db");
     const first = createDatabase({ dbPath });
     new ChatSessionLifecycleRepository(first).initialize({
       workspaceId: "workspace-a",
@@ -616,9 +745,7 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
       );
       recoveredDb.close();
     } finally {
-      fs.rmSync(dbPath, { force: true });
-      fs.rmSync(`${dbPath}-wal`, { force: true });
-      fs.rmSync(`${dbPath}-shm`, { force: true });
+      fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -995,7 +1122,7 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
   });
 
   it("does not infer effect ownership from a reserved run version after process restart", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-secure-reservation-${randomUUID()}.db`);
+    const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-secure-reservation-")), "test.db");
     try {
       const firstDb = createDatabase({ dbPath });
       const fixture = createContinuationFixture(firstDb);
@@ -1038,9 +1165,7 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
       );
       recoveredDb.close();
     } finally {
-      fs.rmSync(dbPath, { force: true });
-      fs.rmSync(`${dbPath}-wal`, { force: true });
-      fs.rmSync(`${dbPath}-shm`, { force: true });
+      fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -1904,7 +2029,7 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
   });
 
   it("admits only one active durable turn across two SQLite workers", async () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-admission-race-${randomUUID()}.db`);
+    const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-admission-race-")), "test.db");
     const db = createDatabase({ dbPath });
     new ChatSessionLifecycleRepository(db).initialize({
       workspaceId: "workspace-a",
@@ -1936,9 +2061,7 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
       );
       verify.close();
     } finally {
-      fs.rmSync(dbPath, { force: true });
-      fs.rmSync(`${dbPath}-wal`, { force: true });
-      fs.rmSync(`${dbPath}-shm`, { force: true });
+      fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });

@@ -1,34 +1,19 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import {
   createOperatorProfileId,
   OperatorProfileRepository,
   type OperatorProfileUpsertInput,
 } from "./operator-profile-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(): OperatorProfileRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-operator-profile-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-operator-profile");
+  const db = tempDbs.open({ dbPath });
   return new OperatorProfileRepository(db);
 }
 
@@ -74,7 +59,10 @@ describe("OperatorProfileRepository", () => {
     const repo = createRepo();
     repo.upsert(baseInput()); // revision 1
     const write = repo.upsertCapturingPrior(
-      baseInput({ summary: "v2 summary", facts: [{ kind: "constraint", content: "Never email vendors.", confidence: 1 }] }),
+      baseInput({
+        summary: "v2 summary",
+        facts: [{ kind: "constraint", content: "Never email vendors.", confidence: 1 }],
+      }),
     );
     assert.equal(write.record.revision, 2);
     assert.ok(write.priorSnapshot, "expected a prior snapshot on the second write");
