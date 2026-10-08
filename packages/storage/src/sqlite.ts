@@ -165,16 +165,56 @@ class SqliteStatementAdapter implements DbStatement {
   }
 }
 
+// Repositories call `prepare` for every query, and compiling SQL was the largest
+// single self-time cost in storage proofs. Compiled statements are reused by SQL
+// text. A reused `SELECT *` keeps its original column list after an ALTER, so
+// the whole cache is dropped whenever the schema cookie changes, whichever
+// connection changed it. The bound keeps dynamically built SQL from growing the
+// cache without limit.
+export const SQLITE_STATEMENT_CACHE_LIMIT = 512;
+
 class SqliteDatabaseClient implements DatabaseClient {
   public readonly dialect = "sqlite" as const;
   private transactionDepth = 0;
   private savepointCounter = 0;
   private activeCompatibilityTransactionId?: string;
+  private readonly statementCache = new Map<string, SqliteStatement>();
+  private schemaVersionStatement?: SqliteStatement;
+  private cachedSchemaVersion?: number;
 
   public constructor(private readonly db: DatabaseSync) {}
 
   public prepare(sql: string): DbStatement {
-    return new SqliteStatementAdapter(this.db.prepare(sql));
+    // A fresh adapter per call: callers (and test fixtures) may wrap the returned
+    // object's methods, which must never leak into later `prepare` calls.
+    return new SqliteStatementAdapter(this.compiledStatement(sql));
+  }
+
+  private currentSchemaVersion(): number {
+    this.schemaVersionStatement ??= this.db.prepare("PRAGMA schema_version");
+    const row = this.schemaVersionStatement.get() as { schema_version?: unknown } | undefined;
+    return Number(row?.schema_version);
+  }
+
+  private compiledStatement(sql: string): SqliteStatement {
+    const schemaVersion = this.currentSchemaVersion();
+    if (schemaVersion !== this.cachedSchemaVersion) {
+      this.statementCache.clear();
+      this.cachedSchemaVersion = schemaVersion;
+    }
+    const cached = this.statementCache.get(sql);
+    if (cached) {
+      this.statementCache.delete(sql);
+      this.statementCache.set(sql, cached);
+      return cached;
+    }
+    const statement = this.db.prepare(sql);
+    this.statementCache.set(sql, statement);
+    if (this.statementCache.size > SQLITE_STATEMENT_CACHE_LIMIT) {
+      const oldest = this.statementCache.keys().next().value;
+      if (oldest !== undefined) this.statementCache.delete(oldest);
+    }
+    return statement;
   }
 
   public exec(sql: string): void {
@@ -182,6 +222,9 @@ class SqliteDatabaseClient implements DatabaseClient {
   }
 
   public close(): void {
+    this.statementCache.clear();
+    this.schemaVersionStatement = undefined;
+    this.cachedSchemaVersion = undefined;
     if (typeof this.db.close === "function") {
       this.db.close();
     }

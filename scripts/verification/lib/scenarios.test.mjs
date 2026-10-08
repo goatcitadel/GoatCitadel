@@ -18,7 +18,7 @@ import {
   runFastLane,
   writeAutonomyGrantRuntimeToolPolicy,
 } from "./scenarios.mjs";
-import { FAST_LANE_STAGES } from "./scenarios/fast-lane.mjs";
+import { FAST_LANE_STAGES, fastLaneStageCommandIds } from "./scenarios/fast-lane.mjs";
 import { GATEWAY_COVERAGE_SHARD_COUNT, STORAGE_COVERAGE_SHARD_COUNT } from "../../coverage-shard-contract.mjs";
 import { buildFastLanePerfPayload, finalizeRunContext, recordScenario } from "./shared.mjs";
 
@@ -567,9 +567,11 @@ test("fast verification split tests preserve recursive package coverage", () => 
     "coverage:exercise",
   ]);
   for (let shard = 1; shard <= STORAGE_COVERAGE_SHARD_COUNT; shard++) {
-    assert.deepEqual(commandById.get(`fast.test.storage.shard${shard}`)?.args, [
+    const storageShard = commandById.get(`fast.test.storage.shard${shard}`);
+    assert.deepEqual(storageShard?.args, [
       "--filter", "@goatcitadel/storage", "test:coverage", `--shard=${shard}/${STORAGE_COVERAGE_SHARD_COUNT}`,
     ]);
+    assert.equal(storageShard?.env?.GOATCITADEL_STORAGE_COVERAGE_PREBUILT, "1", "shards reuse the stage's single build");
   }
   assert.deepEqual(commandById.get("fast.test.mission-control-next")?.args, [
     "--filter",
@@ -665,36 +667,65 @@ test("fast verification stage plan isolates policy and schedules every command e
       ],
     },
     {
-      id: "fast.test.gateway",
-      mode: "serial",
-      commands: [
-        "fast.test.gateway.shard1",
-        "fast.test.gateway.shard2",
-        "fast.test.gateway.shard3",
-        "fast.test.gateway.shard4",
-        "fast.test.gateway.node",
+      id: "fast.tests",
+      mode: "tracks",
+      tracks: [
+        {
+          id: "fast.track.gateway",
+          stages: [
+            {
+              id: "fast.test.gateway",
+              mode: "serial",
+              commands: [
+                "fast.test.gateway.shard1",
+                "fast.test.gateway.shard2",
+                "fast.test.gateway.shard3",
+                "fast.test.gateway.shard4",
+                "fast.test.gateway.node",
+              ],
+            },
+            {
+              id: "fast.coverage.gateway",
+              mode: "serial",
+              commands: ["fast.coverage.gateway.smoke", "fast.coverage.gateway.exercise"],
+            },
+          ],
+        },
+        {
+          id: "fast.track.storage-and-ui",
+          stages: [
+            {
+              id: "fast.test.storage",
+              mode: "parallel",
+              concurrency: 1,
+              concurrencyEnv: "GOATCITADEL_VERIFY_STORAGE_SHARD_CONCURRENCY",
+              serialWhenEnv: "GOATCITADEL_TEST_POSTGRES_URL",
+              prepare: {
+                id: "fast.test.storage.build",
+                title: "Storage build for coverage shards",
+                args: ["--filter", "@goatcitadel/storage", "test:coverage", "--build-only"],
+              },
+              commands: [
+                "fast.test.storage.shard1",
+                "fast.test.storage.shard2",
+                "fast.test.storage.shard3",
+                "fast.test.storage.shard4",
+              ],
+            },
+            {
+              id: "fast.test.policy-engine",
+              mode: "serial",
+              commands: ["fast.test.policy-engine"],
+            },
+            {
+              id: "fast.test.safe-parallel",
+              mode: "parallel",
+              concurrency: 2,
+              commands: ["fast.test.mission-control-next", "fast.test.libraries"],
+            },
+          ],
+        },
       ],
-    },
-    {
-      id: "fast.coverage.gateway",
-      mode: "serial",
-      commands: ["fast.coverage.gateway.smoke", "fast.coverage.gateway.exercise"],
-    },
-    {
-      id: "fast.test.storage",
-      mode: "serial",
-      commands: ["fast.test.storage.shard1", "fast.test.storage.shard2", "fast.test.storage.shard3", "fast.test.storage.shard4"],
-    },
-    {
-      id: "fast.test.policy-engine",
-      mode: "serial",
-      commands: ["fast.test.policy-engine"],
-    },
-    {
-      id: "fast.test.safe-parallel",
-      mode: "parallel",
-      concurrency: 2,
-      commands: ["fast.test.mission-control-next", "fast.test.libraries"],
     },
     {
       id: "fast.post-tests",
@@ -703,7 +734,7 @@ test("fast verification stage plan isolates policy and schedules every command e
     },
   ]);
 
-  const plannedCommandIds = FAST_LANE_STAGES.flatMap((stage) => stage.commands);
+  const plannedCommandIds = FAST_LANE_STAGES.flatMap(fastLaneStageCommandIds);
   assert.equal(new Set(plannedCommandIds).size, plannedCommandIds.length, "stage commands must be unique");
   assert.deepEqual(
     new Set(plannedCommandIds),

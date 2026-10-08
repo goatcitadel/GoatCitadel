@@ -5,13 +5,31 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { STORAGE_COVERAGE_SHARD_COUNT } from "./coverage-shard-contract.mjs";
-import { storageCoverageOptions } from "./storage-coverage.mjs";
+import {
+  STORAGE_COVERAGE_PREBUILT_ENV,
+  isPrebuiltStorageCoverage,
+  storageCoverageOptions,
+} from "./storage-coverage.mjs";
 
 test("storage coverage rejects invalid or partial shard selections before running", () => {
   assert.deepEqual(storageCoverageOptions([]), { reportDirectory: "coverage", nodeArgs: [] });
-  for (const argv of [["--shard=0/4"], ["--shard=5/4"], ["--shard=1/3"], ["--shard=1/4", "extra"], ["--shard=1/4/../tmp"]]) {
-    assert.throws(() => storageCoverageOptions(argv), /Expected no arguments or --shard/);
+  assert.deepEqual(storageCoverageOptions(["--build-only"]), { buildOnly: true });
+  for (const argv of [
+    ["--shard=0/4"],
+    ["--shard=5/4"],
+    ["--shard=1/3"],
+    ["--shard=1/4", "extra"],
+    ["--shard=1/4/../tmp"],
+    ["--build-only", "--shard=1/4"],
+  ]) {
+    assert.throws(() => storageCoverageOptions(argv), /Expected no arguments, --build-only, or --shard/);
   }
+});
+
+test("storage coverage reuses a build only when the prebuilt flag is exactly 1", () => {
+  assert.equal(isPrebuiltStorageCoverage({}), false);
+  assert.equal(isPrebuiltStorageCoverage({ [STORAGE_COVERAGE_PREBUILT_ENV]: "true" }), false);
+  assert.equal(isPrebuiltStorageCoverage({ [STORAGE_COVERAGE_PREBUILT_ENV]: "1" }), true);
 });
 
 test("Node storage shards execute every test file exactly once with separate report directories", () => {

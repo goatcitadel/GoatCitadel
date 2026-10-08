@@ -45,6 +45,7 @@ import {
   runReasoningProfilesLane,
   runVertexFireworksProvidersLane,
   FAST_LANE_COMMANDS,
+  resolveChangedFastLaneRun,
   runFastLane,
   runExtensionsPackageLane,
   runSkillsCatalogLane,
@@ -280,12 +281,16 @@ async function runLockedVerification(lane, options) {
     // manifest; merge-fast-manifests.mjs recomposes them into one run.
     commands: typeof options.commands === "string" ? options.commands : undefined,
   };
+  // `--changed[=<ref>]` (default origin/main) is a local convenience: it runs only
+  // the package suites affected since the merge base. It is recorded as a partial
+  // selection, so it can never stand in for a full fast-lane proof.
+  const changedRun = lane === "fast" && options.changed !== undefined ? resolveChangedFastRun(options, fastOptions) : undefined;
   const context = await createRunContext(lane, {
     runId: typeof options["run-id"] === "string" ? options["run-id"] : undefined,
     profile,
     includeSoak,
     durationMs,
-    commandSelection: lane === "fast" ? fastOptions.commands : undefined,
+    commandSelection: lane === "fast" ? (changedRun?.commandSelection ?? fastOptions.commands) : undefined,
   });
 
   let manifest;
@@ -298,7 +303,7 @@ async function runLockedVerification(lane, options) {
       usabilitySourceState = beginUsabilitySourceGuard(repoRoot, process.env.GOATCITADEL_USABILITY_SOURCE_MODE);
     }
     if (lane === "fast") {
-      await runFastLane(context, fastOptions);
+      await runFastLane(context, changedRun ? { ...fastOptions, selection: changedRun.selection } : fastOptions);
     } else if (lane === "desktop") {
       await runDesktopLane(context);
     } else if (lane === "extensions-package") {
@@ -538,6 +543,15 @@ main().catch((error) => {
   console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
   process.exitCode = 1;
 });
+
+function resolveChangedFastRun(options, fastOptions) {
+  if (fastOptions.commands !== undefined) {
+    throw new Error("Use either --changed or --commands, not both.");
+  }
+  const changedRun = resolveChangedFastLaneRun(options.changed === true ? undefined : String(options.changed));
+  console.log(changedRun.summary);
+  return changedRun;
+}
 
 function assertScenarioSlicePassed(context, startIndex, label) {
   const scenarios = context.manifest.scenarios.slice(startIndex);
