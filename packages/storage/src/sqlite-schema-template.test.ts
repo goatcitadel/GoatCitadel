@@ -27,14 +27,12 @@ after(() => {
     }
   }
   for (const dbPath of createdPaths) {
-    fs.rmSync(dbPath, { force: true });
-    fs.rmSync(`${dbPath}-wal`, { force: true });
-    fs.rmSync(`${dbPath}-shm`, { force: true });
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
 function openFreshDatabase(): DatabaseClient {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-schema-template-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-schema-template-")), "test.db");
   createdPaths.push(dbPath);
   const client = createDatabase({ dbPath });
   openClients.push(client);
@@ -157,7 +155,10 @@ describe("sqlite schema template", () => {
     const previous = process.env.GOATCITADEL_SQLITE_SCHEMA_TEMPLATE;
     process.env.GOATCITADEL_SQLITE_SCHEMA_TEMPLATE = "1";
     try {
-      const dbPath = path.join(os.tmpdir(), `goatcitadel-schema-template-reopen-${randomUUID()}.db`);
+      const dbPath = path.join(
+        fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-schema-template-reopen-")),
+        "test.db",
+      );
       createdPaths.push(dbPath);
       const first = createDatabase({ dbPath });
       openClients.push(first);

@@ -1,31 +1,22 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { EvidenceEnvelopeRepository } from "./evidence-envelope-repo.js";
 import type { DatabaseClient, DbStatement } from "./db.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 const createdDbs: DatabaseClient[] = [];
 
 afterEach(() => {
   for (const db of createdDbs.splice(0)) {
     db.close();
   }
-  for (const file of createdFiles.splice(0)) {
-    fs.rmSync(file, { force: true });
-    fs.rmSync(`${file}-wal`, { force: true });
-    fs.rmSync(`${file}-shm`, { force: true });
-  }
+  tempDbs.cleanup();
 });
 
 function createRepo(): EvidenceEnvelopeRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-evidence-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-evidence");
+  const db = tempDbs.open({ dbPath });
   createdDbs.push(db);
   return new EvidenceEnvelopeRepository(db);
 }

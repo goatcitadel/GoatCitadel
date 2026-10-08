@@ -1,34 +1,25 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createSqliteAsyncStorage } from "./async-storage.js";
 import { Storage } from "./index.js";
 import { ModelComparisonRunRepository } from "./model-comparison-run-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 const createdStorages: Storage[] = [];
 
 afterEach(() => {
   for (const storage of createdStorages.splice(0)) {
     storage.close();
   }
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup errors
-    }
-  }
+  tempDbs.cleanup();
 });
 
 function createRepo(): ModelComparisonRunRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-model-comparison-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
+  const dbPath = tempDbs.path("goatcitadel-model-comparison");
   const storage = new Storage({
     dbPath,
     transcriptsDir: path.join(os.tmpdir(), `goatcitadel-model-comparison-transcripts-${randomUUID()}`),

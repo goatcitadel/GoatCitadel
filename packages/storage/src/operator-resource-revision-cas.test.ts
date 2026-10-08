@@ -1,24 +1,14 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { ChatProjectRepository } from "./chat-project-repo.js";
-import { createDatabase } from "./sqlite.js";
 import { WorkspaceRepository } from "./workspace-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
-      fs.rmSync(candidate, { force: true });
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function assertWriteConflict(
   action: () => unknown,
@@ -34,13 +24,12 @@ function assertWriteConflict(
 
 describe("operator resource revision CAS", () => {
   it("fences stale workspace and chat-project writers across two real SQLite clients", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-resource-cas-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
+    const dbPath = tempDbs.path("goatcitadel-resource-cas");
     let clientA: DatabaseClient | undefined;
     let clientB: DatabaseClient | undefined;
     try {
-      clientA = createDatabase({ dbPath });
-      clientB = createDatabase({ dbPath });
+      clientA = tempDbs.open({ dbPath });
+      clientB = tempDbs.open({ dbPath });
       const workspacesA = new WorkspaceRepository(clientA);
       const workspacesB = new WorkspaceRepository(clientB);
       const projectsA = new ChatProjectRepository(clientA);

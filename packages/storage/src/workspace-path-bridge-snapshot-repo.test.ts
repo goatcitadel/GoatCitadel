@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { WORKSPACE_PATH_BRIDGE_SNAPSHOT_VERSION } from "@goatcitadel/contracts";
@@ -18,14 +17,12 @@ const files: string[] = [];
 afterEach(() => {
   for (const db of databases.splice(0)) db.close();
   for (const file of files.splice(0)) {
-    fs.rmSync(file, { force: true });
-    fs.rmSync(`${file}-wal`, { force: true });
-    fs.rmSync(`${file}-shm`, { force: true });
+    fs.rmSync(path.dirname(file), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
 function createStore() {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-path-bridge-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-path-bridge-")), "test.db");
   files.push(dbPath);
   const db = createDatabase({ dbPath });
   databases.push(db);

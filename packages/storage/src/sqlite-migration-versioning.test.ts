@@ -1,35 +1,21 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
-import { __sqliteInternals, createDatabase } from "./sqlite.js";
+import { createDatabase, __sqliteInternals } from "./sqlite.js";
 import { ChatSessionLifecycleRepository } from "./chat-session-lifecycle-repo.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 describe("sqlite schema migrations", () => {
   it("records applied migration versions", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-migrations");
+    const db = tempDbs.open({ dbPath });
 
     const rows = db.prepare("SELECT version, name FROM schema_migrations ORDER BY version ASC").all() as Array<{
       version: number;
@@ -184,7 +170,7 @@ describe("sqlite schema migrations", () => {
   });
 
   it("keeps migration 188 secret-free, version-CAS fenced, and cancellation-blocking", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     const tableSql = db
       .prepare(
         `SELECT sql FROM sqlite_master
@@ -403,9 +389,8 @@ describe("sqlite schema migrations", () => {
   });
 
   it("accepts the final migration-188 shape and refuses unknown legacy shapes without mutation", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-final-188-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    createDatabase({ dbPath }).close();
+    const dbPath = tempDbs.path("goatcitadel-migrations-final-188");
+    tempDbs.open({ dbPath }).close();
     const current = new DatabaseSync(dbPath);
     __sqliteInternals.applySchemaMigrationForTest(189, current);
     assert.equal(
@@ -442,9 +427,8 @@ describe("sqlite schema migrations", () => {
   });
 
   it("keeps migration 178 additive, immutable-profile, CAS-fenced, high-water-monotonic, and evidence append-only", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx505-178-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-migrations-hx505-178");
+    const db = tempDbs.open({ dbPath });
 
     for (const table of ["remote_worker_cells", "remote_worker_cell_evidence"]) {
       const tableSql = (
@@ -507,9 +491,8 @@ describe("sqlite schema migrations", () => {
   });
 
   it("keeps migration 179 additive across nine settlement tables, insert-only and full-identity fenced", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx506-179-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-migrations-hx506-179");
+    const db = tempDbs.open({ dbPath });
 
     const settlementTables = [
       "remote_worker_artifact_uploads",
@@ -599,9 +582,8 @@ describe("sqlite schema migrations", () => {
   });
 
   it("keeps migration 176 additive, hash-only, currency-fenced, immutable, and delete-after-expiry", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx501b1-176-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-migrations-hx501b1-176");
+    const db = tempDbs.open({ dbPath });
 
     const tables = ["remote_worker_bootstrap_request_nonces", "remote_worker_credential_request_nonces"];
     for (const table of tables) {
@@ -695,9 +677,8 @@ describe("sqlite schema migrations", () => {
   });
 
   it("keeps migration 175 additive, content-free, registry-guarded, and immutable", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx402-175-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-migrations-hx402-175");
+    const db = tempDbs.open({ dbPath });
 
     const tables = [
       "governed_lifecycle_events",
@@ -786,9 +767,8 @@ describe("sqlite schema migrations", () => {
   });
 
   it("keeps migration 174 content-free, deferred, append-only, and recovery-indexed", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx411-174-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-migrations-hx411-174");
+    const db = tempDbs.open({ dbPath });
 
     const columns = db.prepare("PRAGMA table_info(chat_heartbeat_occurrences)").all() as Array<{
       name: string;
@@ -950,8 +930,7 @@ describe("sqlite schema migrations", () => {
   });
 
   it("does not record 173 when its authority predecessors are missing", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx411-missing-predecessors-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
+    const dbPath = tempDbs.path("goatcitadel-migrations-hx411-missing-predecessors");
     const partial = new DatabaseSync(dbPath);
     partial.exec(`
       CREATE TABLE schema_migrations (
@@ -969,7 +948,7 @@ describe("sqlite schema migrations", () => {
     partial.close();
 
     assert.throws(
-      () => createDatabase({ dbPath }),
+      () => tempDbs.open({ dbPath }),
       /migration 173 requires chat_session_meta and chat_session_control_grants predecessors/iu,
     );
     const inspect = new DatabaseSync(dbPath);
@@ -984,9 +963,8 @@ describe("sqlite schema migrations", () => {
   });
 
   it("upgrades 172 to 173 once and permits only exact deletion binding for legacy metadata", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx411-173-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const before = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-migrations-hx411-173");
+    const before = tempDbs.open({ dbPath });
     new ChatSessionMetaRepository(before).ensure("legacy-session", "2026-07-14T00:00:00.000Z", "legacy-workspace");
     rewindSessionLifecycleMigration(before);
     seedLegacyCapabilityProfile(before, {
@@ -1006,7 +984,7 @@ describe("sqlite schema migrations", () => {
     });
     before.close();
 
-    const migrated = createDatabase({ dbPath });
+    const migrated = tempDbs.open({ dbPath });
     assert.equal(
       (
         migrated
@@ -1088,7 +1066,7 @@ describe("sqlite schema migrations", () => {
     );
     migrated.close();
 
-    const replay = createDatabase({ dbPath });
+    const replay = tempDbs.open({ dbPath });
     assert.equal(
       (replay.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 173").get() as { count: number })
         .count,
@@ -1099,9 +1077,8 @@ describe("sqlite schema migrations", () => {
 
   it("rolls back 173 for zero, duplicate, and orphan current-control corruption", () => {
     for (const variant of ["zero", "duplicate", "orphan"] as const) {
-      const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx411-173-${variant}-${randomUUID()}.db`);
-      createdFiles.push(dbPath);
-      const before = createDatabase({ dbPath });
+      const dbPath = tempDbs.path(`goatcitadel-migrations-hx411-173-${variant}`);
+      const before = tempDbs.open({ dbPath });
       new ChatSessionMetaRepository(before).ensure("corrupt-session", undefined, "workspace-a");
       rewindSessionLifecycleMigration(before);
       if (variant === "zero") {
@@ -1145,7 +1122,7 @@ describe("sqlite schema migrations", () => {
       }
       before.close();
 
-      assert.throws(() => createDatabase({ dbPath }), /CHECK constraint|preflight|constraint failed/iu);
+      assert.throws(() => tempDbs.open({ dbPath }), /CHECK constraint|preflight|constraint failed/iu);
       const inspect = new DatabaseSync(dbPath);
       assert.equal(inspect.prepare("SELECT 1 FROM schema_migrations WHERE version = 173").get(), undefined);
       assert.equal(
@@ -1159,9 +1136,8 @@ describe("sqlite schema migrations", () => {
   });
 
   it("rolls back 173 instead of inventing authority for mismatched legacy snapshot/profile rows", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hx411-profile-mismatch-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const before = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-migrations-hx411-profile-mismatch");
+    const before = tempDbs.open({ dbPath });
     rewindSessionLifecycleMigration(before);
     seedLegacyCapabilityProfile(before, {
       profileId: "mismatched-profile",
@@ -1180,7 +1156,7 @@ describe("sqlite schema migrations", () => {
     });
     before.close();
 
-    assert.throws(() => createDatabase({ dbPath }), /CHECK constraint|preflight|constraint failed/iu);
+    assert.throws(() => tempDbs.open({ dbPath }), /CHECK constraint|preflight|constraint failed/iu);
     const inspect = new DatabaseSync(dbPath);
     assert.equal(inspect.prepare("SELECT 1 FROM schema_migrations WHERE version = 173").get(), undefined);
     assert.equal(
@@ -1193,9 +1169,8 @@ describe("sqlite schema migrations", () => {
   });
 
   it("creates hot-path chat projection and index migrations", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-hot-path-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-migrations-hot-path");
+    const db = tempDbs.open({ dbPath });
 
     const chatMessagesColumns = db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>;
     assert.ok(chatMessagesColumns.some((column) => column.name === "message_id"));
@@ -1242,9 +1217,8 @@ describe("sqlite schema migrations", () => {
   });
 
   it("backfills pending mutation claim leases idempotently in the forward migration", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-mutation-lease-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-migrations-mutation-lease");
+    const db = tempDbs.open({ dbPath });
     const updatedAt = "2026-07-11T00:00:00.000Z";
     db.prepare(
       `
@@ -1258,7 +1232,7 @@ describe("sqlite schema migrations", () => {
     db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(140);
     db.close();
 
-    const migrated = createDatabase({ dbPath });
+    const migrated = tempDbs.open({ dbPath });
     const first = migrated
       .prepare(
         `SELECT claim_token, claim_expires_at
@@ -1271,7 +1245,7 @@ describe("sqlite schema migrations", () => {
     migrated.prepare("DELETE FROM schema_migrations WHERE version = ?").run(140);
     migrated.close();
 
-    const replayed = createDatabase({ dbPath });
+    const replayed = tempDbs.open({ dbPath });
     const second = replayed
       .prepare(
         `SELECT claim_token, claim_expires_at
@@ -1284,9 +1258,8 @@ describe("sqlite schema migrations", () => {
   });
 
   it("moves legacy delegation dispatch markers out of canonical child linkage idempotently", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-delegation-lease-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-migrations-delegation-lease");
+    const db = tempDbs.open({ dbPath });
     const expiresAt = "2099-01-01T00:00:00.000Z";
     const expiresAtMs = Date.parse(expiresAt);
     const claimToken = `delegation-claim:v1:${expiresAtMs}:turn-claim:owner-a`;
@@ -1308,7 +1281,7 @@ describe("sqlite schema migrations", () => {
     db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(142);
     db.close();
 
-    const migrated = createDatabase({ dbPath });
+    const migrated = tempDbs.open({ dbPath });
     const rows = migrated
       .prepare(
         `SELECT step_id, child_session_id, child_turn_id, dispatch_claim_token, dispatch_claim_expires_at
@@ -1343,7 +1316,7 @@ describe("sqlite schema migrations", () => {
     migrated.prepare("DELETE FROM schema_migrations WHERE version = ?").run(142);
     migrated.close();
 
-    const replayed = createDatabase({ dbPath });
+    const replayed = tempDbs.open({ dbPath });
     assert.equal(
       replayed
         .prepare("SELECT COUNT(*) AS count FROM chat_delegation_steps WHERE child_session_id LIKE 'delegation-%'")
@@ -1354,9 +1327,8 @@ describe("sqlite schema migrations", () => {
   });
 
   it("creates Citadel parent records and parent-scope columns", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-citadels-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-migrations-citadels");
+    const db = tempDbs.open({ dbPath });
 
     const citadels = db.prepare("SELECT citadel_id, kind, default_workspace_id FROM citadel_records").all() as Array<{
       citadel_id: string;
@@ -1385,9 +1357,8 @@ describe("sqlite schema migrations", () => {
   });
 
   it("scrubs legacy device-token plaintext and revokes only undelivered grants", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-device-token-scrub-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-migrations-device-token-scrub");
+    const db = tempDbs.open({ dbPath });
     const createdAt = "2026-06-20T00:00:00.000Z";
     const tokenExpiresAt = "2099-01-01T00:00:00.000Z";
     const insertRequest = db.prepare(`
@@ -1447,7 +1418,7 @@ describe("sqlite schema migrations", () => {
     db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(137);
     db.close();
 
-    const migrated = createDatabase({ dbPath });
+    const migrated = tempDbs.open({ dbPath });
     const undelivered = migrated
       .prepare(
         `SELECT status, approved_token_plaintext, approved_token_expires_at
@@ -1483,7 +1454,7 @@ describe("sqlite schema migrations", () => {
     const firstRevokedAt = grants.find((grant) => grant.grant_id === "legacy-grant-undelivered")?.revoked_at;
     migrated.prepare("DELETE FROM schema_migrations WHERE version = ?").run(137);
     migrated.close();
-    const rerun = createDatabase({ dbPath });
+    const rerun = tempDbs.open({ dbPath });
     const rerunGrant = rerun
       .prepare("SELECT revoked_at FROM auth_device_grants WHERE grant_id = ?")
       .get("legacy-grant-undelivered") as { revoked_at: string | null };
@@ -1492,12 +1463,11 @@ describe("sqlite schema migrations", () => {
   });
 
   it("scrubs legacy remote approval bearers from durable and observability stores", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-remote-bearer-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
+    const dbPath = tempDbs.path("goatcitadel-migrations-remote-bearer");
     const rawToken = `grat_${"m".repeat(42)}-`;
     const decoratedToken = `x${rawToken}y`;
     const now = "2026-07-10T00:00:00.000Z";
-    const db = createDatabase({ dbPath });
+    const db = tempDbs.open({ dbPath });
     db.prepare(
       `
       INSERT INTO durable_runs (
@@ -1639,7 +1609,7 @@ describe("sqlite schema migrations", () => {
     db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(139);
     db.close();
 
-    const migrated = createDatabase({ dbPath });
+    const migrated = tempDbs.open({ dbPath });
     const durable = migrated
       .prepare(
         `SELECT status, payload_json, lease_owner_id, lease_expires_at, lease_heartbeat_at
@@ -1714,12 +1684,11 @@ describe("sqlite schema migrations", () => {
   });
 
   it("forward-scrubs remote approval bearers from approval effect result and legacy detail truth", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-effect-result-bearer-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
+    const dbPath = tempDbs.path("goatcitadel-migrations-effect-result-bearer");
     const rawToken = `grat_${"r".repeat(43)}`;
     const benign = "grat_community_discount_code";
     const now = "2026-07-11T00:00:00.000Z";
-    const db = createDatabase({ dbPath });
+    const db = tempDbs.open({ dbPath });
     const insertApproval = db.prepare(
       `INSERT INTO approvals (
          approval_id, kind, risk_level, status, payload_json, preview_json, explanation_status, created_at
@@ -1760,7 +1729,7 @@ describe("sqlite schema migrations", () => {
     db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(143);
     db.close();
 
-    const migrated = createDatabase({ dbPath });
+    const migrated = tempDbs.open({ dbPath });
     const raw = migrated
       .prepare("SELECT outcome, detail, details_json, result_json FROM approval_effects WHERE effect_id = ?")
       .get("effect-raw") as Record<string, string>;
@@ -1775,9 +1744,8 @@ describe("sqlite schema migrations", () => {
   });
 
   it("backfills legacy workspace-as-Citadel records during the parent-scope migration", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-legacy-citadel-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-migrations-legacy-citadel");
+    const db = tempDbs.open({ dbPath });
     const now = "2026-06-20T00:00:00.000Z";
 
     db.prepare(
@@ -1802,7 +1770,7 @@ describe("sqlite schema migrations", () => {
     db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(121);
     db.close();
 
-    const migrated = createDatabase({ dbPath });
+    const migrated = tempDbs.open({ dbPath });
     const record = migrated
       .prepare("SELECT name, kind FROM citadel_records WHERE citadel_id = ?")
       .get("legacy-team") as { name: string; kind: string } | undefined;
@@ -1818,9 +1786,8 @@ describe("sqlite schema migrations", () => {
   });
 
   it("backfills generated artifact project scope from existing session assignments", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-artifact-project-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-migrations-artifact-project");
+    const db = tempDbs.open({ dbPath });
     const now = "2026-05-24T00:00:00.000Z";
     db.prepare(
       `
@@ -1868,7 +1835,7 @@ describe("sqlite schema migrations", () => {
     db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(98);
     db.close();
 
-    const migrated = createDatabase({ dbPath });
+    const migrated = tempDbs.open({ dbPath });
     const row = migrated
       .prepare("SELECT project_id FROM chat_generated_artifacts WHERE artifact_id = ?")
       .get("artifact-alpha") as { project_id: string | null };
@@ -1877,13 +1844,12 @@ describe("sqlite schema migrations", () => {
   });
 
   it("clamps requested SQLite tuning pragmas to supported floors", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-tuning-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
+    const dbPath = tempDbs.path("goatcitadel-migrations-tuning");
     const requestedCacheSizeBelowFloorKb = 2_048;
     const cacheSizeFloorKb = 4_096;
     const requestedWalCheckpointBelowFloorPages = 500;
     const walCheckpointFloorPages = 1_000;
-    const db = createDatabase({
+    const db = tempDbs.open({
       dbPath,
       tuning: {
         cacheSizeKb: requestedCacheSizeBelowFloorKb,
@@ -1903,9 +1869,8 @@ describe("sqlite schema migrations", () => {
   });
 
   it("creates the capability_scope_assignments table with unique + lookup indexes", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-capscope-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-capscope");
+    const db = tempDbs.open({ dbPath });
     const cols = db
       .prepare("SELECT name FROM pragma_table_info('capability_scope_assignments') ORDER BY name")
       .all() as Array<{ name: string }>;
@@ -1930,8 +1895,7 @@ describe("sqlite schema migrations", () => {
   });
 
   it("waits through a transient lock before switching to WAL mode", async () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-lock-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
+    const dbPath = tempDbs.path("goatcitadel-migrations-lock");
 
     const lockHolder = spawn(
       process.execPath,
@@ -1959,7 +1923,7 @@ describe("sqlite schema migrations", () => {
     assert.match(String(readyChunk), /LOCKED/);
 
     const startedAt = Date.now();
-    const db = createDatabase({ dbPath });
+    const db = tempDbs.open({ dbPath });
     const elapsedMs = Date.now() - startedAt;
 
     const journalModeRow = db.prepare("PRAGMA journal_mode;").get() as { journal_mode: string };

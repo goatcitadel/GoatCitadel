@@ -1,35 +1,20 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { __taskRepoInternals, TaskRepository } from "./task-repo.js";
 import { TaskActivityRepository } from "./task-activity-repo.js";
 import { TaskDeliverableRepository } from "./task-deliverable-repo.js";
 import { TaskSubagentRepository } from "./task-subagent-repo.js";
 import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
 import type { DatabaseClient } from "./db.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepos() {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-task-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-task");
+  const db = tempDbs.open({ dbPath });
   return {
     db,
     tasks: new TaskRepository(db),
@@ -406,29 +391,62 @@ describe("recent task deliverables", () => {
     const scoped = repos.tasks.create({ workspaceId: "workspace-a", title: "Scoped task" });
     const foreign = repos.tasks.create({ workspaceId: "workspace-b", title: "Foreign task" });
     const deleted = repos.tasks.create({ workspaceId: "workspace-a", title: "Deleted task" });
-    repos.deliverables.append(scoped.taskId, { deliverableType: "file", title: "Old", path: "private/old" }, "2026-09-01T00:00:00.000Z");
-    repos.deliverables.append(scoped.taskId, { deliverableType: "file", title: "First", path: "private/first" }, "2026-09-26T00:00:00.000Z");
-    repos.deliverables.append(scoped.taskId, { deliverableType: "artifact", title: "Second", path: "private/second" }, "2026-09-27T00:00:00.000Z");
-    repos.deliverables.append(foreign.taskId, { deliverableType: "file", title: "Foreign", path: "private/foreign" }, "2026-09-28T00:00:00.000Z");
-    repos.deliverables.append(deleted.taskId, { deliverableType: "file", title: "Deleted", path: "private/deleted" }, "2026-09-28T00:00:00.000Z");
+    repos.deliverables.append(
+      scoped.taskId,
+      { deliverableType: "file", title: "Old", path: "private/old" },
+      "2026-09-01T00:00:00.000Z",
+    );
+    repos.deliverables.append(
+      scoped.taskId,
+      { deliverableType: "file", title: "First", path: "private/first" },
+      "2026-09-26T00:00:00.000Z",
+    );
+    repos.deliverables.append(
+      scoped.taskId,
+      { deliverableType: "artifact", title: "Second", path: "private/second" },
+      "2026-09-27T00:00:00.000Z",
+    );
+    repos.deliverables.append(
+      foreign.taskId,
+      { deliverableType: "file", title: "Foreign", path: "private/foreign" },
+      "2026-09-28T00:00:00.000Z",
+    );
+    repos.deliverables.append(
+      deleted.taskId,
+      { deliverableType: "file", title: "Deleted", path: "private/deleted" },
+      "2026-09-28T00:00:00.000Z",
+    );
     repos.tasks.softDelete(deleted.taskId);
 
     const records = repos.deliverables.listRecentByWorkspace("workspace-a", "2026-09-20T00:00:00.000Z", 2);
-    assert.deepEqual(records.map((record) => record.title), ["Second", "First"]);
-    assert.deepEqual(records.map((record) => record.workspaceId), ["workspace-a", "workspace-a"]);
-    assert.deepEqual(records.map((record) => record.taskTitle), ["Scoped task", "Scoped task"]);
+    assert.deepEqual(
+      records.map((record) => record.title),
+      ["Second", "First"],
+    );
+    assert.deepEqual(
+      records.map((record) => record.workspaceId),
+      ["workspace-a", "workspace-a"],
+    );
+    assert.deepEqual(
+      records.map((record) => record.taskTitle),
+      ["Scoped task", "Scoped task"],
+    );
     assert.ok(records[0]);
     assert.equal("path" in records[0], false);
     assert.equal("description" in records[0], false);
-    assert.deepEqual(repos.deliverables.listRecentByWorkspace("workspace-a", "2026-09-20T00:00:00.000Z", 1).map((record) => record.title), ["Second"]);
+    assert.deepEqual(
+      repos.deliverables
+        .listRecentByWorkspace("workspace-a", "2026-09-20T00:00:00.000Z", 1)
+        .map((record) => record.title),
+      ["Second"],
+    );
   });
 });
 
 describe("TaskRepository sanitization", () => {
   it("quarantines a task whose metadata_json is malformed and falls back to empty metadata", () => {
-    const dbPath = path.join(os.tmpdir(), `gc-task-sanitize-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("gc-task-sanitize");
+    const db = tempDbs.open({ dbPath });
     const quarantine = new StateValidationQuarantineRepository(db);
     const repo = new TaskRepository(db, { quarantine });
 

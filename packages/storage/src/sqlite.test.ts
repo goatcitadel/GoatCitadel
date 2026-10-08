@@ -129,7 +129,7 @@ function makeBenchmarkRow(overrides: Record<string, unknown> = {}): Record<strin
 }
 
 test("SQLite benchmark dedup migration preserves the newest complete duplicate before enforcing uniqueness", () => {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-sqlite-migration-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-sqlite-migration-")), "test.db");
   const warnCalls: unknown[][] = [];
   const originalWarn = console.warn;
   try {
@@ -260,9 +260,7 @@ test("SQLite benchmark dedup migration preserves the newest complete duplicate b
   } finally {
     console.warn = originalWarn;
     try {
-      fs.rmSync(dbPath, { force: true });
-      fs.rmSync(`${dbPath}-wal`, { force: true });
-      fs.rmSync(`${dbPath}-shm`, { force: true });
+      fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     } catch {
       // ignore cleanup failures in tests
     }
@@ -270,7 +268,7 @@ test("SQLite benchmark dedup migration preserves the newest complete duplicate b
 });
 
 test("SQLite benchmark dedup repair restores the archived winner for databases that already kept the wrong survivor", () => {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-sqlite-repair-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-sqlite-repair-")), "test.db");
   try {
     createDatabase({ dbPath }).close();
 
@@ -414,9 +412,7 @@ test("SQLite benchmark dedup repair restores the archived winner for databases t
     repaired.close();
   } finally {
     try {
-      fs.rmSync(dbPath, { force: true });
-      fs.rmSync(`${dbPath}-wal`, { force: true });
-      fs.rmSync(`${dbPath}-shm`, { force: true });
+      fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     } catch {
       // ignore cleanup failures in tests
     }
@@ -424,7 +420,7 @@ test("SQLite benchmark dedup repair restores the archived winner for databases t
 });
 
 test("SQLite prompt pack content hash migration upgrades already-migrated databases", () => {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-sqlite-prompt-pack-hash-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-sqlite-prompt-pack-hash-")), "test.db");
   try {
     const seed = new DatabaseSync(dbPath);
     seed.exec(`
@@ -477,9 +473,7 @@ test("SQLite prompt pack content hash migration upgrades already-migrated databa
     }
   } finally {
     try {
-      fs.rmSync(dbPath, { force: true });
-      fs.rmSync(`${dbPath}-wal`, { force: true });
-      fs.rmSync(`${dbPath}-shm`, { force: true });
+      fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     } catch {
       // ignore cleanup failures in tests
     }

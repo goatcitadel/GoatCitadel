@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 import { createDatabase } from "./sqlite.js";
 import type { DatabaseClient, DbRunResult, DbStatement } from "./db.js";
@@ -476,12 +475,10 @@ afterEach(() => {
     }
   }
   for (const { dbPath } of databases) {
-    for (const file of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
-      try {
-        fs.rmSync(file, { force: true });
-      } catch (error) {
-        cleanupErrors.push(error);
-      }
+    try {
+      fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    } catch (error) {
+      cleanupErrors.push(error);
     }
   }
   if (cleanupErrors.length > 0) {
@@ -518,7 +515,7 @@ function batchedMigration(sql = "BATCH SCRUB"): PostgresMigration {
 }
 
 function createTempDatabase(prefix: string): DatabaseClient {
-  const dbPath = path.join(os.tmpdir(), `${prefix}-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`)), "test.db");
   const db = createDatabase({ dbPath });
   createdDatabases.push({ db, dbPath });
   return db;

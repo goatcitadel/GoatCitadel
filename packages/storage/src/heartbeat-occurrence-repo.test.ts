@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, describe, it } from "node:test";
 import { Worker } from "node:worker_threads";
 import { canonicalJsonString } from "@goatcitadel/contracts";
@@ -20,21 +17,15 @@ import { ChatSessionLifecycleRepository } from "./chat-session-lifecycle-repo.js
 import { SessionAutonomyPrefsRepository } from "./session-autonomy-prefs-repo.js";
 import { SessionMutationAdmissionRepository } from "./session-mutation-admission-repo.js";
 import { SessionRepository } from "./session-repo.js";
-import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    fs.rmSync(file, { force: true });
-    fs.rmSync(`${file}-wal`, { force: true });
-    fs.rmSync(`${file}-shm`, { force: true });
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 describe("HeartbeatOccurrenceRepository SQLite", () => {
   it("claims, consumes cadence, replays exactly, and rolls the callback back atomically", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     const fixture = seedHeartbeatSession(db, "atomic");
     const occurrences = new HeartbeatOccurrenceRepository(db);
     const admissions = new SessionMutationAdmissionRepository(db);
@@ -130,7 +121,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("creates and replays the exact admission through the callback-free worker boundary", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     const fixture = seedHeartbeatSession(db, "worker-safe-claim");
     const occurrences = new HeartbeatOccurrenceRepository(db);
     const admissions = new SessionMutationAdmissionRepository(db);
@@ -155,7 +146,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("requires exact child, profile, actor, and heartbeat occurrence payload bindings", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     const fixture = createBoundHeartbeatFixture(db, "binding");
     const malformedPayload = {
       ...fixture.payload,
@@ -188,7 +179,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("fails closed when an active legacy session has no persisted lifecycle incarnation", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     const fixture = seedHeartbeatSession(db, "legacy-null-incarnation");
     forceLegacyNullLifecycleIntent(db, fixture.sessionId);
     const occurrences = new HeartbeatOccurrenceRepository(db);
@@ -209,7 +200,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("keyset-pages past more than the legacy cap without starving a later occurrence", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     const created: HeartbeatOccurrenceRecord[] = [];
     for (let index = 0; index < 101; index += 1) {
       created.push(createClaimedHeartbeatFixture(db, `recovery-page-${index}`).occurrence);
@@ -228,7 +219,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("accepts only canonical completed, failed, and cancelled terminal handoffs", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     for (const status of ["completed", "failed", "cancelled"] as const) {
       const fixture = createBoundHeartbeatFixture(db, `terminal-${status}`);
       fixture.markBound();
@@ -274,7 +265,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("raw terminal transitions reject forged authority, output, and handoff hashes", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
 
     const forgedSeal = createBoundHeartbeatFixture(db, "raw-terminal-forged-seal");
     forgedSeal.markBound();
@@ -326,7 +317,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("reclaims only the exact expired admitted lease and leaves durable-bound work to canonical recovery", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     const fixture = createClaimedHeartbeatFixture(db, "reclaim");
     forceAdmissionLeaseExpired(db, fixture.occurrence.admissionId);
     const reclaimInput = toReclaimInput(fixture.occurrence, 1);
@@ -370,7 +361,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("closes null or changed lifecycle incarnations as authority drift without reclaiming the lease", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     for (const [seed, lifecycleIntentId] of [
       ["reclaim-null-incarnation", null],
       ["reclaim-changed-incarnation", "changed-persisted-incarnation"],
@@ -395,7 +386,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("atomically admits an operator turn when no heartbeat is active", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     const fixture = seedHeartbeatSession(db, "operator-no-heartbeat");
     const admissions = new SessionMutationAdmissionRepository(db);
     const input = operatorTurnAdmissionInput(fixture, "operator-no-heartbeat", 1);
@@ -416,7 +407,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("returns a structured no-mutation outcome for a normal active turn", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     const fixture = seedHeartbeatSession(db, "operator-active-noop");
     const admissions = new SessionMutationAdmissionRepository(db);
     const active = admissions.admit({
@@ -456,7 +447,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("reclaims and preempts an admitted heartbeat before atomically admitting the operator", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     const fixture = createClaimedHeartbeatFixture(db, "operator-prebind-preempt");
     forceAdmissionLeaseExpired(db, fixture.occurrence.admissionId);
     const expiredRequest = seedPendingControlRequest(db, fixture, "operator-prebind-expired", {
@@ -582,7 +573,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("keeps one canonical settlement clock across a delayed pre-bind preemption", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     const fixture = createClaimedHeartbeatFixture(db, "operator-prebind-delayed");
     forceAdmissionLeaseExpired(db, fixture.occurrence.admissionId);
     seedPendingControlRequest(db, fixture, "operator-prebind-delayed-expired", {
@@ -640,7 +631,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("fails closed before mutating when pending control cleanup exceeds its atomic bound", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     const fixture = createClaimedHeartbeatFixture(db, "operator-prebind-pending-bound");
     forceAdmissionLeaseExpired(db, fixture.occurrence.admissionId);
     seedManyPendingControlRequests(db, fixture, "operator-prebind-pending-bound", 257);
@@ -670,7 +661,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("preempts a durable-bound heartbeat with retained provenance and one atomic clock", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     const fixture = createBoundHeartbeatFixture(db, "operator-bound-preempt");
     const bound = fixture.markBound();
     assert.equal(bound.disposition, "created");
@@ -723,7 +714,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("returns a no-mutation decision-committed outcome for silent and notifying heartbeats", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     for (const notify of [false, true] as const) {
       const seed = `decision-committed-${notify ? "notify" : "silent"}`;
       const fixture = createBoundHeartbeatFixture(db, seed);
@@ -761,7 +752,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("rejects partial, malformed, repaired, and unpaired durable heartbeat decision evidence", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     for (const fault of [
       "raw_only",
       "receipt_drift",
@@ -797,7 +788,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("parks an expired admitted heartbeat without changing control authority", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     const fixture = createClaimedHeartbeatFixture(db, "execution-disabled");
     forceAdmissionLeaseExpired(db, fixture.occurrence.admissionId);
     const input = {
@@ -840,7 +831,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
   });
 
   it("rechecks an open occurrence after candidate selection before generic cleanup", () => {
-    const db = createDatabase({ dbPath: ":memory:" });
+    const db = tempDbs.open({ dbPath: ":memory:" });
     const fixture = seedHeartbeatSession(db, "cleanup-race");
     const admissions = new SessionMutationAdmissionRepository(db);
     const directAdmission = admissions.admit({
@@ -886,7 +877,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
 
   it("serializes two workers into one committed heartbeat occurrence", { timeout: 120_000 }, async () => {
     const dbPath = tempDatabasePath("worker-race");
-    const setup = createDatabase({ dbPath });
+    const setup = tempDbs.open({ dbPath });
     const fixture = seedHeartbeatSession(setup, "worker-race");
     setup.close();
 
@@ -895,7 +886,7 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
     assert.deepEqual(race.map((item) => item.disposition).sort(), ["created", "replayed"]);
     assert.equal(new Set(race.map((item) => item.occurrenceId)).size, 1);
 
-    const verify = createDatabase({ dbPath });
+    const verify = tempDbs.open({ dbPath });
     assert.equal(readCount(verify, "chat_heartbeat_occurrences"), 1);
     assert.equal(readCount(verify, "chat_session_mutation_admissions"), 1);
     const occurrence = new HeartbeatOccurrenceRepository(verify).listRecoverable();
@@ -2033,8 +2024,7 @@ function forceAdmissionLeaseExpired(db: DatabaseClient, admissionId: string): vo
 }
 
 function tempDatabasePath(seed: string): string {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-heartbeat-${seed}-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
+  const dbPath = tempDbs.path(`goatcitadel-heartbeat-${seed}`);
   return dbPath;
 }
 

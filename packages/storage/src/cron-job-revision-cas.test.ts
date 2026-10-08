@@ -1,24 +1,15 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { ConflictError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { CronJobRepository } from "./cron-job-repo.js";
 import { CronRunRepository } from "./cron-run-repo.js";
-import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
-      fs.rmSync(candidate, { force: true });
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function assertWriteConflict(
   action: () => unknown,
@@ -39,13 +30,12 @@ function assertWriteConflict(
 
 describe("Cron job spec revision CAS", () => {
   it("keeps stale scheduler telemetry merge-only while fencing operator spec writes", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-cron-cas-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
+    const dbPath = tempDbs.path("goatcitadel-cron-cas");
     let clientA: DatabaseClient | undefined;
     let clientB: DatabaseClient | undefined;
     try {
-      clientA = createDatabase({ dbPath });
-      clientB = createDatabase({ dbPath });
+      clientA = tempDbs.open({ dbPath });
+      clientB = tempDbs.open({ dbPath });
       const cronA = new CronJobRepository(clientA);
       const cronB = new CronJobRepository(clientB);
       const jobId = `cron-${randomUUID()}`;
@@ -176,9 +166,8 @@ describe("Cron job spec revision CAS", () => {
   });
 
   it("rejects late telemetry from a superseded execution generation", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-cron-generation-cas-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const client = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("goatcitadel-cron-generation-cas");
+    const client = tempDbs.open({ dbPath });
     try {
       const cronJobs = new CronJobRepository(client);
       const cronRuns = new CronRunRepository(client);

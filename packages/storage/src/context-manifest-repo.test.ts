@@ -1,30 +1,15 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { ContextManifestRepository } from "./context-manifest-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // Ignore cleanup noise for temp databases.
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(): ContextManifestRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-context-manifest-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-context-manifest");
+  const db = tempDbs.open({ dbPath });
   return new ContextManifestRepository(db);
 }
 

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
@@ -258,7 +257,7 @@ describe("SQLite migration registry", () => {
     ];
 
     for (const scenario of scenarios) {
-      const dbPath = path.join(os.tmpdir(), `goatcitadel-sqlite-ledger-toctou-${randomUUID()}.db`);
+      const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-sqlite-ledger-toctou-")), "test.db");
       const setup = new DatabaseSync(dbPath);
       try {
         setup.exec("PRAGMA journal_mode = WAL;");
@@ -329,9 +328,7 @@ describe("SQLite migration registry", () => {
       } finally {
         concurrentWriter.close();
         runner.close();
-        fs.rmSync(dbPath, { force: true });
-        fs.rmSync(`${dbPath}-wal`, { force: true });
-        fs.rmSync(`${dbPath}-shm`, { force: true });
+        fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       }
     }
   });
@@ -446,7 +443,10 @@ describe("SQLite migration registry", () => {
     ];
 
     for (const scenario of scenarios) {
-      const dbPath = path.join(os.tmpdir(), `goatcitadel-sqlite-concurrent-startup-${randomUUID()}.db`);
+      const dbPath = path.join(
+        fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-sqlite-concurrent-startup-")),
+        "test.db",
+      );
       const migrationGate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
       const ledgerReadGate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
       try {
@@ -514,9 +514,7 @@ describe("SQLite migration registry", () => {
         }
       } finally {
         try {
-          fs.rmSync(dbPath, { force: true });
-          fs.rmSync(`${dbPath}-wal`, { force: true });
-          fs.rmSync(`${dbPath}-shm`, { force: true });
+          fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
         } catch (error) {
           // A failed worker can still be unwinding when an assertion rejects.
           void error;

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHash, randomUUID } from "node:crypto";
-import { rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CommsSendResult } from "@goatcitadel/contracts";
@@ -325,7 +325,7 @@ describe("ChannelDeliveryRuntimeService", () => {
   });
 
   it("executes exactly one provider send across two runtimes sharing one SQLite delivery queue", async () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-channel-runtime-race-${randomUUID()}.db`);
+    const dbPath = path.join(mkdtempSync(path.join(os.tmpdir(), "goatcitadel-channel-runtime-race-")), "test.db");
     const firstDb = createDatabase({ dbPath });
     const secondDb = createDatabase({ dbPath });
     try {
@@ -359,14 +359,12 @@ describe("ChannelDeliveryRuntimeService", () => {
     } finally {
       firstDb.close();
       secondDb.close();
-      for (const suffix of ["", "-shm", "-wal"]) {
-        rmSync(`${dbPath}${suffix}`, { force: true });
-      }
+      rmSync(path.dirname(dbPath), { recursive: true, force: true });
     }
   }, 60_000);
 
   it("does not let a delayed runtime's stale queued snapshot overwrite a completed send", async () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-channel-runtime-stale-race-${randomUUID()}.db`);
+    const dbPath = path.join(mkdtempSync(path.join(os.tmpdir(), "goatcitadel-channel-runtime-stale-race-")), "test.db");
     const ownerDb = createDatabase({ dbPath });
     const delayedDb = createDatabase({ dbPath });
     try {
@@ -411,9 +409,7 @@ describe("ChannelDeliveryRuntimeService", () => {
     } finally {
       ownerDb.close();
       delayedDb.close();
-      for (const suffix of ["", "-shm", "-wal"]) {
-        rmSync(`${dbPath}${suffix}`, { force: true });
-      }
+      rmSync(path.dirname(dbPath), { recursive: true, force: true });
     }
   }, 60_000);
 

@@ -1,27 +1,16 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { A2ATaskBindingRepository } from "./a2a-task-binding-repo.js";
 import { A2ATaskPushConfigRepository } from "./a2a-task-push-config-repo.js";
-import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    for (const suffix of ["", "-wal", "-shm"]) {
-      fs.rmSync(`${file}${suffix}`, { force: true });
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepositories() {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-a2a-repositories-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-a2a-repositories");
+  const db = tempDbs.open({ dbPath });
   return {
     bindings: new A2ATaskBindingRepository(db),
     db,

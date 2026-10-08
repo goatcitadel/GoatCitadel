@@ -1,7 +1,4 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { CHAT_ROUTED_CONTEXT_SNAPSHOT_VERSION, canonicalJsonString } from "@goatcitadel/contracts";
@@ -12,27 +9,22 @@ import {
   sealChatRoutedContextSnapshot,
   verifyChatRoutedContextSnapshot,
 } from "./routed-context-snapshot-repo.js";
-import { createDatabase } from "./sqlite.js";
 import type { DatabaseClient } from "./db.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 const createdDbs: DatabaseClient[] = [];
 
 afterEach(() => {
   for (const db of createdDbs.splice(0)) {
     db.close();
   }
-  for (const file of createdFiles.splice(0)) {
-    fs.rmSync(file, { force: true });
-    fs.rmSync(`${file}-wal`, { force: true });
-    fs.rmSync(`${file}-shm`, { force: true });
-  }
+  tempDbs.cleanup();
 });
 
 function createStore() {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-routed-context-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-routed-context");
+  const db = tempDbs.open({ dbPath });
   createdDbs.push(db);
   // This suite exercises snapshot verification/immutability semantics in
   // isolation. The turn-write admission chain the incarnation guard enforces is

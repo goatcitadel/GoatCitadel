@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,18 +26,12 @@ const files: string[] = [];
 afterEach(() => {
   for (const db of opened.splice(0)) db.close();
   for (const file of files.splice(0)) {
-    for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
-      try {
-        fs.rmSync(candidate, { force: true });
-      } catch {
-        // Best-effort test cleanup.
-      }
-    }
+    fs.rmSync(path.dirname(file), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
 function createStore(): { db: DatabaseClient; repo: GovernedRemediationRepository } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-governed-remediation-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-governed-remediation-")), "test.db");
   files.push(dbPath);
   const db = createDatabase({ dbPath });
   opened.push(db);

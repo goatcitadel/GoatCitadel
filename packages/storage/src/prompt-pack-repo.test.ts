@@ -1,10 +1,5 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { hashPromptPackPolicyV2 } from "./prompt-pack-policy.js";
 import { PromptPackRepository } from "./prompt-pack-repo.js";
 import {
@@ -13,25 +8,16 @@ import {
   hashRunVariableSchema,
   type PromptPackPolicyV2,
 } from "@goatcitadel/contracts";
+import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup failures
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(): PromptPackRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-prompt-pack-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-prompt-pack");
+  const db = tempDbs.open({ dbPath });
   return new PromptPackRepository(db);
 }
 

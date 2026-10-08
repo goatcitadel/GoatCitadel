@@ -1,32 +1,30 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { randomUUID } from "node:crypto";
 import { createDatabase } from "@goatcitadel/storage";
 import { CapabilityScopeRepository } from "../../../../packages/storage/src/capability-scope-repo.js";
 import type { CapabilityScopeAssignment } from "@goatcitadel/contracts";
 import { CapabilityScopeResolver } from "./capability-scope-resolver.js";
 import { CapabilityScopeRouteService, type CapabilityRegistryEntry } from "./capability-scope-route-service.js";
 
-const createdFiles: string[] = [];
+const createdDirs: string[] = [];
+const openedDbs: Array<ReturnType<typeof createDatabase>> = [];
 
+// Close before deleting: on Windows an open SQLite handle blocks removal.
 function cleanup() {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore
-    }
+  for (const db of openedDbs.splice(0)) db.close();
+  for (const dir of createdDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 }
 
 function createRepo(): CapabilityScopeRepository {
-  const dbPath = path.join(os.tmpdir(), `gc-capscope-svc-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  return new CapabilityScopeRepository(createDatabase({ dbPath }));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gc-capscope-svc-"));
+  createdDirs.push(dir);
+  const db = createDatabase({ dbPath: path.join(dir, "test.db") });
+  openedDbs.push(db);
+  return new CapabilityScopeRepository(db);
 }
 
 const REGISTRY: Record<string, CapabilityRegistryEntry[]> = {
@@ -78,7 +76,7 @@ function makeSvc(repo: CapabilityScopeRepository, extraRows: CapabilityScopeAssi
 }
 
 describe("CapabilityScopeRouteService.getView", () => {
-  beforeEach(cleanup);
+  afterEach(cleanup);
 
   it("unconfigured citadel → mode:inherit, all items available+inherited, effectiveRefs=all", async () => {
     const repo = createRepo();

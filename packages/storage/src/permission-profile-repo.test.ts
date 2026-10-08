@@ -1,26 +1,12 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import { PermissionProfileRepository } from "./permission-profile-repo.js";
-import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup noise
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 describe("PermissionProfileRepository", () => {
   it("ships safe and trusted local built-ins and activates custom profiles by surface", () => {
@@ -517,8 +503,7 @@ describe("PermissionProfileRepository", () => {
 });
 
 function createStore(): { db: DatabaseClient; repo: PermissionProfileRepository } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-permission-profile-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-permission-profile");
+  const db = tempDbs.open({ dbPath });
   return { db, repo: new PermissionProfileRepository(db) };
 }

@@ -1,23 +1,13 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { ConflictError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
-import { createDatabase } from "./sqlite.js";
 import { TaskRepository } from "./task-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
-      fs.rmSync(candidate, { force: true });
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function assertWriteConflict(
   action: () => unknown,
@@ -38,13 +28,12 @@ function assertWriteConflict(
 
 describe("task resource revision CAS", () => {
   it("fences stale two-client writes and does not bump semantic no-ops", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-task-cas-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
+    const dbPath = tempDbs.path("goatcitadel-task-cas");
     let clientA: DatabaseClient | undefined;
     let clientB: DatabaseClient | undefined;
     try {
-      clientA = createDatabase({ dbPath });
-      clientB = createDatabase({ dbPath });
+      clientA = tempDbs.open({ dbPath });
+      clientB = tempDbs.open({ dbPath });
       const tasksA = new TaskRepository(clientA);
       const tasksB = new TaskRepository(clientB);
       const created = tasksA.create({ title: "Original", priority: "high" }, "2026-07-13T00:00:00.000Z");

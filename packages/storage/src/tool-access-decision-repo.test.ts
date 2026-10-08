@@ -1,35 +1,21 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
   mapToolAccessDecisionRow,
   ToolAccessDecisionRepository,
   type ToolAccessDecisionRecord,
 } from "./tool-access-decision-repo.js";
-import { createDatabase } from "./sqlite.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
+import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // Ignore best-effort temp database cleanup failures.
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepoWithDb(): { repo: ToolAccessDecisionRepository; db: ReturnType<typeof createDatabase> } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-tool-access-decision-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-tool-access-decision");
+  const db = tempDbs.open({ dbPath });
   return {
     repo: new ToolAccessDecisionRepository(db),
     db,
@@ -71,7 +57,8 @@ describe("ToolAccessDecisionRepository", () => {
   it("excludes only an already-counted decision in the same window, tool and scope", () => {
     const { repo, db } = createRepoWithDb();
     try {
-      const own = recordDecision(repo), other = recordDecision(repo, { sessionId: "other-session" });
+      const own = recordDecision(repo),
+        other = recordDecision(repo, { sessionId: "other-session" });
       const old = recordDecision(repo, {}, new Date(Date.now() - 7_200_000).toISOString());
       const advisory = recordDecision(repo, { countsTowardLimits: false });
       const input = { toolName: "fs.write", scope: "session" as const, agentId: "agent-1", sessionId: "session-1" };
@@ -82,8 +69,13 @@ describe("ToolAccessDecisionRepository", () => {
       assert.equal(repo.countWritesInLastHourInScope({ ...input, excludeDecisionId: own.decisionId }), 0);
       for (const id of [other.decisionId, old.decisionId, advisory.decisionId, "missing"])
         assert.equal(repo.countToolCallsInLastHourInScope({ ...input, excludeDecisionId: id }), 1);
-      assert.equal(repo.countToolCallsInLastHourInScope({ ...input, toolName: "fs.read", excludeDecisionId: own.decisionId }), 0);
-    } finally { db.close(); }
+      assert.equal(
+        repo.countToolCallsInLastHourInScope({ ...input, toolName: "fs.read", excludeDecisionId: own.decisionId }),
+        0,
+      );
+    } finally {
+      db.close();
+    }
   });
   it("records decisions and counts calls across every grant scope", () => {
     const { repo, db } = createRepoWithDb();

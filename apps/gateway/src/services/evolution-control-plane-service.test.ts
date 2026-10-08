@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import type { ChangePlanRecord, ChangePlanRuntimeConfigurationRequest } from "@goatcitadel/contracts";
 import {
   ChangePlanRepository,
@@ -28,13 +27,7 @@ afterEach(() => {
   vi.useRealTimers();
   for (const database of databases.splice(0)) database.close();
   for (const file of files.splice(0)) {
-    for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
-      try {
-        fs.rmSync(candidate, { force: true });
-      } catch (error: unknown) {
-        if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
-      }
-    }
+    fs.rmSync(path.dirname(file), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -196,7 +189,7 @@ class TestAdapter implements EvolutionControlPlaneAdapter<ChangePlanRuntimeConfi
 }
 
 function fixture(mode: TestAdapter["mode"] = "confirmation") {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-evolution-service-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-evolution-service-")), "test.db");
   files.push(dbPath);
   const database = createDatabase({ dbPath });
   createChangePlanSchema(database);

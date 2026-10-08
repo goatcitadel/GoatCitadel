@@ -1,33 +1,18 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
 import type { ChatOrchestrationRouteDecision, ChatTurnTraceRecord } from "@goatcitadel/contracts";
 import type { DatabaseClient, DbStatement } from "./db.js";
-import { createDatabase } from "./sqlite.js";
 import { ChatDelegationRunRepository } from "./chat-delegation-run-repo.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup noise
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createStore(): { db: DatabaseClient; repo: ChatDelegationRunRepository } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-delegation-run-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-chat-delegation-run");
+  const db = tempDbs.open({ dbPath });
   return { db, repo: new ChatDelegationRunRepository(db) };
 }
 

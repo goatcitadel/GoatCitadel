@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import type { SqliteSchemaTableBlueprint } from "./sqlite.js";
 import { createDatabase, createSqliteSchemaBlueprint } from "./sqlite.js";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
@@ -287,7 +286,7 @@ describe("Postgres runtime schema generation", () => {
     // Behavioral regression: under the real SQLite schema, a CLOSED candidate and a new
     // OPEN candidate that share a fingerprint must coexist (the unique index only spans
     // open statuses). This is exactly the reopen/dedup flow STORAGE-001 protects.
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-improvement-candidate-${randomUUID()}.db`);
+    const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-improvement-candidate-")), "test.db");
     try {
       const client = createDatabase({ dbPath });
       try {
@@ -329,7 +328,7 @@ describe("Postgres runtime schema generation", () => {
         client.close();
       }
     } finally {
-      fs.rmSync(dbPath, { force: true });
+      fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -494,7 +493,10 @@ describe("Postgres runtime schema generation", () => {
     const migration = POSTGRES_MIGRATIONS.find((item) => item.name === "delegation_step_instruction_snapshots");
     assert.equal(migration?.version, 197);
     assert.match(migration?.sql ?? "", /ADD COLUMN IF NOT EXISTS instruction_snapshot_json TEXT/);
-    assert.match(migration?.sql ?? "", /NEW\.instruction_snapshot_json IS DISTINCT FROM OLD\.instruction_snapshot_json/);
+    assert.match(
+      migration?.sql ?? "",
+      /NEW\.instruction_snapshot_json IS DISTINCT FROM OLD\.instruction_snapshot_json/,
+    );
     assert.match(migration?.sql ?? "", /CREATE TRIGGER trg_chat_delegation_step_instruction_snapshot_immutable/);
   });
 

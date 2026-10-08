@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { ConflictError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { createDatabase } from "./sqlite.js";
@@ -17,18 +16,12 @@ const databases: DatabaseClient[] = [];
 afterEach(() => {
   for (const database of databases.splice(0)) database.close();
   for (const file of files.splice(0)) {
-    for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
-      try {
-        fs.rmSync(candidate, { force: true });
-      } catch (error: unknown) {
-        if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
-      }
-    }
+    fs.rmSync(path.dirname(file), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
 function createRepo(): { database: DatabaseClient; repo: ChangePlanRepository } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-evolution-plan-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-evolution-plan-")), "test.db");
   files.push(dbPath);
   const database = createDatabase({ dbPath });
   createChangePlanSchema(database);
@@ -44,8 +37,12 @@ function createPostgresFacade(database: DatabaseClient, preparedSql: string[]): 
       preparedSql.push(sql.replace(/\s+/gu, " ").trim());
       // Execute equivalent predicates only in this SQL-shape fixture. Real
       // PostgreSQL execution is covered by the dedicated repository proof.
-      return database.prepare(sql.replace(/required_action_json::jsonb ->> '(kind|approvalId)'/gu,
-        (_match, key: string) => `json_extract(required_action_json, '$.${key}')`));
+      return database.prepare(
+        sql.replace(
+          /required_action_json::jsonb ->> '(kind|approvalId)'/gu,
+          (_match, key: string) => `json_extract(required_action_json, '$.${key}')`,
+        ),
+      );
     },
   } as DatabaseClient;
 }
@@ -92,15 +89,34 @@ describe("ChangePlanRepository", () => {
   it("looks up only current approval waits, ignoring historical links and terminal plans", () => {
     const { repo } = createRepo();
     const plan = createModelPlan(repo);
-    const waiting = repo.transition(plan.planId, { expectedRevision: plan.revision, status: "awaiting_approval", internal: true,
-      requiredAction: { kind: "approval", actionId: "approval-action", actionNonce: "approval-action-nonce", title: "Approve reviewed change",
-        risk: "caution", approvalId: "current-approval" }, approvalRefs: ["old-approval", "current-approval"] });
+    const waiting = repo.transition(plan.planId, {
+      expectedRevision: plan.revision,
+      status: "awaiting_approval",
+      internal: true,
+      requiredAction: {
+        kind: "approval",
+        actionId: "approval-action",
+        actionNonce: "approval-action-nonce",
+        title: "Approve reviewed change",
+        risk: "caution",
+        approvalId: "current-approval",
+      },
+      approvalRefs: ["old-approval", "current-approval"],
+    });
     assert.deepEqual(repo.listAwaitingApproval("old-approval"), []);
-    assert.deepEqual(repo.listAwaitingApproval("current-approval").map(item => item.planId), [plan.planId]);
+    assert.deepEqual(
+      repo.listAwaitingApproval("current-approval").map((item) => item.planId),
+      [plan.planId],
+    );
     assert.throws(() => repo.listAwaitingApproval("current-approval", 0));
     assert.throws(() => repo.listAwaitingApproval("current-approval", 501));
     assert.throws(() => repo.listAwaitingApproval("current-approval", NaN));
-    repo.transition(plan.planId, { expectedRevision: waiting.revision, status: "cancelled", internal: true, requiredAction: null });
+    repo.transition(plan.planId, {
+      expectedRevision: waiting.revision,
+      status: "cancelled",
+      internal: true,
+      requiredAction: null,
+    });
     assert.deepEqual(repo.listAwaitingApproval("current-approval"), []);
   });
 

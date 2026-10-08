@@ -1,36 +1,21 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
 import type {
   CapabilityArtifactRecord,
   CodeModeRunRecord,
   CodeModeVerificationEvidenceRecord,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient, DbStatement } from "./db.js";
-import { createDatabase } from "./sqlite.js";
 import { CodeModeRunRepository } from "./code-mode-run-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup noise
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createStore(): { dbPath: string; db: DatabaseClient; repo: CodeModeRunRepository } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-code-mode-run-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-code-mode-run");
+  const db = tempDbs.open({ dbPath });
   return { dbPath, db, repo: new CodeModeRunRepository(db) };
 }
 
@@ -700,7 +685,7 @@ describe("CodeModeRunRepository", () => {
     assert.equal(terminal?.stdoutPreview, "completed prefix");
 
     db.close();
-    const reopened = createDatabase({ dbPath });
+    const reopened = tempDbs.open({ dbPath });
     const reopenedRun = new CodeModeRunRepository(reopened).get("run-a");
     assert.equal(reopenedRun.status, "failed");
     assert.equal(reopenedRun.executionRecovery.generation, 1);
@@ -975,7 +960,7 @@ describe("CodeModeRunRepository", () => {
     assert.throws(() => db.prepare("DELETE FROM code_mode_verification_evidence").run(), /append-only/);
 
     db.close();
-    const reopenedDb = createDatabase({ dbPath });
+    const reopenedDb = tempDbs.open({ dbPath });
     const reopened = new CodeModeRunRepository(reopenedDb);
     assert.equal(reopened.get("run-a").verification?.status, "verified");
     assert.equal(reopened.get("run-a").trustedCodeWriteVerification?.artifacts[0]?.verified, true);

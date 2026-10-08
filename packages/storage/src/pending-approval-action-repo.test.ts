@@ -1,37 +1,24 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
 import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { PendingApprovalActionRepository } from "./pending-approval-action-repo.js";
 import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
 import { buildPostgresRuntimeSchemaSql } from "./postgres/runtime-schema.js";
+import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(): PendingApprovalActionRepository {
   return createRepoWithDb().repo;
 }
 
 function createRepoWithDb(): { repo: PendingApprovalActionRepository; db: ReturnType<typeof createDatabase> } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-pending-approval-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-pending-approval");
+  const db = tempDbs.open({ dbPath });
   return { repo: new PendingApprovalActionRepository(db), db };
 }
 
@@ -202,9 +189,8 @@ describe("PendingApprovalActionRepository", () => {
 
 describe("PendingApprovalActionRepository sanitization", () => {
   it("quarantines a row whose request_json is malformed and falls back to empty request", () => {
-    const dbPath = path.join(os.tmpdir(), `gc-paa-request-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("gc-paa-request");
+    const db = tempDbs.open({ dbPath });
     const quarantine = new StateValidationQuarantineRepository(db);
     const repo = new PendingApprovalActionRepository(db, { quarantine });
 
@@ -230,9 +216,8 @@ describe("PendingApprovalActionRepository sanitization", () => {
   });
 
   it("quarantines a row whose result_json is malformed and falls back to empty result", () => {
-    const dbPath = path.join(os.tmpdir(), `gc-paa-result-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("gc-paa-result");
+    const db = tempDbs.open({ dbPath });
     const quarantine = new StateValidationQuarantineRepository(db);
     const repo = new PendingApprovalActionRepository(db, { quarantine });
 

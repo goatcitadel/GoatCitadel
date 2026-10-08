@@ -1,31 +1,17 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
 import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { CronJobRepository } from "./cron-job-repo.js";
 import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(): CronJobRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-cron-job-repo-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-cron-job-repo");
+  const db = tempDbs.open({ dbPath });
   return new CronJobRepository(db);
 }
 
@@ -144,9 +130,8 @@ describe("CronJobRepository row-shape diagnostics", () => {
 
 describe("CronJobRepository sanitization", () => {
   it("quarantines a cron job whose action_config_json is malformed and falls back to undefined", () => {
-    const dbPath = path.join(os.tmpdir(), `gc-cron-sanitize-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("gc-cron-sanitize");
+    const db = tempDbs.open({ dbPath });
     const quarantine = new StateValidationQuarantineRepository(db);
     const repo = new CronJobRepository(db, { quarantine });
 

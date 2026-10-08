@@ -1,31 +1,17 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
 import type { CronJobRecord } from "@goatcitadel/contracts";
-import { createDatabase } from "./sqlite.js";
 import { CronJobRepository } from "./cron-job-repo.js";
+import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup noise
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepoWithDb(): { repo: CronJobRepository; db: ReturnType<typeof createDatabase> } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-cron-citadel-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-cron-citadel");
+  const db = tempDbs.open({ dbPath });
   return { repo: new CronJobRepository(db), db };
 }
 

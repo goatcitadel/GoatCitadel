@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { randomUUID } from "node:crypto";
 import type { ChatMessageRecord, ChatMessageRole } from "@goatcitadel/contracts";
 import { ChatMessageRepository, buildSafeFtsMatchQuery, buildSafePostgresSearchQuery } from "./chat-message-repo.js";
 import type { SearchMessagesOptions } from "./chat-message-repo.js";
@@ -35,19 +34,13 @@ function makeMessage(
 }
 
 function withDatabase(run: (db: DatabaseClient) => void): void {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-search-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-chat-search-")), "test.db");
   const db = createDatabase({ dbPath });
   try {
     run(db);
   } finally {
     db.close();
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try {
-        fs.rmSync(`${dbPath}${suffix}`, { force: true });
-      } catch {
-        // ignore cleanup failures in tests
-      }
-    }
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 }
 

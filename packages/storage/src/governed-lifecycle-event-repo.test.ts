@@ -1,8 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
   GOVERNED_LIFECYCLE_EVENT_VERSION,
@@ -12,22 +8,14 @@ import {
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { GovernedLifecycleEventRepository } from "./governed-lifecycle-event-repo.js";
-import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 const openedDatabases: DatabaseClient[] = [];
 
 afterEach(() => {
   for (const db of openedDatabases.splice(0)) db.close();
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // Best-effort cleanup only.
-    }
-  }
+  tempDbs.cleanup();
 });
 
 /**
@@ -36,9 +24,8 @@ afterEach(() => {
  * hand-built table.
  */
 function createStore(): { db: DatabaseClient; repo: GovernedLifecycleEventRepository } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-governed-lifecycle-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-governed-lifecycle");
+  const db = tempDbs.open({ dbPath });
   openedDatabases.push(db);
   return { db, repo: new GovernedLifecycleEventRepository(db) };
 }

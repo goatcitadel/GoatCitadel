@@ -3,13 +3,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { createDatabase } from "./sqlite.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
 import type { DatabaseClient } from "./db.js";
 
 describe("canonical waiting checkpoint authority", () => {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-waiting-checkpoint-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-waiting-checkpoint-")), "test.db");
   let db: DatabaseClient;
   let repo: DurableRunRepository;
   before(() => {
@@ -18,7 +17,7 @@ describe("canonical waiting checkpoint authority", () => {
   });
   after(() => {
     db?.close();
-    for (const file of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) fs.rmSync(file, { force: true });
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("resolves an exact checkpoint beyond the diagnostic cap and keeps the version CAS in its transaction", () => {
@@ -34,20 +33,35 @@ describe("canonical waiting checkpoint authority", () => {
         });
       }
     });
-    assert.equal(repo.listCheckpoints(run.runId, 2_000).some((row) => row.checkpointId === "waiting-2004"), false);
+    assert.equal(
+      repo.listCheckpoints(run.runId, 2_000).some((row) => row.checkpointId === "waiting-2004"),
+      false,
+    );
     db.transaction("immediate", () => {
-      assert.equal(repo.lockWaitingCheckpointForUpdate({
-        runId: run.runId, checkpointId: "waiting-0000", expectedRunVersion: run.version,
-      }), undefined);
+      assert.equal(
+        repo.lockWaitingCheckpointForUpdate({
+          runId: run.runId,
+          checkpointId: "waiting-0000",
+          expectedRunVersion: run.version,
+        }),
+        undefined,
+      );
       const locked = repo.lockWaitingCheckpointForUpdate({
-        runId: run.runId, checkpointId: "waiting-2004", expectedRunVersion: run.version,
+        runId: run.runId,
+        checkpointId: "waiting-2004",
+        expectedRunVersion: run.version,
       });
       assert.ok(locked);
       assert.deepEqual(locked.checkpoint.state, { index: 2_004 });
       repo.updateRun({ runId: run.runId, status: "waiting", expectedVersion: locked.run.version });
-      assert.equal(repo.lockWaitingCheckpointForUpdate({
-        runId: run.runId, checkpointId: "waiting-2004", expectedRunVersion: run.version,
-      }), undefined);
+      assert.equal(
+        repo.lockWaitingCheckpointForUpdate({
+          runId: run.runId,
+          checkpointId: "waiting-2004",
+          expectedRunVersion: run.version,
+        }),
+        undefined,
+      );
     });
   });
 
@@ -59,12 +73,20 @@ describe("canonical waiting checkpoint authority", () => {
     const own = repo.createCheckpoint({ runId: run.runId, checkpointKind: "run_waiting" });
     db.transaction("immediate", () => {
       for (const checkpointId of ["missing-checkpoint", checkpoint.checkpointId, wrongKind.checkpointId]) {
-        assert.equal(repo.lockWaitingCheckpointForUpdate({ runId: run.runId, checkpointId, expectedRunVersion: run.version }), undefined);
+        assert.equal(
+          repo.lockWaitingCheckpointForUpdate({ runId: run.runId, checkpointId, expectedRunVersion: run.version }),
+          undefined,
+        );
       }
       const cancelled = repo.updateRun({ runId: run.runId, status: "cancelled", expectedVersion: run.version });
-      assert.equal(repo.lockWaitingCheckpointForUpdate({
-        runId: run.runId, checkpointId: own.checkpointId, expectedRunVersion: cancelled.version,
-      }), undefined);
+      assert.equal(
+        repo.lockWaitingCheckpointForUpdate({
+          runId: run.runId,
+          checkpointId: own.checkpointId,
+          expectedRunVersion: cancelled.version,
+        }),
+        undefined,
+      );
     });
   });
 
@@ -73,15 +95,30 @@ describe("canonical waiting checkpoint authority", () => {
     const checkpoint = repo.createCheckpoint({ runId: run.runId, checkpointKind: "run_waiting" });
     db.transaction("immediate", () => {
       for (const value of ["{", "[]", "null", "true", '"text"']) {
-        db.prepare("UPDATE durable_checkpoints SET state_json = ? WHERE checkpoint_id = ?").run(value, checkpoint.checkpointId);
-        assert.throws(() => repo.lockWaitingCheckpointForUpdate({
-          runId: run.runId, checkpointId: checkpoint.checkpointId, expectedRunVersion: run.version,
-        }), /checkpoint/iu);
+        db.prepare("UPDATE durable_checkpoints SET state_json = ? WHERE checkpoint_id = ?").run(
+          value,
+          checkpoint.checkpointId,
+        );
+        assert.throws(
+          () =>
+            repo.lockWaitingCheckpointForUpdate({
+              runId: run.runId,
+              checkpointId: checkpoint.checkpointId,
+              expectedRunVersion: run.version,
+            }),
+          /checkpoint/iu,
+        );
       }
       for (const expectedRunVersion of [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
-        assert.throws(() => repo.lockWaitingCheckpointForUpdate({
-          runId: run.runId, checkpointId: checkpoint.checkpointId, expectedRunVersion,
-        }), /positive run version/u);
+        assert.throws(
+          () =>
+            repo.lockWaitingCheckpointForUpdate({
+              runId: run.runId,
+              checkpointId: checkpoint.checkpointId,
+              expectedRunVersion,
+            }),
+          /positive run version/u,
+        );
       }
     });
   });

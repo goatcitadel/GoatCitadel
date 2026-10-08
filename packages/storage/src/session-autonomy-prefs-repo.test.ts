@@ -1,32 +1,18 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import { SessionAutonomyPrefsRepository } from "./session-autonomy-prefs-repo.js";
 import type { DbStatement } from "./db.js";
+import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(...sessionIds: string[]): SessionAutonomyPrefsRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-autonomy-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-autonomy");
+  const db = tempDbs.open({ dbPath });
   const meta = new ChatSessionMetaRepository(db);
   for (const sessionId of sessionIds) meta.ensure(sessionId, undefined, "default");
   return new SessionAutonomyPrefsRepository(db);

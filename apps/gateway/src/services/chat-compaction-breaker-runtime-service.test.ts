@@ -15,9 +15,7 @@ const createdFiles: string[] = [];
 
 afterEach(() => {
   for (const file of createdFiles.splice(0)) {
-    for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
-      fs.rmSync(candidate, { force: true });
-    }
+    fs.rmSync(path.dirname(file), { recursive: true, force: true });
   }
 });
 
@@ -272,7 +270,7 @@ describe("Gateway chat compaction breaker runtime adapter", () => {
 });
 
 function createFixture(wards: CitadelWard[] = []) {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-compaction-runtime-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-compaction-runtime-")), "test.db");
   createdFiles.push(dbPath);
   const db = createDatabase({ dbPath });
   const repo = new ChatConversationSummaryRepository(db);

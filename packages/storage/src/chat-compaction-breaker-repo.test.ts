@@ -1,11 +1,7 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
-import { createDatabase } from "./sqlite.js";
 import { PostgresDatabaseClient } from "./postgres/client.js";
 import { runPostgresMigrations } from "./postgres/migrator.js";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
@@ -15,26 +11,17 @@ import {
   ChatConversationSummaryRepository,
   type ChatCompactionStateUpsertInput,
 } from "./chat-conversation-summary-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 const postgresConnectionString = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
-      try {
-        fs.rmSync(candidate, { force: true });
-      } catch {
-        // Ignore test cleanup noise.
-      }
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 describe("ChatConversationSummaryRepository compaction breaker", () => {
   it("commits a boundary and pending evidence atomically and survives restart", () => {
     const dbPath = createDbPath();
-    const firstDb = createDatabase({ dbPath });
+    const firstDb = tempDbs.open({ dbPath });
     const first = new ChatConversationSummaryRepository(firstDb);
     const state = compactionState("sess-restart", "dim-a", 8, 14);
 
@@ -50,7 +37,7 @@ describe("ChatConversationSummaryRepository compaction breaker", () => {
     assert.equal(committed.breaker.pendingStateKey, state.stateKey);
     firstDb.close();
 
-    const secondDb = createDatabase({ dbPath });
+    const secondDb = tempDbs.open({ dbPath });
     try {
       const restarted = new ChatConversationSummaryRepository(secondDb);
       assert.deepEqual(restarted.getCompactionBreaker("sess-restart", "dim-a"), committed.breaker);
@@ -577,8 +564,8 @@ describe("ChatConversationSummaryRepository compaction breaker", () => {
 
   it("allows only one of two writers to win the same breaker revision", () => {
     const dbPath = createDbPath();
-    const firstDb = createDatabase({ dbPath });
-    const secondDb = createDatabase({ dbPath });
+    const firstDb = tempDbs.open({ dbPath });
+    const secondDb = tempDbs.open({ dbPath });
     try {
       const first = new ChatConversationSummaryRepository(firstDb);
       const second = new ChatConversationSummaryRepository(secondDb);
@@ -707,13 +694,13 @@ describe("ChatConversationSummaryRepository compaction breaker", () => {
 
   it("replays SQLite migration 163 to restore quarantine evidence and lifecycle enforcement", () => {
     const dbPath = createDbPath();
-    const initial = createDatabase({ dbPath });
+    const initial = tempDbs.open({ dbPath });
     initial.exec("DROP TRIGGER trg_chat_compaction_breaker_actions_transition");
     initial.exec("ALTER TABLE chat_compaction_breakers DROP COLUMN quarantined_state_key");
     initial.prepare("DELETE FROM schema_migrations WHERE version = 163").run();
     initial.close();
 
-    const replayed = createDatabase({ dbPath });
+    const replayed = tempDbs.open({ dbPath });
     try {
       const replayedMigration = replayed
         .prepare("SELECT version, name FROM schema_migrations WHERE version = 163")
@@ -872,13 +859,12 @@ function noProgressAttemptId(
 }
 
 function createDbPath(): string {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-compaction-breaker-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
+  const dbPath = tempDbs.path("goatcitadel-chat-compaction-breaker");
   return dbPath;
 }
 
 function createRepo() {
-  const db = createDatabase({ dbPath: createDbPath() });
+  const db = tempDbs.open({ dbPath: createDbPath() });
   return { db, repo: new ChatConversationSummaryRepository(db) };
 }
 

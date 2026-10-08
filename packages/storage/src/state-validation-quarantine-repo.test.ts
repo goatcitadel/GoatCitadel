@@ -1,30 +1,15 @@
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepo(): StateValidationQuarantineRepository {
-  const dbPath = path.join(os.tmpdir(), `gc-quarantine-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("gc-quarantine");
+  const db = tempDbs.open({ dbPath });
   return new StateValidationQuarantineRepository(db);
 }
 
@@ -131,9 +116,8 @@ describe("StateValidationQuarantineRepository", () => {
 
 describe("state_validation_quarantine schema", () => {
   it("creates the quarantine table on first boot", () => {
-    const dbPath = path.join(os.tmpdir(), `gc-quarantine-schema-${randomUUID()}.db`);
-    createdFiles.push(dbPath);
-    const db = createDatabase({ dbPath });
+    const dbPath = tempDbs.path("gc-quarantine-schema");
+    const db = tempDbs.open({ dbPath });
     const row = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='state_validation_quarantine'")
       .get();

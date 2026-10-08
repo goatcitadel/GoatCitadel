@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import { existsSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, existsSync, rmSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -156,7 +155,7 @@ describe("HX-407 paired external-source schema parity", () => {
   // sibling HX-410 sparse proof uses, and startup's refusal of the very same
   // database is asserted below so neither half can drift.
   it("does not invent or backfill missing parent owners in a repair-only sparse database", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-hx407-sparse-${randomUUID()}.db`);
+    const dbPath = path.join(mkdtempSync(path.join(os.tmpdir(), "goatcitadel-hx407-sparse-")), "test.db");
     const missingAuthorityGuard =
       /Worker Chat resume migration requires the expected authority guard: trg_remote_worker_assignment_leases_live_authority/u;
     try {
@@ -215,7 +214,7 @@ describe("HX-407 paired external-source schema parity", () => {
       // repair remains additive; it does not invent the absent parent owners.
       assert.throws(() => createDatabase({ dbPath }), missingAuthorityGuard);
     } finally {
-      for (const suffix of ["", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
+      rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });

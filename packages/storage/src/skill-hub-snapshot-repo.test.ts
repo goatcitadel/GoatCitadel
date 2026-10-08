@@ -1,16 +1,13 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, describe, it } from "node:test";
 import { canonicalJsonString, diffSkillPermissionEnvelopes } from "@goatcitadel/contracts";
 import type { SkillPermissionEnvelopeV1 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { SkillHubSnapshotRepository, type SkillHubSnapshotCreateInput } from "./skill-hub-snapshot-repo.js";
-import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 const openedDatabases: DatabaseClient[] = [];
 const SHA_A = "a".repeat(64);
 const SHA_B = "b".repeat(64);
@@ -18,21 +15,12 @@ const SHA_C = "c".repeat(64);
 
 afterEach(() => {
   for (const db of openedDatabases.splice(0)) db.close();
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // Best-effort cleanup only; assertions own test outcomes.
-    }
-  }
+  tempDbs.cleanup();
 });
 
 function createStore(): { db: DatabaseClient; repo: SkillHubSnapshotRepository; dbPath: string } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-skill-hub-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-skill-hub");
+  const db = tempDbs.open({ dbPath });
   openedDatabases.push(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS skill_hub_snapshots (
@@ -275,7 +263,7 @@ describe("SkillHubSnapshotRepository", () => {
   it("uses database version claims across repository instances instead of process-local state", () => {
     const { repo, dbPath } = createStore();
     repo.create(snapshot());
-    const secondDb = createDatabase({ dbPath });
+    const secondDb = tempDbs.open({ dbPath });
     openedDatabases.push(secondDb);
     const secondRepo = new SkillHubSnapshotRepository(secondDb);
     const drift = secondRepo.create(

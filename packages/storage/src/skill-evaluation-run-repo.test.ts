@@ -1,32 +1,17 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs";
-import { randomUUID } from "node:crypto";
 import type { SkillEvaluationRunRecord } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
-import { createDatabase } from "./sqlite.js";
 import { SkillEvaluationRunRepository } from "./skill-evaluation-run-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup noise
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createStore(): { db: DatabaseClient; repo: SkillEvaluationRunRepository } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-skill-evaluation-run-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-skill-evaluation-run");
+  const db = tempDbs.open({ dbPath });
   return { db, repo: new SkillEvaluationRunRepository(db) };
 }
 

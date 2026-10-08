@@ -1,36 +1,21 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
-import { createDatabase } from "./sqlite.js";
 import { ApprovalRepository } from "./approval-repo.js";
 import { ApprovalWaitRunRepository } from "./approval-wait-run-repo.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 
-afterEach(() => {
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // ignore cleanup failures
-    }
-  }
-});
+afterEach(() => tempDbs.cleanup());
 
 function createRepos(): {
   approvals: ApprovalRepository;
   approvalWaitRuns: ApprovalWaitRunRepository;
   durableRuns: DurableRunRepository;
 } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-approval-wait-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-approval-wait");
+  const db = tempDbs.open({ dbPath });
   return {
     approvals: new ApprovalRepository(db),
     approvalWaitRuns: new ApprovalWaitRunRepository(db),

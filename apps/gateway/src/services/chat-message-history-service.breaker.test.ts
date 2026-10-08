@@ -22,13 +22,7 @@ const createdFiles: string[] = [];
 
 afterEach(() => {
   for (const file of createdFiles.splice(0)) {
-    for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
-      try {
-        fs.rmSync(candidate, { force: true });
-      } catch {
-        // Ignore cleanup noise.
-      }
-    }
+    fs.rmSync(path.dirname(file), { recursive: true, force: true });
   }
 });
 
@@ -260,7 +254,10 @@ describe("chat branch persistent compaction breaker", () => {
 });
 
 function createFixture() {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-gateway-compaction-breaker-${randomUUID()}.db`);
+  const dbPath = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-gateway-compaction-breaker-")),
+    "test.db",
+  );
   createdFiles.push(dbPath);
   const db = createDatabase({ dbPath });
   return { db, repo: new ChatConversationSummaryRepository(db) };

@@ -34,8 +34,11 @@ function buildService(options: { modelCatalogCachePath?: string } = {}): LlmServ
 }
 
 describe("LlmService model catalog cache", () => {
-  afterEach(() => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
     vi.unstubAllGlobals();
+    await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
   });
 
   it("caches live results within TTL window — no second fetch", async () => {
@@ -218,6 +221,7 @@ describe("LlmService model catalog cache", () => {
 
   it("serves a stale disk catalog immediately and refreshes in the background", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "goat-model-cache-"));
+    tempDirs.push(tempDir);
     const cachePath = path.join(tempDir, "llm-model-catalog.json");
     await fs.writeFile(
       cachePath,
@@ -286,6 +290,7 @@ describe("LlmService model catalog cache", () => {
 
   it("does not treat a recently persisted catalog as freshly verified after restart", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "goat-model-cache-restart-"));
+    tempDirs.push(tempDir);
     const cachePath = path.join(tempDir, "llm-model-catalog.json");
     const cachedAt = new Date().toISOString();
     await fs.writeFile(
@@ -340,6 +345,7 @@ describe("LlmService model catalog cache", () => {
 
   it("persists live catalog snapshots without provider secrets", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "goat-model-cache-live-"));
+    tempDirs.push(tempDir);
     const cachePath = path.join(tempDir, "llm-model-catalog.json");
     const fetchMock = vi.fn(
       async () =>

@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { ConflictError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { createDatabase } from "./sqlite.js";
@@ -17,21 +16,14 @@ afterEach(() => {
     database.close();
   }
   for (const file of files.splice(0)) {
-    // Windows can retain SQLite's journal handles briefly after close. The
-    // temporary file is unique, so a best-effort cleanup keeps the lifecycle
-    // assertion from becoming platform-dependent.
-    for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
-      try {
-        fs.rmSync(candidate, { force: true });
-      } catch (error: unknown) {
-        if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
-      }
-    }
+    // Windows can retain SQLite's journal handles briefly after close; the
+    // rmSync retries cover that window.
+    fs.rmSync(path.dirname(file), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
 function createRepo(): ChatChangePlanRepository {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-change-plan-${randomUUID()}.db`);
+  const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-change-plan-")), "test.db");
   files.push(dbPath);
   const database = createDatabase({ dbPath });
   databases.push(database);

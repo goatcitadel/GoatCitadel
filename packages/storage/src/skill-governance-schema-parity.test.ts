@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -129,7 +128,7 @@ describe("skill governance and Journey schema parity", () => {
   });
 
   it("enforces SQLite inactive candidates and immutable version claims at the database boundary", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-skill-governance-parity-${randomUUID()}.db`);
+    const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-skill-governance-parity-")), "test.db");
     const db = createDatabase({ dbPath });
     try {
       const migration = db.prepare("SELECT name FROM schema_migrations WHERE version = 161").get<{ name: string }>();
@@ -268,9 +267,7 @@ describe("skill governance and Journey schema parity", () => {
     } finally {
       db.close();
       try {
-        fs.rmSync(dbPath, { force: true });
-        fs.rmSync(`${dbPath}-wal`, { force: true });
-        fs.rmSync(`${dbPath}-shm`, { force: true });
+        fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       } catch {
         // Best-effort cleanup only.
       }

@@ -1,8 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import type { DatabaseClient } from "./db.js";
 import {
@@ -11,9 +7,9 @@ import {
   createSkillLearningFingerprint,
   type SkillLearningEvidenceRecord,
 } from "./skill-learning-evidence-repo.js";
-import { createDatabase } from "./sqlite.js";
+import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
-const createdFiles: string[] = [];
+const tempDbs = new TempSqliteFiles();
 const openedDatabases: DatabaseClient[] = [];
 const SHA_A = "a".repeat(64);
 const SHA_B = "b".repeat(64);
@@ -21,15 +17,7 @@ const SHA_C = "c".repeat(64);
 
 afterEach(() => {
   for (const db of openedDatabases.splice(0)) db.close();
-  for (const file of createdFiles.splice(0)) {
-    try {
-      fs.rmSync(file, { force: true });
-      fs.rmSync(`${file}-wal`, { force: true });
-      fs.rmSync(`${file}-shm`, { force: true });
-    } catch {
-      // Best-effort cleanup only.
-    }
-  }
+  tempDbs.cleanup();
 });
 
 function createStore(): {
@@ -38,9 +26,8 @@ function createStore(): {
   links: CandidateSkillEvidenceLinkRepository;
   dbPath: string;
 } {
-  const dbPath = path.join(os.tmpdir(), `goatcitadel-skill-learning-${randomUUID()}.db`);
-  createdFiles.push(dbPath);
-  const db = createDatabase({ dbPath });
+  const dbPath = tempDbs.path("goatcitadel-skill-learning");
+  const db = tempDbs.open({ dbPath });
   openedDatabases.push(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS skill_learning_evidence (
@@ -268,7 +255,7 @@ describe("SkillLearningEvidenceRepository", () => {
 
   it("uses one coherent validated snapshot across repository instances", () => {
     const { evidence: first, dbPath } = createStore();
-    const secondDb = createDatabase({ dbPath });
+    const secondDb = tempDbs.open({ dbPath });
     openedDatabases.push(secondDb);
     const second = new SkillLearningEvidenceRepository(secondDb);
     for (const [index, repo] of [first, second, first].entries()) {

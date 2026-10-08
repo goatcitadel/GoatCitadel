@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { describe, it } from "node:test";
 import { createDatabase } from "../sqlite.js";
@@ -69,7 +68,7 @@ describe("SQLite canonical schema shape", () => {
   });
 
   it("rejects canonical database drift on an already-complete startup", () => {
-    const dbPath = path.join(os.tmpdir(), `goatcitadel-schema-shape-${randomUUID()}.db`);
+    const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-schema-shape-")), "test.db");
     try {
       const created = createDatabase({ dbPath });
       created.close();
@@ -82,7 +81,7 @@ describe("SQLite canonical schema shape", () => {
 
       assert.throws(() => createDatabase({ dbPath }), /non-canonical table operator_profiles/);
     } finally {
-      for (const file of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) fs.rmSync(file, { force: true });
+      fs.rmSync(path.dirname(dbPath), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });
