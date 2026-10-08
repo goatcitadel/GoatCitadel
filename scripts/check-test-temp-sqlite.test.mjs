@@ -21,6 +21,33 @@ test("temp SQLite checker rejects a database placed directly in os.tmpdir()", ()
   );
 });
 
+test("temp SQLite checker rejects computed and concatenated database names in os.tmpdir()", () => {
+  const violations = findTempSqliteViolations(
+    "apps/gateway/src/example.test.ts",
+    [
+      "const filename = `goat-${randomUUID()}.db`;",
+      "const dbPath = path.join(" + TMPDIR + ", filename);",
+      'const other = path.join(' + TMPDIR + ', "goat-" + id + ".sqlite");',
+      'const third = ' + TMPDIR + ' + "/goat.db";',
+    ].join("\n"),
+  );
+
+  assert.deepEqual(
+    violations.map((violation) => violation.line),
+    [2, 3, 4],
+  );
+});
+
+test("temp SQLite checker ignores identifiers that are not database names", () => {
+  const source = [
+    "const prefix = `goat-${randomUUID()}`;",
+    "const root = path.join(" + TMPDIR + ", prefix);",
+    'const dbPath = path.join(root, "test.db");',
+  ].join("\n");
+
+  assert.deepEqual(findTempSqliteViolations("apps/gateway/src/example.test.ts", source), []);
+});
+
 test("temp SQLite checker allows databases inside a mkdtemp directory", () => {
   const source = [
     "const dir = fs.mkdtempSync(path.join(" + TMPDIR + ', "goatcitadel-example-"));',

@@ -9,15 +9,54 @@ import { pathToFileURL } from "node:url";
 // own mkdtemp directory instead (storage tests: `TempSqliteFiles` from
 // packages/storage/src/temp-sqlite.test-support.ts), close it, then remove the
 // directory.
-const directTempSqlitePattern = /\b(?:join|resolve)\(\s*(?:os\.)?tmpdir\(\)\s*,\s*(?:`[^`]*|"[^"]*|'[^']*)\.(?:db|sqlite3?)\b/g;
+const sqliteNamePattern = /\.(?:db|sqlite3?)\b/;
+// `join(os.tmpdir(), <argument up to the closing paren on that line>)`
+const tmpdirJoinPattern = /\b(?:join|resolve)\(\s*(?:os\.)?tmpdir\(\)\s*,([^\n]*)/g;
+// `os.tmpdir() + "/name.db"`
+const tmpdirConcatPattern = /(?:os\.)?tmpdir\(\)\s*\+[^\n]*/g;
+// `const name = \`...\`.db` style assignments, so a computed filename is caught too.
+const sqliteNameAssignmentPattern = /\b(?:const|let|var)\s+([$A-Z_a-z][$\w]*)\s*=\s*(?:`[^`]*`|"[^"]*"|'[^']*')/g;
 
 export function findTempSqliteViolations(relativePath, source) {
-  const violations = [];
-  directTempSqlitePattern.lastIndex = 0;
-  for (const match of source.matchAll(directTempSqlitePattern)) {
-    violations.push({ path: relativePath, line: lineNumberAt(source, match.index ?? 0), snippet: match[0] });
+  const sqliteNameVariables = new Set();
+  for (const match of source.matchAll(sqliteNameAssignmentPattern)) {
+    if (sqliteNamePattern.test(match[0].slice(match[0].indexOf("=")))) sqliteNameVariables.add(match[1]);
   }
-  return violations;
+  const violations = [];
+  const report = (index, snippet) =>
+    violations.push({ path: relativePath, line: lineNumberAt(source, index), snippet: snippet.trim() });
+
+  for (const match of source.matchAll(tmpdirJoinPattern)) {
+    const argument = firstArgument(match[1]);
+    const identifier = argument.trim();
+    if (sqliteNamePattern.test(argument) || sqliteNameVariables.has(identifier)) {
+      report(match.index ?? 0, match[0].slice(0, match[0].length - match[1].length) + argument + ")");
+    }
+  }
+  for (const match of source.matchAll(tmpdirConcatPattern)) {
+    if (sqliteNamePattern.test(match[0])) report(match.index ?? 0, match[0]);
+  }
+  return violations.sort((left, right) => left.line - right.line);
+}
+
+/** The text of the call's next argument: up to the first top-level `,` or the closing `)`. */
+function firstArgument(rest) {
+  let depth = 0;
+  let quote;
+  for (let index = 0; index < rest.length; index += 1) {
+    const char = rest[index];
+    if (quote) {
+      if (char === quote && rest[index - 1] !== "\\") quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") quote = char;
+    else if (char === "(") depth += 1;
+    else if (char === ")" || char === ",") {
+      if (depth === 0) return rest.slice(0, index);
+      if (char === ")") depth -= 1;
+    }
+  }
+  return rest;
 }
 
 export function isTestSource(relativePath) {
