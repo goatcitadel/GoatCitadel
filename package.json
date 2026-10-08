@@ -237,7 +237,7 @@
       "find-my-way": "9.7.0",
       "postcss": "8.5.23",
       "qs": "6.15.2",
-      "shell-quote": "1.9.0",
+      "shell-quote": "1.11.0",
       "tar": "7.5.21",
       "undici": "6.28.1",
       "uuid": "14.0.0",
@@ -270,7 +270,7 @@
     "lint-staged": "16.4.0",
     "playwright": "1.58.2",
     "prettier": "3.8.3",
-    "sharp": "0.35.4",
+    "sharp": "0.35.5",
     "tsx": "4.22.4",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "typescript-7": "npm:typescript@7.0.2",
@@ -288,6 +288,6 @@
     ]
   },
   "dependencies": {
-    "shell-quote": "1.9.0"
+    "shell-quote": "1.11.0"
   }
 }
