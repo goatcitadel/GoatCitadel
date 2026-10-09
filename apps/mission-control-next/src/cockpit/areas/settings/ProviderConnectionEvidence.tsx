@@ -17,19 +17,22 @@ const CODEX_PROVIDER_ID = "openai-codex";
 /** `known`: the owner answered, or a key or local endpoint already proves readiness. `failed`: its read failed. */
 type Credential = { known: boolean; failed: boolean; ready: boolean; meta: string };
 
-/** Credential evidence comes only from its owner: the ChatGPT login for Codex, the secure secret owner otherwise. */
-function useCredential(provider: ProviderModelCatalogOption, open: boolean): Credential {
+/**
+ * Credential evidence comes only from its owner: the ChatGPT login for Codex, the secure secret owner otherwise.
+ * Callers mount this only while the details are open, so opening the details is what triggers the read.
+ */
+function useCredential(provider: ProviderModelCatalogOption): Credential {
   const codex = provider.providerId === CODEX_PROVIDER_ID;
   const local = isLikelyLocalProviderBaseUrl(provider.baseUrl);
   const oauth = useQuery({
     queryKey: ["settings", "provider-evidence", "codex-oauth"],
     queryFn: () => fetchOpenAICodexOAuthStatus(),
-    enabled: open && codex,
+    enabled: codex,
   });
   const secret = useQuery({
     queryKey: ["settings", "provider-evidence", "secret", provider.providerId],
     queryFn: ({ signal }) => fetchProviderSecretStatus(provider.providerId, { signal }),
-    enabled: open && !codex,
+    enabled: !codex,
   });
   if (codex) {
     const status = oauth.isError ? undefined : oauth.data;
@@ -73,7 +76,7 @@ function useCredential(provider: ProviderModelCatalogOption, open: boolean): Cre
 }
 
 function Body({ provider, request }: { provider: ProviderModelCatalogOption; request?: LlmProviderConfig["request"] }) {
-  const credential = useCredential(provider, true);
+  const credential = useCredential(provider);
   const local = isLikelyLocalProviderBaseUrl(provider.baseUrl);
   const executed = provider.resolvedApiStyle ?? provider.apiStyle;
   const capabilities = Object.entries(provider.capabilities ?? {})
