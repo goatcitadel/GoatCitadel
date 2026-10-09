@@ -46,6 +46,14 @@ for `gateway/chat-turn-control-composition.ts` and **1/0** for
 Every original baseline-owner limit remains unchanged; this does not permit future
 growth above these caps.
 
+Additional operator clarification, October 8: resolve the architecture regressions
+introduced by `f9bf998e5`, `588d9787b`, `2e349bbdd` and `9acbd936b` by consolidating
+the existing owners. Record the dependency/host caps of **4/0** for
+`chat-optional-user-input.ts`, the optional Chat clarification owner added in
+`588d9787b`, as an explicit C0 gate-reconciliation scope exception. Every original
+baseline-owner limit remains unchanged; this does not permit future growth above
+this cap.
+
 ### 2. Simplify onboarding through the first useful response
 
 Use the existing guided setup and Change Plans to provide one continuous flow:

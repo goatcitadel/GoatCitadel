@@ -1316,6 +1316,16 @@ export class ChatTurnAgentRunner {
     return input.canonicalWriteFence ? await input.canonicalWriteFence(work) : await work();
   }
 
+  private async isOptionalUserInputEnabled(): Promise<boolean> {
+    return (await this.deps.chatAsyncClarificationV1Enabled?.()) === true;
+  }
+
+  /** Reads the turn's optional-input mailbox under its write fence; undefined when no reader is wired. */
+  private async readOptionalUserInputMailbox(input: ChatTurnAgentRunnerInput) {
+    const readOptionalUserInput = this.deps.readOptionalUserInput;
+    return readOptionalUserInput ? await this.runCanonicalWrite(input, () => readOptionalUserInput(input)) : undefined;
+  }
+
   private async assertExternalDispatch(
     input: Pick<ChatTurnAgentRunnerInput, "canonicalWriteFence" | "sessionId" | "turnId">,
   ): Promise<void> {
@@ -2222,7 +2232,7 @@ export class ChatTurnAgentRunner {
     const routedContextToolSchema = await this.filterRoutedContextCapabilityToolSchema(input, admittedToolSchema);
     const filteredToolSchema = await this.filterSystemHeartbeatCapabilityToolSchema(input, routedContextToolSchema);
     if (
-      (await this.deps.chatAsyncClarificationV1Enabled?.()) !== true ||
+      !(await this.isOptionalUserInputEnabled()) ||
       input.parentDelegationStepId ||
       input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID ||
       input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID
@@ -2480,15 +2490,15 @@ export class ChatTurnAgentRunner {
       | undefined;
     let pendingUserInput: ChatUserInputPromptRecord | undefined;
     const optionalInputEnabled =
-      (await this.deps.chatAsyncClarificationV1Enabled?.()) === true &&
+      (await this.isOptionalUserInputEnabled()) &&
       input.mode === "chat" &&
       !input.parentDelegationStepId &&
       Boolean(input.policyRunId && input.canonicalWriteFence);
     const injectedOptionalReplies = new Set<string>();
     let visibleOptionalPromptId: string | undefined;
     const collectOptionalInput = async () => {
-      if (!optionalInputEnabled || !this.deps.readOptionalUserInput) return { added: 0, prompt: undefined };
-      const mailbox = await this.runCanonicalWrite(input, () => this.deps.readOptionalUserInput!(input));
+      const mailbox = optionalInputEnabled ? await this.readOptionalUserInputMailbox(input) : undefined;
+      if (!mailbox) return { added: 0, prompt: undefined };
       let added = 0;
       for (const reply of mailbox.replies) {
         if (injectedOptionalReplies.has(reply.prompt.promptId)) continue;
@@ -4053,7 +4063,7 @@ export class ChatTurnAgentRunner {
           const optionalInput = await collectOptionalInput();
           if (optionalInput.prompt?.promptId !== visibleOptionalPromptId) {
             visibleOptionalPromptId = optionalInput.prompt?.promptId;
-            const optionalTrace = await this.deps.storage.chatTurnTraces.get(input.turnId);
+            const optionalTrace = await storage.chatTurnTraces.get(input.turnId);
             yield { type: "trace_update", sessionId: input.sessionId, turnId: input.turnId, trace: optionalTrace };
             if (optionalInput.prompt)
               yield {
@@ -6315,12 +6325,11 @@ export class ChatTurnAgentRunner {
     const webLookupIntent = intents.webLookup || [...explicitToolMentions].some((toolName) => isWebToolName(toolName));
     const promptLabHasExplicitToolFamily =
       promptLabContract.requiredNamedTools.length > 0 || promptLabContract.requiredToolFamilies.length > 0;
+    const storage = this.deps.storage;
     const [recentToolRuns, sessionProject, executionPlans] = await Promise.all([
-      this.deps.storage.chatToolRuns.listBySession(input.sessionId, 200),
-      this.deps.storage.chatSessionProjects.get(input.sessionId),
-      this.deps.storage.chatExecutionPlans
-        ? this.deps.storage.chatExecutionPlans.listBySession(input.sessionId, 20)
-        : Promise.resolve([]),
+      storage.chatToolRuns.listBySession(input.sessionId, 200),
+      storage.chatSessionProjects.get(input.sessionId),
+      storage.chatExecutionPlans ? storage.chatExecutionPlans.listBySession(input.sessionId, 20) : Promise.resolve([]),
     ]);
     const projectBound = Boolean(sessionProject?.projectId);
     const activePlan = selectActiveExecutionPlan(executionPlans);
@@ -6375,7 +6384,7 @@ export class ChatTurnAgentRunner {
       input.mode === "chat" &&
       !input.parentDelegationStepId &&
       !restrictedAutonomousProfile &&
-      (await this.deps.chatAsyncClarificationV1Enabled?.()) === true;
+      (await this.isOptionalUserInputEnabled());
     for (const tool of catalog) {
       if (tool.toolName === "user_input.request" && !optionalInputToolEligible) continue;
       if (quickWebProfile && !QUICK_WEB_ALLOWED_TOOL_NAMES.has(tool.toolName)) {
@@ -6898,11 +6907,12 @@ export class ChatTurnAgentRunner {
     }
     if (res.record.status === "executed" && res.record.toolName === "user_input.request") {
       try {
+        const registerOptionalUserInput = this.deps.registerOptionalUserInput;
         if (
-          (await this.deps.chatAsyncClarificationV1Enabled?.()) !== true ||
+          !(await this.isOptionalUserInputEnabled()) ||
           !input.input.policyRunId ||
           !input.input.canonicalWriteFence ||
-          !this.deps.registerOptionalUserInput ||
+          !registerOptionalUserInput ||
           input.input.mode !== "chat" ||
           input.input.parentDelegationStepId ||
           input.input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
@@ -6925,7 +6935,7 @@ export class ChatTurnAgentRunner {
           expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
         };
         res.userInputPrompt = await this.runCanonicalWrite(input.input, () =>
-          this.deps.registerOptionalUserInput!(input.input, prompt),
+          registerOptionalUserInput(input.input, prompt),
         );
       } catch (error) {
         if (isDurableControlError(error)) throw error;
@@ -8867,15 +8877,14 @@ export class ChatTurnAgentRunner {
     const evalIntegrityTurn = input.input.normalizationProfile === "prompt_pack_harness";
     const optionalReplyMessages: ChatCompletionRequest["messages"] = [];
     if (
-      (await this.deps.chatAsyncClarificationV1Enabled?.()) === true &&
-      this.deps.readOptionalUserInput &&
+      (await this.isOptionalUserInputEnabled()) &&
       input.input.mode === "chat" &&
       input.input.policyRunId &&
       input.input.canonicalWriteFence &&
       !input.input.parentDelegationStepId
     ) {
-      const mailbox = await this.runCanonicalWrite(input.input, () => this.deps.readOptionalUserInput!(input.input));
-      for (const reply of mailbox.replies)
+      const mailbox = await this.readOptionalUserInputMailbox(input.input);
+      for (const reply of mailbox?.replies ?? [])
         optionalReplyMessages.push({
           role: "user",
           content:
