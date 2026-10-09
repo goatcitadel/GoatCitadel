@@ -209,7 +209,18 @@ export function resolveViteAllowedHosts(env: Record<string, string | undefined> 
   return [...new Set([...DEFAULT_ALLOWED_HOSTS, ...fromEnv])];
 }
 
-export default defineConfig(({ mode }) => {
+export function readDevResetId(command: string, rootDir: string = repoRoot): string {
+  if (command !== "serve") return "";
+  try {
+    const resetId = fs.readFileSync(path.join(rootDir, "runtime/dev-reset-id"), "utf8").trim();
+    return MANAGED_INSTANCE_ID_PATTERN.test(resetId) ? resetId : "";
+  } catch {
+    // A checkout that has never been cleared has no reset marker.
+    return "";
+  }
+}
+
+export default defineConfig(({ mode, command }) => {
   const env = {
     ...process.env,
     ...loadEnv(mode, repoRoot, ""),
@@ -220,6 +231,7 @@ export default defineConfig(({ mode }) => {
     envDir: repoRoot,
     define: {
       __GC_BUILD_ID__: JSON.stringify(buildId),
+      __GC_DEV_RESET_ID__: JSON.stringify(mode === "test" ? "" : readDevResetId(command)),
     },
     // Managed ownership is a per-process launch identity. Do not let a repo
     // .env file replace the environment injected into this Vite process.

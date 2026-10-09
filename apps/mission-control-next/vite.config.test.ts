@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import viteConfig, {
@@ -9,9 +10,26 @@ import viteConfig, {
   DEV_OPTIMIZE_DEPS_ESBUILD_TARGET,
   managedUiHealthPlugin,
   resolveViteAllowedHosts,
+  readDevResetId,
 } from "./vite.config";
 
 describe("mission-control-next vite config", () => {
+  it("supplies reset IDs only to the dev server, and ignores missing or malformed markers", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-dev-reset-"));
+    try {
+      expect(readDevResetId("serve", root)).toBe("");
+      fs.mkdirSync(path.join(root, "runtime"));
+      const marker = path.join(root, "runtime/dev-reset-id");
+      fs.writeFileSync(marker, "a2680ff0-cd94-4113-8aa1-cdb075e6e596\r\n");
+      expect(readDevResetId("serve", root)).toBe("a2680ff0-cd94-4113-8aa1-cdb075e6e596");
+      expect(readDevResetId("build", root)).toBe("");
+      fs.writeFileSync(marker, "not a reset ID");
+      expect(readDevResetId("serve", root)).toBe("");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the dev dependency optimizer on a modern target", async () => {
     const config =
       typeof viteConfig === "function"
