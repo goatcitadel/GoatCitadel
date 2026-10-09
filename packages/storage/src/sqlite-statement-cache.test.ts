@@ -4,12 +4,55 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SQLITE_STATEMENT_CACHE_LIMIT, createDatabase } from "./sqlite.js";
+import { BoundedStatementCache } from "./sqlite-statement-cache.js";
 
 /**
  * The SQLite client reuses compiled statements by SQL text. Reuse must stay
  * invisible: results follow schema changes, wrapped adapters never leak into later
  * `prepare` calls, and eviction keeps evicted SQL working.
  */
+/** A cache whose compile step records every SQL text it compiles. */
+function countingCache(limit: number) {
+  const compiled: string[] = [];
+  const cache = new BoundedStatementCache(limit, (sql) => {
+    compiled.push(sql);
+    return { sql, generation: compiled.length };
+  });
+  return { cache, compiled };
+}
+
+describe("bounded statement cache", () => {
+  it("compiles repeated SQL once and returns the same compiled statement", () => {
+    const { cache, compiled } = countingCache(4);
+    const first = cache.get("SELECT 1");
+    assert.equal(cache.get("SELECT 1"), first);
+    assert.equal(cache.get("SELECT 1"), first);
+    assert.deepEqual(compiled, ["SELECT 1"]);
+  });
+
+  it("a hit refreshes recency, so overflow evicts the least recently used SQL", () => {
+    const { cache, compiled } = countingCache(2);
+    cache.get("a");
+    cache.get("b");
+    cache.get("a"); // hit: "b" is now the least recently used
+    cache.get("c"); // overflow evicts "b", not "a"
+    assert.equal(cache.size, 2);
+    cache.get("a");
+    assert.deepEqual(compiled, ["a", "b", "c"], "a stayed cached through the overflow");
+    cache.get("b");
+    assert.deepEqual(compiled, ["a", "b", "c", "b"], "the evicted SQL recompiles on its next use");
+  });
+
+  it("clear forces every SQL text to recompile", () => {
+    const { cache, compiled } = countingCache(4);
+    cache.get("a");
+    cache.clear();
+    assert.equal(cache.size, 0);
+    cache.get("a");
+    assert.deepEqual(compiled, ["a", "a"]);
+  });
+});
+
 describe("SQLite compiled statement reuse", () => {
   it("re-prepares a reused statement after the schema changes", () => {
     const db = createDatabase({ dbPath: ":memory:" });
@@ -85,6 +128,12 @@ describe("SQLite compiled statement reuse", () => {
       assert.equal(db.prepare("SELECT 0 AS value").get<{ value: number }>()?.value, 0);
     } finally {
       db.close();
+    }
+  });
+
+  it("rejects a cache bound that is not a positive integer", () => {
+    for (const limit of [0, -1, 1.5, Number.NaN]) {
+      assert.throws(() => new BoundedStatementCache(limit, (sql) => sql), RangeError);
     }
   });
 

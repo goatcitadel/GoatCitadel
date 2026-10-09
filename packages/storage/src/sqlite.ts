@@ -110,6 +110,7 @@ import { createRemoteWorkerMeshNodeAdmissionSchema } from "./sqlite/remote-worke
 import { upgradeGovernedRemediationRecipeBinding } from "./sqlite/governed-remediation-recipe-binding.js";
 import { createMobilePushSchema } from "./sqlite/mobile-push-schema.js";
 import { createMobileApprovalKeySchema } from "./sqlite/mobile-approval-key-schema.js";
+import { BoundedStatementCache } from "./sqlite-statement-cache.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const LEGACY_REMOTE_APPROVAL_BEARER_PATTERN = /grat_[A-Za-z0-9_-]{43}/;
@@ -178,11 +179,13 @@ class SqliteDatabaseClient implements DatabaseClient {
   private transactionDepth = 0;
   private savepointCounter = 0;
   private activeCompatibilityTransactionId?: string;
-  private readonly statementCache = new Map<string, SqliteStatement>();
+  private readonly statementCache: BoundedStatementCache<SqliteStatement>;
   private schemaVersionStatement?: SqliteStatement;
   private cachedSchemaVersion?: number;
 
-  public constructor(private readonly db: DatabaseSync) {}
+  public constructor(private readonly db: DatabaseSync) {
+    this.statementCache = new BoundedStatementCache(SQLITE_STATEMENT_CACHE_LIMIT, (sql) => this.db.prepare(sql));
+  }
 
   public prepare(sql: string): DbStatement {
     // A fresh adapter per call: callers (and test fixtures) may wrap the returned
@@ -202,19 +205,7 @@ class SqliteDatabaseClient implements DatabaseClient {
       this.statementCache.clear();
       this.cachedSchemaVersion = schemaVersion;
     }
-    const cached = this.statementCache.get(sql);
-    if (cached) {
-      this.statementCache.delete(sql);
-      this.statementCache.set(sql, cached);
-      return cached;
-    }
-    const statement = this.db.prepare(sql);
-    this.statementCache.set(sql, statement);
-    if (this.statementCache.size > SQLITE_STATEMENT_CACHE_LIMIT) {
-      const oldest = this.statementCache.keys().next().value;
-      if (oldest !== undefined) this.statementCache.delete(oldest);
-    }
-    return statement;
+    return this.statementCache.get(sql);
   }
 
   public exec(sql: string): void {

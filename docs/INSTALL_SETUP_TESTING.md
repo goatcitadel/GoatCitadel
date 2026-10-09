@@ -480,7 +480,7 @@ On Windows, `verify:fast` leaves out the native remote-worker build, ASan and Ap
 pnpm verify:remote-worker:windows
 ```
 
-While iterating locally, `pnpm verify:fast --changed` runs the always-on checks plus only the package suites affected since the merge base with `origin/main` (pass `--changed=<ref>` for another base). Root configuration, lockfile and `scripts/` changes still select the whole lane. A scoped run is recorded as a partial selection and is not a full fast-lane proof.
+While iterating locally, `pnpm verify:fast --changed` runs the always-on checks plus only the package suites affected since the merge base with `origin/main` (pass `--changed=<ref>` for another base). Root configuration, lockfile and `scripts/` changes still select the whole lane, except `scripts/packaging/`, `scripts/remote-worker/` and `scripts/install-smoke/`, which run only the always-on checks (repo hygiene covers their tests). A scoped run is recorded as a partial selection and is not a full fast-lane proof.
 
 Storage shards share one build made at the start of the test stage. On hosts with fast disks, `GOATCITADEL_VERIFY_FAST_TRACKS=1` overlaps the Gateway and storage test tracks, and `GOATCITADEL_VERIFY_STORAGE_SHARD_CONCURRENCY=2` runs two storage shards at a time. Both are off by default because on a hard-disk host the overlapping suites contend for disk and time out. Storage shards always run one at a time when `GOATCITADEL_TEST_POSTGRES_URL` is set.
 
