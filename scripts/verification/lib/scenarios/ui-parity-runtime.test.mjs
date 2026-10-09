@@ -60,9 +60,15 @@ describe("UI parity route readiness", () => {
       source.indexOf("export async function runUiParityLane"),
       source.indexOf("export async function runMemoryTruthLane"),
     );
+    // Compared routes are built by classicUiParityProbe (which always pins the Classic shell) or written inline.
+    const probes = lane.match(/classicUiParityProbe\(/g) ?? [];
     const routes = lane.match(/route: \{[^}]*\}/g) ?? [];
-    assert.ok(routes.length >= 6);
+    assert.ok(probes.length + routes.length >= 6);
     for (const route of routes) assert.match(route, /shell: "classic"/, route);
+    const { classicUiParityProbe } = await import("./ui-parity-owner-contract.mjs");
+    const probe = classicUiParityProbe("/ops/runtime", { expectedArea: "ops", expectedSection: "runtime", readyText: "Services" });
+    assert.equal(probe.route.shell, "classic");
+    assert.match(probe.href, /shell=classic/);
   });
 });
 
