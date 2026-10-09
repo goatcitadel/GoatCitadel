@@ -1,5 +1,8 @@
 // @vitest-environment happy-dom
 import React from "react";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, create } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MissionThreadedBtwSideChatProps } from "@goatcitadel/threaded-surface-core";
@@ -148,4 +151,23 @@ describe("ThreadedBtwSideChatPanel local position", () => {
       renderer?.unmount();
     });
   });
+});
+
+
+it("scopes native panel paint/layer and compact containment without replacing Classic positioning", () => {
+  const css = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "styles/btw-side-chat.css"), "utf8");
+  const native = 'html[data-shell="cockpit"] .mc-next-btw-side-chat';
+  const panel = css.slice(css.indexOf(`${native} {`)).split("}")[0]!;
+  expect(panel).toContain("background: var(--cockpit-overlay)");
+  expect(panel).toContain("z-index: 30");
+  expect(panel).toContain("color: var(--cockpit-text)");
+  const compact = css.slice(css.lastIndexOf("@media (max-width: 1023px)"));
+  expect(compact).toContain(native);
+  expect(compact).toContain("position: absolute");
+  expect(compact).toContain("max-height: min(70dvh, calc(100% - 1.5rem))");
+  const classic = css.slice(0, css.indexOf('html[data-shell="cockpit"]'));
+  expect(classic).toContain("position: fixed");
+  expect(classic).toContain("z-index: var(--z-side-sheet)");
+  expect(classic).toContain("var(--mc-surface-2)");
+  expect(compact).not.toContain("--mc-");
 });

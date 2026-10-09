@@ -238,6 +238,14 @@ export interface MissionControlActiveSessionSurfaceProps {
     onIndexChange: (value: number) => void;
     onSelect: (item: CommandSuggestionItem) => void;
   };
+  /** Canonical records for a client-side project reassignment review; mutations remain Gateway-owned. */
+  attachmentUpload?: { pending: number; error: string | null };
+  projectSwitchContext?: {
+    workspaceId: string;
+    session: Pick<ChatSessionRecord, "sessionId" | "workspaceId" | "projectId" | "revision">;
+    projects: Array<Pick<import("@goatcitadel/contracts").ChatProjectRecord, "projectId" | "workspaceId" | "revision" | "name" | "workspacePath" | "lifecycleStatus">>;
+    mutationPending: boolean;
+  };
   pendingAttachments: Array<Pick<ChatAttachmentRecord, "attachmentId" | "fileName" | "mimeType" | "sizeBytes">>;
   pendingAttachmentModes?: Record<string, "message" | ThreadKnowledgeRetrievalMode>;
   threadKnowledgeAttachments?: ThreadKnowledgeAttachmentRecord[];
@@ -294,6 +302,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   routeBoundaryAcknowledged: boolean;
   sending: boolean;
   canSend: boolean;
+  /** Same canonical composer admission gates, while an existing stream owns send. */
+  canSendWhileRunning?: boolean;
   profileDependentAdmissionBlockReason?: string;
   hasActiveStream: boolean;
   activeStreamTurnAssigned: boolean;

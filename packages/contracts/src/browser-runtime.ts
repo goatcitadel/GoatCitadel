@@ -91,6 +91,8 @@ export interface BrowserSessionCreateInput {
   workspaceId?: string;
   label?: string;
   actorId?: string;
+  /** Optional client request ID; repeating it returns the session it already created. */
+  requestId?: string;
 }
 
 export interface BrowserSessionGrantInput {
@@ -98,6 +100,8 @@ export interface BrowserSessionGrantInput {
   scopes: BrowserSessionGrantScope[];
   allowedHosts?: string[];
   ttlSeconds?: number;
+  /** Optional client request ID; repeating it returns the grant it already created. */
+  requestId?: string;
 }
 
 export interface BrowserSessionAccessCheck {

@@ -143,7 +143,9 @@ export function useIntegrationEditorActions(s: IntegrationSettingsState) {
       });
       if (result.status !== "saved") {
         if (!s.isCurrent()) return false;
-        setNotice({ tone: "error", message: result.message });
+        // A lock (uncertain/locked) is shown by its own notice, which an outcome check can settle; don't copy it here.
+        if (result.status === "conflict" || result.status === "cancelled")
+          setNotice({ tone: "error", message: result.message });
         if (result.status === "conflict" || result.status === "uncertain") await review.refresh();
         return false;
       }

@@ -310,12 +310,12 @@ describe("desktop shell bootstrap", () => {
     await flushPromises();
 
     listeners.get("desktop://approval-created")?.({
-      payload: { approvalId: "approval 1", status: "pending" },
+      payload: { approvalId: "approval 1", workspaceId: "workspace/a", status: "pending" },
     });
     await flushPromises();
     notificationClick?.();
 
-    expect(frameElement().src).toBe("http://127.0.0.1:5173/ops/approvals?approvalId=approval%201");
+    expect(frameElement().src).toBe("http://127.0.0.1:5173/inbox?approvalId=approval%201&workspaceId=workspace%2Fa");
     expect(close).toHaveBeenCalled();
 
     listeners.get("desktop://operator-attention")?.({

@@ -1,5 +1,7 @@
 import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
+import { getGatewayAccessRevision, getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { detectImageGenerationIntent } from "../chat-image-intent";
 import { parseBtwCommand, parseQueueCommand, resolveMidTurnDisposition } from "../chat-page-pure-helpers";
 import { useBtwSideChatController } from "../useBtwSideChatController";
@@ -21,6 +23,7 @@ import { useChatScopedErrors } from "./useChatScopedErrors";
 import { useChatSessionSelection } from "./useChatSessionSelection";
 
 type Input = {
+  workspaceId: string;
   profileDependentAdmissionBlockReason:
     | "Model council is temporarily unavailable. Turn Council off to send."
     | "Workspace snapshots are temporarily unavailable. Remove the snapshot to send."
@@ -67,6 +70,7 @@ type Input = {
 
 /** Keeps plain Chat, knowledge commands and explicit image generation on their existing admission paths. */
 export function useChatComposerSendIntent({
+  workspaceId,
   profileDependentAdmissionBlockReason,
   notices,
   setFollowThreadOutput,
@@ -93,6 +97,11 @@ export function useChatComposerSendIntent({
   multimodal,
   errorState,
 }: Input) {
+  const access = getGatewayAccessRevision(); const caller = getGatewayCallerScope(); const gateway = getGatewayApiBaseUrl();
+  const identity = JSON.stringify([workspaceId, selection.selectedSessionId, gateway, access, caller]);
+  const scopeRef = useRef({ identity });
+  if (scopeRef.current.identity !== identity) scopeRef.current = { identity };
+  const scope = scopeRef.current;
   const { pushLocalNotice } = notices;
   const { attachPendingKnowledgeSources } = knowledgeActions;
   const { handleSend } = orchestration;
@@ -135,8 +144,12 @@ export function useChatComposerSendIntent({
     const queueCommand = parseQueueCommand(draft);
     const btwCommand = parseBtwCommand(draft);
     if (btwCommand) {
+      const isCurrent = () => scopeRef.current === scope && getGatewayAccessRevision() === access && getGatewayCallerScope() === caller && getGatewayApiBaseUrl() === gateway;
+      if (!isCurrent()) return;
+      // Consume only the submitted command synchronously. Child creation/inline
+      // side sends may finish after the operator has authored a new parent draft.
+      setDraft((current) => isCurrent() && current === draft ? "" : current);
       await openBtwSideChat(btwCommand.text);
-      setDraft("");
       return;
     }
     const disposition = resolveMidTurnDisposition({
@@ -235,6 +248,7 @@ export function useChatComposerSendIntent({
 
     await sendDraftAsChat();
   }, [
+    scope, access, caller, gateway,
     consumeModelCouncilArming,
     draft,
     orchestration.editingTurnId,

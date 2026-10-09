@@ -73,9 +73,16 @@ export function LocalAiSettings() {
       {(["download", "serve"] as const).map((kind) => {
         const state = control.stateFor(kind);
         return state?.message && state.message !== control.notice?.message ? (
-          <p role={state.phase === "uncertain" ? "alert" : "status"} key={kind} className="text-sm text-fg-secondary">
-            {state.message}
-          </p>
+          <div key={kind} className="space-y-2">
+            <p role={state.phase === "uncertain" ? "alert" : "status"} className="text-sm text-fg-secondary">
+              {state.message}
+            </p>
+            {state.phase === "uncertain" && state.transport ? (
+              <Button size="sm" disabled={state.checking} onClick={() => void control.checkOutcome(kind)}>
+                {state.checking ? "Checking outcome…" : "Check outcome"}
+              </Button>
+            ) : null}
+          </div>
         ) : null;
       })}
       {readiness ? (
@@ -166,7 +173,7 @@ export function LocalAiSettings() {
               No selected model fit is available. Choose a returned recommendation to review a request.
             </p>
           )}
-          <p className="text-sm text-fg-secondary">
+          <details><summary>Advisory approval requests (no execution)</summary><p className="text-sm text-fg-secondary">
             The current Gateway records approval intent only. These requests do not download models, start servers, or
             configure a provider. Approval does not supply the missing execution step.
           </p>
@@ -178,14 +185,16 @@ export function LocalAiSettings() {
               Request serve approval
             </Button>
           </div>
+          </details>
         </>
       ) : null}
       <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm">
-        <a className="text-accent hover:underline" href="/settings/advanced?shell=cockpit#managed-runtime"
+        <a className="text-accent hover:underline" href="/settings/models?shell=cockpit#local-ai"
           onClick={(event) => {
             if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
             event.preventDefault();
-            navigate("/settings/advanced?shell=cockpit#managed-runtime");
+            navigate("/settings/models?shell=cockpit#local-ai");
+            requestAnimationFrame(() => document.getElementById("llamacpp-setup")?.scrollIntoView({ block: "start" }));
           }}>
           Set up llama.cpp for Chat
         </a>

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
 import type { OutboundQueueItem } from "../useChatSurfaceOrchestration";
 import { resetChatSessionCreationForTests } from "@goatcitadel/mission-control-shared/state/chat-session-creation";
+import { setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { createQueueStorageKey } from "../useChatLocalPersistence";
 import {
   api,
@@ -228,4 +229,66 @@ describe("first-session send and queue restoration composition", () => {
       "model-stored",
     ]);
   });
+});
+
+it("collects, removes, recollects and preserves the original caller queue across pagehide before one explicit resume", async () => {
+  setGatewayCallerScope("queue-actor-a");
+  api.sendAgentChatMessage.mockResolvedValue({ userMessage: { messageId: "resumed-once" } });
+  await act(async () => { renderer = create(<Harness />); });
+  await act(async () => latest.navigate(CREATED.sessionId));
+  await act(async () => latest.setDraft("/queue collect Remove this"));
+  await act(async () => latest.sendIntent());
+  expect(latest.queue.map((item) => item.content)).toEqual(["Remove this"]);
+  await act(async () => latest.removeQueue(latest.queue[0]!.id));
+  expect(latest.queue).toEqual([]);
+  await act(async () => latest.setDraft("/queue collect Retain this"));
+  await act(async () => latest.sendIntent());
+  expect(latest.queue.map((item) => item.content)).toEqual(["Retain this"]);
+  expect(latest.draft).toBe(""); expect(api.sendAgentChatMessage).not.toHaveBeenCalled();
+  const originalKey = createQueueStorageKey(CREATED.workspaceId!, CREATED.sessionId);
+  // Reload/page navigation does not run React cleanup. Flush the captured key,
+  // even if identity changes immediately before the browser lifecycle event.
+  setGatewayCallerScope("queue-actor-b");
+  await act(async () => window.dispatchEvent(new Event("pagehide")));
+  expect(JSON.parse(window.localStorage.getItem(originalKey) ?? "[]").map((item: OutboundQueueItem) => item.content)).toEqual(["Retain this"]);
+  expect(window.localStorage.getItem(createQueueStorageKey(CREATED.workspaceId!, CREATED.sessionId))).toBeNull();
+  await act(async () => renderer!.unmount()); renderer = undefined;
+  await act(async () => { renderer = create(<Harness />); });
+  await act(async () => latest.navigate(CREATED.sessionId));
+  expect(latest.queue).toEqual([]);
+  await act(async () => renderer!.unmount()); renderer = undefined;
+  setGatewayCallerScope("queue-actor-a");
+  await act(async () => { renderer = create(<Harness />); });
+  await act(async () => latest.navigate(CREATED.sessionId));
+  expect(latest.queue).toHaveLength(1); expect(latest.queue[0]!.paused).toBe(true);
+  expect(api.sendAgentChatMessage).not.toHaveBeenCalled();
+  await act(async () => latest.resumeQueue());
+  expect(api.sendAgentChatMessage).toHaveBeenCalledTimes(1);
+  expect(api.sendAgentChatMessage.mock.calls[0]?.[1].content).toBe("Retain this");
+  expect(latest.queue).toEqual([]);
+  await act(async () => renderer!.unmount()); renderer = undefined;
+  setGatewayCallerScope("");
+});
+
+
+it.each([false, true])("retains new parent input across delayed side opening (handoff %s)", async (handoff) => {
+  const opening = deferred<void>();
+  api.openBtwSideChat.mockReturnValue(opening.promise);
+  await act(async () => { renderer = create(<Harness />); });
+  await act(async () => latest.setDraft("/btw Side question"));
+  const originalIntent = latest.sendIntent;
+  let pending!: Promise<void>;
+  await act(async () => { pending = latest.sendIntent(); });
+  expect(latest.draft).toBe("");
+  expect(api.openBtwSideChat).toHaveBeenCalledExactlyOnceWith("Side question");
+  if (handoff) await act(async () => latest.navigate("other-parent", "other-workspace"));
+  await act(async () => latest.setDraft("New parent input"));
+  await act(async () => { opening.resolve(); await pending; });
+  expect(latest.draft).toBe("New parent input");
+  expect(api.sendAgentChatMessage).not.toHaveBeenCalled();
+  if (handoff) {
+    await act(async () => originalIntent());
+    expect(api.openBtwSideChat).toHaveBeenCalledTimes(1);
+    expect(latest.draft).toBe("New parent input");
+  }
 });

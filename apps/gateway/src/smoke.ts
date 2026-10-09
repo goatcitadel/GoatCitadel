@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { cp, mkdtemp, mkdir, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readdir, rm } from "node:fs/promises";
 import { buildApp } from "./app.js";
 
 interface JsonResponse<T = unknown> {
@@ -35,6 +35,23 @@ function writeSmokeError(message: string): void {
   process.stderr.write(`${message}\n`);
 }
 
+/** The config files the repository ships; operator files beside them (goatcitadel.json, llm-providers.json, …) never are. */
+function isShippedConfigFile(name: string): boolean {
+  return name.endsWith(".example.json") || name === "llm-model-metadata.json";
+}
+
+/** Copies only the shipped top-level config files, so a smoke run sees what a fresh checkout and CI see. */
+export async function copyShippedConfig(repoRoot: string, targetRoot: string): Promise<void> {
+  const sourceConfig = path.join(repoRoot, "config");
+  const targetConfig = path.join(targetRoot, "config");
+  await mkdir(targetConfig, { recursive: true });
+  for (const entry of await readdir(sourceConfig, { withFileTypes: true })) {
+    if (entry.isFile() && isShippedConfigFile(entry.name)) {
+      await copyFile(path.join(sourceConfig, entry.name), path.join(targetConfig, entry.name));
+    }
+  }
+}
+
 function formatSmokeError(error: unknown): string {
   if (error instanceof Error) {
     return error.stack ?? error.message;
@@ -54,7 +71,7 @@ export async function runSmoke(options: SmokeOptions = {}): Promise<void> {
   const priorInsecureLocalOverride = process.env.GOATCITADEL_I_UNDERSTAND_THIS_IS_INSECURE_LOCAL_ONLY;
 
   try {
-    await cp(path.join(repoRoot, "config"), path.join(tempRoot, "config"), { recursive: true });
+    await copyShippedConfig(repoRoot, tempRoot);
     await mkdir(path.join(tempRoot, "data", "transcripts"), { recursive: true });
     await mkdir(path.join(tempRoot, "data", "audit"), { recursive: true });
     await mkdir(path.join(tempRoot, "workspace"), { recursive: true });

@@ -1,24 +1,31 @@
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import type { ChatPendingApprovalState } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
-import { buildApprovalEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
-import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { buildApprovalRequestReviewEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
+import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { ApprovalReviewSummary } from "../inbox/ApprovalReviewSummary";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { handleEvidenceScrollKeyDown } from "../../ui/evidence-scroll";
 
 /** The deliberate, untimed confirmation word for nuclear risk and for risk levels this build doesn't know. */
 const CRITICAL_CONFIRMATION = "approve";
 
 export function RiskApprovalAction({
   approval,
+  workspaceId,
   reviewedApproval,
   pending,
   onApprove,
+  specialistReview,
 }: {
   approval: ChatPendingApprovalState;
+  workspaceId?: string;
   reviewedApproval?: ApprovalRequest;
   pending: boolean;
   onApprove: () => void;
+  specialistReview?: ReactNode;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [typed, setTyped] = useState("");
@@ -30,25 +37,27 @@ export function RiskApprovalAction({
     reviewedApproval.riskLevel === approval.riskLevel
       ? reviewedApproval
       : null;
-  const evidence = reviewed ? buildApprovalEvidenceModel(reviewed.preview) : null;
-  const hasActionPreview = Boolean(
-    evidence?.commands.length ||
-    evidence?.targets.length ||
-    evidence?.changes.length ||
-    evidence?.supporting.some((detail) => /^(?:Url|Uri|Selector|Field|Input):/.test(detail)),
-  );
+  const evidence = reviewed ? buildApprovalRequestReviewEvidenceModel(reviewed) : null;
+  const hasActionPreview =
+    Boolean(specialistReview) ||
+    Boolean(
+      evidence?.commands.length ||
+      evidence?.targets.length ||
+      evidence?.changes.length ||
+      evidence?.supporting.some((detail) => /^(?:Url|Uri|Selector|Field|Input):/.test(detail)),
+    );
 
   if (!approval.riskLevel)
     return <p className="text-xs text-fg-muted">Risk is unavailable. Review the persisted approval before deciding.</p>;
-  if (approval.kind === "remote_worker.native_runtime")
+  if (approval.kind === "remote_worker.native_runtime" && !specialistReview)
     return (
       <p className="text-xs text-fg-muted">This runtime request needs the native review shown in current approvals.</p>
     );
   // Only the two lowest tiers approve in one click. Danger opens the evidence review, and nuclear
   // or any risk level this build doesn't know also needs the typed confirmation.
-  if (approval.riskLevel !== "safe" && approval.riskLevel !== "caution") {
-    const critical = approval.riskLevel !== "danger";
-    const riskName = humanizeToken(approval.riskLevel);
+  if (specialistReview || (approval.riskLevel !== "safe" && approval.riskLevel !== "caution")) {
+    const critical = !["safe", "caution", "danger"].includes(approval.riskLevel);
+    const riskName = presentRiskLevel(approval.riskLevel).label;
     const confirmed = !critical || typed.trim().toLowerCase() === CRITICAL_CONFIRMATION;
     return (
       <>
@@ -70,7 +79,20 @@ export function RiskApprovalAction({
           title={`Confirm ${riskName.toLowerCase()} risk action`}
           description="Review the exact action before approving once."
         >
-          <div className="mb-3 max-h-72 space-y-2 overflow-y-auto text-sm text-fg-secondary">
+          {specialistReview}
+          {reviewed ? (
+            <ApprovalReviewSummary
+              approval={reviewed}
+              workspaceId={workspaceId ?? reviewed.linkage?.workspaceId ?? "Scope unavailable"}
+            />
+          ) : null}
+          <div
+            role="region"
+            aria-label="Approval action evidence"
+            tabIndex={0}
+            onKeyDown={handleEvidenceScrollKeyDown}
+            className="mb-3 min-w-0 max-w-full max-h-72 space-y-2 overflow-y-auto wrap-anywhere text-sm text-fg-secondary"
+          >
             <p>
               <strong>Action:</strong>{" "}
               {reviewed?.linkage?.toolName ?? approval.toolName ?? reviewed?.kind ?? approval.kind ?? "Action request"}
@@ -127,12 +149,11 @@ export function RiskApprovalAction({
               </div>
             ) : null}
             {reviewed ? (
-              <details open className="rounded border border-line p-2">
-                <summary className="cursor-pointer">Full persisted action preview</summary>
+              <TechnicalDetails label="Full persisted action preview">
                 <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-sunken p-2 font-mono text-xs">
                   {JSON.stringify(reviewed.preview, null, 2)}
                 </pre>
-              </details>
+              </TechnicalDetails>
             ) : null}
             {!hasActionPreview ? (
               <p role="alert">

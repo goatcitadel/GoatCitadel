@@ -3,6 +3,7 @@ import { readCockpitLocation } from "../../app/cockpit-back-guard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/Tabs";
 import type { SettingsIndexEntry, SettingsIndexPage } from "./settings-index";
 import { preloadSettingsSection } from "./settings-controls";
+import { describeReleaseSurfaceStatus } from "../../../app/route-model";
 
 const DEFAULT_SECTIONS: Record<string, string> = {
   models: "providers",
@@ -63,7 +64,7 @@ export function SettingsSectionTabs({
       className="min-w-0"
     >
       <TabsList aria-label={`${page.label} sections`} className="mt-3 max-w-full overflow-x-auto pb-px">
-        {page.entries.map((entry) => (
+        {page.entries.filter((entry) => entry.discoverable).map((entry) => (
           <TabsTrigger
             key={entry.section}
             value={entry.section}
@@ -73,6 +74,7 @@ export function SettingsSectionTabs({
             onPointerDown={() => preloadSettingsSection(entry.section)}
           >
             {entry.tabLabel ?? entry.label}
+            {entry.releaseStatus === "experimental" ? " · Experimental" : ""}
           </TabsTrigger>
         ))}
       </TabsList>
@@ -82,6 +84,7 @@ export function SettingsSectionTabs({
           value={entry.section}
           forceMount
           hidden={value !== entry.section}
+          aria-label={!entry.discoverable ? entry.label : undefined}
           className="min-w-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
         >
           {visited.current.has(entry.section) ? (
@@ -92,6 +95,9 @@ export function SettingsSectionTabs({
                 </p>
               }
             >
+              {entry.releaseStatus !== "ship" ? <p role="status" className="py-2 text-sm text-fg-secondary">
+                {describeReleaseSurfaceStatus(entry.releaseStatus)}. {entry.releaseNote}
+              </p> : null}
               {children(entry)}
             </Suspense>
           ) : null}

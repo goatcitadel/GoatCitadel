@@ -80,7 +80,7 @@ export async function runCockpitChatProjectProof({ context, browser, stack, cita
             mutations.push({ method: request.method(), path: url.pathname, body: request.postDataJSON() });
         });
         await page.goto(buildVerificationUiUrl(stack.uiUrl, `/chat?sessionId=${sessions[0].sessionId}&shell=cockpit`), { waitUntil: "domcontentloaded" });
-        await page.getByRole("textbox", { name: "Message", exact: true }).waitFor({ timeout: 30_000 });
+        await page.getByRole("combobox", { name: "Message", exact: true }).waitFor({ timeout: 30_000 });
         stage = "select exact project";
         let filters = await openFilters();
         await filters.getByRole("combobox", { name: "Filter by project", exact: true }).selectOption(projects[0].projectId);

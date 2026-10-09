@@ -9,6 +9,7 @@ import {
   type ChannelSetupWizardProps,
 } from "./channel-wizard-model";
 export function useChannelWizard({
+  allowAdvancedInput = true,
   scopeId = "global",
   advancedValue,
   onAdvancedValueChange,
@@ -35,7 +36,8 @@ export function useChannelWizard({
   const [activeStepId, setActiveStepId] = useSessionViewState(viewKey + ":step", visibleSteps[0]?.id ?? "");
   const [visitedStepIds, setVisitedStepIds] = useSessionViewState<Record<string, boolean>>(viewKey + ":visited", {});
   const [checkedItems, setCheckedItems] = useSessionViewState<Record<string, boolean>>(viewKey + ":checklist", {});
-  const [advancedMode, setAdvancedMode] = useSessionViewState(viewKey + ":advanced-mode", false);
+  const [savedAdvancedMode, setAdvancedMode] = useSessionViewState(viewKey + ":advanced-mode", false);
+  const advancedMode = allowAdvancedInput && savedAdvancedMode;
   const [localAdvancedJson, setLocalAdvancedJson] = useState(() => formatJson(values));
   const advancedJson = advancedValue ?? localAdvancedJson;
   const setAdvancedJson = (value: string) => {

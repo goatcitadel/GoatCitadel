@@ -1,5 +1,4 @@
 import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
-import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { resolveChatRouteReadiness } from "../../../features/threaded-surface/chat-route-readiness";
 
@@ -56,11 +55,6 @@ export function composerSendBlock(props: SendBlockProps): ComposerSendBlock | nu
   if (props.composerPalette?.globalOpen) return { kind: "blocked", message: "Choose a palette item before sending." };
   if (props.routeBoundaryAckRequired && !props.routeBoundaryAcknowledged)
     return { kind: "blocked", message: "Acknowledge the route fallback before sending." };
-  if (getWorkflowSkillCaptureDisplay(props.draft))
-    return {
-      kind: "blocked",
-      message: "This captured workflow needs review before it can be sent. Review it in the classic view.",
-    };
   if (props.commandSuggestions.length && /^\s*[/@$]/.test(props.draft))
     return { kind: "blocked", message: "Choose a suggestion before sending." };
   if (!props.canSend && (props.draft.trim() || props.pendingAttachments.length)) {

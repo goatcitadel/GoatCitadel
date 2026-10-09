@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
 import {
   createChatSession,
+  deleteChatSession,
   listChatSessions,
   searchChatSessions,
   type ChatSessionDependencies,
@@ -37,7 +38,7 @@ function harness() {
     normalizeWorkspaceId: (value?: string) => value?.trim() || "workspace-1",
     ensureChatSessionRuntimeGrants() {},
     requireChatSession: async (sessionId: string) =>
-      (await listChatSessions(deps, { workspaceId: "workspace-1", view: "all", includeHidden: true })).find(
+      (await Promise.all(["workspace-1", "workspace-other"].map((workspaceId) => listChatSessions(deps, { workspaceId, view: "all", includeHidden: true })))).flat().find(
         (item) => item.sessionId === sessionId,
       )!,
     getSession: (sessionId: string) => asyncStorage.sessions.getBySessionId(sessionId),
@@ -72,7 +73,7 @@ function harness() {
       startedAt,
       status: statusValue as never,
     });
-  return { deps, status, trace };
+  return { deps, status, trace, storage };
 }
 
 describe("sessions list activity (CH-08)", () => {
@@ -131,6 +132,25 @@ describe("sessions list activity (CH-08)", () => {
     expect(plain.items[0]?.session.activity).toBeUndefined();
   });
 
+  it("batches previews from visible roles without leaking parts, system content or another workspace", async () => {
+    const { deps, storage } = harness();
+    const first = await createChatSession(deps, { workspaceId: "workspace-1" });
+    const empty = await createChatSession(deps, { workspaceId: "workspace-1" });
+    const other = await createChatSession(deps, { workspaceId: "workspace-other" });
+    const write = (sessionId: string, messageId: string, role: "user" | "assistant" | "system", content: string) => deps.storage.chatMessages.upsert({ sessionId, messageId, role, content, actorType: "user", actorId: "operator", sourceAuthority: "operator", timestamp: new Date().toISOString() });
+    await write(first.sessionId, "first-visible", "user", "Older message");
+    await write(first.sessionId, "last-visible", "assistant", "Visible answer " + "a".repeat(180));
+    await write(first.sessionId, "private-system", "system", "PRIVATE TOOL PAYLOAD");
+    await write(other.sessionId, "foreign", "user", "FOREIGN WORKSPACE");
+    const batch = vi.spyOn(storage.chatMessages, "latestVisibleTextBySessionIds");
+    const rows = await listChatSessions(deps, { workspaceId: "workspace-1" });
+    expect(batch).toHaveBeenCalledOnce();
+    expect(batch.mock.calls[0]?.[0].sort()).toEqual([first.sessionId, empty.sessionId].sort());
+    expect(rows.find((item) => item.sessionId === first.sessionId)?.lastMessagePreview).toBe(("Visible answer " + "a".repeat(180)).slice(0, 160));
+    expect(rows.find((item) => item.sessionId === empty.sessionId)?.lastMessagePreview).toBeUndefined();
+    expect(JSON.stringify(rows)).not.toMatch(/PRIVATE TOOL|FOREIGN WORKSPACE/);
+  });
+
   it("keeps activity in the public projection", () => {
     const activity = {
       observedAt: "2026-10-05T10:03:00.000Z",
@@ -140,4 +160,27 @@ describe("sessions list activity (CH-08)", () => {
     const projected = projectChatSessionForPublic({ sessionId: "s", activity } as ChatSessionRecord);
     expect(projected.activity).toEqual(activity);
   });
+});
+
+
+it("verifies bounded retained membership through canonical workspace, history, search and deletion owners", async () => {
+  const { deps, storage } = harness();
+  const a = await createChatSession(deps, { workspaceId: "workspace-1", title: "Needle keep" });
+  const b = await createChatSession(deps, { workspaceId: "workspace-1", title: "Needle archive" });
+  const c = await createChatSession(deps, { workspaceId: "workspace-1", title: "Needle delete" });
+  const d = await createChatSession(deps, { workspaceId: "workspace-other", title: "Needle foreign" });
+  const e = await createChatSession(deps, { workspaceId: "workspace-1", title: "Needle rename" });
+  const ids = [a, b, c, d, e].map((item) => item.sessionId);
+  const query = { workspaceId: "workspace-1", sessionIds: ids, q: "Needle", includeActivity: true };
+  expect((await listChatSessions(deps, query)).map((item) => item.sessionId).sort()).toEqual([a, b, c, e].map((item) => item.sessionId).sort());
+  storage.chatSessionMeta.patch(b.sessionId, { lifecycleStatus: "archived" });
+  storage.chatSessionMeta.patch(e.sessionId, { title: "Unrelated" });
+  await deleteChatSession(deps, c.sessionId, c.revision);
+  const fresh = await createChatSession(deps, { workspaceId: "workspace-1", title: "Needle new" });
+  expect((await listChatSessions(deps, query)).map((item) => item.sessionId)).toEqual([a.sessionId]);
+  expect((await listChatSessions(deps, { workspaceId: "workspace-1", q: "Needle" })).map((item) => item.sessionId)).toContain(fresh.sessionId);
+  expect((await listChatSessions(deps, { ...query, view: "archived" })).map((item) => item.sessionId)).toEqual([b.sessionId]);
+  expect((await listChatSessions(deps, { ...query, q: undefined })).map((item) => item.sessionId).sort()).toEqual([a.sessionId, e.sessionId].sort());
+  await expect(listChatSessions(deps, { ...query, sessionIds: Array(101).fill(a.sessionId) })).rejects.toThrow("1 to 100");
+  await expect(listChatSessions(deps, { ...query, cursor: "invalid" })).rejects.toThrow("no sessionId or cursor");
 });

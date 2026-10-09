@@ -9,6 +9,7 @@ import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { Button } from "../../ui/Button";
+import { LlamaRuntimeLifecycle } from "./LlamaRuntimeLifecycle";
 
 const inputClass =
   "mt-1 min-h-10 w-full rounded-md border border-line bg-canvas px-2 text-sm text-fg disabled:opacity-60";
@@ -190,6 +191,19 @@ export function ManagedRuntimeSettings() {
         <p role="alert" className="text-sm text-status-failed">
           {control.uncertain}
         </p>
+      ) : null}
+      {control.uncertain && control.checkable ? (
+        <Button size="sm" disabled={control.checking} onClick={() => void control.checkOutcome()}>
+          {control.checking ? "Checking outcome…" : "Check outcome"}
+        </Button>
+      ) : null}
+      {runtime && !settings.isError ? (
+        <LlamaRuntimeLifecycle
+          managementMode={runtime.managementMode}
+          status={runtime.status}
+          busy={control.busy || settings.isFetching}
+          onChanged={() => settings.refetch()}
+        />
       ) : null}
       <div className="flex flex-wrap gap-3 text-sm">
         <ClassicOwnerLink href="/settings/onboarding?view=llamacpp&shell=classic" scope={scope} label="Open validated llama.cpp setup" />

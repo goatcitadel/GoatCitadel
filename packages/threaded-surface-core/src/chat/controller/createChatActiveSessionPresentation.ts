@@ -59,6 +59,7 @@ type Input = {
     | "capabilityProfileInspection"
     | "routeBoundaryAckRequired"
     | "canSend"
+    | "canSendWhileRunning"
     | "profileDependentAdmissionBlockReason"
     | "handleAgenticControl"
   >;
@@ -215,6 +216,14 @@ export function createChatActiveSessionPresentation({
   const activeSessionSurfaceProps: MissionControlActiveSessionSurfaceProps | null = session.threadController
     .selectedSession
     ? {
+        canSendWhileRunning: surfaceRuntime.canSendWhileRunning,
+        attachmentUpload: composer.composerInteractions.attachmentUpload,
+        projectSwitchContext: {
+          workspaceId,
+          session: session.threadController.selectedSession,
+          projects: session.sessionData.projects?.items ?? [],
+          mutationPending: session.sessionControls.sessionControlPending !== null,
+        },
         ...createChatSessionHeaderProps({
           workspaceSummaryText: chatSessionRailPresentation.workspaceSummaryText,
           sessionTrust: surfaceRuntime.runPresentation.sessionTrust,

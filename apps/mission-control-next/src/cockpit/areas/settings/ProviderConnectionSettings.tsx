@@ -98,6 +98,8 @@ function ProviderConnectionEditor({ provider, registeredEnvVar, revision, availa
     {draft.isDirty ? <p className="text-xs text-fg-muted">Finish or discard the endpoint draft before replacing its credential.</p> : null}
     {attempt ? <div className="space-y-2 rounded-md border border-line bg-raised p-3 text-sm text-fg-secondary">
       <p role={attempt.uncertain ? "alert" : "status"}>{attempt.message}</p>
+      {attempt.uncertain && attempt.transport ? <Button size="sm" disabled={!available || attempt.busy || editor.refreshing}
+        onClick={() => void editor.checkOutcome()}>Check outcome</Button> : null}
       {plan ? <>
         <p className="font-medium text-fg">{plan.title} · {humanizeToken(plan.status)}</p>
         <p className="break-words">{plan.summary}</p><p className="break-words">Impact: {plan.impact}</p>

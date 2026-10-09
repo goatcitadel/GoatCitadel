@@ -92,6 +92,9 @@
      Dark theme overrides this below: a 32% near-black veil is imperceptible
      on the #080f11 app background, so drawers read as un-layered. */
   --bg-scrim: rgba(15, 23, 42, 0.32);
+
+  /* Upward shadow for bottom-docked drawers. */
+  --shadow-drawer-up: 0 -8px 24px rgb(0 0 0 / 0.35);
 }
 
 /* Scoped to the bare .theme-* class (on <html>/<body>), not .mc-next-shell, so

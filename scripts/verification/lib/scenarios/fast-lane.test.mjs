@@ -8,6 +8,7 @@ import {
   prepareFastLaneCommandTempRoot,
   removeFastLaneCommandTempRoot,
   resolveFastLaneCommandEnv,
+  resolveFastLaneCommandOmitEnv,
   resolveFastLaneCommandTempRoot,
 } from "./fast-lane.mjs";
 
@@ -107,5 +108,38 @@ describe("fast lane command scratch roots", () => {
     });
 
     assert.equal(removed, false);
+  });
+});
+
+describe("fast smoke isolation", () => {
+  it("gives smoke a fresh empty runtime root with every GoatCitadel path pinned inside it", async () => {
+    const preparedRoot = await prepareFastLaneCommandTempRoot(path.join(await createTestRoot(), "fast.smoke"));
+    const env = await resolveFastLaneCommandEnv({ runId: "run" }, { id: "fast.smoke" }, preparedRoot);
+
+    const runtimeRoot = env.GOATCITADEL_ROOT_DIR;
+    assert.equal(path.dirname(runtimeRoot), preparedRoot);
+    // Nothing is copied from the checkout: no config, skills or workspaces.
+    assert.deepEqual(await fs.readdir(runtimeRoot), []);
+    for (const key of [
+      "GOATCITADEL_HOME",
+      "GOATCITADEL_LOCAL_ENV_FILE",
+      "GOATCITADEL_BACKUP_DIR",
+      "GOATCITADEL_CODE_MODE_ARTIFACT_ROOT",
+      "GOATCITADEL_CODE_MODE_TEMP_ROOT",
+    ]) {
+      assert.ok(env[key]?.startsWith(runtimeRoot), key);
+    }
+    assert.equal(env.GOATCITADEL_DATABASE_DRIVER, "sqlite");
+    assert.equal(env.GOATCITADEL_DISABLE_SECRET_STORE, "true");
+  });
+
+  it("omits every inherited GoatCitadel setting from smoke only", () => {
+    const inherited = { GOATCITADEL_EXAMPLE_INHERITED: "operator", VITE_GOATCITADEL_EXAMPLE: "operator", PATH: "kept" };
+    const omitted = resolveFastLaneCommandOmitEnv({ id: "fast.smoke" }, inherited);
+    assert.ok(omitted.includes("GOATCITADEL_EXAMPLE_INHERITED"));
+    assert.ok(omitted.includes("VITE_GOATCITADEL_EXAMPLE"));
+    assert.ok(omitted.includes("GOATCITADEL_PROMPT_PACK_PATH"));
+    assert.ok(!omitted.includes("PATH"));
+    assert.deepEqual(resolveFastLaneCommandOmitEnv({ id: "fast.test.storage" }, inherited), []);
   });
 });

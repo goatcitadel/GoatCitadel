@@ -309,6 +309,53 @@ describe("dashboard route service", () => {
     expect(rawEvent.payload.authorization).toBe("Bearer dashboard-secret");
   });
 
+  it.each(["runId", "durableRunId"])("discovers canonical %s approval linkage without a lifecycle backlink", async field => {
+    const deps = createDeps();
+    deps.durableOperatorService.getRun.mockReturnValue({ runId: "admitted-run", status: "waiting", workflowKey: "chat.turn.execute", payload: { workspaceId: "ws", sessionId: "session" } });
+    deps.runtimeLifecycleReadService.getRuntimeLifecycle.mockReturnValue({ linked: { approvalIds: [], turnIds: [] }, turns: [], toolRuns: [] });
+    const approval = { approvalId: "actual-approval", kind: "tool.invoke", status: "pending", linkage: { workspaceId: "ws", sessionId: "session", runId: "other-run", durableRunId: "wait-run", [field]: "admitted-run", toolName: "fs.read" }, payload: {}, preview: {} };
+    deps.storage.approvals.listPage.mockReturnValue({ items: [
+      approval,
+      { ...approval, approvalId: "wrong-session", linkage: { ...approval.linkage, sessionId: "other" } },
+      { ...approval, approvalId: "wrong-workspace", linkage: { ...approval.linkage, workspaceId: "other" } },
+      { ...approval, approvalId: "same-session-unrelated-run", linkage: { ...approval.linkage, runId: "other", durableRunId: "other" } },
+    ] } as never);
+    const trace = await createDashboardRouteService(createDashboardRoutePort(deps as never)).getObserveRunTrace("admitted-run");
+    expect(trace.approvals).toMatchObject({ state: "available", items: [{ approvalId: "actual-approval", linkage: approval.linkage }], missingIds: [] });
+    expect(trace.approvals.items).toHaveLength(1);
+    expect(deps.storage.approvals.listPage).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "ws" }));
+    expect(trace.runId).toBe("admitted-run");
+  });
+
+  it.each(["failed", "truncated", "lifecycle-unavailable"])("keeps canonical approval discovery %s and unknown while preserving exact owners", async mode => {
+    const deps = createDeps();
+    deps.durableOperatorService.getRun.mockReturnValue({ runId: "run", status: "waiting", payload: { workspaceId: "ws", sessionId: "session", approvalId: "known" } });
+    deps.storage.approvals.get.mockReturnValue({ approvalId: "known", status: "pending", payload: {}, preview: {} });
+    if (mode === "failed") deps.storage.approvals.listPage.mockImplementation(() => { throw new Error("unavailable"); });
+    else if (mode === "truncated") deps.storage.approvals.listPage.mockReturnValue({ items: [], nextCursor: "more" } as never);
+    else deps.runtimeLifecycleReadService.getRuntimeLifecycle.mockRejectedValue(new Error("lifecycle unavailable"));
+    const trace = await createDashboardRouteService(createDashboardRoutePort(deps as never)).getObserveRunTrace("run");
+    expect(trace.approvals).toMatchObject({ state: "unknown", items: [{ approvalId: "known" }] });
+    expect(deps.storage.approvals.listPage.mock.calls.length).toBeLessThanOrEqual(5);
+  });
+
+  it("follows canonical approval pages and retains resolved linkage for history", async () => {
+    const deps = createDeps();
+    deps.durableOperatorService.getRun.mockReturnValue({ runId: "run", status: "completed", payload: { workspaceId: "ws", sessionId: "session" } });
+    deps.storage.approvals.listPage.mockReturnValueOnce({ items: [], nextCursor: "second-page" } as never).mockReturnValueOnce({ items: [{ approvalId: "resolved", status: "approved", linkage: { workspaceId: "ws", sessionId: "session", runId: "run", durableRunId: "distinct-wait-run" } }] } as never);
+    const trace = await createDashboardRouteService(createDashboardRoutePort(deps as never)).getObserveRunTrace("run");
+    expect(trace.approvals).toMatchObject({ state: "available", items: [{ approvalId: "resolved", status: "approved" }] });
+    expect(deps.storage.approvals.listPage).toHaveBeenNthCalledWith(2, { workspaceId: "ws", limit: 200, cursor: "second-page", includeExpired: true });
+  });
+
+  it.each([{}, { workspaceId: "ws" }])("does not broaden approval discovery with absent or contradictory workspace scope %j", async payload => {
+    const deps = createDeps();
+    deps.durableOperatorService.getRun.mockReturnValue({ runId: "run", payload, metadata: payload.workspaceId ? { workspaceId: "other" } : {} });
+    const trace = await createDashboardRouteService(createDashboardRoutePort(deps as never)).getObserveRunTrace("run");
+    expect(trace.approvals).toEqual({ state: "unknown", items: [], missingIds: [] });
+    expect(deps.storage.approvals.listPage).not.toHaveBeenCalled();
+  });
+
   it("builds a universal run trace projection from durable, lifecycle, memory, provider, approval, and artifact truth", async () => {
     const deps = createDeps();
     deps.durableOperatorService.getRun.mockReturnValue({
@@ -426,7 +473,8 @@ describe("dashboard route service", () => {
       lifecycle: { state: "available" },
       session: { state: "available" },
       thread: { state: "available" },
-      approvals: { state: "available", items: [{ approvalId: "approval-1" }], missingIds: [] },
+      // This legacy fixture has no canonical workspace, so reverse linkage coverage is unknown.
+      approvals: { state: "unknown", items: [{ approvalId: "approval-1" }], missingIds: [] },
       toolCalls: { state: "available", items: [{ toolRunId: "tool-1" }] },
       memoryContext: { state: "available", items: [{ contextId: "context-1" }] },
       providerUsage: {
@@ -826,7 +874,7 @@ describe("dashboard route service", () => {
           totals: { inputTokens: 7, outputTokens: 11, cachedInputTokens: 2, costUsd: 0.03 },
         },
         approvals: {
-          state: approvalIds.length > 0 ? "available" : "not_available",
+          state: mode === "cowork" ? "not_available" : "unknown", // Only the orchestration fixture has canonical workspace scope.
           items: approvalIds.length > 0 ? [{ approvalId: "approval-code-mode", kind: "code_mode.run" }] : [],
           missingIds: [],
         },
@@ -1063,6 +1111,7 @@ function createDeps() {
       },
       approvals: {
         get: vi.fn(),
+        listPage: vi.fn(() => ({ items: [] })),
         list: vi.fn(() => [
           { approvalId: "approval-1", expiresAt: "2999-01-01T00:00:00.000Z" },
           { approvalId: "approval-2", expiresAt: "2000-01-01T00:00:00.000Z" },

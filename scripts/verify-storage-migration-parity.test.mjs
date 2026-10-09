@@ -1008,12 +1008,16 @@ test("current registries and checked-in manifest cover every migration exactly",
 
   // These reviewed literals are intentionally independent from the generated
   // manifest so an accidental registry-plus-manifest edit cannot self-certify.
-  assert.equal(sqlite.migrations.length, 252);
-  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 252]);
-  assert.equal(postgres.migrations.length, 198);
-  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 198]);
-  assert.equal(sqlite.migrations.at(-1)?.name, "channel_guided_setup_evidence_and_oauth_attempts");
-  assert.equal(postgres.migrations.at(-1)?.name, "channel_guided_setup_evidence_and_oauth_attempts");
+  assert.equal(sqlite.migrations.length, 253);
+  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 253]);
+  assert.equal(postgres.migrations.length, 199);
+  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 199]);
+  assert.equal(sqlite.migrations.at(-1)?.name, "purge_credential_route_idempotency_payload_hashes");
+  assert.equal(postgres.migrations.at(-1)?.name, "purge_credential_route_idempotency_payload_hashes");
+  assert.equal(sqlite.migrations.find(record => record.version === 251)?.name, "delegation_step_instruction_snapshots");
+  assert.equal(postgres.migrations.find(record => record.version === 197)?.name, "delegation_step_instruction_snapshots");
+  assert.equal(sqlite.migrations.find(record => record.version === 252)?.name, "channel_guided_setup_evidence_and_oauth_attempts");
+  assert.equal(postgres.migrations.find(record => record.version === 198)?.name, "channel_guided_setup_evidence_and_oauth_attempts");
   assert.equal(postgres.migrations.find(record => record.version === 195)?.name, "remote_worker_runtime_install_evidence");
   assert.equal(sqlite.migrations.find(record => record.version === 249)?.name, "remote_worker_native_policy_reservations");
   assert.equal(postgres.migrations.find(record => record.version === 194)?.name, "remote_worker_native_policy_reservations");

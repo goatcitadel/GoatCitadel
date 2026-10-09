@@ -599,12 +599,14 @@ export async function discardChannelSetupDraft(
   assertDraftRevision(current, expectedRevision);
   const deleted = await host.storage.channelSetupDrafts.delete(draftId, current.revision);
   if (deleted) {
+    host.recentChannelSetupTests.delete(draftId);
     try {
     for (const state of Object.values(current.secretState ?? {})) {
       if (state.secretRef && state.custody === "temporary") host.channelSecrets?.deleteTemporary(state.secretRef);
     }
-    host.recentChannelSetupTests.delete(draftId);
-    } catch (cause) { throw Object.assign(new Error("The channel draft was discarded. Review credential cleanup before retrying.", { cause }), { mutationCommitted: true }); }
+    } catch (cause) {
+      throw Object.assign(new Error("The channel draft was deleted but temporary credential cleanup needs operator review.", { cause }), { mutationCommitted: true });
+    }
   }
   return deleted;
 }

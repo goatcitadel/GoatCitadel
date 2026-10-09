@@ -95,8 +95,8 @@ describe("MobileTabBar", () => {
         </QueryClientProvider>,
       ),
     );
-    expect(container.querySelector('[title="At least this many Inbox items"]')?.textContent).toBe("2+");
-    expect(container.querySelector('button[aria-label="Inbox, at least 2 items"]')).not.toBeNull();
+    expect(container.querySelector('[title="Outstanding decisions"]')?.textContent).toBe("2");
+    expect(container.querySelector('button[aria-label="Inbox, 2 decisions"]')).not.toBeNull();
     await act(async () => button("More").click());
     expect(document.querySelector('[role="dialog"][aria-label="More"]')).not.toBeNull();
     expect(button("Switch to light theme")).not.toBeNull();

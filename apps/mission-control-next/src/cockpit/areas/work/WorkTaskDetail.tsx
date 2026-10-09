@@ -12,6 +12,7 @@ import { EmptyState } from "../../ui/EmptyState";
 import { taskMatchesWorkspace } from "./work-tasks";
 import { TaskAssignmentControl } from "./TaskAssignmentControl";
 import { TaskDetailsEditor } from "./TaskDetailsEditor";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 
 function formattedTime(iso: string): string {
   const parsed = Date.parse(iso);
@@ -26,6 +27,7 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
   const workspaceId = activeWorkspaceId ?? "default";
   const taskQuery = useQuery({
     queryKey: ["tasks", "work-task", workspaceId, taskId],
+    refetchOnMount: "always",
     queryFn: () => fetchTask(taskId, workspaceId),
     refetchInterval: 30_000,
   });
@@ -33,6 +35,7 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
     !taskQuery.isError && taskQuery.data && taskMatchesWorkspace(taskQuery.data, workspaceId)
       ? taskQuery.data
       : undefined;
+  const taskSessionId = task?.proactiveContext?.sessionId ?? task?.agenticContext?.childSessionId ?? task?.agenticContext?.parentSessionId;
   const activities = useQuery({
     queryKey: ["tasks", "work-task-activities", workspaceId, taskId],
     queryFn: () => fetchTaskActivities(taskId, workspaceId),
@@ -77,6 +80,7 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
           description="This task has no matching active workspace record."
         />
       ) : null}
+      {!taskQuery.isLoading && !taskQuery.isError && !taskQuery.data ? <EmptyState title="Task not found" description="The Gateway returned no task record for this link." /> : null}
       {task ? (
         <>
           <header>
@@ -87,12 +91,17 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
               {formattedTime(task.updatedAt)}
             </p>
           </header>
+          {task.distressSignals?.filter(signal => !signal.resolvedAt).map(signal => <p key={signal.signalId} role="status" className="rounded-md border border-line p-3 text-sm text-fg-secondary">{signal.title}: {signal.summary}</p>)}
+          {task.status === "blocked" && !task.distressSignals?.some(signal => !signal.resolvedAt) ? <p className="text-sm text-fg-secondary">This task is blocked. No blocker reason was recorded; review its activity.</p> : null}
+          {task.proactiveContext?.durableRunId || task.agenticContext?.durableRunId ? <NativeOwnerLink scope={[workspaceId, taskId]} href={`/work/runs/${encodeURIComponent((task.proactiveContext?.durableRunId ?? task.agenticContext?.durableRunId)!)}`}>Open linked runtime run</NativeOwnerLink> : null}
+          {taskSessionId ? <NativeOwnerLink scope={[workspaceId, taskId]} href={`/chat?sessionId=${encodeURIComponent(taskSessionId)}`}>Open linked conversation</NativeOwnerLink> : null}
           {task.description ? (
             <section className="rounded-lg border border-line bg-raised p-4">
               <h2 className="font-display text-lg font-semibold text-fg">Description</h2>
               <p className="mt-2 whitespace-pre-wrap break-words text-sm text-fg-secondary">{task.description}</p>
             </section>
           ) : null}
+          <fieldset disabled={taskQuery.isFetching || !taskQuery.isFetchedAfterMount || taskQuery.isPlaceholderData} className="grid gap-4">
           <TaskStatusControl
             key={`${workspaceId}:${task.taskId}`}
             task={task}
@@ -105,6 +114,7 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
             workspaceId={workspaceId}
           />
           <TaskDetailsEditor key={`${workspaceId}:${task.taskId}:details`} task={task} workspaceId={workspaceId} />
+          </fieldset>
           <div className="grid gap-3 md:grid-cols-2">
             <section className="rounded-lg border border-line bg-raised p-4">
               <h2 className="font-display text-lg font-semibold text-fg">Activity</h2>

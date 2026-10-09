@@ -78,7 +78,7 @@ export async function runUxBudgetChat(environment) {
           assertOk(beforeCommands, `read ${variant} Chat before local commands`);
           const originalTurnIds = beforeCommands.body?.turns?.map((turn) => turn.turnId);
           if (!Array.isArray(originalTurnIds)) throw new Error("Chat command proof has no canonical thread turn list.");
-          await page.getByRole("textbox", { name: "Message" }).fill("/status");
+          await page.getByRole("combobox", { name: "Message", exact: true }).fill("/status");
           await page.getByRole("button", { name: "Show status" }).click();
           const statusPanel = page.getByRole("region", { name: "Chat session status" });
           await statusPanel.waitFor();
@@ -93,7 +93,7 @@ export async function runUxBudgetChat(environment) {
           const statusShot = path.join(screenshotDir, `ux-budgets-cockpit-status-${variant}.png`);
           await page.screenshot({ path: statusShot, fullPage: false });
           await statusPanel.getByRole("button", { name: "Close session status" }).click();
-          await page.getByRole("textbox", { name: "Message" }).fill("/timer");
+          await page.getByRole("combobox", { name: "Message", exact: true }).fill("/timer");
           await page.getByRole("button", { name: "Open timer" }).click();
           const timerDialog = page.getByRole("dialog", { name: "Set a Chat timer" });
           await timerDialog.waitFor();
@@ -140,7 +140,7 @@ export async function runUxBudgetChat(environment) {
           ) {
             throw new Error(`Cockpit Chat ${variant}: local commands sent a model turn`);
           }
-          await page.getByRole("textbox", { name: "Message" }).fill("/schedule");
+          await page.getByRole("combobox", { name: "Message", exact: true }).fill("/schedule");
           await page.getByRole("button", { name: "Open schedules" }).click();
           await page.getByRole("heading", { name: "Schedules" }).waitFor();
           if (!new URL(page.url()).pathname.endsWith("/work/schedules")) {

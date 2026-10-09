@@ -89,6 +89,18 @@ export function useFirstRunSetup(workspaceId: string | undefined) {
     !query.isFetching &&
     !checking,
   );
+  const finishPrerequisite = state?.completed ? "Setup is already recorded. Open Chat to send a message."
+    : completion.attempt?.phase === "unknown" ? "Setup completion is uncertain. Refresh checks to inspect the recorded marker."
+    : completion.locked ? "Wait for the Gateway to confirm setup completion."
+    : query.isFetching || checking ? "Wait for the current setup checks to finish." // refetch-guard: allow Prerequisite text changes during checks; the current setup record remains visible.
+    : !progress?.modelReady ? "Connect a provider and confirm a ready default model before finishing."
+    : approval.locked ? "Resolve the pending or uncertain approval-rule save before finishing."
+    : approval.draft.isDirty || approval.draft.hasRemoteChanges ? "Save or reconcile the approval-rule draft, then refresh checks and review the current rule."
+    : !approvalReady ? "Refresh checks to confirm the current approval rule and settings revision."
+    : !progress.safeApprovalMode ? "Choose and save an approval rule that keeps prompts, then refresh checks and review the current rule."
+    : !safetyConfirmed ? "Review the current approval rule in Step 2 and choose Keep current rule before finishing."
+    : !completion.ready ? "Refresh checks and review the current model and approval rule before finishing."
+    : "Ready to finish setup and open Chat. A completed Chat answer verifies the model separately.";
 
   async function keepCurrentRule() {
     if (!canKeep || !binding || approval.change.isPending()) return;
@@ -118,6 +130,22 @@ export function useFirstRunSetup(workspaceId: string | undefined) {
       if (live.current.mounted) setChecking(false);
     }
   }
+  async function continueModel() {
+    if (!progress?.modelReady || query.isFetching || checking || completion.locked || approval.locked) return;
+    const generation = live.current.generation;
+    setChecking(true);
+    try {
+      const fresh = await fetchOnboardingState();
+      if (!live.current.mounted || live.current.generation !== generation || getGatewayApiBaseUrl() !== installation) return;
+      client.setQueryData(["system", "onboarding"], fresh);
+      if (projectFirstRunState(fresh).modelReady) setStep("safety");
+      else setNotice("Model readiness changed. Connect and confirm the current default before continuing.");
+    } catch (error) {
+      if (live.current.mounted && live.current.generation === generation) setNotice(describeApiError(error).summary);
+    } finally {
+      if (live.current.mounted) setChecking(false);
+    }
+  }
   async function finish() {
     if (!canFinish || approval.change.isPending()) return false;
     const result = await completion.complete();
@@ -140,9 +168,11 @@ export function useFirstRunSetup(workspaceId: string | undefined) {
     safetyConfirmed,
     canKeep,
     canFinish,
+    finishPrerequisite,
     checking,
     notice,
     keepCurrentRule,
+    continueModel,
     finish,
     refresh,
   };

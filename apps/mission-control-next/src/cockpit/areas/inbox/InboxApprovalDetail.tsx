@@ -1,16 +1,24 @@
-import { useState } from "react";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { ApprovalShellExplanations } from "./ApprovalShellExplanations";
+import { ApprovalCodeOutcome } from "./ApprovalCodeOutcome";
+import { ApprovalAuditRecovery } from "./ApprovalAuditRecovery";
+import { readSpecialistEvidence, specialistEvidenceMatches } from "./specialist-approval-evidence";
+import { SpecialistApprovalReview } from "./SpecialistApprovalReview";
+import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
+import { ApprovalSettlement } from "./ApprovalSettlement";
+import { RiskBadge } from "../../ui/RiskBadge";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { buildApprovalEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
-import { presentApprovalStatus, presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { approvalExpiryLabel, approvalExplanationLine } from "./approval-preview";
 import { InboxApprovalActions } from "./InboxApprovalActions";
-import { InboxApprovalOutcome } from "./InboxApprovalOutcome";
 import { queryKeys } from "../../data/query-keys";
 import { nullWhenMissing } from "./inbox-record-read";
 
@@ -18,24 +26,29 @@ export function InboxApprovalDetail({
   item,
   workspaceId,
   focusAction,
+  ownerChecking = false,
 }: {
   item: OperatorInboxItem;
   workspaceId: string;
   focusAction?: "approve" | "deny";
+  ownerChecking?: boolean;
 }) {
+  const access = useProjectAccess(workspaceId);
   const [decisionNotice, setDecisionNotice] = useState("");
+  const noticeRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => { if (decisionNotice) noticeRef.current?.focus(); }, [decisionNotice]);
   const queryClient = useQueryClient();
   const approvalId = item.source.approvalId;
   // The same key as Chat's blocker card, so moving between them is a cache hit (IN-11).
-  const queryKey = ["approvals", "record", workspaceId, approvalId];
+  const queryKey = ["approvals", "record", workspaceId, approvalId, access.identity];
   const query = useQuery({
     queryKey,
     queryFn: ({ signal }) => nullWhenMissing(fetchApproval(approvalId!, { workspaceId, signal })),
     enabled: Boolean(approvalId),
     staleTime: 0,
   });
-  // A decided or changed record is superseded. Drop it while the queue is re-read instead of keeping it
-  // on screen as a background recheck would, with its old badges and a second copy of the outcome.
+  // Re-read the owner after a decision or stale review; the settled receipt remains reachable
+  // through LinkedApproval after the pending projection removes this selection.
   const rereadSettled = (notice: string) => {
     setDecisionNotice(notice);
     void queryClient.resetQueries({ queryKey, exact: true });
@@ -45,11 +58,21 @@ export function InboxApprovalDetail({
     void queryClient.invalidateQueries({ queryKey: queryKeys.durableRunHistory(workspaceId) });
   };
   const view = recordView(query);
-  const checking = view.phase === "checking";
+  const checking = ownerChecking || view.phase === "checking";
   const lastVersion = lastVersionNote(view);
-  // Retain decided records as evidence; only pending records expose decisions.
-  const approval = view.record;
+  // Pending decisions and settled follow-on evidence are separate native views of the owner record.
+  const approval = view.record?.status === "pending" ? view.record : undefined;
+  const settled = view.record && view.record.status !== "pending" ? view.record : undefined;
   const evidence = approval ? buildApprovalEvidenceModel(approval.preview) : null;
+  // A decided record stays evidence: its request is shown read-only, never with decision controls.
+  const settledEvidence = settled ? buildApprovalEvidenceModel(settled.preview) : null;
+  const specialist = Boolean(approval && ["code_mode.run", "remote_worker.native_runtime"].includes(approval.kind));
+  const specialistQuery = useQuery({
+    queryKey: ["approvals", "specialist", access.identity, approval],
+    queryFn: () => readSpecialistEvidence(approval!), enabled: specialist, retry: false, staleTime: 0,
+  });
+  const specialistEvidence = approval && !specialistQuery.isError && specialistQuery.data && specialistEvidenceMatches(approval, specialistQuery.data) ? specialistQuery.data : undefined;
+
   return (
     <section aria-label="Current approval" className="space-y-3 border-t border-line-subtle pt-3 text-sm">
       <div className="flex items-center justify-between gap-2">
@@ -81,17 +104,40 @@ export function InboxApprovalDetail({
       ) : null}
       {lastVersion ? <p className="text-fg-muted">{lastVersion}</p> : null}
       {decisionNotice ? (
-        <p role="status" className="text-fg-secondary">
+        <p ref={noticeRef} tabIndex={-1} role="status" className="text-fg-secondary">
           {decisionNotice}
         </p>
       ) : null}
-      {recordAnswered(view) && !approval ? (
-        <p className="text-fg-muted">This approval is no longer waiting. The current record could not be found.</p>
+      {view.record ? <ApprovalAuditRecovery approval={view.record} workspaceId={workspaceId} checking={checking || query.isError} /> : null}
+      {view.record?.kind === "change_plan_effect" && ["llama_cpp_setup", "llama_cpp_configuration"].includes(String(view.record.payload.targetResourceId)) && view.record.linkage?.workspaceId === workspaceId && !query.isError ? <NativeOwnerLink href="/settings/models#local-ai" scope={access.identity}>Return to llama.cpp setup</NativeOwnerLink> : null}
+      {settled?.kind === "code_mode.run" ? <ApprovalCodeOutcome approval={settled} workspaceId={workspaceId} /> : null}
+      {settled ? <ApprovalSettlement approval={settled} workspaceId={workspaceId} /> : null}
+      {settled ? (
+        <section aria-label="Decided request" className="space-y-2 rounded-md border border-line bg-sunken p-3">
+          <div className="flex flex-wrap gap-2">
+            <RiskBadge risk={settled.riskLevel} />
+            <StatusBadge status={presentApprovalStatus(settled.status)} />
+          </div>
+          {settledEvidence?.commands.length ? (
+            <ul className="space-y-1">
+              {settledEvidence.commands.map((command) => (
+                <li key={command}>
+                  <code className="break-all font-mono text-xs text-fg">{command}</code>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
+      {recordAnswered(view) && !approval && !settled && !decisionNotice ? (
+        <p className="text-fg-muted">
+          This approval is no longer waiting. Open Approvals for the current record and outcome.
+        </p>
       ) : null}
       {approval ? (
         <>
           <div className="flex flex-wrap gap-2">
-            <StatusBadge status={presentRiskLevel(approval.riskLevel)} />
+            <RiskBadge risk={approval.riskLevel} />
             <StatusBadge status={presentApprovalStatus(approval.status)} />
           </div>
           {approval.expiresAt ? <p className="text-fg-muted">{approvalExpiryLabel(approval.expiresAt)}</p> : null}
@@ -101,6 +147,7 @@ export function InboxApprovalDetail({
           {approval.explanation?.riskExplanation ? (
             <p className="text-fg-secondary">{approval.explanation.riskExplanation}</p>
           ) : null}
+          {approval.explanationError ? <p role="alert">Approval summary unavailable: {approval.explanationError}</p> : null}
           {approval.explanation?.saferAlternative ? (
             <p className="text-fg-secondary">Safer option: {approval.explanation.saferAlternative}</p>
           ) : null}
@@ -110,7 +157,7 @@ export function InboxApprovalDetail({
               {evidence.targets.length ? (
                 <ul className="list-disc space-y-1 pl-5 text-fg-secondary">
                   {evidence.targets.map((target) => (
-                    <li key={target}>{target}</li>
+                    <li className="break-all" key={target}>{target}</li>
                   ))}
                 </ul>
               ) : null}
@@ -125,10 +172,11 @@ export function InboxApprovalDetail({
                   ))}
                 </ul>
               ) : null}
+              {evidence.commands.length ? <ApprovalShellExplanations commands={evidence.commands} explanations={approval.shellExplanations} /> : null}
               {evidence.supporting.length ? (
                 <ul className="list-disc space-y-1 pl-5 text-fg-secondary">
                   {evidence.supporting.map((support) => (
-                    <li key={support}>{support}</li>
+                    <li className="break-all" key={support}>{support}</li>
                   ))}
                 </ul>
               ) : null}
@@ -145,17 +193,17 @@ export function InboxApprovalDetail({
             </p>
           )}
           {approval.rollbackNote ? <p className="text-fg-secondary">Recovery: {approval.rollbackNote}</p> : null}
-          {approval.status !== "pending" ? <p className="text-fg-muted">This approval is no longer waiting.</p> : null}
-          <InboxApprovalOutcome approval={approval} workspaceId={workspaceId} />
-          {evidence && approval.status === "pending" ? (
+          {specialist ? <><Button disabled={specialistQuery.isFetching} onClick={() => void specialistQuery.refetch()}>Refresh specialist evidence</Button>{specialistEvidence ? <SpecialistApprovalReview approval={approval} evidence={specialistEvidence} /> : <p role="alert">{specialistQuery.error ? describeApiError(specialistQuery.error).summary : "Specialist evidence is unavailable or changed. Refresh before approving."}</p>}</> : null}
+          {evidence || specialist ? (
             <InboxApprovalActions
+              specialistEvidence={specialistEvidence}
               item={item}
               approval={approval}
               workspaceId={workspaceId}
               focusAction={focusAction}
-              checking={checking}
+              checking={checking || (specialist && specialistQuery.isFetching)}
               onResolved={rereadSettled}
-              onInvalidated={() => rereadSettled("The approval changed. Review the refreshed record before deciding.")}
+              onInvalidated={(message) => rereadSettled(message ?? "The approval changed. Review the refreshed record before deciding.")}
             />
           ) : null}
           <p className="text-xs text-fg-muted">

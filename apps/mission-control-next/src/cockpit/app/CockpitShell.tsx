@@ -1,4 +1,6 @@
-import { Activity, Suspense, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
+import { ClassicOwnerLink } from "../ui/ClassicOwnerLink";
+import { Activity, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -14,11 +16,16 @@ import { InspectorPanel, InspectorProvider } from "./inspector";
 import { MobileTabBar } from "./MobileTabBar";
 import { COCKPIT_AREAS } from "./routes";
 import { Sidebar } from "./Sidebar";
+import { IncomingScopeReview } from "./IncomingScopeReview";
 import { useCockpitRoute } from "./use-cockpit-route";
 import type { GatewayReachability } from "./use-gateway-reachability";
-import { SettingsArea, InboxArea, WorkArea, LibraryArea, SystemArea, Gallery } from "./area-loaders";
+import { SettingsArea, InboxArea, WorkArea, LibraryArea, SystemArea, Gallery, ChatProjects } from "./area-loaders";
 import { applyCockpitAppearance } from "./cockpit-appearance";
+import { useAreaShortcuts } from "./use-area-shortcuts";
+import { ShortcutHelp } from "./ShortcutHelp";
 import { cockpitDocumentTitle } from "./cockpit-document-title";
+import { useCockpitScroll } from "./use-cockpit-scroll";
+import { getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 
 interface CockpitShellProps {
   streamState?: EventStreamConnectionState;
@@ -43,21 +50,26 @@ function CockpitShellContent({
   onVisibleSessionChange,
 }: CockpitShellProps) {
   const { isTransitionPending } = useCockpitNavigation();
-  const { area, rest, pathname, search, navigate } = useCockpitRoute();
-  const areaLabel =
+  const { area, rest, pathname, search, navigate, resolution } = useCockpitRoute();
+  const areaLabel = resolution.kind === "missing" ? "Page not found" : resolution.kind === "classic" ? "Classic view" :
     COCKPIT_AREAS.find((entry) => entry.area === area)?.label ?? (area === "gallery" ? "Gallery" : "Settings");
   const firstRun = area === "settings" && rest[0] === "first-run";
   const { theme, density, activeCitadelId, activeWorkspaceId } = useUiPreferences();
   // Preserve the visited Chat's DOM/state, but dispose its effects while hidden.
   // Retention never crosses installation, Citadel or workspace boundaries.
   const chatScope = JSON.stringify([getGatewayApiBaseUrl(), activeCitadelId, activeWorkspaceId]);
+  const mainScroll = useCockpitScroll(JSON.stringify([chatScope, getGatewayCallerScope(), pathname, search, window.location.hash]));
   const retainedChat = useRef({ scope: chatScope, visited: false });
   if (retainedChat.current.scope !== chatScope) retainedChat.current = { scope: chatScope, visited: false };
-  if (area === "chat") retainedChat.current.visited = true;
+  const nativeRoute = resolution.kind === "native";
+  const conversationVisible = nativeRoute && area === "chat" && rest[0] !== "projects";
+  const projectsVisible = nativeRoute && area === "chat" && rest[0] === "projects";
+  if (conversationVisible) retainedChat.current.visited = true;
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const tablet = useMediaQuery("(640px <= width < 1024px)");
+  const [helpOpen, setHelpOpen] = useState(false);
+  const tablet = useMediaQuery(RESPONSIVE_QUERIES.tablet);
   // NV-13: phones get the tab bar and its status strip; the hidden sidebar must not keep reading.
-  const wide = useMediaQuery("(min-width: 640px)");
+  const wide = useMediaQuery(RESPONSIVE_QUERIES.abovePhone);
   const [collapseOverride, setCollapseOverride] = useState<boolean | null>(null);
   const sidebarCollapsed = collapseOverride ?? tablet;
 
@@ -79,38 +91,15 @@ function CockpitShellContent({
     };
   }, [theme, density]);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-      if (event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        if (!isTransitionPending()) setPaletteOpen(true);
-        return;
-      }
-      if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable=true]"))
-        return;
-      if (
-        event.key.toLowerCase() === "b" &&
-        !event.shiftKey &&
-        !document.querySelector('[role="dialog"][data-state="open"]')
-      ) {
-        event.preventDefault();
-        setCollapseOverride(!sidebarCollapsed);
-        return;
-      }
-      const target = COCKPIT_AREAS.find((entry) => entry.shortcut === event.key);
-      if (target) {
-        event.preventDefault();
-        navigate(target.path);
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [navigate, sidebarCollapsed, isTransitionPending]);
+  const openPalette = useCallback(() => { if (!isTransitionPending()) setPaletteOpen(true); }, [isTransitionPending]);
+  const openHelp = useCallback(() => { if (!isTransitionPending()) setHelpOpen(true); }, [isTransitionPending]);
+  const toggleSidebar = useCallback(() => setCollapseOverride(!sidebarCollapsed), [sidebarCollapsed]);
+  useAreaShortcuts({ scope: chatScope + pathname + search, navigate, onPalette: openPalette, onHelp: openHelp, onToggleSidebar: toggleSidebar });
 
   return (
     <InspectorProvider>
       <div className="flex h-dvh flex-col bg-canvas text-fg">
+        <IncomingScopeReview />
         {/* Above the scrolling row, so the outage notice never scrolls away and phones see it. */}
         {gatewayReachability?.unavailable ? (
           <GatewayUnavailableBanner reachability={gatewayReachability} inChat={area === "chat"} />
@@ -127,15 +116,16 @@ function CockpitShellContent({
             />
           ) : null}
           <main
+            ref={mainScroll}
             id="main-content"
             className={
-              area === "chat"
+              conversationVisible
                 ? "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
                 : "min-w-0 flex-1 overflow-y-auto"
             }
           >
             {retainedChat.current.visited ? (
-              <Activity key={chatScope} mode={area === "chat" ? "visible" : "hidden"}>
+              <Activity key={chatScope} mode={conversationVisible ? "visible" : "hidden"}>
                 {/* A new route query, such as the palette's New chat, retries a failed Chat. */}
                 <AreaErrorBoundary label="Chat" resetKey={chatScope + search}>
                   <ChatArea
@@ -145,7 +135,12 @@ function CockpitShellContent({
                 </AreaErrorBoundary>
               </Activity>
             ) : null}
-            {area !== "chat" ? (
+            {projectsVisible ? <AreaErrorBoundary label="Projects" resetKey={pathname + search}><Suspense fallback={<p role="status" className="p-4">Loading projects…</p>}><ChatProjects /></Suspense></AreaErrorBoundary> : null}
+            {!nativeRoute ? (
+              <section className="p-6 space-y-4"><h1 className="text-xl font-semibold">{resolution.kind === "classic" ? "This view is available in Classic" : "Page not found"}</h1>
+                {resolution.kind === "classic" ? <ClassicOwnerLink href={resolution.href} scope={chatScope} label={resolution.label} /> : <p>Choose a destination from the navigation to continue.</p>}
+              </section>
+            ) : area !== "chat" ? (
               // `key` remounts on an area change; the path retries a failed view after Back or a jump inside the area.
               <AreaErrorBoundary
                 key={area}
@@ -192,6 +187,7 @@ function CockpitShellContent({
         ) : null}
       </div>
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <ShortcutHelp open={helpOpen} onOpenChange={setHelpOpen} />
     </InspectorProvider>
   );
 }

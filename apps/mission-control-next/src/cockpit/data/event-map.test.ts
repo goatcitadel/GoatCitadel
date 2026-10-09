@@ -93,6 +93,21 @@ describe("resolveRealtimeEvent", () => {
     });
   });
 
+  it("refreshes the saved-board list and detail readers when a board changes elsewhere", () => {
+    expect(
+      resolveRealtimeEvent(event("ops_saved_board_changed", "ops_saved_boards", { eventClass: "operational_signal" })),
+    ).toEqual({
+      kind: "mapped",
+      effect: {
+        keys: [
+          ["surface", "saved-boards"],
+          ["surface", "saved-board"],
+        ],
+        refresh: ["dashboard"],
+      },
+    });
+  });
+
   it("maps workspace lifecycle under system to the directory readers only", () => {
     expect(resolveRealtimeEvent(event("workspace_updated", "system"))).toEqual({
       kind: "mapped",

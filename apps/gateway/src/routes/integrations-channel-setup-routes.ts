@@ -42,6 +42,19 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       return reply.send(projectChannelSetupDraftForPublicResponse(await fastify.services.channelSetup.getChannelSetupDraft(params.data.draftId)));
     } catch (error) { return sendRouteError(reply, error, request.log); }
   });
+  fastify.delete("/api/v1/channels/drafts/:draftId", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (request, reply) => {
+    const params = channelDraftParamsSchema.safeParse(request.params);
+    const body = channelDraftActionSchema.safeParse(request.body);
+    if (!params.success || !body.success) return reply.code(400).send({ error: "A draft identity and reviewed revision are required." });
+    try {
+      const deleted = await fastify.services.channelSetup.discardChannelSetupDraft(params.data.draftId, body.data.expectedRevision);
+      if (deleted) await markMutationCommitted(request);
+      return reply.send({ draftId: params.data.draftId, deleted });
+    } catch (error) {
+      await markMutationCommittedFromError(request, error);
+      return sendRouteError(reply, error, request.log);
+    }
+  });
   fastify.get("/api/v1/channels/drafts/:draftId/evidence", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (request, reply) => {
     const params = channelDraftParamsSchema.safeParse(request.params);
     const query = z.object({ expectedRevision: z.coerce.number().int().positive() }).strict().safeParse(request.query);
@@ -250,7 +263,7 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
             requestId: request.id,
           },
           request: { kind: "channel_connection", channelKind: draft.catalogId, draftId: draft.draftId },
-          idempotencyKey: `legacy-channel-finalize:${request.id}:${draft.draftId}:${draft.revision}`,
+          idempotencyKey: `legacy-channel-finalize:${request.idempotencyKey || request.id}:${draft.draftId}:${draft.revision}`,
           expectedTargetRevision: draft.revision,
         });
         return reply.code(202).send({

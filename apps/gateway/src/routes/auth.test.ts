@@ -962,3 +962,81 @@ describe("auth routes", () => {
     expect(limitedResponse.statusCode).toBe(429);
   });
 });
+
+describe("current caller projection", () => {
+  it("distinguishes anonymous permitted access from an identified operator", async () => {
+    const app = await buildApp("none");
+    try {
+      const response = await app.inject({ method: "GET", url: "/api/v1/auth/current" });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toMatchObject({
+        actorId: null,
+        actorSource: "none",
+        operatorAccess: true,
+        readStatusScope: "browser_local",
+      });
+    } finally {
+      await app.close();
+    }
+  });
+  it("projects the verified principal without exposing supplied credentials", async () => {
+    const app = await buildApp("token");
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/auth/current",
+        headers: { authorization: "Bearer test-token" },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        actorSource: "token",
+        operatorAccess: true,
+        readStatusScope: "operator",
+      });
+      expect(response.body).not.toContain("test-token");
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+it.each([
+  ["basic", "Basic " + Buffer.from("operator:password123").toString("base64"), "basic", true],
+  ["token", "Bearer device-bearer", "device", false],
+] as const)(
+  "reports current %s caller and preserves its actual operator restriction",
+  async (mode, authorization, actorSource, operatorAccess) => {
+    const app = await buildApp(mode);
+    try {
+      const response = await app.inject({ method: "GET", url: "/api/v1/auth/current", headers: { authorization } });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ actorSource, operatorAccess });
+      if (actorSource === "device")
+        expect(response.json()).toMatchObject({
+          grantId: "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f",
+          readStatusScope: "unavailable",
+        });
+    } finally {
+      await app.close();
+    }
+  },
+);
+it("rejects unauthenticated reads of the caller projection in token mode", async () => {
+  const app = await buildApp("token");
+  try {
+    expect((await app.inject({ method: "GET", url: "/api/v1/auth/current" })).statusCode).toBe(401);
+  } finally {
+    await app.close();
+  }
+});
+
+it("keeps loopback authority browser-local rather than identifying a person",async()=>{
+ const app=await buildApp("token");
+ app.gatewayConfig.assistant.auth.allowLoopbackBypass=true;
+ try {
+  const response=await app.inject({method:"GET",url:"/api/v1/auth/current",remoteAddress:"127.0.0.1"});
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toMatchObject({actorSource:"loopback",operatorAccess:true,readStatusScope:"browser_local"});
+ }finally{await app.close()}
+});

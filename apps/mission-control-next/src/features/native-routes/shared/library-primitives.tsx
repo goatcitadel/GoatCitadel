@@ -53,7 +53,7 @@ export function LibrarySectionShell({
           description={presentation.description}
           technicalDetails={presentation.technicalDetail}
           primaryAction={
-            onRetry ? (
+            onRetry && presentation.retryable !== false ? (
               <NativeButton variant="outline" onClick={() => onRetry()}>
                 <RefreshCw size={16} />
                 Retry

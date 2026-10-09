@@ -623,6 +623,7 @@ export {
   upsertNotificationPresence,
   validateChannelSetupDraft,
   finalizeChannelSetupDraft,
+  discardChannelSetupDraft,
 } from "./integrations.js";
 export {
   archiveWorkspace,

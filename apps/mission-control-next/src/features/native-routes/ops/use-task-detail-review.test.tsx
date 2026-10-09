@@ -234,8 +234,8 @@ describe("task review acknowledgement across owner refreshes", () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "Edited");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    await click("Review details");
-    await click("Confirm details");
+    // Task12 made the details editor save directly (the owner still re-reads and checks the revision).
+    await click("Save task details");
     expect(updateTask).toHaveBeenCalledTimes(1);
     await renderEditor(saved);
     expect(container.textContent).toContain("The task changed while this editor was open");

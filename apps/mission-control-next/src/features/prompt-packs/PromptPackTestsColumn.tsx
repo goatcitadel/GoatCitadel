@@ -75,6 +75,7 @@ export function PromptPackTestsColumn({
           return (
             <article
               key={test.testId}
+              role="listitem"
               className={`mc-pp-test-row${selected ? " active" : ""}`}
               data-category={category}
             >
@@ -141,8 +142,8 @@ export function PromptPackTestsColumn({
             </article>
           );
         })}
-        {filteredTests.length === 0 ? <EmptyState size="compact" title="No tests match this filter." /> : null}
       </div>
+      {filteredTests.length === 0 ? <EmptyState size="compact" title="No tests match this filter." /> : null}
     </section>
   );
 }

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, StrictMode } from "react";
+import { act, StrictMode, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,13 +36,15 @@ vi.mock("../areas/library/LibraryArea", () => ({
   },
 }));
 // No other test here visits Chat, so a stub keeps the failure test off the network.
-const chatArea = vi.hoisted(() => ({ failure: null as Error | null }));
+const chatArea = vi.hoisted(() => ({ failure: null as Error | null, effects: 0 }));
 vi.mock("../areas/chat/ChatArea", () => ({
   ChatArea: () => {
+    useEffect(() => { chatArea.effects++; return () => { chatArea.effects--; }; }, []);
     if (chatArea.failure) throw chatArea.failure;
-    return <p>Chat content</p>;
+    return <><p>Chat content</p><input aria-label="Retained conversation draft" defaultValue="Draft" /></>;
   },
 }));
+vi.mock("../areas/chat/ChatProjects", () => ({ ChatProjects: () => <p>Native projects content</p> }));
 const health = vi.hoisted(() => ({
   sources: vi.fn(async () => {
     throw new Error("Health owner unavailable in shell fixture.");
@@ -158,7 +160,8 @@ describe("CockpitShell", () => {
     expect(container.textContent).not.toContain("All systems ok");
 
     await act(async () => {
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "4", ctrlKey: true }));
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "g" }));
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "l" }));
     });
     expect(window.location.pathname).toBe("/library");
   });
@@ -298,8 +301,8 @@ describe("CockpitShell", () => {
       expect(icon.getAttribute("class")).toContain("shrink-0");
     }
     const inbox = sidebar.querySelector('nav[aria-label="Areas"] button[aria-label^="Inbox"]')!;
-    expect(inbox.getAttribute("aria-label")).toBe("Inbox, 1 item");
-    const badge = inbox.querySelector('[title="Inbox items"]')!;
+    expect(inbox.getAttribute("aria-label")).toBe("Inbox, 1 decision");
+    const badge = inbox.querySelector('[title="Outstanding decisions"]')!;
     expect(badge.textContent).toBe("1");
     expect(badge.className).not.toContain("sr-only");
     expect(container.querySelector("#cockpit-work-running-summary")?.className).toContain("absolute");
@@ -309,7 +312,7 @@ describe("CockpitShell", () => {
   it("defaults tablet navigation to the rail and leaves editor Ctrl+B untouched", async () => {
     vi.stubGlobal("matchMedia", (media: string) => ({
       media,
-      matches: media === "(640px <= width < 1024px)" || media === "(min-width: 640px)",
+      matches: media === "(640px <= width < 1024px)" || media === "(width >= 640px)",
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     }));
@@ -602,4 +605,38 @@ describe("CockpitShell", () => {
       consoleError.mockRestore();
     }
   });
+});
+
+it.each(["/missing", "/system/missing", "/ops/runtime", "/library/knowledge"])("does not show Chat or Health for %s", async (path) => {
+  window.history.replaceState(null, "", path + "?workspaceId=w#record");
+  await act(async () => root.render(<QueryClientProvider client={new QueryClient()}><CockpitShell /></QueryClientProvider>));
+  expect(container.textContent).not.toContain("Chat content");
+  if (path === "/ops/runtime") {
+    expect(container.textContent).toContain("This view is available in Classic");
+    const link = container.querySelector<HTMLAnchorElement>('a[href*="shell=classic"]');
+    expect(link?.href).toContain("workspaceId=w");
+    expect(link?.hash).toBe("#record");
+  } else if (path === "/library/knowledge") {
+    expect(container.textContent).toContain("Library content");
+    expect(container.textContent).not.toContain("This view is available in Classic");
+  } else expect(container.textContent).toContain("Page not found");
+});
+
+
+it("retains Chat state but suspends its effects while native Projects owns the destination", async () => {
+  window.history.replaceState(null, "", "/chat?sessionId=conversation-a&shell=cockpit");
+  await act(async () => root.render(<QueryClientProvider client={new QueryClient()}><CockpitNavigationProvider><CockpitShell /><PendingProbe /></CockpitNavigationProvider></QueryClientProvider>));
+  const draft = container.querySelector<HTMLInputElement>('[aria-label="Retained conversation draft"]')!;
+  draft.value = "Keep my conversation input";
+  expect(chatArea.effects).toBe(1);
+  await act(async () => navigation.navigate("/chat/projects/project-a"));
+  await vi.waitFor(() => expect(container.textContent).toContain("Native projects content"));
+  expect(window.location.pathname).toBe("/chat/projects/project-a"); expect(chatArea.effects).toBe(0);
+  expect(container.querySelector('[aria-label="Retained conversation draft"]')).toBe(draft);
+  await act(async () => window.history.back());
+  await vi.waitFor(() => expect(window.location.pathname).toBe("/chat"));
+  expect(chatArea.effects).toBe(1); expect(draft.value).toBe("Keep my conversation input");
+  await act(async () => window.history.forward());
+  await vi.waitFor(() => expect(window.location.pathname).toBe("/chat/projects/project-a"));
+  expect(chatArea.effects).toBe(0);
 });

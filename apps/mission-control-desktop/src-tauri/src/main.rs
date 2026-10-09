@@ -108,6 +108,7 @@ struct DesktopActionResult {
 #[serde(rename_all = "camelCase")]
 struct ApprovalNotificationPayload {
     approval_id: String,
+    workspace_id: Option<String>,
     kind: Option<String>,
     risk_level: Option<String>,
     status: Option<String>,
@@ -522,6 +523,9 @@ fn parse_approval_notification(data: &str) -> Option<ApprovalNotificationPayload
         .or_else(|| value.get("links")?.get("approvalId")?.as_str())?;
     Some(ApprovalNotificationPayload {
         approval_id: approval_id.to_string(),
+        workspace_id: payload.get("workspaceId").and_then(Value::as_str)
+            .or_else(|| payload.get("linkage")?.get("workspaceId")?.as_str())
+            .or_else(|| value.get("links")?.get("workspaceId")?.as_str()).map(str::to_string),
         kind: payload
             .get("kind")
             .and_then(Value::as_str)
@@ -593,11 +597,24 @@ fn parse_operator_attention_notification(data: &str) -> Option<OperatorAttention
         return Some(OperatorAttentionPayload {
             title: "GoatCitadel is waiting".to_string(),
             body: "Work is paused until the operator responds.".to_string(),
-            route_path: Some("/ops/approvals".to_string()),
+            route_path: Some(approval_attention_route(&value)),
         });
     }
 
     None
+}
+
+fn approval_attention_route(value: &Value) -> String {
+    let payload = value.get("payload");
+    let approval_id = payload.and_then(|p| p.get("approvalId")).and_then(Value::as_str)
+        .or_else(|| value.get("links")?.get("approvalId")?.as_str());
+    let Some(approval_id) = approval_id else { return "/inbox".to_string(); };
+    let workspace_id = payload.and_then(|p| p.get("workspaceId")).and_then(Value::as_str)
+        .or_else(|| value.get("links")?.get("workspaceId")?.as_str());
+    let mut url = reqwest::Url::parse("http://localhost/inbox").expect("static route URL");
+    url.query_pairs_mut().append_pair("approvalId", approval_id);
+    if let Some(workspace_id) = workspace_id { url.query_pairs_mut().append_pair("workspaceId", workspace_id); }
+    format!("/inbox?{}", url.query().unwrap_or_default())
 }
 
 fn is_run_like_signal(signal: &str) -> bool {
@@ -1092,12 +1109,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_scoped_waiting_approval_destination() {
+        let payload = parse_operator_attention_notification(
+            r#"{"eventType":"orchestration_event","payload":{"event":"paused_for_approval"},"links":{"approvalId":"a /?","workspaceId":"w /?"}}"#,
+        ).expect("waiting notification");
+        assert_eq!(payload.route_path.as_deref(), Some("/inbox?approvalId=a+%2F%3F&workspaceId=w+%2F%3F"));
+    }
+
+    #[test]
     fn parses_approval_created_notification() {
         let payload = parse_approval_notification(
-            r#"{"eventType":"approval_created","payload":{"approvalId":"ap-1","kind":"tool","riskLevel":"medium","status":"pending"}}"#,
+            r#"{"eventType":"approval_created","payload":{"approvalId":"ap-1","kind":"tool","riskLevel":"medium","status":"pending","linkage":{"workspaceId":"w /?"}}}"#,
         )
         .expect("approval notification");
         assert_eq!(payload.approval_id, "ap-1");
+        assert_eq!(payload.workspace_id.as_deref(), Some("w /?"));
         assert_eq!(payload.kind.as_deref(), Some("tool"));
         assert_eq!(payload.risk_level.as_deref(), Some("medium"));
         assert_eq!(payload.status.as_deref(), Some("pending"));
@@ -1138,6 +1164,6 @@ mod tests {
         )
         .expect("waiting notification");
         assert_eq!(waiting.title, "GoatCitadel is waiting");
-        assert_eq!(waiting.route_path.as_deref(), Some("/ops/approvals"));
+        assert_eq!(waiting.route_path.as_deref(), Some("/inbox"));
     }
 }

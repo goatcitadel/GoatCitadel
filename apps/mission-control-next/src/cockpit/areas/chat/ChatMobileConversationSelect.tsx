@@ -12,12 +12,14 @@ export function ChatMobileConversationSelect({
   rail: MissionThreadedRenderSurfaceInput["sessionRail"];
   onOpenFilters: () => void;
 }) {
-  const selectedSessionId = rail.missionSessions.some((item) => item.sessionId === rail.selectedSessionId)
+  const sessions = [...rail.missionSessions, ...(rail.externalSessions ?? [])];
+  const hits = sessions.flatMap((session) => (session.searchHits ?? []).map((hit) => ({ sessionId: session.sessionId, hit })));
+  const selectedSessionId = sessions.some((item) => item.sessionId === rail.selectedSessionId)
     ? (rail.selectedSessionId ?? "")
     : "";
   return (
     <label className="min-w-0 max-w-32 text-xs text-fg-muted md:hidden">
-      {rail.historyView === "archived" ? "Archived" : "Thread"}
+      {rail.historyView === "archived" ? "Archived" : "Conversations"}
       <select
         aria-label="Choose conversation"
         disabled={rail.loading}
@@ -29,6 +31,9 @@ export function ChatMobileConversationSelect({
           else if (value === MOBILE_FILTERS) onOpenFilters();
           else if (value === MOBILE_LOAD_MORE) {
             if (!rail.loadingMoreSessions) rail.onLoadMoreSessions?.();
+          } else if (value.startsWith("match:")) {
+            const match = hits[Number(value.slice(6))];
+            if (match) rail.onSelectSession(match.sessionId, { searchHit: match.hit });
           } else rail.onSelectSession(value);
         }}
         className="block h-8 w-full rounded-md border border-line bg-raised px-1 text-sm text-fg"
@@ -36,11 +41,17 @@ export function ChatMobileConversationSelect({
         <option value="" disabled>
           Choose
         </option>
-        {rail.missionSessions.map((session) => (
+        <optgroup label="Conversations">
+        {[...rail.missionSessions, ...(rail.externalSessions ?? [])].map((session) => (
           <option key={session.sessionId} value={session.sessionId}>
             {rail.renderSessionLabel(session.sessionId)}
           </option>
         ))}
+        </optgroup>
+        {hits.length ? <optgroup label="Matching messages">{hits.map((match, index) => <option key={`${match.sessionId}:${match.hit.messageId}`} value={`match:${index}`}>
+          {rail.renderSessionLabel(match.sessionId)} — {match.hit.excerpt} — Open matching message
+        </option>)}</optgroup> : null}
+        <optgroup label="Conversation actions">
         {rail.historyView === "archived" ? (
           <option value={MOBILE_SHOW_RECENT}>Show recent conversations</option>
         ) : (
@@ -52,6 +63,7 @@ export function ChatMobileConversationSelect({
           </option>
         ) : null}
         <option value={MOBILE_FILTERS}>Filter conversations…</option>
+        </optgroup>
       </select>
     </label>
   );

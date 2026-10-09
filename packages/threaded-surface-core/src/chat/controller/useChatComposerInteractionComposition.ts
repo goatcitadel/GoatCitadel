@@ -20,6 +20,7 @@ import { useChatSurfaceNavigation } from "./useChatSurfaceNavigation";
 import { useChatTurnNavigation } from "./useChatTurnNavigation";
 
 type Input = {
+  workspaceId: string;
   surfaceRuntime: Pick<
     ReturnType<typeof useChatSurfaceComposition>,
     "surfaceState" | "workbenchController" | "setDockOpen" | "profileDependentAdmissionBlockReason" | "planningMode"
@@ -72,6 +73,7 @@ type Input = {
 
 /** Composes turn navigation, composer, media and send-intent owners while leaving final send binding to the Host. */
 export function useChatComposerInteractionComposition({
+  workspaceId,
   surfaceRuntime,
   selectedTurnId,
   navigation,
@@ -198,6 +200,7 @@ export function useChatComposerInteractionComposition({
     pushLocalNotice: pushLocalNotice,
   });
   const sendIntent = useChatComposerSendIntent({
+    workspaceId,
     profileDependentAdmissionBlockReason: surfaceRuntime.profileDependentAdmissionBlockReason,
     notices,
     setFollowThreadOutput,

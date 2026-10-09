@@ -429,6 +429,9 @@ export interface ExternalSourceKnowledgeSnapshotApprovalPayload {
 }
 
 /** Content-free operator preview for the knowledge-snapshot approval inbox. */
+export const EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE =
+  "Create a Knowledge document and retrieval chunks from this verified imported snapshot. This does not include the source in the next Chat turn or activate a skill. Approval alone does not prove the copy completed.";
+
 export interface ExternalSourceKnowledgeSnapshotApprovalPreview {
   sourceId: string;
   importId: string;
@@ -436,6 +439,15 @@ export interface ExternalSourceKnowledgeSnapshotApprovalPreview {
   attachmentId: string;
   normalizedArtifactSha256: string;
   normalizedByteCount: number;
+  /** Optional only for immutable approvals created before readable review v1. */
+  review?: {
+    version: 1;
+    sourceLabel: string;
+    itemPath: string;
+    target: string;
+    scopeSummary: string;
+    consequence: typeof EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE;
+  };
 }
 
 /**

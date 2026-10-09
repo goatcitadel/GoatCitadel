@@ -1,6 +1,7 @@
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 
 export const knowledgeRouteMethods = [
+  "knowledgeApprovalResult",
   "knowledgeDocsIngest",
   "knowledgeEmbeddingsIndex",
   "knowledgeEmbeddingsQuery",

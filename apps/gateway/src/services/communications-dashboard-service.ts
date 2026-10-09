@@ -16,6 +16,7 @@ import type {
 } from "@goatcitadel/contracts";
 
 export interface CreateMailDraftInput {
+  workspaceId?: string;
   accountId: string;
   to: string[];
   cc?: string[];
@@ -50,12 +51,13 @@ const DEFAULT_AGENDA_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 export class CommunicationsDashboardService {
   private readonly drafts = new Map<string, MailDraftRecord>();
+  private readonly sending = new Map<string, Promise<MailDraftRecord>>();
 
   public constructor(private readonly deps: CommunicationsDashboardServiceDependencies = {}) {}
 
   public async getDashboard(query: CommunicationsDashboardQuery = {}): Promise<CommunicationsDashboardResponse> {
     const workspaceId = normalizeWorkspaceId(query.workspaceId);
-    const connections = await this.listConnections();
+    const connections = await this.listWorkspaceConnections(workspaceId);
     const mailAccounts = connections.flatMap((connection) => this.toMailAccount(connection, workspaceId));
     const calendarAccounts = connections.flatMap((connection) => this.toCalendarAccount(connection, workspaceId));
     const [messages, events] = await Promise.all([
@@ -77,6 +79,7 @@ export class CommunicationsDashboardService {
     const now = this.nowIso();
     const draft: MailDraftRecord = {
       draftId: createStableDraftId(now, input.accountId, input.to, input.subject),
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
       accountId: input.accountId,
       to: input.to,
       cc: input.cc ?? [],
@@ -91,7 +94,27 @@ export class CommunicationsDashboardService {
     return draft;
   }
 
+  /** True only when the account is a mail account projected into this workspace's dashboard. */
+  public async isMailAccountVisible(workspaceId: string, accountId: string): Promise<boolean> {
+    const normalized = normalizeWorkspaceId(workspaceId);
+    const connections = await this.listWorkspaceConnections(normalized);
+    return connections.some((connection) =>
+      this.toMailAccount(connection, normalized).some((account) => account.accountId === accountId),
+    );
+  }
+
   public async sendDraft(draftId: string): Promise<MailDraftRecord> {
+    // A replay that arrives while the original is still in flight shares it.
+    const inFlight = this.sending.get(draftId);
+    if (inFlight) {
+      return inFlight;
+    }
+    const pending = this.requestSendApproval(draftId).finally(() => this.sending.delete(draftId));
+    this.sending.set(draftId, pending);
+    return pending;
+  }
+
+  private async requestSendApproval(draftId: string): Promise<MailDraftRecord> {
     const existing = this.drafts.get(draftId);
     const now = this.nowIso();
     if (!existing) {
@@ -110,7 +133,31 @@ export class CommunicationsDashboardService {
       this.drafts.set(draftId, failed);
       return failed;
     }
-    const approvalId = await createCommunicationsApproval(
+    if (existing.status !== "draft") {
+      // Replaying a send whose response was lost returns the recorded outcome
+      // instead of requesting a second high-risk approval for the same draft.
+      return existing;
+    }
+    let approvalId: string;
+    try {
+      approvalId = await this.createSendApproval(existing);
+    } catch (error) {
+      // The approval may have persisted before the failure. Never request another one for this draft.
+      this.drafts.set(draftId, { ...existing, status: "failed", updatedAt: now });
+      throw error;
+    }
+    const approvalRequired: MailDraftRecord = {
+      ...existing,
+      approvalId,
+      status: "approval_required",
+      updatedAt: now,
+    };
+    this.drafts.set(draftId, approvalRequired);
+    return approvalRequired;
+  }
+
+  private createSendApproval(existing: MailDraftRecord): Promise<string> {
+    return createCommunicationsApproval(
       this.deps.createApproval,
       existing.approvalId ?? `approval_required:${existing.draftId}`,
       {
@@ -139,17 +186,10 @@ export class CommunicationsDashboardService {
         linkage: {
           actionType: "communications.mail.send",
           connectorId: existing.accountId,
+          ...(existing.workspaceId ? { workspaceId: existing.workspaceId } : {}),
         },
       },
     );
-    const approvalRequired: MailDraftRecord = {
-      ...existing,
-      approvalId,
-      status: "approval_required",
-      updatedAt: now,
-    };
-    this.drafts.set(draftId, approvalRequired);
-    return approvalRequired;
   }
 
   public async createCalendarEventPlaceholder(
@@ -298,6 +338,12 @@ export class CommunicationsDashboardService {
   private async listConnections(): Promise<IntegrationConnection[]> {
     const connections = await this.deps.listIntegrationConnections?.(undefined, INTEGRATION_CONNECTION_LIMIT);
     return Array.isArray(connections) ? connections : [];
+  }
+
+  /** Unbound connections belong to the default personal citadel and stay visible; bound ones only in their workspace. */
+  private async listWorkspaceConnections(workspaceId: string): Promise<IntegrationConnection[]> {
+    const connections = await this.listConnections();
+    return connections.filter((connection) => !connection.workspaceId || connection.workspaceId === workspaceId);
   }
 
   private toMailAccount(connection: IntegrationConnection, workspaceId: string): MailAccountRecord[] {

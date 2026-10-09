@@ -405,6 +405,7 @@ export function MissionThreadedControllerHost({
   const { recordChangePlanResult } = actions;
 
   const composer = useChatComposerInteractionComposition({
+    workspaceId,
     surfaceRuntime,
     selectedTurnId,
     navigation,

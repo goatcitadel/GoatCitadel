@@ -13,6 +13,10 @@ vi.mock("../../../features/threaded-surface/ThreadedDocumentsPanel", () => ({
   },
 }));
 
+vi.mock("./SessionControlManager", () => ({
+  SessionControlManager: ({ sessionId }: { sessionId: string }) => <p>Session control for {sessionId}</p>,
+}));
+
 let root: Root;
 let container: HTMLDivElement;
 beforeEach(() => {
@@ -91,7 +95,7 @@ describe("conversation inspector", () => {
     const input = fixture();
     input.activeSessionSurfaceProps!.delegationRun = { attachedTurnId: "older-turn", label: "Older delegation", objective: "Older work", steps: [] } as never;
     await act(async () => root.render(<ChatInspector input={input} />));
-    expect(container.textContent).toContain("No delegation run is linked to this turn");
+    expect(container.textContent).toContain("No delegated work is linked to this response");
     expect(container.textContent).not.toContain("Older delegation");
   });
 
@@ -148,8 +152,8 @@ describe("conversation inspector", () => {
     } as never;
 
     await act(async () => root.render(<ChatInspector input={input} initialTab="context" />));
-    expect(container.querySelector('[aria-label="Recorded turn context"]')?.textContent).toContain("Memory modeOn");
-    expect(container.querySelector('[aria-label="Recorded turn context"]')?.textContent).toContain("780 tokens (estimated)");
+    expect(container.querySelector('[aria-label="Recorded message context"]')?.textContent).toContain("Memory modeOn");
+    expect(container.querySelector('[aria-label="Recorded message context"]')?.textContent).toContain("780 tokens (estimated)");
     expect(container.querySelector('[aria-label="Current context selection"]')?.textContent).toContain("Memory modeOff");
     expect(container.querySelector('[aria-label="Verified routed context"]')?.textContent).toContain("Scoped document");
 
@@ -161,8 +165,16 @@ describe("conversation inspector", () => {
     input.contextDockProps!.selectedSessionId = "another-session";
     await act(async () => root.render(<ChatInspector input={input} initialTab="context" />));
     expect(container.querySelector('[aria-label="Current context selection"]')?.textContent).toContain("unavailable until this session is selected");
-    expect(container.querySelector('[aria-label="Recorded turn context"]')?.textContent).toContain("Select a conversation turn");
+    expect(container.querySelector('[aria-label="Recorded message context"]')?.textContent).toContain("Select a message");
     expect(container.textContent).not.toContain("Scoped document");
+  });
+
+  it("offers session control for the selected conversation", async () => {
+    const input = fixture();
+    // The Conversation tab shows the current planning and web preferences.
+    Object.assign(input.contextDockProps!.prefs as object, { planningMode: "auto", webMode: "off" });
+    await act(async () => root.render(<ChatInspector input={input} initialTab="thread" />));
+    expect(container.textContent).toContain("Session control for session-1");
   });
 
   it("shows next-turn context in a selected conversation with no turns yet", async () => {
@@ -170,7 +182,7 @@ describe("conversation inspector", () => {
     input.activeSessionSurfaceProps!.thread = { turns: [] } as never;
     input.activeSessionSurfaceProps!.selectedTurnId = null;
     await act(async () => root.render(<ChatInspector input={input} initialTab="context" />));
-    expect(container.querySelector('[aria-label="Recorded turn context"]')?.textContent).toContain("Select a conversation turn");
+    expect(container.querySelector('[aria-label="Recorded message context"]')?.textContent).toContain("Select a message");
     expect(container.querySelector('[aria-label="Current context selection"]')?.textContent).toContain("Memory modeAuto");
   });
 

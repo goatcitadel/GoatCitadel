@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { GATEWAY_COVERAGE_SHARD_COUNT, STORAGE_COVERAGE_SHARD_COUNT, gatewayCoverageShardDirectory } from "../../../coverage-shard-contract.mjs";
 import { clampString, maybeParseBool, repoRoot, runCommand, runScenario, sanitizeFilePart } from "../shared.mjs";
-import { prepareVerificationRuntime } from "../runtime.mjs";
+import { buildTestbenchEnvOmit } from "../../../testbench-runtime.mjs";
 import {
   DEFAULT_CHANGED_BASE_REF,
   collectChangedPaths,
@@ -554,6 +554,7 @@ async function runFastLaneCommand(context, command, options = {}) {
           artifactRoot: path.join(context.artifactRoot, "diagnostics"),
           logName: command.id,
           env,
+          omitEnv: resolveFastLaneCommandOmitEnv(command),
         });
         return {
           status: result.code === 0 ? "passed" : "failed",
@@ -678,14 +679,27 @@ export async function resolveFastLaneCommandEnv(context, command, commandTempRoo
       ...(command.env ?? {}),
     };
   }
-  const runtimeRoot = await prepareVerificationRuntime(`${context.runId}-fast-smoke`);
+  // A fresh empty root: nothing is copied from the checkout (smoke builds its own shipped-config root), and every
+  // path the Gateway would otherwise resolve from the operator's home stays inside it.
+  const runtimeRoot = path.join(commandTempRoot, "smoke-runtime");
+  await fs.mkdir(runtimeRoot, { recursive: true });
   return {
     ...tempEnv,
     ...(command.env ?? {}),
     GOATCITADEL_ROOT_DIR: runtimeRoot,
+    GOATCITADEL_HOME: path.join(runtimeRoot, "home"),
+    GOATCITADEL_LOCAL_ENV_FILE: path.join(runtimeRoot, ".env"),
+    GOATCITADEL_BACKUP_DIR: path.join(runtimeRoot, "backups"),
+    GOATCITADEL_CODE_MODE_ARTIFACT_ROOT: path.join(runtimeRoot, "data", "code-mode", "artifacts"),
+    GOATCITADEL_CODE_MODE_TEMP_ROOT: path.join(runtimeRoot, "data", "code-mode", "tmp"),
     GOATCITADEL_DATABASE_DRIVER: "sqlite",
     GOATCITADEL_DISABLE_SECRET_STORE: "true",
   };
+}
+
+/** Smoke inherits no GoatCitadel setting from the operator shell; only the explicit settings above apply. */
+export function resolveFastLaneCommandOmitEnv(command, env = process.env) {
+  return command.id === "fast.smoke" ? buildTestbenchEnvOmit([], env) : [];
 }
 
 async function resolveFastLaneTempBaseRoot(context) {

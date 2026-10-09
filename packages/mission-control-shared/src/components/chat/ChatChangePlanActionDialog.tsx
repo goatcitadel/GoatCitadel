@@ -252,7 +252,11 @@ export function ChatChangePlanActionDialog({
                   {artifactReview.data.artifacts.map((artifact) => (
                     <details key={artifact.artifactRef} open={artifact.label === "Instructions"}>
                       <summary>{artifact.label}</summary>
+                      {/* A bounded scroll region must be keyboard-reachable and named. */}
                       <pre
+                        role="region"
+                        aria-label={`${artifact.label} artifact content`}
+                        tabIndex={0}
                         style={{
                           whiteSpace: "pre-wrap",
                           overflowWrap: "anywhere",
@@ -273,7 +277,7 @@ export function ChatChangePlanActionDialog({
                 </p>
               )
             ) : null}
-            <ul>
+            <ul aria-label="Immutable evidence references" tabIndex={0}>
               {action.artifactRefs.map((reference) => (
                 <li key={reference}>{reference}</li>
               ))}

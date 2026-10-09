@@ -103,7 +103,8 @@ describe("native integration management", () => {
     });
     expect(api.fetchIntegrationConnection).toHaveBeenCalledWith(saved.connectionId);
     expect(text(view.root)).toContain("Connection Reviewed fixture created.");
-    expect(text(view.root)).toContain("Saved status: connected");
+    expect(text(view.root)).toContain("Configured status: connected");
+    expect(text(view.root)).toContain("Connectivity unverified");
   });
   it("cancels deletion without calling the owner", async () => {
     api.fetchIntegrationConnections.mockResolvedValue({ items: [saved] });

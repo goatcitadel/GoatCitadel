@@ -4,6 +4,7 @@ import type { AutonomousActivationGrantRecord, ChatProjectRecord } from "@goatci
 import {
   createAutonomousActivationGrant,
   fetchAutonomousActivationGrants,
+  fetchChatProjects,
   revokeAutonomousActivationGrant,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { ProjectAutomaticFanoutCard } from "./ProjectAutomaticFanoutCard";
@@ -11,6 +12,7 @@ import { ProjectAutomaticFanoutCard } from "./ProjectAutomaticFanoutCard";
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   createAutonomousActivationGrant: vi.fn(),
   fetchAutonomousActivationGrants: vi.fn(),
+  fetchChatProjects: vi.fn(),
   revokeAutonomousActivationGrant: vi.fn(),
 }));
 
@@ -79,6 +81,8 @@ async function render(): Promise<ReactTestRenderer> {
 
 describe("ProjectAutomaticFanoutCard", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fetchChatProjects).mockResolvedValue({ items: [project()] });
     mockedFetch.mockResolvedValue({ items: [] });
     mockedCreate.mockResolvedValue(grant());
     mockedRevoke.mockResolvedValue(grant());
@@ -94,6 +98,8 @@ describe("ProjectAutomaticFanoutCard", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+    expect(mockedCreate).not.toHaveBeenCalled();
+    await act(async () => { findButton(root, "Confirm automatic fan-out").props.onClick(); });
     expect(mockedCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceId: "workspace-1",

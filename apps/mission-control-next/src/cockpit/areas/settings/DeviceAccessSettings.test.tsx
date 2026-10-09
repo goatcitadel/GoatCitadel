@@ -181,3 +181,7 @@ describe("cockpit device access", () => {
     );
   });
 });
+
+vi.mock("../../../app/use-current-access", () => ({
+  useCurrentAccess: () => ({ isSuccess: true, data: { actorId: null, actorSource: "none", operatorAccess: true } }),
+}));

@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LlmProviderConfig } from "@goatcitadel/contracts";
 import type { LlmRuntimeConfigResponse } from "@goatcitadel/mission-control-shared/api/client";
+import { request } from "@goatcitadel/mission-control-shared/api/client-core";
 import { useProviderProfileEditor } from "./use-provider-profile-editor";
 import { useProviderRouting } from "./use-provider-routing";
 import { useProviderCredentials } from "./use-provider-credentials";
@@ -271,6 +272,33 @@ describe("shared provider mutation ownership", () => {
       expect(profile.mutation.uncertain).toBeUndefined();
     },
   );
+  it.each([
+    ["profile", "PATCH", "/api/v1/settings"],
+    ["routing", "PATCH", "/api/v1/settings"],
+    ["credential", "POST", "/api/v1/secrets/providers/fixture"],
+    ["removal", "DELETE", "/api/v1/secrets/providers/fixture"],
+  ] as const)("leaves a checkable attempt behind when a %s reply is lost", async (kind, method, path) => {
+    const lose = () => request(path, { method, body: "{}" });
+    api.patchSettings.mockImplementation(lose);
+    api.saveProviderSecret.mockImplementation(lose);
+    api.deleteProviderSecret.mockImplementation(lose);
+    view = kind === "routing" ? "routing" : kind === "profile" ? "editor" : "trust";
+    await render();
+    if (kind === "profile")
+      await act(async () => profile.setProviderDraft((draft) => ({ ...draft, label: "Updated" })));
+    if (kind === "credential") await act(async () => credentials.setSecretValue("synthetic-fixture-value"));
+    if (kind === "removal")
+      await act(async () => credentials.setPendingDeleteSecret({ providerId: "fixture", label: "Fixture" }));
+    await act(async () => {
+      if (kind === "profile") await profile.handleSaveProvider();
+      else if (kind === "routing") await routing.persistRouting("fixture", "model-b");
+      else if (kind === "credential") await credentials.handleSaveSecret();
+      else await credentials.handleDeleteSecret();
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(profile.mutation).toMatchObject({ checkable: true });
+    expect(profile.mutation.uncertain).toBeTruthy();
+  });
   it("does not dispatch credential deletion using a revision newer than the reviewed removal", async () => {
     view = "trust";
     await render();

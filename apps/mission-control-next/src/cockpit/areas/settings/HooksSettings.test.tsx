@@ -15,7 +15,8 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("../../../features/native-routes/settings/sections/hooks-api", () => api);
 vi.mock("../../data/use-workspace-name", () => ({ useActiveWorkspaceLabel: () => "Research" }));
-vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>()),
   getGatewayApiBaseUrl: () => "http://fixture",
 }));
 let root: ReactTestRenderer;
@@ -71,6 +72,7 @@ it("shows structured owner evidence and requires explicit review for a real test
   const review = root.root.findAllByType(Dialog).find((item) => item.props.title === "Send a real hook test?");
   expect(review?.props.open).toBe(true);
   expect(review?.props.description).toContain("can affect the destination");
+  expect(review?.props.children.props.children[0].props.variant).toBe("primary");
   expect(api.testWorkspaceHook).not.toHaveBeenCalled();
   await act(async () => review?.props.onOpenChange(false));
   expect(api.testWorkspaceHook).not.toHaveBeenCalled();
@@ -89,6 +91,7 @@ it("keeps new signing input out of review copy and out of a remounted native edi
   await act(async () => button("Review hook registration").props.onClick());
   const review = root.root.findAllByType(Dialog).find((item) => item.props.title === "Register this hook?");
   expect(review?.props.description).not.toContain("synthetic-private-input");
+  expect(review?.props.children.props.children[0].props.variant).toBe("primary");
   expect(api.createWorkspaceHook).not.toHaveBeenCalled();
   await act(async () => root.unmount());
   await act(async () => {
@@ -98,4 +101,31 @@ it("keeps new signing input out of review copy and out of a remounted native edi
   expect(root.root.findByProps({ "aria-label": "Hook label" }).props.value).toBe("Native observer");
   expect(root.root.findByProps({ "aria-label": "Signing secret" }).props.value).toBe("");
   expect(root.root.findByProps({ "aria-label": "HTTPS endpoint" }).props.value).toBe("");
+});
+
+it.each(["mutate", "intercept"] as const)("keeps %s delivery consequence styled as dangerous", async (mode) => {
+  api.fetchWorkspaceHooks.mockResolvedValue({
+    items: [{ ...hook, mode, trigger: "tool.call.before", phase: "before" }],
+  });
+  await act(async () => {
+    root = create(<HooksSettings workspaceId="fixture" />);
+  });
+  await act(async () => button("Observer · tool.call.before · Enabled").props.onClick());
+  await act(async () => button("Review real test delivery").props.onClick());
+  const review = root.root.findAllByType(Dialog).find((item) => item.props.title === "Send a real hook test?");
+  expect(review?.props.open).toBe(true);
+  expect(review?.props.children.props.children[0].props.variant).toBe("danger");
+  expect(api.testWorkspaceHook).not.toHaveBeenCalled();
+});
+
+it("keeps observer deletion explicitly dangerous", async () => {
+  await act(async () => {
+    root = create(<HooksSettings workspaceId="fixture" />);
+  });
+  await act(async () => button("Observer · tool.call.after · Enabled").props.onClick());
+  await act(async () => button("Review hook deletion").props.onClick());
+  const review = root.root.findAllByType(Dialog).find((item) => item.props.open && item.props.title.includes("Delete"));
+  expect(review).toBeDefined();
+  expect(review?.props.children.props.children[0].props.variant).toBe("danger");
+  expect(api.deleteWorkspaceHook).not.toHaveBeenCalled();
 });

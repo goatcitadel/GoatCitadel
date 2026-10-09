@@ -12,11 +12,15 @@ export function FirstRunModelStep({
   workspaceId,
   onReload,
   onModelReady,
+  canContinue,
+  onContinue,
 }: {
   state: OnboardingState;
   workspaceId?: string;
   onReload: () => Promise<void>;
   onModelReady: () => void;
+  canContinue: boolean;
+  onContinue: () => void;
 }) {
   const { navigate } = useCockpitRoute();
   const [choice, setChoice] = useState<"provider" | "llama" | null>(null);
@@ -24,6 +28,7 @@ export function FirstRunModelStep({
   const label =
     state.settings.llm.providers.find((item) => item.providerId === state.settings.llm.activeProviderId)?.label ??
     state.settings.llm.activeProviderId;
+  const providerReady = state.setupReadiness?.items.find((item) => item.id === "provider")?.status === "ready";
   return (
     <div className="space-y-4">
       <h2 className="font-display text-lg font-semibold text-fg">Choose a model</h2>
@@ -35,9 +40,9 @@ export function FirstRunModelStep({
         .
       </p>
       <p className="text-sm text-fg-secondary">
-        Gateway connection:{" "}
-        {state.setupReadiness?.items.find((item) => item.id === "provider")?.detail ??
-          "Not reported. Refresh after connecting a provider."}
+        Provider and model:{" "}
+        {providerReady ? "Configured for a first send. Send a Chat message after setup to check the first answer."
+          : "Setup needed. Connect a provider and refresh checks before continuing."}
       </p>
       <p className="text-sm text-fg-secondary">
         Keep an existing ready model, or choose a setup path. Credentials, model defaults, and local runtime changes
@@ -52,6 +57,14 @@ export function FirstRunModelStep({
         </Button>
         {choice ? <Button onClick={() => leave.request(() => setChoice(null))}>Close model controls</Button> : null}
       </div>
+      {!choice ? <div className="space-y-2">
+        <Button variant="primary" aria-describedby="first-run-model-prerequisite" disabled={!canContinue}
+          onClick={() => leave.request(onContinue)}>Continue to safety</Button>
+        <p id="first-run-model-prerequisite" className="text-xs text-fg-muted">
+          {canContinue ? "Continue rechecks the ready default model before reviewing safety."
+            : "Connect and confirm a ready default model, then wait for current checks and pending changes to settle."}
+        </p>
+      </div> : null}
       {choice === "provider" ? (
         <>
           <CockpitGuidedModelSetup

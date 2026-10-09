@@ -4,7 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetSessionDraftsForTests } from "../library/session-drafts";
 import { __resetSettingsChangesForTests } from "./use-settings-change";
-import { __resetAuthAttemptsForTests } from "./gateway-auth-state";
+import { __resetAuthAttemptsForTests, checkAuthAttemptOutcome, readAuthAttempt } from "./gateway-auth-state";
+import { freshReadsActive } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { useGatewayAuthSettings } from "./use-gateway-auth-settings";
 import { gatewayAuthSettingsFixture } from "./gateway-auth.test-support";
 
@@ -14,7 +15,26 @@ const api = vi.hoisted(() => ({
   fetchChangePlan: vi.fn(),
   baseUrl: "http://gateway-a",
 }));
-vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({ getGatewayApiBaseUrl: () => api.baseUrl }));
+// Each owner write reports the attempt it dispatched, as the real capture would for its Gateway route.
+const attempts = vi.hoisted(() => ({ paths: [] as string[], read: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({
+  getGatewayApiBaseUrl: () => api.baseUrl,
+  captureMutationAttempt: (dispatch: () => Promise<unknown>, onAttempt: (attempt: unknown) => void) => {
+    const path = attempts.paths.shift();
+    if (path)
+      onAttempt({
+        attemptKey: "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+        method: "PATCH",
+        path,
+        installation: api.baseUrl,
+      });
+    return dispatch();
+  },
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  fetchMutationAttempt: attempts.read,
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   ...api,
   isApiRequestError: (error: unknown) => Boolean(error && typeof error === "object" && "status" in error),
@@ -68,6 +88,7 @@ function plan() {
 }
 beforeEach(async () => {
   vi.resetAllMocks();
+  attempts.paths.length = 0;
   api.baseUrl = "http://gateway-a";
   owner = structuredClone(initial);
   active = true;
@@ -190,6 +211,116 @@ describe("shared Gateway authentication owner", () => {
     await render();
     expect(hook.attempt?.state).toBe("uncertain");
     expect(hook.locked).toBe(true);
+  });
+  async function loseAuthSave() {
+    await review();
+    attempts.paths.push("/api/v1/auth/settings");
+    api.patchGatewayAuthSettings.mockRejectedValue(new Error("lost response"));
+    await confirm();
+    expect(hook.attempt).toMatchObject({ state: "uncertain", transport: { routePattern: "/api/v1/auth/settings" } });
+  }
+  async function checkOutcome() {
+    await act(async () => {
+      await hook.checkOutcome();
+    });
+  }
+  it("settles a lost authentication save from the Gateway's attempt record and a canonical readback", async () => {
+    await loseAuthSave();
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    api.fetchSettings.mockClear();
+    await checkOutcome();
+    expect(attempts.read).toHaveBeenCalledWith(
+      "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+      "PATCH",
+      "/api/v1/auth/settings",
+    );
+    expect(api.fetchSettings).toHaveBeenCalled();
+    expect(reload).toHaveBeenCalled();
+    expect(hook.attempt).toBeUndefined();
+    expect(hook.notice).toMatch(/recorded this authentication change as processed/);
+    expect(api.patchGatewayAuthSettings).toHaveBeenCalledOnce();
+  });
+  it("unlocks a released authentication save without claiming nothing was applied", async () => {
+    await loseAuthSave();
+    attempts.read.mockResolvedValue({ status: "failed", claimExpired: false });
+    await checkOutcome();
+    expect(hook.attempt).toBeUndefined();
+    expect(hook.notice).toMatch(/may still have been applied/);
+  });
+  it.each([
+    [{ status: "pending", claimExpired: false }, /still running/],
+    [{ status: "pending", claimExpired: true }, /expired/],
+    [{ status: "absent" }, /no record/],
+  ])("keeps the authentication lock for %o", async (record, message) => {
+    await loseAuthSave();
+    attempts.read.mockResolvedValue(record);
+    await checkOutcome();
+    expect(hook.attempt?.state).toBe("uncertain");
+    expect(hook.attempt?.message).toMatch(message);
+    expect(hook.locked).toBe(true);
+  });
+  it.each(["read", "readback"] as const)("keeps the authentication lock when the %s fails", async (failure) => {
+    await loseAuthSave();
+    if (failure === "read") attempts.read.mockRejectedValue(new Error("API error 401: gateway-internal-detail"));
+    else {
+      attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+      api.fetchSettings.mockRejectedValue(new Error("API error 401: gateway-internal-detail"));
+    }
+    await checkOutcome();
+    expect(hook.attempt?.state).toBe("uncertain");
+    expect(hook.attempt?.message).toMatch(/check failed/);
+    expect(hook.attempt?.message).not.toContain("gateway-internal-detail");
+  });
+  it("refuses to check a lost authentication save against a different Gateway installation", async () => {
+    await loseAuthSave();
+    const key = hook.key;
+    api.baseUrl = "http://gateway-b";
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    expect(await checkAuthAttemptOutcome(key, async () => undefined)).toBeUndefined();
+    expect(attempts.read).not.toHaveBeenCalled();
+    expect(readAuthAttempt(key)).toMatchObject({
+      state: "uncertain",
+      message: expect.stringMatching(/different Gateway/),
+    });
+  });
+  it.each(["during the attempt read", "during the readback"])(
+    "keeps authentication locked when the Gateway connection changes %s",
+    async (when) => {
+      await loseAuthSave();
+      const key = hook.key;
+      attempts.read.mockImplementation(async () => {
+        if (when === "during the attempt read") api.baseUrl = "http://gateway-b";
+        return { status: "completed", claimExpired: false };
+      });
+      const readback = vi.fn(async () => {
+        api.baseUrl = "http://gateway-b";
+      });
+      expect(await checkAuthAttemptOutcome(key, readback)).toBeUndefined();
+      expect(readAuthAttempt(key)).toMatchObject({
+        state: "uncertain",
+        message: expect.stringMatching(/different Gateway/),
+      });
+      expect(readAuthAttempt(key)?.checking).toBeFalsy();
+      if (when === "during the attempt read") expect(readback).not.toHaveBeenCalled();
+    },
+  );
+  it("reads authentication settings back fresh", async () => {
+    await loseAuthSave();
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    let fresh = false;
+    await checkAuthAttemptOutcome(hook.key, async () => {
+      fresh = freshReadsActive();
+    });
+    expect(fresh).toBe(true);
+  });
+  it("offers no outcome check for an attempt it could not identify", async () => {
+    await review();
+    api.patchGatewayAuthSettings.mockRejectedValue(new Error("lost response"));
+    await confirm();
+    expect(hook.attempt?.state).toBe("uncertain");
+    expect(hook.attempt?.transport).toBeUndefined();
+    await checkOutcome();
+    expect(attempts.read).not.toHaveBeenCalled();
   });
   it("acknowledges a late committed receipt without refreshing the replacement view", async () => {
     await review();

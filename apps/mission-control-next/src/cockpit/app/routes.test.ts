@@ -10,9 +10,9 @@ describe("cockpit routes", () => {
     expect(parseCockpitLocation("/")).toEqual({ area: "chat", rest: [] });
   });
 
-  it("lists five primary areas with Ctrl+1 through Ctrl+5", () => {
+  it("lists primary areas with non-conflicting sequence keys", () => {
     expect(COCKPIT_AREAS.map((entry) => [entry.label, entry.shortcut])).toEqual([
-      ["Chat", "1"], ["Inbox", "2"], ["Work", "3"], ["Library", "4"], ["System", "5"],
+      ["Chat", "c"], ["Inbox", "i"], ["Work", "w"], ["Library", "l"], ["System", "s"],
     ]);
   });
 });

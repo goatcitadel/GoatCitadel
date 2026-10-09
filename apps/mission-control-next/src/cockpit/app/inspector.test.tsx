@@ -117,7 +117,8 @@ describe("inspector", () => {
       );
     });
     act(() => api.open({ title: "Run", body: <p>Steps</p> }));
-    expect(document.querySelector('.cockpit-sheet [aria-label="Inspector: Run"]')?.textContent).toContain("Steps");
+    expect(document.querySelector('.cockpit-sheet [role="region"][aria-label="Inspector: Run"]')?.textContent).toContain("Steps");
+    expect(document.querySelectorAll('.cockpit-sheet [role="dialog"]').length).toBeLessThanOrEqual(1);
     expect(container.querySelector("aside.cockpit-inspector")).toBeNull();
   });
   it("opens only a registered current selection with Ctrl+I and cannot resurrect it after route ABA", () => {

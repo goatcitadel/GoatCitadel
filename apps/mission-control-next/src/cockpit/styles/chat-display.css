@@ -2,6 +2,16 @@
 @layer theme, base, components, utilities;
 
 @layer components {
+  .cockpit-chat-content .mc-assistant-markdown .contains-task-list { list-style: none; }
+  .cockpit-chat-content .mc-assistant-streaming-cursor {
+    display: inline-block;
+    width: 0.45em;
+    height: 1em;
+    margin-left: 0.15em;
+    vertical-align: text-bottom;
+    background: var(--cockpit-accent);
+  }
+
   .cockpit-chat-content .mc-assistant-renderer-body {
     min-width: 0;
     overflow-wrap: anywhere;
@@ -16,7 +26,7 @@
 
   /* The shared assistant copy button ships classic-only styles; give it a real hit area here. */
   .cockpit-chat-content .mc-assistant-copy-button {
-    display: inline-flex;
+    display: none;
     align-items: center;
     justify-content: center;
     min-width: 2rem;
@@ -41,7 +51,7 @@
     color: var(--cockpit-failed);
   }
 
-  @media (max-width: 639px) {
+  @media (width < 640px) {
     .cockpit-chat-content .mc-assistant-copy-button {
       min-width: 2.75rem;
       min-height: 2.75rem;

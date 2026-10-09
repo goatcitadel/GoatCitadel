@@ -14,6 +14,20 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ ...api, isApiRequestError: () => false }));
 vi.mock("@goatcitadel/mission-control-shared/components/ConfirmModal", () => ({ ConfirmModal: () => null }));
+// Each owner write reports the attempt it dispatched, as the real capture would for its Gateway route.
+const attempts = vi.hoisted(() => ({ paths: [] as string[], read: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  captureMutationAttempt: (dispatch: () => Promise<unknown>, onAttempt: (attempt: unknown) => void) => {
+    const path = attempts.paths.shift();
+    if (path) onAttempt({ attemptKey: "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b", method: "PATCH", path });
+    return dispatch();
+  },
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  fetchMutationAttempt: attempts.read,
+}));
 const connection = (id: string, patch: Partial<IntegrationConnection> = {}): IntegrationConnection => ({
   connectionId: id,
   catalogId: "productivity.github",
@@ -73,11 +87,17 @@ afterEach(async () => {
 });
 
 describe("native integration connections", () => {
+  it("does not promote a configured connected record to verified connectivity", async () => {
+    items = [{ ...connection("one"), enabled: true, status: "connected" }];
+    await mount();
+    expect(text(view.root)).toContain("Connectivity unverified");
+    expect(text(view.root)).toContain("Configured status: Connected");
+  });
   it("shows global scope, saved status, and an explicit exact owner review before changing enabled state", async () => {
     await mount();
     expect(text(view.root)).toContain("across all workspaces");
     expect(button("Add and manage integrations").props["aria-expanded"]).toBe(false);
-    expect(text(view.root)).toContain("Disabled · Paused");
+    expect(text(view.root)).toContain("Configured status: Paused");
     await click(button("Review enable"));
     expect(modal().props.open).toBe(true);
     expect(modal().props.message).toContain("Personal Citadel policy applies");
@@ -118,6 +138,48 @@ describe("native integration connections", () => {
     expect(button("Review enable").props.disabled).toBe(true);
     expect(text(view.root)).toContain("outcome is unconfirmed");
     expect(api.updateIntegrationConnection).toHaveBeenCalledTimes(1);
+  });
+  it("settles a lost toggle through Check outcome after a canonical directory read", async () => {
+    attempts.paths.length = 0;
+    await mount();
+    await click(button("Review enable"));
+    attempts.paths.push("/api/v1/integrations/connections/one");
+    api.updateIntegrationConnection.mockRejectedValueOnce(new Error("lost acknowledgement"));
+    await act(async () => modal().props.onConfirm());
+    expect(text(view.root)).toContain("outcome is unconfirmed");
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    const reads = api.fetchIntegrationConnections.mock.calls.length;
+    await click(button("Check outcome"));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(api.fetchIntegrationConnections.mock.calls.length).toBeGreaterThan(reads);
+    expect(text(view.root)).not.toContain("outcome is unconfirmed");
+    expect(text(view.root)).toContain("recorded this integration change as processed");
+    expect(button("Review enable").props.disabled).toBe(false);
+    expect(api.updateIntegrationConnection).toHaveBeenCalledTimes(1);
+  });
+  it("settling one row's lost toggle leaves another row's open review untouched", async () => {
+    attempts.paths.length = 0;
+    items = [connection("one"), connection("two")];
+    await mount();
+    const review = (name: string) =>
+      view.root.findAllByType("button").find((node) => node.props["aria-label"] === `Review enable GitHub ${name}`)!;
+    await click(review("one"));
+    attempts.paths.push("/api/v1/integrations/connections/one");
+    api.updateIntegrationConnection.mockRejectedValueOnce(new Error("lost acknowledgement"));
+    await act(async () => modal().props.onConfirm());
+    await act(async () => modal().props.onCancel());
+    await click(review("two"));
+    expect(modal().props.open).toBe(true);
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    await click(button("Check outcome"));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(text(view.root)).toContain("recorded this integration change as processed");
+    expect(modal().props.open).toBe(true);
+    expect(modal().props.message).toContain("GitHub two");
   });
   it("withholds cached controls after a failed directory refresh", async () => {
     await mount();

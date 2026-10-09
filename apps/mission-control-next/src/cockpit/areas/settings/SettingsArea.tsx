@@ -41,6 +41,7 @@ import {
 } from "./settings-controls";
 
 const PAGES = buildSettingsIndex();
+const DISCOVERABLE_PAGES = buildSettingsIndex({ discovery: true });
 
 export function SettingsArea() {
   const { rest, navigate } = useCockpitRoute();
@@ -53,7 +54,7 @@ export function SettingsArea() {
     PAGES[0]!;
   const selectedId = page.id;
   const selectedSection = selectedSettingsSection(page, rest[0], hash);
-  const searched = useMemo(() => searchSettingsPages(PAGES, query), [query]);
+  const searched = useMemo(() => searchSettingsPages(DISCOVERABLE_PAGES, query), [query]);
   const searching = Boolean(query.trim());
 
   const openSection = (entry: SettingsIndexEntry) => {
@@ -64,6 +65,8 @@ export function SettingsArea() {
   };
   const renderControls = (section: string) => {
     switch (section) {
+      case "onboarding":
+        return <FirstRunArea />;
       case "general":
         return <AppearanceSettings />;
       case "personalities":
@@ -101,7 +104,7 @@ export function SettingsArea() {
       case "providers":
         return <ModelsSettings />;
       case "local-ai":
-        return <LocalAiSettings key={activeCitadelId} />;
+        return <><LlamaSetupSettings workspaceId={activeWorkspaceId ?? ""} /><LocalAiSettings key={activeCitadelId} /><details className="mt-4"><summary className="cursor-pointer text-sm font-medium">Expert local runtime configuration</summary><ManagedRuntimeSettings /></details></>;
       case "permissions":
         return <PermissionProfileSettings key={activeWorkspaceId} workspaceId={activeWorkspaceId ?? ""} />;
       case "hooks":
@@ -124,6 +127,9 @@ export function SettingsArea() {
   };
 
   if (rest[0] === "first-run") return <Suspense fallback={<p role="status" className="p-4 text-sm text-fg-muted">Loading setup…</p>}><FirstRunArea /></Suspense>;
+  if (page.entries.find((entry) => entry.section === selectedSection)?.releaseStatus === "hide") return <EmptyState title="Settings destination unavailable" description="This capability is hidden from the current release. Technical display preferences do not enable it." />;
+  if (rest[0] && !PAGES.some((item) => item.id === rest[0] || item.entries.some((entry) => entry.section === rest[0]))) return <EmptyState title="Settings destination unavailable" description="This link does not identify a supported settings destination. Open Settings to choose a current page." />;
+  if (hash && !["application-updates", "approval-mode"].includes(hash) && !page.entries.some((entry) => entry.anchor === hash || entry.section === hash)) return <EmptyState title="Settings destination unavailable" description="This link does not identify a supported section on this settings page. Open Settings to choose a current section." />;
 
   return (
     <section className="mx-auto flex w-full min-w-0 max-w-5xl flex-col gap-5 p-4 sm:p-6">
@@ -134,6 +140,7 @@ export function SettingsArea() {
         <a
           href="/settings/first-run"
           onClick={(event) => {
+            if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
             event.preventDefault();
             navigate("/settings/first-run");
           }}
@@ -157,7 +164,7 @@ export function SettingsArea() {
         aria-label="Settings pages"
         className="flex flex-wrap gap-1 border-b border-line-subtle sm:flex-nowrap sm:overflow-x-auto"
       >
-        {PAGES.map((page) => (
+        {DISCOVERABLE_PAGES.map((page) => (
           <a
             key={page.id}
             href={`/settings/${page.id}`}
@@ -166,6 +173,7 @@ export function SettingsArea() {
             onPointerDown={() => preloadSettingsSection(selectedSettingsSection(page, page.id, ""))}
             aria-current={!query.trim() && selectedId === page.id ? "page" : undefined}
             onClick={(event) => {
+              if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
               event.preventDefault();
               setQuery("");
               navigate(`/settings/${page.id}`);
@@ -273,6 +281,7 @@ function SettingsDestinationContent({ entry }: { entry: SettingsIndexEntry }) {
   return <>
             <span className="min-w-0 flex-1">
               <span className="block text-sm font-medium text-fg">{entry.label}</span>
+              {entry.releaseStatus === "experimental" ? <span className="text-xs text-fg-muted">Experimental</span> : null}
               <span className="mt-1 block text-xs text-fg-muted">{entry.description}</span>
               <span className="mt-1 block text-xs text-fg-secondary">
                 {entry.destination === "detailed"

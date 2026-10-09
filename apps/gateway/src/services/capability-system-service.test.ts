@@ -32,6 +32,7 @@ import type {
 import { canonicalJsonString, ConflictError } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { CapabilitySystemService, __internal } from "./capability-system-service.js";
+import { resolveCandidateLifecycleWorkspace } from "./capability-candidate-lifecycle-scope.js";
 import type { CapabilityRuntimeConfig } from "../config.js";
 
 const tempRoots: string[] = [];
@@ -5148,7 +5149,7 @@ describe("CapabilitySystemService", () => {
     CODE_MODE_CANDIDATE_IO_TEST_TIMEOUT_MS,
   );
 
-  it("advances an existing Code Mode candidate from revision one to two for a second version", async () => {
+  it("advances a Code Mode candidate to a second version and governs rollback through the older exact run scope", async () => {
     const harness = await createHarness({
       sandboxConfig: {
         required: false,
@@ -5156,7 +5157,9 @@ describe("CapabilitySystemService", () => {
       },
     });
     const candidateId = "candidate-code-mode-second-version";
+    const workspaceId = "workspace-historical-code";
     const firstRun = await harness.service.createCodeModeRun({
+      workspaceId,
       language: "javascript",
       source: "return { ok: true, version: 1 };",
       requestedOutputIntent: "Generate the first candidate version.",
@@ -5165,6 +5168,7 @@ describe("CapabilitySystemService", () => {
     });
     await harness.service.executeApprovedCodeModeRun("approval-1");
     const secondRun = await harness.service.createCodeModeRun({
+      workspaceId,
       language: "javascript",
       source: "return { ok: true, version: 2 };",
       requestedOutputIntent: "Generate the second candidate version.",
@@ -5184,6 +5188,27 @@ describe("CapabilitySystemService", () => {
         .filter(([eventType]) => eventType === "candidate_skill_staged")
         .map(([, , payload]) => payload.revision),
     ).toEqual([1, 2]);
+    const older = detail.versions.find(version => version.originatingRunId === firstRun.runId)!;
+    const latest = detail.versions.find(version => version.originatingRunId === secondRun.runId)!;
+    expect(detail.originatingRun?.runId).toBe(secondRun.runId);
+    const readRun = vi.fn((runId: string) => harness.service.getCodeModeRun(runId));
+    expect(await resolveCandidateLifecycleWorkspace(detail, older, readRun)).toBe(workspaceId);
+    expect(readRun).toHaveBeenCalledExactlyOnceWith(firstRun.runId);
+    const promote = await harness.service.promoteCandidate(candidateId, detail.revision, latest.versionId);
+    if (!promote.pendingApproval) throw new Error("Expected governed latest-version promotion");
+    harness.storage.approvals.resolve(promote.pendingApproval.approvalId, { decision: "approve", resolvedBy: "operator" });
+    const promoted = await harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: promote.pendingApproval.approvalId });
+    expect(promoted.detail.activeVersion?.versionId).toBe(latest.versionId);
+    expect(await resolveCandidateLifecycleWorkspace(promoted.detail, older, readRun)).toBe(workspaceId);
+    const rollback = await harness.service.rollbackCandidate(candidateId, older.versionId, promoted.revision);
+    if (!rollback.pendingApproval) throw new Error("Expected governed historical rollback");
+    expect((await harness.service.getCandidateDetail(candidateId)).activeVersion?.versionId).toBe(latest.versionId);
+    harness.storage.approvals.resolve(rollback.pendingApproval.approvalId, { decision: "approve", resolvedBy: "operator" });
+    const restored = await harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: rollback.pendingApproval.approvalId });
+    expect(restored.revision).toBe(promoted.revision + 1);
+    expect(restored.detail.activeVersion?.versionId).toBe(older.versionId);
+    expect(restored.detail.originatingRun?.runId).toBe(firstRun.runId);
+    expect(restored.detail.activeVersion?.instructionArtifact).toEqual(older.instructionArtifact);
   });
 
   it("never stages a candidate after a successful child result is terminalized as interrupted", async () => {

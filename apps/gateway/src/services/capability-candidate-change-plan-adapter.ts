@@ -143,7 +143,9 @@ export class CapabilityCandidateChangePlanAdapter implements EvolutionControlPla
     const copy = actionCopy(action, resolved.proposal.proposal.title);
     if ("noMutationRequired" in outcome && outcome.noMutationRequired) {
       return {
-        status: "completed",
+        // Staging cannot transition directly to completed. Re-read the existing
+        // lifecycle state through verify, without minting an approval or effect.
+        status: "verifying",
         evidenceRefs: lifecycleEvidence(outcome.detail, resolved.version.versionId),
         result: { summary: copy.noopSummary },
       };

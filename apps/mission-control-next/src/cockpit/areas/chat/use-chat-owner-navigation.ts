@@ -6,6 +6,7 @@ import { CockpitNavigationContext } from "../../app/cockpit-navigation-context";
 import { cockpitHref, commitCockpitNavigation, readCockpitHistory } from "../../app/cockpit-history";
 import { chatSelectionHref, chatSelectionMatches, type ChatLocationSelection, type ChatSelectionEvidence } from "./chat-selection-evidence";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { isCockpitConversationLocation } from "../../app/cockpit-compatibility";
 
 /** Review before invoking the controller; cancellation cannot change selection or create a session. */
 export function useChatSelectionReview(identity: string) {
@@ -35,19 +36,25 @@ export function useChatOwnerNavigation(workspaceId: string, citadelId?: string) 
   if (scope.current.identity !== identity) scope.current = { identity };
   const renderedScope = scope.current;
   const mounted = useRef(true);
-  const pending = useRef<{ selection: ChatLocationSelection; history: string; scope: object; href: string } | null>(null);
+  const pending = useRef<{ selection: ChatLocationSelection; href: string; history: string; scope: object } | null>(null);
   const [, changed] = useState(0);
   useLayoutEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; pending.current = null; };
   }, []);
   const current = useCallback(() => available && mounted.current && scope.current === renderedScope &&
-    getGatewayApiBaseUrl() === installation && window.location.pathname === "/chat", [available, installation, renderedScope]);
+    getGatewayApiBaseUrl() === installation && isCockpitConversationLocation(window.location.pathname + window.location.search + window.location.hash), [available, installation, renderedScope]);
   const request = useCallback((_surface: ChatMode, selection: ChatLocationSelection = {}) => {
     if (!current()) return;
-    const href = preserveChannelPlanReviewHref(chatSelectionHref(selection), window.location.search, workspaceId);
+    const destination = new URL(
+      preserveChannelPlanReviewHref(chatSelectionHref(selection), window.location.search, workspaceId),
+      window.location.origin,
+    );
+    const incoming = new URLSearchParams(window.location.search);
+    if (incoming.get("sessionId") === selection.sessionId && incoming.has("assignProjectId")) destination.searchParams.set("assignProjectId", incoming.get("assignProjectId")!);
+    const href = destination.pathname + destination.search + destination.hash;
     if (cockpitHref(window.location.pathname + window.location.search + window.location.hash) === href) return;
-    pending.current = { selection: { ...selection }, history: readCockpitHistory(), scope: renderedScope, href };
+    pending.current = { selection: { ...selection }, href, history: readCockpitHistory(), scope: renderedScope };
     changed((version) => version + 1);
   }, [current, renderedScope, workspaceId]);
   const publish = useCallback((evidence: ChatSelectionEvidence) => {
@@ -60,7 +67,8 @@ export function useChatOwnerNavigation(workspaceId: string, citadelId?: string) 
     if (!chatSelectionMatches(request.selection, evidence, workspaceId)) return;
     pending.current = null;
     // No arbitrary href is accepted: the only destination is the bound current Chat selection.
-    commitCockpitNavigation(request.href);
+    commitCockpitNavigation(request.href, undefined,
+      () => current() && request.history === readCockpitHistory());
   }, [current, renderedScope, workspaceId]);
   return { request, publish };
 }

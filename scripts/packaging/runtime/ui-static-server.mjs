@@ -114,7 +114,13 @@ function resolveStaticPath(candidatePath) {
 
 function resolveCacheControl(finalPath, requestUrl) {
   const pathname = requestUrl.pathname.toLowerCase();
-  if (finalPath.endsWith(".html") || pathname.endsWith("/sw.js") || pathname.endsWith("/manifest.webmanifest")) {
+  // Unhashed root files must revalidate; only content-hashed assets are immutable.
+  if (
+    finalPath.endsWith(".html") ||
+    pathname.endsWith("/sw.js") ||
+    pathname.endsWith("/manifest.webmanifest") ||
+    pathname.endsWith("/theme-boot.js")
+  ) {
     return "no-store, max-age=0, must-revalidate";
   }
   return "public, max-age=31536000, immutable";

@@ -155,17 +155,24 @@ describe("secrets routes", () => {
       evolution: { isEnabled: vi.fn(async () => true), create, confirm },
       evolutionProviderConnection: { submitSecret },
     } as never);
+    // The idempotency plugin sets the caller's attempt key; plans must be bound to it, not to a per-process request id.
+    app.decorateRequest("idempotencyKey", "");
+    app.addHook("onRequest", async (request) => {
+      request.idempotencyKey = String(request.headers["idempotency-key"] ?? "");
+    });
     await app.register(secretsRoutes);
 
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/secrets/providers/glm",
+      headers: { "Idempotency-Key": "attempt-secret-save-1" },
       payload: { apiKey: "secret-value", expectedRevision: 7 },
     });
 
     expect(response.statusCode).toBe(200);
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
+        idempotencyKey: "provider-secret-save:attempt-secret-save-1:7",
         expectedTargetRevision: 7,
         request: expect.objectContaining({ credentialAction: "replace_api_key" }),
       }),

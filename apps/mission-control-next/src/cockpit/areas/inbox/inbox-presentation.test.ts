@@ -51,7 +51,7 @@ describe("Inbox counts", () => {
   });
   it("labels incomplete counts as lower bounds", () => {
     expect(inboxKnownCount(projection)).toEqual({ known: 2, complete: false });
-    expect(inboxCountLabel(projection)).toBe("2+");
+    expect(inboxCountLabel(projection)).toBe("2");
     expect(
       inboxCountLabel({
         ...projection,
@@ -71,28 +71,28 @@ describe("Inbox counts", () => {
         { source: "memory_proposals", state: "not_enabled" },
       ],
     };
-    expect(inboxCountIsExact(limited, false)).toBe(true);
+    expect(inboxCountIsExact(limited, false)).toBe(false);
     expect(inboxCountLabel(limited)).toBe("2");
-    expect(inboxNavigationLabel(inboxCountLabel(limited))).toBe("Inbox, 2 items");
+    expect(inboxNavigationLabel(inboxCountLabel(limited))).toBe("Inbox, 2 decisions");
     const gap: OperatorInboxResponse = {
       ...limited,
       coverage: [...limited.coverage, { source: "dead_letters", state: "partial" }],
     };
     expect(inboxReadGaps(gap).map((source) => source.source)).toEqual(["dead_letters"]);
-    expect(inboxCountLabel(gap)).toBe("2+");
+    expect(inboxCountLabel(gap)).toBe("2");
   });
 
   it("marks an unread source even when nothing is known", () => {
     const unread: OperatorInboxResponse = {
       ...projection,
       coverage: [{ source: "dead_letters", state: "unavailable" }],
-      counts: { ...projection.counts, needs_decision: { known: 0, complete: true } },
+      counts: { ...projection.counts, needs_decision: { known: 0, complete: false } },
     };
     expect(inboxCountLabel(unread)).toBe("?");
     expect(inboxNavigationLabel("?")).toBe("Inbox, some sources could not be read");
-    expect(inboxNavigationLabel("1")).toBe("Inbox, 1 item");
-    expect(inboxNavigationLabel("1+")).toBe("Inbox, at least 1 item");
-    expect(inboxCountTitle("?")).toBe("Some Inbox sources could not be read");
+    expect(inboxNavigationLabel("1")).toBe("Inbox, 1 decision");
+    expect(inboxNavigationLabel("1+")).toBe("Inbox, at least 1 decision");
+    expect(inboxCountTitle("?")).toBe("Some decision coverage is incomplete");
   });
 
   it("hides a zero count", () => {

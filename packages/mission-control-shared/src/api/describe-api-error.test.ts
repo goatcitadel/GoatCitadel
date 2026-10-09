@@ -13,6 +13,15 @@ function httpError(status: number, body?: unknown): ApiRequestError {
 }
 
 describe("describeApiError", () => {
+  it("classifies disabled features and access failures without permission retries", () => {
+    for (const code of ["FEATURE_DISABLED", "STATE_CONFLICT"]) {
+      expect(describeApiError(httpError(409, { code, details: { flag: "feature" } }))).toMatchObject({ category: "feature_disabled", retryable: false });
+    }
+    expect(describeApiError(httpError(409, { code: "STATE_CONFLICT" }))).toMatchObject({ category: "conflict", retryable: true });
+    expect(describeApiError(httpError(403, { code: "FEATURE_DISABLED", details: { flag: "feature" } }))).toMatchObject({ category: "permission", retryable: false });
+    expect(describeApiError(httpError(401))).toMatchObject({ category: "authentication", retryable: false });
+    expect(describeApiError(httpError(503))).toMatchObject({ category: "transient", retryable: true });
+  });
   it("turns request failures into plain copy while retaining technical details", () => {
     const error = new ApiRequestError("Network error POST /api/v1/chat/sessions/s/route-preflight: Failed to fetch", {
       kind: "network",

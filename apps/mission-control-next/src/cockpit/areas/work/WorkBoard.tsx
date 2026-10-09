@@ -16,11 +16,17 @@ import { WorkTaskCreate } from "./WorkTaskCreate";
 import { useWorkspaceDurableRuns } from "./useWorkspaceDurableRuns";
 import { workspaceTasksOptions } from "./work-queries";
 import { formattedWorkTime } from "./work-format";
+import { Field } from "../../ui/Field";
+import { WorkWaitingDecisions } from "./WorkWaitingDecisions";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { recordView } from "../../data/record-view";
+import { workColumnStatus } from "./work-column-status";
+import { WorkTaskBulkActions } from "./WorkTaskBulkActions";
 
 const COLUMNS: readonly { id: WorkBoardGroup; title: string; description: string }[] = [
-  { id: "running", title: "Running", description: "Queued or executing" },
-  { id: "waiting", title: "Waiting", description: "Waiting or paused; review the run for its cause" },
-  { id: "failed", title: "Failed", description: "Failed or needs recovery" },
+  { id: "running", title: "Active", description: "Tasks being prepared or worked; runs queued or executing" },
+  { id: "waiting", title: "Needs attention", description: "Tasks in inbox, blocked or review; runs waiting or paused" },
+  { id: "failed", title: "Failed runs", description: "Runtime failures and recovery" },
   { id: "done", title: "Done", description: "Completed or cancelled" },
 ];
 
@@ -29,10 +35,17 @@ const CARD = "block rounded-md border border-line bg-raised p-3 hover:border-lin
 export function WorkBoard() {
   const { navigate } = useCockpitRoute();
   const [creating, setCreating] = useState(false);
+  const [search, setSearch] = useState("");
+  const [kind, setKind] = useState("all");
+  // Select mode turns operator task cards into checkboxes for reviewed task actions; runtime runs stay links.
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
+  const [bulkNotice, setBulkNotice] = useState<string>();
   const { activeWorkspaceId } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
   const runs = useWorkspaceDurableRuns(workspaceId);
   const tasks = useInfiniteQuery(workspaceTasksOptions(workspaceId));
+  const writable = tasks.isSuccess && tasks.isFetchedAfterMount && !tasks.isFetching && !tasks.isPlaceholderData;
   const board = runs.data
     ? projectWorkBoard(
         runs.data.pages.flatMap((page) => page.items),
@@ -40,12 +53,23 @@ export function WorkBoard() {
       )
     : null;
   const taskBoard =
-    !tasks.isError && tasks.data
+    tasks.data
       ? projectWorkTasks(
           tasks.data.pages.flatMap((page) => page.items),
           workspaceId,
         )
       : null;
+  const loadedTasks = taskBoard ? Object.values(taskBoard).flat() : [];
+  const taskView = recordView(tasks);
+  const runView = recordView(runs);
+  const selectedTasks = loadedTasks.filter((task) => selectedIds.has(task.taskId));
+  const toggle = (taskId: string) =>
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
   const open = (path: string) => (event: { preventDefault: () => void }) => {
     event.preventDefault();
     navigate(path);
@@ -62,8 +86,20 @@ export function WorkBoard() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="primary" onClick={() => setCreating(true)} disabled={creating}>
+          <Button size="sm" variant="primary" onClick={() => setCreating(true)} disabled={creating || !writable}>
             New task
+          </Button>
+          <Button
+            size="sm"
+            aria-pressed={selecting}
+            disabled={!selecting && !tasks.data}
+            onClick={() => {
+              setSelecting((value) => !value);
+              setSelectedIds(new Set());
+              setBulkNotice(undefined);
+            }}
+          >
+            {selecting ? "Done selecting" : "Select tasks"}
           </Button>
           <Button
             size="sm"
@@ -77,10 +113,34 @@ export function WorkBoard() {
           </Button>
         </div>
       </header>
+      <WorkWaitingDecisions workspaceId={workspaceId} />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Search loaded work">{props => <input {...props} value={search} onChange={event => setSearch(event.target.value)} className="rounded-md border border-line bg-sunken p-2 text-fg" />}</Field>
+        <Field label="Record type">{props => <select {...props} value={kind} onChange={event => setKind(event.target.value)} className="rounded-md border border-line bg-sunken p-2 text-fg"><option value="all">Tasks and runtime runs</option><option value="task">Operator tasks</option><option value="run">Runtime runs</option></select>}</Field>
+      </div>
+      {selecting ? (
+        <WorkTaskBulkActions
+          workspaceId={workspaceId}
+          selected={selectedTasks}
+          onClear={() => setSelectedIds(new Set())}
+          onRefresh={() => void tasks.refetch()}
+          onSettled={(notice) => {
+            setSelectedIds(new Set());
+            setBulkNotice(notice);
+            void tasks.refetch();
+          }}
+        />
+      ) : null}
+      {bulkNotice ? (
+        <p role="status" className="rounded-md border border-line bg-sunken p-3 text-sm text-fg">
+          {bulkNotice}
+        </p>
+      ) : null}
       {creating ? (
         <WorkTaskCreate
           key={workspaceId}
           workspaceId={workspaceId}
+          accessAvailable={writable}
           onClose={() => setCreating(false)}
           onCreated={(task) => {
             setCreating(false);
@@ -121,9 +181,11 @@ export function WorkBoard() {
                   <p className="text-xs text-fg-muted">{column.description}</p>
                 </div>
                 <span className="text-sm tabular-nums text-fg-secondary">
-                  {(board?.[column.id].length ?? 0) + (taskBoard?.[column.id].length ?? 0)}
+                  {workColumnStatus(taskView, taskBoard?.[column.id].length, "tasks")} · {workColumnStatus(runView, board?.[column.id].length, "runs")}
                 </span>
               </div>
+              {(["task", "run"] as const).filter(recordKind => kind === "all" || kind === recordKind).map(recordKind => <section key={recordKind} aria-label={recordKind === "task" ? "Operator tasks" : "Runtime runs"}>
+                <h3 className="mb-2 text-xs font-semibold text-fg-secondary">{recordKind === "task" ? "Operator tasks" : "Runtime runs"}</h3>
               <WindowedRecordList
                 label={column.title + " records"}
                 items={[
@@ -133,16 +195,31 @@ export function WorkBoard() {
                     task,
                   })),
                   ...(board?.[column.id] ?? []).map((run) => ({ kind: "run" as const, key: "run:" + run.runId, run })),
-                ]}
+                ].filter(item => item.kind === recordKind && (item.kind === "task" ? `${item.task.title} ${item.task.status} ${item.task.description ?? ""}` : `${workRunTitle(item.run)} ${item.run.status} ${item.run.lastError ?? ""}`).toLowerCase().includes(search.trim().toLowerCase())).slice(0, column.id === "done" ? 25 : undefined)}
                 itemKey={(item) => item.key}
               >
                 {(item) => {
                   if (item.kind === "task") {
                     const task = item.task;
                     const path = `/work/tasks/${encodeURIComponent(task.taskId)}`;
+                    if (selecting)
+                      return (
+                        <label key={`task:${task.taskId}`} className={`${CARD} flex min-h-11 cursor-pointer items-start gap-2`}>
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 size-5 shrink-0"
+                            checked={selectedIds.has(task.taskId)}
+                            onChange={() => toggle(task.taskId)}
+                          />
+                          <span className="min-w-0">
+                            <span className="text-xs font-semibold text-accent">Operator task · {humanizeToken(task.status)}</span>
+                            <span className="mt-1 line-clamp-3 block text-sm font-medium text-fg">{task.title}</span>
+                          </span>
+                        </label>
+                      );
                     return (
                       <a key={`task:${task.taskId}`} href={path} onClick={open(path)} className={CARD}>
-                        <span className="text-xs font-semibold text-accent">Task · {humanizeToken(task.status)}</span>
+                        <span className="text-xs font-semibold text-accent">Operator task · {humanizeToken(task.status)}</span>
                         <span className="mt-1 line-clamp-3 block text-sm font-medium text-fg">{task.title}</span>
                         <span className="mt-2 block text-xs text-fg-muted">
                           Updated {formattedWorkTime(task.updatedAt)}
@@ -154,17 +231,20 @@ export function WorkBoard() {
                   const path = `/work/runs/${encodeURIComponent(run.runId)}`;
                   return (
                     <a key={`run:${run.runId}`} href={path} onClick={open(path)} className={CARD}>
-                      <span className="text-xs font-semibold text-accent">Durable run</span>
+                      <span className="text-xs font-semibold text-accent">Runtime run</span>
                       <span className="line-clamp-3 text-sm font-medium text-fg">{workRunTitle(run)}</span>
                       <span className="mt-2 flex flex-wrap items-center justify-between gap-2">
                         <StatusBadge status={presentRunStatus(run.status)} />
                         <span className="text-xs text-fg-muted">{formattedWorkTime(run.updatedAt)}</span>
                       </span>
+                      {run.lastError || run.recoverySummary ? <span className="mt-2 block text-xs text-status-failed">{run.lastError ?? run.recoverySummary}</span> : null}
                     </a>
                   );
                 }}
               </WindowedRecordList>
-              {!board?.[column.id].length && !taskBoard?.[column.id].length ? (
+              </section>)}
+              {column.id === "done" ? <p className="mt-2 text-xs text-fg-muted">Overview shows up to 25 matching tasks and 25 matching runs. <NativeOwnerLink href="/work/history" scope={workspaceId}>Open run history</NativeOwnerLink> or <NativeOwnerLink href="/work/kanban" scope={workspaceId}>all loaded task actions</NativeOwnerLink> for older records.</p> : null}
+              {!runs.isError && !tasks.isError && !board?.[column.id].length && !taskBoard?.[column.id].length ? (
                 <p className="text-xs text-fg-muted">No recent work in this state.</p>
               ) : null}
             </section>

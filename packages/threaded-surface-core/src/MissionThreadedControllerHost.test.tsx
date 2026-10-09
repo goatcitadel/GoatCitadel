@@ -906,6 +906,7 @@ function setupMocks() {
     approvalPending: false,
     userInputPending: false,
     handleApprovePending: vi.fn(async () => undefined),
+    refreshThreadAndApprovals: vi.fn(async () => undefined),
     handleDenyPending: vi.fn(async () => undefined),
     handleSubmitUserInput: vi.fn(async () => undefined),
     handleSelectBranchTurn: vi.fn(async () => thread),
@@ -2672,9 +2673,18 @@ describe("MissionThreadedControllerHost", () => {
       await flushEffects(4);
     });
     expect(parseChatCommandMock).not.toHaveBeenCalled();
+    // The project command changed selection. Its captured old callback must not
+    // create a child in the newly selected scope; invoke the current owner next.
+    expect(createChatSideChatMock).not.toHaveBeenCalled();
+    await selectDefaultSession();
+    await act(async () => {
+      const currentOutbound = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as any;
+      await currentOutbound.operations.handleCommandExecution("session-1", "/btw quick aside");
+      await flushEffects(4);
+    });
     expect(createChatSideChatMock).toHaveBeenCalledWith(
       "session-1",
-      { createdFromSurface: "chat", sourceTurnId: undefined },
+      { createdFromSurface: "chat", sourceTurnId: "turn-1" },
       { originSurface: "chat" },
     );
     expect(streamAgentChatMessageMock).toHaveBeenCalledWith(
@@ -3336,8 +3346,8 @@ describe("MissionThreadedControllerHost", () => {
       latestSurfaceInput?.activeSessionSurfaceProps?.onStartNewThreadFromTurn("turn-1");
       await flushEffects(4);
     });
-    const confirm = confirmModalProps.filter((props) => props.title === "Fork conversation from this turn?").at(-1);
-    expect(confirm?.message).toContain("1 turn");
+    const confirm = confirmModalProps.filter((props) => props.title === "Start a new conversation from this message?").at(-1);
+    expect(confirm?.message).toContain("1 message exchange");
     await act(async () => {
       await confirm?.onConfirm();
       await flushEffects(12);

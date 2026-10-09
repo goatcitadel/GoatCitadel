@@ -10,6 +10,7 @@ const communicationsQuerySchema = z.object({
 });
 
 const mailDraftSchema = z.object({
+  workspaceId: z.string().trim().min(1).max(256).optional(),
   accountId: z.string().min(1),
   to: z.array(z.string().email()).min(1),
   cc: z.array(z.string().email()).optional(),
@@ -92,6 +93,12 @@ export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = mailDraftSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    if (
+      parsed.data.workspaceId &&
+      !(await service.isMailAccountVisible(parsed.data.workspaceId, parsed.data.accountId))
+    ) {
+      return reply.code(404).send({ error: "This mail account is not connected to the requested workspace." });
     }
     return reply.code(201).send(service.createDraft(parsed.data));
   });

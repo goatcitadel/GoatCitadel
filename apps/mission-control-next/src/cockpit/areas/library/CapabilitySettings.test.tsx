@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 // @vitest-environment happy-dom
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { act, StrictMode } from "react";
@@ -8,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CapabilitySettings } from "./CapabilitySettings";
 import { __resetCapabilitySkillAttemptsForTests } from "./use-capability-skill-state";
 
+vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({ fetchCapabilityProposal: vi.fn(async () => { throw new Error("Unavailable"); }) }));
 vi.mock("@goatcitadel/mission-control-shared/api/skills", () => ({ fetchSkills: vi.fn(), updateSkillState: vi.fn() }));
 const scope = vi.hoisted(() => ({ activeWorkspaceId: "workspace-a", activeCitadelId: "citadel-a" }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => scope }));
@@ -41,10 +43,12 @@ const skill: SkillListItem = {
   revision: 4,
   state: "enabled",
 };
+let client: QueryClient;
 let root: Root;
 let container: HTMLDivElement;
 
 beforeEach(() => {
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   __resetCapabilitySkillAttemptsForTests();
   scope.activeWorkspaceId = "workspace-a";
   scope.activeCitadelId = "citadel-a";
@@ -74,14 +78,14 @@ beforeEach(() => {
 });
 afterEach(() => {
   act(() => root.unmount());
-  container.remove();
+  container.remove(); client.clear();
 });
 
 function renderSettings(onRefresh = vi.fn<() => void>(), selectedItem = item, selectedSkill = skill, strict = false) {
   const view = (
-    <CockpitNavigationProvider>
+    <QueryClientProvider client={client}><CockpitNavigationProvider>
       <CapabilitySettings item={selectedItem} skillsKnown skill={selectedSkill} onRefresh={onRefresh} />
-    </CockpitNavigationProvider>
+    </CockpitNavigationProvider></QueryClientProvider>
   );
   act(() => root.render(strict ? <StrictMode>{view}</StrictMode> : view));
   return onRefresh;

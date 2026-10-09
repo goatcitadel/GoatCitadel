@@ -1,5 +1,6 @@
 import type {
   ApprovalRequest,
+  GatewayCurrentAccess,
   ApprovalResolveInput,
   DeviceAccessRequestCreateInput,
   DeviceAccessRequestCreateResponse,
@@ -59,6 +60,10 @@ export {
   setGatewayAuthStorageMode,
   subscribeGatewayAuthRejection,
 };
+
+export async function fetchGatewayCurrentAccess(): Promise<GatewayCurrentAccess> {
+  return request<GatewayCurrentAccess>("/api/v1/auth/current", { cache: "no-store" });
+}
 
 export interface WorkspacesResponse {
   items: WorkspaceRecord[];

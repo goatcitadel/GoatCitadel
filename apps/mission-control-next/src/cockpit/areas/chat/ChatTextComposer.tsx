@@ -1,3 +1,4 @@
+import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
 import { useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { useCockpitShellSwitch } from "../../app/use-cockpit-shell-switch";
@@ -7,14 +8,27 @@ import { ChatComposerPalette } from "./ChatComposerPalette";
 import { ChatRunVariables } from "./ChatRunVariables";
 import { composerSendBlock, type ComposerSendBlock } from "./composer-send-block";
 import { isImeEnter } from "./ime";
+import { useProjectSwitchReview } from "../../../features/threaded-surface/useProjectSwitchReview";
+import { useChatSelectionReview } from "./use-chat-owner-navigation";
+import { SessionControlBanner } from "../../../features/threaded-surface/SessionControlBanner";
+import { useAutoGrowTextarea } from "../../../features/threaded-surface/useAutoGrowTextarea";
+import { ChatQueueBar } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
+import { ExternalSourceStrip } from "../../../features/threaded-surface/ThreadedExternalSourceStrip";
+import { ChatMediaControls, type ChatMediaProps } from "./ChatMediaControls";
+import type { ChatCompletionReasoningEffort } from "@goatcitadel/contracts";
+import { ChatLegacyInputNotice } from "./ChatLegacyInputNotice";
+import { Dialog } from "../../ui/Dialog";
 
-export type ComposerProps = Pick<
+export type ComposerProps = ChatMediaProps & Pick<
   MissionThreadedActiveSessionSurfaceProps,
+  | "queueItems" | "onResumeAll" | "onRemoveQueuedItem" | "midTurnDisposition"
+  | "externalSourceControls" | "onOpenLibraryImports"
+  | "attachmentUpload"
   | "draft"
   | "onDraftChange"
   | "onSend"
   | "onStopActiveTurn"
-  | "canSend"
+  | "canSend" | "canSendWhileRunning"
   | "sending"
   | "hasActiveStream"
   | "isStopPending"
@@ -69,6 +83,7 @@ export type ComposerProps = Pick<
   | "isDragActive"
   | "chatTimerPanel"
   | "sessionStatusPanel"
+  | "projectSwitchContext"
 >;
 
 const REASON_ID = "cockpit-chat-send-reason";
@@ -102,12 +117,30 @@ export function ChatTextComposer({
   props,
   onOpenSchedules,
   gatewayUnavailable = false,
+  reasoningEfforts,
 }: {
   props: ComposerProps;
   onOpenSchedules?: () => void;
   gatewayUnavailable?: boolean;
+  reasoningEfforts?: ChatCompletionReasoningEffort[];
 }) {
+  const capture = getWorkflowSkillCaptureDisplay(props.draft);
   const shellSwitch = useCockpitShellSwitch(props.selectedSessionId);
+  useAutoGrowTextarea(props.composerRef, props.draft, { minLines: 1, maxLines: 8 });
+  const [externalSourceOpenToken, setExternalSourceOpenToken] = useState(0);
+  const [composing, setComposing] = useState(false);
+  const projectReview = useProjectSwitchReview(props, composing);
+  const reviewTransition = useChatSelectionReview(projectReview.identity);
+  const selectPaletteItem = (item: ComposerProps["commandSuggestions"][number]) => {
+    if (projectReview.begin(item)) return;
+    if (item.action?.type === "launch_external_source") {
+      props.composerPalette?.onClose();
+      if (props.externalSourceControls) setExternalSourceOpenToken((token) => token + 1);
+      else props.onOpenLibraryImports?.();
+      return;
+    }
+    props.composerPalette?.onSelect(item);
+  };
   const command = props.draft.trim().toLowerCase();
   const localCommand =
     !props.editingTurnId &&
@@ -123,7 +156,8 @@ export function ChatTextComposer({
     !props.hasActiveStream &&
     !props.historicalReadOnly &&
     !props.sessionControlBanner;
-  const block = gatewayUnavailable ? GATEWAY_UNAVAILABLE_BLOCK : localReady ? null : composerSendBlock(props);
+  const admitted = props.canSend || Boolean(props.hasActiveStream && props.canSendWhileRunning);
+  const block = gatewayUnavailable ? GATEWAY_UNAVAILABLE_BLOCK : localReady ? null : composerSendBlock({ ...props, canSend: admitted });
   const routeChecking = block?.kind === "route-checking";
   // The controller performs a fresh, authoritative preflight before dispatch. Let an explicit
   // send start that path while the display preflight is still debouncing this draft.
@@ -131,7 +165,7 @@ export function ChatTextComposer({
   const canSubmit = Boolean(
     localReady ||
     (Boolean(props.draft.trim() || props.pendingAttachments.length) &&
-      ((props.canSend && !props.sending && !props.hasActiveStream && !block) || routeCheckingSend)),
+      ((admitted && !block) || routeCheckingSend)),
   );
   // A route check that settles quickly never flashes or re-announces its hint.
   const showRouteHint = useSettled(routeChecking, ROUTE_CHECK_HINT_DELAY_MS);
@@ -144,6 +178,7 @@ export function ChatTextComposer({
       return;
     }
     props.onSend();
+    props.composerRef.current?.focus();
   };
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -156,7 +191,7 @@ export function ChatTextComposer({
       if (props.commandSuggestions.length && !localReady) {
         const selected = props.commandSuggestions[props.commandIndex];
         if (selected) {
-          if (props.composerPalette?.enabled) props.composerPalette.onSelect(selected);
+          if (props.composerPalette?.enabled) selectPaletteItem(selected);
           else props.onApplyDraftCommand(selected.applyValue);
         }
       } else send();
@@ -174,21 +209,52 @@ export function ChatTextComposer({
       onDrop={props.onDrop}
       className={`border-t bg-raised p-3 ${props.isDragActive ? "border-accent" : "border-line-subtle"}`}
     >
+      {props.sessionControlBanner ? <SessionControlBanner {...props.sessionControlBanner} /> : null}
       <div className="mx-auto max-w-3xl">
         {props.editingTurnId ? (
           <div
             role="status"
             className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-line bg-sunken px-3 py-2 text-xs text-fg-secondary"
           >
-            <span>Editing a new branch from this turn.</span>
+            <span>Editing a new version of this message.</span>
             <button type="button" onClick={props.onCancelEdit} className="font-medium text-accent hover:underline">
-              Cancel branch
+              Cancel edit
             </button>
           </div>
         ) : null}
+        <ChatLegacyInputNotice workspaceId={props.projectSwitchContext?.workspaceId} sessionId={props.selectedSessionId} draft={props.draft} onRestore={props.onDraftChange} disabled={props.historicalReadOnly || props.sending || Boolean(props.sessionControlBanner)} />
         <ChatRunVariables panel={props.runVariablePanel} />
-        <ChatComposerPalette props={props} />
-        <ChatComposerControls props={props} />
+        <ChatComposerPalette props={props} onSelect={selectPaletteItem} />
+        {projectReview.notice ? (
+          <p role="status" className="mb-2 text-sm text-fg-secondary">
+            {projectReview.notice}
+          </p>
+        ) : null}
+        <Dialog
+          open={projectReview.candidate !== null}
+          onOpenChange={(open) => {
+            if (!open) projectReview.cancel();
+          }}
+          title="Switch this Chat to another project?"
+          description={projectReview.candidate?.message}
+        >
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={projectReview.cancel}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={() => projectReview.confirm(reviewTransition)}>
+              Switch project
+            </Button>
+          </div>
+        </Dialog>
+        {props.externalSourceControls ? <ExternalSourceStrip controls={props.externalSourceControls}
+          disabled={props.historicalReadOnly || Boolean(props.sessionControlBanner)} openAttachFormToken={externalSourceOpenToken}
+          onOpenLibrary={props.onOpenLibraryImports} onRestoreFocus={() => props.composerRef.current?.focus()} /> : null}
+        <ChatQueueBar items={props.queueItems ?? []} title="Queued messages" onResumeAll={props.onResumeAll} onRemove={props.onRemoveQueuedItem} />
+        <ChatComposerControls props={props.attachmentUpload?.pending ? { ...props, sending: false } : props} reasoningEfforts={reasoningEfforts} />
+        {props.attachmentUpload?.pending ? <p role="status" className="text-sm text-fg-secondary">Uploading {props.attachmentUpload.pending} attachment(s)…</p> : null}
+        {props.attachmentUpload?.error ? <p role="status" className="text-sm text-status-failed">Attachment upload failed: {props.attachmentUpload.error}. Select the file again to retry.</p> : null}
+        <ChatMediaControls props={props} />
         <label htmlFor="cockpit-chat-draft" className="sr-only">
           Message
         </label>
@@ -196,15 +262,24 @@ export function ChatTextComposer({
           id="cockpit-chat-draft"
           ref={props.composerRef}
           rows={1}
-          value={props.draft}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={props.commandSuggestions.length > 0}
+          aria-controls={props.commandSuggestions.length ? "cockpit-composer-suggestions" : undefined}
+          aria-activedescendant={props.commandSuggestions[props.commandIndex] ? `cockpit-suggestion-${props.commandIndex}` : undefined}
+          value={capture?.summary ?? props.draft}
+          readOnly={Boolean(capture)}
           disabled={props.historicalReadOnly || Boolean(props.sessionControlBanner)}
           aria-describedby={visibleReason ? REASON_ID : undefined}
           onChange={(event) => props.onDraftChange(event.target.value)}
           onKeyDown={keyDown}
+          onCompositionStart={() => setComposing(true)}
+          onCompositionEnd={() => setComposing(false)}
           onPaste={props.onComposerPaste}
           placeholder="Message GoatCitadel…"
           className="cockpit-chat-draft mt-2 block min-h-10 w-full resize-y rounded-md border border-line bg-canvas px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-muted focus:border-accent disabled:opacity-60"
         />
+        {capture ? <section aria-label="Review captured workflow" className="my-3 space-y-2 rounded-md border border-line p-3 text-sm"><p>Review the captured task before sending. Sending generates instructions; saving and activation have separate reviews.</p><details><summary>Captured task and result</summary><p className="whitespace-pre-wrap">{capture.request}</p><p className="whitespace-pre-wrap">{capture.result}</p></details><Button type="button" variant="secondary" disabled={props.sending || props.historicalReadOnly || Boolean(props.sessionControlBanner)} onClick={() => props.onDraftChange("")}>Clear captured workflow</Button></section> : null}
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
           <p className="min-w-0 text-xs text-fg-muted">
             <button
@@ -215,7 +290,7 @@ export function ChatTextComposer({
             >
               Commands and context
             </button>{" "}
-            ·{" "}
+            · Shift+Enter for a new line ·{" "}
             <button
               type="button"
               onClick={shellSwitch.visit}
@@ -224,6 +299,9 @@ export function ChatTextComposer({
               Open classic view
             </button>
           </p>
+          {props.hasActiveStream ? <Button type="submit" variant="primary" size="sm" disabled={!canSubmit}>
+            {props.midTurnDisposition === "steer" ? "Steer response" : "Queue message"}
+          </Button> : null}
           {props.hasActiveStream ? (
             <Button
               type="button"
@@ -231,7 +309,7 @@ export function ChatTextComposer({
               size="sm"
               className="max-sm:h-11 max-sm:px-4"
               disabled={props.isStopPending}
-              onClick={props.onStopActiveTurn}
+              onClick={() => { props.onStopActiveTurn(); props.composerRef.current?.focus(); }}
             >
               {props.isStopPending ? "Stopping…" : "Stop response"}
             </Button>
@@ -246,7 +324,7 @@ export function ChatTextComposer({
                 : props.sending
                   ? "Sending…"
                   : props.editingTurnId
-                    ? "Send branch"
+                    ? "Send edited message"
                     : "Send"}
             </Button>
           )}
@@ -256,9 +334,9 @@ export function ChatTextComposer({
             {command === "/schedule"
               ? "Open Work schedules to review and create a scheduled job."
               : command === "/timer"
-                ? "Open a durable reminder for this conversation."
+                ? "Open a reminder that stays with this conversation."
                 : "Read the current session state from the Gateway."}{" "}
-            No model turn is sent.
+            Nothing is sent to the model.
           </p>
         ) : null}
         {visibleReason ? (

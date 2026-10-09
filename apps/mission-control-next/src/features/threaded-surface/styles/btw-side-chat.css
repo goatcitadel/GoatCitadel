@@ -224,3 +224,81 @@
     max-width: 58vw;
   }
 }
+
+
+/* Native presentation stays local to this shared panel. Classic continues to
+   use its own tokens and desktop positioning; no global compatibility aliases. */
+html[data-shell="cockpit"] .mc-next-btw-side-chat {
+  z-index: 30;
+  border-color: var(--cockpit-border);
+  background: var(--cockpit-overlay);
+  color: var(--cockpit-text);
+  box-shadow: var(--shadow-overlay);
+}
+
+html[data-shell="cockpit"] .mc-next-btw-side-chat-header,
+html[data-shell="cockpit"] .mc-next-btw-side-chat-compose,
+html[data-shell="cockpit"] .mc-next-btw-side-chat-message {
+  border-color: var(--cockpit-border);
+  background: var(--cockpit-raised);
+}
+
+html[data-shell="cockpit"] .mc-next-btw-side-chat-title h2,
+html[data-shell="cockpit"] .mc-next-btw-side-chat-message p {
+  color: var(--cockpit-text);
+}
+
+html[data-shell="cockpit"] .mc-next-btw-side-chat-title p,
+html[data-shell="cockpit"] .mc-next-btw-side-chat-message span,
+html[data-shell="cockpit"] .mc-next-btw-side-chat-status,
+html[data-shell="cockpit"] .mc-next-btw-side-chat-empty {
+  color: var(--cockpit-text-secondary);
+}
+
+html[data-shell="cockpit"] .mc-next-btw-side-chat-title svg,
+html[data-shell="cockpit"] .mc-next-btw-side-chat-status.thinking {
+  color: var(--cockpit-accent);
+}
+
+html[data-shell="cockpit"] .mc-next-btw-side-chat-error {
+  color: var(--cockpit-failed);
+  border-color: var(--cockpit-failed);
+  background: var(--cockpit-raised);
+}
+
+html[data-shell="cockpit"] .mc-next-btw-side-chat-body {
+  padding-right: 0.66rem;
+}
+
+html[data-shell="cockpit"] .mc-next-btw-side-chat-compose textarea {
+  color: var(--cockpit-text);
+  background: var(--cockpit-canvas);
+  border-color: var(--cockpit-border);
+}
+
+html[data-shell="cockpit"] .mc-next-btw-side-chat-compose textarea:focus-visible,
+html[data-shell="cockpit"] .mc-next-btw-side-chat button:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+html[data-shell="cockpit"] .mc-next-btw-side-chat button {
+  color: var(--cockpit-text);
+  background: var(--cockpit-raised);
+  border: 1px solid var(--cockpit-border);
+  border-radius: var(--r-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+}
+
+@media (max-width: 1023px) {
+  html[data-shell="cockpit"] .mc-next-btw-side-chat {
+    /* The positioned Chat content host ends above the shell's Areas bar. */
+    position: absolute;
+    max-height: min(70dvh, calc(100% - 1.5rem));
+    min-height: min(18rem, calc(100% - 1.5rem));
+  }
+}

@@ -10,8 +10,11 @@ import { humanizeToken } from "@goatcitadel/mission-control-shared/content/statu
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { SpendAttempts } from "./SpendAttempts";
 
 export function SpendOverview() {
+  const { activeWorkspaceId } = useUiPreferences();
   const costs = useQuery({ queryKey: queryKeys.costs(), queryFn: () => fetchCostSummary("day"), refetchInterval: 60_000 });
   const settings = useQuery({ queryKey: ["system", "settings-budget-mode"], queryFn: fetchSettings, refetchInterval: 60_000 });
   const summary = costs.data;
@@ -20,7 +23,7 @@ export function SpendOverview() {
   const providers = summary ? projectProviderCostRows(summary) : [];
   const dates = summary ? [Date.parse(summary.from), Date.parse(summary.to)] : [];
   const period = dates.length === 2 && dates.every(Number.isFinite)
-    ? `${new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(dates[0])} – ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(dates[1])}`
+    ? `${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(dates[0])} – ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(dates[1])} (local time)`
     : "Latest seven days";
 
   return <section className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
@@ -28,7 +31,7 @@ export function SpendOverview() {
       <div>
         <h1 className="font-display text-xl font-semibold text-fg">Spend</h1>
         <p className="text-sm text-fg-secondary">Gateway usage and known cost for the latest seven days.</p>
-        {summary ? <p className="mt-1 text-xs text-fg-muted">{period}</p> : null}
+        {summary ? <p className="mt-1 text-xs text-fg-muted">Installation scope · {summary.scope} groups · {period} · currency USD</p> : null}
       </div>
       <Button size="sm" onClick={() => void costs.refetch()} disabled={costs.isFetching}><RefreshCw aria-hidden="true" className="size-4" /> Refresh</Button>
     </header>
@@ -42,16 +45,19 @@ export function SpendOverview() {
         <Metric label="Recorded groups" value={new Intl.NumberFormat().format(summary.items.length)} />
       </div>
       <p className="rounded-md border border-line bg-sunken p-3 text-sm text-fg-secondary">{projection.coverageDescription}</p>
+      <p className="text-sm text-fg-secondary">Accounted cost may combine provider-reported amounts and Gateway pricing estimates. Complete coverage means all costs were accounted; it does not make an estimate a measured bill. Recorded groups count summary buckets, not calls.</p>
 
       <section aria-labelledby="daily-cost-title" className="rounded-lg border border-line bg-raised p-4">
-        <h2 id="daily-cost-title" className="font-display text-lg font-semibold text-fg">Known cost by day</h2>
-        <p className="mt-1 text-sm text-fg-secondary">Bars show only cost recorded by the Gateway. A plus sign marks a lower bound.</p>
+        <h2 id="daily-cost-title" className="font-display text-lg font-semibold text-fg">Known cost by Gateway day (UTC)</h2>
+        <p className="mt-1 text-sm text-fg-secondary">Bars show cost in USD recorded in UTC day buckets. The period above uses local time; these aggregates cannot be rebucketed into local days. A plus sign marks a lower bound.</p>
         {bars.length ? <ol className="mt-4 grid gap-3">{bars.map((bar) => <li key={bar.key} className="flex items-center gap-2 text-xs sm:text-sm">
-          <span className="w-12 shrink-0 truncate text-fg-secondary sm:w-20" title={bar.label}>{bar.label}</span>
+          <span className="w-28 shrink-0 text-fg-secondary sm:w-32" title={bar.label}>{bar.label}</span>
           <span className="h-3 min-w-0 flex-1 overflow-hidden rounded-full bg-sunken"><span aria-hidden="true" className="block h-full rounded-full bg-accent" style={{ width: `${bar.percent}%` }} /></span>
           <span className="w-16 shrink-0 text-right tabular-nums text-fg sm:w-20">{bar.costLabel}</span>
         </li>)}</ol> : <p className="mt-4 text-sm text-fg-muted">No daily usage is recorded for this period.</p>}
       </section>
+
+      <SpendAttempts key={activeWorkspaceId ?? "default"} workspaceId={activeWorkspaceId ?? "default"} from={summary.from} to={summary.to} />
 
       <section aria-labelledby="provider-cost-title" className="rounded-lg border border-line bg-raised p-4">
         <h2 id="provider-cost-title" className="font-display text-lg font-semibold text-fg">Provider attribution</h2>

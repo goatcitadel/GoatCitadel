@@ -4,6 +4,26 @@ import { DatabaseSync } from "node:sqlite";
 import { BrowserSessionRuntimeService } from "../services/browser-session-runtime-service.js";
 import { browserSessionsRoutes } from "./browser-sessions.js";
 
+/** node:sqlite with the Gateway's immediate-transaction contract. */
+function transactionalSql(db: DatabaseSync) {
+  return {
+    dialect: "sqlite" as const,
+    exec: (sql: string) => db.exec(sql),
+    prepare: (sql: string) => db.prepare(sql),
+    async runImmediateTransaction<T>(callback: () => T | Promise<T>): Promise<Awaited<T>> {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const result = await callback();
+        db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    },
+  } as never;
+}
+
 describe("browser session routes", () => {
   let app: FastifyInstance | undefined;
   let db: DatabaseSync | undefined;
@@ -22,7 +42,7 @@ describe("browser session routes", () => {
     app.decorateRequest("authActorSource", "loopback");
     app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("gatewayRuntime", {
-      browserSessionRuntimeService: new BrowserSessionRuntimeService({ gatewaySql: db }),
+      browserSessionRuntimeService: new BrowserSessionRuntimeService({ gatewaySql: transactionalSql(db) }),
     });
     await app.register(browserSessionsRoutes);
     return app;
@@ -108,6 +128,32 @@ describe("browser session routes", () => {
     });
 
     expect(response.statusCode).toBe(400);
+  });
+
+  it("replays a grant by request ID, rejects malformed IDs and refuses rotating a revoked grant", async () => {
+    const fastify = await buildApp();
+    const created = await fastify.inject({ method: "POST", url: "/api/v1/browser-sessions", payload: {} });
+    const url = `/api/v1/browser-sessions/${created.json().sessionId}/grants`;
+    const payload = {
+      actorId: "agent-1",
+      scopes: ["read"],
+      ttlSeconds: 3600,
+      requestId: "0b8f2c1e-7d3a-4e5f-8a9b-1c2d3e4f5a6b",
+    };
+
+    const malformed = await fastify.inject({ method: "POST", url, payload: { ...payload, requestId: "not-a-uuid" } });
+    expect(malformed.statusCode).toBe(400);
+    const first = await fastify.inject({ method: "POST", url, payload });
+    const replay = await fastify.inject({ method: "POST", url, payload });
+    expect(first.statusCode).toBe(201);
+    expect(replay.json()).toEqual(first.json());
+    const active = await fastify.inject({ method: "GET", url: `${url}?status=active` });
+    expect(active.json()).toHaveLength(1);
+
+    const grantId = first.json().grantId;
+    await fastify.inject({ method: "DELETE", url: `${url}/${grantId}` });
+    const rotateRevoked = await fastify.inject({ method: "POST", url: `${url}/${grantId}/rotate` });
+    expect(rotateRevoked.statusCode).toBe(409);
   });
 
   it("returns 404 for a missing browser session state projection", async () => {

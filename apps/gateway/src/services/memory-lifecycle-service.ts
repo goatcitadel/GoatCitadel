@@ -98,6 +98,7 @@ import {
   PolicyViolationError,
   ValidationError,
   canonicalJsonString,
+  redactSecretText,
   type ApprovalRequest,
   type BrowserContentGuardResult,
 } from "@goatcitadel/contracts";
@@ -354,6 +355,15 @@ export class MemoryLifecycleService {
         subjectId: current.itemId,
         workspaceId: current.workspaceId,
         fieldCodes: Object.keys(approvedPatch).sort(),
+        reviewKind: "memory.lifecycle.patch",
+        target: redactSecretText(current.title, { env: process.env }).value,
+        scopeSummary: `Workspace: ${current.workspaceId}; namespace: ${redactSecretText(current.namespace, { env: process.env }).value}`,
+        ...(approvedPatch.title !== undefined ? { requestedTitle: redactSecretText(approvedPatch.title, { env: process.env }).value } : {}),
+        ...(approvedPatch.content !== undefined ? { requestedContent: redactSecretText(approvedPatch.content, { env: process.env }).value } : {}),
+        ...(approvedPatch.content !== undefined ? { contentSummary: `Requested content: ${Buffer.byteLength(approvedPatch.content, "utf8")} UTF-8 bytes before redaction.` } : {}),
+        ...(approvedPatch.pinned !== undefined ? { pinnedSummary: `Requested pinned state: ${approvedPatch.pinned ? "pinned" : "unpinned"}` } : {}),
+        ...(approvedPatch.ttlOverrideSeconds !== undefined ? { ttlSummary: `Requested TTL: ${approvedPatch.ttlOverrideSeconds === null ? "clear override" : `${approvedPatch.ttlOverrideSeconds} seconds`}` } : {}),
+        withheldSummary: `Secret-looking values are redacted. ${approvedPatch.metadata !== undefined ? "Requested metadata changes are withheld from this review." : "No metadata change requested."} Approval applies the immutable request only if the reviewed memory state still matches.`,
       },
       hooks,
     });
@@ -504,6 +514,22 @@ export class MemoryLifecycleService {
       itemIds: distinctItems.map((item) => item.itemId),
       preview: {
         title: "Approve memory batch mutation",
+        reviewKind: "memory.lifecycle.batch",
+        reviewedItems: operations.map((operation) => {
+          const item = distinctItems.find((candidate) => candidate.itemId === operation.itemId)!;
+          const patch = operation.kind === "patch_item" ? operation.patch : undefined;
+          return {
+            itemId: item.itemId,
+            target: redactSecretText(item.title, { env: process.env }).value,
+            scopeSummary: `Workspace: ${workspaceId}; namespace: ${redactSecretText(item.namespace, { env: process.env }).value}`,
+            consequence: operation.kind === "forget_item" ? "Forget this item from active recall." : "Apply these reviewed changes after approval.",
+            ...(patch?.title !== undefined ? { requestedTitle: redactSecretText(patch.title, { env: process.env }).value } : {}),
+            ...(patch?.content !== undefined ? { requestedContent: redactSecretText(patch.content, { env: process.env }).value } : {}),
+            ...(patch?.pinned !== undefined ? { pinnedSummary: patch.pinned ? "Pin item" : "Unpin item" } : {}),
+            ...(patch?.ttlOverrideSeconds !== undefined ? { ttlSummary: patch.ttlOverrideSeconds === null ? "Use default TTL" : `TTL: ${patch.ttlOverrideSeconds} seconds` } : {}),
+            ...(patch?.metadata !== undefined ? { withheldSummary: "Requested metadata changes are withheld; secret-looking values are redacted." } : {}),
+          };
+        }),
         action: binding.action,
         subjectKind: binding.subjectKind,
         workspaceId,
@@ -2913,7 +2939,11 @@ export class MemoryLifecycleService {
         metadata: candidate.metadata ?? {},
       });
       await this.assertMemoryFeedbackContentAllowed(contentForGuard, workspaceId);
-      candidateIssues.set(candidate.dedupKey, candidate);
+      // Auth actor provenance is server-owned, not candidate content. Guard the
+      // source-derived content before adding the exact authenticated fingerprint.
+      candidateIssues.set(candidate.dedupKey, {
+        ...candidate, metadata: { ...candidate.metadata, scannedBy: actorId },
+      });
     };
 
     const memoryItems = (await this.listMemoryItems({ workspaceId, status: "all", limit })).filter((item) =>
@@ -2938,7 +2968,6 @@ export class MemoryLifecycleService {
             namespace: item.namespace,
             expiresAt: item.expiresAt,
             lifecycleState: item.lifecycleState,
-            scannedBy: actorId,
           },
           dedupKey: buildMemoryQualityDedupKey(workspaceId, "stale_low_value", "memory_item", item.itemId),
         });
@@ -2966,7 +2995,6 @@ export class MemoryLifecycleService {
         metadata: {
           stalenessIssue: issue.issue,
           path: issue.path,
-          scannedBy: actorId,
         },
         dedupKey: buildMemoryQualityDedupKey(
           workspaceId,
@@ -2999,7 +3027,6 @@ export class MemoryLifecycleService {
         metadata: {
           namespace: duplicate.primary.namespace,
           duplicateScore: duplicate.score,
-          scannedBy: actorId,
         },
         dedupKey: buildMemoryQualityDedupKey(
           workspaceId,
@@ -3029,7 +3056,6 @@ export class MemoryLifecycleService {
         metadata: {
           feedbackIds: retrievalGap.feedback.map((item) => item.feedbackId),
           notes: retrievalGap.feedback.map((item) => item.note).filter(Boolean),
-          scannedBy: actorId,
         },
         dedupKey: buildMemoryQualityDedupKey(
           workspaceId,

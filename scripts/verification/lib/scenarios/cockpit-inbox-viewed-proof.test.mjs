@@ -17,11 +17,13 @@ function fixture() {
     createdAt: "2026-09-30T00:00:00Z",
   };
   const projection = {
+    readStatus: { scope: "browser_local" },
     authority: "derived_projection",
     workspaceId,
     generatedAt: "2026-09-30T00:00:00Z",
     items: [
       {
+        version: "a".repeat(64),
         id: "task_deliverable:delivery-a",
         kind: "task_deliverable",
         group: "updates",

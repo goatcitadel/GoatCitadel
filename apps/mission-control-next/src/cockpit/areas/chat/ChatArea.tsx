@@ -19,12 +19,19 @@ import { ChatSessionOverflow, ChatSessionTitle } from "./ChatSessionControls";
 import { ChatInspector } from "./ChatInspector";
 import { chatSelectionHref } from "./chat-selection-evidence";
 import { readCockpitHistory } from "../../app/cockpit-history";
+import { resolveCockpitCompatibility } from "../../app/cockpit-compatibility";
 import { SelectedThreadActivity } from "./SelectedThreadActivity";
 import { ThreadList } from "./ThreadList";
 import { useInspector } from "../../app/inspector";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { buildClassicOwnerUrl } from "../../../app/classic-owner-url";
+import { useShellHandoff } from "../../../app/use-shell-handoff";
+import { ShellSwitchFeedback } from "../../app/use-cockpit-shell-switch";
 import { ChatOwnerNavigationBoundary } from "./ChatOwnerNavigationBoundary";
 import { useChatOwnerNavigation } from "./use-chat-owner-navigation";
+import { ThreadedBtwSideChatPanel } from "../../../features/threaded-surface/ThreadedBtwSideChatPanel";
+import "../../../features/threaded-surface/styles/btw-side-chat.css";
+import { ProjectAssignmentReview } from "./ProjectAssignmentReview";
 import { ChatTimerPanel } from "../../../features/threaded-surface/ChatTimerPanel";
 import { ChatSessionStatusPanel } from "../../../features/threaded-surface/ChatSessionStatusPanel";
 
@@ -55,8 +62,10 @@ export function ChatArea({
   const { navigate, search } = useCockpitRoute();
 
   const conversationNavigation = useChatOwnerNavigation(activeWorkspaceId ?? "default", activeCitadelId);
+  const handoff = useShellHandoff([activeCitadelId, activeWorkspaceId]);
   return (
     <div className="cockpit-chat-host flex min-h-0 min-w-0 flex-1 flex-col">
+      <ShellSwitchFeedback owner={handoff} />
       <MissionThreadedControllerHost
         workspaceId={activeWorkspaceId ?? "default"}
         surface="chat"
@@ -79,8 +88,12 @@ export function ChatArea({
         onReturnToChannels={(href) => navigate(href)}
         onOpenLocalAiSettings={() => navigate("/settings/models?shell=cockpit#local-ai")}
         onOpenLibraryArtifacts={() => navigate("/library/artifacts?shell=cockpit")}
-        onOpenLibraryImports={() => navigate("/library/knowledge?shell=cockpit")}
-        onOpenOpsRuntime={() => navigate("/system/health?shell=cockpit")}
+        onOpenLibraryImports={() => navigate("/library/knowledge?shell=cockpit#external-sources")}
+        onOpenOpsRuntime={() => {
+          const target = resolveCockpitCompatibility("/ops/runtime");
+          if (target.kind === "native") navigate(target.href);
+          else if (target.kind === "classic") handoff.request("classic", { href: buildClassicOwnerUrl(target.href) });
+        }}
         renderSurface={(input: MissionThreadedRenderSurfaceInput) => (
           <ChatOwnerNavigationBoundary input={input} owner={conversationNavigation}>
             {(reviewedInput) => (
@@ -204,7 +217,11 @@ export function ChatAreaView({
   useEffect(() => {
     onVisibleSessionChange?.(selectedSessionId);
   }, [onVisibleSessionChange, selectedSessionId]);
-  useEffect(() => setBuildOpen(false), [selectedSessionId]);
+  const buildSession = useRef(selectedSessionId);
+  useEffect(() => {
+    if (buildSession.current !== selectedSessionId) setBuildOpen(false);
+    buildSession.current = selectedSessionId;
+  }, [selectedSessionId]);
   useEffect(() => () => onVisibleSessionChange?.(undefined), [onVisibleSessionChange]);
   useEffect(() => {
     if (active && selectedSessionId)
@@ -232,7 +249,7 @@ export function ChatAreaView({
           </Button>
         </Dialog>
       ) : null}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex min-h-12 items-center justify-between gap-2 border-b border-line-subtle px-3">
           <div className="min-w-0 flex-1">
             <ChatSessionTitle
@@ -246,6 +263,7 @@ export function ChatAreaView({
               loading={input.sessionRail.loading}
             />
           </div>
+          <Button size="sm" onClick={() => navigate("/chat/projects")}>Projects</Button>
           <ChatMobileConversationSelect rail={input.sessionRail} onOpenFilters={() => setFiltersOpen(true)} />
           <SelectedThreadActivity session={session} />
           <Button
@@ -291,6 +309,7 @@ export function ChatAreaView({
             />
           ) : null}
         </header>
+        {active ? <ProjectAssignmentReview active={active} /> : null}
         {onboarding.data && !onboarding.isError && !onboarding.data.completed && !buildOpen ? (
           <ChatSetupBanner onReturnToSetup={() => navigate("/settings/first-run")} />
         ) : null}
@@ -320,6 +339,7 @@ export function ChatAreaView({
               gatewayUnavailable={gatewayUnavailable}
               props={active}
               receipt={input.changePlanReceipt}
+              onReviewPlan={input.onReviewChangePlan}
               onInspectTurn={(turnId) => openInspector(turnId, "turn")}
               onInspectRun={(turnId) => openInspector(turnId, "run")}
               onOpenArtifact={(turnId, artifactId) => {
@@ -365,9 +385,11 @@ export function ChatAreaView({
           <ChatTextComposer
             props={active}
             gatewayUnavailable={gatewayUnavailable}
+            reasoningEfforts={input.contextDockProps?.selectedModelReasoningEfforts}
             onOpenSchedules={() => navigate("/work/schedules")}
           />
         ) : null}
+        {input.btwSideChatProps ? <ThreadedBtwSideChatPanel sideChat={input.btwSideChatProps} /> : null}
         {active?.chatTimerPanel ? <ChatTimerPanel panel={active.chatTimerPanel} /> : null}
       </div>
     </section>

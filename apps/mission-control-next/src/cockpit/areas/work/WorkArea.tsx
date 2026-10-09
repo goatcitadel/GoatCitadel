@@ -6,11 +6,16 @@ import { WorkHistory } from "./WorkHistory";
 import { WorkRunDetail } from "./WorkRunDetail";
 import { WorkSchedules } from "./WorkSchedules";
 import { WorkTaskDetail } from "./WorkTaskDetail";
+import { WorkKanban, WorkArchive } from "./WorkKanban";
+import { WorkAutomation } from "./WorkAutomation";
 
 const VIEWS = [
   { id: "board", label: "Board", path: "/work" },
   { id: "history", label: "History", path: "/work/history" },
   { id: "schedules", label: "Schedules", path: "/work/schedules" },
+  { id: "kanban", label: "Task actions", path: "/work/kanban" },
+  { id: "archive", label: "Archived tasks", path: "/work/archive" },
+  { id: "automation", label: "Automation Designer", path: "/work/automation" },
 ] as const;
 
 export function WorkArea() {
@@ -29,7 +34,7 @@ export function WorkArea() {
       return <EmptyState title="Run link unavailable" description="This run link could not be read." />;
     }
   }
-  const view = rest[0] === "history" ? "history" : rest[0] === "schedules" ? "schedules" : "board";
+  const view = VIEWS.some(item => item.id === rest[0]) ? rest[0] : "board";
   return (
     <>
       <nav aria-label="Work views" className={AREA_TABS}>
@@ -48,7 +53,7 @@ export function WorkArea() {
           </a>
         ))}
       </nav>
-      {view === "history" ? <WorkHistory /> : view === "schedules" ? <WorkSchedules /> : <WorkBoard />}
+      {view === "history" ? <WorkHistory /> : view === "schedules" ? <WorkSchedules /> : view === "kanban" ? <WorkKanban /> : view === "archive" ? <WorkArchive /> : view === "automation" ? <WorkAutomation /> : <WorkBoard />}
     </>
   );
 }

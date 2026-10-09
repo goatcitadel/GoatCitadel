@@ -1,5 +1,8 @@
-import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
-import { useQuery } from "@tanstack/react-query";
+import { SystemOwnerLink } from "./SystemOwnerLink";
+import { HealthBackupAction } from "./HealthBackupAction";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSyncExternalStore } from "react";
+import { getGatewayAccessRevision, subscribeGatewayAccessChange } from "@goatcitadel/mission-control-shared/api/client-core";
 import {
   Archive,
   Cable,
@@ -20,13 +23,14 @@ import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { StatusBadge } from "../../ui/StatusBadge";
-import type { HealthCheck } from "./health-overview";
+import { healthOverviewState, type HealthCheck } from "./health-overview";
 import { deriveSystemHealthChecks } from "./system-health";
 import { backupTrustFromInbox } from "./backup-trust";
 import { useOperatorInbox } from "../../data/use-operator-inbox";
 import { inboxMatchesWorkspace } from "../inbox/inbox-presentation";
-import { loadSystemHealthSources } from "./system-health-sources";
+import { loadSystemHealthSources, type SystemHealthSources } from "./system-health-sources";
 import { HealthLocalRuntimeActions } from "./HealthLocalRuntimeActions";
+import { healthQueryScope } from "../../data/health-query-scope";
 
 const ICONS: Readonly<Record<HealthCheck["id"], LucideIcon>> = {
   gateway: Waypoints,
@@ -40,19 +44,16 @@ const ICONS: Readonly<Record<HealthCheck["id"], LucideIcon>> = {
   remote_workers: Workflow,
 };
 
-function ownerHref(path: string): string {
-  const [pathname, fragment] = path.split("#");
-  return `${pathname}?shell=classic${fragment ? `#${fragment}` : ""}`;
-}
-
 function HealthCard({
   check,
   workspaceId,
   onRefresh,
+  backupReadAvailable,
 }: {
   check: HealthCheck;
   workspaceId: string;
   onRefresh: () => Promise<unknown>;
+  backupReadAvailable: boolean;
 }) {
   const Icon = ICONS[check.id];
   return (
@@ -65,12 +66,11 @@ function HealthCard({
         <StatusBadge status={check.status} />
       </div>
       <p className="mt-2 text-sm leading-relaxed text-fg-secondary">{check.detail}</p>
-      <ClassicOwnerLink
-        className="mt-3 inline-block text-sm font-medium text-accent underline-offset-2 hover:underline"
-        href={ownerHref(check.inspectPath)}
-        scope={JSON.stringify([workspaceId, check.id])}
-        label={`Review ${check.title.toLowerCase()} in the classic view`}
-      />
+      <SystemOwnerLink href={check.id === "remote_workers" ? "/system/diagnostics" : check.inspectPath} scope={[workspaceId, check.id]}>
+        Review {check.title.toLowerCase()}
+      </SystemOwnerLink>
+      {check.id === "remote_workers" ? <p className="mt-2 text-xs text-fg-muted">Diagnostics show available worker evidence; worker management is not supplied here.</p> : null}
+      {check.id === "backups" ? <HealthBackupAction readAvailable={backupReadAvailable} onRefresh={onRefresh} /> : null}
       {check.id === "models" ? <HealthLocalRuntimeActions workspaceId={workspaceId} onRefresh={onRefresh} /> : null}
     </article>
   );
@@ -80,19 +80,22 @@ export function HealthOverview() {
   const { activeWorkspaceId } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
   const desktopUpdates = useDesktopUpdates();
+  const client = useQueryClient();
+  const accessRevision = useSyncExternalStore(subscribeGatewayAccessChange, getGatewayAccessRevision, getGatewayAccessRevision);
   const health = useQuery({
-    queryKey: queryKeys.health(workspaceId),
-    queryFn: () => loadSystemHealthSources(workspaceId),
+    queryKey: [...queryKeys.health(workspaceId), ...healthQueryScope(client, workspaceId, accessRevision)],
+    queryFn: ({ queryKey }) => loadSystemHealthSources(workspaceId, client.getQueryData<SystemHealthSources>(queryKey)),
     refetchInterval: 60_000,
   });
   const inbox = useOperatorInbox(workspaceId);
+  const sources = health.isError ? undefined : health.data;
   const backupTrust = backupTrustFromInbox(
     !inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId) ? inbox.data : undefined,
+    sources?.summary.state === "current" ? sources.summary.value.backups.latest : undefined,
   );
-  const sources = health.isError ? undefined : health.data;
+  const error = describeApiError(health.error);
   const checks = sources ? deriveSystemHealthChecks(sources, desktopUpdates, backupTrust) : [];
-  const problems = checks.filter((item) => item.status.tone === "failed" || item.status.tone === "waiting");
-  const unknown = checks.filter((item) => item.status.tone === "neutral" && !item.notSetUp);
+  const { problems, unknown, heading } = healthOverviewState(checks);
   const generatedAt = sources?.summary.state === "current" ? Date.parse(sources.summary.value.generatedAt) : Number.NaN;
   const unavailable = sources ? Object.entries(sources).filter(([, source]) => source.state === "unavailable") : [];
 
@@ -111,7 +114,7 @@ export function HealthOverview() {
             </p>
           ) : null}
         </div>
-        <Button size="sm" onClick={() => void health.refetch()} disabled={health.isFetching}>
+        <Button size="sm" onClick={() => void health.refetch()} disabled={health.isFetching || (health.isError && error.retryable === false)}>
           <RefreshCw aria-hidden="true" className="size-4" /> Refresh
         </Button>
       </header>
@@ -125,7 +128,7 @@ export function HealthOverview() {
         <EmptyState
           title="Health unavailable"
           description={describeApiError(health.error).summary}
-          action={<Button onClick={() => void health.refetch()}>Try again</Button>}
+          action={error.retryable === false ? null : <Button onClick={() => void health.refetch()}>Try again</Button>}
         />
       ) : null}
       {sources ? (
@@ -139,6 +142,8 @@ export function HealthOverview() {
                 {unavailable.map(([name, source]) => (
                   <li key={name}>
                     {name.replaceAll("_", " ")}: {source.state === "unavailable" ? source.detail : "Unknown"}
+                    {source.state === "unavailable" && source.lastKnown ? ` Retained observation is stale; last observed ${source.lastKnown.observedAt ? new Date(source.lastKnown.observedAt).toLocaleString() : "at an unavailable time"}.` : ""}
+                    {source.state === "unavailable" && source.retryable === false ? " This source will be checked again after Gateway access or workspace scope changes; other sources continue refreshing." : ""}
                   </li>
                 ))}
               </ul>
@@ -146,7 +151,7 @@ export function HealthOverview() {
           ) : null}
           <section aria-labelledby="system-attention-title" className="rounded-lg border border-line bg-sunken p-4">
             <h2 id="system-attention-title" className="font-display text-lg font-semibold text-fg">
-              Needs attention
+              {heading}
             </h2>
             {problems.length ? (
               <ul className="mt-3 space-y-3">
@@ -158,12 +163,7 @@ export function HealthOverview() {
                     <span className="text-sm text-fg">
                       <strong>{check.title}:</strong> {check.detail}
                     </span>
-                    <ClassicOwnerLink
-                      className="text-sm font-medium text-accent underline-offset-2 hover:underline"
-                      href={ownerHref(check.inspectPath)}
-                      scope={JSON.stringify([workspaceId, check.id])}
-                      label={`Review ${check.title.toLowerCase()}`}
-                    />
+                    <SystemOwnerLink href={check.id === "remote_workers" ? "/system/diagnostics" : check.inspectPath} scope={[workspaceId, check.id]}>Review {check.title.toLowerCase()}</SystemOwnerLink>
                   </li>
                 ))}
               </ul>
@@ -178,13 +178,21 @@ export function HealthOverview() {
             )}
           </section>
 
+          {unknown.length ? <section aria-label="Checks awaiting evidence" className="rounded-lg border border-line bg-sunken p-4">
+            <h2 className="font-display text-lg font-semibold text-fg">Checks awaiting evidence</h2>
+            <ul className="mt-3 space-y-2">{unknown.map((check) => <li key={check.id} className="text-sm text-fg-secondary"><strong>{check.title}:</strong> {check.detail}</li>)}</ul>
+          </section> : null}
+
           <section aria-labelledby="system-checks-title">
             <h2 id="system-checks-title" className="mb-3 font-display text-lg font-semibold text-fg">
               Current checks
             </h2>
             <div className="grid gap-3 sm:grid-cols-2">
               {checks.map((check) => (
-                <HealthCard key={check.id} check={check} workspaceId={workspaceId} onRefresh={() => health.refetch()} />
+                <HealthCard key={check.id} check={check} workspaceId={workspaceId} backupReadAvailable={sources.summary.state === "current" && !health.isFetching} onRefresh={() => Promise.all([
+                  client.invalidateQueries({ queryKey: queryKeys.healthAll() }),
+                  client.invalidateQueries({ queryKey: queryKeys.inboxAll() }),
+                ])} />
               ))}
             </div>
           </section>

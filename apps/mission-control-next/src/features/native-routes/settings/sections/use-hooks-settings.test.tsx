@@ -15,6 +15,8 @@ const api = vi.hoisted(() => ({
 vi.mock("./hooks-api", () => api);
 vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({
   getGatewayApiBaseUrl: () => "http://hook-fixture",
+  // Owner writes are attempt-tracked; these tests do not identify attempts, so dispatch passes straight through.
+  captureMutationAttempt: (dispatch: () => Promise<unknown>) => dispatch(),
 }));
 const stamp = "2026-09-30T12:00:00.000Z";
 const form = {

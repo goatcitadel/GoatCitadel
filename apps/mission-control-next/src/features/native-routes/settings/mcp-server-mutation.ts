@@ -16,6 +16,7 @@ type EditorInput = Pick<
 import {
   IDLE_MCP_ATTEMPT as IDLE,
   readMcpServerAttempt as read,
+  trackMcpWrite,
   writeMcpServerAttempt as write,
 } from "./mcp-server-attempts";
 export { useMcpServerMutation, __resetMcpServerMutationsForTests } from "./mcp-server-attempts";
@@ -169,7 +170,7 @@ export async function commitMcpServerUpdate({
     }
     write(id, { phase: "saving" });
     dispatched = true;
-    const saved = await updateMcpServer(id, request);
+    const saved = await trackMcpWrite(id, () => updateMcpServer(id, request));
     if (!receiptMatches(snapshot, request, saved)) throw new Error("Unverified MCP update acknowledgement");
     write(id, { phase: "saved", message: "Saved MCP configuration confirmed by the Gateway." });
     return { status: "saved", server: saved };
@@ -228,7 +229,7 @@ export async function commitMcpServerDelete({
     }
     write(id, { phase: "saving" });
     dispatched = true;
-    const receipt = await deleteMcpServer(id, snapshot.revision!);
+    const receipt = await trackMcpWrite(id, () => deleteMcpServer(id, snapshot.revision!));
     if (receipt?.deleted !== true) throw new Error("Unverified MCP deletion acknowledgement");
     acknowledged = true;
     let absent = false;

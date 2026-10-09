@@ -1,5 +1,6 @@
 import type { ChatSessionRecord, ChatThreadResponse, ChatUserInputPromptResponse } from "@goatcitadel/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getGatewayAccessRevision } from "@goatcitadel/mission-control-shared/api/access-scope";
 import {
   answerChatUserInputPrompt,
   approveChatTool,
@@ -55,6 +56,13 @@ export function useChatOperatorPrompts({
   const approvalRefreshTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const threadRef = useRef(thread);
   threadRef.current = thread;
+  const scopeRef = useRef({ sessionId: selectedSessionId, active: true });
+  if (scopeRef.current.sessionId !== selectedSessionId) scopeRef.current = { sessionId: selectedSessionId, active: true };
+  const scope = scopeRef.current;
+  useEffect(() => {
+    scope.active = true;
+    return () => { scope.active = false; };
+  }, [scope]);
 
   const refreshPendingApprovalQueue = useCallback(async (sessionId: string, isCancelled?: () => boolean) => {
     const response = await fetchChatPendingApprovals(sessionId);
@@ -148,6 +156,22 @@ export function useChatOperatorPrompts({
       return nextApproval;
     });
   }, []);
+
+  // A shared decision owner can resolve without invoking Chat's legacy approve/deny action.
+  // Re-read both canonical owners; a decision alone never advances execution or clears a prompt.
+  const refreshThreadAndApprovals = useCallback(async () => {
+    if (!selectedSessionId || !scope.active || scopeRef.current !== scope) return;
+    const revision = getGatewayAccessRevision();
+    const stale = () => !scope.active || scopeRef.current !== scope || revision !== getGatewayAccessRevision();
+    try {
+      await Promise.all([
+        refreshPendingApprovalQueue(selectedSessionId, stale),
+        loadSessionCoreState(selectedSessionId, { background: true, includeThread: true }),
+      ]);
+    } catch (err) {
+      if (!stale()) setError((err as Error).message, "approval");
+    }
+  }, [loadSessionCoreState, refreshPendingApprovalQueue, scope, selectedSessionId, setError]);
 
   useEffect(() => {
     const threadApproval = deriveThreadPendingApproval(thread);
@@ -446,5 +470,6 @@ export function useChatOperatorPrompts({
     handleDenyPending,
     handleSubmitUserInput,
     handleSelectBranchTurn,
+    refreshThreadAndApprovals,
   };
 }

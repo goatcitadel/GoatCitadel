@@ -25,15 +25,14 @@ function projectActivityView(work: ActivityView, observedAt: string): ThreadActi
   if (work.turnCounts.running || work.turnCounts.waiting_for_tool)
     return { label: "Working", tone: "running", observedAt };
   if (work.turnCounts.queued) return { label: "Queued", tone: "running", observedAt };
-  if (work.latestTurn === null && !work.latestTurnId)
-    return { label: "No recorded turns", tone: "neutral", observedAt };
+  if (work.latestTurn === null && !work.latestTurnId) return { label: "No messages yet", tone: "neutral", observedAt };
   const latest = work.latestTurn;
   if (!latest || latest.turnId !== work.latestTurnId || !Number.isFinite(Date.parse(latest.startedAt)))
     return UNKNOWN_THREAD_ACTIVITY;
-  if (latest.status === "failed") return { label: "Last turn failed", tone: "failed", observedAt };
-  if (latest.status === "partial") return { label: "Last turn incomplete", tone: "waiting", observedAt };
-  if (latest.status === "completed") return { label: "Last turn completed", tone: "done", observedAt };
-  if (latest.status === "cancelled") return { label: "Last turn cancelled", tone: "neutral", observedAt };
+  if (latest.status === "failed") return { label: "Last response failed", tone: "failed", observedAt };
+  if (latest.status === "partial") return { label: "Last response incomplete", tone: "waiting", observedAt };
+  if (latest.status === "completed") return { label: "Last response completed", tone: "done", observedAt };
+  if (latest.status === "cancelled") return { label: "Last response cancelled", tone: "neutral", observedAt };
   return UNKNOWN_THREAD_ACTIVITY;
 }
 
@@ -63,7 +62,7 @@ export function projectSessionActivity(session: ChatSessionRecord): ThreadActivi
   );
 }
 
-/** "Last turn completed · as of 10:42" once a status is no longer known to be current. */
+/** "Last response completed · as of 10:42" once a status is no longer known to be current. */
 export function threadActivityLabel(activity: ThreadActivity & { stale?: boolean }): string {
   if (!activity.stale || !activity.observedAt) return activity.label;
   const observed = new Date(activity.observedAt);

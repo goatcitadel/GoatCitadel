@@ -582,6 +582,9 @@ describe("browser Back and Forward with unsaved drafts", () => {
   it("keeps the review open through the hashchange events of a held move across a path change", async () => {
     await render();
     await visit("/hooks#signing");
+    // Happy DOM queues hashchange for pushState; browsers do not. Finish setup events
+    // before starting the dirty Back traversal whose real hash events this test checks.
+    await settleHistoryEvents();
     await editPlainDraft();
     await back();
     await settleHistoryEvents();
@@ -590,4 +593,27 @@ describe("browser Back and Forward with unsaved drafts", () => {
     await click("Discard changes");
     expect(here()).toBe("/work?shell=cockpit");
   });
+});
+
+it("replaces a compatibility entry once while preserving state, scope and fragment", async () => {
+  window.history.replaceState({retained: "yes"}, "", "/ops/approvals?approvalId=a&workspaceId=w#review");
+  const length = window.history.length;
+  await render();
+  expect(window.location.pathname).toBe("/inbox");
+  expect(window.location.hash).toBe("#review");
+  expect(window.history.state).toMatchObject({retained: "yes"});
+  expect(window.history.length).toBe(length);
+  expect(route.search).toContain("workspaceId=w");
+});
+it("reviews a compatibility navigation and leaves it untouched on cancel", async () => {
+  await render();
+  await act(async () => { draft.setValue({name: "Unsaved"}); });
+  await act(async () => { route.navigate("/ops/approvals?approvalId=a#record"); });
+  expect(window.location.pathname).toBe("/work");
+  await click("Cancel");
+  expect(window.location.pathname).toBe("/work");
+  await act(async () => { route.navigate("/ops/approvals?approvalId=a#record"); });
+  await click("Keep draft and close");
+  expect(window.location.pathname).toBe("/inbox");
+  expect(window.location.hash).toBe("#record");
 });

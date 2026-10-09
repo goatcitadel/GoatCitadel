@@ -160,7 +160,7 @@ describe("memory-facade-service", () => {
       5,
       {
         toolName: "embeddings.query",
-        args: { namespace: "docs", query: "decision", limit: 5, embeddingProfile: undefined },
+        args: { namespace: "docs", query: "decision", limit: 5 },
         sessionId: "session-4",
         agentId: "agent-4",
         taskId: "task-4",
@@ -186,3 +186,23 @@ function fakeDeps(): KnowledgeFacadePort {
     invokeAndUnwrap: vi.fn(async () => ({ ok: true })),
   };
 }
+
+it("keeps omitted facade arguments identical through canonical JSON approval persistence", async () => {
+  const deps: KnowledgeFacadePort = { invokeAndUnwrap: vi.fn(async request => {
+    expect(JSON.parse(JSON.stringify(request.args))).toStrictEqual(request.args);
+    return { outcome: "approval_required", approvalId: "review-only" } as never;
+  }) };
+  await knowledgeMemoryWrite(deps, { namespace: "workspace", title: "Decision", content: "Reviewed content" });
+  await knowledgeMemorySearch(deps, { query: "decision" });
+  await knowledgeDocsIngest(deps, { namespace: "workspace", sourceType: "text", source: "Document" });
+  await knowledgeEmbeddingsIndex(deps, {});
+  await knowledgeEmbeddingsQuery(deps, { query: "decision" });
+  expect(deps.invokeAndUnwrap).toHaveBeenCalledTimes(5);
+});
+it("preserves explicitly supplied empty and false arguments instead of treating them as omitted", async () => {
+  const deps = fakeDeps();
+  await knowledgeMemoryWrite(deps, { namespace: "workspace", title: "Decision", content: "Content", tags: [], metadata: {} });
+  await knowledgeEmbeddingsIndex(deps, { namespace: "workspace", force: false });
+  expect(deps.invokeAndUnwrap).toHaveBeenNthCalledWith(1, expect.objectContaining({ args: { namespace: "workspace", title: "Decision", content: "Content", tags: [], metadata: {} } }), "knowledge_memory_write");
+  expect(deps.invokeAndUnwrap).toHaveBeenNthCalledWith(2, expect.objectContaining({ args: { namespace: "workspace", force: false } }), "knowledge_embeddings_index");
+});

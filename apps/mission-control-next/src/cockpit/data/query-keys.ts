@@ -1,6 +1,6 @@
 import type { QueryKey } from "@tanstack/react-query";
 import type { RefreshTopic } from "@goatcitadel/mission-control-shared/state/refresh-bus";
-import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { getGatewayApiBaseUrl, getGatewayAccessRevision } from "@goatcitadel/mission-control-shared/api/client-core";
 
 type TopicKey = readonly [RefreshTopic, ...unknown[]];
 
@@ -13,7 +13,13 @@ export const queryKeys = {
   capabilities: (): TopicKey => ["skills", "capabilities"],
   pendingApprovals: (): TopicKey => ["approvals", "pending"],
   inboxAll: (): TopicKey => ["approvals", "operator-inbox"],
-  inbox: (workspaceId: string): TopicKey => ["approvals", "operator-inbox", workspaceId],
+  inbox: (workspaceId: string): TopicKey => [
+    "approvals",
+    "operator-inbox",
+    workspaceId,
+    getGatewayApiBaseUrl(),
+    getGatewayAccessRevision(),
+  ],
   health: (workspaceId: string): TopicKey => ["system", "health", workspaceId],
   healthAll: (): TopicKey => ["system", "health"],
   memory: (): TopicKey => ["memory"],
@@ -52,4 +58,9 @@ export const SETTINGS_READER_KEYS: readonly QueryKey[] = [
   ["settings", "gateway-auth"],
   ["settings", "permission-selection"],
   ["settings", "local-operator-overrides"],
+  // Library panels that read settings (engineering learnings; memory editor and proposals).
+  ["library", "engineering-settings"],
+  ["library", "memory-settings"],
+  // Device continuity checks read the Gateway settings too.
+  ["settings", "continuity", "settings"],
 ];

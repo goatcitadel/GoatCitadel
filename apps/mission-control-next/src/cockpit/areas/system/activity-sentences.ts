@@ -1,4 +1,4 @@
-import type { RealtimeEvent } from "@goatcitadel/contracts";
+import { canonicalJsonString, type RealtimeEvent } from "@goatcitadel/contracts";
 import { presentEventType } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { realtimeEventKind } from "../../data/event-map";
 
@@ -40,6 +40,7 @@ const SENTENCES: Readonly<Record<string, string>> = {
   code_mode_run_completed: "A code run finished",
   code_mode_run_failed: "A code run failed",
   memory_qmd_generated: "Memory summary updated",
+  memory_qmd_fallback: "Memory summary used fallback context",
 };
 
 /** With a conversation title from the payload, the sentence names it. */
@@ -83,13 +84,37 @@ export function collapseActivity(events: readonly RealtimeEvent[]): ActivityRow[
   for (const event of events) {
     const described = describeActivity(event);
     const last = rows.at(-1);
-    if (last && last.sentence === described.sentence && last.operational === described.operational) {
+    if (last && described.operational && last.sentence === described.sentence && last.operational === described.operational &&
+      canonicalJsonString([last.event.source, last.event.links, activityMetadata(last.event)]) ===
+      canonicalJsonString([event.source, event.links, activityMetadata(event)])) {
       rows[rows.length - 1] = { ...last, count: last.count + 1, firstAt: event.timestamp };
       continue;
     }
     rows.push({ ...described, event, count: 1, firstAt: event.timestamp, lastAt: event.timestamp });
   }
   return rows;
+}
+
+/** Only explicit retained Gateway metadata, never a browser join to an assumed target. */
+export function activityMetadata(event: RealtimeEvent): Array<[string, string]> {
+  const rows: Array<[string, string]> = [["Source", event.source || "Unknown source"]];
+  for (const [label, value] of Object.entries({
+    Workspace: event.links?.workspaceId, Run: event.links?.durableRunId ?? event.links?.runId,
+    Task: event.links?.taskId, Worker: event.links?.workerId,
+    "Reported host": event.payload?.hostname ?? event.payload?.hostName,
+    "Reported device": event.payload?.deviceId, "Reported action": event.payload?.action,
+  })) if (typeof value === "string" && value.length) rows.push([label, value]);
+  return rows;
+}
+
+export function activityOwnerPath(event: RealtimeEvent): string | null {
+  const links = event.links;
+  const scoped = (path: string) => `${path}${path.includes("?") ? "&" : "?"}eventId=${encodeURIComponent(event.eventId)}${links?.workspaceId ? `&workspaceId=${encodeURIComponent(links.workspaceId)}` : ""}`;
+  if (links?.approvalId) return scoped(`/inbox?approvalId=${encodeURIComponent(links.approvalId)}`);
+  if (links?.sessionId) return scoped(`/chat?sessionId=${encodeURIComponent(links.sessionId)}${links.turnId ? `&turnId=${encodeURIComponent(links.turnId)}` : ""}`);
+  if (links?.durableRunId || links?.runId) return scoped(`/work/runs/${encodeURIComponent(links.durableRunId ?? links.runId!)}`);
+  if (links?.taskId) return scoped(`/work/tasks/${encodeURIComponent(links.taskId)}`);
+  return null;
 }
 
 /** "×96 in 2 min" for a collapsed row; empty for a single event. */

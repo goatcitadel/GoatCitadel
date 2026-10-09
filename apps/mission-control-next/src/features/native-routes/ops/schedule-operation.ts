@@ -8,6 +8,7 @@ import {
   pauseCronJob,
   runCronJobNow,
   startCronJob,
+  updateCronJob,
   type CronRunNowResponse,
 } from "@goatcitadel/mission-control-shared/api/cron";
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
@@ -15,9 +16,10 @@ import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/clien
 export type ScheduleAction = "run" | "pause" | "resume" | "cancel";
 export type ScheduleOperation =
   | { kind: "create"; input: Parameters<typeof createCronJob>[0] }
+  | { kind: "edit"; job: CronJobRecordResponse; input: Omit<Parameters<typeof updateCronJob>[1], "expectedRevision"> }
   | { kind: ScheduleAction; job: CronJobRecordResponse };
 export type ScheduleReceipt =
-  | { kind: "create" | "pause" | "resume"; job: CronJobRecordResponse }
+  | { kind: "create" | "edit" | "pause" | "resume"; job: CronJobRecordResponse }
   | { kind: "cancel"; jobId: string }
   | { kind: "run"; run: CronRunNowResponse };
 
@@ -84,6 +86,16 @@ export async function performScheduleOperation(
     throw new Error("This schedule changed during review. Inspect its latest settings before acting.");
   }
   markDispatched();
+  if (operation.kind === "edit") {
+    const job = await updateCronJob(current.jobId, { ...operation.input, expectedRevision: current.revision });
+    const expected = { ...current, ...operation.input, revision: job.revision } as CronJobRecordResponse;
+    if (operation.input.description !== undefined) expected.description = operation.input.description.trim() || undefined;
+    if (job.revision <= current.revision || !sameScheduleReview(job, expected))
+      throw new Error("The schedule edit receipt did not match the reviewed draft.");
+    const saved = await fetchCronJob(current.jobId, fresh());
+    if (!sameScheduleReview(job, saved)) throw new Error("The saved schedule could not be independently verified.");
+    return { kind: "edit", job: saved };
+  }
   if (operation.kind === "cancel") {
     const receipt = await deleteCronJob(current.jobId, current.revision);
     if (!receipt.deleted || receipt.jobId !== current.jobId) throw new Error("Schedule deletion was not confirmed.");

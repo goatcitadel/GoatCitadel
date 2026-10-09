@@ -167,7 +167,9 @@ export async function buildThemeTokens({ styleDir = STYLE_DIR } = {}) {
 }
 
 export async function buildCockpitThemeTokens({ cssPath = path.join(repoRoot, "apps", "mission-control-next", "src", "cockpit", "styles", "cockpit.css") } = {}) {
-  const css = await fs.readFile(cssPath, "utf8");
+  // cockpit.css imports its colour palette from cockpit-tokens.css; read the palette first, as the cascade does.
+  const tokensPath = path.join(path.dirname(cssPath), "cockpit-tokens.css");
+  const css = `${await fs.readFile(tokensPath, "utf8")}\n${await fs.readFile(cssPath, "utf8")}`;
   const rootStart = css.indexOf(":root {");
   if (rootStart < 0) throw new Error("Cockpit stylesheet has no root token block.");
   const themeCss = css.slice(rootStart);

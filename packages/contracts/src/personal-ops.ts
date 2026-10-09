@@ -93,6 +93,7 @@ export interface MailMessageSummary {
 
 export interface MailDraftRecord {
   draftId: string;
+  workspaceId?: string;
   accountId: string;
   to: string[];
   cc: string[];

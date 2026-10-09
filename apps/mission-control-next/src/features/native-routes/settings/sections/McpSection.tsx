@@ -53,6 +53,7 @@ import {
   isRuntimeInvokableMcpServer,
 } from "../helpers/mcp-helpers";
 import { formatDateTime } from "../helpers/input-format";
+import { McpOutcomeCheck } from "../McpOutcomeCheck";
 
 export function McpSection(props: SettingsSectionProps) {
   const [panel, setPanel] = useState<"create" | "edit" | "detail" | "previews" | "elicitation" | null>(null);
@@ -272,9 +273,11 @@ export function McpSection(props: SettingsSectionProps) {
       {mutation.phase === "uncertain" ? (
         <SettingsNotice notice={{ tone: "error", message: mutation.message! }} />
       ) : null}
+      {selectedServerId ? <McpOutcomeCheck target={{ kind: "server", serverId: selectedServerId }} refresh={reload} /> : null}
       {creation.mutation.phase === "uncertain" ? (
         <SettingsNotice notice={{ tone: "error", message: creation.mutation.message! }} />
       ) : null}
+      <McpOutcomeCheck target={{ kind: "create" }} refresh={reload} />
       {data ? (
         <SettingsStack>
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />

@@ -10,7 +10,7 @@ import { nativeLoad, nativeLoadIssues, useAsyncLoad, type Notice } from "../Sett
 import type { ChannelSetupWizardFeedback } from "../channel-setup/ChannelSetupWizard";
 import { formatJson } from "../helpers/input-format";
 import { preferredChannelDefinition } from "../helpers/channel-helpers";
-import { useSessionDraft } from "../../library/session-drafts";
+import { useCredentialInput } from "../credential-input-owner";
 import { useDraftLeave } from "../../library/DraftLeaveDialog";
 import { useSessionViewState } from "../../../../hooks/use-session-view-state";
 import { useIntegrationConnectionReview } from "./useIntegrationConnectionReview";
@@ -128,7 +128,7 @@ export function useChannelSetupState(activeWorkspaceId: string) {
 
   const selectedConnection = data?.connections?.find((item) => item.connectionId === selectedConnectionId) ?? null;
   const inputEpoch = useRef(0);
-  const sessionDraft = useSessionDraft(
+  const sessionDraft = useCredentialInput(
     "channel:" + activeWorkspaceId + ":" + selectedDraftId + ":setup",
     {
       label: selectedDraft?.label ?? "",

@@ -1,4 +1,6 @@
+import { useScopedOperation } from "@goatcitadel/mission-control-shared/hooks/use-scoped-operation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type {
   ChatRoutedContextRef,
   ExternalSessionAttachmentRecord,
@@ -90,7 +92,11 @@ function describeAttachmentLabel(attachment: ExternalSessionAttachmentRecord): s
 
 export function useExternalSourceAttachments(input: UseExternalSourceAttachmentsInput): ExternalSourceAttachmentsState {
   const { workspaceId, sessionId, pushLocalNotice } = input;
+  const attempt = useScopedOperation(JSON.stringify(["external-attachments", workspaceId, sessionId]));
+  const { current: currentAccess, identity: accessIdentity, locked: operationLocked, run: runOperation } = attempt;
   const hostSessionIncarnationId = input.sessionIncarnationId ?? null;
+  const [loadedIdentity, setLoadedIdentity] = useState<string>();
+  const liveScope = loadedIdentity === accessIdentity && currentAccess();
   const [supported, setSupported] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -107,6 +113,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
   const loadSequenceRef = useRef(0);
   const scopeGenerationRef = useRef(0);
   const mutationSequenceRef = useRef(0);
+  const mutationActiveRef = useRef(false);
 
   const reload = useCallback(async () => {
     if (!sessionId) {
@@ -117,10 +124,11 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
     setLoading(true);
     try {
       const list = await fetchExternalSessionAttachments(sessionId, workspaceId);
-      if (loadSequenceRef.current !== loadId) {
+      if (loadSequenceRef.current !== loadId || !currentAccess()) {
         return;
       }
       const live = list.items.filter((item) => item.status === "attached");
+      setLoadedIdentity(accessIdentity);
       setSupported(true);
       setError(null);
       setAttachments(live);
@@ -132,13 +140,13 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       });
       try {
         const candidateList = await fetchExternalSourceAttachmentCandidates(sessionId, workspaceId, 100);
-        if (loadSequenceRef.current !== loadId) {
+        if (loadSequenceRef.current !== loadId || !currentAccess()) {
           return;
         }
         setCandidates(candidateList.items);
         setCandidatesSupported(true);
       } catch (candidateError) {
-        if (loadSequenceRef.current !== loadId) {
+        if (loadSequenceRef.current !== loadId || !currentAccess()) {
           return;
         }
         setCandidates([]);
@@ -146,11 +154,11 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
           setCandidatesSupported(false);
         } else {
           setCandidatesSupported(true);
-          setError("Eligible imported external items are unavailable right now.");
+          setError(describeApiError(candidateError, "Eligible imported external items are unavailable right now.").summary);
         }
       }
     } catch (loadError) {
-      if (loadSequenceRef.current !== loadId) {
+      if (loadSequenceRef.current !== loadId || !currentAccess()) {
         return;
       }
       if (isExternalSourceCapabilityAbsent(loadError)) {
@@ -163,18 +171,19 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
         setListSessionIncarnationId(null);
         setSelectedAttachmentIds((current) => (current.length === 0 ? current : []));
       } else {
-        setError("External source attachments are unavailable right now.");
+        setError(describeApiError(loadError, "External source attachments are unavailable right now.").summary);
       }
     } finally {
       if (loadSequenceRef.current === loadId) {
         setLoading(false);
       }
     }
-  }, [sessionId, workspaceId]);
+  }, [sessionId, workspaceId, accessIdentity, currentAccess]);
 
   useEffect(() => {
     scopeGenerationRef.current += 1;
     loadSequenceRef.current += 1;
+    setLoadedIdentity(undefined);
     setSupported(null);
     setError(null);
     setAttachments([]);
@@ -182,6 +191,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
     setCandidatesSupported(null);
     setSelectedAttachmentIds([]);
     setBusyAttachmentId(null);
+    mutationActiveRef.current = false;
     setListSessionIncarnationId(null);
     if (sessionId) {
       void reload();
@@ -196,6 +206,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
 
   const toggleSelection = useCallback(
     (attachmentId: string) => {
+      if (!liveScope || !currentAccess()) return;
       setSelectedAttachmentIds((current) => {
         if (current.includes(attachmentId)) {
           return current.filter((id) => id !== attachmentId);
@@ -206,7 +217,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
         return [...current, attachmentId];
       });
     },
-    [attachments],
+    [attachments, liveScope, currentAccess],
   );
 
   const clearSelection = useCallback(() => {
@@ -218,7 +229,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
   // takes precedence over the host seam; the seam remains a fallback for
   // runtimes whose list response does not carry the field yet.
   const sessionIncarnationId = listSessionIncarnationId ?? hostSessionIncarnationId;
-  const canMutate = supported === true && Boolean(sessionId) && Boolean(sessionIncarnationId);
+  const canMutate = liveScope && supported === true && Boolean(sessionId) && Boolean(sessionIncarnationId) && !operationLocked && currentAccess();
 
   const runMutation = useCallback(
     async (
@@ -226,12 +237,15 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       operation: (isCurrent: () => boolean) => Promise<void>,
       failureNotice: string,
     ): Promise<boolean> => {
+      if (mutationActiveRef.current || operationLocked || !currentAccess()) return false;
+      mutationActiveRef.current = true;
       const scope = scopeGenerationRef.current;
       const mutation = ++mutationSequenceRef.current;
-      const isCurrent = () => scopeGenerationRef.current === scope;
+      const isCurrent = () => scopeGenerationRef.current === scope && currentAccess();
       setBusyAttachmentId(busyKey);
       try {
-        await operation(isCurrent);
+        const completed = await runOperation(sessionIncarnationId ?? "missing", async () => { if (!isCurrent()) throw new Error("The source conversation changed."); }, async () => { await operation(isCurrent); return true; });
+        if (!completed) return false;
         if (isCurrent()) await reload();
         return true;
       } catch (mutationError) {
@@ -242,13 +256,14 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
           setSelectedAttachmentIds([]);
           return false;
         }
-        pushLocalNotice?.(failureNotice, "warning");
+        setError("The source request outcome is uncertain. Further source changes are locked; refreshing does not settle the original request.");
+        pushLocalNotice?.(failureNotice + " Outcome is uncertain; no automatic retry will run.", "warning");
         return false;
       } finally {
-        if (isCurrent() && mutationSequenceRef.current === mutation) setBusyAttachmentId(null);
+        if (isCurrent() && mutationSequenceRef.current === mutation) { mutationActiveRef.current = false; setBusyAttachmentId(null); }
       }
     },
-    [pushLocalNotice, reload],
+    [pushLocalNotice, reload, currentAccess, operationLocked, runOperation, sessionIncarnationId],
   );
 
   const attach = useCallback(
@@ -269,7 +284,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
           });
           if (isCurrent()) pushLocalNotice?.("Attached the imported item read-only.", "success");
         },
-        "The external source attach was rejected. Reload and retry.",
+        "The external source attach did not return a confirmed receipt.",
       );
     },
     [canMutate, pushLocalNotice, runMutation, sessionId, sessionIncarnationId, workspaceId],
@@ -294,7 +309,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
           if (isCurrent())
             pushLocalNotice?.("Detached the external source. Imported evidence remains immutable.", "neutral");
         },
-        "The external source detach was rejected. Reload and retry.",
+        "The external source detach did not return a confirmed receipt.",
       );
     },
     [attachments, canMutate, pushLocalNotice, runMutation, sessionId, sessionIncarnationId, workspaceId],
@@ -326,7 +341,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
               "success",
             );
         },
-        "The knowledge copy request was rejected. Reload and retry.",
+        "The knowledge copy request did not return a confirmed receipt.",
       );
     },
     [attachments, canMutate, pushLocalNotice, runMutation, sessionId, sessionIncarnationId, workspaceId],
@@ -335,12 +350,15 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
   // Read via refs inside the capture callback so the queue can freeze the
   // CURRENT selection at enqueue time while the callback identity stays stable
   // for the orchestration hook (synced-ref pattern).
+  const captureScopeRef = useRef<() => boolean>(() => false);
+  captureScopeRef.current = () => liveScope && currentAccess();
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
   const selectedRef = useRef(selectedAttachmentIds);
   selectedRef.current = selectedAttachmentIds;
 
   const captureOutboundExternalContextRefs = useCallback((): readonly ChatRoutedContextRef[] => {
+    if (!captureScopeRef.current()) return [];
     const live = new Map(attachmentsRef.current.map((item) => [item.attachmentId, item] as const));
     return selectedRef.current.flatMap((attachmentId) => {
       const attachment = live.get(attachmentId);
@@ -377,11 +395,11 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
     () => ({
       supported,
       loading,
-      error,
-      attachments,
-      candidates,
+      error: operationLocked ? attempt.attempt?.message ?? error : error,
+      attachments: liveScope ? attachments : [],
+      candidates: liveScope ? candidates : [],
       candidatesSupported,
-      selectedAttachmentIds,
+      selectedAttachmentIds: liveScope ? selectedAttachmentIds : [],
       busyAttachmentId,
       canMutate,
       sessionIncarnationId,
@@ -395,6 +413,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       handleOutboundExternalContextSent,
     }),
     [
+      liveScope, operationLocked, attempt.attempt?.message,
       supported,
       loading,
       error,

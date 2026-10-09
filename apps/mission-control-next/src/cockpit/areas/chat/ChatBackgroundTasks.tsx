@@ -57,7 +57,7 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
     },
   );
   if (!active || !parentRunId)
-    return <p className="text-sm text-fg-muted">No durable background run is recorded for this turn.</p>;
+    return <p className="text-sm text-fg-muted">No background work is recorded for this response.</p>;
   const cancelTask = cancelReview?.task;
   const reviewScopeCurrent = Boolean(cancelReview && rail.isReviewCurrent(cancelReview.review));
   const reviewError = rail.controlFailure && rail.controlFailure.review !== cancelReview?.review ? null : rail.error;
@@ -83,7 +83,7 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
   return (
     <section aria-label="Background work" className="space-y-3 text-sm">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-fg-secondary">Durable child work attached to this turn.</p>
+        <p className="text-fg-secondary">Background work started by this response.</p>
         <Button size="sm" onClick={() => void rail.refresh()} disabled={rail.refreshing}>
           Refresh
         </Button>
@@ -108,7 +108,7 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
                     <div className="min-w-0">
                       <h3 className="font-medium text-fg">{task.label}</h3>
                       <p className="text-xs text-fg-muted">
-                        {task.role ?? "Delegated child"} · {humanizeToken(task.attention.state)}
+                        {task.role ?? "Delegated task"} · {humanizeToken(task.attention.state)}
                       </p>
                     </div>
                     <StatusBadge status={taskStatus(task)} />
@@ -172,7 +172,7 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
                         }}
                         className="font-medium text-status-failed hover:underline disabled:opacity-50"
                       >
-                        Cancel child
+                        Cancel task
                       </button>
                     ) : null}
                   </div>
@@ -180,7 +180,7 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
               ))}
             </ol>
           ) : (
-            <p className="text-fg-muted">No durable child runs are attached to this turn.</p>
+            <p className="text-fg-muted">No background tasks are attached to this response.</p>
           )}
           {rail.snapshot.synthesis.summary ? (
             <p className="rounded-md border border-line p-3 text-fg-secondary">
@@ -203,11 +203,11 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
         onOpenChange={(open) => {
           if (!open) dismissCancel();
         }}
-        title="Cancel this child run?"
+        title="Cancel this background task?"
         description="Completed work stays in its evidence record. The live executor must honor the cancellation."
       >
         <p className="mb-3 break-words text-sm text-fg-secondary">
-          {cancelTask?.label} · Child version {cancelReview?.review.childVersion ?? "unavailable"} · Watcher revision{" "}
+          {cancelTask?.label} · Task version {cancelReview?.review.childVersion ?? "unavailable"} · Watcher revision{" "}
           {cancelReview?.review.watcherRevision}
         </p>
         {reviewError ? (
@@ -228,7 +228,7 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
               if (cancelReview) void control(cancelReview.task, "cancel", cancelReview.review);
             }}
           >
-            Cancel child
+            Cancel task
           </Button>
         </div>
       </Dialog>

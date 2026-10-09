@@ -65,6 +65,7 @@ it("optional background input preserves the composer while required input and ap
 
 function composerProps(overrides: Partial<ComposerProps> = {}): ComposerProps {
   return {
+    queueItems: [], onResumeAll: vi.fn(), onRemoveQueuedItem: vi.fn(),
     draft: "Hello",
     onDraftChange: vi.fn(),
     onSend: vi.fn(),
@@ -312,15 +313,15 @@ describe("cockpit text composer", () => {
   it("sends or cancels an edit branch through the shared controller", async () => {
     const props = composerProps({ draft: "Revised message", editingTurnId: "turn-1" });
     await act(async () => root.render(<ChatTextComposer props={props} />));
-    expect(container.textContent).toContain("Editing a new branch from this turn.");
+    expect(container.textContent).toContain("Editing a new version of this message.");
     const send = [...container.querySelectorAll("button")].find(
-      (element) => element.textContent?.trim() === "Send branch",
+      (element) => element.textContent?.trim() === "Send edited message",
     ) as HTMLButtonElement;
     expect(send.disabled).toBe(false);
     await act(async () => send.click());
     expect(props.onSend).toHaveBeenCalledOnce();
     const cancel = [...container.querySelectorAll("button")].find(
-      (element) => element.textContent?.trim() === "Cancel branch",
+      (element) => element.textContent?.trim() === "Cancel edit",
     ) as HTMLButtonElement;
     await act(async () => cancel.click());
     expect(props.onCancelEdit).toHaveBeenCalledOnce();
@@ -365,6 +366,10 @@ describe("cockpit text composer", () => {
       (element) => element.textContent?.trim() === (command === "/timer" ? "Open timer" : "Show status"),
     ) as HTMLButtonElement;
     expect(button.disabled).toBe(false);
+    expect(container.textContent).toContain(
+      command === "/timer" ? "Open a reminder that stays with this conversation." : "Read the current session state",
+    );
+    expect(container.textContent).toContain("Nothing is sent to the model.");
     await act(async () => button.click());
     expect(props.onSend).toHaveBeenCalledOnce();
     expect(props.onApplyDraftCommand).not.toHaveBeenCalled();
@@ -447,4 +452,53 @@ describe("cockpit text composer", () => {
     expect(plainEnter.defaultPrevented).toBe(true);
     expect(props.composerPalette?.onSelect).toHaveBeenCalledOnce();
   });
+});
+
+it("keeps governed external-control recovery actions available while send is locked", async () => {
+  const onRevoke = vi.fn();
+  const onEmergencyTakeover = vi.fn();
+  const props = composerProps({
+    sessionControlBanner: {
+      model: {
+        externalControlActive: true,
+        sendLocked: true,
+        generation: 2,
+        pendingRequestCount: 0,
+        ownerLabel: "External controller",
+        generationLabel: "Generation 2",
+        tone: "external-live",
+        sendLockReason: "Externally controlled",
+        leaseStateLabel: "Live lease",
+        capabilitiesLabel: "Send",
+        clientInstanceId: "fixture-client",
+        companionSessionId: "fixture-companion",
+        tokenFingerprint: null,
+        lastHeartbeatAt: null,
+        leaseExpiresAt: null,
+        reconnectExpiresAt: null,
+      },
+      onRevoke,
+      onEmergencyTakeover,
+      actionPending: null,
+      actionError: null,
+      statusError: null,
+    } as ComposerProps["sessionControlBanner"],
+  });
+  await act(async () => root.render(<ChatTextComposer props={props} />));
+  await act(async () =>
+    container.querySelector<HTMLButtonElement>('[aria-label="Revoke external session control"]')!.click(),
+  );
+  expect(onRevoke).toHaveBeenCalledOnce();
+  expect(props.onSend).not.toHaveBeenCalled();
+});
+
+it("submits a running turn only through the shared queue admission and preserves blockers", async () => {
+  const props = composerProps({ draft: "Next request", sending: true, hasActiveStream: true, canSend: false, canSendWhileRunning: true, midTurnDisposition: "queue" });
+  await act(async () => root.render(<ChatTextComposer props={props} />));
+  const queue = [...container.querySelectorAll("button")].find((button) => button.textContent === "Queue message")!;
+  expect(queue.disabled).toBe(false);
+  await act(async () => queue.click());
+  expect(props.onSend).toHaveBeenCalledOnce();
+  await act(async () => root.render(<ChatTextComposer props={{ ...props, pendingApproval: { approvalId: "waiting" } as never }} />));
+  expect(queue.disabled).toBe(true);
 });

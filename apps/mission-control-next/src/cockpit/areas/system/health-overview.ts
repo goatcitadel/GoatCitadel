@@ -14,6 +14,8 @@ export interface HealthCheck {
 
 export function backupHealthCheck(trust: BackupTrustState | undefined, hasRecord: boolean): HealthCheck {
   const base = { id: "backups", title: "Backups", inspectPath: "/ops/runtime" } as const;
+  // Manifest existence and exact-record verification are independent observations.
+  if (hasRecord && trust === "none") trust = "unknown";
   switch (trust) {
     case "verified":
       return { ...base, status: { label: "Verified", tone: "done" },
@@ -26,7 +28,7 @@ export function backupHealthCheck(trust: BackupTrustState | undefined, hasRecord
         detail: "The latest backup failed exact-byte or restore-contract verification." };
     case "none":
       return { ...base, notSetUp: true, status: { label: "No backup yet", tone: "neutral" },
-        detail: "No backup has been published yet. Create one from the classic runtime view." };
+        detail: "No backup has been published yet. Back up now creates a host-wide snapshot through the Gateway. Scheduling and offline restore remain separate operator workflows." };
     default:
       return hasRecord
         ? { ...base, status: { label: "Not verified yet", tone: "neutral" },
@@ -102,4 +104,12 @@ export function summarizeHealthChecks(checks: readonly HealthCheck[]): { label: 
     return { label: "Some system checks lack live proof", tone: "neutral" };
   }
   return { label: "Reported system checks clear", tone: "done" };
+}
+
+/** Unknown evidence remains distinct from actionable owner-reported problems. */
+export function healthOverviewState(checks: readonly HealthCheck[]) {
+  const problems = checks.filter((check) => check.status.tone === "failed" || check.status.tone === "waiting");
+  const unknown = checks.filter((check) => check.status.tone === "neutral" && !check.notSetUp);
+  const kind = problems.length ? "problems" : unknown.length || !checks.length ? "incomplete" : "clear";
+  return { kind, problems, unknown, heading: kind === "problems" ? "Needs attention" : kind === "incomplete" ? "Some checks cannot be verified yet" : "Available checks report no problems" };
 }

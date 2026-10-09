@@ -1,3 +1,4 @@
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import type { CitadelAccessSnapshot } from "@goatcitadel/contracts";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
@@ -79,7 +80,7 @@ export function CitadelAccessReview({
           </div>
         ))}
       </details>
-      <p className="break-all font-mono text-xs">Revision: {snapshot.revision}</p>
+      <TechnicalDetails><p className="break-all font-mono text-xs">Version: {snapshot.revision}</p></TechnicalDetails>
       <Button disabled={snapshot.structure.record?.lifecycleStatus === "archived"} onClick={onAccept}>
         Use current access review
       </Button>

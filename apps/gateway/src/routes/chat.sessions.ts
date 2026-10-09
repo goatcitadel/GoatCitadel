@@ -14,6 +14,10 @@ import {
 const chatOnlyModeSchema = z.enum(["chat", "cowork", "code"]).transform(() => "chat" as const);
 
 const listChatSessionsSchema = z.object({
+  sessionIds: z.preprocess((value) => {
+    if (typeof value !== "string") return value;
+    try { return JSON.parse(value); } catch { return null; }
+  }, z.array(z.string().trim().min(1).max(256)).min(1).max(100).optional()),
   sessionId: z.string().trim().min(1).max(256).optional(),
   scope: z.enum(["mission", "external", "all"]).optional(),
   citadelId: z.string().min(1).optional(),
@@ -34,7 +38,7 @@ const listChatSessionsSchema = z.object({
     .enum(["true", "false", "1", "0"])
     .transform((value) => value === "true" || value === "1")
     .optional(),
-});
+}).refine((query) => !query.sessionIds || (query.sessionId === undefined && query.cursor === undefined), "Batch membership cannot use sessionId or cursor");
 
 const searchChatSessionsSchema = z.object({
   query: z.string().trim().min(1).max(512),
@@ -354,15 +358,15 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    if (parsed.data.q?.trim()) {
+    if (parsed.data.q?.trim() || parsed.data.sessionIds) {
       reply.header("cache-control", "private, no-store");
       reply.header("pragma", "no-cache");
     }
     try {
       const items = await fastify.services.chatSessions.listChatSessions(parsed.data);
       const last = items.at(-1);
-      const nextCursor = items.length === parsed.data.limit && last ? `${last.updatedAt}|${last.sessionId}` : undefined;
-      return reply.send({ items: items.map(projectChatSessionForPublic), nextCursor });
+      const nextCursor = !parsed.data.sessionIds && items.length === parsed.data.limit && last ? `${last.updatedAt}|${last.sessionId}` : undefined;
+      return reply.send({ items: items.map(projectChatSessionForPublic), nextCursor, ...(parsed.data.sessionIds ? { membership: { sessionIds: parsed.data.sessionIds, complete: true } } : {}) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

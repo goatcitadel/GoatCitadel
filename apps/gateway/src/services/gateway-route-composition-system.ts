@@ -78,6 +78,7 @@ export function composeSystemRouteDependencies(
         getDatabaseHealthSnapshot: () => gateway.databaseCutoverService.getHealthSnapshot(),
         getDaemonStatus: () => createDaemonRouteService({ systemSettings: storage.systemSettings }).getDaemonStatus(),
         inspectLatestBackupTrust: () => gateway.backupRetentionService.inspectLatestBackupTrust(),
+        listBackups: (limit) => gateway.backupRetentionService.listBackups(limit),
       },
     },
     media: mediaVoiceService,

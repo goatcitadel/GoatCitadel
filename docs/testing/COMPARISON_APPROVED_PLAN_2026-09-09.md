@@ -54,6 +54,22 @@ the existing owners. Record the dependency/host caps of **4/0** for
 baseline-owner limit remains unchanged; this does not permit future growth above
 this cap.
 
+Additional operator clarification, October 8 (delegated to the implementing agent):
+resolve the cockpit-remediation branch's architecture growth by consolidating the
+existing owners it touched and moving its new responsibilities into reviewed new
+owners. Record dependency/host caps of **3/0** for `inbox-read-status-service.ts`,
+**6/0** for `knowledge-approval-result.ts`, **3/0** for
+`workflow-skill-capture-authority.ts`, **2/0** for
+`engineering-learning-canonical-source.ts`, **5/0** for
+`engineering-learning-sources.ts` and **3/0** for
+`browser-session-request-replay.ts` as explicit C0 gate-reconciliation scope
+exceptions. The counter scores the replay owner 0 because its port type is an
+alias; its cap records the 3 real reads found by inspection. Raise the reviewed new-owner caps of `inbox-projection-service.ts`
+from 24 to 26 and `workflow-skill-capture-service.ts` from 23 to 24 for the real
+reads each entry names. `GatewayService` does not grow. Every original
+baseline-owner limit remains unchanged; this does not permit future growth above
+these caps.
+
 ### 2. Simplify onboarding through the first useful response
 
 Use the existing guided setup and Change Plans to provide one continuous flow:

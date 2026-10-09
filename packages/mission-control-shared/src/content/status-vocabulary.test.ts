@@ -28,7 +28,10 @@ describe("status vocabulary", () => {
     expect(presentChangePlanStatus("rollback_failed")).toEqual({ label: "Rollback failed", tone: "failed" });
     expect(presentApprovalStatus("edited")).toEqual({ label: "Approved with edits", tone: "done" });
     expect(presentApprovalOutcome("policy_blocked")).toEqual({ label: "Blocked by policy", tone: "failed" });
-    expect(presentRiskLevel("nuclear")).toEqual({ label: "Nuclear", tone: "failed" });
+    expect(presentRiskLevel("safe")).toEqual({ label: "Low", tone: "neutral" });
+    expect(presentRiskLevel("caution")).toEqual({ label: "Medium", tone: "waiting" });
+    expect(presentRiskLevel("danger")).toEqual({ label: "High", tone: "failed" });
+    expect(presentRiskLevel("nuclear")).toEqual({ label: "Critical", tone: "failed" });
     // A level a newer Gateway sends must still render instead of crashing the badge.
     expect(presentRiskLevel("critical_infra" as never)).toEqual({ label: "Critical infra", tone: "failed" });
   });

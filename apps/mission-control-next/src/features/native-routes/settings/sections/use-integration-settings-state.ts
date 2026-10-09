@@ -100,7 +100,7 @@ export function useIntegrationSettingsState(activeWorkspaceId: string) {
     (IntegrationActionInvokeResult & { actionLabel: string }) | null
   >(null);
   const createableCatalog = useMemo(
-    () => data?.catalog.filter((item) => item.kind !== "external_connector") ?? [],
+    () => data?.catalog.filter((item) => item.kind !== "external_connector" && item.kind !== "channel" && item.kind !== "model_provider") ?? [],
     [data?.catalog],
   );
   const selectedConnection = data?.connections.find((item) => item.connectionId === selectedConnectionId) ?? null;

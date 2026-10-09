@@ -68,8 +68,17 @@ export function useTaskCreate(options: {
       setFeedback({ identity, text: error instanceof Error ? error.message : "Task review unavailable." });
     }
   }
-  async function confirm(onConfirmed: (task: TaskRecord, isCurrent: () => boolean) => unknown) {
-    const origin = visibleReview;
+  async function confirm(onConfirmed: (task: TaskRecord, isCurrent: () => boolean) => unknown, direct = false) {
+    let origin = visibleReview;
+    if (direct) {
+      if (!current(generation) || attempt.phase !== "idle") return;
+      try {
+        origin = { generation, lifetime: live.current.lifetime, submitted: structuredClone(options.draft), draft: normalizeTaskCreateDraft(options.draft) };
+      } catch (error) {
+        setFeedback({ identity, text: error instanceof Error ? error.message : "Task creation unavailable." });
+        return;
+      }
+    }
     if (!origin || !current(origin.generation) || live.current.lifetime !== origin.lifetime) return;
     // Consume this exact review synchronously, including queued callbacks from the previous render.
     live.current.generation++;
@@ -121,6 +130,7 @@ export function useTaskCreate(options: {
   return {
     begin,
     confirm,
+    create: (onConfirmed: (task: TaskRecord, isCurrent: () => boolean) => unknown) => confirm(onConfirmed, true),
     invalidate,
     review: visibleReview?.draft,
     attempt,

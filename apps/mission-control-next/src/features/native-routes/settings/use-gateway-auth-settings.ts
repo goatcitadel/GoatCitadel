@@ -11,12 +11,15 @@ import { useSessionDraft } from "../library/session-drafts";
 import { useFormDirty } from "../library/use-form-dirty";
 import { useSettingsChange } from "./use-settings-change";
 import { isManagedRuntimeRevisionConflict } from "./managed-runtime-state";
+import { dispatchTrackedMutation, type TrackedAttempt } from "./mutation-attempt-tracking";
 import {
   authMatches,
   authReady,
   authSnapshot,
   authValues,
+  AUTH_ROUTE_PATTERNS,
   beginAuthAttempt,
+  checkAuthAttemptOutcome,
   finishAuthAttempt,
   matchesAuthPlan,
   normalizeAuth,
@@ -143,6 +146,7 @@ export function useGatewayAuthSettings(options: {
     let dispatched = false,
       responseReceived = false,
       acknowledged = false;
+    let transport: TrackedAttempt | undefined;
     setReview(null);
     setNotice(null);
     try {
@@ -158,17 +162,24 @@ export function useGatewayAuthSettings(options: {
         return false;
       }
       dispatched = true;
-      const updated = await patchGatewayAuthSettings({
-        expectedRevision: intent.revision,
-        mode: intent.submitted.mode,
-        allowLoopbackBypass: intent.submitted.allowLoopbackBypass,
-        ...(intent.submitted.basicUsername ? { basicUsername: intent.submitted.basicUsername } : {}),
-        ...(intent.submitted.replaceCredential
-          ? intent.submitted.mode === "token"
-            ? { token: secret }
-            : { basicPassword: secret }
-          : {}),
-      });
+      const updated = await dispatchTrackedMutation(
+        AUTH_ROUTE_PATTERNS,
+        () =>
+          patchGatewayAuthSettings({
+            expectedRevision: intent.revision,
+            mode: intent.submitted.mode,
+            allowLoopbackBypass: intent.submitted.allowLoopbackBypass,
+            ...(intent.submitted.basicUsername ? { basicUsername: intent.submitted.basicUsername } : {}),
+            ...(intent.submitted.replaceCredential
+              ? intent.submitted.mode === "token"
+                ? { token: secret }
+                : { basicPassword: secret }
+              : {}),
+          }),
+        (tracked) => {
+          transport = tracked;
+        },
+      );
       responseReceived = true;
       if (getGatewayApiBaseUrl() !== installation) throw new Error("Gateway installation changed.");
       const receipt = updated.changePlanReceipt;
@@ -235,7 +246,7 @@ export function useGatewayAuthSettings(options: {
       return false;
     } finally {
       if (dispatched && live.current.mounted) clearCredential();
-      finishAuthAttempt(key, dispatched && !acknowledged);
+      finishAuthAttempt(key, dispatched && !acknowledged, transport);
     }
   }
   function updateCredential(value: string) {
@@ -261,6 +272,14 @@ export function useGatewayAuthSettings(options: {
     inputError,
     requestReview,
     confirm,
+    /** Settles a lost write from the Gateway's record of it, then a canonical settings read. */
+    checkOutcome: async () => {
+      const settled = await checkAuthAttemptOutcome(key, async () => {
+        await fetchSettings();
+        await options.reload();
+      });
+      if (settled && live.current.mounted) setNotice(settled);
+    },
     cancel: () => setReview(null),
     discard: () => {
       draft.discard();

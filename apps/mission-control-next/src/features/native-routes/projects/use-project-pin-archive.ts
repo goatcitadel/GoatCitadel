@@ -55,12 +55,13 @@ export type ProjectPinController = {
   togglePinned: (projectId: string) => void;
 };
 
-export function useProjectPinController(workspaceId: string): ProjectPinController {
-  const [pinnedIds, setPinnedIds] = useState<ReadonlySet<string>>(() => readPinnedSet(workspaceId));
+export function useProjectPinController(workspaceId: string, ownerScope?: string): ProjectPinController {
+  const storageScope = ownerScope ? JSON.stringify([ownerScope, workspaceId]) : workspaceId;
+  const [pinnedIds, setPinnedIds] = useState<ReadonlySet<string>>(() => readPinnedSet(storageScope));
 
   useEffect(() => {
-    setPinnedIds(readPinnedSet(workspaceId));
-  }, [workspaceId]);
+    setPinnedIds(readPinnedSet(storageScope));
+  }, [storageScope]);
 
   const isPinned = useCallback((projectId: string) => pinnedIds.has(projectId), [pinnedIds]);
 
@@ -73,11 +74,11 @@ export function useProjectPinController(workspaceId: string): ProjectPinControll
         } else {
           next.add(projectId);
         }
-        writePinnedSet(workspaceId, next);
+        writePinnedSet(storageScope, next);
         return next;
       });
     },
-    [workspaceId],
+    [storageScope],
   );
 
   return { pinnedIds, isPinned, togglePinned };

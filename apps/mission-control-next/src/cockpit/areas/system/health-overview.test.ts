@@ -28,7 +28,10 @@ function inbox(coverageState: OperatorInboxResponse["coverage"][number]["state"]
     authority: "derived_projection",
     workspaceId: "default",
     generatedAt: "2026-09-28T12:00:00Z",
-    coverage: [{ source: "backup_trust", state: coverageState }],
+    coverage: [{ source: "backup_trust", state: coverageState, backupTrust: {
+      state: itemId === "backup_trust:stale" ? "stale" : itemId === "backup_trust:failed" ? "failed" : "verified",
+      backupId: "backup", createdAt: "2026-09-28T10:00:00Z", observedAt: "2026-09-28T12:00:00Z",
+    } }],
     items: itemId
       ? [{ id: itemId, kind: "backup_trust", group: "needs_attention", title: "t", summary: "s", createdAt: "x",
           source: { workspaceId: "default" }, href: "/system/health" } as OperatorInboxResponse["items"][number]]
@@ -78,10 +81,21 @@ describe("system health checks", () => {
 
   it("reads backup verification from the Inbox projection", () => {
     expect(backupTrustFromInbox(undefined)).toBeUndefined();
-    expect(backupTrustFromInbox(inbox("not_enabled"))).toBe("none");
+    expect(backupTrustFromInbox(inbox("not_enabled"), null)).toBe("none");
     expect(backupTrustFromInbox(inbox("unavailable"))).toBe("unknown");
-    expect(backupTrustFromInbox(inbox("current"))).toBe("verified");
-    expect(backupTrustFromInbox(inbox("limited", "backup_trust:stale"))).toBe("stale");
-    expect(backupTrustFromInbox(inbox("current", "backup_trust:failed"))).toBe("failed");
+    expect(backupTrustFromInbox(inbox("current"), healthy.backups.latest)).toBe("verified");
+    expect(backupTrustFromInbox(inbox("limited", "backup_trust:stale"), healthy.backups.latest)).toBe("stale");
+    expect(backupTrustFromInbox(inbox("current", "backup_trust:failed"), healthy.backups.latest)).toBe("failed");
   });
+});
+
+import { healthOverviewState } from "./health-overview";
+it("separates actionable problems, missing proof and verified available evidence", () => {
+  const done = { id: "gateway", title: "Gateway", detail: "Responding", inspectPath: "/ops/runtime", status: { tone: "done", label: "Responding" } } as const;
+  const unknown = { ...done, id: "database" as const, status: { tone: "neutral" as const, label: "Unknown" } };
+  const failed = { ...done, id: "models" as const, status: { tone: "failed" as const, label: "Problem" } };
+  expect(healthOverviewState([done])).toMatchObject({ kind: "clear", problems: [], unknown: [] });
+  expect(healthOverviewState([done, unknown])).toMatchObject({ kind: "incomplete", unknown: [unknown] });
+  expect(healthOverviewState([failed, unknown])).toMatchObject({ kind: "problems", problems: [failed], unknown: [unknown] });
+  expect(healthOverviewState([]).kind).toBe("incomplete");
 });

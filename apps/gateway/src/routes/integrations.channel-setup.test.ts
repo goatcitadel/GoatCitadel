@@ -17,6 +17,21 @@ describe("channel setup routes", () => {
     app = null;
   });
 
+  it("deletes only a revision-reviewed draft and acknowledges its identity", async () => {
+    const discardChannelSetupDraft = vi.fn().mockResolvedValue(true);
+    app = Fastify();
+    decorateIntegrationServices(app, { discardChannelSetupDraft });
+    await app.register(integrationsRoutes);
+    const draftId = "11111111-1111-1111-1111-111111111111";
+    const missingReview = await app.inject({ method: "DELETE", url: `/api/v1/channels/drafts/${draftId}`, payload: {} });
+    expect(missingReview.statusCode).toBe(400);
+    expect(discardChannelSetupDraft).not.toHaveBeenCalled();
+    const response = await app.inject({ method: "DELETE", url: `/api/v1/channels/drafts/${draftId}`, payload: { expectedRevision: 3 } });
+    expect(response.statusCode).toBe(200);
+    expect(discardChannelSetupDraft).toHaveBeenCalledExactlyOnceWith(draftId, 3);
+    expect(response.json()).toEqual({ draftId, deleted: true });
+  });
+
   it("returns a channel setup definition", async () => {
     const getChannelSetupDefinition = vi.fn(() => ({
       catalog: { catalogId: "channel.discord", label: "Discord" },

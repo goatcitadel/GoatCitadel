@@ -1,6 +1,8 @@
 import { validateMemoryForgetRequest } from "@goatcitadel/contracts";
 import type {
   DocsIngestInput,
+  KnowledgeApprovalResult,
+  KnowledgeApprovalResultQuery,
   EmbeddingIndexInput,
   EmbeddingQueryInput,
   MemoryBatchMutationRequest,
@@ -145,6 +147,11 @@ export async function knowledgeEmbeddingsIndex(
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export async function fetchKnowledgeApprovalResult(approvalId: string, input: KnowledgeApprovalResultQuery): Promise<KnowledgeApprovalResult> {
+  const query = new URLSearchParams({ workspaceId: input.workspaceId, sessionId: input.sessionId, toolName: input.toolName });
+  return request<KnowledgeApprovalResult>(`/api/v1/knowledge/approvals/${encodeURIComponent(approvalId)}/result?${query}`);
 }
 
 export async function knowledgeEmbeddingsQuery(

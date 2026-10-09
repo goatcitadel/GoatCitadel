@@ -1,3 +1,4 @@
+import type { CodeModeRunVerificationResponse } from "@goatcitadel/contracts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -27,6 +28,7 @@ async function buildApp(): Promise<{ app: FastifyInstance; service: EngineeringL
     isEnabled: () => true,
     createApproval: async (input) => storage.approvals.create(input),
     resolveSourceRoot: async () => root,
+    readVerifiedSource: async (runId, workspaceId) => ({ run: { runId, workspaceId, sessionId: "source-chat", turnId: "source-turn", status: "completed", codeHash: "code", codeModeInputHash: "input", wrapperManifestHash: "wrapper", policySnapshotHash: "policy", verification: { status: "verified", evidenceId: "verified-source", subjectHash: "subject" } }, evidence: { evidenceId: "verified-source", runId, workspaceId, sessionId: "source-chat", turnId: "source-turn", status: "verified", subject: { subjectHash: "subject", codeHash: "code", codeModeInputHash: "input", wrapperManifestHash: "wrapper", policySnapshotHash: "policy", changedFiles: ["src/fix.ts"], changedFilesTruncated: false }, outputArtifactRefs: [] } }) as CodeModeRunVerificationResponse,
   });
   const app = Fastify();
   app.decorateRequest("authActorId", "operator-test");

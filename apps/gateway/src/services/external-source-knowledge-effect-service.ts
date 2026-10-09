@@ -276,9 +276,12 @@ export class ExternalSourceKnowledgeEffectService {
       return await this.dependencies.runImmediateTransaction(async () => {
         const existing = await this.findApproval(approvalId);
         if (existing) {
+          const { review: _review, ...legacyPreview } = material.preview;
           if (
             existing.kind !== EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND ||
-            canonicalJsonString(existing.payload) !== canonicalJsonString(material.payload)
+            canonicalJsonString(existing.payload) !== canonicalJsonString(material.payload) ||
+            (canonicalJsonString(existing.preview) !== canonicalJsonString(material.preview) &&
+              canonicalJsonString(existing.preview) !== canonicalJsonString(legacyPreview))
           ) {
             throw new ExternalSourceKnowledgeEffectServiceError("approval_conflict");
           }
@@ -286,7 +289,9 @@ export class ExternalSourceKnowledgeEffectService {
           return {
             schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
             approval: existing,
-            material,
+            // A replay returns exactly what the original operator could review.
+            // Never enrich old immutable approvals using current source metadata.
+            material: { ...material, preview: existing.preview as unknown as typeof material.preview },
             disposition: "replayed" as const,
           };
         }

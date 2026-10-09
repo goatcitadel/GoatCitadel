@@ -9,6 +9,20 @@ import { __resetManagedRuntimeUncertaintyForTests, type ManagedRuntimeValues } f
 import { useManagedRuntimeSettings } from "./use-managed-runtime-settings";
 
 const api = vi.hoisted(() => ({ fetchSettings: vi.fn(), patchSettings: vi.fn(), fetchChangePlan: vi.fn() }));
+// Each owner write reports the attempt it dispatched, as the real capture would for its Gateway route.
+const attempts = vi.hoisted(() => ({ paths: [] as string[], read: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  captureMutationAttempt: (dispatch: () => Promise<unknown>, onAttempt: (attempt: unknown) => void) => {
+    const path = attempts.paths.shift();
+    if (path) onAttempt({ attemptKey: "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b", method: "PATCH", path });
+    return dispatch();
+  },
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  fetchMutationAttempt: attempts.read,
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   ...api,
   isApiRequestError: (value: unknown) => Boolean(value && typeof value === "object" && "status" in value),
@@ -69,6 +83,7 @@ function pendingPlan(alias = "reviewed-model") {
 }
 beforeEach(async () => {
   vi.resetAllMocks();
+  attempts.paths.length = 0;
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => {
@@ -217,6 +232,49 @@ describe("shared managed runtime configuration owner", () => {
     await review();
     await confirm();
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
+  });
+  async function loseRuntimeSave() {
+    attempts.paths.push("/api/v1/settings");
+    api.patchSettings.mockRejectedValue(new Error("lost response"));
+    await review();
+    await confirm();
+    expect(hook.uncertain).toContain("uncertain");
+    expect(hook.checkable).toBe(true);
+  }
+  it("settles a lost runtime save from the Gateway's attempt record and a canonical readback", async () => {
+    await loseRuntimeSave();
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    api.fetchSettings.mockClear();
+    await act(async () => {
+      await hook.checkOutcome();
+    });
+    expect(attempts.read).toHaveBeenCalledWith("6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b", "PATCH", "/api/v1/settings");
+    expect(api.fetchSettings).toHaveBeenCalled();
+    expect(hook.uncertain).toBeUndefined();
+    expect(hook.locked).toBe(false);
+    expect(hook.notice).toMatch(/recorded this runtime change as processed/);
+    expect(api.patchSettings).toHaveBeenCalledTimes(1);
+  });
+  it("keeps the runtime lock while the Gateway has no settled record", async () => {
+    await loseRuntimeSave();
+    attempts.read.mockResolvedValue({ status: "absent" });
+    await act(async () => {
+      await hook.checkOutcome();
+    });
+    expect(hook.uncertain).toMatch(/no record/);
+    expect(hook.locked).toBe(true);
+    expect(hook.checkable).toBe(true);
+  });
+  it("offers no outcome check for a runtime save it could not identify", async () => {
+    api.patchSettings.mockRejectedValue(new Error("lost response"));
+    await review();
+    await confirm();
+    expect(hook.checkable).toBe(false);
+    await act(async () => {
+      await hook.checkOutcome();
+    });
+    expect(attempts.read).not.toHaveBeenCalled();
+    expect(hook.locked).toBe(true);
   });
   it("unlocks only a marked precommit revision conflict", async () => {
     api.patchSettings.mockRejectedValue({

@@ -78,7 +78,8 @@ export function projectDailyCostBars(summary: CostSummaryResponse): DailyCostBar
     const complete = day.metricAvailability?.costUsdComplete === true;
     return {
       key: day.isoDate,
-      label: day.shortLabel || day.isoDate,
+      // Daily ledger buckets are UTC; do not relabel aggregates as local days.
+      label: `${day.isoDate} UTC`,
       costLabel: complete ? formatCostUsd(known) : known > 0 ? `${formatCostUsd(known)}+` : "Unknown",
       percent: maxAmount > 0 ? Math.round((known / maxAmount) * 100) : 0,
     };

@@ -8,6 +8,7 @@ import {
 } from "../services/capability-public-projection.js";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
+import { resolveCandidateLifecycleWorkspace } from "../services/capability-candidate-lifecycle-scope.js";
 
 const DEFAULT_WORKSPACE_ID = "default";
 
@@ -210,6 +211,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       ? fastify.services.capabilities.listCapabilityCatalog(
           scope,
           await fastify.services.capabilityScope.resolveEffectiveSkills(parsed.data.workspaceId),
+          parsed.data.workspaceId,
         )
       : fastify.services.capabilities.listCapabilityCatalog(scope));
     return reply.send({ scope, items: projectCapabilityPublicValue(items) });
@@ -452,14 +454,17 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
             message: "The requested capability version is no longer the latest immutable candidate version.",
           });
         }
-        const proposal =
-          detail.relatedProposals.find((item) => item.candidateId === detail.candidateId) ?? detail.relatedProposals[0];
+        const selected = detail.versions.find((item) => item.versionId === detail.latestVersion?.versionId);
+        const workspaceId = await resolveCandidateLifecycleWorkspace(
+          detail, selected, (runId) => fastify.services.capabilities.getCodeModeRun(runId),
+        );
+        const proposal = detail.relatedProposals.find((item) => item.candidateId === detail.candidateId);
         if (!proposal) {
-          throw new SemanticValidationError("The capability candidate has no linked Code Mode proposal.");
+          throw new SemanticValidationError("The capability candidate has no linked proposal.");
         }
         const plan = await evolution.create({
           actor: {
-            workspaceId: detail.originatingRun?.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            workspaceId,
             actorId: resolveActorId(request),
             surface: "settings",
             requestId: request.id,
@@ -468,7 +473,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
             kind: "capability_candidate",
             proposalId: proposal.proposalId,
             action: "activate",
-            ...(body.data.versionId ? { versionId: body.data.versionId } : {}),
+            versionId: selected!.versionId,
           },
           idempotencyKey: `capability-promote:${request.id}:${params.data.candidateId}:${body.data.expectedRevision}`,
           expectedTargetRevision: body.data.expectedRevision,
@@ -520,12 +525,14 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
           ? detail.versions.find((item) => item.versionId === body.data.versionId)
           : (detail.activeVersion ?? detail.latestVersion);
         if (!selected) throw new SemanticValidationError("The capability candidate has no version to revoke.");
-        const proposal =
-          detail.relatedProposals.find((item) => item.candidateId === detail.candidateId) ?? detail.relatedProposals[0];
-        if (!proposal) throw new SemanticValidationError("The capability candidate has no linked Code Mode proposal.");
+        const workspaceId = await resolveCandidateLifecycleWorkspace(
+          detail, selected, (runId) => fastify.services.capabilities.getCodeModeRun(runId),
+        );
+        const proposal = detail.relatedProposals.find((item) => item.candidateId === detail.candidateId);
+        if (!proposal) throw new SemanticValidationError("The capability candidate has no linked proposal.");
         const plan = await evolution.create({
           actor: {
-            workspaceId: detail.originatingRun?.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            workspaceId,
             actorId: resolveActorId(request),
             surface: "settings",
             requestId: request.id,
@@ -582,17 +589,20 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
             details: { expectedRevision: body.data.expectedRevision, currentRevision: detail.revision },
           });
         }
-        if (!detail.versions.some((item) => item.versionId === body.data.targetVersionId)) {
+        const selected = detail.versions.find((item) => item.versionId === body.data.targetVersionId);
+        if (!selected) {
           throw new ConflictError({
             message: "The requested rollback target is no longer part of this capability candidate.",
           });
         }
-        const proposal =
-          detail.relatedProposals.find((item) => item.candidateId === detail.candidateId) ?? detail.relatedProposals[0];
-        if (!proposal) throw new SemanticValidationError("The capability candidate has no linked Code Mode proposal.");
+        const workspaceId = await resolveCandidateLifecycleWorkspace(
+          detail, selected, (runId) => fastify.services.capabilities.getCodeModeRun(runId),
+        );
+        const proposal = detail.relatedProposals.find((item) => item.candidateId === detail.candidateId);
+        if (!proposal) throw new SemanticValidationError("The capability candidate has no linked proposal.");
         const plan = await evolution.create({
           actor: {
-            workspaceId: detail.originatingRun?.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            workspaceId,
             actorId: resolveActorId(request),
             surface: "settings",
             requestId: request.id,

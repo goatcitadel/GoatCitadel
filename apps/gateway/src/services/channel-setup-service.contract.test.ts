@@ -78,7 +78,8 @@ function createDraftStore(): DraftStore {
       drafts.set(draftId, updated);
       return updated;
     },
-    delete(draftId) {
+    delete(draftId, expectedRevision) {
+      if (expectedRevision !== this.get(draftId).revision) throw new Error("stale draft");
       return drafts.delete(draftId);
     },
     listByCatalog(catalogId, limit) {
@@ -180,6 +181,17 @@ function createHost(): ChannelSetupHost & {
 }
 
 describe("channel-setup-service contract behavior", () => {
+  it("rejects stale draft deletion, then removes temporary custody after exact deletion", async () => {
+    const host = createHost();
+    const created = await createChannelSetupDraft(host, { catalogId: "channel.telegram" });
+    const secured = await setChannelSetupDraftSecrets(host, created.draftId, { expectedRevision: created.revision, values: { botToken: "synthetic-delete-fixture" } });
+    const reference = secured.secretState.botToken!.secretRef!;
+    await expect(discardChannelSetupDraft(host, secured.draftId, created.revision)).rejects.toThrow();
+    expect(host.channelSecrets!.resolve(reference)).toBe("synthetic-delete-fixture");
+    expect(await discardChannelSetupDraft(host, secured.draftId, secured.revision)).toBe(true);
+    expect(() => host.storage.channelSetupDrafts.get(secured.draftId)).toThrow();
+    expect(() => host.channelSecrets!.resolve(reference)).toThrow(/unavailable/);
+  });
   it("moves legacy raw draft credentials into keychain custody and scrubs legacy hydration", async () => {
     const host = createHost();
     const created = await createChannelSetupDraft(host, { catalogId: "channel.discord" });

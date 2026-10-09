@@ -1,4 +1,6 @@
-import type { ComponentProps, ReactNode } from "react";
+import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
+import { useLayoutEffect, useRef, type ComponentProps, type ReactNode } from "react";
+import { registerCockpitSheetBack } from "../app/cockpit-back-guard";
 import { X } from "lucide-react";
 import { Drawer } from "vaul";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
@@ -19,14 +21,29 @@ export function Sheet({
   sideOnDesktop?: boolean;
   onCloseAutoFocus?: ComponentProps<typeof Drawer.Content>["onCloseAutoFocus"];
 }) {
-  const isDesktop = useMediaQuery("(width >= 640px)");
+  const isDesktop = useMediaQuery(RESPONSIVE_QUERIES.abovePhone);
+  const close = useRef(onOpenChange); close.current = onOpenChange;
+  const trigger = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    trigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return registerCockpitSheetBack(() => close.current(false));
+  }, [open]);
   const side = sideOnDesktop && isDesktop;
   return (
     <Drawer.Root open={open} onOpenChange={onOpenChange} direction={side ? "right" : "bottom"}>
       <Drawer.Portal>
         <Drawer.Overlay className="fixed inset-0 z-40 bg-canvas/70" />
         <Drawer.Content
-          onCloseAutoFocus={onCloseAutoFocus}
+          onCloseAutoFocus={
+            onCloseAutoFocus ??
+            ((event) => {
+              if (trigger.current?.isConnected) {
+                event.preventDefault();
+                trigger.current.focus();
+              }
+            })
+          }
           className={
             side
               ? "fixed inset-y-0 right-0 z-50 h-full w-full max-w-2xl overflow-hidden border-l border-line bg-overlay"

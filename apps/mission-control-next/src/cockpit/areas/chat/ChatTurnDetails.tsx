@@ -108,7 +108,7 @@ export function ChatTurnDetails({
         </details>
       ) : null}
       {turn.toolRuns.length ? (
-        <details aria-label="Tool activity for this turn">
+        <details open={streaming || turn.toolRuns.some((tool) => tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal)} aria-label="Tool activity for this turn">
           <summary className="cursor-pointer text-accent">
             {turn.toolRuns.length} tool {turn.toolRuns.length === 1 ? "call" : "calls"} · {activitySummary}
           </summary>

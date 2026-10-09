@@ -51,6 +51,17 @@ describe("memory routes", () => {
     app = null;
   });
 
+  it("binds quality scan provenance to the authenticated token actor, never body metadata", async () => {
+    const runQualityScan = vi.fn(async () => ({ issues: [], issueCount: 0 }));
+    const built = buildApp({ runQualityScan }); app = built.app;
+    app.addHook("onRequest", async request => { request.authActorId = "token:0123456789abcdef"; });
+    await app.register(memoryRoutes);
+    const result = await app.inject({ method: "POST", url: "/api/v1/memory/quality/scan", payload: { workspaceId: "workspace-a", actorId: "forged", metadata: { scannedBy: "forged" } } });
+    expect(result.statusCode).toBe(200);
+    expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
+    expect(runQualityScan).toHaveBeenCalledExactlyOnceWith({ workspaceId: "workspace-a" }, "token:0123456789abcdef");
+  });
+
   it("reads one trace-memory proposal by id within its workspace, operator-only like the list", async () => {
     const candidate = { candidateId: "candidate-1", workspaceId: "workspace-a", status: "proposed" };
     const getTraceCandidate = vi.fn(async (candidateId: string, workspaceId?: string) => {

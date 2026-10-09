@@ -18,6 +18,10 @@ export function ChatOwnerNavigationBoundary({ input, owner, children }: {
   const onCreateSession = () => review(input.sessionRail.onCreateSession);
   return children({
     ...input,
+    activeSessionSurfaceProps: active ? { ...active, onReturnToLatest: () => {
+      active.onReturnToLatest();
+      owner.request("chat", { sessionId: active.selectedSessionId, turnId: null, artifactId: null });
+    } } : null,
     sessionRail: {
       ...input.sessionRail,
       onCreateSession,

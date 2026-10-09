@@ -1,3 +1,5 @@
+import { InboxReadStatusService, versionInboxUpdates } from "./inbox-read-status-service.js";
+import type { OperatorInboxUpdateReference } from "@goatcitadel/contracts";
 import type {
   ChangePlanStatus,
   OperatorInboxGroup,
@@ -29,8 +31,17 @@ const RECENT_UPDATE_DAYS = 14;
 const RECENT_UPDATE_LIMIT = 50;
 const BACKUP_TRUST_CACHE_MS = 5 * 60 * 1000;
 
+function approvalTargetSummary(preview: unknown): string {
+  const value = preview && typeof preview === "object" ? (preview as Record<string, unknown>).targets : undefined;
+  const targets = Array.isArray(value) ? value.filter((target): target is string => typeof target === "string") : [];
+  return targets.length
+    ? bounded(`Targets: ${targets.slice(0, 3).join(", ")}${targets.length > 3 ? "; more in review" : ""}`)
+    : "Review the requested action and its policy reason. Target details are available in the approval record.";
+}
+
 export interface InboxProjectionDependencies {
   storage: {
+    systemSettings?: Pick<AsyncStorage["systemSettings"], "get" | "compareAndSet">;
     approvals: Pick<AsyncStorage["approvals"], "listPage">;
     changePlans: Pick<AsyncStorage["changePlans"], "list">;
     documentPatchProposals: Pick<AsyncStorage["documentPatchProposals"], "list">;
@@ -51,6 +62,7 @@ export interface InboxProjectionDependencies {
     getDatabaseHealthSnapshot: DatabaseCutoverService["getHealthSnapshot"];
     getDaemonStatus: DaemonRouteService["getDaemonStatus"];
     inspectLatestBackupTrust: BackupRetentionService["inspectLatestBackupTrust"];
+    listBackups: BackupRetentionService["listBackups"];
   };
 }
 
@@ -66,16 +78,50 @@ async function readOptionalOwner<T>(read: () => Promise<T>): Promise<T | undefin
 export class InboxProjectionService {
   private backupTrustCache?: {
     at: number;
+    manifestKey: string;
     read: ReturnType<BackupRetentionService["inspectLatestBackupTrust"]>;
   };
 
   public constructor(private readonly deps: InboxProjectionDependencies) {}
 
+  public async getReadProjection(
+    workspaceId: string,
+    actor?: string,
+    onSourceError?: (source: string, error: unknown) => void,
+  ) {
+    const projection = await this.getProjection(workspaceId, onSourceError);
+    const readStatus = this.readStatusOwner();
+    if (!readStatus) return { ...projection, readStatus: { scope: "unavailable" as const } };
+    return readStatus.project(projection, actor);
+  }
+  public async acknowledgeUpdates(
+    workspaceId: string,
+    actor: string | undefined,
+    updates: OperatorInboxUpdateReference[],
+  ) {
+    const projection = await this.getProjection(workspaceId);
+    const readStatus = this.readStatusOwner();
+    if (!readStatus) throw new Error("Inbox read storage unavailable.");
+    return readStatus.acknowledge(projection, actor, updates);
+  }
+  /** Per-operator read state lives in system settings; without them the Inbox reports read status as unavailable. */
+  private readStatusOwner(): InboxReadStatusService | undefined {
+    const settings = this.deps.storage.systemSettings;
+    return settings ? new InboxReadStatusService(settings) : undefined;
+  }
   private async readBackupTrust() {
     const now = Date.now();
-    const cached = Boolean(this.backupTrustCache && now - this.backupTrustCache.at < BACKUP_TRUST_CACHE_MS);
+    const { runtimeHealth } = this.deps;
+    // A cheap canonical manifest read re-keys cached byte/contract inspection. Creation,
+    // removal or changed manifest contents cannot reuse a previous record's proof.
+    const manifestKey = JSON.stringify((await runtimeHealth.listBackups(1))[0] ?? null);
+    const cached = Boolean(
+      this.backupTrustCache &&
+      this.backupTrustCache.manifestKey === manifestKey &&
+      now - this.backupTrustCache.at < BACKUP_TRUST_CACHE_MS,
+    );
     if (!cached) {
-      this.backupTrustCache = { at: now, read: this.deps.runtimeHealth.inspectLatestBackupTrust() };
+      this.backupTrustCache = { at: now, manifestKey, read: runtimeHealth.inspectLatestBackupTrust() };
     }
     const read = this.backupTrustCache!.read;
     try {
@@ -100,6 +146,7 @@ export class InboxProjectionService {
         partial?: boolean;
         state?: OperatorInboxSourceCoverage["state"];
         detail?: string;
+        backupTrust?: OperatorInboxSourceCoverage["backupTrust"];
       }>,
     ) => {
       try {
@@ -109,6 +156,7 @@ export class InboxProjectionService {
           source,
           state: result.state ?? (result.partial ? "partial" : "current"),
           ...(result.detail ? { detail: result.detail } : {}),
+          ...(result.backupTrust ? { backupTrust: result.backupTrust } : {}),
         });
       } catch (error) {
         onSourceError?.(source, error);
@@ -130,8 +178,7 @@ export class InboxProjectionService {
             kind: "approval",
             group: "needs_decision",
             title: `Review ${label(approval.linkage?.toolName ?? approval.kind)}`,
-            summary:
-              "An operator decision is required. Open the approval to inspect the exact action and its policy reason.",
+            summary: approvalTargetSummary(approval.preview),
             createdAt: approval.createdAt,
             expiresAt: approval.expiresAt,
             riskLevel: approval.riskLevel,
@@ -566,6 +613,6 @@ export class InboxProjectionService {
       return projectInboxBackupTrust(workspaceId, inspection, cached, Date.now());
     });
 
-    return buildInboxProjection(workspaceId, items, coverage, new Date().toISOString());
+    return versionInboxUpdates(buildInboxProjection(workspaceId, items, coverage, new Date().toISOString()));
   }
 }

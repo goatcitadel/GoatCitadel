@@ -797,7 +797,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
         const plan = await evolution.create({
           actor,
           request: governedRequest,
-          idempotencyKey: `settings:${request.id}:${parsed.data.expectedRevision}`,
+          idempotencyKey: `settings:${request.idempotencyKey || request.id}:${parsed.data.expectedRevision}`,
           expectedTargetRevision: parsed.data.expectedRevision,
         });
         if (plan.requiredAction?.kind !== "confirmation") {
@@ -878,7 +878,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
               ...(credential !== undefined ? { replaceCredential: true } : {}),
             },
           },
-          idempotencyKey: `settings-auth:${request.id}:${expectedRevision}`,
+          idempotencyKey: `settings-auth:${request.idempotencyKey || request.id}:${expectedRevision}`,
           expectedTargetRevision: expectedRevision,
         });
         if (plan.requiredAction?.kind === "secure_input" && credential !== undefined) {

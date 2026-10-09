@@ -30,6 +30,7 @@ import { useComposerV2Enabled } from "./useComposerV2Enabled";
 import { ThreadedComposerBanners } from "./ThreadedComposerBanners";
 import { ThreadedComposerSendOptions } from "./ThreadedComposerSendOptions";
 import { ThreadedComposerContextInputs } from "./ThreadedComposerContextInputs";
+import { useProjectSwitchReview } from "./useProjectSwitchReview";
 
 export { computeUsageTotals, formatCostLabel, formatTokenLabel, formatUsageLabel } from "./threaded-composer-usage";
 
@@ -85,9 +86,8 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const wasComposerPaletteOpenRef = useRef(false);
   const [externalSourceOpenToken, setExternalSourceOpenToken] = useState(0);
   const [scopeCandidateId, setScopeCandidateId] = useState("");
-  const [projectSwitchCandidate, setProjectSwitchCandidate] = useState<
-    (typeof props.commandSuggestions)[number] | null
-  >(null);
+  const [composing, setComposing] = useState(false);
+  const projectReview = useProjectSwitchReview(props, composing);
   const commandSuggestionOptionId = (key: string) => `${commandSuggestionsListboxId}-${key}`;
   const activeCommandSuggestion =
     commandSuggestionsOpen && props.commandIndex >= 0 && props.commandIndex < props.commandSuggestions.length
@@ -122,10 +122,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
     );
   }, [props.delegatedScopeControls?.candidates, props.delegatedScopeControls?.pendingApprovalId]);
   const applyComposerPaletteItem = (item: (typeof props.commandSuggestions)[number]) => {
-    if (item.action?.type === "switch_project") {
-      setProjectSwitchCandidate(item);
-      return;
-    }
+    if (projectReview.begin(item)) return;
     if (item.action?.type === "launch_external_source") {
       props.composerPalette?.onClose();
       setExternalSourceOpenToken((current) => current + 1);
@@ -381,6 +378,8 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
 
       <div className="mc-next-composer-input-shell">
         <textarea
+          onCompositionStart={() => setComposing(true)}
+          onCompositionEnd={() => setComposing(false)}
           ref={props.composerRef}
           disabled={props.historicalReadOnly}
           value={getWorkflowSkillCaptureDisplay(props.draft)?.summary ?? props.draft}
@@ -484,25 +483,17 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       ) : null}
 
       <ConfirmModal
-        open={projectSwitchCandidate !== null}
+        open={projectReview.candidate !== null}
         title="Switch this Chat to another project?"
-        message={
-          projectSwitchCandidate?.action?.type === "switch_project"
-            ? `Switch to ${projectSwitchCandidate.action.projectName}? The current draft and attachments stay in Chat.`
-            : "Switch this Chat to the selected project?"
-        }
+        message={projectReview.candidate?.message ?? "Review the destination project."}
         confirmLabel="Switch project"
-        onCancel={() => setProjectSwitchCandidate(null)}
-        onConfirm={() => {
-          const selected = projectSwitchCandidate;
-          setProjectSwitchCandidate(null);
-          if (selected) {
-            props.composerPalette?.onSelect(selected);
-            globalThis.setTimeout(() => props.composerRef.current?.focus(), 0);
-          }
-        }}
+        onCancel={projectReview.cancel}
+        onConfirm={() => projectReview.confirm()}
       />
+      {projectReview.notice ? <p role="status">{projectReview.notice}</p> : null}
 
+      {props.attachmentUpload?.pending ? <p role="status">Uploading {props.attachmentUpload.pending} attachment(s)…</p> : null}
+      {props.attachmentUpload?.error ? <p role="status">Attachment upload failed: {props.attachmentUpload.error}. Select the file again to retry.</p> : null}
       {props.pendingAttachments.length > 0 ? (
         <div className="mc-next-composer-attachments">
           {props.pendingAttachments.map((item) => (

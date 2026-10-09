@@ -6,6 +6,7 @@ import { useEventStreamStatus } from "@goatcitadel/mission-control-shared/hooks/
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { useCallback, useEffect, useMemo } from "react";
 import type { MissionThreadedControllerHostProps } from "../../MissionThreadedControllerHost.types";
+import { useChatHistoricalRoute } from "../useChatHistoricalRoute";
 import { useChatChangePlanHistory } from "../useChatChangePlanHistory";
 import { useChatChangePlanState } from "../useChatChangePlanState";
 import { useChatDocuments } from "../useChatDocuments";
@@ -187,6 +188,7 @@ export function useChatSessionComposition({
     applyFetchedThreadRef: coordination.applyFetchedThreadRef,
     messageMutationVersionRef: coordination.messageMutationVersionRef,
   });
+  useChatHistoricalRoute({ routeSearch, workspaceId, viewIdentity, selectedSession: threadController.selectedSession, openHistoricalWindow: sessionData.openHistoricalWindow, returnToLatest: sessionData.returnToLatest });
   const sessionStatus = useChatSessionStatus({
     sessionId: selection.selectedSessionId,
     workspaceId: threadController.selectedSession?.workspaceId ?? workspaceId,
@@ -217,9 +219,9 @@ export function useChatSessionComposition({
   }, [loadSessionCoreState, coordination.loadSessionCoreStateRef]);
 
   const refreshChatSessionAggregate = useCallback(
-    async (sessionId: string) => {
+    async (sessionId: string, options?: { preserveSelection?: boolean }) => {
       const [, , , goal] = await Promise.all([
-        loadSidebar(selection.historyView, { bypassCache: true, preferredSessionId: sessionId }),
+        loadSidebar(selection.historyView, { bypassCache: true, preferredSessionId: sessionId, ...options }),
         loadSessionCoreState(sessionId, { background: true, includeThread: false }),
         loadSessionSecondaryState(sessionId, { background: true }),
         fetchChatSessionGoal(sessionId),

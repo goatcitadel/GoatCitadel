@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingBootstrapInput } from "@goatcitadel/contracts";
 import { FirstRunAdvanced } from "./FirstRunAdvanced";
+import { FirstRunVerification } from "./FirstRunVerification";
 import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
 import { gatewayAuthSettingsFixture } from "../../../features/native-routes/settings/gateway-auth.test-support";
 import { demoFixture } from "../../../features/native-routes/settings/demo-bootstrap.test-support";
@@ -45,7 +46,7 @@ async function render() {
   );
 }
 async function open() {
-  await click("Advanced setup and evidence");
+  await click("Optional bootstrap defaults");
   await vi.waitFor(() => expect(button("Review defaults").disabled).toBe(false));
 }
 beforeEach(() => {
@@ -86,12 +87,15 @@ afterEach(() => {
 describe("native advanced first-run disclosure", () => {
   it("keeps advanced owners and reads out of the primary initial flow", async () => {
     await render();
-    expect(button("Advanced setup and evidence").getAttribute("aria-expanded")).toBe("false");
+    expect(button("Optional bootstrap defaults").getAttribute("aria-expanded")).toBe("false");
+    expect(button("Explore sample records").getAttribute("aria-expanded")).toBe("false");
     expect(api.fetchSettings).not.toHaveBeenCalled();
     expect(api.fetchDemoState).not.toHaveBeenCalled();
     await open();
-    expect(container.textContent).toContain("not bound to this workspace");
-    expect(container.textContent).toContain("not observed");
+    expect(api.fetchDemoState).not.toHaveBeenCalled();
+    expect(api.fetchAgenticRuns).not.toHaveBeenCalled();
+    expect(api.fetchEvidenceEnvelopes).not.toHaveBeenCalled();
+    expect(container.textContent).not.toContain("Verification evidence");
   });
   it("shows exact revision and auth consequence, cancels with zero writes, then confirms through the owner", async () => {
     await render();
@@ -112,12 +116,17 @@ describe("native advanced first-run disclosure", () => {
     api.fetchAgenticRuns.mockRejectedValue(new Error("unavailable"));
     api.fetchEvidenceEnvelopes.mockRejectedValue(new Error("unavailable"));
     await render();
-    await open();
+    await click("Explore sample records");
+    await vi.waitFor(() => expect(button("Review demo preparation").disabled).toBe(false));
     await click("Review demo preparation");
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("durable memory example");
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("no revision guard");
     await click("Cancel");
     expect(api.bootstrapDemo).not.toHaveBeenCalled();
+    expect(api.bootstrapOnboarding).not.toHaveBeenCalled();
+    expect(api.fetchAgenticRuns).not.toHaveBeenCalled();
+    await act(async () => root.render(<QueryClientProvider client={client}><FirstRunVerification /></QueryClientProvider>));
+    await vi.waitFor(() => expect(container.textContent).toContain("Recent run evidence is unavailable"));
     expect(container.textContent).toContain("Recent run evidence is unavailable");
     expect(container.textContent).toContain("Evidence envelopes are unavailable");
   });

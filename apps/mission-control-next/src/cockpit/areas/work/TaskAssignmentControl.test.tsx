@@ -108,15 +108,14 @@ async function click(label: string): Promise<void> {
 }
 
 describe("cockpit task assignment", () => {
-  it("requires confirmation and records only a board assignment", async () => {
+  it("saves a board assignment with fresh preflight and no risk dialog", async () => {
     const saved = task({ revision: 3, assignedAgentId: "agent-a" });
     vi.mocked(updateTask).mockResolvedValue(saved);
     vi.mocked(fetchTask).mockResolvedValueOnce(task()).mockResolvedValue(saved);
     await render();
     await chooseAgent();
-    await click("Review assignment");
-    expect(updateTask).not.toHaveBeenCalled();
-    await click("Confirm assignment");
+    await click("Save task assignment");
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
     await vi.waitFor(() =>
       expect(updateTask).toHaveBeenCalledWith("task-a", {
         workspaceId: "workspace-a",
@@ -131,8 +130,7 @@ describe("cockpit task assignment", () => {
     vi.mocked(fetchTask).mockResolvedValue(task({ revision: 3 }));
     await render();
     await chooseAgent();
-    await click("Review assignment");
-    await click("Confirm assignment");
+    await click("Save task assignment");
     await vi.waitFor(() => expect(container.textContent).toContain("changed during review"));
     expect(updateTask).not.toHaveBeenCalled();
   });
@@ -143,8 +141,7 @@ describe("cockpit task assignment", () => {
       .mockResolvedValue({ items: [] });
     await render();
     await chooseAgent();
-    await click("Review assignment");
-    await click("Confirm assignment");
+    await click("Save task assignment");
     await vi.waitFor(() => expect(container.textContent).toContain("no longer in the active catalog"));
     expect(updateTask).not.toHaveBeenCalled();
   });
@@ -153,12 +150,11 @@ describe("cockpit task assignment", () => {
     vi.mocked(updateTask).mockRejectedValue(new Error("Response lost"));
     await render();
     await chooseAgent();
-    await click("Review assignment");
-    await click("Confirm assignment");
+    await click("Save task assignment");
     await vi.waitFor(() => expect(container.textContent).toContain("task action outcome is unconfirmed"));
     expect(
       [...container.querySelectorAll<HTMLButtonElement>("button")].some(
-        (item) => item.textContent?.trim() === "Review assignment",
+        (item) => item.textContent?.trim() === "Save task assignment",
       ),
     ).toBe(false);
     expect(

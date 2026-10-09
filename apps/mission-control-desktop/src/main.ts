@@ -45,6 +45,7 @@ interface DesktopRuntimeStatus {
 type DesktopLaunchResult = DesktopRuntimeStatus;
 
 interface ApprovalNotificationPayload {
+  workspaceId?: string;
   approvalId: string;
   kind?: string;
   riskLevel?: string;
@@ -286,7 +287,7 @@ async function showApprovalNotification(payload: ApprovalNotificationPayload): P
   if (granted && "Notification" in window) {
     const notification = new Notification(title, { body });
     notification.onclick = () => {
-      openApprovalRoute(approvalId);
+      openApprovalRoute(approvalId, payload.workspaceId);
       notification.close();
     };
     return;
@@ -321,8 +322,8 @@ async function ensureNotificationPermission(): Promise<boolean> {
   return permission === "granted";
 }
 
-function openApprovalRoute(approvalId: string): void {
-  openRoutePath(`/ops/approvals?approvalId=${encodeURIComponent(approvalId)}`);
+function openApprovalRoute(approvalId: string, workspaceId?: string): void {
+  openRoutePath(`/inbox?approvalId=${encodeURIComponent(approvalId)}${workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : ""}`);
 }
 
 function openRoutePath(routePath: string): void {

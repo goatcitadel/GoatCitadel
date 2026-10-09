@@ -109,7 +109,7 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
             return ids.every(id => values.includes(id));
           }, fixture.sessions.map(item => item.sessionId));
           assert.equal(await picker.inputValue(), sessionId);
-          await page.getByLabel("Selected conversation activity").getByText("Last turn completed", { exact: true }).waitFor();
+          await page.getByLabel("Selected conversation activity").getByText("Last response completed", { exact: true }).waitFor();
           assert.ok(new Set(statusIds).size <= 1);
         } else {
           await page.getByRole("button", { name: "Load more", exact: true }).click();
@@ -122,7 +122,7 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
           assert.equal(await page.evaluate(() => document.activeElement?.closest("li")?.getAttribute("aria-posinset")), "105");
           const endId = await page.evaluate(() => document.activeElement?.closest("[data-record-key]")?.getAttribute("data-record-key"));
           assert.ok(fixture.sessions.some(item => item.sessionId === endId));
-          await threads.locator('li[aria-posinset="105"]').getByText(endId === sessionId ? "Last turn completed" : "No recorded turns", { exact: true }).waitFor();
+          await threads.locator('li[aria-posinset="105"]').getByText(endId === sessionId ? "Last response completed" : "No messages yet", { exact: true }).waitFor();
           assert.ok(new Set(statusIds).size <= 73, "Settled initial/page/end windows plus selected session must stay within3*24+1 unique IDs.");
         }
         await capture("threads");

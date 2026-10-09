@@ -22,6 +22,9 @@ export type OperatorInboxKind =
 export interface OperatorInboxItem {
   /** Stable projection key. The owning record remains authoritative. */
   id: string;
+  /** Server-authored public update content version; absent on decisions. */
+  version?: string;
+  read?: boolean;
   kind: OperatorInboxKind;
   group: OperatorInboxGroup;
   title: string;
@@ -56,6 +59,13 @@ export interface OperatorInboxSourceCoverage {
   source: string;
   state: OperatorInboxSourceState;
   detail?: string;
+  /** Installation-wide inspection identity; absence or missing identity never verifies a manifest. */
+  backupTrust?: {
+    state: "verified" | "stale" | "failed" | "none" | "unknown";
+    backupId?: string;
+    createdAt?: string;
+    observedAt: string;
+  };
 }
 
 export interface OperatorInboxCount {
@@ -65,10 +75,26 @@ export interface OperatorInboxCount {
 }
 
 export interface OperatorInboxResponse {
+  readStatus?: OperatorInboxReadStatus;
   authority: "derived_projection";
   workspaceId: string;
   generatedAt: string;
   items: OperatorInboxItem[];
   coverage: OperatorInboxSourceCoverage[];
   counts: Record<OperatorInboxGroup, OperatorInboxCount>;
+}
+
+export interface OperatorInboxReadStatus {
+  scope: "operator" | "browser_local" | "unavailable";
+  /** Opaque actor/workspace binding, never a credential. */
+  scopeId?: string;
+}
+export interface OperatorInboxUpdateReference {
+  id: string;
+  version: string;
+}
+export interface OperatorInboxReadResponse {
+  readStatus: OperatorInboxReadStatus;
+  acknowledged: OperatorInboxUpdateReference[];
+  skipped: Array<OperatorInboxUpdateReference & { reason: "not_current" | "unavailable" | "browser_local" }>;
 }

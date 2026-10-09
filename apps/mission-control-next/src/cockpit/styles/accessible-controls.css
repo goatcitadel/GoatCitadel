@@ -1,0 +1,66 @@
+/* Shared control states across native Cockpit consumers and their portalled primitives. */
+html[data-shell="cockpit"] :is(button, select, input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea) {
+  border-color: var(--cockpit-text-muted);
+}
+html[data-shell="cockpit"] :is(button, select) {
+  height: auto;
+  min-height: 2em;
+}
+html[data-shell="cockpit"] :is([aria-current="page"], [aria-selected="true"], [aria-pressed="true"]) {
+  box-shadow: inset 0 -2px var(--cockpit-accent);
+  font-weight: 600;
+}
+html[data-shell="cockpit"] :is([data-highlighted], [cmdk-item][data-selected="true"]) {
+  outline: 2px solid var(--cockpit-accent);
+  outline-offset: -2px;
+}
+html[data-shell="cockpit"] :focus-visible {
+  outline: 2px solid var(--cockpit-accent) !important;
+  outline-offset: 2px !important;
+}
+html[data-shell="cockpit"] ::selection {
+  color: var(--cockpit-accent-ink);
+  background: var(--cockpit-accent);
+}
+html[data-shell="cockpit"] .cockpit-menu-item:is([data-disabled], [aria-disabled="true"]) {
+  color: var(--cockpit-text-muted);
+  opacity: 0.6;
+  cursor: not-allowed;
+  background-color: transparent;
+  outline: none;
+}
+@media (pointer: coarse) {
+  html[data-shell="cockpit"] :is(button, select, [role="tab"], [role="menuitem"], summary, nav a, input:not([type="checkbox"]):not([type="radio"]):not([type="file"])) {
+    min-height: max(44px, 2em);
+    min-width: 44px;
+  }
+  html[data-shell="cockpit"] label:has(:is(input[type="checkbox"], input[type="radio"])) {
+    min-height: 44px;
+    cursor: pointer;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-shell="cockpit"] *, html[data-shell="cockpit"] *::before, html[data-shell="cockpit"] *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+@media (forced-colors: active) {
+  html[data-shell="cockpit"] :focus-visible,
+  html[data-shell="cockpit"] :is([data-highlighted], [cmdk-item][data-selected="true"]) {
+    outline: 2px solid Highlight !important;
+  }
+  html[data-shell="cockpit"] :is([aria-current="page"], [aria-selected="true"], [aria-pressed="true"]) {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+    text-decoration: underline;
+  }
+  html[data-shell="cockpit"] :is(button, select, input, textarea, [data-tone]) { border-color: ButtonText; }
+  html[data-shell="cockpit"] :is(:disabled, [data-disabled], [aria-disabled="true"]),
+  html[data-shell="cockpit"] .cockpit-menu-item:is([data-disabled], [aria-disabled="true"]) {
+    color: GrayText;
+    border-color: GrayText;
+    opacity: 1;
+  }
+}

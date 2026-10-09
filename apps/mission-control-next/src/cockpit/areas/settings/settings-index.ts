@@ -1,4 +1,4 @@
-import { buildAppHref, RAIL_GROUPS, RAIL_ITEMS } from "../../../app/route-model";
+import { buildAppHref, getRouteReleaseScope, isPrimaryRailRoute, RAIL_GROUPS, RAIL_ITEMS, type ReleaseSurfaceStatus } from "../../../app/route-model";
 
 export interface SettingsIndexEntry {
   section: string;
@@ -10,6 +10,9 @@ export interface SettingsIndexEntry {
   href: string;
   searchTerms: string;
   destination: "cockpit" | "detailed";
+  discoverable: boolean;
+  releaseStatus: ReleaseSurfaceStatus;
+  releaseNote: string;
 }
 
 export interface SettingsIndexPage {
@@ -20,15 +23,15 @@ export interface SettingsIndexPage {
 
 const CONTROL_TERMS: Record<string, string> = {
   general:
-    "theme color appearance density technical details notifications desktop system permission sound unfocused updates download installer",
+    "theme color appearance light dark density guided expert technical details notifications notification routing desktop system permission sound unfocused updates download installer",
   personalities: "tone style overlay create edit delete work default personality",
   onboarding: "first run setup choose model test message safety network allowlist safe demo",
-  providers: "provider api key credential secret endpoint base url oauth login model catalog routing default",
-  "local-ai": "hardware memory model fit download serve endpoint jobs local inference",
-  channels: "channel setup draft connect discord telegram slack oauth validate test finalize delivery",
+  providers: "provider api key credential secret endpoint base url oauth login model catalog routing default llm guided expert diagnostics connection ollama openai compatible",
+  "local-ai": "hardware memory model fit download serve endpoint jobs local inference llama.cpp llamacpp gguf gpu cpu npu",
+  channels: "channel setup draft connect discord telegram slack oauth validate test finalize delivery disconnect disable remove delete",
   integrations:
     "add create edit delete enable disable integration connection diagnostics operator actions external connector routing meet",
-  mcp: "register create edit delete server enable disable connect disconnect oauth tools health elicitation templates",
+  mcp: "register create edit delete server enable disable connect disconnect oauth tools health elicitation templates model context protocol stdio http sse transport",
   addons: "install update uninstall enable disable launch stop addon extension capability pack import export",
   permissions:
     "permission profile select activate chat effective policy create edit archive default override autonomy grant revoke",
@@ -56,7 +59,7 @@ const NATIVE_SECTIONS = new Set([
 ]);
 
 /** A destination describes the page opened, including its explicit detailed-owner links. */
-export function buildSettingsIndex(): SettingsIndexPage[] {
+export function buildSettingsIndex({ discovery = false }: { discovery?: boolean } = {}): SettingsIndexPage[] {
   return (RAIL_GROUPS.settings ?? []).map((group) => ({
     id: group.id.replace(/^settings-/, ""),
     label: group.label,
@@ -65,6 +68,8 @@ export function buildSettingsIndex(): SettingsIndexPage[] {
         RAIL_ITEMS.settings.find((entry) => entry.section === section) ??
         RAIL_ITEMS.library.find((entry) => entry.section === section);
       if (!item) return [];
+      const discoverable = isPrimaryRailRoute(item);
+      if (discovery && !discoverable) return [];
       const href =
         section === "general"
           ? "/settings/general#appearance"
@@ -120,6 +125,9 @@ export function buildSettingsIndex(): SettingsIndexPage[] {
       return [
         {
           section,
+          discoverable,
+          releaseStatus: getRouteReleaseScope(item).status,
+          releaseNote: getRouteReleaseScope(item).note,
           anchor: href.split("#")[1] ?? section,
           tabLabel: section === "general" ? "Appearance" : undefined,
           completeNative: NATIVE_SECTIONS.has(section),
@@ -131,7 +139,7 @@ export function buildSettingsIndex(): SettingsIndexPage[] {
         },
       ];
     }),
-  }));
+  })).filter((page) => page.entries.length > 0);
 }
 
 export function searchSettingsPages(pages: SettingsIndexPage[], query: string): SettingsIndexPage[] {

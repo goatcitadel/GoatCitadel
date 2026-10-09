@@ -198,7 +198,9 @@
   color: var(--danger);
 }
 
-.chat-change-plan-modal button:focus-visible {
+.chat-change-plan-modal button:focus-visible,
+.chat-change-plan-artifact-review pre:focus-visible,
+.chat-change-plan-artifact-review ul:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
 }

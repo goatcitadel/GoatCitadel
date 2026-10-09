@@ -11,7 +11,7 @@ export function ChatConversationFilters({ rail, projectOptions = [] }: {
   rail: FilterRail;
   projectOptions?: readonly ChatProjectFilterOption[];
 }) {
-  const [foldersOpen, setFoldersOpen] = useState(true);
+  const [foldersOpen, setFoldersOpen] = useState(rail.selectedFolderId !== "all" && rail.selectedFolderId != null);
   const projectId = rail.selectedProjectId ?? "all";
   const folderId = rail.selectedFolderId ?? "all";
   const projects = projectOptions.filter((option) => option.value !== "all" && option.value !== "none");
@@ -44,7 +44,7 @@ export function ChatConversationFilters({ rail, projectOptions = [] }: {
       </div>
     </details> : null}
     <label className="block text-xs text-fg-muted">Search
-      <input aria-label="Search conversations" value={rail.search} onChange={(event) => rail.onSearchChange(event.target.value)} placeholder="Find a thread"
+      <input aria-label="Search conversations" value={rail.search} onChange={(event) => rail.onSearchChange(event.target.value)} placeholder="Find a conversation"
         className="mt-1 h-8 w-full rounded-md border border-line bg-canvas px-2 text-sm text-fg" />
     </label>
   </div>;

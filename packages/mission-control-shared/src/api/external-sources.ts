@@ -5,9 +5,8 @@
  * `apps/gateway/src/routes/external-sources.ts`. Chat attachment calls are
  * typed against the frozen C1 contracts and the C4 packet's route paths
  * (`/api/v1/chat/sessions/:sessionId/external-source-attachments`); those
- * routes do not exist until C4 composes them, so callers MUST treat a 404 as
- * "capability absent" (see `isExternalSourceCapabilityAbsent`) and degrade
- * instead of surfacing an error.
+ * routes are composed by the current Gateway. Older or disabled runtimes may
+ * return 404; callers treat that as capability absent and retain read restrictions.
  *
  * Every request body passes through the frozen contract normalizers before it
  * leaves the client, so the operator UI can never send malformed material and
@@ -57,6 +56,19 @@ import {
 } from "@goatcitadel/contracts";
 import { request } from "./client-core.js";
 import { isApiRequestError } from "./http-internal.js";
+import { assertWorkspacePathBridgeSnapshot, type WorkspacePathBridgeResolveRequest, type WorkspacePathBridgeSnapshotRecord } from "@goatcitadel/contracts";
+
+/** Verify an exact root through the existing inspection-only Gateway owner. */
+export async function resolveExternalSourcePath(input: WorkspacePathBridgeResolveRequest): Promise<WorkspacePathBridgeSnapshotRecord> {
+  const result = await request<WorkspacePathBridgeSnapshotRecord>("/api/v1/ops/workspace-path-bridges/resolve", { method: "POST", cache: "no-store", body: JSON.stringify(input) });
+  assertWorkspacePathBridgeSnapshot(result);
+  return result;
+}
+export async function inspectExternalSourcePath(workspaceId: string, snapshotId: string): Promise<WorkspacePathBridgeSnapshotRecord> {
+  const result = await request<WorkspacePathBridgeSnapshotRecord>(`/api/v1/ops/workspace-path-bridges/${encodeURIComponent(snapshotId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: "no-store" });
+  assertWorkspacePathBridgeSnapshot(result);
+  return result;
+}
 
 const LIBRARY_SOURCES_PATH = "/api/v1/library/external-sources";
 const LIBRARY_IMPORT_PLANS_PATH = "/api/v1/library/external-source-import-plans";

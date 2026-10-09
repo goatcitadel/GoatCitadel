@@ -30,6 +30,7 @@ export function workspaceTasksOptions(workspaceId: string) {
   const installation = getGatewayApiBaseUrl();
   return infiniteQueryOptions({
     queryKey: queryKeys.workTasks(workspaceId),
+    refetchOnMount: "always",
     initialPageParam: "",
     queryFn: async ({ pageParam, signal }) => {
       const page = await fetchTasks(undefined, workspaceId, { limit: 200, cursor: pageParam || undefined, signal });

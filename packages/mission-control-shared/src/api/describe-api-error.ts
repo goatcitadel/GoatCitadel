@@ -3,6 +3,8 @@ import { isApiRequestError } from "./http-internal.js";
 export interface ApiErrorDescription {
   summary: string;
   technical?: string;
+  category?: "authentication" | "permission" | "feature_disabled" | "conflict" | "transient";
+  retryable?: boolean;
 }
 
 export const GATEWAY_UNREACHABLE_SUMMARY =
@@ -19,10 +21,18 @@ export function describeApiError(error: unknown, fallback = DEFAULT_FALLBACK): A
     if (error.kind === "protocol") {
       return { summary: "The gateway sent a response Mission Control couldn't read. Try again.", technical };
     }
-    if (readDisabledFeatureFlag(error.body)) {
-      return { summary: "This feature is turned off for this installation.", technical };
+    if (error.status === 401) {
+      return { summary: summaryForStatus(401, undefined), technical, category: "authentication", retryable: false };
     }
-    return { summary: summaryForStatus(error.status, readBodyMessage(error.body)), technical };
+    if (error.status === 403) {
+      return { summary: "You don't have permission to do that. Review Settings > Access before trying again. Anonymous access in auth-none mode cannot use protected operator actions; signed-in callers still need permission.", technical, category: "permission", retryable: false };
+    }
+    if (error.status === 409 && readDisabledFeatureFlag(error.body)) {
+      return { summary: "This feature is turned off for this installation.", technical, category: "feature_disabled", retryable: false };
+    }
+    return { summary: summaryForStatus(error.status, readBodyMessage(error.body)), technical,
+      ...(error.status === 409 ? { category: "conflict" as const, retryable: true } : {}),
+      ...(error.status !== undefined && error.status >= 500 ? { category: "transient" as const, retryable: true } : {}) };
   }
 
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
@@ -43,7 +53,7 @@ export function describeApiError(error: unknown, fallback = DEFAULT_FALLBACK): A
 }
 
 function summaryForStatus(status: number | undefined, bodyMessage: string | undefined): string {
-  if (status === 401) return "Your gateway session expired. Sign in again to continue.";
+  if (status === 401) return "Gateway credentials are missing or expired. Sign in again through Settings > Access to continue.";
   if (status === 403) return "You don't have permission to do that.";
   if (status === 404) return "That item no longer exists. Refresh to see the latest.";
   if (status === 409) return "This changed somewhere else. Refresh and try again.";
@@ -64,11 +74,11 @@ function readBodyMessage(body: unknown): string | undefined {
   return undefined;
 }
 
-/** The Gateway rejects a switched-off feature as STATE_CONFLICT with `details.flag`; that is not an edit conflict. */
+/** Accept the public contract and older Gateways' flagged conflicts. */
 function readDisabledFeatureFlag(body: unknown): string | undefined {
   if (!body || typeof body !== "object") return undefined;
   const record = body as { code?: unknown; details?: unknown };
-  if (record.code !== "STATE_CONFLICT" || !record.details || typeof record.details !== "object") return undefined;
+  if ((record.code !== "FEATURE_DISABLED" && record.code !== "STATE_CONFLICT") || !record.details || typeof record.details !== "object") return undefined;
   const flag = (record.details as { flag?: unknown }).flag;
   return typeof flag === "string" && flag.trim() ? flag : undefined;
 }

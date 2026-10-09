@@ -1,3 +1,5 @@
+import { getGatewayAccessRevision, notifyGatewayAccessChanged } from "./access-scope";
+export { getGatewayAccessRevision, subscribeGatewayAccessChange } from "./access-scope";
 import type { OnboardingStartupState, UiActionState } from "@goatcitadel/contracts";
 
 import {
@@ -23,6 +25,7 @@ import {
   sleep,
   unwrapApiResponse,
 } from "./http-internal";
+import { freshReadsActive } from "./fresh-reads";
 
 const RAW_API_BASE = readPackagedGatewayOrigin() ?? import.meta.env.VITE_GATEWAY_URL ?? inferDefaultGatewayBaseUrl();
 export const API_BASE = normalizeGatewayBaseUrl(RAW_API_BASE);
@@ -79,10 +82,11 @@ export interface GatewayAuthRejection {
   authMode: "token" | "basic";
   path: string;
   status: 401;
+  hadStoredAuth: boolean;
 }
 
 export type GatewayAuthStorageMode = "session" | "persistent";
-export type GatewayAccessPreflightStatus = "ready" | "needs-auth" | "unreachable" | "misconfigured";
+export type GatewayAccessPreflightStatus = "ready" | "needs-auth" | "access-blocked" | "unreachable" | "misconfigured";
 
 export interface GatewayBootstrapResult {
   consumed: boolean;
@@ -142,7 +146,7 @@ export function buildGatewayHeaders(
   method: string,
   correlationId: string,
   extraHeaders?: HeadersInit,
-  options?: { hasBody?: boolean },
+  options?: { hasBody?: boolean; attemptKey?: string },
 ): HeadersInit {
   return {
     // Only claim a JSON body when one is actually sent: Fastify rejects
@@ -150,7 +154,7 @@ export function buildGatewayHeaders(
     // FST_ERR_CTP_EMPTY_JSON_BODY before the route handler runs, which breaks
     // body-less POSTs such as POST /api/v1/mason/sessions.
     ...(options?.hasBody === false ? {} : { "Content-Type": "application/json" }),
-    ...(method !== "GET" ? { "Idempotency-Key": crypto.randomUUID() } : {}),
+    ...(method !== "GET" ? { "Idempotency-Key": options?.attemptKey ?? crypto.randomUUID() } : {}),
     ...(MUTATING_METHODS.has(method) ? { [BROWSER_MUTATION_INTENT_HEADER]: BROWSER_MUTATION_INTENT_VALUE } : {}),
     ...readGatewayAuthHeaders(path),
     "x-goatcitadel-correlation-id": correlationId,
@@ -159,9 +163,51 @@ export function buildGatewayHeaders(
   };
 }
 
-export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/**
+ * `attemptKey` lets a mutation owner choose (and remember) the Idempotency-Key of one attempt, so a lost response can
+ * later be settled from the Gateway's own record of that exact attempt. It must be a UUID and only applies to mutations.
+ */
+export type GatewayRequestInit = RequestInit & { attemptKey?: string };
+const ATTEMPT_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+/** The identity of one mutation attempt (never its body), so its owner can later read the Gateway's record of it. */
+export interface CapturedMutationAttempt {
+  attemptKey: string;
+  method: string;
+  /** The request path without its query string. */
+  path: string;
+  /** The Gateway installation the attempt was sent to; its record can only be read there. */
+  installation: string;
+}
+let attemptSink: ((attempt: CapturedMutationAttempt) => void) | null = null;
+
+/**
+ * Runs `dispatch` and reports the first mutating request it issues synchronously, before any await. Reads, later
+ * requests and requests issued after `dispatch` returns are never reported. The report happens before the request is
+ * sent, so a lost response still leaves the owner with the attempt it must reconcile.
+ */
+export function captureMutationAttempt<T>(
+  dispatch: () => Promise<T>,
+  onAttempt: (attempt: CapturedMutationAttempt) => void,
+): Promise<T> {
+  const previous = attemptSink;
+  attemptSink = (attempt) => {
+    attemptSink = null;
+    onAttempt(attempt);
+  };
+  try {
+    return dispatch();
+  } finally {
+    attemptSink = previous;
+  }
+}
+
+export async function request<T>(path: string, init?: GatewayRequestInit): Promise<T> {
   init?.signal?.throwIfAborted();
   const method = normalizeHttpMethod(init?.method);
+  if (init?.attemptKey !== undefined && (!MUTATING_METHODS.has(method) || !ATTEMPT_KEY_PATTERN.test(init.attemptKey))) {
+    throw new Error("An attempt key must be a UUID and is only valid on a mutating request.");
+  }
   const coalescingKey = buildGetRequestCoalescingKey(path, method, init);
   if (coalescingKey) {
     const existing = inFlightGetRequests.get(coalescingKey) as Promise<T> | undefined;
@@ -177,10 +223,22 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return requestUncoalesced<T>(path, init, method);
 }
 
-async function requestUncoalesced<T>(path: string, init: RequestInit | undefined, method: string): Promise<T> {
+async function requestUncoalesced<T>(
+  path: string,
+  gatewayInit: GatewayRequestInit | undefined,
+  method: string,
+): Promise<T> {
+  const { attemptKey: ownerKey, ...fetchInit } = gatewayInit ?? {};
+  const init: RequestInit | undefined = gatewayInit ? fetchInit : undefined;
+  const sink = MUTATING_METHODS.has(method) ? attemptSink : null;
+  const attemptKey = ownerKey ?? (sink ? crypto.randomUUID() : undefined);
+  if (sink && attemptKey)
+    sink({ attemptKey, method, path: path.split("?")[0] ?? path, installation: getGatewayApiBaseUrl() });
+  const accessRevision = getGatewayAccessRevision();
   const correlationId = createCorrelationId();
   const headers = buildGatewayHeaders(path, method, correlationId, filterGatewayExtraHeaders(init?.headers), {
     hasBody: init?.body != null,
+    ...(attemptKey ? { attemptKey } : {}),
   });
   recordClientDiagnostic({
     level: "info",
@@ -210,7 +268,7 @@ async function requestUncoalesced<T>(path: string, init: RequestInit | undefined
       if (!res.ok) {
         const text = await res.text();
         const parsed = parseApiError(text);
-        handleGatewayAuthRejectionResponse(res.status, text, path);
+        if (accessRevision === getGatewayAccessRevision()) handleGatewayAuthRejectionResponse(res.status, text, path);
         lastError = new ApiRequestError(`API error ${res.status}: ${text}`, {
           kind: "http",
           method,
@@ -252,6 +310,11 @@ async function requestUncoalesced<T>(path: string, init: RequestInit | undefined
         throw lastError;
       }
 
+      if (accessRevision !== getGatewayAccessRevision())
+        throw new ApiRequestError(
+          "Gateway access changed while this request was in flight. Refresh current caller state.",
+          { kind: "protocol", method, path },
+        );
       setDevDiagnosticsLastRequestError(undefined);
       recordClientDiagnostic({
         level: "info",
@@ -366,7 +429,7 @@ function filterGatewayExtraHeaders(extraHeaders?: HeadersInit): Record<string, s
 }
 
 function buildGetRequestCoalescingKey(path: string, method: string, init?: RequestInit): string | undefined {
-  if (method !== "GET" || init?.body || init?.signal) {
+  if (method !== "GET" || init?.body || init?.signal || freshReadsActive()) {
     return undefined;
   }
   const headers = init?.headers ? Array.from(new Headers(init.headers).entries()).sort() : [];
@@ -465,41 +528,54 @@ export function setGatewayAuthStorageMode(mode: GatewayAuthStorageMode): void {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.setItem(AUTH_STORAGE_MODE_KEY, mode);
-  if (mode === "persistent") {
-    const sessionRaw = window.sessionStorage.getItem(AUTH_STORAGE_KEY);
-    if (sessionRaw) {
-      window.localStorage.setItem(AUTH_STORAGE_KEY, sessionRaw);
+  try {
+    window.localStorage.setItem(AUTH_STORAGE_MODE_KEY, mode);
+    if (mode === "persistent") {
+      const sessionRaw = window.sessionStorage.getItem(AUTH_STORAGE_KEY);
+      if (sessionRaw) {
+        window.localStorage.setItem(AUTH_STORAGE_KEY, sessionRaw);
+      }
+    } else {
+      window.localStorage.removeItem(AUTH_STORAGE_KEY);
     }
-    return;
+  } finally {
+    notifyGatewayAccessChanged();
   }
-  window.localStorage.removeItem(AUTH_STORAGE_KEY);
 }
 
 export function persistGatewayAuthState(state: GatewayAuthState, mode: GatewayAuthStorageMode = "session"): void {
   if (typeof window === "undefined") {
     return;
   }
-  volatileGatewayBasicAuth = buildVolatileGatewayBasicAuth(state);
-  const payload = buildPersistedGatewayAuthState(state);
-  const raw = JSON.stringify(payload);
-  window.sessionStorage.setItem(AUTH_STORAGE_KEY, raw);
-  if (mode === "persistent") {
-    window.localStorage.setItem(AUTH_STORAGE_KEY, raw);
-  } else {
-    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+  try {
+    volatileGatewayBasicAuth = buildVolatileGatewayBasicAuth(state);
+    const payload = buildPersistedGatewayAuthState(state);
+    const raw = JSON.stringify(payload);
+    window.sessionStorage.setItem(AUTH_STORAGE_KEY, raw);
+    if (mode === "persistent") {
+      window.localStorage.setItem(AUTH_STORAGE_KEY, raw);
+    } else {
+      window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    }
+    window.localStorage.setItem(AUTH_STORAGE_MODE_KEY, mode);
+  } finally {
+    // Partial storage writes can already have changed effective custody. Notify after they settle.
+    notifyGatewayAccessChanged();
   }
-  window.localStorage.setItem(AUTH_STORAGE_MODE_KEY, mode);
 }
 
 export function clearGatewayAuthState(): void {
   if (typeof window === "undefined") {
     return;
   }
-  volatileGatewayBasicAuth = undefined;
-  window.sessionStorage.removeItem(AUTH_STORAGE_KEY);
-  window.localStorage.removeItem(AUTH_STORAGE_KEY);
-  window.localStorage.removeItem(LAST_ROUTE_STORAGE_KEY);
+  try {
+    volatileGatewayBasicAuth = undefined;
+    window.sessionStorage.removeItem(AUTH_STORAGE_KEY);
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    window.localStorage.removeItem(LAST_ROUTE_STORAGE_KEY);
+  } finally {
+    notifyGatewayAccessChanged();
+  }
 }
 
 export function subscribeGatewayAuthRejection(listener: (rejection: GatewayAuthRejection) => void): () => void {
@@ -515,11 +591,13 @@ export function handleGatewayAuthRejectionResponse(status: number, bodyText: str
   if (parsed.authMode !== "token" && parsed.authMode !== "basic") {
     return false;
   }
+  const hadStoredAuth = Boolean(readStoredGatewayAuthState());
   clearGatewayAuthState();
   notifyGatewayAuthRejected({
     authMode: parsed.authMode,
     path,
     status: 401,
+    hadStoredAuth,
   });
   return true;
 }
@@ -646,6 +724,16 @@ export async function preflightGatewayAccess(
         };
       }
 
+      if (error.status === 403 && !error.authMode)
+        return {
+          status: "access-blocked",
+          message:
+            "The current caller does not have permission to open Mission Control. Use an operator credential or the permitted device surface.",
+          healthDetail: authPhase.detail,
+          rejectedStoredAuth: false,
+          bootstrapTokenRejected: false,
+          startupTiming: createStartupTiming("access-blocked", startupStartedAt, startupStartedMs, phases),
+        };
       if (error.status === 401 || error.status === 403) {
         if (usedBootstrap) {
           clearGatewayAuthState();

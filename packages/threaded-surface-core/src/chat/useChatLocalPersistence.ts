@@ -1,15 +1,25 @@
 import { useEffect, useRef } from "react";
+import { getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+
+function storageKey(kind: string, workspaceId: string, sessionId: string | null): string {
+  const caller = getGatewayCallerScope();
+  // Only the Gateway-authored caller can own retained input. Legacy keys remain intact,
+  // but cannot be attributed to an identified caller and must not be imported into it.
+  return caller
+    ? `goatcitadel.chat.${kind}.caller:${JSON.stringify([caller, workspaceId, sessionId])}`
+    : `goatcitadel.chat.${kind}.${workspaceId}.${sessionId ?? "new"}`;
+}
 
 export function createDraftStorageKey(workspaceId: string, sessionId: string | null): string {
-  return `goatcitadel.chat.draft.${workspaceId}.${sessionId ?? "new"}`;
+  return storageKey("draft", workspaceId, sessionId);
 }
 
 export function createAttachmentStorageKey(workspaceId: string, sessionId: string | null): string {
-  return `goatcitadel.chat.attachments.${workspaceId}.${sessionId ?? "new"}`;
+  return storageKey("attachments", workspaceId, sessionId);
 }
 
 export function createQueueStorageKey(workspaceId: string, sessionId: string | null): string {
-  return `goatcitadel.chat.queue.${workspaceId}.${sessionId ?? "new"}`;
+  return storageKey("queue", workspaceId, sessionId);
 }
 
 export function clearChatSessionLocalState(workspaceId: string, sessionId: string): void {
@@ -63,24 +73,30 @@ export function useDebouncedLocalStoragePersistence(key: string, value: string, 
     }, delayMs);
   }, [delayMs, key, value]);
 
-  useEffect(
-    () => () => {
-      if (typeof window === "undefined") {
-        return;
-      }
+  useEffect(() => {
+    const flush = () => {
+      if (typeof window === "undefined") return;
       if (timerRef.current) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
       }
-      if (pendingWriteRef.current) {
+      const pending = pendingWriteRef.current;
+      if (pending) {
         try {
-          window.localStorage.setItem(pendingWriteRef.current.key, pendingWriteRef.current.value);
+          // Keep the original captured owner even if access changed before pagehide.
+          window.localStorage.setItem(pending.key, pending.value);
         } catch {
-          // Fallback: localStorage may be disabled or quota-exceeded; drop the pending write rather than crash.
+          // Best-effort on exit: storage may be disabled or quota-exceeded; do not crash.
         }
         pendingWriteRef.current = null;
       }
-    },
-    [],
-  );
+    };
+    // Browser reload/navigation does not unmount React. Persist retained input
+    // synchronously before the document leaves, including an immediate queue reload.
+    if (typeof window !== "undefined") window.addEventListener?.("pagehide", flush);
+    return () => {
+      if (typeof window !== "undefined") window.removeEventListener?.("pagehide", flush);
+      flush();
+    };
+  }, []);
 }

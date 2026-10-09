@@ -13,6 +13,7 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useEventStreamStatus", () => 
   useEventStreamStatus: () => ({ state: stream.state, reconnectAttempts: 0 }),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/system", () => ({ fetchRealtimeEvents: api.fetchRealtimeEvents }));
+vi.mock("./RecentSessions", () => ({ RecentSessions: () => <p>Recent sessions owner</p> }));
 
 let root: Root, container: HTMLDivElement, client: QueryClient;
 const interval = () => {
@@ -56,6 +57,11 @@ async function render() {
 }
 
 describe("System activity polling (WK-13)", () => {
+  it("shows recent sessions beside the activity feed", async () => {
+    await render();
+    expect(document.body.textContent).toContain("Recent sessions owner");
+  });
+
   it("does not poll while live events extend the feed", async () => {
     stream.state = "open";
     await render();

@@ -61,11 +61,12 @@ let prefs: ReturnType<typeof useUiPreferences>,
   owner: ReturnType<typeof useCockpitScope>,
   draft: ReturnType<typeof useSessionDraft<{ text: string }>>;
 let editor: { open: boolean; set: (value: { open: boolean; citadelId: string; workspaceId: string }) => void };
+let destination: string | undefined;
 function Probe() {
   const [choice, setChoice] = useState({ open: true, citadelId: "cit-b", workspaceId: "ws-b" });
   editor = { open: choice.open, set: setChoice };
   prefs = useUiPreferences();
-  owner = useCockpitScope(choice.open, choice, () => setChoice((value) => ({ ...value, open: false })));
+  owner = useCockpitScope(choice.open, choice, () => setChoice((value) => ({ ...value, open: false })), destination);
   draft = useSessionDraft(`scope-draft:${prefs.activeWorkspaceId}`, { text: "Saved" }, 1, { label: "Scope draft" });
   return (
     <>
@@ -109,6 +110,7 @@ async function click(text: string) {
   });
 }
 beforeEach(() => {
+  destination = undefined;
   width = 1280;
   vi.stubGlobal("matchMedia", (query: string) => ({
     media: query,
@@ -226,13 +228,15 @@ describe("cockpit scope owner", () => {
     );
     expect(document.querySelector('[aria-label="Change Citadel and workspace"]')?.textContent).not.toContain("foreign");
   });
-  it("does not read the current Citadel for the hidden phone trigger", async () => {
+  it("shares the authorized Citadel name read for the visible phone scope label", async () => {
     width = 390;
     await render();
+    await vi.waitFor(() => expect(mocks.currentCitadel).toHaveBeenCalledTimes(1));
+    expect(document.querySelector('[aria-label="Current operating scope"]')?.textContent).not.toContain("Reading Citadel");
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["system", "directory", "active-citadel"] });
     });
-    expect(mocks.currentCitadel).not.toHaveBeenCalled();
+    expect(mocks.currentCitadel).toHaveBeenCalledTimes(2);
   });
   it("requires one real leave decision, keeps the origin draft/unknown lock and atomically changes verified scope", async () => {
     await render();
@@ -634,4 +638,20 @@ describe("cockpit scope owner", () => {
       }
     },
   );
+});
+
+it("keeps the approval destination through the reviewed directory-checked scope transition", async () => {
+  window.history.replaceState({retained: "yes"}, "", "/inbox?approvalId=a%2Fb&workspaceId=ws-b&extra=keep#review");
+  destination = "/inbox?approvalId=a%2Fb&citadelId=cit-a&workspaceId=ws-b&extra=keep#review";
+  await render();
+  await vi.waitFor(() => expect(owner.ready).toBe(true));
+  await act(async () => { owner.select("cit-b", "ws-b"); });
+  await vi.waitFor(() => expect(prefs.activeWorkspaceId).toBe("ws-b"));
+  expect(window.location.pathname).toBe("/inbox");
+  expect(new URLSearchParams(window.location.search).get("approvalId")).toBe("a/b");
+  expect(window.location.hash).toBe("#review");
+  expect(new URLSearchParams(window.location.search).get("workspaceId")).toBe("ws-b");
+  expect(new URLSearchParams(window.location.search).get("citadelId")).toBe("cit-b");
+  expect(new URLSearchParams(window.location.search).get("extra")).toBe("keep");
+  expect(window.history.state).toMatchObject({retained: "yes"});
 });

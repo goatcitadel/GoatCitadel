@@ -30,6 +30,13 @@ afterEach(() => {
 });
 
 describe("cockpit access gate", () => {
+  it("shows Gateway setup diagnosis and retries it natively", async () => {
+    const onRetry = vi.fn();
+    await act(async () => root.render(<CockpitAccessGate access={{ status: "misconfigured", message: "Configured auth owner is unavailable" } as never} busy={false} onRetry={onRetry} />));
+    expect(container.textContent).toContain("Configured auth owner is unavailable");
+    await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Try again")!.click());
+    expect(onRetry).toHaveBeenCalledOnce(); expect(shell.switchShell).not.toHaveBeenCalled();
+  });
   it("tells the operator how to start an unreachable Gateway", async () => {
     const onRetry = vi.fn();
     await act(async () =>

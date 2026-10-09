@@ -9,7 +9,9 @@ import type { Notice } from "../../../features/native-routes/settings/SettingsSh
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { ProviderChangeStatus } from "./ProviderChangeStatus";
+import { ProviderOutcomeCheck } from "./ProviderOutcomeCheck";
 import { providerFieldClass } from "./ProviderProfileFields";
+import { ProviderModelSearch } from "./ProviderModelSearch";
 
 export function ProviderRoutingSettings() {
   const catalog = useProviderModelCatalog("system");
@@ -67,6 +69,16 @@ export function ProviderRoutingSettings() {
         Review installation routing
       </Button>
       <div hidden={!open} className="space-y-3">
+        <ProviderModelSearch
+          providers={catalog.providers}
+          activeProviderId={catalog.config?.activeProviderId}
+          activeModel={catalog.config?.activeModel}
+          disabled={locked || catalog.loading}
+          onSelect={(choice) => {
+            routing.setRoutingProviderId(choice.providerId);
+            routing.setRoutingModel(choice.model);
+          }}
+        />
         <label className="block text-sm text-fg-secondary">
           Default provider
           <select
@@ -154,11 +166,7 @@ export function ProviderRoutingSettings() {
           Routing evidence unavailable: {catalog.error}
         </p>
       ) : null}
-      {routing.mutation.uncertain ? (
-        <p role="alert" className="text-sm text-status-waiting">
-          {routing.mutation.uncertain}
-        </p>
-      ) : null}
+      <ProviderOutcomeCheck mutation={routing.mutation} reload={catalog.reload} />
       <ProviderChangeStatus change={routingChange.change} onRefresh={routingChange.refresh} onReview={setPlan} />
       <Dialog
         open={Boolean(review)}

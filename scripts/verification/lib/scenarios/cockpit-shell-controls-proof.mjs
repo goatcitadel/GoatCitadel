@@ -65,7 +65,7 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
         });
         await page.goto(buildVerificationUiUrl(stack.uiUrl, `/chat?sessionId=${encodeURIComponent(session.sessionId)}&shell=cockpit`), { waitUntil: "domcontentloaded" });
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
-        const composer = page.getByRole("textbox", { name: "Message", exact: true }); await composer.waitFor();
+        const composer = page.getByRole("combobox", { name: "Message", exact: true }); await composer.waitFor();
         const origin = await page.evaluate(() => performance.timeOrigin), sourceChatUrl = page.url();
         await page.addScriptTag({ path: axeSourcePath });
         const capture = async label => {

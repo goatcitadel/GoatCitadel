@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Storage } from "./index.js";
+import { ChatSessionListRepository } from "./chat-session-list-repo.js";
+import type { DatabaseClient } from "./db.js";
 
 const createdRoots: string[] = [];
 
@@ -212,4 +214,22 @@ describe("ChatSessionListRepository", () => {
       storage.close();
     }
   });
+});
+
+
+it("bounds explicit membership and keeps IDs parameterized for both SQL dialects", () => {
+  for (const dialect of ["sqlite", "postgres"] as const) {
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const db = { dialect, prepare(sql: string) { return { all(...params: unknown[]) { statements.push({ sql, params }); return []; } }; } } as unknown as DatabaseClient;
+    const repo = new ChatSessionListRepository(db);
+    repo.listCandidates({ workspaceId: "current", sessionIds: ["retained", "' OR 1=1 --"], q: "needle", view: "active" });
+    const statement = statements[0]!;
+    assert.match(statement.sql, /s.session_id IN \(\?,\?\)/);
+    assert.match(statement.sql, /m.workspace_id = \?/);
+    assert.ok(!statement.sql.includes("' OR 1=1 --"));
+    assert.deepEqual(statement.params.slice(0, 4), ["current", "retained", "' OR 1=1 --", "active"]);
+    assert.match(statement.sql, dialect === "postgres" ? /content_search_vector/ : /chat_messages_fts/);
+    assert.throws(() => repo.listCandidates({ workspaceId: "current", sessionIds: [] }), /1 to 100/);
+    assert.throws(() => repo.listCandidates({ workspaceId: "current", sessionIds: Array(101).fill("one") }), /1 to 100/);
+  }
 });

@@ -47,6 +47,12 @@ export function PermissionManagementReview({
             {operation.kind === "create" ? "Create" : "Update"} <strong>{fields.label}</strong>:{" "}
             {describeToolApprovalMode(fields.approvalMode)}.
           </p>
+          {fields.approvalMode === "bypass" ? (
+            <p role="alert" className="text-status-waiting">
+              This profile skips normal tool prompts wherever it is selected. Review every tool pattern and affected
+              policy context. Required high-risk approvals and deny rules remain enforced.
+            </p>
+          ) : null}
           <dl className="space-y-2 text-sm">
             <div>
               <dt>Description</dt>

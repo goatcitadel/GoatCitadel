@@ -28,9 +28,11 @@ function subscribe(listener: () => void) {
 const keyFor = (base: string, id?: string) => JSON.stringify([base, id ? "job" : "create", id ?? null]);
 
 /** Installation-wide retry locks shared by classic and cockpit; never execution authority. */
-export function useScheduleOperations(identity: string) {
+export function useScheduleOperations(identity: string, feedbackIdentity = identity) {
   const base = getGatewayApiBaseUrl();
   const binding = JSON.stringify([base, identity]);
+  // Review feedback can outlive a refreshed revision; mutation admission cannot.
+  const feedbackBinding = JSON.stringify([base, feedbackIdentity]);
   const owner = useRef({ binding, generation: 0, lifetime: 0, mounted: true });
   if (owner.current.binding !== binding) {
     owner.current.binding = binding;
@@ -95,7 +97,7 @@ export function useScheduleOperations(identity: string) {
           ? error.message
           : "Could not check the current schedule owner.";
       publish(keys, dispatched ? { phase: "uncertain", kind: copied.kind, message } : undefined);
-      if (isCurrent()) setFeedback({ binding, message });
+      if (isCurrent()) setFeedback({ binding: feedbackBinding, message });
       return undefined;
     }
   }
@@ -104,7 +106,7 @@ export function useScheduleOperations(identity: string) {
     invalidate,
     locked,
     attempt,
-    message: feedback?.binding === binding ? feedback.message : undefined,
+    message: feedback?.binding === feedbackBinding ? feedback.message : undefined,
   };
 }
 

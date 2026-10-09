@@ -1,3 +1,4 @@
+import { isApiRequestError } from "../api/http-internal";
 import { useEffect, useState } from "react";
 import {
   clearGatewayAuthState,
@@ -138,6 +139,16 @@ export function GatewayAccessGate({
       } catch (error) {
         if (!cancelled) {
           setDeviceApprovalError((error as Error).message);
+          if (isApiRequestError(error) && (error.status === 401 || error.status === 403))
+            setPendingDeviceApproval((current) =>
+              current
+                ? {
+                    ...current,
+                    status: "rejected",
+                    message: "Device approval access was rejected. Start a new request after checking access.",
+                  }
+                : current,
+            );
         }
       }
     };
@@ -164,7 +175,7 @@ export function GatewayAccessGate({
   ]);
 
   const storedAuthPresent = Boolean(readStoredGatewayAuthState());
-  const needsAuth = access.status === "needs-auth";
+  const needsAuth = access.status === "needs-auth" || access.status === "access-blocked";
   const headerKicker = isChecking ? "Mission Control startup" : "Remote gateway handshake";
   const headerTitle = isChecking ? "Starting Mission Control" : "Mission Control access gate";
   const themeClass = resolveGatewayAccessThemeClass();

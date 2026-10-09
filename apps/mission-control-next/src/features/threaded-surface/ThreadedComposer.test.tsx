@@ -191,6 +191,11 @@ async function renderComposer(overrides: Partial<any> = {}): Promise<ReactTestRe
   return renderer!;
 }
 
+/** True when the element carries the class token (shared elements carry both Classic and cockpit classes). */
+function hasClass(node: ReactTestInstance, name: string): boolean {
+  return typeof node.props.className === "string" && node.props.className.split(/\s+/).includes(name);
+}
+
 function collectText(node: ReactTestInstance): string {
   return node.children
     .map((child) => {
@@ -1175,6 +1180,12 @@ describe("ThreadedComposer", () => {
     };
     const renderer = await renderComposer({
       commandSuggestions: [projectItem],
+      projectSwitchContext: {
+        workspaceId: "default",
+        session: { sessionId: "session-1", workspaceId: "default", revision: 7 },
+        projects: [{ projectId: "project-1", workspaceId: "default", revision: 1, name: "GoatCitadel", workspacePath: "F:/code/goat", lifecycleStatus: "active" }],
+        mutationPending: false,
+      },
       composerPalette: {
         enabled: true,
         globalOpen: true,
@@ -1192,7 +1203,7 @@ describe("ThreadedComposer", () => {
     await click(findButton(renderer.root, "GoatCitadel"));
     expect(onSelect).not.toHaveBeenCalled();
     const confirm = renderer.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
-    expect(confirm?.props.message).toContain("Switch to GoatCitadel?");
+    expect(confirm?.props.message).toContain("Switch to GoatCitadel in workspace default?");
     await act(async () => confirm?.props.onConfirm());
     expect(onSelect).toHaveBeenCalledWith(projectItem);
   });
@@ -1929,7 +1940,7 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
   it("keeps an empty source strip hidden until the attach action is opened and closes cleanly", async () => {
     const controls = externalControls({ attachments: [], candidates: [], candidatesSupported: true });
     const renderer = await renderComposer({ externalSourceControls: controls });
-    expect(renderer.root.findAllByProps({ className: "mc-next-composer-external-strip" })).toHaveLength(0);
+    expect(renderer.root.findAll((node) => node.type === "section" && hasClass(node, "mc-next-composer-external-strip"))).toHaveLength(0);
 
     await click(findButton(renderer.root, "Attach imported item"));
     expect(renderer.root.findAll((node) => node.props.role === "dialog")).toHaveLength(1);
@@ -1937,7 +1948,7 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     await click(findButton(renderer.root, "Close"));
 
     expect(renderer.root.findAll((node) => node.props.role === "dialog")).toHaveLength(0);
-    expect(renderer.root.findAllByProps({ className: "mc-next-composer-external-strip" })).toHaveLength(0);
+    expect(renderer.root.findAll((node) => node.type === "section" && hasClass(node, "mc-next-composer-external-strip"))).toHaveLength(0);
     renderer.unmount();
   });
 
@@ -1946,8 +1957,8 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
       externalSourceControls: externalControls({ selectedAttachmentIds: ["attachment-1"] }),
     });
 
-    expect(markup).toContain("Sources for this turn");
-    expect(markup).toContain("1 selected; clear the selection before sending");
+    expect(markup).toContain("Read-only sources");
+    expect(markup).toContain("1 retained source selection(s). Clear the selection to send.");
     expect(markup).not.toContain("item-attachment-1");
     expect(markup).not.toContain(FULL_SHA);
     expect(markup).not.toContain('"attachmentId"');
@@ -1960,7 +1971,7 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     await click(findButton(renderer.root, "Choose sources"));
 
     const checkbox = renderer.root.find(
-      (node) => node.type === "input" && node.props["aria-label"] === "Remove Read-only source from the next turn",
+      (node) => node.type === "input" && node.props["aria-label"] === "Include Read-only source in the next turn",
     );
     expect(checkbox.props.checked).toBe(true);
     expect(checkbox.props.disabled).toBe(false);
@@ -1971,7 +1982,7 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
 
     await click(findButton(renderer.root, "Clear selection"));
     expect(controls.onClearSelection).toHaveBeenCalledTimes(1);
-    await click(findButton(renderer.root, "Add to chat"));
+    await click(findButton(renderer.root, "Done reviewing sources"));
     expect(renderer.root.findAll((node) => node.props.role === "dialog")).toHaveLength(0);
     renderer.unmount();
   });
@@ -2015,14 +2026,14 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     ).toHaveLength(0);
     await click(findButton(renderer.root, "Choose sources"));
     const attachDetails = renderer.root.findAll(
-      (node) => node.type === "details" && node.props.className === "mc-next-source-picker-attach",
+      (node) => node.type === "details" && hasClass(node, "mc-next-source-picker-attach"),
     )[0]!;
     await act(async () => attachDetails.props.onToggle({ currentTarget: { open: true } }));
     const attachForm = renderer.root.findAll(
-      (node) => node.props.className === "mc-next-composer-external-attach-form",
+      (node) => node.type === "div" && hasClass(node, "mc-next-composer-external-attach-form"),
     )[0]!;
     expect(attachForm.props.id).toContain("-attach-form");
-    expect(collectText(renderer.root)).toContain("First attach a verified import");
+    expect(collectText(renderer.root)).toContain("Attach a verified import for read-only inspection");
     expect(collectText(renderer.root)).toContain("Imported Codex sessions");
     expect(renderer.root.findAll((node) => node.type === "input" && node.props.id?.includes("-source"))).toHaveLength(
       0,
@@ -2043,7 +2054,7 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     const renderer = await renderComposer({ externalSourceControls: controls });
     await click(findButton(renderer.root, "Choose sources"));
     const attachDetails = renderer.root.findAll(
-      (node) => node.type === "details" && node.props.className === "mc-next-source-picker-attach",
+      (node) => node.type === "details" && hasClass(node, "mc-next-source-picker-attach"),
     )[0]!;
     await act(async () => attachDetails.props.onToggle({ currentTarget: { open: true } }));
     expect(collectText(renderer.root)).toContain("Verified import selection is unavailable here");
@@ -2057,7 +2068,7 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     const renderer = await renderComposer({ externalSourceControls: controls });
     await click(findButton(renderer.root, "Choose sources"));
     const attachDetails = renderer.root.findAll(
-      (node) => node.type === "details" && node.props.className === "mc-next-source-picker-attach",
+      (node) => node.type === "details" && hasClass(node, "mc-next-source-picker-attach"),
     )[0]!;
     await act(async () => attachDetails.props.onToggle({ currentTarget: { open: true } }));
     await click(findButton(renderer.root, "Attach read-only"));
@@ -2082,7 +2093,7 @@ describe("ThreadedComposer external source strip (HX-407 C3)", () => {
     });
     const sourceCheckbox = renderer.root.find(
       (node) =>
-        node.type === "input" && node.props["aria-label"] === "Remove Imported Codex sessions from the next turn",
+        node.type === "input" && node.props["aria-label"] === "Include Imported Codex sessions in the next turn",
     );
     expect(collectText(renderer.root)).toContain("Imported");
     expect(sourceCheckbox.props.disabled).toBe(true);

@@ -6,7 +6,7 @@ import {
   isApiRequestError,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { hasMcpServerBinding, isGatewayMcpServer } from "./mcp-server-mutation";
-import { IDLE_MCP_ATTEMPT, readMcpServerAttempt, writeMcpServerAttempt } from "./mcp-server-attempts";
+import { IDLE_MCP_ATTEMPT, readMcpServerAttempt, trackMcpWrite, writeMcpServerAttempt } from "./mcp-server-attempts";
 import { isRuntimeInvokableMcpServer } from "./helpers/mcp-helpers";
 
 export type McpConnectionAction = "connect" | "disconnect";
@@ -136,9 +136,9 @@ export async function commitMcpConnection({
       expectedRevision: snapshot.revision!,
       expectedConnectionRevision: snapshot.connectionRevision ?? null,
     };
-    const receipt = await (action === "connect"
-      ? connectReviewedMcpServer(id, request)
-      : disconnectReviewedMcpServer(id, request));
+    const receipt = await trackMcpWrite(id, () =>
+      action === "connect" ? connectReviewedMcpServer(id, request) : disconnectReviewedMcpServer(id, request),
+    );
     acknowledged = true;
     if (!verifiedReceipt(snapshot, action, receipt))
       throw new Error("Connection receipt did not bind the reviewed operation.");

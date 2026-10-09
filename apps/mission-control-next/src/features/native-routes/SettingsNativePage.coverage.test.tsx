@@ -2569,7 +2569,8 @@ describe("SettingsNativePage broad native sections", () => {
         decision: "deny",
         scope: "session",
         scopeRef: "session-1",
-        grantType: "persistent",
+        grantType: "ttl",
+        expiresAt: expect.any(String),
       }),
     );
     await click(findButton(tools.root, "All grants"));

@@ -7,6 +7,7 @@ import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import type { CapabilityCatalogView } from "./capability-catalog";
 import { useCapabilitySkillState } from "./use-capability-skill-state";
+import { CapabilityLifecycleInspector } from "./CapabilityLifecycleInspector";
 
 type CatalogSkill = CapabilityCatalogView["skillsById"][string];
 
@@ -73,6 +74,8 @@ export function CapabilitySettings({
   const control = useCapabilitySkillState({ item, skill, skillsKnown, workspaceId: activeWorkspaceId, onRefresh });
   const { target, pending, locked, notice, error } = control;
   const title = presentCapabilityTitle(item);
+
+  if (item.kind === "proposal" || item.kind === "candidate_skill") return <><CapabilityLifecycleInspector key={JSON.stringify([activeWorkspaceId, item.capabilityId])} item={item} workspaceId={activeWorkspaceId ?? "default"} /><CapabilityOwnerLink item={item} /></>;
 
   if (item.kind !== "skill" || !item.skillId)
     return (

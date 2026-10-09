@@ -1,4 +1,6 @@
+import { __resetApprovalOperationAttemptsForTests } from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExternalSessionAttachmentRecord } from "@goatcitadel/contracts";
 import { useExternalSourceAttachments, type ExternalSourceAttachmentsState } from "./useExternalSourceAttachments";
@@ -96,6 +98,7 @@ async function renderHarness(props: Parameters<typeof Harness>[0] = {}): Promise
 }
 
 beforeEach(() => {
+  __resetApprovalOperationAttemptsForTests();
   latest = null;
   pushLocalNotice.mockClear();
   apiMocks.fetchExternalSessionAttachments.mockReset();
@@ -110,40 +113,18 @@ beforeEach(() => {
 });
 
 describe("useExternalSourceAttachments", () => {
-  it("refreshes a successful overlapping mutation without clearing the newer busy state", async () => {
+  it("admits only one source mutation at a time and refreshes its receipt", async () => {
     apiMocks.fetchExternalSessionAttachments.mockResolvedValue(listResponse([], "incarnation-1"));
     let resolveFirst!: () => void;
-    let rejectSecond!: (error: Error) => void;
-    apiMocks.attachExternalSourceToSession
-      .mockImplementationOnce(
-        () =>
-          new Promise<void>((resolve) => {
-            resolveFirst = resolve;
-          }),
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise<void>((_resolve, reject) => {
-            rejectSecond = reject;
-          }),
-      );
+    apiMocks.attachExternalSourceToSession.mockImplementationOnce(() => new Promise<void>(resolve => { resolveFirst = resolve; }));
     const renderer = await renderHarness();
     let first!: Promise<boolean>;
-    let second!: Promise<boolean>;
-    act(() => {
-      first = latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "first" });
-      second = latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "second" });
-    });
-    await act(async () => {
-      resolveFirst();
-      expect(await first).toBe(true);
-    });
+    await act(async () => { first = latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "first" }); });
+    await act(async () => { expect(await latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "second" })).toBe(false); });
+    expect(apiMocks.attachExternalSourceToSession).toHaveBeenCalledTimes(1);
+    expect(latest!.busyAttachmentId).toBe("attach:first");
+    await act(async () => { resolveFirst(); expect(await first).toBe(true); });
     expect(apiMocks.fetchExternalSessionAttachments).toHaveBeenCalledTimes(2);
-    expect(latest!.busyAttachmentId).toBe("attach:second");
-    await act(async () => {
-      rejectSecond(new Error("rejected"));
-      expect(await second).toBe(false);
-    });
     expect(latest!.busyAttachmentId).toBeNull();
     act(() => renderer.unmount());
   });
@@ -177,7 +158,7 @@ describe("useExternalSourceAttachments", () => {
     );
     const renderer = await renderHarness();
     let pending!: Promise<boolean>;
-    act(() => {
+    await act(async () => {
       pending = latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "item-old" });
     });
     await act(async () => {
@@ -462,4 +443,29 @@ describe("useExternalSourceAttachments", () => {
     ]);
     renderer.unmount();
   });
+});
+
+it.each([401, 403])("explains authoritative access failure %s without automatic retry", async (status) => {
+ apiMocks.fetchExternalSessionAttachments.mockRejectedValue(new ApiRequestError("Denied", { kind: "http", method: "GET", path: "/api/v1/chat/sessions/session-1/external-source-attachments", status }));
+ const renderer = await renderHarness();
+ expect(latest!.error).toContain("Settings > Access");
+ expect(latest!.canMutate).toBe(false);
+ expect(apiMocks.fetchExternalSessionAttachments).toHaveBeenCalledTimes(1);
+ renderer.unmount();
+});
+
+it("retains uncertain source attempts across remount and refreshed incarnation", async () => {
+  apiMocks.fetchExternalSessionAttachments.mockResolvedValue(listResponse([attachment("a1")], "incarnation-1"));
+  apiMocks.detachExternalSourceAttachment.mockRejectedValue(new Error("Lost response"));
+  let renderer = await renderHarness();
+  await act(async () => { expect(await latest!.detach("a1")).toBe(false); });
+  act(() => renderer.unmount());
+  apiMocks.fetchExternalSessionAttachments.mockResolvedValue(listResponse([attachment("a1", { revision: 2 })], "incarnation-2"));
+  renderer = await renderHarness();
+  expect(latest!.canMutate).toBe(false);
+  expect(latest!.error).toContain("uncertain");
+  await act(async () => { expect(await latest!.detach("a1")).toBe(false); await latest!.reload(); });
+  expect(latest!.canMutate).toBe(false);
+  expect(apiMocks.detachExternalSourceAttachment).toHaveBeenCalledTimes(1);
+  act(() => renderer.unmount());
 });

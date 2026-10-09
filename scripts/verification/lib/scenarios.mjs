@@ -22,6 +22,8 @@ import {
   readArchitectureMetricsBaseline,
 } from "./architecture-metrics.mjs";
 import { readArchitectureServiceAllowances } from "./architecture-service-allowances.mjs";
+import { prepareBackupRoundtripFixture } from "./scenarios/backup-roundtrip-fixture.mjs";
+import { prepareUiParityRuntime } from "./scenarios/ui-parity-runtime.mjs";
 import {
   buildVisualBaselineFileName,
   resolveDirectCompatibilityManifest,
@@ -2482,19 +2484,12 @@ export async function runMeshReadinessLane(context, options = {}) {
 }
 
 export async function runBackupRoundtripLane(context, _options = {}) {
-  const runtimeRoot = await prepareVerificationRuntime(`${context.runId}-backup-roundtrip`);
-  const backupRoot = path.join(runtimeRoot, ".GoatCitadel", "backups");
-  let stack = await startVerificationStack(context, {
-    runtimeRoot,
-    includeUi: false,
-    gatewayEnv: {
-      GOATCITADEL_BACKUP_DIR: backupRoot,
-      GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
-      HOME: runtimeRoot,
-      USERPROFILE: runtimeRoot,
-    },
-  });
+  const stub = await startDeterministicLlmStub();
+  let stack, fixture;
   try {
+    fixture = await prepareBackupRoundtripFixture(`${context.runId}-backup-roundtrip`, stub.baseUrl);
+    const { runtimeRoot, backupRoot, gatewayEnv, gatewayEnvOmit } = fixture;
+    stack = await startVerificationStack(context, { runtimeRoot, includeUi: false, gatewayEnv, gatewayEnvOmit });
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-backup-roundtrip");
     await runScenario(
       context,
@@ -2539,6 +2534,9 @@ export async function runBackupRoundtripLane(context, _options = {}) {
         )}\n`;
 
         await fs.writeFile(configSentinelPath, configSentinelRaw, "utf8");
+        const nestedConfigSentinel = path.join(configDir, "verification", "nested-backup-sentinel.json");
+        await fs.mkdir(path.dirname(nestedConfigSentinel), { recursive: true });
+        await fs.writeFile(nestedConfigSentinel, configSentinelRaw, "utf8");
         const dbSentinelPolicy = {
           realtimeEventsDays: 11,
           backupsKeep: 17,
@@ -2701,15 +2699,8 @@ export async function runBackupRoundtripLane(context, _options = {}) {
             cwd: repoRoot,
             artifactRoot: path.join(context.artifactRoot, "diagnostics"),
             logName: "backup-roundtrip-restore-cli",
-            env: {
-              GOATCITADEL_ROOT_DIR: runtimeRoot,
-              GOATCITADEL_BACKUP_DIR: backupRoot,
-              GOATCITADEL_AUTH_MODE: "none",
-              GOATCITADEL_DATABASE_DRIVER: "sqlite",
-              GOATCITADEL_DISABLE_SECRET_STORE: "true",
-              HOME: runtimeRoot,
-              USERPROFILE: runtimeRoot,
-            },
+            env: gatewayEnv,
+            omitEnv: gatewayEnvOmit,
           },
         );
         if (restoreCommand.code !== 0) {
@@ -2731,12 +2722,8 @@ export async function runBackupRoundtripLane(context, _options = {}) {
         stack = await startVerificationStack(context, {
           runtimeRoot,
           includeUi: false,
-          gatewayEnv: {
-            GOATCITADEL_BACKUP_DIR: backupRoot,
-            GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
-            HOME: runtimeRoot,
-            USERPROFILE: runtimeRoot,
-          },
+          gatewayEnv,
+          gatewayEnvOmit,
         });
 
         const restoredConfigRaw = await fs.readFile(configPath, "utf8");
@@ -2866,7 +2853,8 @@ export async function runBackupRoundtripLane(context, _options = {}) {
       },
     );
   } finally {
-    await stopVerificationStack(stack);
+    await stopVerificationStack(stack ?? { runtimeRoot: fixture?.runtimeRoot });
+    await stub.close();
   }
 }
 
@@ -3371,19 +3359,36 @@ export function requireCanonicalMemorySeed(body, expectedWorkspaceId, label) {
 }
 
 export async function runUiParityLane(context, _options = {}) {
-  const stack = await startVerificationStack(context, {
-    includeUi: false,
-    gatewayEnv: {
-      GOATCITADEL_AUTH_MODE: "token",
-      GOATCITADEL_AUTH_TOKEN: "verification-ui-parity-operator-token",
-      GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
-      GOATCITADEL_FEATURE_MEMORY_LIFECYCLE_ADMIN_V1_ENABLED: "true",
-      GOATCITADEL_FEATURE_MEMORY_MAINTENANCE_V1_ENABLED: "true",
-      GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
-    },
-  });
-  const nextUi = await startVerificationUiProcess(context, stack.gatewayUrl, NEXT_UI_PACKAGE, "ui-parity-next");
+  // This lane certifies the Classic shell only (saved Classic preference plus shell: "classic" on every compared
+  // route); cockpit parity is covered by the ux-budget, surface and visual lanes. Shipped defaults only, with every
+  // GoatCitadel path pinned inside the disposable root and inherited settings scrubbed from both children.
+  const isolation = await prepareUiParityRuntime(context);
+  let stack;
   try {
+    stack = await startVerificationStack(context, {
+      includeUi: false,
+      runtimeRoot: isolation.runtimeRoot,
+      gatewayEnvOmit: isolation.omitEnv,
+      gatewayEnv: {
+        ...isolation.gatewayEnv,
+        GOATCITADEL_AUTH_MODE: "token",
+        GOATCITADEL_AUTH_TOKEN: "verification-ui-parity-operator-token",
+        GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
+        GOATCITADEL_FEATURE_MEMORY_LIFECYCLE_ADMIN_V1_ENABLED: "true",
+        GOATCITADEL_FEATURE_MEMORY_MAINTENANCE_V1_ENABLED: "true",
+        GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
+      },
+    });
+  } catch (error) {
+    // A stack that never started cannot remove the fresh root, so remove it here.
+    await stopVerificationStack({ runtimeRoot: isolation.runtimeRoot }).catch(() => undefined);
+    throw error;
+  }
+  let nextUi;
+  try {
+    nextUi = await startVerificationUiProcess(context, stack.gatewayUrl, NEXT_UI_PACKAGE, "ui-parity-next", {
+      omitEnv: isolation.omitEnv,
+    });
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-ui-parity");
     const fixture = await seedMissionControlNextFixture(stack.gatewayUrl);
     const foreignFixture = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/seed", {
@@ -3459,6 +3464,9 @@ export async function runUiParityLane(context, _options = {}) {
             colorScheme: "dark",
           });
           await installMissionControlNextBrowserState(nextContext, fixture.workspaceId);
+          // This lane compares the Classic surfaces; the cockpit is the default shell and owns /ops/approvals natively,
+          // so pin the supported saved Classic preference (the rollback path) for every page in this context.
+          await nextContext.addInitScript(() => window.localStorage.setItem("goatcitadel.ui.shell.v1", "classic"));
 
           const nextPage = await nextContext.newPage();
           const nextLog = attachBrowserLogging(nextPage);
@@ -3595,10 +3603,12 @@ export async function runUiParityLane(context, _options = {}) {
   } finally {
     // stopProcess can throw on a stuck Windows process; the lane's own result
     // must win, and the stack teardown below must still run.
-    try {
-      await stopProcess(nextUi.handle);
-    } catch (error) {
-      console.warn(`[verification] UI process cleanup failure (non-fatal): ${error?.message ?? error}`);
+    if (nextUi) {
+      try {
+        await stopProcess(nextUi.handle);
+      } catch (error) {
+        console.warn(`[verification] UI process cleanup failure (non-fatal): ${error?.message ?? error}`);
+      }
     }
     await stopVerificationStack(stack);
   }
@@ -5402,7 +5412,7 @@ function forceVerificationUiPackage(packageName) {
   };
 }
 
-async function restartGatewayProcess(context, stack, gatewayEnv = {}) {
+async function restartGatewayProcess(context, stack, gatewayEnv = {}, processOptions = {}) {
   const gatewayPort = Number.parseInt(new URL(stack.gatewayUrl).port, 10);
   await stopProcess(stack.gateway);
   const gateway = await startProcess(
@@ -5420,13 +5430,13 @@ async function restartGatewayProcess(context, stack, gatewayEnv = {}) {
       GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
       ...gatewayEnv,
     },
-    { cwd: path.join(repoRoot, "apps", "gateway") },
+    { ...processOptions, cwd: path.join(repoRoot, "apps", "gateway") },
   );
   await waitForHttp(`${stack.gatewayUrl}/health`, "Gateway health", 180000, gateway);
   return gateway;
 }
 
-async function startVerificationUiProcess(context, gatewayUrl, packageName, name) {
+async function startVerificationUiProcess(context, gatewayUrl, packageName, name, options = {}) {
   const uiPort = await resolveAvailablePort(0);
   const uiUrl = `http://127.0.0.1:${uiPort}`;
   const handle = await startProcess(
@@ -5450,6 +5460,7 @@ async function startVerificationUiProcess(context, gatewayUrl, packageName, name
       VITE_GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true",
       VITE_GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
     },
+    { omitEnv: options.omitEnv },
   );
   try {
     await waitForHttp(uiUrl, `${packageName} UI`, 180000, handle);

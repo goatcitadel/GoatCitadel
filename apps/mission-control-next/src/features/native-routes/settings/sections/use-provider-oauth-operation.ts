@@ -3,6 +3,7 @@ import { getErrorMessage } from "../SettingsShared";
 import type { ProviderNoticeSetter } from "./provider-section-types";
 import {
   beginProviderMutation,
+  dispatchProviderMutation,
   finishProviderMutation,
   retainProviderMutationUncertainty,
   useProviderEditorEpoch,
@@ -33,7 +34,7 @@ export function useProviderOAuthOperation(workspaceId: string, setNotice: Provid
           if (!isCurrent()) throw new Error("The provider view changed before dispatch.");
           attempted = true;
           acknowledged = false;
-          const value = await dispatch();
+          const value = await dispatchProviderMutation(dispatch);
           validate(value);
           acknowledged = true;
           return value;

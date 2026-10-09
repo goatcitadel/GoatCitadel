@@ -31,6 +31,7 @@ export interface ResourceQuery {
   query: string;
   status: string;
   cursor?: string;
+  projectId?: string;
   /** Checked between reads; the Library owners themselves take no signal. */
   signal?: AbortSignal;
 }
@@ -80,7 +81,7 @@ export function resourceBinding(resource: LibraryResource) {
 }
 
 export async function loadLibraryResources(input: ResourceQuery): Promise<ResourcePage> {
-  const { kind, workspaceId, citadelId, query, status, cursor, signal } = input;
+  const { kind, workspaceId, citadelId, query, status, cursor, signal, projectId } = input;
   signal?.throwIfAborted();
   if (!workspaceId.trim() || !citadelId.trim())
     throw new Error("Choose a workspace and Citadel before reading Library resources.");
@@ -116,8 +117,15 @@ export async function loadLibraryResources(input: ResourceQuery): Promise<Resour
     };
   }
   if (kind === "artifacts") {
-    const response = await fetchChatGeneratedArtifacts({ workspaceId, citadelId, limit: RESOURCE_LIMIT });
-    const scoped = response.items.filter((item) => item.workspaceId === workspaceId);
+    const response = await fetchChatGeneratedArtifacts({
+      workspaceId,
+      citadelId,
+      ...(projectId ? { projectId } : {}),
+      limit: RESOURCE_LIMIT,
+    });
+    const scoped = response.items.filter(
+      (item) => item.workspaceId === workspaceId && (!projectId || item.projectId === projectId),
+    );
     return {
       items: scoped
         .filter((item) => !text || `${item.title} ${item.kind}`.toLowerCase().includes(text))

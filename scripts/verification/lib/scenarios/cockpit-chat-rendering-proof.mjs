@@ -78,7 +78,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
           if (request.method() === "POST" && new URL(request.url()).pathname === `${sessionPath}/agent-send/stream`) sends.push(request.postDataJSON()?.content);
         });
         await page.goto(buildVerificationUiUrl(stack.uiUrl, `/chat?sessionId=${sessionId}&shell=cockpit`), { waitUntil: "domcontentloaded" });
-        await page.getByRole("textbox", { name: "Message", exact: true }).waitFor({ timeout: 30_000 });
+        await page.getByRole("combobox", { name: "Message", exact: true }).waitFor({ timeout: 30_000 });
         stage = "Markdown and code rendering";
         const markdown = await send(`COCKPIT_RENDER_MARKDOWN ${token}`, RENDER_MARKDOWN);
         let article = await findTurn(markdown.userMessage.content);
@@ -167,7 +167,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
         article = await findTurn(markdown.userMessage.content, "top");
         await clickTurnAction(article, "Run details");
         await page.getByRole("tab", { name: "Sources", exact: true }).click();
-        await sources.getByText("No sources were recorded for this turn.", { exact: true }).waitFor();
+        await sources.getByText("No sources were recorded for this response.", { exact: true }).waitFor();
         assert.equal(await sources.getByRole("link").count(), 0);
         await closeInspector();
 
@@ -191,7 +191,10 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
         assert.equal(recordedTurn.trace.capabilityProfileId, invalid.trace.capabilityProfileId);
         assert.equal(recordedTurn.trace.capabilityProfileHash, invalid.trace.capabilityProfileHash);
         await page.reload({ waitUntil: "domcontentloaded" });
-        const runCard = page.getByRole("region", { name: "Conversation run", exact: true });
+        await findTurn(invalid.userMessage.content);
+        const runCard = await revealConversationRun(page);
+        assert.equal(await runCard.evaluate((element) => element.tagName === "DETAILS" && element.open), true,
+          "Partial run evidence must expand automatically");
         await runCard.getByText(delegation.objective, { exact: true }).waitFor();
         await runCard.getByText("Partially complete", { exact: true }).waitFor();
         await runCard.getByRole("button", { name: "Inspect run", exact: true }).click();
@@ -209,7 +212,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
         article = await findTurn(markdown.userMessage.content, "top");
         await clickTurnAction(article, "Run details");
         await page.getByRole("tab", { name: "Run", exact: true }).click();
-        await runPanel.getByText("No delegation run is linked to this turn.", { exact: true }).waitFor();
+        await runPanel.getByText("No delegated work is linked to this response.", { exact: true }).waitFor();
         assert.equal(await runPanel.getByText(delegation.objective, { exact: true }).count(), 0);
         await closeInspector();
         evidence.recordedDelegationRunId = delegation.runId;
@@ -237,7 +240,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
       } finally { await browserContext.close(); }
 
       async function send(content, reply) {
-        await page.getByRole("textbox", { name: "Message", exact: true }).fill(content);
+        await page.getByRole("combobox", { name: "Message", exact: true }).fill(content);
         const button = page.getByRole("button", { name: "Send", exact: true });
         await poll(() => button.isEnabled(), "Send is unavailable");
         await button.click();
@@ -279,7 +282,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
         const messages = page.locator('[aria-label="Messages"]'); await messages.waitFor({ timeout: 30_000 });
         const scroller = messages.locator('[data-testid="virtuoso-scroller"]');
         await scroller.evaluate((element, top) => { element.scrollTop = top ? 0 : element.scrollHeight; element.dispatchEvent(new window.Event("scroll", { bubbles: true })); }, position === "top");
-        const article = messages.getByRole("article", { name: "Conversation turn", exact: true }).filter({ hasText: content });
+        const article = messages.getByRole("article", { name: "Conversation messages", exact: true }).filter({ hasText: content });
         await article.waitFor({ timeout: 15_000 }); return article;
       }
       async function saveArtifact(turn, content) {
@@ -315,4 +318,17 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
       }
     });
   }
+}
+
+
+/** Read the actual disclosure after bringing the virtual transcript footer into view. */
+export async function revealConversationRun(page) {
+  const messages = page.getByRole("region", { name: "Messages", exact: true });
+  await messages.waitFor({ timeout: 30_000 });
+  const scroller = messages.locator('[data-testid="virtuoso-scroller"]');
+  await scroller.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  const disclosure = messages.getByRole("group", { name: "Conversation run", exact: true });
+  await disclosure.waitFor({ state: "attached", timeout: 15_000 });
+  await disclosure.scrollIntoViewIfNeeded();
+  return disclosure;
 }

@@ -12,7 +12,11 @@ export function assertInboxDeliverableProjection({ projection, workspaceId, task
   const matches = projection.items.filter((item) => item.id === `task_deliverable:${deliverable.deliverableId}`);
   assert.equal(matches.length, 1);
   const item = matches[0];
-  assert.deepEqual(item, {
+  assert.match(item.version, /^[a-f0-9]{64}$/u);
+  assert.ok(["operator", "browser_local"].includes(projection.readStatus?.scope));
+  const { version, read, ...publicItem } = item;
+  if (projection.readStatus.scope === "operator") assert.equal(typeof read, "boolean");
+  assert.deepEqual(publicItem, {
     id: `task_deliverable:${deliverable.deliverableId}`,
     kind: "task_deliverable",
     group: "updates",
@@ -33,6 +37,10 @@ export function assertInboxOwnerUnchanged(before, after) {
     items: projection.items.map((item) => {
       // This rolling coverage warning is authored anew on each Gateway read.
       // All identity, scope, content, coverage, counts and persisted timestamps remain exact.
+      if (item.group === "updates") {
+        const { read, ...stable } = item;
+        return stable;
+      }
       if (item.id !== "spend_coverage:seven_days" || item.kind !== "spend_coverage") return item;
       const { createdAt, ...stable } = item;
       assert.ok(Number.isFinite(Date.parse(createdAt)));
@@ -65,7 +73,7 @@ export async function finishInboxProof(outcome, cleanupSteps) {
     : outcome;
 }
 
-/** Real disposable deliverable records; browser viewed state sends no runtime acknowledgement. */
+/** Real disposable deliverable records; read status is scoped to the operator or explicitly browser-local. */
 export async function runCockpitInboxViewedProof({ context, browser, stack, citadelId, viewports, deps }) {
   const {
     requestJson,
@@ -94,7 +102,7 @@ export async function runCockpitInboxViewedProof({ context, browser, stack, cita
         id: `ux-budgets.cockpit-inbox-viewed.${variant}`,
         lane: "ux-budgets",
         subsystem: "mission-control-ux",
-        title: `Inbox scoped viewed Updates without runtime acknowledgement ${variant}`,
+        title: `Inbox scoped versioned read status ${variant}`,
       },
       async () => {
         const screenshots = [],
@@ -184,7 +192,8 @@ export async function runCockpitInboxViewedProof({ context, browser, stack, cita
               pathname = new URL(request.url()).pathname;
             if (
               ["POST", "PUT", "PATCH", "DELETE"].includes(request.method()) &&
-              pathname !== "/api/v1/notifications/presence"
+              pathname !== "/api/v1/notifications/presence" &&
+              pathname !== "/api/v1/inbox/updates/read"
             )
               return route.abort("failed");
             return route.continue();
@@ -220,33 +229,33 @@ export async function runCockpitInboxViewedProof({ context, browser, stack, cita
           const ownerCount = before.counts.updates;
           const countLabel = ownerCount.complete ? String(ownerCount.known) : `${ownerCount.known}+`;
           assert.equal(await updates.getByLabel("Updates Gateway count", { exact: true }).innerText(), countLabel);
-          assert.ok((await updates.innerText()).includes("0 viewed here from this response"));
+          assert.ok((await updates.innerText()).includes("0 read from shown updates"));
           const navigationBaseline = navigations;
           stage = "selection leaves the row unviewed";
           await row.getByRole("button", { name: "Details", exact: true }).focus();
           await page.keyboard.press("j");
           await row.waitFor();
-          assert.ok((await updates.innerText()).includes("0 viewed here from this response"));
+          assert.ok((await updates.innerText()).includes("0 read from shown updates"));
           stage = "explicit Details marks the exact version";
           await row.getByRole("button", { name: "Details", exact: true }).click();
           await inspector.waitFor();
           await closeDetails();
           await row.waitFor({ state: "hidden" });
-          await updates.getByRole("button", { name: "Show viewed updates (1)", exact: true }).waitFor();
+          await updates.getByRole("button", { name: "Show read updates (1)", exact: true }).waitFor();
           assert.equal(await nav.getByRole("button", { name: /^Inbox/u }).innerText(), navCount);
           assert.equal(await updates.getByLabel("Updates Gateway count", { exact: true }).innerText(), countLabel);
           assertInboxOwnerUnchanged(before, await readInbox());
           await capture("hidden");
           stage = "show and hide are reversible";
-          await updates.getByRole("button", { name: "Show viewed updates (1)", exact: true }).click();
+          await updates.getByRole("button", { name: "Show read updates (1)", exact: true }).click();
           await row.waitFor();
-          await updates.getByRole("button", { name: "Hide viewed updates", exact: true }).click();
+          await updates.getByRole("button", { name: "Hide read updates", exact: true }).click();
           await row.waitFor({ state: "hidden" });
           stage = "same-document remount retains viewed state";
           await nav.getByRole("button", { name: "Work", exact: true }).click();
           await page.getByRole("heading", { name: "Work", exact: true }).waitFor();
           await nav.getByRole("button", { name: /^Inbox/u }).click();
-          await updates.getByRole("button", { name: "Show viewed updates (1)", exact: true }).waitFor();
+          await updates.getByRole("button", { name: "Show read updates (1)", exact: true }).waitFor();
           await row.waitFor({ state: "hidden" });
           assert.equal(navigations, navigationBaseline);
           assertInboxOwnerUnchanged(before, await readInbox());
@@ -274,13 +283,14 @@ export async function runCockpitInboxViewedProof({ context, browser, stack, cita
             task,
             deliverable,
           });
-          assert.deepEqual(changedItem, { ...item, summary: changedItem.summary });
+          assert.deepEqual(changedItem, { ...item, summary: changedItem.summary, version: changedItem.version });
+          assert.notEqual(changedItem.version, item.version);
           assert.notEqual(changedItem.summary, item.summary);
           assert.deepEqual(changed.counts, before.counts);
           await page.getByRole("button", { name: "Refresh", exact: true }).click();
           await row.waitFor();
           await row.getByText(changedItem.summary, { exact: true }).waitFor();
-          assert.ok((await updates.innerText()).includes("0 viewed here from this response"));
+          assert.ok((await updates.innerText()).includes("0 read from shown updates"));
           assert.equal(await nav.getByRole("button", { name: /^Inbox/u }).innerText(), navCount);
           await capture("new-version");
           await row.getByRole("button", { name: "Details", exact: true }).click();
@@ -288,12 +298,25 @@ export async function runCockpitInboxViewedProof({ context, browser, stack, cita
           await closeDetails();
           await row.waitFor({ state: "hidden" });
           assertInboxOwnerUnchanged(changed, await readInbox());
-          stage = "full reload clears presentation-only viewed state";
+          stage = "full reload preserves acknowledged update version";
           await page.reload({ waitUntil: "domcontentloaded" });
-          await row.waitFor();
-          assert.ok((await updates.innerText()).includes("0 viewed here from this response"));
+          await updates.getByRole("button", { name: "Show read updates (1)", exact: true }).waitFor();
+          await row.waitFor({ state: "hidden" });
           assertInboxOwnerUnchanged(changed, await readInbox());
-          assert.deepEqual(writes, [], "Viewing updates sent a runtime mutation.");
+          assert.ok(
+            writes.every(
+              (entry) =>
+                entry.pathname === "/api/v1/inbox/updates/read" &&
+                entry.method === "POST" &&
+                entry.body.workspaceId === workspace.workspaceId,
+            ),
+            "Read updates must never resolve approvals or tasks.",
+          );
+          if (before.readStatus.scope === "operator") {
+            assert.ok(writes.length >= 2);
+            const receipt = await readInbox();
+            assert.equal(receipt.items.find((entry) => entry.id === item.id).read, true);
+          } else assert.equal(writes.length, 0);
           const identity = await page.evaluate(() => ({
             workspaceId: window.localStorage.getItem("goatcitadel.ui.workspace_id.v1"),
             clientId: window.sessionStorage.getItem("goatcitadel.notification-client-id"),
@@ -314,12 +337,13 @@ export async function runCockpitInboxViewedProof({ context, browser, stack, cita
               reversibleShowViewed: true,
               sameDocumentRemount: true,
               newOwnerVersionReappears: true,
-              fullReloadClearsPresentation: true,
-              browserRuntimeWrites: 0,
+              fullReloadPreservesReadStatus: true,
+              browserReadStatusWrites: writes.length,
+              taskOrApprovalResolutionWrites: 0,
               fixtureTaskTitleCasWrites: 1,
               systemPresenceHeartbeats: presence.length,
               limitation:
-                "Recorded task-deliverable metadata in a disposable runtime. No task execution, persistent acknowledgement, archive or run completion is claimed.",
+                "Recorded task-deliverable metadata in a disposable runtime. No task execution, archive or run completion is claimed; read acknowledgement has no decision authority.",
             },
             artifacts: emptyArtifacts({ screenshots }),
           };

@@ -13,6 +13,7 @@ import {
   type EngineeringLearningStatus,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
+import { resolveCanonicalEngineeringProposal } from "./engineering-learning-canonical-source.js";
 
 export const ENGINEERING_LEARNING_APPROVAL_KIND = "engineering_learning.lifecycle" as const;
 export const ENGINEERING_LEARNING_EFFECT_KIND = "engineering_learning_lifecycle_apply" as const;
@@ -52,12 +53,22 @@ interface EngineeringLearningServiceDependencies {
   isEnabled: () => boolean | Promise<boolean>;
   createApproval: (input: ApprovalCreateInput) => Promise<ApprovalRequest>;
   resolveSourceRoot: (input: { sessionId?: string; projectId?: string }) => Promise<string | undefined>;
+  readVerifiedSource?: (runId: string, workspaceId: string) => Promise<CodeModeRunVerificationResponse>;
   resolveProjectId?: (sessionId: string) => string | undefined | Promise<string | undefined>;
   appendAudit?: (payload: Record<string, unknown>) => void | Promise<void>;
 }
 
 export class EngineeringLearningService {
   public constructor(private readonly deps: EngineeringLearningServiceDependencies) {}
+
+  /** Public proposals bind to a canonical run and its current immutable verification evidence (see
+   * engineering-learning-canonical-source.ts). Text may be operator-authored; ownership, changed files and
+   * verification are server-authored.
+   */
+  public async proposeFromCanonicalSource(input: EngineeringLearningProposalInput): Promise<EngineeringLearningRecord> {
+    await this.requireEnabled();
+    return this.propose(await resolveCanonicalEngineeringProposal(this.deps, input));
+  }
 
   public async propose(input: EngineeringLearningProposalInput): Promise<EngineeringLearningRecord> {
     await this.requireEnabled();
@@ -232,13 +243,19 @@ export class EngineeringLearningService {
       throw new Error("Stale engineering learnings must be updated or replaced before activation.");
     }
     const targetLearningIds = [...new Set((input.targetLearningIds ?? []).map((item) => item.trim()).filter(Boolean))];
-    for (const targetId of targetLearningIds) await this.get(targetId);
+    const reviewedTargets = await Promise.all(targetLearningIds.map(async (targetId) => {
+      const target = await this.get(targetId);
+      if (target.workspaceId !== learning.workspaceId || target.learningId === learningId) throw new Error("Engineering learning targets must be distinct records in the same workspace.");
+      return target;
+    }));
+    if (["replace", "consolidate"].includes(input.action) && !reviewedTargets.length) throw new Error("Replacement and consolidation require reviewed learning targets.");
     const updates = input.updates ? sanitizeLearningUpdates(input.updates) : undefined;
     const payload = {
       schemaVersion: "engineering-learning.lifecycle.v1",
       learningId,
       action: input.action,
       expectedProvenanceHash: learning.provenanceHash,
+      expectedTargetProvenance: Object.fromEntries(reviewedTargets.map(target => [target.learningId, target.provenanceHash])),
       targetLearningIds,
       updates,
     };
@@ -258,6 +275,9 @@ export class EngineeringLearningService {
         title: `${input.action} engineering learning`,
         learningId,
         learningTitle: learning.title,
+        scopeSummary: `Workspace: ${learning.workspaceId}`,
+        targetSummary: reviewedTargets.map(target => `${target.title} (${target.status})`).join(", ") || "No other learning is targeted.",
+        changeSummary: updates ? Object.entries(updates).map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : value}`).join("\n") : `Requested lifecycle action: ${input.action}`,
         status: learning.status,
         targetLearningIds,
         evidence: learning.verificationEvidence,
@@ -298,6 +318,13 @@ export class EngineeringLearningService {
     }
     const updates = isRecord(payload.updates) ? sanitizeLearningUpdates(payload.updates) : undefined;
     const targets = readRecordStringArray(payload.targetLearningIds);
+    if (action === "replace" || action === "consolidate") {
+      const expectedTargets = isRecord(payload.expectedTargetProvenance) ? payload.expectedTargetProvenance : {};
+      for (const targetId of targets) {
+        const target = await this.get(targetId);
+        if (target.workspaceId !== current.workspaceId || target.learningId === current.learningId || target.provenanceHash !== expectedTargets[targetId]) throw new Error("A reviewed Engineering target changed after the approval request.");
+      }
+    }
     const status: EngineeringLearningStatus =
       action === "activate" || action === "replace" || action === "consolidate"
         ? "active"

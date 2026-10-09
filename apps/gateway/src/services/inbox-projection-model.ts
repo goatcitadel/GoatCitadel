@@ -94,6 +94,7 @@ export function projectInboxBackupTrust(
       items: [],
       state: "not_enabled" as const,
       detail: "No backup has been published yet, so there is no backup proof to verify.",
+      backupTrust: { state: "none" as const, observedAt: new Date(now).toISOString() },
     };
   const observedAt = inspection.observedAt ?? new Date(now).toISOString();
   const age = inspection.createdAt ? Date.parse(inspection.createdAt) : NaN;
@@ -120,6 +121,13 @@ export function projectInboxBackupTrust(
         ]
       : [],
     state: cached ? ("limited" as const) : ("current" as const),
+    backupTrust: {
+      state: !inspection.backupId || !inspection.createdAt ? "unknown" as const
+        : !verified ? "failed" as const : stale ? "stale" as const : "verified" as const,
+      ...(inspection.backupId ? { backupId: inspection.backupId } : {}),
+      ...(inspection.createdAt ? { createdAt: inspection.createdAt } : {}),
+      observedAt,
+    },
     detail: cached
       ? "Backup verification is cached for up to five minutes to avoid copying the backup on every Inbox poll."
       : undefined,

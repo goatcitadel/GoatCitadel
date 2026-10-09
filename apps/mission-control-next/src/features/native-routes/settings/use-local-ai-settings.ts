@@ -16,7 +16,14 @@ import {
   localAiReviewBinding,
   type LocalAiIntent,
 } from "./local-ai-model";
-import { localAiRequestLocked, setLocalAiRequest, useLocalAiRequestState } from "./local-ai-request-state";
+import {
+  LOCAL_AI_ROUTE_PATTERNS,
+  checkLocalAiRequestOutcome,
+  localAiRequestLocked,
+  setLocalAiRequest,
+  useLocalAiRequestState,
+} from "./local-ai-request-state";
+import { dispatchTrackedMutation, type TrackedAttempt } from "./mutation-attempt-tracking";
 
 type Review = {
   scope: string;
@@ -119,6 +126,7 @@ export function useLocalAiSettings() {
     setLocalAiRequest(intent.key, { phase: "checking" });
     setNotice(null);
     let dispatched = false;
+    let transport: TrackedAttempt | undefined;
     try {
       const fresh = assertLocalAiReadiness(await fetchLocalAiReadiness());
       if (!current(generation)) return;
@@ -127,7 +135,13 @@ export function useLocalAiSettings() {
       setLocalAiRequest(intent.key, { phase: "requesting" });
       dispatched = true;
       const input = { modelId: intent.model.modelId, backend: intent.model.backend, approvalMode: "request" as const };
-      const job = intent.kind === "download" ? await startLocalAiDownload(input) : await startLocalAiServe(input);
+      const job = await dispatchTrackedMutation(
+        LOCAL_AI_ROUTE_PATTERNS,
+        () => (intent.kind === "download" ? startLocalAiDownload(input) : startLocalAiServe(input)),
+        (tracked) => {
+          transport = tracked;
+        },
+      );
       if (
         !job?.jobId ||
         !job.approvalId ||
@@ -156,7 +170,14 @@ export function useLocalAiSettings() {
       const message = dispatched
         ? `Request outcome is unconfirmed. Do not retry this request in this app session. Review retained jobs and approvals. ${describeApiError(error).summary}`
         : `No approval request was sent. ${describeApiError(error).summary}`;
-      if (dispatched) setLocalAiRequest(intent.key, { phase: "uncertain", message });
+      if (dispatched)
+        setLocalAiRequest(intent.key, {
+          phase: "uncertain",
+          message: transport
+            ? `${message} Check its outcome to settle it from the Gateway's record of this attempt.`
+            : message,
+          ...(transport ? { transport } : {}),
+        });
       if (current(generation)) {
         setReview(null);
         setNotice({ tone: "error", message });
@@ -185,5 +206,14 @@ export function useLocalAiSettings() {
     cancel,
     queueing,
     stateFor: (kind: LocalAiIntent) => requestState.stateFor(requestKey(kind)),
+    /** Settles a lost approval request from the Gateway's record of it, then the canonical retained-job read. */
+    checkOutcome: async (kind: LocalAiIntent) => {
+      const settled = await checkLocalAiRequestOutcome(requestKey(kind), async () => {
+        assertLocalAiReadiness(await fetchLocalAiReadiness());
+      });
+      if (!settled) return;
+      if (lifetime.current.active) setNotice({ tone: "info", message: settled });
+      await Promise.resolve(load.reload()).catch(() => undefined);
+    },
   };
 }

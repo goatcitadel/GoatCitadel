@@ -14,6 +14,20 @@ const api = vi.hoisted(() => ({
 const prefs = vi.hoisted(() => ({ activeCitadelId: "first" }));
 vi.mock("@goatcitadel/mission-control-shared/api/local-ai", () => api);
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => prefs }));
+// Each owner write reports the attempt it dispatched, as the real capture would for its Gateway route.
+const attempts = vi.hoisted(() => ({ paths: [] as string[], read: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  captureMutationAttempt: (dispatch: () => Promise<unknown>, onAttempt: (attempt: unknown) => void) => {
+    const path = attempts.paths.shift();
+    if (path) onAttempt({ attemptKey: "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b", method: "POST", path });
+    return dispatch();
+  },
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  fetchMutationAttempt: attempts.read,
+}));
 let view: ReactTestRenderer | undefined;
 let hook: ReturnType<typeof useLocalAiSettings>;
 let owner: LocalAiReadinessResponse;
@@ -40,6 +54,7 @@ async function confirm() {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  attempts.paths.length = 0;
   __resetLocalAiRequestStateForTests();
   prefs.activeCitadelId = "first";
   owner = localAiFixture();
@@ -60,6 +75,51 @@ afterEach(async () => {
   view = undefined;
 });
 describe("Local AI request lifecycle", () => {
+  async function loseDownload() {
+    await render();
+    await review();
+    attempts.paths.push("/api/v1/local-ai/downloads");
+    api.startLocalAiDownload.mockRejectedValueOnce(new Error("response lost"));
+    await confirm();
+    expect(hook.stateFor("download")).toMatchObject({
+      phase: "uncertain",
+      transport: { routePattern: "/api/v1/local-ai/downloads" },
+    });
+  }
+  it("settles a lost approval request from the Gateway's record and the retained job owner", async () => {
+    await loseDownload();
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    const reads = api.fetchLocalAiReadiness.mock.calls.length;
+    await act(async () => hook.checkOutcome("download"));
+    expect(attempts.read).toHaveBeenCalledWith(
+      "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+      "POST",
+      "/api/v1/local-ai/downloads",
+    );
+    expect(api.fetchLocalAiReadiness.mock.calls.length).toBeGreaterThan(reads);
+    expect(hook.stateFor("download")?.phase).not.toBe("uncertain");
+    expect(hook.queueing).toBe(false);
+    expect(hook.notice?.message).toMatch(/recorded this Local AI request as processed/);
+    expect(api.startLocalAiDownload).toHaveBeenCalledTimes(1);
+  });
+  it("keeps the Local AI lock while the Gateway has no record", async () => {
+    await loseDownload();
+    attempts.read.mockResolvedValue({ status: "absent" });
+    await act(async () => hook.checkOutcome("download"));
+    expect(hook.stateFor("download")).toMatchObject({
+      phase: "uncertain",
+      message: expect.stringMatching(/no record/),
+    });
+    expect(hook.queueing).toBe(true);
+  });
+  it("keeps the Local AI lock when the job owner cannot be read", async () => {
+    await loseDownload();
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    api.fetchLocalAiReadiness.mockRejectedValue(new Error("readiness unavailable"));
+    await act(async () => hook.checkOutcome("download"));
+    expect(hook.stateFor("download")?.message).toMatch(/check failed/);
+    expect(hook.queueing).toBe(true);
+  });
   it("reads in StrictMode without mutation and cancellation sends no request", async () => {
     await render();
     expect(hook.readiness).toEqual(owner);

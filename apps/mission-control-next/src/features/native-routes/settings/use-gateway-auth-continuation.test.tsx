@@ -12,7 +12,15 @@ const api = vi.hoisted(() => ({
   submitChangePlanGatewayAuthCredential: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
-vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({ getGatewayApiBaseUrl: () => "owner" }));
+const attempts = vi.hoisted(() => ({ paths: [] as string[] }));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({
+  getGatewayApiBaseUrl: () => "owner",
+  captureMutationAttempt: (dispatch: () => Promise<unknown>, onAttempt: (attempt: unknown) => void) => {
+    const path = attempts.paths.shift();
+    if (path) onAttempt({ attemptKey: "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b", method: "POST", path });
+    return dispatch();
+  },
+}));
 const key = "access:owner:auth";
 const submitted = { mode: "token", allowLoopbackBypass: false, basicUsername: "", replaceCredential: true };
 function initial(): ChangePlanRecord {
@@ -202,6 +210,23 @@ describe("required Gateway authentication action", () => {
     await confirm();
     expect(api.submitChangePlanGatewayAuthCredential).toHaveBeenCalledOnce();
   });
+  it.each([
+    [
+      "secure_input",
+      "/api/v1/change-plans/auth-plan/gateway-auth-credential",
+      "/api/v1/change-plans/:planId/gateway-auth-credential",
+    ],
+  ] as const)(
+    "keeps the identity of a lost %s action for an outcome check, never the credential",
+    async (_kind, path, pattern) => {
+      attempts.paths.push(path);
+      api.submitChangePlanGatewayAuthCredential.mockRejectedValue(new Error("lost response"));
+      await review();
+      await confirm();
+      expect(attempt).toMatchObject({ state: "uncertain", transport: { method: "POST", routePattern: pattern } });
+      expect(JSON.stringify(attempt)).not.toContain("synthetic-direct-secret");
+    },
+  );
   it("withholds settlement for a substituted owner receipt", async () => {
     api.submitChangePlanGatewayAuthCredential.mockResolvedValue({
       ...plan,

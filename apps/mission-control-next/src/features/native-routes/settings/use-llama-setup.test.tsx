@@ -6,6 +6,7 @@ import type { ChangePlanRecord, LlamaCppSetupProjection } from "@goatcitadel/con
 import { __resetSessionDraftsForTests } from "../library/session-drafts";
 import { __resetLlamaSetupForTests, rememberLlamaPlan, type LlamaSetupChange } from "./llama-setup-state";
 import { useLlamaSetup } from "./use-llama-setup";
+import { freshReadsActive } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import {
   awaitingLlamaApproval,
   deferredLlama,
@@ -24,7 +25,20 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
 const owner = vi.hoisted(() => ({ base: "fixture-gateway" }));
-vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({ getGatewayApiBaseUrl: () => owner.base }));
+// Each owner write reports the attempt it dispatched, as the real capture would for its Gateway route.
+const attempts = vi.hoisted(() => ({ paths: [] as string[], read: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({
+  getGatewayApiBaseUrl: () => owner.base,
+  captureMutationAttempt: (dispatch: () => Promise<unknown>, onAttempt: (attempt: unknown) => void) => {
+    const path = attempts.paths.shift();
+    if (path) onAttempt({ attemptKey: "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b", method: "POST", path });
+    return dispatch();
+  },
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  fetchMutationAttempt: attempts.read,
+}));
 let root: Root,
   control: ReturnType<typeof useLlamaSetup>,
   workspaceId: string,
@@ -54,6 +68,7 @@ async function confirm() {
 }
 beforeEach(async () => {
   vi.resetAllMocks();
+  attempts.paths.length = 0;
   __resetLlamaSetupForTests();
   __resetSessionDraftsForTests();
   owner.base = "fixture-gateway";
@@ -154,6 +169,7 @@ describe("shared governed llama setup", () => {
           autoStart: true,
         },
       },
+      idempotencyKey: expect.stringMatching(/^llama-setup:[0-9a-f-]{36}$/),
     });
   });
   it.each(["expired", "wrong-model", "missing-selection"])(
@@ -238,6 +254,175 @@ describe("shared governed llama setup", () => {
     await render();
     expect(api.createChangePlan).not.toHaveBeenCalled();
     expect(control.state.attempt).toBeUndefined();
+  });
+  async function checkOutcome() {
+    await act(async () => {
+      await control.checkOutcome();
+    });
+  }
+  it("settles a lost confirmation from the attempt record and the canonical plan", async () => {
+    choose();
+    review();
+    await confirm();
+    act(() => control.confirmationReview());
+    attempts.paths.push("/api/v1/change-plans/plan-1/confirmations");
+    api.confirmChangePlan.mockImplementationOnce(async () => {
+      plan = awaitingLlamaApproval(plan);
+      throw new Error("response lost");
+    });
+    await confirm();
+    expect(control.state.attempt).toMatchObject({
+      state: "uncertain",
+      transport: { routePattern: "/api/v1/change-plans/:planId/confirmations" },
+    });
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    await checkOutcome();
+    expect(control.state.attempt).toBeUndefined();
+    expect(control.plan?.status).toBe("awaiting_approval");
+    expect(control.notice).toMatch(/recorded this setup confirmation as processed/);
+    expect(api.confirmChangePlan).toHaveBeenCalledTimes(1);
+  });
+  it("recovers a lost plan create by replaying its plan key only when the Gateway recorded it", async () => {
+    choose();
+    review();
+    attempts.paths.push("/api/v1/change-plans");
+    const create = api.createChangePlan.getMockImplementation()!;
+    api.createChangePlan.mockRejectedValueOnce(new Error("response lost"));
+    await confirm();
+    expect(control.state.attempt?.state).toBe("uncertain");
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    api.createChangePlan.mockImplementation(create);
+    await checkOutcome();
+    expect(api.createChangePlan).toHaveBeenCalledTimes(2);
+    const [first, replay] = api.createChangePlan.mock.calls.map(([input]) => input);
+    expect(first.idempotencyKey).toMatch(/^llama-setup:[0-9a-f-]{36}$/);
+    expect(replay).toEqual(first);
+    expect(control.state.attempt).toBeUndefined();
+    expect(control.plan?.status).toBe("awaiting_confirmation");
+  });
+  it("never replays a released plan create", async () => {
+    choose();
+    review();
+    attempts.paths.push("/api/v1/change-plans");
+    api.createChangePlan.mockRejectedValueOnce(new Error("response lost"));
+    await confirm();
+    attempts.read.mockResolvedValue({ status: "failed", claimExpired: false });
+    await checkOutcome();
+    expect(api.createChangePlan).toHaveBeenCalledTimes(1);
+    expect(control.state.attempt).toBeUndefined();
+    expect(control.notice).toMatch(/not replayed/);
+  });
+  it.each([
+    [{ status: "pending", claimExpired: false }, /still running/],
+    [{ status: "absent" }, /no record/],
+  ])("keeps the setup lock for %o", async (record, message) => {
+    choose();
+    review();
+    attempts.paths.push("/api/v1/change-plans");
+    api.createChangePlan.mockRejectedValueOnce(new Error("response lost"));
+    await confirm();
+    attempts.read.mockResolvedValue(record);
+    await checkOutcome();
+    expect(control.state.attempt?.state).toBe("uncertain");
+    expect(control.state.attempt?.message).toMatch(message);
+    expect(api.createChangePlan).toHaveBeenCalledTimes(1);
+  });
+  it("keeps the setup lock when the attempt read fails, with fixed copy", async () => {
+    choose();
+    review();
+    attempts.paths.push("/api/v1/change-plans");
+    api.createChangePlan.mockRejectedValueOnce(new Error("response lost"));
+    await confirm();
+    attempts.read.mockRejectedValue(new Error("API error 403: gateway-internal-detail"));
+    await checkOutcome();
+    expect(control.state.attempt?.state).toBe("uncertain");
+    expect(control.state.attempt?.message).toMatch(/check failed/);
+    expect(control.state.attempt?.message).not.toContain("gateway-internal-detail");
+  });
+  it("never reads, replays or adopts against a different Gateway installation", async () => {
+    choose();
+    review();
+    attempts.paths.push("/api/v1/change-plans");
+    api.createChangePlan.mockRejectedValueOnce(new Error("response lost"));
+    await confirm();
+    owner.base = "other-gateway";
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    await checkOutcome();
+    owner.base = "fixture-gateway";
+    await render();
+    expect(attempts.read).not.toHaveBeenCalled();
+    expect(api.createChangePlan).toHaveBeenCalledTimes(1);
+    expect(control.state.attempt?.state).toBe("uncertain");
+    expect(control.state.attempt?.message).toMatch(/different Gateway/);
+  });
+  it("keeps the lock when the Gateway changes while a released create's setup is read back", async () => {
+    choose();
+    review();
+    attempts.paths.push("/api/v1/change-plans");
+    api.createChangePlan.mockRejectedValueOnce(new Error("response lost"));
+    await confirm();
+    attempts.read.mockResolvedValue({ status: "failed", claimExpired: false });
+    let switchDuringRead = true;
+    api.fetchLlamaCppSetup.mockImplementation(async () => {
+      if (switchDuringRead) owner.base = "other-gateway";
+      switchDuringRead = false;
+      return structuredClone(projection);
+    });
+    await checkOutcome();
+    owner.base = "fixture-gateway";
+    await render();
+    expect(control.state.attempt?.state).toBe("uncertain");
+    expect(control.state.attempt?.message).toMatch(/different Gateway/);
+    expect(control.notice ?? "").not.toMatch(/not replayed/);
+  });
+  it("keeps the lock when a lost replay is released, because the original plan may exist", async () => {
+    choose();
+    review();
+    attempts.paths.push("/api/v1/change-plans");
+    api.createChangePlan.mockRejectedValueOnce(new Error("response lost"));
+    await confirm();
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    attempts.paths.push("/api/v1/change-plans");
+    api.createChangePlan.mockRejectedValueOnce(new Error("replay response lost"));
+    await checkOutcome();
+    expect(api.createChangePlan).toHaveBeenCalledTimes(2);
+    expect(control.state.attempt?.state).toBe("uncertain");
+    attempts.read.mockResolvedValue({ status: "failed", claimExpired: false });
+    await checkOutcome();
+    expect(api.createChangePlan).toHaveBeenCalledTimes(2);
+    expect(control.state.attempt?.state).toBe("uncertain");
+    expect(control.state.attempt?.message).toMatch(/original plan may exist/);
+    expect(control.notice ?? "").not.toMatch(/not replayed/);
+  });
+  it("re-reads the plan fresh when settling a lost confirmation", async () => {
+    choose();
+    review();
+    await confirm();
+    act(() => control.confirmationReview());
+    attempts.paths.push("/api/v1/change-plans/plan-1/confirmations");
+    api.confirmChangePlan.mockImplementationOnce(async () => {
+      plan = awaitingLlamaApproval(plan);
+      throw new Error("response lost");
+    });
+    await confirm();
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    let fresh = false;
+    api.fetchChangePlan.mockImplementation(async () => {
+      fresh = freshReadsActive();
+      return structuredClone(plan);
+    });
+    await checkOutcome();
+    expect(fresh).toBe(true);
+  });
+  it("offers no outcome check for a setup write it could not identify", async () => {
+    choose();
+    review();
+    api.createChangePlan.mockRejectedValueOnce(new Error("response lost"));
+    await confirm();
+    expect(control.state.attempt?.transport).toBeUndefined();
+    await checkOutcome();
+    expect(attempts.read).not.toHaveBeenCalled();
+    expect(control.state.attempt?.state).toBe("uncertain");
   });
   it("retains an unknown create outcome and public draft across workspace and shell remount", async () => {
     choose();

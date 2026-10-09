@@ -47,7 +47,7 @@ public sealed class NotificationService : IDisposable
 
     public void ShowApproval(ApprovalNotificationPayload payload)
     {
-        var route = $"/ops/approvals?approvalId={Uri.EscapeDataString(payload.ApprovalId)}";
+        var route = payload.RoutePath;
         var body = $"{payload.Kind ?? "Approval"}{(string.IsNullOrWhiteSpace(payload.RiskLevel) ? "" : $" / {payload.RiskLevel}")}";
         Show("GoatCitadel approval waiting", body, route);
     }

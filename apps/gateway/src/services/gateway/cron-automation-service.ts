@@ -1931,14 +1931,21 @@ export function parseSimpleCronSchedule(value: string): {
   let weekdays: number[] | undefined;
   const wildcardWeekday = dayOfWeekRaw === "*";
   if (!wildcardWeekday) {
-    const parsedWeekdays = [...new Set(dayOfWeekRaw.split(",").map((token) => Number.parseInt(token, 10)))];
-    if (
-      parsedWeekdays.length === 0 ||
-      parsedWeekdays.some((weekday) => !Number.isFinite(weekday) || weekday < 0 || weekday > 6)
-    ) {
-      return null;
+    // Each comma token is one exact day (0-6) or an ascending range ("1-5" is Monday to Friday).
+    const days: number[] = [];
+    for (const token of dayOfWeekRaw.split(",")) {
+      const range = /^([0-6])(?:-([0-6]))?$/.exec(token);
+      if (!range) {
+        return null;
+      }
+      const first = Number(range[1]);
+      const last = range[2] === undefined ? first : Number(range[2]);
+      if (last < first) {
+        return null;
+      }
+      for (let day = first; day <= last; day += 1) days.push(day);
     }
-    weekdays = parsedWeekdays.sort((left, right) => left - right);
+    weekdays = [...new Set(days)].sort((left, right) => left - right);
   }
   const timeZone = timezoneParts.length > 0 ? timezoneParts.join(" ") : undefined;
   if (timeZone) {

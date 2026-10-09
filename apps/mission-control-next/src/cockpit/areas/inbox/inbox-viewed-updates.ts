@@ -1,25 +1,25 @@
 import { useCallback, useSyncExternalStore } from "react";
-import { canonicalJsonString, type OperatorInboxItem } from "@goatcitadel/contracts";
-
-// Presentation only: no persisted acknowledgement, archive or change to Gateway counts.
-const viewed = new Map<string, ReadonlySet<string>>();
-const EMPTY = new Set<string>();
-const listeners = new Set<() => void>();
-const scopeKey = (installation: string, workspaceId: string) => JSON.stringify([installation, workspaceId]);
-const snapshot = (key: string) => viewed.get(key) ?? EMPTY;
-const subscribe = (listener: () => void) => {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-};
-
+import type { OperatorInboxItem } from "@goatcitadel/contracts";
+import {
+  acknowledgeLocalInboxUpdate,
+  readLocalInboxUpdates,
+  localInboxStorageAvailable,
+  subscribeLocalInboxReads,
+} from "@goatcitadel/mission-control-shared/api/inbox-local-read-store";
+function references(raw: string): Array<{ id: string; version: string }> {
+  try {
+    const data: unknown = JSON.parse(raw);
+    return Array.isArray(data)
+      ? data.filter((e) => e && typeof e.id === "string" && typeof e.version === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
 export function inboxUpdateVersion(item: OperatorInboxItem, workspaceId: string): string | undefined {
   if (
     !workspaceId.trim() ||
     !item.id ||
-    item.source.workspaceId !== workspaceId ||
-    item.group !== "updates" ||
     item.riskLevel ||
     item.source.approvalId ||
     item.source.planId ||
@@ -30,53 +30,58 @@ export function inboxUpdateVersion(item: OperatorInboxItem, workspaceId: string)
     (item.updatedAt && !Number.isFinite(Date.parse(item.updatedAt)))
   )
     return undefined;
-  if (item.kind === "task_deliverable") {
-    if (!item.source.taskId || !item.source.deliverableId) return undefined;
-  } else if (item.kind === "completed_background_run") {
-    if (!item.source.runId) return undefined;
-  } else return undefined;
-  return canonicalJsonString(item);
+  if (
+    item.kind === "task_deliverable"
+      ? !item.source.taskId || !item.source.deliverableId
+      : item.kind === "completed_background_run"
+        ? !item.source.runId
+        : true
+  )
+    return undefined;
+  return item.group === "updates" &&
+    item.source.workspaceId === workspaceId &&
+    typeof item.version === "string" &&
+    /^[a-f0-9]{64}$/.test(item.version)
+    ? JSON.stringify([item.id, item.version])
+    : undefined;
 }
 
 export function isInboxUpdateViewed(installation: string, workspaceId: string, item: OperatorInboxItem): boolean {
-  const version = inboxUpdateVersion(item, workspaceId);
-  return version !== undefined && snapshot(scopeKey(installation, workspaceId)).has(version);
+  return Boolean(
+    inboxUpdateVersion(item, workspaceId) &&
+    references(readLocalInboxUpdates(installation, workspaceId)).some(
+      (e) => e.id === item.id && e.version === item.version,
+    ),
+  );
 }
-
-export function markInboxUpdateViewed(installation: string, workspaceId: string, item: OperatorInboxItem): boolean {
-  const version = inboxUpdateVersion(item, workspaceId);
-  if (!installation.trim() || version === undefined) return false;
-  const key = scopeKey(installation, workspaceId);
-  const previous = snapshot(key);
-  if (previous.has(version)) return true;
-  // Bound retained presentation memory. Evicted versions simply appear as unviewed again.
-  const next = new Set([...previous].slice(-499));
-  next.add(version);
-  viewed.delete(key);
-  viewed.set(key, next);
-  if (viewed.size > 32) viewed.delete(viewed.keys().next().value!);
-  for (const listener of listeners) listener();
-  return true;
+export async function markInboxUpdateViewed(
+  installation: string,
+  workspaceId: string,
+  item: OperatorInboxItem,
+  isCurrent?: () => boolean,
+): Promise<boolean> {
+  if (!inboxUpdateVersion(item, workspaceId)) return false;
+  return acknowledgeLocalInboxUpdate(installation, workspaceId, { id: item.id, version: item.version! }, isCurrent);
 }
-
 export function useInboxViewedUpdates(installation: string, workspaceId: string) {
-  const key = scopeKey(installation, workspaceId);
-  const versions = useSyncExternalStore(
-    subscribe,
-    () => snapshot(key),
-    () => EMPTY,
+  const raw = useSyncExternalStore(
+    subscribeLocalInboxReads,
+    () => readLocalInboxUpdates(installation, workspaceId),
+    () => "[]",
+  );
+  const available = useSyncExternalStore(
+    subscribeLocalInboxReads,
+    () => localInboxStorageAvailable(installation, workspaceId),
+    () => false,
   );
   const isViewed = useCallback(
-    (item: OperatorInboxItem) => {
-      const version = inboxUpdateVersion(item, workspaceId);
-      return version !== undefined && versions.has(version);
-    },
-    [versions, workspaceId],
+    (item: OperatorInboxItem) =>
+      Boolean(
+        inboxUpdateVersion(item, workspaceId) &&
+        references(raw).some((e) => e.id === item.id && e.version === item.version),
+      ),
+    [raw, workspaceId],
   );
-  return { isViewed };
+  return { isViewed, available };
 }
-
-export function __resetInboxViewedUpdatesForTests() {
-  viewed.clear();
-  for (const listener of listeners) listener();
-}
+export function __resetInboxViewedUpdatesForTests() {}

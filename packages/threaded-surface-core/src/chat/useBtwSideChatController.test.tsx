@@ -22,11 +22,11 @@ type Controller = ReturnType<typeof useBtwSideChatController>;
 
 let latest: Controller | null = null;
 
-function Harness() {
+function Harness({ parent = "parent-1" }: { parent?: string } = {}) {
   latest = useBtwSideChatController({
     workspaceId: "workspace-1",
     selectedSession: null,
-    selectedSessionId: "parent-1",
+    selectedSessionId: parent,
     selectedTurnId: null,
     currentSurface: "chat",
     prefs: null,
@@ -183,6 +183,21 @@ describe("useBtwSideChatController streaming preview", () => {
     expect(latest!.panelProps.thread?.turns[0]?.assistantMessage?.content).toBe("Hello world");
     expect(latest!.panelProps.sending).toBe(false);
     expect(latest!.panelProps.error).toBeNull();
+  });
+
+  it("ignores a previous parent stream after switching conversation", async () => {
+    const { sendPromise } = await startStreamingSend();
+    await act(async () => { renderer!.update(<Harness parent="parent-2" />); });
+    await act(async () => {
+      emitChunk!({ type: "error", sessionId: "child-1", error: "old parent failure" } as never);
+      resolveStream!();
+      await sendPromise;
+    });
+    expect(latest!.panelProps.parentSessionId).toBe("parent-2");
+    expect(latest!.panelProps.thread).toBeNull();
+    expect(latest!.panelProps.error).toBeNull();
+    expect(latest!.panelProps.open).toBe(false);
+    expect(latest!.panelProps.sending).toBe(false);
   });
 
   it("promotes the buffered preview into the thread when the stream fails", async () => {

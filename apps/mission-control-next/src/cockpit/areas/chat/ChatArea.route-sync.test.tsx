@@ -2,11 +2,13 @@
 import { act, useEffect, useLayoutEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { commitCockpitNavigation } from "../../app/cockpit-history";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { useChatOwnerNavigation, useChatSelectionReview } from "./use-chat-owner-navigation";
 import {
   chatSelectionMatches,
+  chatSelectionHref,
   type ChatLocationSelection,
   type ChatSelectionEvidence,
 } from "./chat-selection-evidence";
@@ -303,4 +305,40 @@ describe("cockpit controller route publication", () => {
       ),
     ).toBe(false);
   });
+});
+
+it("publishes a legacy message destination only after its exact scoped history anchor is found", () => {
+  const selection = { sessionId: "s", messageId: "legacy/1", sequence: 7 };
+  const bound = evidence({ sessionId: "s" });
+  expect(chatSelectionMatches(selection, bound, "workspace-a")).toBe(false);
+  const anchor = { workspaceId: "workspace-a", sessionId: "s", messageId: "legacy/1", sequence: 7, state: "found" as const };
+  const active = { ...bound.active!, historicalWindow: { anchor, items: [], hasOlder: false, hasNewer: false, truncated: false, droppedItems: 0, byteLength: 0 } };
+  expect(chatSelectionMatches(selection, { ...bound, active }, "workspace-a")).toBe(true);
+  expect(chatSelectionHref(selection)).toBe("/chat?shell=cockpit&sessionId=s&messageId=legacy%2F1&sequence=7");
+  for (const patch of [{ messageId: "other" }, { sequence: 8 }, { workspaceId: "foreign" }, { state: "unavailable" as const }]) {
+    expect(chatSelectionMatches(selection, { ...bound, active: { ...active, historicalWindow: { ...active.historicalWindow, anchor: { ...anchor, ...patch } } } }, "workspace-a")).toBe(false);
+  }
+});
+
+
+it("does not publish a retained conversation selection over an exact Projects destination", async () => {
+  await render();
+  await act(async () => controller.request("chat", { sessionId: "session-b" }));
+  await act(async () => { commitCockpitNavigation("/chat/projects/project-a?workspaceId=workspace-a#context"); });
+  await act(async () => publishSelection({ sessionId: "session-b" }));
+  expect(window.location.pathname).toBe("/chat/projects/project-a");
+  expect(window.location.hash).toBe("#context");
+  expect(new URLSearchParams(window.location.search).get("sessionId")).toBeNull();
+  expect(new URLSearchParams(window.location.search).get("workspaceId")).toBe("workspace-a");
+});
+
+it("preserves the requested assignment only while publishing the same conversation", async () => {
+  window.history.replaceState(null, "", "/chat?sessionId=session-a&assignProjectId=project-a&shell=cockpit");
+  await render();
+  await act(async () => controller.request("chat", { sessionId: "session-a" }));
+  await act(async () => publishSelection({ sessionId: "session-a" }));
+  expect(new URLSearchParams(window.location.search).get("assignProjectId")).toBe("project-a");
+  await act(async () => controller.request("chat", { sessionId: "session-b" }));
+  await act(async () => publishSelection({ sessionId: "session-b" }));
+  expect(new URLSearchParams(window.location.search).get("assignProjectId")).toBeNull();
 });

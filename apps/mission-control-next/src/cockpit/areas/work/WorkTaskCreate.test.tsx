@@ -99,13 +99,12 @@ async function click(label: string): Promise<void> {
 }
 
 describe("cockpit task creation", () => {
-  it("creates only after review and confirmation in the selected workspace", async () => {
+  it("creates directly through the guarded owner in the selected workspace", async () => {
     vi.mocked(createTask).mockResolvedValue(task());
     await render();
     await fill();
-    await click("Review task");
     expect(createTask).not.toHaveBeenCalled();
-    await click("Confirm create");
+    await click("Create task");
     await vi.waitFor(() =>
       expect(createTask).toHaveBeenCalledWith({
         workspaceId: "workspace-a",
@@ -120,8 +119,7 @@ describe("cockpit task creation", () => {
     vi.mocked(createTask).mockResolvedValue(task({ workspaceId: "other-workspace" }));
     await render();
     await fill();
-    await click("Review task");
-    await click("Confirm create");
+    await click("Create task");
     await vi.waitFor(() => expect(container.textContent).toContain("create outcome is unconfirmed"));
     expect(onCreated).not.toHaveBeenCalled();
     expect(container.querySelector<HTMLButtonElement>("button[disabled]")?.disabled).toBe(true);
@@ -131,8 +129,7 @@ describe("cockpit task creation", () => {
     vi.mocked(createTask).mockRejectedValue(new Error("Response lost"));
     await render();
     await fill();
-    await click("Review task");
-    await click("Confirm create");
+    await click("Create task");
     await vi.waitFor(() => expect(container.textContent).toContain("create outcome is unconfirmed"));
     await click("Close");
     expect(createTask).toHaveBeenCalledTimes(1);
@@ -198,8 +195,7 @@ describe("retained task creation input", () => {
     vi.mocked(createTask).mockRejectedValue(new Error("Response lost"));
     await render();
     await fill();
-    await click("Review task");
-    await click("Confirm create");
+    await click("Create task");
     await vi.waitFor(() => expect(container.textContent).toContain("create outcome is unconfirmed"));
     await act(async () =>
       discardSessionDraft(taskCreateDraftKey(getGatewayApiBaseUrl(), "workspace-a", preferences.activeCitadelId)),
@@ -221,9 +217,8 @@ describe("retained task creation input", () => {
     );
     await render();
     await fill();
-    await click("Review task");
     const confirm = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (item) => item.textContent?.trim() === "Confirm create",
+      (item) => item.textContent?.trim() === "Create task",
     )!;
     await act(async () => {
       confirm.click();
@@ -249,8 +244,7 @@ describe("confirmed task draft acknowledgement", () => {
     const invalidate = vi.spyOn(client, "invalidateQueries").mockReturnValue(refreshed);
     await render();
     await fill();
-    await click("Review task");
-    await click("Confirm create");
+    await click("Create task");
     await vi.waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
     expect(container.querySelector<HTMLInputElement>("input")!.value).toBe("");
     expect(onCreated).not.toHaveBeenCalled();
@@ -272,8 +266,7 @@ describe("confirmed task draft acknowledgement", () => {
       const invalidate = vi.spyOn(client, "invalidateQueries").mockReturnValue(refreshed);
       await render();
       await fill();
-      await click("Review task");
-      await click("Confirm create");
+        await click("Create task");
       await vi.waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
       if (kind === "workspace-aba") {
         await render("workspace-b");
@@ -310,8 +303,7 @@ describe("confirmed creation refresh feedback", () => {
     const invalidate = vi.spyOn(client, "invalidateQueries").mockReturnValue(refreshed);
     await render();
     await fill();
-    await click("Review task");
-    await click("Confirm create");
+    await click("Create task");
     await vi.waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
     expect(container.querySelector<HTMLInputElement>("input")!.value).toBe("");
     await act(async () => {

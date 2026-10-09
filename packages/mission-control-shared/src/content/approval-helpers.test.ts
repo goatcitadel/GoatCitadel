@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildApprovalEvidenceModel,
+  buildApprovalReviewEvidenceModel,
   approvalResolutionLabel,
   findTraceMetadata,
   formatInferredIds,
@@ -227,4 +228,43 @@ it("exposes exact capability identity and scope before a lifecycle decision", ()
       "Scope Kind: global",
     ]),
   );
+});
+
+it("keeps every exact target and full command in approval review", () => {
+  const targets = Array.from({ length: 10 }, (_, index) => "file-" + index);
+  const command = "run " + "x".repeat(2000);
+  const review = buildApprovalReviewEvidenceModel({ targets, command });
+  expect(review!.targets.join(" ")).toContain("file-9");
+  expect(review!.commands.join(" ")).toContain(command);
+  expect(buildApprovalEvidenceModel({ targets, command })!.commands.join(" ")).not.toContain(command);
+});
+it.each(["memory.write", "memory.upsert"])("keeps full %s content readable for exact review without broadening arbitrary content fields", toolName => {
+  const content = "  " + "Memory sentence ".repeat(200) + "\nSecond line\n";
+  expect(buildApprovalReviewEvidenceModel({ toolName, content })?.changes).toEqual([{ label: "Memory content", content }]);
+  expect(buildApprovalReviewEvidenceModel({ toolName, content: "One line" })?.changes).toEqual([{ label: "Memory content", content: "One line" }]);
+  expect(buildApprovalEvidenceModel({ toolName, content })?.changes[0]?.content.length).toBeLessThan(content.length);
+  expect(buildApprovalReviewEvidenceModel({ toolName: "unrelated", content: "One line" })).toBeNull();
+});
+
+it("preserves exact lifecycle content and title while keeping compact review bounded", () => {
+  const requestedContent = "  " + "Memory value ".repeat(200) + "\nSecond line\n";
+  const preview = { reviewKind: "memory.lifecycle.patch", requestedTitle: "Updated title", requestedContent, pinnedSummary: "Requested pinned state: unpinned", ttlSummary: "Requested TTL: 60 seconds" };
+  expect(buildApprovalReviewEvidenceModel(preview)?.changes).toEqual([{ label: "Requested memory title", content: "Updated title" }, { label: "Requested memory content", content: requestedContent }]);
+  expect(buildApprovalEvidenceModel(preview)?.changes[1]?.content.length).toBeLessThan(requestedContent.length);
+  expect(buildApprovalReviewEvidenceModel({ ...preview, requestedContent: "  \n" })?.changes[1]?.content).toBe("  \n");
+});
+
+it("keeps every exact batch target paired with its scope and requested values", () => {
+ const model = buildApprovalReviewEvidenceModel({ reviewKind: "memory.lifecycle.batch", reviewedItems: [{ target: "First memory", scopeSummary: "Workspace one; namespace decisions", consequence: "Apply reviewed changes", pinnedSummary: "Unpin item" }, { target: "Second memory", scopeSummary: "Workspace one; namespace workspace", consequence: "Forget this item from active recall." }] });
+ expect(model?.changes).toEqual([{ label: "Memory target 1", content: "Target: First memory\nWorkspace one; namespace decisions\nConsequence: Apply reviewed changes\nUnpin item" }, { label: "Memory target 2", content: "Target: Second memory\nWorkspace one; namespace workspace\nConsequence: Forget this item from active recall." }]);
+});
+
+it("shows memory review summaries as the Gateway wrote them and pairs each target with its own label", () => {
+  const preview = { reviewKind: "memory.lifecycle.patch", title: "Approve memory item update", target: "Target: launch plan", scopeSummary: "Workspace: ws-1; namespace: notes", contentSummary: "Requested content: 41 UTF-8 bytes before redaction.", pinnedSummary: "Requested pinned state: unpinned", ttlSummary: "Requested TTL: 600 seconds", withheldSummary: "Secret-looking values are redacted." };
+  const model = buildApprovalReviewEvidenceModel(preview);
+  // The user-supplied title is kept exactly, even when it starts with "Target:".
+  expect(model?.targetEntries).toEqual([{ label: "Target", value: "Target: launch plan" }]);
+  expect(model?.targets).toEqual(["Target: Target: launch plan"]);
+  expect(model?.supporting).toEqual(expect.arrayContaining(["Workspace: ws-1; namespace: notes", "Requested content: 41 UTF-8 bytes before redaction.", "Requested pinned state: unpinned", "Requested TTL: 600 seconds", "Secret-looking values are redacted."]));
+  expect(model?.supporting.some((line) => /Summary: /.test(line))).toBe(false);
 });

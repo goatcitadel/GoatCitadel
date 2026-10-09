@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { MoreHorizontal } from "lucide-react";
+import { MoreHorizontal, Pencil } from "lucide-react";
 import type { MissionThreadedContextDockProps } from "@goatcitadel/threaded-surface-core";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
@@ -29,7 +29,7 @@ export function ChatSessionTitle({ title, dock }: { title: string; dock: Mission
     <Button type="button" size="sm" onClick={cancel} disabled={busy}>Cancel</Button>
   </form>;
   return <h1 className="truncate font-display text-base font-semibold text-fg"><button type="button" title="Rename conversation"
-    onClick={() => { dock.onRenameTitleChange(title); setRenaming(true); }} className="max-w-full truncate text-left hover:text-accent">{title}</button></h1>;
+    onClick={() => { dock.onRenameTitleChange(title); setRenaming(true); }} className="inline-flex max-w-full items-center gap-1 text-left hover:text-accent"><span className="truncate">{title}</span><Pencil aria-hidden="true" className="size-3 shrink-0" /></button></h1>;
 }
 
 export function ChatSessionOverflow({ dock, onFork, onInspect }: {
@@ -49,7 +49,9 @@ export function ChatSessionOverflow({ dock, onFork, onInspect }: {
       </MenuTrigger>
       <MenuContent align="end">
         {onInspect ? <MenuItem className="max-sm:min-h-11 md:hidden" onSelect={onInspect}>Inspect conversation</MenuItem> : null}
-        <MenuItem className="max-sm:min-h-11" disabled={!onFork} onSelect={() => onFork?.()}>Fork from latest turn</MenuItem>
+        <MenuItem className="max-sm:min-h-11" disabled={!onFork} onSelect={() => onFork?.()}>New conversation from latest message</MenuItem>
+        <MenuItem className="max-sm:min-h-11" disabled={Boolean(dock.sessionControlPending)} onSelect={() => void dock.onTogglePinSession()}>{dock.selectedSession.pinned ? "Unpin conversation" : "Pin conversation"}</MenuItem>
+        <MenuItem className="max-sm:min-h-11" disabled={Boolean(dock.sessionControlPending)} onSelect={dock.onDeleteSession}>Delete conversation…</MenuItem>
         <MenuItem className="max-sm:min-h-11" onSelect={() => dock.onExportSnapshot()}>Export conversation</MenuItem>
         <MenuItem className="max-sm:min-h-11" disabled={archivePending} onSelect={() => setArchiveOpen(true)}>
           {archived ? "Restore conversation" : "Archive conversation"}

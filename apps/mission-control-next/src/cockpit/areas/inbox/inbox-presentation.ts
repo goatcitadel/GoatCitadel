@@ -21,10 +21,7 @@ export function inboxMatchesWorkspace(
 
 export function inboxKnownCount(projection: OperatorInboxResponse): { known: number; complete: boolean } {
   return Object.values(projection.counts).reduce(
-    (total, count) => ({
-      known: total.known + count.known,
-      complete: total.complete && count.complete,
-    }),
+    (total, count) => ({ known: total.known + count.known, complete: total.complete && count.complete }),
     { known: 0, complete: true },
   );
 }
@@ -38,19 +35,18 @@ export function inboxReadGaps(projection: OperatorInboxResponse) {
 
 /**
  * The Gateway marks a count incomplete for read gaps and for declared scopes ("limited") alike.
- * When a declared scope is the only reason, the count is exact for what this Inbox covers; the
+ * Declared limits remain lower bounds; the
  * scope itself is listed under "What this Inbox covers".
  */
 export function inboxCountIsExact(projection: OperatorInboxResponse, complete: boolean): boolean {
-  if (complete) return true;
-  return inboxReadGaps(projection).length === 0 && projection.coverage.some((source) => source.state === "limited");
+  return complete;
 }
 
 /** Badge text: "3", "3+" when a read gap may hide more, "?" when nothing is known and a read failed. */
 export function inboxCountLabel(projection: OperatorInboxResponse | undefined): string | null {
   if (!projection) return null;
-  const count = inboxKnownCount(projection);
-  if (count.known === 0) return inboxReadGaps(projection).length ? UNKNOWN_COUNT : null;
+  const count = projection.counts.needs_decision;
+  if (count.known === 0) return !count.complete ? UNKNOWN_COUNT : null;
   return inboxCountIsExact(projection, count.complete) ? String(count.known) : `${count.known}+`;
 }
 
@@ -60,13 +56,13 @@ export function inboxNavigationLabel(count: string | null): string {
   if (count === UNKNOWN_COUNT) return "Inbox, some sources could not be read";
   const lowerBound = count.endsWith("+");
   const number = lowerBound ? count.slice(0, -1) : count;
-  const noun = number === "1" ? "item" : "items";
+  const noun = number === "1" ? "decision" : "decisions";
   return lowerBound ? `Inbox, at least ${number} ${noun}` : `Inbox, ${number} ${noun}`;
 }
 
 export function inboxCountTitle(count: string): string {
-  if (count === UNKNOWN_COUNT) return "Some Inbox sources could not be read";
-  return count.endsWith("+") ? "At least this many Inbox items" : "Inbox items";
+  if (count === UNKNOWN_COUNT) return "Some decision coverage is incomplete";
+  return count.endsWith("+") ? "At least this many outstanding decisions" : "Outstanding decisions";
 }
 
 export function inboxItemKindLabel(kind: OperatorInboxItem["kind"]): string {

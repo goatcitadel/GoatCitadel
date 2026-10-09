@@ -171,10 +171,22 @@ export function readDesignQualityEvidence(repoRoot: string): OpsDesignQualitySna
     }),
   );
 
+  // Token sources declare the palette, so their literals are the point, not a leak. Classic keeps its tokens file;
+  // the cockpit is styled in isolation from Classic and has exactly one token file of its own.
+  const cockpitTokenFile = path.resolve(
+    root,
+    "apps",
+    "mission-control-next",
+    "src",
+    "cockpit",
+    "styles",
+    "cockpit-tokens.css",
+  );
   const rawColorHits = collectRawColorLiteralHits([path.join(root, "apps", "mission-control-next", "src")], {
     recursive: true,
     repoRoot: root,
-    exclude: (filePath) => filePath.endsWith("mission-control-next-tokens.css"),
+    exclude: (filePath) =>
+      filePath.endsWith("mission-control-next-tokens.css") || path.resolve(filePath) === cockpitTokenFile,
   });
   checks.push(
     check({

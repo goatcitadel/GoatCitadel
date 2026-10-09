@@ -154,6 +154,13 @@ describe("ChatChangePlanActionDialog", () => {
       if (matching) {
         expect(handlers.onReviewArtifacts).toHaveBeenCalledWith(value);
         expect(JSON.stringify(renderer.toJSON())).toContain("Run the prescribed check.");
+        // Bounded scroll regions stay keyboard-reachable and named (axe scrollable-region-focusable).
+        expect(renderer.root.findByType("pre").props).toMatchObject({
+          role: "region",
+          "aria-label": "Instructions artifact content",
+          tabIndex: 0,
+        });
+        expect(renderer.root.findByType("ul").props).toMatchObject({ "aria-label": "Immutable evidence references", tabIndex: 0 });
       } else {
         expect(handlers.onReviewArtifacts).not.toHaveBeenCalled();
         expect(JSON.stringify(renderer.toJSON())).toContain("artifacts changed");

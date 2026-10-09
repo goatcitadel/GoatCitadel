@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Notice } from "../../../features/native-routes/settings/SettingsShared";
 import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
 import { ModelsSettings } from "./ModelsSettings";
+import { clearAllDirty, setSectionDirty } from "../../../features/native-routes/library/use-form-dirty";
 
 const api = vi.hoisted(() => ({ fetchOnboardingState: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
@@ -13,7 +14,7 @@ vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: undefined }),
 }));
 vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: vi.fn() }) }));
-vi.mock("./ProviderCatalogSettings", () => ({ ProviderCatalogSettings: () => null }));
+vi.mock("./ProviderCatalogSettings", () => ({ ProviderCatalogSettings: () => <p>Expert catalog owner</p> }));
 vi.mock("./ProviderConnectionSettings", () => ({ ProviderConnectionSettings: () => null }));
 vi.mock("./ProviderManagementSettings", () => ({ ProviderManagementSettings: () => null }));
 vi.mock("./ProviderRoutingSettings", () => ({ ProviderRoutingSettings: () => null }));
@@ -61,9 +62,37 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   client.clear();
+  clearAllDirty();
 });
 
 describe("Models settings", () => {
+  it.each(["provider:system:test", "provider-secret:system:test", "provider-endpoint:system:test", "provider-routing:system", `caller-scope:${JSON.stringify(["verified-caller", "provider-endpoint:system:test"])}`])("shows guided setup first, mounts experts on expansion and guards dirty %s collapse", async (key) => {
+    api.fetchOnboardingState.mockResolvedValue(onboardingFixture());
+    await act(async () => root.render(<QueryClientProvider client={client}><ModelsSettings /></QueryClientProvider>));
+    await settleUntil(() => button("Report change") !== undefined);
+    expect(container.textContent).not.toContain("Expert catalog owner");
+    const expand = button("Advanced provider configuration")!;
+    expect(expand).toBeDefined();
+    expect(expand.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => expand.click());
+    expect(container.textContent).toContain("Expert catalog owner");
+    expect(container.textContent!.indexOf("Guided model setup")).toBeLessThan(container.textContent!.indexOf("Expert catalog owner"));
+    setSectionDirty(key, true, "Provider profile");
+    await act(async () => expand.click());
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Provider profile");
+    await act(async () => [...document.querySelectorAll("button")].find((item) => item.textContent === "Cancel")!.click());
+    expect(expand.getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain("Expert catalog owner");
+    await act(async () => expand.click());
+    await act(async () => [...document.querySelectorAll("button")].find((item) => item.textContent === "Discard changes")!.click());
+    expect(expand.getAttribute("aria-expanded")).toBe("false");
+    expect(container.textContent).not.toContain("Expert catalog owner");
+    setSectionDirty("unrelated:editor", true, "Other editor");
+    await act(async () => expand.click());
+    await act(async () => expand.click());
+    expect(expand.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
   it("keeps the guided setup's notice when a failed re-read removes the card", async () => {
     api.fetchOnboardingState
       .mockResolvedValueOnce(onboardingFixture())

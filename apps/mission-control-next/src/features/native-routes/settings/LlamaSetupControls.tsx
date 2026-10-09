@@ -238,6 +238,15 @@ export function LlamaSetupControls({
       {control.state.attempt ? (
         <p role={control.state.attempt.state === "uncertain" ? "alert" : "status"}>{control.state.attempt.message}</p>
       ) : null}
+      {control.state.attempt?.state === "uncertain" && control.state.attempt.transport ? (
+        <Action
+          className={actionClass}
+          disabled={Boolean(control.state.attempt.checking)}
+          onClick={() => void control.checkOutcome()}
+        >
+          {control.state.attempt.checking ? "Checking outcome…" : "Check outcome"}
+        </Action>
+      ) : null}
       <LlamaSetupReviews control={control} diagnostic={diagnostic} />
     </section>
   );

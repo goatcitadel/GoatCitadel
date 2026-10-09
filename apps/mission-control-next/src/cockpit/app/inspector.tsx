@@ -1,3 +1,4 @@
+import { RESPONSIVE_BREAKPOINTS, RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { Maximize2, Minimize2, X } from "lucide-react";
 import {
   useCallback,
@@ -132,8 +133,8 @@ export function useInspector(): InspectorApi {
 
 export function InspectorPanel() {
   const { content, close } = useInspector();
-  const isPhone = useMediaQuery("(width < 640px)");
-  const overlay = useMediaQuery("(width < 1280px)");
+  const isPhone = useMediaQuery(RESPONSIVE_QUERIES.phone);
+  const overlay = useMediaQuery(`(width < ${RESPONSIVE_BREAKPOINTS.wide}px)`);
   const [width, setWidth] = useState(384);
   const [expanded, setExpanded] = useState(false);
   const opened = useRef(false);
@@ -147,6 +148,7 @@ export function InspectorPanel() {
   if (!content) return null;
   const body = (
     <div
+      role="region"
       data-inspector-body="true"
       aria-label={`Inspector: ${content.title}`}
       className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3"

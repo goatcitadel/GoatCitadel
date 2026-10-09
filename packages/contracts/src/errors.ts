@@ -16,6 +16,7 @@ export type GoatErrorCode =
   | "FIELD_INVALID"
   | "ALREADY_EXISTS"
   | "STATE_CONFLICT"
+  | "FEATURE_DISABLED"
   | "WRITE_CONFLICT"
   | "POLICY_BLOCKED"
   | "PATH_OUTSIDE_JAIL"
@@ -105,6 +106,16 @@ export class ConflictError extends GoatError {
   }) {
     super(opts.message, opts.details);
     this.code = opts.code ?? "STATE_CONFLICT";
+  }
+}
+
+/** An installation feature gate, distinct from a revision or state conflict. */
+export class FeatureDisabledError extends GoatError {
+  readonly code = "FEATURE_DISABLED" as const;
+  readonly httpStatus = 409;
+
+  constructor(flag: string) {
+    super(`Feature flag ${flag} is disabled.`, { flag });
   }
 }
 

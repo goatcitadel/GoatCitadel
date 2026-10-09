@@ -3,10 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildGatewayHeaders,
   buildGatewayUrl,
+  captureMutationAttempt,
   clearGatewayAuthState,
   consumeGatewayAccessBootstrapFromLocation,
   getGatewayApiBaseUrl,
   getGatewayAuthStorageMode,
+  getGatewayAccessRevision,
+  subscribeGatewayAccessChange,
   normalizeGatewayBaseUrl,
   persistGatewayAuthState,
   preflightGatewayAccess,
@@ -18,6 +21,7 @@ import {
   subscribeGatewayAuthRejection,
 } from "./client-core";
 import { ApiRequestError } from "./http-internal";
+import { withFreshReads } from "./fresh-reads";
 
 class MemoryStorage implements Storage {
   private items = new Map<string, string>();
@@ -78,6 +82,61 @@ function jsonResponse(body: unknown, init: ResponseInit = {}) {
 }
 
 describe("client-core", () => {
+  it("notifies after partial persistence and preserves the later storage error", () => {
+    const win = installWindow();
+    const failure = new Error("storage unavailable");
+    const changed = vi.fn(() => readStoredGatewayAuthState()?.mode);
+    const unsubscribe = subscribeGatewayAccessChange(changed);
+    const revision = getGatewayAccessRevision();
+    vi.spyOn(win.localStorage, "setItem").mockImplementation(() => {
+      throw failure;
+    });
+    expect(() => persistGatewayAuthState({ mode: "token", token: "fixture" })).toThrow(failure);
+    unsubscribe();
+    expect(getGatewayAccessRevision()).toBe(revision + 1);
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(changed.mock.results[0]?.value).toBe("token");
+  });
+  it("notifies after partial clearing and preserves the later storage error", () => {
+    const win = installWindow();
+    persistGatewayAuthState({ mode: "token", token: "fixture" });
+    const failure = new Error("storage unavailable");
+    const changed = vi.fn(() => readStoredGatewayAuthState()?.mode);
+    const unsubscribe = subscribeGatewayAccessChange(changed);
+    const revision = getGatewayAccessRevision();
+    vi.spyOn(win.localStorage, "removeItem").mockImplementation(() => {
+      throw failure;
+    });
+    expect(() => clearGatewayAuthState()).toThrow(failure);
+    unsubscribe();
+    expect(getGatewayAccessRevision()).toBe(revision + 1);
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(changed.mock.results[0]?.value).not.toBe("token");
+  });
+  it("publishes only a nonsecret revision on custody changes and observes storage between reader mounts", () => {
+    const win = installWindow();
+    let onStorage!: (event: { key: string | null }) => void;
+    Object.assign(win, {
+      addEventListener: vi.fn((_name, listener) => {
+        onStorage = listener;
+      }),
+      removeEventListener: vi.fn(),
+    });
+    const initial = getGatewayAccessRevision();
+    const changed = vi.fn();
+    const unsubscribe = subscribeGatewayAccessChange(changed);
+    persistGatewayAuthState({ mode: "none" });
+    expect(getGatewayAccessRevision()).toBe(initial + 1);
+    clearGatewayAuthState();
+    expect(getGatewayAccessRevision()).toBe(initial + 2);
+    expect(changed.mock.calls).toEqual([[], []]);
+    unsubscribe();
+    onStorage({ key: "goatcitadel.gateway.auth" });
+    expect(getGatewayAccessRevision()).toBe(initial + 3);
+    expect(changed).toHaveBeenCalledTimes(2);
+    onStorage({ key: "unrelated-preference" });
+    expect(getGatewayAccessRevision()).toBe(initial + 3);
+  });
   beforeEach(() => {
     vi.stubGlobal("crypto", { randomUUID: vi.fn(() => "uuid-1") });
     vi.stubGlobal("btoa", (value: string) => Buffer.from(value, "utf8").toString("base64"));
@@ -206,7 +265,17 @@ describe("client-core", () => {
       authMode: "token",
       path: "/api/v1/dashboard/state",
       status: 401,
+      hadStoredAuth: true,
     });
+    unsubscribe();
+  });
+
+  it("reports missing credentials separately from rejected stored credentials", async () => {
+    clearGatewayAuthState();
+    const listener = vi.fn(); const unsubscribe = subscribeGatewayAuthRejection(listener);
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: "Unauthorized", authMode: "basic" }, { status: 401 })));
+    await expect(request("/api/v1/auth/current")).rejects.toMatchObject({ status: 401 });
+    expect(listener).toHaveBeenCalledWith({ authMode: "basic", path: "/api/v1/auth/current", status: 401, hadStoredAuth: false });
     unsubscribe();
   });
 
@@ -313,6 +382,85 @@ describe("client-core", () => {
     await request("/api/v1/mason/draft", { method: "POST", body: "{}" });
     const jsonHeaders = fetchMock.mock.calls[1]?.[1]?.headers as Record<string, string>;
     expect(jsonHeaders["Content-Type"]).toBe("application/json");
+  });
+
+  it("sends an owner-chosen attempt key as the Idempotency-Key of a mutation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ success: true, data: { ok: true } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const attemptKey = "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b";
+    await request("/api/v1/secrets/providers/openai", { method: "POST", body: "{}", attemptKey });
+    expect((fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>)["Idempotency-Key"]).toBe(attemptKey);
+  });
+
+  it("refuses a malformed attempt key or one on a read, before dispatch", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ success: true, data: { ok: true } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(request("/api/v1/x", { method: "POST", body: "{}", attemptKey: "not-a-uuid" })).rejects.toThrow(/attempt key/i);
+    await expect(request("/api/v1/x", { method: "GET", attemptKey: "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b" })).rejects.toThrow(/attempt key/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("captures the key, method and path of the first mutation a dispatch issues, even when the reply is lost", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    vi.stubGlobal("fetch", fetchMock);
+    const seen: unknown[] = [];
+    const dispatch = captureMutationAttempt(
+      () => request("/api/v1/secrets/providers/openai?storage=env", { method: "POST", body: "{}" }),
+      (attempt) => seen.push(attempt),
+    );
+    await expect(dispatch).rejects.toBeInstanceOf(ApiRequestError);
+    const sentKey = (fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>)["Idempotency-Key"];
+    expect(seen).toEqual([
+      {
+        attemptKey: sentKey,
+        method: "POST",
+        path: "/api/v1/secrets/providers/openai",
+        installation: getGatewayApiBaseUrl(),
+      },
+    ]);
+  });
+
+  it("never coalesces a read issued inside a fresh-read scope with an older in-flight read", async () => {
+    let resolveFirst!: (value: Response) => void;
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => (resolveFirst = resolve)))
+      .mockImplementation(async () => jsonResponse({ success: true, data: { fresh: true } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const older = request("/api/v1/settings");
+    const fresh = await withFreshReads(() => request<{ fresh: boolean }>("/api/v1/settings"));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fresh).toEqual({ fresh: true });
+    resolveFirst(jsonResponse({ success: true, data: { fresh: false } }));
+    await older;
+  });
+
+  it("captures only one synchronous mutation, never a read, and nothing after the dispatch returns", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse({ success: true, data: { ok: true } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const seen: Array<{ method: string; path: string }> = [];
+    await captureMutationAttempt(
+      () => {
+        void request("/api/v1/settings");
+        const first = request("/api/v1/settings", { method: "PATCH", body: "{}" });
+        const second = request("/api/v1/llm/config", { method: "PATCH", body: "{}" });
+        return Promise.all([first, second]);
+      },
+      (attempt) => seen.push(attempt),
+    );
+    await request("/api/v1/settings", { method: "PATCH", body: "{}" });
+    expect(seen.map(({ method, path }) => `${method} ${path}`)).toEqual(["PATCH /api/v1/settings"]);
+  });
+
+  it("reports an owner-chosen attempt key unchanged", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ success: true, data: { ok: true } })));
+    const attemptKey = "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b";
+    const seen: Array<{ attemptKey: string }> = [];
+    await captureMutationAttempt(
+      () => request("/api/v1/settings", { method: "PATCH", body: "{}", attemptKey }),
+      (attempt) => seen.push(attempt),
+    );
+    expect(seen).toEqual([expect.objectContaining({ attemptKey })]);
   });
 
   it("does not let generic request headers override gateway-controlled headers", async () => {
@@ -540,7 +688,8 @@ describe("client-core", () => {
     expect(secondHeaders.Authorization).toBe("Bearer session-token");
 
     resolvers.forEach((resolve) => resolve(jsonResponse({ success: true, data: { ok: true } })));
-    await Promise.all([unauthenticated, authenticated]);
+    await expect(unauthenticated).rejects.toMatchObject({ kind: "protocol" });
+    await expect(authenticated).resolves.toEqual({ ok: true });
   });
 
   it("clears the coalescing entry once a GET settles so later calls re-fetch", async () => {

@@ -6,6 +6,7 @@ import {
   COCKPIT_LOCATION_EVENT,
   readCockpitLocation,
   registerCockpitBackGuard,
+  registerCockpitSheetBack,
   type CockpitBackGuardOwner,
 } from "./cockpit-back-guard";
 import { commitCockpitNavigation } from "./cockpit-history";
@@ -51,6 +52,132 @@ afterEach(async () => {
 });
 
 describe("cockpit Back and Forward gate", () => {
+  it("sends an unnumbered skipped-base target through the existing dirty owner", async () => {
+    const owner = register(true);
+    window.history.pushState(null, "", "/legacy");
+    window.dispatchEvent(new Event(COCKPIT_LOCATION_EVENT));
+    commitCockpitNavigation("/settings/models#local-ai");
+    const close = vi.fn(), cleanup = registerCockpitSheetBack(close);
+    try {
+      window.history.go(-2); await settle();
+      expect(close).toHaveBeenCalledOnce();
+      expect(here()).toBe("/settings/models?shell=cockpit#local-ai");
+      expect(owner.holds).toHaveBeenCalled(); expect(owner.review).toHaveBeenCalledOnce();
+    } finally { cleanup(); }
+  });
+  it.each(["initial document", "reloaded document", "SPA entry"])("gives an open sheet its own same-document Back entry after %s", async entryKind => {
+    const owner = register(false);
+    const destination = "/settings/models?shell=cockpit&workspaceId=scope%3Aa&view=llamacpp#local-ai";
+    if (entryKind === "SPA entry") commitCockpitNavigation(destination);
+    else {
+      // Simulate the current entry belonging to a newly loaded document. Its
+      // predecessor cannot safely be intercepted by this document's popstate.
+      unregister?.();
+      window.history.pushState({ retained: { entryKind } }, "", destination);
+      register(false);
+    }
+    const state = structuredClone(window.history.state), length = window.history.length;
+    const close = vi.fn();
+    const cleanup = registerCockpitSheetBack(close);
+    try {
+    expect(window.history.length).toBe(length + 1);
+    expect(here()).toBe(destination);
+    window.history.back(); await settle();
+    expect(close).toHaveBeenCalledOnce(); expect(here()).toBe(destination);
+    expect(window.history.state).toEqual(state); expect(owner.review).not.toHaveBeenCalled();
+    cleanup();
+    window.history.back(); await settle(); expect(here()).toBe("/work");
+    window.history.forward(); await settle(); expect(here()).toBe(destination);
+    } finally { cleanup(); }
+  });
+  it("retires explicit Close/Escape entries so ordinary Back and Forward have no duplicate route stop", async () => {
+    register(false); commitCockpitNavigation("/settings/models?view=llamacpp#local-ai");
+    const destination = here();
+    for (const _gesture of ["Close", "Escape"]) {
+      const close = vi.fn(), cleanup = registerCockpitSheetBack(close);
+      cleanup(); await settle();
+      expect(here()).toBe(destination); expect(close).not.toHaveBeenCalled();
+      window.history.back(); await settle(); expect(here()).toBe("/work");
+      window.history.forward(); await settle(); expect(here()).toBe(destination);
+    }
+  });
+  it("commits navigation only after removing sheet entries and retains dirty-review ownership", async () => {
+    const owner = register(false); commitCockpitNavigation("/settings/models#local-ai");
+    const close = vi.fn(), cleanup = registerCockpitSheetBack(close);
+    commitCockpitNavigation("/settings/connections#mcp-servers"); await settle(); cleanup();
+    expect(here()).toBe("/settings/connections?shell=cockpit#mcp-servers");
+    window.history.back(); await settle(); expect(here()).toBe("/settings/models?shell=cockpit#local-ai");
+    window.history.back(); await settle(); expect(here()).toBe("/work");
+    expect(owner.review).not.toHaveBeenCalled();
+  });
+  it("handles a StrictMode cleanup/remount while traversal is deferred", async () => {
+    register(false); commitCockpitNavigation("/settings/models#local-ai");
+    deferTraversals();
+    const first = registerCockpitSheetBack(vi.fn()); first();
+    const close = vi.fn(), cleanup = registerCockpitSheetBack(close);
+    await settle(); window.history.back(); await settle();
+    expect(close).toHaveBeenCalledOnce(); expect(here()).toBe("/settings/models?shell=cockpit#local-ai");
+    cleanup(); window.history.back(); await settle(); expect(here()).toBe("/work");
+  });
+  it("skips a lower sheet retired under the top and restores ordinary history", async () => {
+    register(false); commitCockpitNavigation("/settings/models#local-ai");
+    const lower = registerCockpitSheetBack(vi.fn());
+    const close = vi.fn(), upper = registerCockpitSheetBack(close);
+    lower(); window.history.back(); await settle(); upper();
+    expect(close).toHaveBeenCalledOnce(); expect(here()).toBe("/settings/models?shell=cockpit#local-ai");
+    window.history.back(); await settle(); expect(here()).toBe("/work");
+  });
+  it("does not expose a retired sheet as a Forward route stop", async () => {
+    register(false); commitCockpitNavigation("/settings/models#local-ai");
+    const cleanup = registerCockpitSheetBack(vi.fn()); cleanup(); await settle();
+    const state = structuredClone(window.history.state);
+    window.history.forward(); await settle(); expect(window.history.state).toEqual(state);
+    window.history.back(); await settle(); expect(here()).toBe("/work");
+  });
+  it("rechecks the existing navigation capability after a deferred sheet close", async () => {
+    register(false); commitCockpitNavigation("/settings/models#local-ai");
+    deferTraversals(); const cleanup = registerCockpitSheetBack(vi.fn());
+    let current = true;
+    commitCockpitNavigation("/settings/connections", undefined, () => current);
+    current = false; await settle(); cleanup();
+    expect(here()).toBe("/settings/models?shell=cockpit#local-ai");
+  });
+  it("preserves replacement semantics after closing the sheet", async () => {
+    register(false); commitCockpitNavigation("/settings/models#local-ai");
+    const cleanup = registerCockpitSheetBack(vi.fn());
+    commitCockpitNavigation("/settings/connections", { replace: true }); await settle(); cleanup();
+    expect(here()).toBe("/settings/connections?shell=cockpit");
+    window.history.back(); await settle(); expect(here()).toBe("/work");
+  });
+  it("removes orphan sheet entries retained by a document reload before opening another sheet", async () => {
+    register(false); commitCockpitNavigation("/settings/models#local-ai");
+    const base = structuredClone(window.history.state), destination = here();
+    unregister?.();
+    window.history.pushState({ ...base, [SHELL_HISTORY_POSITION]: Number(base[SHELL_HISTORY_POSITION]) + 1,
+      "goatcitadel.cockpit.sheet": "1700000000000:999" }, "", destination);
+    register(false); await settle();
+    expect(window.history.state).toEqual(base);
+    window.history.forward(); await settle(); expect(window.history.state).toEqual(base);
+    const close = vi.fn(), cleanup = registerCockpitSheetBack(close);
+    window.history.back(); await settle(); cleanup(); expect(close).toHaveBeenCalledOnce();
+    expect(window.history.state).toEqual(base);
+    window.history.back(); await settle(); expect(here()).toBe("/work");
+  });
+  it("closes the top sheet and restores the shown entry before any dirty leave review", async () => {
+    const owner = register(true);
+    commitCockpitNavigation("/library");
+    const lower = vi.fn(); const top = vi.fn();
+    const removeLower = registerCockpitSheetBack(lower); const removeTop = registerCockpitSheetBack(top);
+    try {
+      deferTraversals(); window.history.back();
+      await vi.waitFor(() => expect(top).toHaveBeenCalledOnce());
+      expect(here()).toBe("/library?shell=cockpit");
+      expect(lower).not.toHaveBeenCalled(); expect(owner.review).not.toHaveBeenCalled();
+      removeTop(); window.history.back();
+      await vi.waitFor(() => expect(lower).toHaveBeenCalledOnce());
+      expect(here()).toBe("/library?shell=cockpit");
+    } finally { removeTop(); removeLower(); }
+  });
   it("passes every move through while no owner is registered", () => {
     window.history.pushState(null, "", "/library");
     window.addEventListener("popstate", later);

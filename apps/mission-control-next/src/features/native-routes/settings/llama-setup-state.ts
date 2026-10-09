@@ -6,6 +6,7 @@ import {
   type ChangePlanRuntimeConfigurationRequest,
   type LlamaCppSetupProjection,
 } from "@goatcitadel/contracts";
+import type { TrackedAttempt } from "./mutation-attempt-tracking";
 
 export interface LlamaSetupDraft {
   mode: "external" | "managed";
@@ -122,7 +123,32 @@ export function requireLlamaConfirmationReceipt(before: ChangePlanRecord, after:
     throw new Error("Setup confirmation returned unrelated or unchanged evidence.");
 }
 type PlanEntry = { installation: string; workspaceId: string; plan: ChangePlanRecord; submitted?: LlamaSetupDraft };
-type Attempt = { state: "pending" | "uncertain"; message: string };
+/** The Gateway routes the llama.cpp setup owner writes through; a lost write on any of them can be checked. */
+export const LLAMA_ROUTE_PATTERNS = [
+  "/api/v1/llamacpp/setup/managed-selection",
+  "/api/v1/change-plans",
+  "/api/v1/change-plans/:planId/confirmations",
+] as const;
+/** Public identities only (no credentials exist in this owner): what a lost write needs to be settled. */
+export type LlamaRecovery =
+  | { kind: "stage"; workspaceId: string }
+  | {
+      kind: "create";
+      workspaceId: string;
+      change: LlamaSetupChange;
+      settingsRevision: number;
+      planKey: string;
+      /** Set once the create was replayed: its own record now decides, and only "committed" may proceed. */
+      replayed?: boolean;
+    }
+  | { kind: "confirm"; workspaceId: string; planId: string };
+type Attempt = {
+  state: "pending" | "uncertain";
+  message: string;
+  transport?: TrackedAttempt;
+  recovery?: LlamaRecovery;
+  checking?: boolean;
+};
 const plans = new Map<string, PlanEntry>(),
   attempts = new Map<string, Attempt>(),
   listeners = new Set<() => void>();
@@ -156,13 +182,40 @@ export function beginLlamaAttempt(installation: string) {
   publish();
   return true;
 }
-export function finishLlamaAttempt(installation: string, uncertain: boolean) {
+export function finishLlamaAttempt(
+  installation: string,
+  uncertain: boolean,
+  lost?: { transport?: TrackedAttempt; recovery?: LlamaRecovery },
+) {
+  const checkable = Boolean(lost?.transport && lost.recovery);
   if (uncertain)
     attempts.set(installation, {
       state: "uncertain",
       message:
-        "The llama.cpp setup outcome is uncertain. Further setup writes are locked in this app session. Inspect its recorded plan and runtime before continuing.",
+        "The llama.cpp setup outcome is uncertain. Further setup writes are locked in this app session. Inspect its recorded plan and runtime before continuing." +
+        (checkable ? " Check its outcome to settle it from the Gateway's record of this attempt." : ""),
+      ...(checkable ? { transport: lost!.transport, recovery: lost!.recovery } : {}),
     });
+  else attempts.delete(installation);
+  publish();
+}
+/** Marks the uncertain attempt as being checked; returns its snapshot, or undefined when it cannot be checked now. */
+export function beginLlamaCheck(installation: string) {
+  const attempt = attempts.get(installation);
+  if (attempt?.state !== "uncertain" || !attempt.transport || !attempt.recovery || attempt.checking) return undefined;
+  const checking = { ...attempt, checking: true };
+  attempts.set(installation, checking);
+  publish();
+  return checking;
+}
+/** Ends a check: no `kept` releases the lock; otherwise the lock stays with the given message (and transport). */
+export function endLlamaCheck(
+  installation: string,
+  checking: Attempt,
+  kept?: { message: string; transport?: TrackedAttempt; recovery?: LlamaRecovery },
+) {
+  if (attempts.get(installation) !== checking) return;
+  if (kept) attempts.set(installation, { ...checking, checking: false, ...kept });
   else attempts.delete(installation);
   publish();
 }

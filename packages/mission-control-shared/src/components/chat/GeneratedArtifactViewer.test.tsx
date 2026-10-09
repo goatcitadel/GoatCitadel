@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
-import { describe, expect, it } from "vitest";
-import { hardenMermaidSvg, isSafeSvgLinkTarget } from "./GeneratedArtifactViewer";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import type { ChatGeneratedArtifactRecord } from "@goatcitadel/contracts";
+import { describe, expect, it, vi } from "vitest";
+import { GeneratedArtifactViewer, hardenMermaidSvg, isSafeSvgLinkTarget } from "./GeneratedArtifactViewer";
 
 describe("isSafeSvgLinkTarget", () => {
   it("allows fragment, http(s), mailto, and relative targets", () => {
@@ -56,4 +59,16 @@ describe("hardenMermaidSvg", () => {
     expect(hardened).toContain('href="https://example.com/docs"');
     expect(hardened).toContain('href="#shape"');
   });
+});
+
+vi.mock("mermaid", () => ({ default: { initialize: vi.fn(), render: vi.fn(async () => { throw new Error("Owned parse failure"); }) } }));
+it.each(["text", "code", "mermaid", "html"] as const)("preserves exact %s bytes in accessible source or sandboxed preview", async kind => {
+  const host=document.createElement('div');document.body.append(host);const root=createRoot(host);
+  const content=kind==='mermaid'?'invalid diagram\n  exact source':kind==='html'?'<script>untrusted()</script>':'long '+ 'x'.repeat(500)+'\n  exact indentation';
+  const artifact={artifactId:'owned',title:'Generated note',kind,content,version:1,sourceSurface:'chat',createdAt:'2026-10-06T00:00:00Z'} as ChatGeneratedArtifactRecord;
+  try {
+    await act(async()=>root.render(<GeneratedArtifactViewer artifact={artifact} compact/>));
+    if(kind==='html') {expect(host.querySelector('iframe')?.getAttribute('sandbox')).toBe('');expect(host.querySelector('iframe')?.getAttribute('srcdoc')).toBe(content);}
+    else { const region=host.querySelector<HTMLElement>('[role="region"]')!;expect(region.textContent).toBe(content);expect(region.getAttribute('aria-label')).toBe(kind==='mermaid'?'Diagram source':'Artifact source: Generated note');region.focus();expect(document.activeElement).toBe(region); }
+  } finally {await act(async()=>root.unmount());host.remove();}
 });

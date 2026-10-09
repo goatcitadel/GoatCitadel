@@ -3,6 +3,12 @@ import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { ConfigFormBuilder } from "@goatcitadel/mission-control-shared/components/ConfigFormBuilder";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
+  fetchExternalConnectorServices,
+  fetchExternalSideEffectRuns,
+  fetchGoogleMeetSessions,
+  fetchIntegrationConnections,
+} from "@goatcitadel/mission-control-shared/api/client";
+import {
   humanizeEnumToken,
   SettingsActionList,
   SettingsButtonRow,
@@ -31,6 +37,8 @@ import { hasSessionDraft } from "../../library/session-drafts";
 import { DetailInspector } from "../../../../components/DetailInspector";
 import { FocusedDetail } from "../../shared/FocusedDetail";
 import { IntegrationConnectionReview } from "./IntegrationConnectionReview";
+import { IntegrationLockNotice } from "./IntegrationLockNotice";
+import { MEET_OWNER_LIMIT } from "./integration-meet-binding";
 import { useIntegrationSettings } from "./use-integration-settings";
 import "./integration-confirmation.css";
 export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionProps) {
@@ -114,12 +122,18 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
   return (
     <SettingsSectionShell loading={loading && !data} error={data ? null : error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
-      {[externalMutation, replayMutation, meetMutation].filter((item) => item.phase === "uncertain").map((item, index) =>
-        <SettingsNotice key={index} notice={{ tone: "warning", message: item.message! }} />)}
-      {createMutation.phase === "uncertain" ? <SettingsNotice notice={{ tone: "warning", message: createMutation.message! }} /> : null}
-      {connectionMutation.phase === "uncertain" ? (
-        <SettingsNotice notice={{ tone: "warning", message: connectionMutation.message! }} />
-      ) : null}
+      {/* Each lock settles only through its own owner's canonical read; the section reload then refreshes the view. */}
+      {(
+        [
+          [externalMutation, () => fetchExternalConnectorServices({ workspaceId: activeWorkspaceId })],
+          [replayMutation, () => fetchExternalSideEffectRuns({ workspaceId: activeWorkspaceId, limit: 25 })],
+          [meetMutation, () => fetchGoogleMeetSessions(MEET_OWNER_LIMIT)],
+          [createMutation, () => fetchIntegrationConnections()],
+          [connectionMutation, () => fetchIntegrationConnections()],
+        ] as const
+      ).map(([item, readback], index) => (
+        <IntegrationLockNotice key={index} mutation={item} readback={readback} reload={reload} />
+      ))}
       {data ? (
         <SettingsStack>
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />

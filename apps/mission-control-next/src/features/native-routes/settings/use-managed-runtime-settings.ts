@@ -7,8 +7,11 @@ import {
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useSessionDraft } from "../library/session-drafts";
 import { useSettingsChange } from "./use-settings-change";
+import { dispatchTrackedMutation, type TrackedAttempt } from "./mutation-attempt-tracking";
 import {
   MANAGED_RUNTIME_DRAFT_KEY,
+  RUNTIME_ROUTE_PATTERNS,
+  checkManagedRuntimeOutcome,
   hasManagedRuntimeSettings,
   isManagedRuntimeRevisionConflict,
   managedRuntimeInputError,
@@ -18,7 +21,7 @@ import {
   retainManagedRuntimeUncertainty,
   runtimeManagementMode,
   sameRuntimeValues,
-  useManagedRuntimeUncertainty,
+  useManagedRuntimeLock,
   type ManagedRuntimeValues,
 } from "./managed-runtime-state";
 
@@ -54,7 +57,8 @@ export function useManagedRuntimeSettings(options: {
     acceptSaved: (value, revision, submitted) => draft.acceptSaved(normalizeManagedRuntime(value), revision, submitted),
     reload,
   });
-  const uncertain = useManagedRuntimeUncertainty();
+  const runtimeLock = useManagedRuntimeLock();
+  const uncertain = runtimeLock?.message;
   const [busy, setBusy] = useState(false);
   const [review, setReview] = useState<RuntimeReview | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -105,6 +109,7 @@ export function useManagedRuntimeSettings(options: {
     setNotice(null);
     let attempted = false;
     let acknowledged = false;
+    let transport: TrackedAttempt | undefined;
     try {
       const latest = await fetchSettings();
       if (!mounted.current) return false;
@@ -129,10 +134,17 @@ export function useManagedRuntimeSettings(options: {
         return false;
       }
       attempted = true;
-      const result = await patchSettings({
-        expectedRevision: intent.revision,
-        llamaCpp: normalizeManagedRuntime(intent.submitted),
-      });
+      const result = await dispatchTrackedMutation(
+        RUNTIME_ROUTE_PATTERNS,
+        () =>
+          patchSettings({
+            expectedRevision: intent.revision,
+            llamaCpp: normalizeManagedRuntime(intent.submitted),
+          }),
+        (tracked) => {
+          transport = tracked;
+        },
+      );
       const saved = change.receive(result, intent.submitted, intent.revision);
       acknowledged = true;
       setNotice(
@@ -157,6 +169,7 @@ export function useManagedRuntimeSettings(options: {
       } else if (attempted && !acknowledged) {
         retainManagedRuntimeUncertainty(
           "Save outcome is uncertain. Further runtime saves are locked in this app session; inspect Settings activity before continuing.",
+          transport,
         );
       } else setNotice(`Could not confirm current runtime settings. ${describeApiError(error).summary}`);
       return false;
@@ -172,6 +185,16 @@ export function useManagedRuntimeSettings(options: {
     draft,
     change,
     uncertain,
+    checkable: Boolean(runtimeLock?.transport),
+    checking: Boolean(runtimeLock?.checking),
+    /** Settles a lost save from the Gateway's record of it, then a canonical settings read. */
+    checkOutcome: async () => {
+      const settled = await checkManagedRuntimeOutcome(async () => {
+        await fetchSettings();
+        await reload();
+      });
+      if (settled && mounted.current) setNotice(settled);
+    },
     busy,
     review,
     reviewCurrent,

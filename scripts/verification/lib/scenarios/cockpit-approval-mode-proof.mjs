@@ -1,7 +1,31 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
+import { createReviewedMutationRecorder } from "./cockpit-reviewed-mutations.mjs";
 
 const RULE_LABELS = { approve_all: "Ask every time", approve_risky: "Ask for risky work", bypass: "Skip normal prompts" };
+export function assertApprovedDecisionReceipt({ approvalId, decision, rendered, recordHref }) {
+  assert.ok(approvalId, "The expected canonical approval identity is required.");
+  assert.equal(decision.approval?.approvalId, approvalId);
+  assert.equal(decision.approval?.status, "approved");
+  const followOnMessages = ["Follow-on action is blocked by policy.",
+    "Follow-on work failed. Inspect the persisted outcome before retrying.", "Follow-on settlement is pending.",
+    "Approval effects settled. Linked work has its own execution outcome.", "Follow-on execution needs separate verification."];
+  assert.ok(followOnMessages.some(message => rendered === `Decision recorded: approved. ${message}`),
+    "The native settlement must retain the approved decision and separate follow-on outcome.");
+  // ApprovalSettlement and its compatibility adapter emit root-relative owner links.
+  // Validate raw form before URL parsing can normalize authority, slashes or controls.
+  assert.equal(typeof recordHref, "string");
+  assert.match(recordHref, /^\/ops\/approvals(?:[?#]|$)/, "The settlement link must be a relative canonical owner destination.");
+  assert.ok(!/[\u0000-\u0020\u007f\\]/.test(recordHref), "The settlement link must not contain ambiguous URL characters.");
+  const owner = new URL(recordHref, "http://verification.invalid");
+  assert.equal(owner.pathname, "/ops/approvals");
+  assert.deepEqual(owner.searchParams.getAll("approvalId"), [approvalId], "The settlement link must identify exactly one canonical approval.");
+}
+export function assertApprovalModeBypassReview(rendered, revision) {
+  for (const consequence of [`settings revision ${revision}`, "Allowed tools may run without normal prompts.",
+    "Deny rules, Critical risk and risky-shell approvals, read boundaries, and tool grants remain in force."])
+    assert.ok(rendered.includes(consequence), `Missing reviewed consequence: ${consequence}`);
+}
 export function assertApprovalModeInspection({ before, after, rendered, mutations }) {
   assert.ok(Object.hasOwn(RULE_LABELS, before?.toolApprovalMode), "The owner approval rule is unavailable.");
   assert.ok(Number.isSafeInteger(before.revision) && before.revision > 0, "The owner settings revision is unavailable.");
@@ -49,7 +73,7 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
       assert.ok(["local_dev", "trusted_local"].includes(before.body?.deploymentProfile), "Bypass cancellation proof requires the local verification profile.");
       const theme = variant === "mobile" ? "light" : "dark";
       const browserContext = await browser.newContext({ viewport, colorScheme: theme });
-      let page;
+      let page, approvalPage;
       let releaseHeldInboxRead = () => {};
       const screenshots = [];
       const settingsTraffic = [];
@@ -60,12 +84,13 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
         }, theme);
         await installMissionControlNextBrowserState(browserContext, "default", citadelId);
         page = await browserContext.newPage();
-        const mutations = [];
+        const mutations = [], traffic = createReviewedMutationRecorder();
         page.on("request", (request) => {
           const pathname = new URL(request.url()).pathname;
           if (pathname === "/api/v1/settings") settingsTraffic.push({ at: Date.now(), kind: "request", method: request.method() });
-          if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method())
-            && /^\/api\/v1\/(settings|change-plans|tools\/grants)(\/|$)/.test(pathname)) mutations.push(`${request.method()} ${pathname}`);
+          const beforeCount = traffic.writes.length;
+          traffic.record(request);
+          if (traffic.writes.length !== beforeCount) mutations.push(`${request.method()} ${pathname}`);
         });
         page.on("response", (response) => {
           if (new URL(response.url()).pathname === "/api/v1/settings") settingsTraffic.push({ at: Date.now(), kind: "response",
@@ -106,12 +131,12 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
         await reviewSkipping.click();
         const dialog = page.getByRole("dialog", { name: "Skip normal tool prompts?", exact: true });
         await dialog.waitFor();
-        assert.ok((await dialog.innerText()).includes(`settings revision ${before.body.revision}`));
-        assert.ok((await dialog.innerText()).includes("nuclear-risk and risky-shell approvals"));
+        assertApprovalModeBypassReview(await dialog.innerText(), before.body.revision);
         assert.deepEqual(mutations, [], "Opening dangerous review mutated the owner.");
         await audit("bypass-review");
         await dialog.getByRole("button", { name: "Keep current rule", exact: true }).click();
         await dialog.waitFor({ state: "hidden" });
+        await traffic.assertPageBackground(page, "default");
         assert.deepEqual(mutations, [], "Cancelling bypass mutated the owner.");
 
         const draftMode = before.body.toolApprovalMode === "approve_all" ? "approve_risky" : "approve_all";
@@ -147,7 +172,9 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
           rendered: { current: await panel.getByText(/^Current:/).innerText(), selection: await select.inputValue() } });
         await panel.scrollIntoViewIfNeeded();
         const overflow = await audit("recovered");
-        const approvalPage = await browserContext.newPage();
+        approvalPage = await browserContext.newPage();
+        const approvalTraffic = createReviewedMutationRecorder();
+        approvalPage.on("request", request => approvalTraffic.record(request));
         const stream = await browserContext.newCDPSession(approvalPage);
         await stream.send("Network.enable");
         let streamReady = false;
@@ -296,7 +323,11 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
         const decision = await decisionHttp.json();
         assert.equal(decision.approval?.approvalId, approvalId);
         assert.equal(decision.approval?.status, "approved");
-        await inspector.getByText(/Approved decision recorded\./).waitFor();
+        const settlement = inspector.getByRole("region", { name: "Decision and follow-on work", exact: true });
+        const decisionStatus = settlement.getByRole("status").filter({ hasText: /^Decision recorded: approved\./ });
+        await decisionStatus.waitFor();
+        assertApprovedDecisionReceipt({ approvalId, decision, rendered: await decisionStatus.innerText(),
+          recordHref: await settlement.getByRole("link", { name: "Inspect decision and execution record", exact: true }).getAttribute("href") });
         const ready = await requestJson(stack.gatewayUrl, `/api/v1/change-plans/${receipt.planId}?workspaceId=default`);
         assertOk(ready, "read approved change before explicit continuation");
         assert.equal(ready.body.status, "awaiting_approval", "This setting must retain explicit continuation after approval.");
@@ -336,10 +367,16 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
         assert.equal(await panel.getByRole("button", { name: "Save approval rule", exact: true }).isDisabled(), true);
         assert.deepEqual(mutations, ["PATCH /api/v1/settings", `POST /api/v1/change-plans/${receipt.planId}/responses`]);
         await panel.scrollIntoViewIfNeeded(); await audit("saved");
+        await traffic.assertPageBackground(page, "default");
+        await approvalTraffic.assertPageBackground(approvalPage, "default");
+        assert.deepEqual(approvalTraffic.writes.map(entry => `${entry.method} ${entry.pathname}`), [`POST /api/v1/approvals/${approvalId}/resolve`]);
         await approvalPage.close();
         return { status: "passed", metrics: { savedRevision: saved.body.revision, rule: saved.body.toolApprovalMode,
           bypassReviewCancelled: true, failedReadFixture: true, failedReads, preservedDraft: true,
-          settingsMutations: mutations.length, reviewOwnerUnchanged: true, canonicalApprovalResolved: true,
+          settingsMutations: mutations.length, browserMutations: traffic.total + approvalTraffic.total,
+          presenceMutations: traffic.presence.length + approvalTraffic.presence.length,
+          observerRequests: traffic.observers.length + approvalTraffic.observers.length,
+          reviewOwnerUnchanged: true, canonicalApprovalResolved: true,
           unapprovedContinuationBlocked: true, explicitApprovedContinuation: true,
           scopedInboxDeepLink: true, currentOwnerNotification: true, notificationWithoutReload: true,
           retainedInboxInvalidationBound: true,
@@ -347,11 +384,12 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
           exactRuleSaveVerified: true, blockingAxe: 0, overflow },
         artifacts: emptyArtifacts({ screenshots }) };
       } catch (error) {
-        if (page && !page.isClosed()) {
+        for (const [target, suffix] of [[page, "failure"], [approvalPage, "approval-failure"]]) {
+          if (!target || target.isClosed()) continue;
           try {
             const screenshotDir = path.join(context.artifactRoot, "screenshots"); await mkdir(screenshotDir, { recursive: true });
-            const screenshot = path.join(screenshotDir, `ux-budgets-cockpit-approval-mode-${variant}-failure.png`);
-            await page.screenshot({ path: screenshot, fullPage: false }); screenshots.push(relativeToRun(context, screenshot));
+            const screenshot = path.join(screenshotDir, `ux-budgets-cockpit-approval-mode-${variant}-${suffix}.png`);
+            await target.screenshot({ path: screenshot, fullPage: false }); screenshots.push(relativeToRun(context, screenshot));
           } catch { /* Keep the first failure when screenshot capture is unavailable. */ }
         }
         return { status: "failed", error: error instanceof Error ? (error.stack ?? error.message) : String(error),

@@ -196,6 +196,146 @@ describe("communications dashboard service", () => {
     );
   });
 
+  it("binds the send approval to the draft workspace and replays an exact repeated send without a second approval", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const service = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval });
+    const draft = service.createDraft({
+      workspaceId: "workspace-mail",
+      accountId: "11111111-1111-4111-8111-111111111111",
+      to: ["operator@example.test"],
+      subject: "Scoped approval",
+      bodyText: "Bound to its workspace.",
+    });
+    expect(draft.workspaceId).toBe("workspace-mail");
+    const first = await service.sendDraft(draft.draftId);
+    // A lost response must be safely replayable by exact draft ID.
+    const replay = await service.sendDraft(draft.draftId);
+    expect(createApproval).toHaveBeenCalledOnce();
+    expect(createApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        linkage: expect.objectContaining({ workspaceId: "workspace-mail", actionType: "communications.mail.send" }),
+      }),
+    );
+    expect(replay).toEqual(first);
+    expect(first).toMatchObject({
+      status: "approval_required",
+      approvalId: "22222222-2222-4222-8222-222222222222",
+      workspaceId: "workspace-mail",
+    });
+  });
+
+  it("keeps the exact unscoped send linkage for drafts without a workspace", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const service = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval });
+    const draft = service.createDraft({
+      accountId: "acct-unscoped",
+      to: ["operator@example.test"],
+      subject: "Unscoped",
+      bodyText: "Classic path.",
+    });
+    await service.sendDraft(draft.draftId);
+    expect(createApproval.mock.calls[0]![0].linkage).toEqual({
+      actionType: "communications.mail.send",
+      connectorId: "acct-unscoped",
+    });
+  });
+
+  it("shares one in-flight send so a concurrent replay never requests a second approval", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => {
+      await gate;
+      return createApprovalRecord(input);
+    });
+    const service = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval });
+    const draft = service.createDraft({
+      workspaceId: "workspace-mail",
+      accountId: "acct-a",
+      to: ["operator@example.test"],
+      subject: "Concurrent",
+      bodyText: "Once.",
+    });
+    const first = service.sendDraft(draft.draftId);
+    const replay = service.sendDraft(draft.draftId);
+    release();
+    const results = await Promise.all([first, replay]);
+    expect(createApproval).toHaveBeenCalledOnce();
+    expect(results[1]).toEqual(results[0]);
+    expect(results[0]).toMatchObject({ status: "approval_required" });
+  });
+
+  it("treats an uncertain approval request as terminal so no replay can create a second approval", async () => {
+    const createApproval = vi.fn(async () => {
+      throw new Error("storage write outcome unknown");
+    });
+    const service = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval });
+    const draft = service.createDraft({
+      workspaceId: "workspace-mail",
+      accountId: "acct-a",
+      to: ["operator@example.test"],
+      subject: "Uncertain",
+      bodyText: "Do not repeat.",
+    });
+    await expect(service.sendDraft(draft.draftId)).rejects.toThrow("storage write outcome unknown");
+    const replay = await service.sendDraft(draft.draftId);
+    expect(replay).toMatchObject({ draftId: draft.draftId, status: "failed" });
+    expect(replay.approvalId).toBeUndefined();
+    expect(createApproval).toHaveBeenCalledOnce();
+  });
+
+  it("never requests an approval for a draft the Gateway does not hold, even when sent twice", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const service = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval });
+    expect(await service.sendDraft("mail_draft_missing")).toMatchObject({ status: "failed" });
+    expect(await service.sendDraft("mail_draft_missing")).toMatchObject({ status: "failed" });
+    expect(createApproval).not.toHaveBeenCalled();
+  });
+
+  it("projects only unbound connections and connections bound to the requested workspace", async () => {
+    const gmailRead = vi.fn(async (_input: { connectionId: string }) => ({ messages: [] }));
+    const calendarList = vi.fn(async (_input: { connectionId: string }) => ({ items: [] }));
+    const readConnections = (mock: typeof gmailRead) => mock.mock.calls.map(([input]) => input.connectionId);
+    const service = createCommunicationsDashboardService({
+      now: () => new Date(NOW),
+      listIntegrationConnections: () => [
+        createConnection({
+          connectionId: "conn-unbound",
+          label: "Unbound",
+          config: { address: "unbound@example.test", contacts: [{ displayName: "Unbound contact" }] },
+        }),
+        createConnection({
+          connectionId: "conn-own",
+          label: "Own",
+          workspaceId: "workspace-1",
+          config: { address: "own@example.test" },
+        }),
+        createConnection({
+          connectionId: "conn-foreign",
+          label: "Foreign",
+          workspaceId: "workspace-2",
+          config: { address: "foreign@example.test", contacts: [{ displayName: "Foreign contact" }] },
+        }),
+      ],
+      commsGmailRead: gmailRead,
+      commsCalendarList: calendarList,
+    });
+
+    const dashboard = await service.getDashboard({ workspaceId: "workspace-1" });
+
+    expect(dashboard.mailAccounts.map((account) => account.accountId).sort()).toEqual(["conn-own", "conn-unbound"]);
+    expect(dashboard.calendarAccounts.map((account) => account.accountId)).not.toContain("conn-foreign");
+    expect(dashboard.contacts.map((contact) => contact.displayName)).toEqual(["Unbound contact"]);
+    expect(await service.isMailAccountVisible("workspace-1", "conn-own")).toBe(true);
+    expect(await service.isMailAccountVisible("workspace-1", "conn-unbound")).toBe(true);
+    expect(await service.isMailAccountVisible("workspace-1", "conn-foreign")).toBe(false);
+    expect(await service.isMailAccountVisible("workspace-1", "conn-missing")).toBe(false);
+    expect(readConnections(gmailRead)).not.toContain("conn-foreign");
+    expect(readConnections(calendarList)).not.toContain("conn-foreign");
+    expect(readConnections(gmailRead).sort()).toEqual(["conn-own", "conn-unbound"]);
+  });
+
   // The composed gateway port resolves connections asynchronously. Treating it
   // as synchronous made `/api/v1/communications` answer 500 with
   // "connections.flatMap is not a function".

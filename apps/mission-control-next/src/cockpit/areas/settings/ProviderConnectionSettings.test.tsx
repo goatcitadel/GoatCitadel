@@ -9,8 +9,10 @@ import {
   type ProviderModelCatalogOption,
 } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
+import { __resetCredentialInputsForTests } from "../../../features/native-routes/settings/credential-input-owner";
 import { __resetProviderConnectionAttemptsForTests, readProviderConnectionAttempt } from "./provider-connection-state";
 import { ProviderConnectionSettings } from "./ProviderConnectionSettings";
+import { freshReadsActive } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 
 const api = vi.hoisted(() => ({
   createChangePlan: vi.fn(),
@@ -21,6 +23,36 @@ const api = vi.hoisted(() => ({
   submitChangePlanProviderSecret: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
+// Each owner write reports the attempt it dispatched, as the real capture would for these Gateway routes.
+const attempts = vi.hoisted(() => ({
+  paths: [] as string[],
+  read: vi.fn(),
+  installation: undefined as string | undefined,
+  /** Overrides the connected installation, so a test can switch Gateway mid-check. */
+  connected: undefined as string | undefined,
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>();
+  return {
+    ...original,
+    getGatewayApiBaseUrl: () => attempts.connected ?? original.getGatewayApiBaseUrl(),
+    captureMutationAttempt: (dispatch: () => Promise<unknown>, onAttempt: (attempt: unknown) => void) => {
+      const path = attempts.paths.shift();
+      if (path)
+        onAttempt({
+          attemptKey: "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+          method: "POST",
+          path,
+          ...(attempts.installation ? { installation: attempts.installation } : {}),
+        });
+      return dispatch();
+    },
+  };
+});
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  fetchMutationAttempt: attempts.read,
+}));
 const switchShellMock = vi.hoisted(() => vi.fn<typeof import("../../../shell-preference").switchShell>());
 vi.mock("../../../shell-preference", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../shell-preference")>()),
@@ -82,6 +114,9 @@ async function chooseEnvironment() {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  attempts.paths.length = 0;
+  attempts.installation = undefined;
+  attempts.connected = undefined;
   switchShellMock.mockResolvedValue("cancelled");
   catalog = {
     config: config() as NonNullable<ReturnType<typeof useProviderModelCatalog>["config"]>,
@@ -153,6 +188,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   __resetSessionDraftsForTests();
+  __resetCredentialInputsForTests();
   __resetProviderConnectionAttemptsForTests();
 });
 
@@ -169,6 +205,7 @@ describe("cockpit provider connection editing", () => {
         providerId: "provider-a",
         profile: { baseUrl: "https://new.example.test/v1" },
       },
+      idempotencyKey: expect.stringMatching(/^provider-connection:[0-9a-f-]{36}$/),
     });
     expect(api.confirmChangePlan).not.toHaveBeenCalled();
     expect(dialog.contextNote).toContain("New endpoint: https://new.example.test/v1");
@@ -247,6 +284,7 @@ describe("cockpit provider connection editing", () => {
         credentialAction: "replace_api_key",
         credentialStorage: "keychain",
       },
+      idempotencyKey: expect.stringMatching(/^provider-connection:[0-9a-f-]{36}$/),
     });
     api.submitChangePlanProviderSecret.mockResolvedValue({
       ...currentPlan,
@@ -493,6 +531,212 @@ describe("cockpit provider connection editing", () => {
     expect(button("Review endpoint change").disabled).toBe(true);
     expect(button("Review current step")).toBeUndefined();
     expect(api.confirmChangePlan).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles a lost confirmation from the Gateway's attempt record and the canonical plan", async () => {
+    await render();
+    await editEndpoint();
+    await click("Review endpoint change");
+    attempts.paths.push("/api/v1/change-plans/connection-plan/confirmations");
+    api.confirmChangePlan.mockRejectedValue(new Error("lost response"));
+    await act(async () => dialog.onConfirm(dialog.plan!));
+    expect(container.textContent).toContain("outcome is uncertain");
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    currentPlan = { ...currentPlan, revision: 2, status: "completed", requiredAction: undefined };
+    api.fetchLlmConfig.mockResolvedValue(config(5, "https://new.example.test/v1"));
+    await click("Check outcome");
+    expect(attempts.read).toHaveBeenCalledWith(
+      "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+      "POST",
+      "/api/v1/change-plans/:planId/confirmations",
+    );
+    expect(container.textContent).not.toContain("outcome is uncertain");
+    expect(container.textContent).toContain("Current provider evidence confirms the saved change");
+    expect(api.confirmChangePlan).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers a lost plan creation by replaying the same plan key, never a new one", async () => {
+    await render();
+    await editEndpoint();
+    attempts.paths.push("/api/v1/change-plans");
+    const create = api.createChangePlan.getMockImplementation()!;
+    api.createChangePlan.mockRejectedValueOnce(new Error("lost response"));
+    await click("Review endpoint change");
+    expect(container.textContent).toContain("outcome is uncertain");
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    api.createChangePlan.mockImplementation(create);
+    await click("Check outcome");
+    expect(api.createChangePlan).toHaveBeenCalledTimes(2);
+    const [first, replay] = api.createChangePlan.mock.calls.map(([input]) => input);
+    expect(replay).toEqual(first);
+    expect(container.textContent).not.toContain("outcome is uncertain");
+    expect(dialog.plan?.planId).toBe("connection-plan");
+  });
+
+  it("never replays a released plan creation and releases the lock without claiming nothing was created", async () => {
+    await render();
+    await editEndpoint();
+    attempts.paths.push("/api/v1/change-plans");
+    api.createChangePlan.mockRejectedValueOnce(new Error("lost response"));
+    await click("Review endpoint change");
+    attempts.read.mockResolvedValue({ status: "failed", claimExpired: false });
+    await click("Check outcome");
+    expect(api.createChangePlan).toHaveBeenCalledTimes(1);
+    expect(readProviderConnectionAttempt("provider-a")).toBeUndefined();
+    expect(container.textContent).toContain("released this change after an error");
+    expect(container.textContent).toContain("Unsaved endpoint draft");
+  });
+
+  it("re-reads a released confirmation's plan as a retry gate, not as proof", async () => {
+    await render();
+    await editEndpoint();
+    await click("Review endpoint change");
+    attempts.paths.push("/api/v1/change-plans/connection-plan/confirmations");
+    api.confirmChangePlan.mockRejectedValue(new Error("lost response"));
+    await act(async () => dialog.onConfirm(dialog.plan!));
+    attempts.read.mockResolvedValue({ status: "failed", claimExpired: false });
+    await click("Check outcome");
+    expect(readProviderConnectionAttempt("provider-a")?.uncertain).toBe(false);
+    expect(container.textContent).toContain("Review its current step before acting again");
+    expect(api.confirmChangePlan).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [{ status: "pending", claimExpired: false }, "still running"],
+    [{ status: "pending", claimExpired: true }, "expired"],
+    [{ status: "absent" }, "no record"],
+  ])("keeps the connection lock for %o", async (record, message) => {
+    await render();
+    await editEndpoint();
+    await click("Review endpoint change");
+    attempts.paths.push("/api/v1/change-plans/connection-plan/confirmations");
+    api.confirmChangePlan.mockRejectedValue(new Error("lost response"));
+    await act(async () => dialog.onConfirm(dialog.plan!));
+    attempts.read.mockResolvedValue(record);
+    await click("Check outcome");
+    expect(container.textContent).toContain(message);
+    expect(readProviderConnectionAttempt("provider-a")?.uncertain).toBe(true);
+    expect(api.fetchChangePlan).toHaveBeenCalledTimes(1);
+    expect(button("Check outcome").disabled).toBe(false);
+  });
+
+  it("keeps the connection lock when the attempt read fails", async () => {
+    await render();
+    await editEndpoint();
+    await click("Review endpoint change");
+    attempts.paths.push("/api/v1/change-plans/connection-plan/confirmations");
+    api.confirmChangePlan.mockRejectedValue(new Error("lost response"));
+    await act(async () => dialog.onConfirm(dialog.plan!));
+    attempts.read.mockRejectedValue(new Error("API error 403: gateway-internal-detail"));
+    await click("Check outcome");
+    expect(readProviderConnectionAttempt("provider-a")?.uncertain).toBe(true);
+    expect(container.textContent).toContain("check failed");
+    expect(container.textContent).not.toContain("gateway-internal-detail");
+  });
+
+  it("refuses to check a lost confirmation against a different Gateway installation", async () => {
+    await render();
+    await editEndpoint();
+    await click("Review endpoint change");
+    attempts.installation = "http://other-gateway.invalid";
+    attempts.paths.push("/api/v1/change-plans/connection-plan/confirmations");
+    api.confirmChangePlan.mockRejectedValue(new Error("lost response"));
+    await act(async () => dialog.onConfirm(dialog.plan!));
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    await click("Check outcome");
+    expect(attempts.read).not.toHaveBeenCalled();
+    expect(readProviderConnectionAttempt("provider-a")?.uncertain).toBe(true);
+    expect(container.textContent).toContain("different Gateway");
+  });
+  it("never replays a lost create on a Gateway the operator switched to during the check", async () => {
+    await render();
+    await editEndpoint();
+    attempts.installation = "http://gateway-a.invalid";
+    attempts.connected = "http://gateway-a.invalid";
+    attempts.paths.push("/api/v1/change-plans");
+    api.createChangePlan.mockRejectedValueOnce(new Error("lost response"));
+    await click("Review endpoint change");
+    expect(readProviderConnectionAttempt("provider-a")?.uncertain).toBe(true);
+    api.createChangePlan.mockClear();
+    attempts.read.mockImplementation(async () => {
+      attempts.connected = "http://gateway-b.invalid";
+      return { status: "completed", claimExpired: false };
+    });
+    await click("Check outcome");
+    expect(api.createChangePlan).not.toHaveBeenCalled();
+    expect(readProviderConnectionAttempt("provider-a")?.uncertain).toBe(true);
+    expect(container.textContent).toContain("different Gateway");
+  });
+  it("keeps a lost confirmation locked when the Gateway changes while its plan is re-read", async () => {
+    await render();
+    await editEndpoint();
+    await click("Review endpoint change");
+    attempts.installation = "http://gateway-a.invalid";
+    attempts.connected = "http://gateway-a.invalid";
+    attempts.paths.push("/api/v1/change-plans/connection-plan/confirmations");
+    api.confirmChangePlan.mockRejectedValue(new Error("lost response"));
+    await act(async () => dialog.onConfirm(dialog.plan!));
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    api.fetchChangePlan.mockImplementation(async () => {
+      attempts.connected = "http://gateway-b.invalid";
+      return currentPlan;
+    });
+    await click("Check outcome");
+    expect(readProviderConnectionAttempt("provider-a")?.uncertain).toBe(true);
+    expect(container.textContent).toContain("different Gateway");
+  });
+  it.each([
+    ["confirms", "https://new.example.test/v1"],
+    ["disagrees", "https://other.example.test/v1"],
+  ])(
+    "keeps a lost confirmation checkable when the Gateway changes while the saved provider is read and it %s",
+    async (_case, baseUrl) => {
+      await render();
+      await editEndpoint();
+      await click("Review endpoint change");
+      attempts.installation = "http://gateway-a.invalid";
+      attempts.connected = "http://gateway-a.invalid";
+      attempts.paths.push("/api/v1/change-plans/connection-plan/confirmations");
+      api.confirmChangePlan.mockRejectedValue(new Error("lost response"));
+      await act(async () => dialog.onConfirm(dialog.plan!));
+      attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+      currentPlan = { ...currentPlan, revision: 2, status: "completed", requiredAction: undefined };
+      api.fetchLlmConfig.mockImplementation(async () => {
+        attempts.connected = "http://gateway-b.invalid";
+        return config(5, baseUrl);
+      });
+      await click("Check outcome");
+      const attempt = readProviderConnectionAttempt("provider-a");
+      expect(attempt?.uncertain).toBe(true);
+      expect(attempt?.transport).toBeDefined();
+      expect(container.textContent).toContain("different Gateway");
+      expect(container.textContent).not.toContain("Current provider evidence confirms the saved change");
+    },
+  );
+  it("re-reads the plan fresh when settling a lost confirmation", async () => {
+    await render();
+    await editEndpoint();
+    await click("Review endpoint change");
+    attempts.paths.push("/api/v1/change-plans/connection-plan/confirmations");
+    api.confirmChangePlan.mockRejectedValue(new Error("lost response"));
+    await act(async () => dialog.onConfirm(dialog.plan!));
+    attempts.read.mockResolvedValue({ status: "failed", claimExpired: false });
+    let fresh = false;
+    api.fetchChangePlan.mockImplementation(async () => {
+      fresh = freshReadsActive();
+      return currentPlan;
+    });
+    await click("Check outcome");
+    expect(fresh).toBe(true);
+  });
+  it("offers no outcome check for an attempt it could not identify", async () => {
+    await render();
+    await editEndpoint();
+    await click("Review endpoint change");
+    api.confirmChangePlan.mockRejectedValue(new Error("lost response"));
+    await act(async () => dialog.onConfirm(dialog.plan!));
+    expect(container.textContent).toContain("outcome is uncertain");
+    expect(button("Check outcome")).toBeUndefined();
   });
 
   it("does not confirm a completed plan when the provider readback disagrees", async () => {

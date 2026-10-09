@@ -1,8 +1,14 @@
+import { setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import {
+  getGatewayAccessRevision,
+  subscribeGatewayAccessChange,
+} from "@goatcitadel/mission-control-shared/api/client-core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   consumeGatewayAccessBootstrapFromLocation,
   getGatewayApiBaseUrl,
   preflightGatewayAccess,
+  fetchGatewayCurrentAccess,
   subscribeGatewayAuthRejection,
   type GatewayAccessPreflightResult,
 } from "@goatcitadel/mission-control-shared/api/shell-client";
@@ -38,6 +44,7 @@ export type GatewayAccessViewState =
 export interface UseGatewayAccessResult {
   gatewayAccess: GatewayAccessViewState;
   gatewayBusy: boolean;
+  callerScope?: string;
   autoRetryPending: boolean;
   retryGatewayAccess: () => Promise<void>;
 }
@@ -47,23 +54,46 @@ export function useGatewayAccess(): UseGatewayAccessResult {
     status: "checking",
     message: "Verifying gateway reachability and Mission Control access policy.",
   });
+  const [callerScope, setCallerScope] = useState<string>();
   const [gatewayBusy, setGatewayBusy] = useState(true);
+  const requestGeneration = useRef(0);
   const autoRetryDelayRef = useRef(AUTO_RETRY_BASE_MS);
 
   const retryGatewayAccess = useCallback(async () => {
+    const generation = ++requestGeneration.current;
     setGatewayBusy(true);
     try {
       const bootstrap = consumeGatewayAccessBootstrapFromLocation();
+      const revision = getGatewayAccessRevision();
       const next = await preflightGatewayAccess({ bootstrap });
+      if (generation !== requestGeneration.current || revision !== getGatewayAccessRevision()) return;
+      if (next.status === "ready") {
+        const caller = await fetchGatewayCurrentAccess();
+        if (generation !== requestGeneration.current || revision !== getGatewayAccessRevision()) return;
+        const scope = JSON.stringify([
+          getGatewayApiBaseUrl(),
+          caller.actorSource,
+          caller.actorId,
+          caller.operatorAccess,
+          caller.deviceId,
+          caller.grantId,
+        ]);
+        setGatewayCallerScope(scope);
+        setCallerScope(scope);
+      }
       setGatewayAccess(next);
     } catch (error) {
+      if (generation !== requestGeneration.current) return;
       setGatewayAccess({
-        status: "unreachable",
+        status:
+          error && typeof error === "object" && "status" in error && (error.status === 401 || error.status === 403)
+            ? "access-blocked"
+            : "unreachable",
         message: error instanceof Error ? error.message : "Gateway preflight failed.",
         healthDetail: getGatewayApiBaseUrl(),
       });
     } finally {
-      setGatewayBusy(false);
+      if (generation === requestGeneration.current) setGatewayBusy(false);
     }
   }, []);
 
@@ -73,14 +103,31 @@ export function useGatewayAccess(): UseGatewayAccessResult {
 
   useEffect(
     () =>
-      subscribeGatewayAuthRejection((rejection) => {
+      subscribeGatewayAccessChange(() => {
+        requestGeneration.current += 1;
         setGatewayBusy(false);
         setGatewayAccess({
           status: "needs-auth",
-          message: "Gateway credentials were rejected. Re-enter them to continue.",
+          message: "Gateway access changed. Verify the current caller to continue.",
+          healthDetail: "Credential custody changed; previous caller evidence was invalidated.",
+        });
+      }),
+    [],
+  );
+
+  useEffect(
+    () =>
+      subscribeGatewayAuthRejection((rejection) => {
+        requestGeneration.current += 1;
+        setGatewayBusy(false);
+        setGatewayAccess({
+          status: "needs-auth",
+          message: rejection.hadStoredAuth
+            ? "Gateway credentials were rejected. Re-enter them to continue."
+            : "Gateway credentials are required. Sign in to continue.",
           healthDetail: `Gateway authentication failed for ${rejection.path} (401).`,
           authMode: rejection.authMode,
-          rejectedStoredAuth: true,
+          rejectedStoredAuth: rejection.hadStoredAuth,
           bootstrapTokenRejected: false,
         });
       }),
@@ -108,5 +155,5 @@ export function useGatewayAccess(): UseGatewayAccessResult {
   // pending auto-retry for the access gate's "will retry automatically" note.
   const autoRetryPending = gatewayAccess.status === "unreachable";
 
-  return { gatewayAccess, gatewayBusy, autoRetryPending, retryGatewayAccess };
+  return { gatewayAccess, gatewayBusy, callerScope, autoRetryPending, retryGatewayAccess };
 }

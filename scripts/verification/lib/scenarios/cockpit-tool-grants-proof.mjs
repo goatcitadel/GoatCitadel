@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { reviewNavigationDraft } from "./cockpit-navigation-draft-proof.mjs";
+import { createReviewedMutationRecorder } from "./cockpit-reviewed-mutations.mjs";
 
 export function assertReviewedToolGrant(input, receipt, owner) {
   assert.ok(receipt.grantId && receipt.createdBy && Number.isFinite(Date.parse(receipt.createdAt)));
@@ -25,12 +26,12 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
       const workspace = await read("/api/v1/workspaces", { method: "POST", body: { name: `Tool grants ${token}`, ...(citadelId ? { citadelId } : {}) } });
       const theme = variant === "mobile" ? "light" : "dark";
       const browserContext = await browser.newContext({ viewport, colorScheme: theme });
-      let page; const screenshots = [], writes = [];
+      let page; const screenshots = [], traffic = createReviewedMutationRecorder(), writes = traffic.writes;
       try {
         await browserContext.addInitScript((value) => { window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit"); window.localStorage.setItem("goatcitadel.ui.theme.v1", value); }, theme);
         await installMissionControlNextBrowserState(browserContext, workspace.workspaceId, workspace.citadelId);
         page = await browserContext.newPage();
-        page.on("request", (request) => { if (["POST", "PATCH", "PUT", "DELETE"].includes(request.method()) && new URL(request.url()).pathname.startsWith("/api/")) writes.push({ path: new URL(request.url()).pathname, body: request.postDataJSON() }); });
+        page.on("request", request => traffic.record(request));
         await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/safety?shell=cockpit#approval-mode"), { waitUntil: "domcontentloaded" });
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
         const panel = page.getByRole("region", { name: "Tool catalog and grants", exact: true });
@@ -39,18 +40,22 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
         await panel.getByLabel("Decision", { exact: true }).selectOption("deny");
         await panel.getByLabel("Scope", { exact: true }).selectOption("workspace");
         await panel.getByLabel("Scope ID", { exact: true }).fill(workspace.workspaceId);
+        const defaultExpiry = await panel.getByLabel("Expires at", { exact: true }).inputValue();
+        assert.equal(await panel.getByLabel("Grant type", { exact: true }).inputValue(), "ttl");
         await panel.getByRole("button", { name: "Review new grant", exact: true }).click();
         let dialog = page.getByRole("dialog", { name: "Review new tool grant", exact: true }); await dialog.waitFor();
         assert.ok((await dialog.innerText()).includes(workspace.workspaceId));
         await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+        await traffic.assertPageBackground(page, workspace.workspaceId);
         assert.deepEqual(writes, [], "Cancelled grant review wrote to an owner");
         await panel.getByRole("button", { name: "Review new grant", exact: true }).click();
         dialog = page.getByRole("dialog", { name: "Review new tool grant", exact: true });
         const createResponse = page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/v1/tools/grants");
         await dialog.getByRole("button", { name: "Create reviewed grant", exact: true }).click();
         const created = await createResponse; assert.equal(created.status(), 201); const receipt = await created.json();
-        const input = { toolPattern: `verification.tool.${token}`, decision: "deny", scope: "workspace", scopeRef: workspace.workspaceId, grantType: "persistent" };
-        assert.deepEqual(writes, [{ path: "/api/v1/tools/grants", body: input }]);
+        const input = { toolPattern: `verification.tool.${token}`, decision: "deny", scope: "workspace", scopeRef: workspace.workspaceId, grantType: "ttl", expiresAt: defaultExpiry };
+        assert.ok(Date.parse(input.expiresAt) > Date.now() + 50 * 60_000 && Date.parse(input.expiresAt) <= Date.now() + 60 * 60_000, "New grant must default to one hour");
+        assert.deepEqual(writes, [{ method: "POST", pathname: "/api/v1/tools/grants", body: input }]);
         assertReviewedToolGrant(input, receipt, await read("/api/v1/tools/grants?limit=400"));
         await panel.getByText("Tool grant recorded. Effective policy and approval gates still apply.", { exact: true }).waitFor();
         await panel.getByRole("button", { name: `Inspect grant ${receipt.grantId}`, exact: true }).click();
@@ -89,7 +94,7 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
         const documentTime = await page.evaluate(() => performance.timeOrigin);
         const retainedDraft = async () => {
           for (const [label, expected] of Object.entries({ "Tool pattern": `verification.tool.${token}.lost`,
-            Decision: "deny", Scope: "workspace", "Scope ID": workspace.workspaceId, "Grant type": "persistent" })) {
+            Decision: "deny", Scope: "workspace", "Scope ID": workspace.workspaceId, "Grant type": "ttl", "Expires at": input.expiresAt })) {
             assert.equal(await panel.getByLabel(label, { exact: true }).inputValue(), expected, `Navigation changed ${label}.`);
           }
           await panel.getByText(/Grant write outcome is unconfirmed\./).waitFor();
@@ -111,7 +116,9 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
         assertReviewedToolGrant({ ...input, toolPattern: `verification.tool.${token}.lost` }, lostReceipt, await read("/api/v1/tools/grants?limit=400"));
         assert.equal(await page.evaluate(() => performance.timeOrigin), documentTime, "Unknown-lock check must remount in the same app session");
         assert.equal(writes.length, 3); await audit("unknown-lock");
-        return { status: "passed", metrics: { reviewedGrantId: receipt.grantId, cancelledWrites: 0, browserMutations: 3, exactScope: true,
+        await traffic.assertPageBackground(page, workspace.workspaceId);
+        return { status: "passed", metrics: { reviewedGrantId: receipt.grantId, cancelledWrites: 0, browserMutations: traffic.total,
+          reviewedOwnerMutations: writes.length, presenceMutations: traffic.presence.length, observerRequests: traffic.observers.length, exactScope: true,
           independentReadback: true, revoked: true, unknownLockAcrossRemount: true, toolInvocations: 0, blockingAxe: 0, overflow: 0 }, artifacts: emptyArtifacts({ screenshots }) };
       } catch (error) {
         if (page && !page.isClosed()) { try { const dir = path.join(context.artifactRoot, "screenshots"); await mkdir(dir, { recursive: true }); const screenshot = path.join(dir, `ux-budgets-cockpit-tool-grants-${variant}-failure.png`); await page.screenshot({ path: screenshot, fullPage: false }); screenshots.push(relativeToRun(context, screenshot)); } catch { /* Preserve the owner failure. */ } }

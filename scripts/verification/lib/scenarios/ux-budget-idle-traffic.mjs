@@ -214,7 +214,7 @@ export async function runUxBudgetIdleTraffic(environment) {
         await chatPage.waitForTimeout(SETTLE_MS);
         const replies = await chatPage.getByText("UX_BUDGET_OK").count();
         const inboxCounter = countGatewayRequests(inboxPage, stack.gatewayUrl, counterOptions);
-        await chatPage.getByRole("textbox", { name: "Message", exact: true }).fill("Idle traffic check");
+        await chatPage.getByRole("combobox", { name: "Message", exact: true }).fill("Idle traffic check");
         const send = chatPage.getByRole("button", { name: "Send", exact: true });
         await waitUntil(chatPage, () => send.isEnabled(), "Send never became available for the idle-traffic turn");
         await send.click();

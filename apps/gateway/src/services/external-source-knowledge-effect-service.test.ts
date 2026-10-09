@@ -2,16 +2,19 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_TTL_MS,
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE,
   EXTERNAL_SOURCE_SCHEMA_VERSION,
   WORKSPACE_PATH_BRIDGE_SNAPSHOT_VERSION,
   canonicalJsonString,
   type ExternalSourceCatalogItem,
   type ExternalSourceKnowledgeSnapshotApprovalPayload,
   type ExternalSourceRecord,
+  type ToolPolicyConfig,
 } from "@goatcitadel/contracts";
+import { ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import {
   createSqliteAsyncStorage,
   Storage,
@@ -41,6 +44,8 @@ import {
   deriveExternalSourceKnowledgeSnapshotMaterializedIdentities,
   type ExternalSourceKnowledgeSnapshotPolicyDecision,
 } from "./external-source-knowledge-effect-service.js";
+import { readKnowledgeApprovalResult } from "./knowledge-approval-result.js";
+import { KnowledgeFacadeService } from "./memory-facade-service.js";
 
 const WORKSPACE_ID = "default";
 const SESSION_ID = "session-1";
@@ -64,6 +69,7 @@ const EVIDENCE_TABLES = [
 const cleanups: Array<() => void> = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const cleanup of cleanups.splice(0)) cleanup();
 });
 
@@ -97,9 +103,17 @@ interface Harness {
 }
 
 async function createHarness(): Promise<Harness> {
-  const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+  // Audit/transcript writers (the governed retrieval suite drives the policy
+  // engine) stay inside a disposable root, never the package directory.
+  const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), "gc-hx407-knowledge-storage-"));
+  const storage = new Storage({
+    dbPath: ":memory:",
+    transcriptsDir: path.join(storageDir, "transcripts"),
+    auditDir: path.join(storageDir, "audit"),
+  });
   const asyncStorage = createSqliteAsyncStorage(storage);
   cleanups.push(() => storage.close());
+  cleanups.push(() => fs.rmSync(storageDir, { recursive: true, force: true }));
   const artifactsDir = fs.mkdtempSync(path.join(os.tmpdir(), "gc-hx407-knowledge-effect-"));
   cleanups.push(() => fs.rmSync(artifactsDir, { recursive: true, force: true }));
   // This suite proves knowledge effects over real bytes, independently of OS
@@ -407,6 +421,67 @@ async function createApprovedSnapshotApproval(
 }
 
 describe("ExternalSourceKnowledgeEffectService", () => {
+  it("replays an immutable legacy preview without enriching it, then applies the one original approved snapshot", async () => {
+    const harness = await createHarness();
+    const { attachmentId } = await harness.attach();
+    const input = harness.requestInput(attachmentId);
+    const material = await harness.attachmentService.buildKnowledgeSnapshotRequest(input, ACTOR, signal());
+    const { review: _review, ...legacyPreview } = material.preview;
+    const approvalId = deriveExternalSourceKnowledgeSnapshotApprovalId(material.payload);
+    const original = harness.storage.approvals.createDeterministicDetachedWithTtlDuration({
+      approvalId, kind: material.approvalKind, riskLevel: "danger", payload: { ...material.payload },
+      preview: legacyPreview, linkage: { workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, operatorId: ACTOR.actorId, authActorId: ACTOR.actorId, authActorSource: ACTOR.source },
+    }, EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_TTL_MS).approval;
+    const before = canonicalJsonString(original);
+    const replay = await harness.service.createApprovalRequest(input, ACTOR, signal());
+    expect(replay.material.preview).toEqual(legacyPreview);
+    expect(canonicalJsonString(harness.storage.approvals.get(approvalId))).toBe(before);
+    expect(harness.countRows().knowledge_documents).toBe(0);
+    harness.storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: ACTOR.actorId });
+    const applied = await harness.service.applyApprovedSnapshot({ workspaceId: WORKSPACE_ID, approvalId }, ACTOR, signal());
+    expect(applied.disposition).toBe("created");
+    expect((await harness.service.applyApprovedSnapshot({ workspaceId: WORKSPACE_ID, approvalId }, ACTOR, signal())).disposition).toBe("replayed");
+    expect(harness.countRows().knowledge_documents).toBe(1);
+    expect(harness.countRows().approval_effects).toBe(1);
+    expect(harness.storage.approvals.get(approvalId).preview).toEqual(legacyPreview);
+    expect(applied.link).toMatchObject({ approvalId, importId: material.payload.importId, itemId: material.payload.itemId, normalizedArtifactSha256: material.payload.normalizedArtifactSha256 });
+  });
+  it("refuses a changed new review or foreign caller without replacing the stored approval", async () => {
+    const harness = await createHarness();
+    const { attachmentId } = await harness.attach();
+    const input = harness.requestInput(attachmentId);
+    const created = await harness.service.createApprovalRequest(input, ACTOR, signal());
+    const original = canonicalJsonString(created.approval);
+    await expect(harness.service.createApprovalRequest(input, { ...ACTOR, actorId: "foreign" }, signal())).rejects.toThrow();
+    const spy = vi.spyOn(harness.attachmentService, "buildKnowledgeSnapshotRequest").mockResolvedValue({
+      ...created.material, preview: { ...created.material.preview, review: {
+        ...created.material.preview.review!, sourceLabel: "Later label", target: "Later target",
+      } },
+    });
+    await expectEffectError(harness.service.createApprovalRequest(input, ACTOR, signal()), "approval_conflict");
+    spy.mockRestore();
+    expect(canonicalJsonString(harness.storage.approvals.get(created.approval.approvalId))).toBe(original);
+    expect(harness.countRows().knowledge_documents).toBe(0);
+    expect(harness.countRows().approval_effects).toBe(0);
+  });
+  it("fails missing or foreign sealed catalog evidence before a Knowledge approval can be created", async () => {
+    const harness = await createHarness();
+    const { attachmentId } = await harness.attach();
+    const input = harness.requestInput(attachmentId);
+    const original = harness.storage.externalSourceScans.getItem(WORKSPACE_ID, harness.scanId, "item-1");
+    for (const patch of [{ sourceId: "foreign" }, { scanId: "later-scan" }, { rawSha256: "f".repeat(64) }]) {
+      const spy = vi.spyOn(harness.storage.externalSourceScans, "getItem").mockReturnValue({ ...original, ...patch });
+      await expect(harness.service.createApprovalRequest(input, ACTOR, signal())).rejects.toMatchObject({
+        name: "ExternalSourceAttachmentServiceError", code: "conflict",
+      });
+      spy.mockRestore();
+    }
+    const missing = vi.spyOn(harness.storage.externalSourceScans, "getItem").mockImplementation(() => { throw new Error("Missing sealed catalog item"); });
+    await expect(harness.service.createApprovalRequest(input, ACTOR, signal())).rejects.toThrow("Missing sealed catalog item");
+    missing.mockRestore();
+    expect(harness.storage.approvals.list()).toHaveLength(0);
+    expect(harness.countRows().knowledge_documents).toBe(0);
+  });
   it("creates one deterministic bounded-expiry approval with request Journey evidence and exact replay", async () => {
     const harness = await createHarness();
     const { attachmentId } = await harness.attach();
@@ -421,6 +496,12 @@ describe("ExternalSourceKnowledgeEffectService", () => {
       ),
     );
     expect(created.approval.payload).toEqual(created.material.payload);
+    expect(created.approval.preview).toEqual(created.material.preview);
+    expect(created.material.preview.review).toEqual({
+      version: 1, sourceLabel: "Synthetic source-1", itemPath: "sessions/2026/07/14/synthetic-1.jsonl",
+      target: "Knowledge copy of sessions/2026/07/14/synthetic-1.jsonl from Synthetic source-1",
+      scopeSummary: "Workspace default; conversation session-1.", consequence: EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE,
+    });
     expect(created.approval.linkage).toMatchObject({
       workspaceId: WORKSPACE_ID,
       sessionId: SESSION_ID,
@@ -938,5 +1019,132 @@ describe("ExternalSourceKnowledgeEffectService", () => {
     expect(results[0]!.effectRow).toEqual(results[1]!.effectRow);
     expect(results[0]!.journeyEventIds).toEqual(results[1]!.journeyEventIds);
     expect(results[0]!.journeyEventIds.length).toBe(2);
+  });
+});
+
+describe("governed Knowledge retrieval of an approved external snapshot", () => {
+  const NAMESPACE = `workspace/${WORKSPACE_ID}/external-source-snapshots`;
+
+  // Real ask-always embeddings.query: one approval, one execution, then the
+  // canonical approval-result read that rechecks current read authority.
+  async function governedQuery(harness: Harness, sessionId: string) {
+    harness.storage.sessions.upsert({
+      sessionId,
+      sessionKey: `test:${sessionId}`,
+      kind: "dm",
+      channel: "test",
+      account: ACTOR.actorId,
+      timestamp: TS,
+    });
+    harness.storage.chatSessionMeta.ensure(sessionId, TS, WORKSPACE_ID);
+    const storage = createSqliteAsyncStorage(harness.storage);
+    const config: ToolPolicyConfig = {
+      tools: { approvalMode: "approve_all", allow: ["*"], deny: [] },
+      agents: {},
+      sandbox: {
+        writeJailRoots: [os.tmpdir()],
+        readOnlyRoots: [],
+        networkAllowlist: [],
+        riskyShellPatterns: [],
+        requireApprovalForRiskyShell: true,
+      },
+    };
+    const engine = new ToolPolicyEngine(config, storage);
+    const facade = new KnowledgeFacadeService({
+      invokeAndUnwrap: (request) => engine.invoke({ ...request, workspaceId: WORKSPACE_ID }),
+    });
+    const pending = await facade.knowledgeEmbeddingsQuery({
+      namespace: NAMESPACE,
+      sessionId,
+      query: "lobster-matrix-7f3a",
+      limit: 20,
+    });
+    expect(pending).toMatchObject({ outcome: "approval_required" });
+    const queryApprovalId = pending.approvalId as string;
+    harness.storage.approvals.resolve(queryApprovalId, { decision: "approve", resolvedBy: ACTOR.actorId });
+    expect(await engine.executeApprovedAction(queryApprovalId)).toMatchObject({ outcome: "executed" });
+    const read = () =>
+      readKnowledgeApprovalResult(
+        { storage, evaluateToolAccess: (request) => engine.evaluateAccess(request) },
+        queryApprovalId,
+        { workspaceId: WORKSPACE_ID, sessionId, toolName: "embeddings.query" },
+      );
+    return { read };
+  }
+
+  async function materialize(harness: Harness) {
+    const { approvalId } = await createApprovedSnapshotApproval(harness);
+    const applied = await harness.service.applyApprovedSnapshot(
+      { workspaceId: WORKSPACE_ID, approvalId },
+      ACTOR,
+      signal(),
+    );
+    return { approvalId, applied, binding: buildExternalSourceKnowledgeDocumentBinding(applied.link) };
+  }
+
+  it("releases the exact approved copy in its original conversation as untrusted external provenance", async () => {
+    const harness = await createHarness();
+    const { applied, binding } = await materialize(harness);
+    const firstChunk = (
+      harness.storage.db
+        .prepare("SELECT chunk_id, content FROM knowledge_chunks WHERE doc_id = ? ORDER BY seq ASC")
+        .all(applied.knowledgeDocumentId) as Array<{ chunk_id: string; content: string }>
+    )[0]!;
+    const { read } = await governedQuery(harness, SESSION_ID);
+    const receipt = await read();
+    expect(receipt.state).toBe("completed");
+    expect(receipt.message).toContain("0 withheld");
+    const items = (receipt.result as { items: Array<Record<string, unknown>> }).items;
+    expect(items).toEqual([
+      {
+        docId: applied.knowledgeDocumentId,
+        chunkId: firstChunk.chunk_id,
+        snippet: firstChunk.content.slice(0, 320),
+        attribution: {
+          title: "External source snapshot item-1",
+          sourceRef: binding.sourceRef,
+          sourceType: "external_source_snapshot",
+          trustLevel: "untrusted_external",
+        },
+      },
+    ]);
+    expect(await read()).toEqual(receipt);
+  });
+
+  it("withholds forged, tampered and other-conversation snapshot documents", async () => {
+    const harness = await createHarness();
+    const { applied, binding } = await materialize(harness);
+    // A forged document claims the snapshot source type and the real approval
+    // provenance but is not the derived materialized identity.
+    const forged = harness.storage.knowledge.createDocument({
+      namespace: NAMESPACE,
+      title: "External source snapshot item-1",
+      sourceType: "external_source_snapshot",
+      sourceRef: binding.sourceRef,
+      metadata: binding.metadata,
+    });
+    harness.storage.knowledge.appendChunks(forged.docId, [{ content: "forged lobster-matrix-7f3a material" }]);
+
+    const original = await governedQuery(harness, SESSION_ID);
+    const released = await original.read();
+    expect((released.result as { items: Array<{ docId: string }> }).items.map((item) => item.docId)).toEqual([
+      applied.knowledgeDocumentId,
+    ]);
+    expect(released.message).toContain("1 withheld");
+    expect(JSON.stringify(released)).not.toContain("forged");
+
+    const otherConversation = await governedQuery(harness, "session-2");
+    const withheld = await otherConversation.read();
+    expect(withheld).toMatchObject({ state: "completed", result: { items: [] } });
+    expect(withheld.message).toContain("2 withheld");
+    expect(JSON.stringify(withheld)).not.toContain("lobster-matrix-7f3a");
+
+    harness.storage.db
+      .prepare("UPDATE knowledge_documents SET metadata_json = ? WHERE doc_id = ?")
+      .run(canonicalJsonString({ ...binding.metadata, bindingSha256: "0".repeat(64) }), applied.knowledgeDocumentId);
+    const tampered = await original.read();
+    expect(tampered).toMatchObject({ state: "completed", result: { items: [] } });
+    expect(tampered.message).toContain("2 withheld");
+    expect(JSON.stringify(tampered)).not.toContain("lobster-matrix-7f3a");
   });
 });

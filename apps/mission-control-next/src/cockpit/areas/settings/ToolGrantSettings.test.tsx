@@ -174,3 +174,14 @@ it("retains an unconfirmed grant write and its input across the guarded handoff 
   expect(button("Review new grant").props.disabled).toBe(true);
   expect(api.createToolGrant).toHaveBeenCalledOnce();
 });
+
+it("defaults a new grant to an expiring one-hour grant and preserves until-revoked choices", async () => {
+  const now = Date.now();
+  await render();
+  expect(input("Grant type").props.value).toBe("ttl");
+  expect(Date.parse(input("Expires at").props.value) - now).toBeGreaterThan(3_500_000);
+  expect(Date.parse(input("Expires at").props.value) - now).toBeLessThan(3_700_000);
+  await act(async () => input("Grant type").props.onChange({ target: { value: "persistent" } }));
+  expect(input("Grant type").props.value).toBe("persistent");
+  expect(api.createToolGrant).not.toHaveBeenCalled();
+});

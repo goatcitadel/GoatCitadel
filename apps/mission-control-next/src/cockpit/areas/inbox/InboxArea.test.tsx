@@ -11,7 +11,15 @@ import { InspectorPanel, InspectorProvider } from "../../app/inspector";
 import { InboxArea } from "./InboxArea";
 import { __resetInboxViewedUpdatesForTests, isInboxUpdateViewed } from "./inbox-viewed-updates";
 
-const apiMocks = vi.hoisted(() => ({ fetchApproval: vi.fn(), fetchApprovals: vi.fn(), resolveApproval: vi.fn() }));
+const apiMocks = vi.hoisted(() => ({
+  fetchApproval: vi.fn(),
+  fetchApprovals: vi.fn(),
+  resolveApproval: vi.fn(),
+  markRead: vi.fn(),
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({
+  markOperatorInboxUpdatesRead: apiMocks.markRead,
+}));
 const switchShellMock = vi.hoisted(() => vi.fn<typeof import("../../../shell-preference").switchShell>());
 vi.mock("../../../shell-preference", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../shell-preference")>()),
@@ -19,7 +27,10 @@ vi.mock("../../../shell-preference", async (importOriginal) => ({
 }));
 const inboxMock = vi.hoisted(() => ({ result: null as unknown, installation: "http://localhost:8787" }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => apiMocks);
-vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({ fetchApproval: apiMocks.fetchApproval }));
+vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
+  fetchApproval: apiMocks.fetchApproval,
+  fetchApprovals: apiMocks.fetchApprovals,
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>()),
   getGatewayApiBaseUrl: () => inboxMock.installation,
@@ -97,12 +108,18 @@ beforeEach(() => {
     removeEventListener: vi.fn(),
   }));
   switchShellMock.mockReset().mockResolvedValue("cancelled");
+  localStorage.clear();
+  Object.defineProperty(navigator, "locks", {
+    configurable: true,
+    value: { request: async (_name: string, _options: unknown, fn: () => unknown) => fn() },
+  });
   __resetInboxViewedUpdatesForTests();
   inboxMock.installation = "http://localhost:8787";
   window.history.replaceState(null, "", "/inbox");
   inboxMock.result = { data: projection, isLoading: false, isError: false, isFetching: false, refetch: vi.fn() };
   apiMocks.fetchApproval.mockReset();
   apiMocks.fetchApprovals.mockReset();
+  apiMocks.markRead.mockReset();
   apiMocks.resolveApproval.mockReset();
   apiMocks.fetchApproval.mockResolvedValue(approval);
   container = document.createElement("div");
@@ -114,6 +131,7 @@ const update: OperatorInboxItem = {
   id: "task_deliverable:delivery-a",
   kind: "task_deliverable",
   group: "updates",
+  version: "a".repeat(64),
   title: "Viewed report",
   summary: "A file deliverable was recorded.",
   createdAt: "2026-09-28T00:00:00Z",
@@ -124,6 +142,7 @@ const update: OperatorInboxItem = {
 function updateProjection(item = update): OperatorInboxResponse {
   const data = {
     ...projection,
+    readStatus: { scope: "browser_local" as const },
     items: [item],
     counts: {
       ...projection.counts,
@@ -167,8 +186,8 @@ describe("viewed Updates presentation", () => {
     const client = new QueryClient();
     await renderUpdates(client);
     const link = container.querySelector<HTMLAnchorElement>("a[data-inbox-owner]")!;
-    expect(link.getAttribute("href")).toBe(`${projection.items[0]!.href}&shellScope=visit`);
-    expect(link.getAttribute("aria-label")).toBe("Open in classic Approvals");
+    expect(link.getAttribute("href")).toBe("/inbox?approvalId=test&shell=cockpit&workspaceId=default");
+    expect(link.textContent).toContain("Open in Approvals");
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true })));
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true })));
     expect(document.activeElement).toBe(link);
@@ -176,15 +195,9 @@ describe("viewed Updates presentation", () => {
     await act(async () => {
       link.click();
     });
-    expect(switchShellMock).toHaveBeenCalledExactlyOnceWith(
-      "classic",
-      expect.objectContaining({
-        href: `${projection.items[0]!.href}&shellScope=visit`,
-        isCurrent: expect.any(Function),
-        signal: expect.any(AbortSignal),
-      }),
-    );
-    expect(switchShellMock.mock.calls[0]![1].isCurrent()).toBe(true);
+    expect(switchShellMock).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe("/inbox");
+    expect(new URLSearchParams(window.location.search).get("approvalId")).toBe("test");
     expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
     expect(assign).not.toHaveBeenCalled();
     assign.mockRestore();
@@ -205,13 +218,13 @@ describe("viewed Updates presentation", () => {
     expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(0);
     expect(container.querySelector('[aria-label="Updates Gateway count"]')?.textContent).toBe("4+");
     expect(container.textContent).toContain("4 known items; more may be outside this view.");
-    expect(container.textContent).toContain("0 unviewed · 1 viewed here from this response");
-    await clickButton("Show viewed updates (1)");
+    expect(container.textContent).toContain("0 unread · 1 read from shown updates");
+    await clickButton("Show read updates (1)");
     expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(1);
-    await clickButton("Hide viewed updates");
+    await clickButton("Hide read updates");
     expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(0);
     expect(data).toEqual(original);
-    expect(JSON.stringify({ ...window.localStorage })).toBe(persistedBefore);
+    expect(JSON.stringify({ ...window.localStorage })).not.toBe(persistedBefore);
     expect(apiMocks.fetchApproval).not.toHaveBeenCalled();
     expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
   });
@@ -242,7 +255,7 @@ describe("viewed Updates presentation", () => {
       const client = new QueryClient();
       await renderUpdates(client, false);
       await clickButton("Details");
-      if (change === "new version") updateProjection({ ...update, summary: "New evidence" });
+      if (change === "new version") updateProjection({ ...update, version: "b".repeat(64), summary: "New evidence" });
       if (change === "foreign workspace")
         updateProjection({ ...update, source: { ...update.source, workspaceId: "other" } });
       if (change === "refresh") inboxMock.result = { data: updateProjection(), isFetching: true };
@@ -263,10 +276,15 @@ describe("viewed Updates presentation", () => {
     await act(async () => root.render(null));
     await renderUpdates(client);
     expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(0);
-    updateProjection({ ...update, summary: "New evidence", updatedAt: "2026-09-30T00:00:00Z" });
+    updateProjection({
+      ...update,
+      version: "b".repeat(64),
+      summary: "New evidence",
+      updatedAt: "2026-09-30T00:00:00Z",
+    });
     await renderUpdates(client);
     expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(1);
-    expect(container.textContent).toContain("1 unviewed · 0 viewed here from this response");
+    expect(container.textContent).toContain("1 unread · 0 read from shown updates");
   });
 });
 
@@ -316,8 +334,8 @@ describe("InboxArea", () => {
     expect(container.textContent).not.toContain("Coverage is incomplete");
     expect(container.textContent).not.toContain("Count unknown");
     // A declared scope is not a read gap, so the per-group counts read exactly.
-    expect(container.querySelector('[aria-label="Needs attention Gateway count"]')?.textContent).toBe("0");
-    expect(container.textContent).not.toContain("No known items returned in this group.");
+    expect(container.querySelector('[aria-label="Needs attention Gateway count"]')?.textContent).toBe("0 known");
+    expect(container.textContent).toContain("No known items returned in this group.");
   });
 
   it("says when sources could not be read instead of claiming an all-clear", async () => {
@@ -487,8 +505,8 @@ describe("InboxArea", () => {
     expect(container.textContent).toContain("Coverage is incomplete for 1 source");
     expect(container.textContent).toContain("Review file write");
     expect(container.textContent).toContain("No known items returned in this group.");
-    const link = container.querySelector('a[href="/ops/approvals?approvalId=test&shell=classic&shellScope=visit"]');
-    expect(link?.textContent).toContain("Open in classic Approvals");
+    const link = container.querySelector('a[href="/inbox?approvalId=test&shell=cockpit&workspaceId=default"]');
+    expect(link?.textContent).toContain("Open in Approvals");
     const details = [...container.querySelectorAll("button")].find((button) => button.textContent === "Details");
     if (!details) throw new Error("Missing details control");
     const input = document.createElement("input");
@@ -551,7 +569,7 @@ describe("InboxArea", () => {
 
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true })));
     expect(document.activeElement?.getAttribute("href")).toBe(
-      "/ops/approvals?approvalId=test&shell=classic&shellScope=visit",
+      "/inbox?approvalId=test&shell=cockpit&workspaceId=default",
     );
   });
 
@@ -701,12 +719,100 @@ it("keeps triage selection and owner focus beyond the window without resolving a
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true }));
   });
   await vi.waitFor(() =>
-    expect(document.activeElement?.getAttribute("href")).toBe(`${items[124]!.href}&shellScope=visit`),
+    expect(document.activeElement?.getAttribute("href")).toBe(
+      "/inbox?shell=cockpit&approvalId=row-124&workspaceId=default",
+    ),
   );
   expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
   expect(switchShellMock).not.toHaveBeenCalled();
   client.clear();
 });
+
+it("acknowledges only shown update references and reports skipped operator receipts", async () => {
+  const data = updateProjection();
+  data.readStatus = { scope: "operator", scopeId: "operator-a" };
+  apiMocks.markRead.mockResolvedValue({
+    readStatus: { scope: "operator", scopeId: "operator-a" },
+    acknowledged: [],
+    skipped: [{ id: update.id, version: update.version, reason: "not_current" }],
+  });
+  await renderUpdates(new QueryClient());
+  const before = JSON.stringify({ ...localStorage });
+  await clickButton("Mark all shown updates read");
+  expect(apiMocks.markRead).toHaveBeenCalledWith("default", [{ id: update.id, version: update.version }]);
+  expect(container.textContent).toContain("1 updates were not acknowledged");
+  expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(1);
+  expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
+  expect(JSON.stringify({ ...localStorage })).toBe(before);
+});
+it("shows server-scoped approval history with an older-page continuation", async () => {
+  apiMocks.fetchApprovals.mockResolvedValue({ items: [{ ...approval, linkage: { ...approval.linkage, workspaceId: "default" }, status: "rejected" }], nextCursor: "more" });
+  await renderUpdates(new QueryClient());
+  await clickButton("Approval history and replay");
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  expect(apiMocks.fetchApprovals).toHaveBeenCalledWith({ workspaceId: "default", limit: 100 });
+  expect(container.textContent).toContain("Load older pages to inspect the full retained history");
+  expect(container.textContent).toContain("Rejected");
+  expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
+});
+
+it("lets operators disable single-letter shortcuts", async () => {
+  await renderUpdates(new QueryClient());
+  const toggle = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  await act(async () => toggle.click());
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true })));
+  expect(container.querySelector('[data-inbox-item][data-selected="true"]')).toBeNull();
+  await act(async () => toggle.click());
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true })));
+  expect(container.querySelector('[data-inbox-item][data-selected="true"]')).not.toBeNull();
+});
+it("orders decisions by risk and selects the next remaining decision after settlement", async () => {
+  const low = { ...projection.items[0]!, id: "approval:low", title: "Lower risk", riskLevel: "safe" as const };
+  const high = { ...projection.items[0]!, id: "approval:high", title: "Higher risk", riskLevel: "nuclear" as const };
+  const data = { ...projection, items: [low, high] };
+  inboxMock.result = { data, isFetching: false, refetch: vi.fn() };
+  const client = new QueryClient();
+  await renderUpdates(client);
+  expect(container.querySelector("[data-inbox-item] h3")?.textContent).toBe("Higher risk");
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true })));
+  inboxMock.result = { data: { ...data, items: [low] }, isFetching: false, refetch: vi.fn() };
+  await renderUpdates(client);
+  expect(container.querySelector('[data-inbox-item][data-selected="true"] h3')?.textContent).toBe("Lower risk");
+});
+
+it.each([0, 1])(
+  "shows one unavailable state after write denial with %s earlier saved updates",
+  async (savedBeforeDenial) => {
+    inboxMock.installation = "http://localhost:8787/write-denial-" + savedBeforeDenial;
+    const data = updateProjection();
+    data.items = [
+      update,
+      { ...update, id: "task_deliverable:second", source: { ...update.source, deliverableId: "second" } },
+    ];
+    await renderUpdates(new QueryClient());
+    const original = localStorage.setItem.bind(localStorage);
+    let attempts = 0;
+    const write = vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
+      if (key.startsWith("goatcitadel.inbox.read.v1:") && attempts++ >= savedBeforeDenial)
+        throw new Error("write denied");
+      original(key, value);
+    });
+    try {
+      await clickButton("Mark all shown updates read");
+      expect(container.textContent).toContain("Read storage unavailable");
+      expect(container.textContent).not.toContain("Read status is browser-local");
+      expect(container.textContent).toContain(String(savedBeforeDenial) + " read from shown updates");
+      const action = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+        (b) => b.textContent === "Mark all shown updates read",
+      )!;
+      expect(action.disabled).toBe(true);
+    } finally {
+      write.mockRestore();
+    }
+  },
+);
 
 it("opens an exact approval link even outside the Inbox projection", async () => {
   inboxMock.result = {

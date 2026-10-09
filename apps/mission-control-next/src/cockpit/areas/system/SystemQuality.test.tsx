@@ -74,6 +74,14 @@ async function click(label: string) {
 const region = (label: string) => container.querySelector(`[aria-label="${label}"]`)!;
 
 describe("native Quality owner evidence", () => {
+  it("shows installation limitations once while retaining source-specific warnings", async () => {
+    const data = snapshot();
+    data.warnings = ["Shared limitation", "Shared limitation"];
+    data.securityQualityGates.warnings = ["Shared limitation", "Local gate warning", "Local gate warning"];
+    api.snapshot.mockResolvedValue(data); await mount();
+    expect(container.textContent?.split("Shared limitation").length).toBe(2);
+    expect(container.textContent?.split("Local gate warning").length).toBe(2);
+  });
   it("uses the bounded installation-wide owner and keeps partial sources unavailable", async () => {
     const data = snapshot(); data.promptPacks = { state: "unknown", items: [pack] };
     api.snapshot.mockResolvedValue(data);

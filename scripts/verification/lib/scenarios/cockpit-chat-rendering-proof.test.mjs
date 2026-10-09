@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { it } from "node:test";
 import { assertProjectConversationScope, assertProjectReadRequests } from "./cockpit-chat-project-proof.mjs";
-import { assertRenderingArtifact, assertRenderingRunLink, assertSourceLinks, clipboardText, RENDER_BAD_MERMAID, RENDER_MARKDOWN, RENDER_MERMAID, renderingReplyRules } from "./cockpit-chat-rendering-proof.mjs";
+import { revealConversationRun, assertRenderingArtifact, assertRenderingRunLink, assertSourceLinks, clipboardText, RENDER_BAD_MERMAID, RENDER_MARKDOWN, RENDER_MERMAID, renderingReplyRules } from "./cockpit-chat-rendering-proof.mjs";
 
 const sessions = [
   { sessionId: "a1", workspaceId: "workspace-a", projectId: "project-a", folderId: "folder-one" },
@@ -92,4 +92,21 @@ it("keeps deterministic reply rules correct when earlier prompts remain in conve
     const history = prompts.slice(0, index + 1).join("\n");
     assert.equal(rules.find((rule) => history.includes(rule.userContentIncludes)).replyText, expected[index]);
   }
+});
+
+
+it("reveals the virtual footer's actual named disclosure without changing its expanded state", async () => {
+  const calls = [];
+  const disclosure = { waitFor: async (options) => calls.push(["wait-disclosure", options]), scrollIntoViewIfNeeded: async () => calls.push(["reveal-disclosure"]) };
+  const messages = {
+    waitFor: async () => calls.push(["wait-messages"]),
+    locator: (selector) => { assert.equal(selector, '[data-testid="virtuoso-scroller"]'); return { evaluate: async (fn) => {
+      const element = { scrollTop: 0, scrollHeight: 2500 }; fn(element); assert.equal(element.scrollTop, 2500); calls.push(["latest"]);
+    } }; },
+    getByRole: (role, options) => { calls.push([role, options]); return disclosure; },
+  };
+  const page = { getByRole: (role, options) => { calls.push([role, options]); return messages; } };
+  assert.equal(await revealConversationRun(page), disclosure);
+  assert.deepEqual(calls, [["region", { name: "Messages", exact: true }], ["wait-messages"], ["latest"],
+    ["group", { name: "Conversation run", exact: true }], ["wait-disclosure", { state: "attached", timeout: 15000 }], ["reveal-disclosure"]]);
 });

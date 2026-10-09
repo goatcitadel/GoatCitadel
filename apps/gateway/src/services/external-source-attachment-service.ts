@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND,
+  EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE,
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND,
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND,
   EXTERNAL_SOURCE_LIMITS,
@@ -69,7 +70,7 @@ interface ExternalSourceAttachmentServiceClock {
 
 export interface ExternalSourceAttachmentServiceDependencies {
   configs: Pick<AsyncStorage["externalSourceConfigs"], "find">;
-  scans: Pick<AsyncStorage["externalSourceScans"], "find">;
+  scans: Pick<AsyncStorage["externalSourceScans"], "find" | "getItem">;
   imports: Pick<
     AsyncStorage["externalSourceImports"],
     "getIntent" | "getItem" | "getSettlement" | "listItems" | "listAttachmentCandidateBindings"
@@ -473,6 +474,19 @@ export class ExternalSourceAttachmentService {
       attachmentRevision: current.revision,
     };
     assertExternalSourceKnowledgeSnapshotApprovalPayload(payload);
+    // Use the sealed import's catalog item, never a later scan or path guess.
+    const catalogItem = await this.dependencies.scans.getItem(input.workspaceId, item.scanId, item.itemId);
+    if (
+      catalogItem.workspaceId !== input.workspaceId ||
+      catalogItem.sourceId !== source.sourceId ||
+      catalogItem.scanId !== intent.scanId ||
+      catalogItem.itemId !== item.itemId ||
+      catalogItem.rawSha256 !== item.rawSha256 ||
+      catalogItem.rawByteCount !== item.rawByteCount ||
+      catalogItem.adapterId !== item.adapterId ||
+      catalogItem.adapterVersion !== item.adapterVersion
+    )
+      throw new ExternalSourceAttachmentServiceError("conflict");
     return {
       schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
       approvalKind: EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND,
@@ -486,6 +500,14 @@ export class ExternalSourceAttachmentService {
         attachmentId: current.attachmentId,
         normalizedArtifactSha256: item.normalizedArtifactSha256,
         normalizedByteCount: item.normalizedByteCount,
+        review: {
+          version: 1,
+          sourceLabel: source.label,
+          itemPath: catalogItem.normalizedRelativePath,
+          target: `Knowledge copy of ${catalogItem.normalizedRelativePath} from ${source.label}`,
+          scopeSummary: `Workspace ${payload.workspaceId}; conversation ${payload.sessionId}.`,
+          consequence: EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE,
+        },
       },
     };
   }
@@ -565,14 +587,15 @@ export class ExternalSourceAttachmentService {
   }
 
   private async requireAppliedImportItem(workspaceId: string, sourceId: string, importId: string, itemId: string) {
+    const { imports } = this.dependencies;
     try {
-      const intent = await this.dependencies.imports.getIntent(workspaceId, importId);
+      const intent = await imports.getIntent(workspaceId, importId);
       if (intent.sourceId !== sourceId) {
         throw new ExternalSourceAttachmentServiceError("conflict");
       }
-      const item = await this.dependencies.imports.getItem(workspaceId, importId, itemId);
-      const settlement = await this.dependencies.imports.getSettlement(workspaceId, importId);
-      const items = await this.dependencies.imports.listItems(workspaceId, importId);
+      const item = await imports.getItem(workspaceId, importId, itemId);
+      const settlement = await imports.getSettlement(workspaceId, importId);
+      const items = await imports.listItems(workspaceId, importId);
       verifyExternalSourceImportSettlement(settlement, items);
       if (settlement.disposition !== "applied") {
         throw new ExternalSourceAttachmentServiceError("conflict");

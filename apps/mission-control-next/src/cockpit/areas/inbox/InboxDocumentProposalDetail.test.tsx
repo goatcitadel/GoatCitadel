@@ -259,3 +259,7 @@ describe("Inbox document proposal", () => {
     expect(container.textContent).not.toContain("Review apply");
   });
 });
+
+vi.mock("@goatcitadel/mission-control-shared/api/personal-ops", () => ({
+  listNotes: vi.fn(async () => ({ items: [{ noteId: "note-a", workspaceId: "default", title: "Reviewable note" }] })),
+}));

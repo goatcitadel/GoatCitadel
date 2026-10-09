@@ -1,3 +1,4 @@
+import { __resetApprovalOperationAttemptsForTests } from "../../cockpit/areas/inbox/approval-operation-attempts";
 // @vitest-environment happy-dom
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -32,6 +33,7 @@ afterEach(async () => {
   document.body.replaceChildren();
   __resetSessionDraftsForTests();
   __resetSessionViewStateForTests();
+  __resetApprovalOperationAttemptsForTests();
   vi.clearAllMocks();
 });
 
@@ -55,7 +57,7 @@ describe("skill capture preparation", () => {
     expect(button("Saving…").disabled).toBe(true);
     await act(async()=>button("Saving…").click());
     expect(api.stage).toHaveBeenCalledOnce();
-    await act(async()=>resolveStage({candidateId:"candidate-1",versionId:"version-1",proposalId:"proposal-1"}));
+    await act(async()=>resolveStage({candidateId:"candidate-1",versionId:"version-1",proposalId:"proposal-1", revision:1, activationPerformed:false, evaluation:"structure_and_safety_passed", behavioralValidation:"not_run"}));
     expect(button("Save reviewed candidate").disabled).toBe(true);
     await act(async()=>button("Review activation").click());
     expect(api.plan).toHaveBeenCalledWith(expect.objectContaining({request:{kind:"capability_candidate",proposalId:"proposal-1",versionId:"version-1"}}));
@@ -126,6 +128,31 @@ describe("skill capture preparation", () => {
     );
     await act(async () => resolve({ prompt: "prepared workflow payload" }));
     expect(onPrepare).not.toHaveBeenCalled();
-    expect(host.querySelector('[role="alert"]')?.textContent).toMatch(/changed/);
+    if (change === "draft") expect(host.querySelector('[role="alert"]')?.textContent).toMatch(/changed/);
+    else expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+  it.each([
+    ["Save as skill", sourceTurn],
+    ["Review skill draft", { ...sourceTurn, turnId: "capture-open", userMessage: { ...sourceTurn.userMessage, content: WORKFLOW_SKILL_CAPTURE_MARKER + "{}" } }],
+  ] as const)("keeps %s open with its guidance when the virtualized row remounts", async (label, turn) => {
+    // The Chat transcript is virtualized; a row can be recreated while the operator works.
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    roots.push(root);
+    const props = { turn: turn as ChatThreadTurnRecord, sessionId: "session-open", workspaceId: "default", draftEmpty: true, onPrepare: vi.fn() };
+    await act(async () => root.render(<WorkflowSkillCaptureControl {...props} />));
+    const summary = () => [...host.querySelectorAll("summary")].find((item) => item.textContent?.startsWith(label))!;
+    await act(async () => summary().click());
+    expect(summary().closest("details")!.open).toBe(true);
+    const textarea = host.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "Keep the approval boundaries.");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => root.render(null));
+    await act(async () => root.render(<WorkflowSkillCaptureControl {...props} />));
+    expect(summary().closest("details")!.open).toBe(true);
+    expect(host.querySelector("textarea")!.value).toBe("Keep the approval boundaries.");
   });
 });

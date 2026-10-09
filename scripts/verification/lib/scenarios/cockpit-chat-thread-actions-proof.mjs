@@ -23,7 +23,7 @@ async function lastTurn(page, content) {
     element.scrollTop = element.scrollHeight;
     element.dispatchEvent(new element.ownerDocument.defaultView.Event("scroll", { bubbles: true }));
   });
-  const turn = messages.getByRole("article", { name: "Conversation turn", exact: true }).filter({ hasText: content });
+  const turn = messages.getByRole("article", { name: "Conversation messages", exact: true }).filter({ hasText: content });
   await turn.waitFor();
   return turn;
 }
@@ -52,9 +52,9 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
   const forkRoute = `${prefix}${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(sourceTurn.turnId)}/fork`;
   const forkWrites = () => writes.filter((write) => write.pathname.endsWith("/fork"));
   const providersBefore = providerSnapshot(providerStub);
-  await clickTurnAction(await lastTurn(page, sourceTurn.userMessage.content), "Fork");
-  const dialog = page.getByRole("dialog", { name: "Fork conversation from this turn?", exact: true });
-  await dialogBounds(dialog, viewport, ["Create fork", "Cancel"]);
+  await clickTurnAction(await lastTurn(page, sourceTurn.userMessage.content), "New conversation from here");
+  const dialog = page.getByRole("dialog", { name: "Start a new conversation from this message?", exact: true });
+  await dialogBounds(dialog, viewport, ["Create conversation", "Cancel"]);
   assert.ok((await dialog.innerText()).includes("read-only provenance, not replayed"));
   await capture("fork-review");
   assert.equal(forkWrites().length, 0);
@@ -63,10 +63,10 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
   assert.deepEqual((await api(listRoute)).items.map((item) => item.sessionId).sort(), list.items.map((item) => item.sessionId).sort());
   assert.deepEqual(await api(threadRoute), initial);
   assert.equal(forkWrites().length, 0, "Cancel created a fork.");
-  await clickTurnAction(await lastTurn(page, sourceTurn.userMessage.content), "Fork");
-  await dialogBounds(dialog, viewport, ["Create fork", "Cancel"]);
+  await clickTurnAction(await lastTurn(page, sourceTurn.userMessage.content), "New conversation from here");
+  await dialogBounds(dialog, viewport, ["Create conversation", "Cancel"]);
   const responsePromise = page.waitForResponse((response) => response.request().method() === "POST" && pathOf(response.url()) === forkRoute);
-  await dialog.getByRole("button", { name: "Create fork", exact: true }).click();
+  await dialog.getByRole("button", { name: "Create conversation", exact: true }).click();
   const reply = await responsePromise;
   assert.equal(reply.status(), 201);
   const response = await reply.json();
@@ -95,8 +95,8 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
   const copied = forkThread.turns.find((turn) => turn.turnId === forkThread.activeLeafTurnId);
   await clickTurnAction(await lastTurn(page, copied.userMessage.content), "Edit and resend");
   const revised = `Independent fork sibling ${scope.variant} ${forkId}.`;
-  await page.getByRole("textbox", { name: "Message", exact: true }).fill(revised);
-  const send = page.getByRole("button", { name: "Send branch", exact: true });
+  await page.getByRole("combobox", { name: "Message", exact: true }).fill(revised);
+  const send = page.getByRole("button", { name: "Send edited message", exact: true });
   await waitUntil(() => send.isEnabled(), Boolean, page, "reviewed branch readiness");
   await send.click();
   await waitUntil(() => api(forkThreadRoute), (thread) => thread.turns.some((turn) =>
@@ -105,7 +105,7 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
   // the normal composer and settled turn actions before switching branches.
   await page.getByRole("button", { name: "Send", exact: true }).waitFor();
   await waitForTurnAction(await lastTurn(page, revised), "Edit and resend");
-  await waitUntil(() => page.getByRole("textbox", { name: "Message", exact: true }).inputValue(), (value) => value === "", page, "settled branch composer");
+  await waitUntil(() => page.getByRole("combobox", { name: "Message", exact: true }).inputValue(), (value) => value === "", page, "settled branch composer");
   const branched = await api(forkThreadRoute);
   const newTurn = branched.turns.find((turn) => turn.userMessage.content === revised);
   assert.ok(newTurn && newTurn.turnId !== copied.turnId && newTurn.parentTurnId === copied.parentTurnId);
@@ -125,7 +125,7 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
     assert.ok(index >= 0);
     const selectRoute = `${prefix}${encodeURIComponent(forkId)}/turns/${encodeURIComponent(targetId)}/select`;
     const selectionResponse = page.waitForResponse((result) => result.request().method() === "POST" && pathOf(result.url()) === selectRoute);
-    await (await lastTurn(page, displayed.userMessage.content)).getByRole("button", { name: `Switch to branch ${index + 1}`, exact: true }).click();
+    await (await lastTurn(page, displayed.userMessage.content)).getByRole("button", { name: `Switch to version ${index + 1}`, exact: true }).click();
     const selection = await selectionResponse;
     assert.equal(selection.status(), 200);
     const after = await api(forkThreadRoute);
@@ -156,7 +156,7 @@ async function timerActions({ api, page, scope, writes, capture, viewport, provi
   const providerBefore = providerSnapshot(providerStub);
   const timerWrites = () => writes.filter((write) => write.pathname.includes("/timers"));
   const open = async () => {
-    await page.getByRole("textbox", { name: "Message", exact: true }).fill("/timer");
+    await page.getByRole("combobox", { name: "Message", exact: true }).fill("/timer");
     await page.getByRole("button", { name: "Open timer", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Set a Chat timer", exact: true });
     await dialog.waitFor();

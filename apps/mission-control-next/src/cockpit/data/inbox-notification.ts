@@ -9,9 +9,13 @@ export function resolveInboxNotificationItem(
   notification: DerivedRealtimeNotification,
   workspaceId: string,
 ): OperatorInboxItem | undefined {
-  if (!inboxMatchesWorkspace(projection, workspaceId) || projection.authority !== "derived_projection"
-    || event.eventAuthority === "durable_history"
-    || (event.links?.workspaceId && event.links.workspaceId !== workspaceId)) return undefined;
+  if (
+    !inboxMatchesWorkspace(projection, workspaceId) ||
+    projection.authority !== "derived_projection" ||
+    event.eventAuthority === "durable_history" ||
+    (event.links?.workspaceId && event.links.workspaceId !== workspaceId)
+  )
+    return undefined;
   const links = event.links;
   if (!links) return undefined;
   const runId = links.runId ?? links.durableRunId;
@@ -24,8 +28,11 @@ export function resolveInboxNotificationItem(
       case "approval_waiting":
         return item.kind === "approval" && Boolean(links.approvalId) && item.source.approvalId === links.approvalId;
       case "operator_blocked":
-        return ["user_input", "change_plan"].includes(item.kind)
-          && Boolean(runId || (links.sessionId && links.turnId)) && (!runId || item.source.runId === runId);
+        return (
+          ["user_input", "change_plan"].includes(item.kind) &&
+          Boolean(runId || (links.sessionId && links.turnId)) &&
+          (!runId || item.source.runId === runId)
+        );
       case "run_failed":
         return ["failed_run", "dead_letter"].includes(item.kind) && Boolean(runId) && item.source.runId === runId;
       case "run_completed":
@@ -41,5 +48,7 @@ export function resolveInboxNotificationItem(
 }
 
 export function inboxItemLocation(item: OperatorInboxItem): string {
+  if (item.kind === "approval" && item.source.approvalId)
+    return `/inbox?${new URLSearchParams({ approvalId: item.source.approvalId, workspaceId: item.source.workspaceId })}`;
   return `/inbox?${new URLSearchParams({ workspaceId: item.source.workspaceId, item: item.id })}`;
 }

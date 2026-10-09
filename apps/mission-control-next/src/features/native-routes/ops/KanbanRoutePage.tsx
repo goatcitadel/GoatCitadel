@@ -95,6 +95,7 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
   const [loading, setLoading] = useState(true);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
   const [pendingConflict, setPendingConflict] = useState<PendingBulkConflict | null>(null);
   const isMounted = useIsMounted();
   // Monotonic request id drops superseded/late run-list responses so
@@ -252,11 +253,11 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
       needs_attention: [],
       closed: [],
     };
-    for (const card of cards) {
+    for (const card of cards.filter(card => `${card.title} ${card.statusLabel} ${card.surfaceLabel}`.toLowerCase().includes(search.toLowerCase()))) {
       groups[card.column].push(card);
     }
     return groups;
-  }, [cards]);
+  }, [cards, search]);
 
   const toggleSelect = useCallback((taskId: string) => {
     setSelected((current) => {
@@ -273,7 +274,7 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
   const runBulk = useCallback(
     async (action: BulkAction) => {
       const ids = Array.from(selected);
-      if (ids.length === 0 || bulkLock.current) {
+      if (ids.length === 0 || bulkLock.current || loading || error) {
         return;
       }
       const cardsByTaskId = new Map(cards.map((card) => [card.taskId, card]));
@@ -404,13 +405,14 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
         }
       }
     },
-    [cards, isMounted, load, gatewayBase, props.activeCitadelId, props.activeWorkspaceId, selected],
+    [cards, isMounted, load, gatewayBase, props.activeCitadelId, props.activeWorkspaceId, selected, loading, error],
   );
 
   const hasSelection = selected.size > 0;
   const selectionLocked = [...selected].some(
     (id) => readTaskMutation(taskMutationKey(gatewayBase, props.activeWorkspaceId, id)).phase !== "idle",
   );
+  const accessUnavailable = loading || Boolean(error);
   const uncertainTask =
     tasks.find(
       (task) =>
@@ -438,6 +440,7 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
       actions={
         <>
           <NativeButton
+            disabled={accessUnavailable}
             onClick={() =>
               leave.request(() => {
                 setInspected(null);
@@ -457,12 +460,13 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
         </>
       }
     >
+      <label className="mc-next-field">Search loaded tasks and runs<input aria-label="Search loaded tasks and runs" value={search} onChange={event => setSearch(event.target.value)} /></label>
       {hasSelection ? (
         <div className="mc-next-kanban-toolbar" role="toolbar" aria-label="Agentic run bulk actions">
           <NativeButton
             variant="default"
             className="mc-next-kanban-action"
-            disabled={!hasSelection || bulkBusy || selectionLocked}
+            disabled={!hasSelection || bulkBusy || selectionLocked || accessUnavailable}
             onClick={() => void runBulk("unblock")}
           >
             Unblock
@@ -470,7 +474,7 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
           <NativeButton
             variant="outline"
             className="mc-next-kanban-action"
-            disabled={!hasSelection || bulkBusy || selectionLocked}
+            disabled={!hasSelection || bulkBusy || selectionLocked || accessUnavailable}
             onClick={() => void runBulk("retry")}
           >
             Retry
@@ -478,7 +482,7 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
           <NativeButton
             variant="outline"
             className="mc-next-kanban-action"
-            disabled={!hasSelection || bulkBusy || selectionLocked}
+            disabled={!hasSelection || bulkBusy || selectionLocked || accessUnavailable}
             onClick={() => void runBulk("close")}
           >
             Close
@@ -511,7 +515,7 @@ function KanbanWorkspacePage(props: NativeRoutePagesProps) {
               className="mc-next-kanban-action"
               data-testid="kanban-conflict-retry"
               aria-label={`Retry ${pendingConflict.action} for ${pendingConflict.taskIds.length} previously selected tasks`}
-              disabled={bulkBusy || selected.size === 0 || selectionLocked}
+              disabled={bulkBusy || selected.size === 0 || selectionLocked || accessUnavailable}
               onClick={() => void runBulk(pendingConflict.action)}
             >
               Retry {formatBulkAction(pendingConflict.action)}

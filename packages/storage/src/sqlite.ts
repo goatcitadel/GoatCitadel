@@ -7363,6 +7363,11 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         },
       },
       { version: 252, name: "channel_guided_setup_evidence_and_oauth_attempts", up: createChannelGuidedSetupSchema },
+      {
+        version: 253,
+        name: "purge_credential_route_idempotency_payload_hashes",
+        up: purgeCredentialRouteIdempotencyPayloadHashes,
+      },
     ],
   },
 ];
@@ -13730,6 +13735,34 @@ function scrubLegacyDeviceTokenPlaintext(db: DatabaseSync): void {
     WHERE approved_token_plaintext IS NOT NULL
   `,
   ).run({ resolutionNote });
+}
+
+// sha256 hex of the literal "credential_route_historical_payload_hash_purged_v1".
+// Frozen here (and inlined in the matching Postgres migration) so the migration
+// body never changes; it is not derived from any request content.
+const CREDENTIAL_ROUTE_HISTORICAL_PAYLOAD_HASH_SENTINEL =
+  "ce1d02d6a6ff6eab5660c3fe4ac10944c7c34bc153672d6ab46120cd84ef3617";
+
+// The gateway now fingerprints these two credential routes path-only
+// (`credential_route_redacted_v1`). Older rows hold an unsalted hash of the
+// request body (API keys, Basic passwords, tokens), which is an offline oracle
+// for those secrets. Reusing an old key already conflicts because a path-only
+// hash never equals the historical body hash, so replacing the stored hash with
+// a fixed sentinel preserves replay/conflict behavior exactly while removing the
+// oracle. Rows are kept (not deleted) so completed keys stay blocked. Only
+// `payload_hash` of these two route paths is touched.
+function purgeCredentialRouteIdempotencyPayloadHashes(db: DatabaseSync): void {
+  if (!tableExists(db, "mutation_idempotency")) {
+    return;
+  }
+  db.prepare(
+    `
+    UPDATE mutation_idempotency
+    SET payload_hash = @sentinel
+    WHERE route_path IN ('/api/v1/secrets/providers/:providerId', '/api/v1/auth/settings')
+      AND payload_hash <> @sentinel
+  `,
+  ).run({ sentinel: CREDENTIAL_ROUTE_HISTORICAL_PAYLOAD_HASH_SENTINEL });
 }
 
 function scrubLegacyRemoteApprovalBearers(db: DatabaseSync): void {

@@ -76,6 +76,7 @@ export async function fetchCommunicationsDashboard(workspaceId = "default"): Pro
 }
 
 export async function createMailDraft(input: {
+  workspaceId?: string;
   accountId: string;
   to: string[];
   cc?: string[];

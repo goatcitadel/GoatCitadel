@@ -12,6 +12,7 @@ import { EvolutionControlPlaneAdapterRegistry } from "./evolution-control-plane-
 import { EvolutionControlPlaneService } from "./evolution-control-plane-service.js";
 import { readChangePlanApprovalDisposition } from "./evolution-control-plane-approval-disposition.js";
 import { WorkflowSkillCaptureService } from "./workflow-skill-capture-service.js";
+import { bindWorkflowCaptureTurnAuthor } from "./workflow-capture-author-test-fixtures.js";
 
 const actor = { workspaceId: "default", actorId: "capture-operator", surface: "chat" as const, sessionId: "session" };
 const captureActor = { actorId: actor.actorId, authActorSource: "loopback" as const };
@@ -50,7 +51,8 @@ async function fixture() {
   } });
   const asyncStorage = createSqliteAsyncStorage(storage);
   const capture = new WorkflowSkillCaptureService({ storage: asyncStorage, rootDir: root, candidateRoot: "candidates" });
-  const seed = (id: string, user: string, assistant: string) => {
+  // Capture binds the authenticated author, never the display actor, so each turn is admitted with a sealed profile.
+  const seed = async (id: string, user: string, assistant: string) => {
     const timestamp = new Date().toISOString();
     storage.chatSessionMeta.ensure(actor.sessionId, timestamp, actor.workspaceId);
     for (const [role, content] of [["user", user], ["assistant", assistant]] as const) {
@@ -58,14 +60,17 @@ async function fixture() {
         actorType: role === "user" ? "user" : "agent", actorId: role === "user" ? actor.actorId : "assistant",
         sourceAuthority: role === "user" ? "operator" : "agent_proposed", content, timestamp });
     }
-    storage.chatTurnTraces.create({ turnId: id, sessionId: actor.sessionId, userMessageId: `${id}-user`,
+    const author = await bindWorkflowCaptureTurnAuthor(storage, {
+      turnId: id, sessionId: actor.sessionId, workspaceId: actor.workspaceId, userContent: user, actor: captureActor, timestamp,
+    });
+    storage.chatTurnTraces.create({ turnId: id, sessionId: actor.sessionId, userMessageId: `${id}-user`, ...author,
       assistantMessageId: `${id}-assistant`, status: "completed", mode: "chat", webMode: "off", memoryMode: "off",
       // Synthetic completed-provider evidence satisfies capture admission; no provider is invoked.
       thinkingLevel: "standard", completion: { status: "complete", repaired: false, providerCallCount: 1 },
       startedAt: timestamp, finishedAt: timestamp });
   };
-  seed("source", "Review the supplied work item", "Read the supplied evidence and report discrepancies.");
-  seed("draft", (await capture.prepare(actor.sessionId, { sourceTurnId: "source" }, captureActor)).prompt, markdown);
+  await seed("source", "Review the supplied work item", "Read the supplied evidence and report discrepancies.");
+  await seed("draft", (await capture.prepare(actor.sessionId, { sourceTurnId: "source" }, captureActor)).prompt, markdown);
   const captured = await capture.stage(actor.sessionId, {
     draftTurnId: "draft", reviewedContentSha256: createHash("sha256").update(markdown).digest("hex"),
   }, captureActor);

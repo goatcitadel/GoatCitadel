@@ -27,6 +27,7 @@ function dependencies(): InboxProjectionDependencies {
       getRun: vi.fn(),
     },
     runtimeHealth: {
+      listBackups: vi.fn(async () => []),
       getDatabaseHealthSnapshot: vi.fn(async () => ({ configured: true, reachable: true, issues: [] })),
       getDaemonStatus: vi.fn(async () => ({ running: true, diagnostics: [] })),
       inspectLatestBackupTrust: vi.fn(async () => ({
@@ -40,6 +41,26 @@ function dependencies(): InboxProjectionDependencies {
 }
 
 describe("Gateway inbox projection", () => {
+  it("rekeys cached absence and exact trust when a new manifest is published", async () => {
+    const deps = dependencies(), service = new InboxProjectionService(deps);
+    const createdAt = new Date().toISOString();
+    vi.mocked(deps.runtimeHealth.inspectLatestBackupTrust).mockResolvedValue(undefined);
+    expect((await service.getProjection("workspace-a")).coverage.find(e => e.source === "backup_trust")?.backupTrust?.state).toBe("none");
+    vi.mocked(deps.runtimeHealth.listBackups).mockResolvedValue([{ backupId: "A", createdAt, files: [] }] as never);
+    vi.mocked(deps.runtimeHealth.inspectLatestBackupTrust).mockResolvedValue({ backupId: "A", createdAt, observedAt: createdAt, verified: true, contractVerified: true, issueCodes: [] });
+    const a = await service.getProjection("workspace-a");
+    expect(a.coverage.find(e => e.source === "backup_trust")?.backupTrust).toMatchObject({ state: "verified", backupId: "A", createdAt });
+    await service.getProjection("workspace-a");
+    expect(deps.runtimeHealth.inspectLatestBackupTrust).toHaveBeenCalledTimes(2);
+    vi.mocked(deps.runtimeHealth.listBackups).mockResolvedValue([{ backupId: "B", createdAt, files: [] }] as never);
+    vi.mocked(deps.runtimeHealth.inspectLatestBackupTrust).mockResolvedValue({ backupId: "B", createdAt, observedAt: createdAt, verified: true, contractVerified: false, issueCodes: [] });
+    expect((await service.getProjection("workspace-a")).coverage.find(e => e.source === "backup_trust")?.backupTrust).toMatchObject({ state: "failed", backupId: "B" });
+    expect(deps.runtimeHealth.inspectLatestBackupTrust).toHaveBeenCalledTimes(3);
+    // Editing the same manifest also invalidates its previous inspection.
+    vi.mocked(deps.runtimeHealth.listBackups).mockResolvedValue([{ backupId: "B", createdAt, files: [{ path: "changed" }] }] as never);
+    vi.mocked(deps.runtimeHealth.inspectLatestBackupTrust).mockRejectedValue(new Error("private path"));
+    expect((await service.getProjection("workspace-a")).coverage.find(e => e.source === "backup_trust")?.state).toBe("unavailable");
+  });
   it("treats a brand-new installation with no published backup as not set up, not as attention", async () => {
     const deps = dependencies();
     vi.mocked(deps.runtimeHealth.inspectLatestBackupTrust).mockResolvedValue(undefined);
@@ -838,4 +859,11 @@ describe("Gateway inbox projection", () => {
     expect(onSourceError).toHaveBeenCalledWith("background_updates", expect.any(Error));
     expect(JSON.stringify(projection)).not.toContain("database/private-path");
   });
+});
+
+it("projects bounded readable approval targets without assuming preview payload shape",async()=>{
+ const deps=dependencies();
+ vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({items:[{approvalId:"a",kind:"file.write",status:"pending",riskLevel:"danger",createdAt:"2026-10-06T00:00:00Z",preview:{targets:["workspace/report.md",{private:"not a target"}]}}]} as never);
+ const projection=await new InboxProjectionService(deps).getProjection("workspace-a");
+ expect(projection.items.find(item=>item.id==="approval:a")?.summary).toBe("Targets: workspace/report.md");
 });

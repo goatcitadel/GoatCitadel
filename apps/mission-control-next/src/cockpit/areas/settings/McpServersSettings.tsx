@@ -18,6 +18,7 @@ import { McpDeleteControl } from "./McpDeleteControl";
 import { McpServerInspection } from "./McpServerInspection";
 import { McpElicitationRequests } from "./McpElicitationRequests";
 import { McpModeInspection } from "./McpModeInspection";
+import { McpOutcomeCheck } from "../../../features/native-routes/settings/McpOutcomeCheck";
 
 const PAGE_SIZE = 20;
 const connectionLabel: Record<McpServerRecord["status"], string> = {
@@ -220,7 +221,7 @@ function McpServerRow({
           {server.enabled ? "Review disable" : "Review enable"}
         </Button>
         <Button size="sm" disabled={disabled} aria-label={`Inspect ${server.label}`} onClick={onInspect}>
-          Inspect tools and transport
+          Connections, tools and transport
         </Button>
         <McpDeleteControl workspaceId={workspaceId} server={server} available={!disabled} />
         <Button
@@ -238,6 +239,7 @@ function McpServerRow({
           {attempt.message ?? "Waiting for the Gateway server owner…"}
         </p>
       ) : null}
+      <McpOutcomeCheck target={{ kind: "server", serverId: server.serverId }} buttonComponent={Button} />
       <details className="mt-2 text-xs text-fg-muted">
         <summary className="cursor-pointer">Saved server details</summary>
         <dl className="mt-2 space-y-1">

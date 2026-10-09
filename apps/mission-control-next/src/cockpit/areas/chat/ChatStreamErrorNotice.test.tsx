@@ -25,7 +25,7 @@ describe("Chat stream error notice", () => {
 
   it("keeps the generic sentence and tucks an unrecognized raw error behind a detail", async () => {
     await act(async () => root.render(<ChatStreamErrorNotice error="E_WEIRD_42 internal" source="other" />));
-    expect(container.textContent).toContain("The response was interrupted.");
+    expect(container.textContent).toContain("The request failed.");
     expect(container.querySelector("details")?.textContent).toContain("E_WEIRD_42 internal");
   });
 });

@@ -2,7 +2,11 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { sendRouteError } from "./_error-handler.js";
-import type { ExternalSideEffectRunHealthSummary, ExternalSideEffectRunRecord } from "@goatcitadel/contracts";
+import type {
+  ExternalSideEffectRunHealthSummary,
+  ExternalSideEffectRunRecord,
+  IntegrationConnectionUpdateInput,
+} from "@goatcitadel/contracts";
 import {
   preserveIntegrationConnectionSecretsForPublicUpdate,
   projectExternalSideEffectRunsForPublicResponse,
@@ -10,6 +14,7 @@ import {
   projectIntegrationConnectionsForPublicResponse,
 } from "../services/integration-connection-public-projection.js";
 import { projectPublicSecretValue } from "../services/public-secret-projection.js";
+import { assertIntegrationPublicInput } from "../services/integration-public-input.js";
 import {
   catalogParamsSchema,
   catalogQuerySchema,
@@ -276,6 +281,7 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
+      assertIntegrationPublicInput(parsed.data.catalogId, parsed.data.config);
       const created = await fastify.services.integrations.createIntegrationConnection(parsed.data, () => markMutationCommitted(request));
       await markMutationCommitted(request);
       return reply.code(201).send(projectIntegrationConnectionForPublicResponse(created));
@@ -297,13 +303,14 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
       });
     }
     try {
-      const update =
-        parsed.data.config === undefined
-          ? parsed.data
-          : preserveIntegrationConnectionSecretsForPublicUpdate(
-              await fastify.services.integrations.getIntegrationConnection(params.data.connectionId),
-              parsed.data,
-            );
+      // Only a configuration change needs the saved record: it validates public input and restores masked secrets.
+      // Status, label and enable updates go straight to the update owner and its revision check.
+      let update: IntegrationConnectionUpdateInput = parsed.data;
+      if (parsed.data.config !== undefined) {
+        const current = await fastify.services.integrations.getIntegrationConnection(params.data.connectionId);
+        assertIntegrationPublicInput(current.catalogId, parsed.data.config, current.config);
+        update = preserveIntegrationConnectionSecretsForPublicUpdate(current, parsed.data);
+      }
       const updated = await fastify.services.integrations.updateIntegrationConnection(params.data.connectionId, update, () => markMutationCommitted(request));
       await markMutationCommitted(request);
       return reply.send(projectIntegrationConnectionForPublicResponse(updated));

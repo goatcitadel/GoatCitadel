@@ -6,13 +6,13 @@ type PaletteProps = Pick<
   "commandSuggestions" | "commandIndex" | "composerPalette" | "onApplyDraftCommand" | "composerRef"
 >;
 
-export function ChatComposerPalette({ props }: { props: PaletteProps }) {
+export function ChatComposerPalette({ props, onSelect }: { props: PaletteProps; onSelect?: (item: PaletteProps["commandSuggestions"][number]) => void }) {
   const palette = props.composerPalette;
   if (!palette?.globalOpen && props.commandSuggestions.length === 0) return null;
   const choose = (index: number) => {
     const item = props.commandSuggestions[index];
     if (!item) return;
-    if (palette?.enabled) palette.onSelect(item);
+    if (palette?.enabled) (onSelect ?? palette.onSelect)(item);
     else props.onApplyDraftCommand(item.applyValue);
     props.composerRef.current?.focus();
   };
@@ -23,6 +23,9 @@ export function ChatComposerPalette({ props }: { props: PaletteProps }) {
           Find a command, model, file, or variable
           <input
             autoFocus
+            role="combobox" aria-autocomplete="list" aria-expanded={true}
+            aria-controls="cockpit-composer-suggestions"
+            aria-activedescendant={props.commandSuggestions[props.commandIndex] ? `cockpit-suggestion-${props.commandIndex}` : undefined}
             value={palette.query}
             onChange={(event) => palette.onQueryChange(event.target.value)}
             onKeyDown={(event) => {
@@ -54,11 +57,12 @@ export function ChatComposerPalette({ props }: { props: PaletteProps }) {
           Searching…
         </p>
       ) : null}
-      <div role="listbox" aria-label="Composer suggestions" className="mt-1 grid gap-0.5">
+      <div id="cockpit-composer-suggestions" role="listbox" aria-label="Composer suggestions" className="mt-1 grid gap-0.5">
         {props.commandSuggestions.map((item, index) => (
           <button
             type="button"
             role="option"
+            id={`cockpit-suggestion-${index}`}
             aria-selected={index === props.commandIndex}
             key={item.key}
             onMouseEnter={() => palette?.onIndexChange(index)}

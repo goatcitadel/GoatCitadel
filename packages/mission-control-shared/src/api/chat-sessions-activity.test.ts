@@ -45,3 +45,19 @@ describe("fetchChatSessions activity", () => {
     expect(init?.signal?.aborted).toBe(true);
   });
 });
+
+
+it("passes bounded membership identity and cancellation through the existing session owner", async () => {
+  const ids = ["one", "two"];
+  const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => jsonResponse({ items: [], membership: { sessionIds: ids, complete: true } }));
+  vi.stubGlobal("fetch", fetchMock);
+  const { fetchChatSessions } = await import("./chat");
+  const controller = new AbortController();
+  const result = await fetchChatSessions({ workspaceId: "workspace-a", sessionIds: ids, q: "needle", view: "active" }, { signal: controller.signal });
+  const url = new URL(String(fetchMock.mock.calls[0]?.[0]), "http://localhost");
+  expect(JSON.parse(url.searchParams.get("sessionIds")!)).toEqual(ids);
+  expect(url.searchParams.get("workspaceId")).toBe("workspace-a");
+  expect(url.searchParams.get("q")).toBe("needle");
+  expect(result.membership?.complete).toBe(true);
+  controller.abort(); expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+});

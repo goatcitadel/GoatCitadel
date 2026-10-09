@@ -8,6 +8,7 @@ import {
 import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { ProviderConnectionEvidence } from "./ProviderConnectionEvidence";
 
 const MODEL_PAGE_SIZE = 40;
 
@@ -88,6 +89,8 @@ export function ProviderCatalogSettings() {
         </label>
         <div className="mt-3 flex flex-wrap items-center gap-2"><StatusBadge status={presentProviderReadiness(provider)} />
           <span className="break-all text-xs text-fg-muted">{provider.sanitizedEndpointIdentity}</span></div>
+        <ProviderConnectionEvidence key={provider.providerId} provider={provider}
+          request={catalog.config?.providerConfigs?.find((item) => item.providerId === provider.providerId)?.request} />
         <div className="mt-4 rounded-md border border-line bg-raised p-3" aria-busy={refreshingId === provider.providerId}>
           <div className="flex flex-wrap items-center justify-between gap-2"><h4 className="text-sm font-semibold text-fg">{refreshingId === provider.providerId ? "Checking catalog…" : evidence.label}</h4>
             <Button size="sm" disabled={catalog.loading || refreshingId !== null} onClick={() => void refreshModels()}>Refresh models</Button></div>

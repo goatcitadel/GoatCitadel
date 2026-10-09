@@ -135,6 +135,10 @@ function resolveChatRefreshPlanForSignal(
       refreshSession: hasActiveTurn ? "full" : "light",
     };
   }
+  // Durable settlement is an execution signal, even immediately after a preference mutation.
+  if (eventType.startsWith("durable_run_") || eventType === "chat_turn_completed" || eventType === "chat_turn_failed") {
+    return { refreshSidebar: true, refreshSession: "full" };
+  }
   if (isPrefEcho) {
     return {
       refreshSidebar: false,
@@ -174,7 +178,7 @@ function resolveChatRefreshPlanForSignal(
     };
   }
   const refreshSidebar =
-    /\b(project|archive|restore|pin|unpin|binding|workspace|external|session_created|session_deleted|title|rename|chat_session_title_updated|chat_session_updated)\b/.test(
+    /\b(project|archive|restore|pin|unpin|binding|workspace|external|session_created|session_deleted|chat_session_deleted|title|rename|chat_session_title_updated|chat_session_updated)\b/.test(
       haystack,
     );
   const refreshSession = /\b(chat_thread_updated|message|thread|turn|assistant|user)\b/.test(haystack)

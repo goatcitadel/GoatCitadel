@@ -387,7 +387,10 @@ function getSseTokenScopeForPath(url: string): "events:stream" | "dev:diagnostic
   return null;
 }
 
-function hasOperatorControlPlaneAccess(fastify: FastifyInstance, source: FastifyRequest["authActorSource"]): boolean {
+export function hasOperatorControlPlaneAccess(
+  fastify: FastifyInstance,
+  source: FastifyRequest["authActorSource"],
+): boolean {
   if (source === "token" || source === "basic" || source === "loopback") {
     return true;
   }

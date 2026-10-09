@@ -217,13 +217,7 @@ export const GOAT_OPENUI_COMPONENT_NAMES: OpenUiStructuredComponentName[] = [
   "MiniTable",
 ];
 
-export function isGoatOpenUiRendererEnabled(): boolean {
-  const globalFlag = globalThis.__GOATCITADEL_OPENUI_RENDERER__;
-  if (globalFlag !== undefined) {
-    return globalFlag === true || globalFlag === "true";
-  }
-  return import.meta.env.VITE_GOATCITADEL_OPENUI_RENDERER === "true";
-}
+export { isGoatOpenUiRendererEnabled } from "./openui-flag";
 
 export function parseOpenUiStructuredBlock(source: string): ParseResult | null {
   try {

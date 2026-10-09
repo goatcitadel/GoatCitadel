@@ -207,7 +207,7 @@ export function NativePageFrame({
           description={errorPresentation.description}
           technicalDetails={errorPresentation.technicalDetail}
           primaryAction={
-            onRetry ? (
+            onRetry && errorPresentation.retryable !== false ? (
               <NativeButton variant="outline" onClick={onRetry}>
                 <RefreshCw size={16} />
                 Retry

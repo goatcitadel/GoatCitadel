@@ -1,3 +1,4 @@
+import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import { canRetryTurn } from "@goatcitadel/mission-control-shared/components/chat/chat-display-helpers";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
@@ -15,7 +16,7 @@ const PHONE = "inline-flex min-h-11 items-center rounded-md border border-line p
 
 /**
  * Turn actions. On a phone, Retry and Copy stay as 44 px buttons and the rest move into a
- * "More" menu; wider screens keep the inline links with a real hit area.
+ * "More" menu; wider screens use the same compressed action menu.
  */
 export function ChatTurnActions({
   turn,
@@ -32,14 +33,14 @@ export function ChatTurnActions({
   hasAnswer: boolean;
   onCopy: () => void;
 }) {
-  const phone = useMediaQuery("(max-width: 639px)");
+  const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const canRetry = canRetryTurn(turn) && !streaming && !readOnly;
   const canBranch = !streaming && !readOnly;
   const canSave = Boolean(turn.assistantMessage) && turn.trace.status !== "failed" && !readOnly;
   const siblings = turn.branch.siblingTurnIds ?? [];
   const copyLabel = streaming ? "Copy answer so far" : "Copy answer";
   const secondary = [
-    canBranch ? { label: "Fork", run: () => actions.onStartNewThreadFromTurn(turn.turnId) } : null,
+    canBranch ? { label: "New conversation from here", run: () => actions.onStartNewThreadFromTurn(turn.turnId) } : null,
     canBranch ? { label: "Edit and resend", run: () => actions.onEditTurn(turn.turnId) } : null,
     { label: "Run details", run: () => actions.onOpenRunDetails(turn.turnId) },
     canSave ? { label: "Save answer", run: () => actions.onCreateGeneratedArtifact(turn.turnId) } : null,
@@ -57,9 +58,9 @@ export function ChatTurnActions({
           {copyLabel}
         </button>
       ) : null}
-      {phone ? (
+      {secondary.length ? (
         <Menu>
-          <MenuTrigger aria-label="More turn actions" className={PHONE}>
+          <MenuTrigger aria-label="More message actions" className={phone ? PHONE : INLINE}>
             <MoreHorizontal aria-hidden="true" className="size-4" />
             <span className="ml-1">More</span>
           </MenuTrigger>
@@ -71,23 +72,17 @@ export function ChatTurnActions({
             ))}
           </MenuContent>
         </Menu>
-      ) : (
-        secondary.map((item) => (
-          <button key={item.label} type="button" onClick={item.run} className={INLINE}>
-            {item.label}
-          </button>
-        ))
-      )}
+      ) : null}
       {siblings.length > 1 ? (
         <span className="flex items-center gap-1 text-fg-muted">
-          Branch {turn.branch.activeSiblingIndex + 1} of {turn.branch.siblingCount}
+          Version {turn.branch.activeSiblingIndex + 1} of {turn.branch.siblingCount}
           {siblings.map((siblingId, index) => (
             <button
               key={siblingId}
               type="button"
               disabled={siblingId === turn.turnId}
               onClick={() => actions.onSwitchBranch(siblingId)}
-              aria-label={`Switch to branch ${index + 1}`}
+              aria-label={`Switch to version ${index + 1}`}
               className={`inline-flex items-center justify-center rounded border border-line text-accent disabled:text-fg-muted ${phone ? "min-h-11 min-w-11" : "min-h-8 min-w-8"}`}
             >
               {index + 1}

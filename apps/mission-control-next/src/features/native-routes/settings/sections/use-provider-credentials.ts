@@ -5,12 +5,13 @@ import {
   saveProviderSecret,
   deleteProviderSecret,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { useSessionDraft } from "../../library/session-drafts";
+import { useCredentialInput, retainCredentialSubmission, settleCredentialSubmission } from "../credential-input-owner";
 import { useSettingsChange } from "../use-settings-change";
 import { getErrorMessage, type LoadState } from "../SettingsShared";
 import type { ProviderCatalog, ProviderNoticeSetter, ProviderEditorIdentity } from "./provider-section-types";
 import {
   beginProviderMutation,
+  dispatchProviderMutation,
   finishProviderMutation,
   isProviderPrecommitConflict,
   retainProviderMutationUncertainty,
@@ -54,7 +55,7 @@ export function useProviderCredentials({
     error: null,
     data: null,
   });
-  const secretEditor = useSessionDraft(`provider-secret:system:${selectedProviderId}`, "", config?.revision, {
+  const secretEditor = useCredentialInput(`provider-secret:system:${selectedProviderId}`, "", config?.revision, {
     label: "Provider credential",
     active: detailView === "trust" && credentialEditorOpen,
     available: Boolean(config),
@@ -65,7 +66,7 @@ export function useProviderCredentials({
     selectedProviderId,
     detailView,
     credentialEditorOpen,
-    value: secretValue,
+    credentialVersion: secretEditor.inputVersion,
     revision: secretEditor.baseRevision,
     pendingDeleteSecret,
   });
@@ -84,7 +85,7 @@ export function useProviderCredentials({
     },
     matches: (status) => status.providerId === selectedProviderId && status.hasSecret === true,
     savedValue: () => "",
-    acceptSaved: secretEditor.acceptSaved,
+    acceptSaved: (_value, revision, receipt) => settleCredentialSubmission(secretEditor.key, receipt, (submitted) => secretEditor.acceptSaved("", revision, submitted)),
     reload,
   });
   const secretRemoval = useSettingsChange<{ providerId: string }, Awaited<ReturnType<typeof deleteProviderSecret>>>({
@@ -175,8 +176,8 @@ export function useProviderCredentials({
         return false;
       }
       attempted = true;
-      const next = await saveProviderSecret(selectedProviderId, secretValue.trim(), revision);
-      const settled = secretChange.receive(next, secretValue, revision);
+      const next = await dispatchProviderMutation(() => saveProviderSecret(selectedProviderId, secretValue.trim(), revision));
+      const settled = secretChange.receive(next, retainCredentialSubmission(secretEditor.key, secretValue), revision);
       acknowledged = true;
       if (viewCurrent() && currentEditor.current === editorIdentity) {
         setSecretState({ loading: false, error: null, data: next });
@@ -260,7 +261,7 @@ export function useProviderCredentials({
         return;
       }
       attempted = true;
-      const next = await deleteProviderSecret(pendingDeleteSecret.providerId, revision);
+      const next = await dispatchProviderMutation(() => deleteProviderSecret(pendingDeleteSecret.providerId, revision));
       const settled = secretRemoval.receive(next, { providerId: pendingDeleteSecret.providerId }, revision);
       acknowledged = true;
       if (viewCurrent() && currentEditor.current === editorIdentity) {

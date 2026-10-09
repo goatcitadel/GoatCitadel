@@ -351,7 +351,19 @@ describe("useChatSessionControls", () => {
       folderName: "Focus",
       tags: ["alpha", "beta"],
     });
-    expect(apiMocks.assignChatSessionProject).toHaveBeenCalledWith("session-1", undefined, 7);
+    // Archive cleared the selected conversation; a retained callback must not assign its old session.
+    expect(apiMocks.assignChatSessionProject).not.toHaveBeenCalled();
+  });
+
+  it("rejects a retained assignment callback after Citadel view identity changes away and back", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<Harness session={selectedSession} viewIdentity="citadel-a" />); });
+    const oldAssignment = latest!.controls.handleAssignProject;
+    await act(async () => { renderer.update(<Harness session={selectedSession} viewIdentity="citadel-b" />); });
+    await act(async () => { renderer.update(<Harness session={selectedSession} viewIdentity="citadel-a" />); });
+    await act(async () => { await oldAssignment("project-2"); });
+    expect(apiMocks.assignChatSessionProject).not.toHaveBeenCalled();
+    await act(async () => { renderer.unmount(); });
   });
 
   it("pins, archives, deletes, imports code projects, and saves external bindings", async () => {
@@ -620,5 +632,11 @@ describe("useChatSessionControls", () => {
     expect(latest!.setError).toHaveBeenCalledWith(
       "This chat changed elsewhere. Review the latest state, then click pin again.",
     );
+    apiMocks.assignChatSessionProject.mockRejectedValueOnce(new apiMocks.ApiRequestError("stale assignment", { status: 409 }));
+    await act(async () => { await latest!.controls.handleAssignProject("project-2"); });
+    expect(apiMocks.assignChatSessionProject).toHaveBeenCalledExactlyOnceWith("session-1", "project-2", 7);
+    expect(refreshSessionAggregate).toHaveBeenCalledTimes(4);
+    expect(refreshSessionAggregate).toHaveBeenLastCalledWith("session-1", { preserveSelection: true });
+    expect(latest!.setError).toHaveBeenCalledWith("This chat changed elsewhere. Review the latest state, then choose the project again.");
   });
 });

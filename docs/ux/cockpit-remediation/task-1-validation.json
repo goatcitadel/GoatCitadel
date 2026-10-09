@@ -1,0 +1,31 @@
+{
+  "historical_rows": 219,
+  "finding_rows": 233,
+  "unique_ids": 233,
+  "release_rows": 56,
+  "route_rows": 64,
+  "adapter_rows": 66,
+  "shell_capabilities": 18,
+  "owner_tasks_valid": true,
+  "criteria_complete": true,
+  "imported_fields_exact": true,
+  "release_coverage": true,
+  "section_union_coverage": true,
+  "route_ids_unique": true,
+  "all_evidence_paths_pinned_exist": true,
+  "review_fixes": {
+    "original_233_source_fields_unchanged": true,
+    "implementation_statuses_unchanged": true,
+    "n_criteria_match_explicit_remaining_behavior": true,
+    "n_qualifications_separate": true,
+    "ch01_remaining_disclosure_and_shared_bar": true,
+    "ch01_gl09_bidirectional_overlap": true,
+    "knowledge_rendered_activate_reject_archive_inspected": true,
+    "knowledge_learning_states_and_flag_recorded": true,
+    "knowledge_owner_and_pending_receipt_destination_recorded": true,
+    "knowledge_incidental_importId_removed": true,
+    "all_233_criteria_present": true,
+    "all_owners_and_overlap_references_valid": true,
+    "no_new_verified_closures": true
+  }
+}

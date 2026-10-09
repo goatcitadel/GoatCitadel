@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
+  ConflictError,
+  NotFoundError,
   ValidationError,
   type CuratorArchiveRequest,
   type CuratorArchiveResponse,
@@ -117,15 +119,28 @@ export class CuratorService {
     }
     const skill = (await this.deps.listSkills()).find((s) => s.skillId === input.skillId);
     if (!skill) {
-      throw new Error(`Curator: skill not found: ${input.skillId}`);
+      throw new NotFoundError({ entity: "skill", id: input.skillId });
     }
     const immunity = computeSkillImmunity(skill);
     if (immunity.immune) {
-      throw new Error(`Curator: ${immunity.reason} skill ${input.skillId} cannot be archived`);
+      throw new ConflictError({ message: `Curator: ${immunity.reason} skill ${input.skillId} cannot be archived` });
+    }
+    // One clock read per archive request: the status check, a replay readback and the archive time agree.
+    const now = this.deps.now();
+    if (this.toStatusItem(skill, now).archived) {
+      // A replayed archive (for example after a lost response) never disables the skill a second time.
+      // The original archive time lives in the skill's state history; this is the readback time.
+      return {
+        skillId: skill.skillId,
+        archived: true,
+        alreadyArchived: true,
+        archivedAt: now.toISOString(),
+        state: skill.state,
+      };
     }
     const archiveReason = normalizeArchiveReason(input.reason);
     const updated = await this.deps.archiveSkill(input.skillId, archiveReason, input.actorId);
-    const archivedAt = this.deps.now().toISOString();
+    const archivedAt = now.toISOString();
     await this.deps.publishRealtime("curator", {
       type: "skill_archived",
       skillId: input.skillId,
