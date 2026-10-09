@@ -94,7 +94,8 @@ export function useChatComposerInteractions(input: {
   uploadScopeRef.current = uploadScope;
   const uploadOwnerRef = useRef<object | null>(null);
   useEffect(() => {
-    setAttachmentUpload({ pending: 0, error: null });
+    // Idempotent reset: keeping the same idle state avoids a render loop when a caller's setSending is not stable.
+    setAttachmentUpload((current) => (current.pending === 0 && current.error === null ? current : { pending: 0, error: null }));
     return () => {
       if (uploadOwnerRef.current) { uploadOwnerRef.current = null; setSending(false); }
     };

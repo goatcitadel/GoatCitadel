@@ -2529,7 +2529,12 @@ function countApprovalFirstRows(harness: ApprovalFirstMemoryHarness, table: stri
 }
 
 describe("exact lifecycle patch approval review", () => {
-  it.each(["Single sentence", "  First line\nSecond line\n", "password=private-review-value"])("persists readable immutable changes: %s", async (content) => {
+  // Labels keep the secret-shaped case out of the test title, which reporters print and artifact redaction scans.
+  it.each([
+    ["single sentence", "Single sentence"],
+    ["multi-line", "  First line\nSecond line\n"],
+    ["secret-shaped content", "password=private-review-value"],
+  ])("persists readable immutable changes: %s", async (_label, content) => {
     const harness = createApprovalFirstMemoryHarness("readable-preview");
     insertApprovalFirstMemoryItem(harness, { itemId: "review-values" });
     const patch = { title: "Requested title", content, pinned: false, ttlOverrideSeconds: null, metadata: { privateField: "withheld-value" } };
