@@ -122,7 +122,7 @@ it("rejects stale connection reviews before credentials, live checks, and finali
   const peer = storage.integrationConnections.update(f.connection.connectionId, {
     config: { botToken: nextToken, defaultChatId: "-1000999999" },
   });
-  for (const action of ["validate", "test", "finalize"]) {
+  for (const action of ["validate", "test"]) {
     const response = await f.app.inject({
       method: "POST",
       url: `${f.url}/${action}`,
@@ -132,6 +132,19 @@ it("rejects stale connection reviews before credentials, live checks, and finali
     expect(response.statusCode).toBe(409);
     expect(response.json().details.reason).toBe("CHANNEL_CONNECTION_REVIEW_REQUIRED");
   }
+  // The legacy route never activates directly: without change management it refuses before any owner work.
+  const finalize = await f.app.inject({
+    method: "POST",
+    url: `${f.url}/finalize`,
+    headers: f.headers(),
+    payload: { expectedRevision: f.draft.revision },
+  });
+  expect(finalize.statusCode).toBe(409);
+  expect(finalize.json().code).toBe("CHANNEL_ACTIVATION_REVIEW_UNAVAILABLE");
+  // The finalize owner the Change Plan adapter calls still refuses the stale review.
+  await expect(setup.finalizeChannelSetupDraft(f.host, f.draft.draftId, f.draft.revision)).rejects.toMatchObject({
+    details: { reason: "CHANNEL_CONNECTION_REVIEW_REQUIRED" },
+  });
   expect(f.host.runIntegrationConnectionLiveChecks).not.toHaveBeenCalled();
   expect(f.deps.publishRealtime).not.toHaveBeenCalled();
   expect(storage.integrationConnections.get(peer.connectionId)).toEqual(peer);
@@ -253,25 +266,18 @@ it("commits one connection version, reuses the exact passing test, and returns i
   });
   const tested = await setup.testChannelSetupDraft(f.host, draft.draftId, draft.revision);
   expect(tested.status).toBe("ok");
-  const mark = vi.spyOn(storage.mutationIdempotency, "markCompleted");
-  vi.mocked(f.deps.publishRealtime).mockImplementationOnce(async () => {
-    expect(mark).toHaveBeenCalled();
+  // Activation runs through the finalize owner the Change Plan adapter calls; a peer write after the commit must not
+  // change the acknowledgement this finalize returns.
+  const result = await setup.finalizeChannelSetupDraft(f.host, draft.draftId, tested.draftRevision, async () => {
     expect(() => storage.channelSetupDrafts.get(draft.draftId)).toThrow(NotFoundError);
     storage.integrationConnections.update(f.connection.connectionId, { label: "Later peer" });
   });
-  const response = await f.app.inject({
-    method: "POST",
-    url: `${f.url}/finalize`,
-    headers: f.headers(),
-    payload: { expectedRevision: tested.draftRevision },
-  });
-  expect(response.statusCode).toBe(200);
-  expect(response.json().connection.label).toBe("Telegram fixture");
+  expect(result.connection.label).toBe("Telegram fixture");
   expect(storage.integrationConnections.get(f.connection.connectionId).label).toBe("Later peer");
   expect(f.host.runIntegrationConnectionLiveChecks).toHaveBeenCalledOnce();
   const reference = storage.integrationConnections.get(f.connection.connectionId).config.botToken as string;
   expect(f.custody.resolve(reference)).toBe(nextToken);
-  expect(response.body).not.toContain(nextToken);
+  expect(JSON.stringify(result)).not.toContain(nextToken);
 });
 
 it("keeps committed credentials and blocks a duplicate after runtime synchronization fails", async () => {
@@ -281,20 +287,16 @@ it("keeps committed credentials and blocks a duplicate after runtime synchroniza
     values: { botToken: nextToken },
   });
   vi.mocked(f.deps.syncDiscordRuntime).mockRejectedValueOnce(new Error("Synthetic sync failure"));
-  const request = {
-    method: "POST" as const,
-    url: `${f.url}/finalize`,
-    headers: f.headers(),
-    payload: { expectedRevision: draft.revision },
-  };
-  expect((await f.app.inject(request)).statusCode).toBe(500);
+  await expect(setup.finalizeChannelSetupDraft(f.host, draft.draftId, draft.revision)).rejects.toThrow(
+    "The channel connection was saved",
+  );
   expect(
     f.custody.resolve(storage.integrationConnections.get(f.connection.connectionId).config.botToken as string),
   ).toBe(nextToken);
   expect(() => storage.channelSetupDrafts.get(draft.draftId)).toThrow(NotFoundError);
-  expect((await f.app.inject(request)).statusCode).toBe(409);
+  // The committed draft is gone, so a duplicate finalize cannot activate it again.
+  await expect(setup.finalizeChannelSetupDraft(f.host, draft.draftId, draft.revision)).rejects.toThrow(NotFoundError);
   expect(f.host.runIntegrationConnectionLiveChecks).toHaveBeenCalledOnce();
-  expect(f.deps.publishRealtime).toHaveBeenCalledOnce();
 });
 
 it("retains existing credentials when the draft save conflicts", async () => {
