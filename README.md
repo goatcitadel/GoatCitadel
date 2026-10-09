@@ -266,6 +266,17 @@ Default source endpoints:
 - Mission Control: `http://localhost:5173`
 - Gateway health: `http://127.0.0.1:8787/health`
 
+For a fresh Windows source-development test, run:
+
+```powershell
+pnpm clear
+pnpm dev
+```
+
+`clear` is a GoatCitadel package script. It stops this checkout's identifiable dev processes and bundled native PostgreSQL, archives untracked local settings (including `.env`), database/history/memory, runtime state, and generated Chat output, and removes GoatCitadel's Windows PasswordVault credentials, including ChatGPT OAuth. The next dev page load resets GoatCitadel browser preferences, auth transport state, and drafts once per browser origin/tab. Reload existing tabs after restarting. ChatGPT website cookies remain; use a private browser window if you also want to test signing into ChatGPT from scratch.
+
+Preview with `pnpm clear -WhatIf`. Files are backed up under `.codex-tmp/fresh-reset-*`; removed keychain credentials are not backed up. PasswordVault entries are shared across GoatCitadel installs for your Windows account, so other installs will also need their credentials reconnected. Use `pnpm clear -KeepCredentials` to retain them. Source edits, tracked files, dependencies, skills, fixtures, downloaded models outside the reset roots, and Git worktrees are preserved. This command is for the default local source profile; it refuses production environments, external database modes, custom storage roots, linked paths, or a gateway/UI still running on the default dev ports. It does not reset installed-app profiles or external services. Existing environment variables in your terminal remain active.
+
 ### Docker / Compose
 
 Use Docker when you want a stronger local or shared-host runtime boundary than a raw host install.
