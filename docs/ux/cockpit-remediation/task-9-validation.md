@@ -13,7 +13,7 @@ Source/unit closure on 2026-10-06; independent browser acceptance is pending. No
 
 ## Commands and results
 
-From `C:/Users/spurn/.codex/worktrees/cockpit-remediation/personal-ai`:
+From `<user-home>/.codex/worktrees/cockpit-remediation/personal-ai`:
 
 ```powershell
 & './node_modules/.bin/vitest.cmd' run --root apps/mission-control-next src/features/native-routes/ops/schedule-edit.test.ts
@@ -134,7 +134,7 @@ Run source: dashboard-route-service.ts discovers reverse canonical associations 
 
 ## Regression and validation evidence
 
-Commands ran from C:/Users/spurn/.codex/worktrees/cockpit-remediation/personal-ai:
+Commands ran from <user-home>/.codex/worktrees/cockpit-remediation/personal-ai:
 
 - & './node_modules/.bin/vitest.cmd' run --root apps/mission-control-next src/cockpit/areas/work/WorkSchedules.portal.test.tsx -t 'retains the reviewed snapshot': RED, accessible alert count 0 after settled refresh. GREEN after correction; strengthened before-confirmation and after-rejected-preflight variants: 2 passed, 8 skipped. Uses the actual QueryClient and shared Radix portal, excludes aria-hidden background, waits for invalidation, canonical query settlement and a later task, checks retained original snapshot, blocked confirmation, no pause write, dismissal and explicit current re-review.
 - & './node_modules/.bin/vitest.cmd' run --root apps/gateway src/services/dashboard-route-service.test.ts -t canonical: RED, four new canonical linkage/partial-discovery assertions failed against the frozen source (one existing matching test passed). Both actual linkage directions and failed/truncated coverage reproduced.

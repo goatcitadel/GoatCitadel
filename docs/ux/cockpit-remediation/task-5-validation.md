@@ -1,6 +1,6 @@
 # Task 5 validation: access, release visibility and honest status
 
-Task5 and review fix3 are implemented and source-frozen, pending independent review. Baseline `30958cdbcfe2a8dc3234929fbee6bdf4b2248b15`; worktree `C:/Users/spurn/.codex/worktrees/cockpit-remediation/personal-ai`. Earlier Tasks1–4 source/ledger rows preserved. No commits, staging, dependency additions, user-profile writes or process changes. Output ownership released to controller.
+Task5 and review fix3 are implemented and source-frozen, pending independent review. Baseline `30958cdbcfe2a8dc3234929fbee6bdf4b2248b15`; worktree `<user-home>/.codex/worktrees/cockpit-remediation/personal-ai`. Earlier Tasks1–4 source/ledger rows preserved. No commits, staging, dependency additions, user-profile writes or process changes. Output ownership released to controller.
 
 ## Traceable sub-batches and source owners
 
