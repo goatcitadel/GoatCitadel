@@ -85,6 +85,7 @@ import {
   runVertexFireworksProvidersLane as runVertexFireworksProvidersLaneImpl,
 } from "./scenarios/provider-reasoning-lanes.mjs";
 import { runSurfaceRegressionLane as runSurfaceRegressionLaneImpl } from "./scenarios/surface-regression-lane.mjs";
+import { classicUiParityProbe } from "./scenarios/ui-parity-owner-contract.mjs";
 import { runChatAsyncClarificationProof as runChatAsyncClarificationProofImpl } from "./scenarios/chat-async-clarification-proof.mjs";
 import { runChatStreamingDisplayProof as runChatStreamingDisplayProofImpl } from "./scenarios/chat-streaming-display-proof.mjs";
 import {
@@ -124,6 +125,7 @@ import { runCitadelRecordRevisionsLane as runCitadelRecordRevisionsLaneImpl } fr
 import { runIntegrationConnectionRevisionsLane as runIntegrationConnectionRevisionsLaneImpl } from "./scenarios/integration-connection-revisions-lane.mjs";
 import { runMcpServerRevisionsLane as runMcpServerRevisionsLaneImpl } from "./scenarios/mcp-server-revisions-lane.mjs";
 import { runChannelConnectionReviewLane as runChannelConnectionReviewLaneImpl } from "./scenarios/channel-connection-review-lane.mjs";
+import { runChannelGuidedSetupLane as runChannelGuidedSetupLaneImpl } from "./scenarios/channel-guided-setup-lane.mjs";
 import { runAuthMatrixLane as runAuthMatrixLaneImpl } from "./scenarios/auth-matrix-lane.mjs";
 import { runArchitectureMetricsLane as runArchitectureMetricsLaneImpl } from "./scenarios/architecture-metrics-lane.mjs";
 import { runCatalogParityLane as runCatalogParityLaneImpl } from "./scenarios/catalog-parity-lane.mjs";
@@ -498,6 +500,10 @@ export async function runIntegrationConnectionRevisionsLane(context) {
 
 export async function runMcpServerRevisionsLane(context) {
   await runMcpServerRevisionsLaneImpl(context, verificationLaneDeps());
+}
+
+export async function runChannelGuidedSetupLane(context) {
+  await runChannelGuidedSetupLaneImpl(context, verificationLaneDeps());
 }
 
 export async function runChannelConnectionReviewLane(context) {
@@ -3442,7 +3448,7 @@ export async function runUiParityLane(context, _options = {}) {
         id: "ui-parity.next-operator-surfaces",
         lane: "ui-parity",
         title:
-          "Canonical Mission Control Next routes expose seeded operator facts (legacy comparison retired in Track D Phase 3)",
+          "Mission Control Next Classic rollback owners expose seeded operator facts (Cockpit has separate browser proof)",
         subsystem: "mission-control",
       },
       async ({ correlationId }) => {
@@ -3462,8 +3468,7 @@ export async function runUiParityLane(context, _options = {}) {
             approvals: await collectUiParitySurface({
               page: nextPage,
               baseUrl: nextUi.uiUrl,
-              href: `/ops/approvals`,
-              route: { expectedArea: "ops", expectedSection: "approvals", readyText: "Approval queue" },
+              ...classicUiParityProbe("/ops/approvals", { expectedArea: "ops", expectedSection: "approvals", readyText: "Approval queue" }),
               packageName: NEXT_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
@@ -3472,8 +3477,7 @@ export async function runUiParityLane(context, _options = {}) {
             runtime: await collectUiParitySurface({
               page: nextPage,
               baseUrl: nextUi.uiUrl,
-              href: "/ops/runtime",
-              route: { expectedArea: "ops", expectedSection: "runtime", readyText: "Services" },
+              ...classicUiParityProbe("/ops/runtime", { expectedArea: "ops", expectedSection: "runtime", readyText: "Services" }),
               prepare: async (page) => {
                 await page.getByRole("button", { name: "Gateway details", exact: true }).click();
               },
@@ -3485,8 +3489,7 @@ export async function runUiParityLane(context, _options = {}) {
             diagnostics: await collectUiParitySurface({
               page: nextPage,
               baseUrl: nextUi.uiUrl,
-              href: "/ops/diagnostics",
-              route: { expectedArea: "ops", expectedSection: "diagnostics", readyText: "Diagnostics directory" },
+              ...classicUiParityProbe("/ops/diagnostics", { expectedArea: "ops", expectedSection: "diagnostics", readyText: "Diagnostics directory" }),
               packageName: NEXT_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
@@ -3495,8 +3498,7 @@ export async function runUiParityLane(context, _options = {}) {
             activity: await collectUiParitySurface({
               page: nextPage,
               baseUrl: nextUi.uiUrl,
-              href: "/ops/activity",
-              route: { expectedArea: "ops", expectedSection: "activity", readyText: "Activity feed" },
+              ...classicUiParityProbe("/ops/activity", { expectedArea: "ops", expectedSection: "activity", readyText: "Activity feed" }),
               packageName: NEXT_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
@@ -3505,8 +3507,7 @@ export async function runUiParityLane(context, _options = {}) {
             memory: await collectUiParitySurface({
               page: nextPage,
               baseUrl: nextUi.uiUrl,
-              href: "/library/memory",
-              route: { expectedArea: "library", expectedSection: "memory", readyText: "Memory items" },
+              ...classicUiParityProbe("/library/memory", { expectedArea: "library", expectedSection: "memory", readyText: "Memory items" }),
               packageName: NEXT_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
@@ -3516,8 +3517,7 @@ export async function runUiParityLane(context, _options = {}) {
             mcpSettings: await collectUiParitySurface({
               page: nextPage,
               baseUrl: nextUi.uiUrl,
-              href: "/settings/mcp",
-              route: { expectedArea: "settings", expectedSection: "mcp", readyText: "MCP servers" },
+              ...classicUiParityProbe("/settings/mcp", { expectedArea: "settings", expectedSection: "mcp", readyText: "MCP servers" }),
               prepare: async (page) => {
                 await page.getByRole("button", { name: "MCP diagnostics", exact: true }).click();
               },
@@ -3527,6 +3527,26 @@ export async function runUiParityLane(context, _options = {}) {
               needle: "Remote MCP preview",
             }),
           };
+
+          // Keep rendered readbacks and raw console evidence even when a readiness/fact assertion fails.
+          const nextArtifacts = await captureBrowserArtifacts(context, {
+            slug: "ui-parity-next",
+            page: nextPage,
+            browserLog: nextLog,
+            gatewayUrl: stack.gatewayUrl,
+            correlationId,
+            logCursor: nextCursor,
+          });
+          const outPath = path.join(context.artifactRoot, "diagnostics", "ui-parity-operator-surfaces.json");
+          await writeJson(outPath, {
+            owner: "classic-rollback",
+            fixture,
+            approvalNeedle,
+            activityNeedle,
+            memoryNeedle,
+            parity,
+          });
+          assertBrowserConsoleHealthy(nextLog, nextCursor, NEXT_UI_PACKAGE);
 
           const labelledChecks = [
             ["approvals", parity.approvals],
@@ -3548,22 +3568,7 @@ export async function runUiParityLane(context, _options = {}) {
             throw new Error(`ui-parity memory surface exposed foreign workspace item ${foreignMemoryNeedle}`);
           }
 
-          const nextArtifacts = await captureBrowserArtifacts(context, {
-            slug: "ui-parity-next",
-            page: nextPage,
-            browserLog: nextLog,
-            gatewayUrl: stack.gatewayUrl,
-            correlationId,
-            logCursor: nextCursor,
-          });
-          const outPath = path.join(context.artifactRoot, "diagnostics", "ui-parity-operator-surfaces.json");
-          await writeJson(outPath, {
-            fixture,
-            approvalNeedle,
-            activityNeedle,
-            memoryNeedle,
-            parity,
-          });
+
           return {
             status: "passed",
             metrics: {

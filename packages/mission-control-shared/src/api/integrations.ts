@@ -198,18 +198,8 @@ export async function fetchSlackOAuthStatus(): Promise<{
   return request("/api/v1/integrations/slack/oauth/status");
 }
 
-export async function startSlackOAuth(): Promise<{
-  authorizationUrl: string;
-  state: string;
-  configured: boolean;
-  mode: "hosted" | "self_owned";
-  scopes: string[];
-}> {
-  return request("/api/v1/integrations/slack/oauth/start", {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-}
+/** Compatibility name; OAuth starts require the exact owner binding. */
+export { startStagedSlackOAuth as startSlackOAuth } from "./channel-oauth.js";
 
 export async function discoverTelegramTargets(input: {
   connectionId?: string;

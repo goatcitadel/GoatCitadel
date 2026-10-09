@@ -23,6 +23,7 @@ export function attachBrowserLogging(page) {
     consoleMessages.push({
       type: message.type(),
       text: message.text(),
+      location: safeConsoleLocation(message),
       timestamp: new Date().toISOString(),
     });
   });
@@ -321,6 +322,21 @@ function loopbackNetworkPath(value) {
       return undefined;
     }
     return parsed.pathname;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeConsoleLocation(message) {
+  try {
+    const location = message.location?.();
+    const locationPath = loopbackNetworkPath(location?.url);
+    if (!locationPath) return undefined;
+    return {
+      path: locationPath,
+      lineNumber: Number.isSafeInteger(location.lineNumber) && location.lineNumber >= 0 ? location.lineNumber : undefined,
+      columnNumber: Number.isSafeInteger(location.columnNumber) && location.columnNumber >= 0 ? location.columnNumber : undefined,
+    };
   } catch {
     return undefined;
   }

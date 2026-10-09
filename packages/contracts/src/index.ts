@@ -156,6 +156,7 @@ export * from "./utf8-truncation.js";
 export * from "./channel-access.js";
 export * from "./channel-wizard.js";
 export * from "./channel-probes.js";
+export * from "./channel-setup-evidence.js";
 export * from "./research.js";
 export * from "./research-search.js";
 export * from "./update-scout.js";
@@ -223,3 +224,7 @@ export * from "./remote-worker-runtime-install-exchange.js";
 export * from "./remote-worker-installation-rpc.js";
 export * from "./desktop-updates.js";
 export * from "./opencode.js";
+
+export * from "./channel-oauth.js";
+
+export * from "./channel-setup-operations.js";

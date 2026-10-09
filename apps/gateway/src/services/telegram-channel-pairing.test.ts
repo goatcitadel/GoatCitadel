@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { approveTelegramPairingCode, authorizeTelegramChannelActor } from "./telegram-channel-pairing.js";
+import { approveTelegramPairingCode, authorizeTelegramChannelActor, revokeTelegramPairingActor } from "./telegram-channel-pairing.js";
 
 describe("telegram channel pairing", () => {
   it("allows configured allow-all Telegram connections", () => {
@@ -59,5 +59,15 @@ describe("telegram channel pairing", () => {
         now,
       }).authorized,
     ).toBe(true);
+  });
+  it("coordinates pairing with the explicit sender gate and revokes both authorities", () => {
+    const now = new Date("2026-05-02T12:00:00.000Z");
+    const decision = authorizeTelegramChannelActor({ config: { inboundAccessMode: "allowlist", allowedSenders: ["888"] }, chatId: "123", actorId: "777", now });
+    const pending = (decision.configPatch!.telegramPairing as { pending: Array<{ code: string }> }).pending;
+    const approved = approveTelegramPairingCode({ inboundAccessMode: "allowlist", allowedSenders: ["888"], ...decision.configPatch }, pending[0]!.code, now);
+    expect(approved.configPatch!.allowedSenders).toEqual(["888", "777"]);
+    const revoked = revokeTelegramPairingActor({ inboundAccessMode: "allowlist", ...approved.configPatch }, "777");
+    expect(revoked.allowedSenders).toEqual(["888"]);
+    expect(authorizeTelegramChannelActor({ config: revoked, chatId: "123", actorId: "777", now }).authorized).toBe(false);
   });
 });

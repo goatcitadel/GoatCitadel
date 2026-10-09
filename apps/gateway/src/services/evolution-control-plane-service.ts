@@ -436,6 +436,9 @@ export class EvolutionControlPlaneService {
         message: "This Change Plan crossed its live-effect boundary. Use rollback instead of cancellation.",
       });
     }
+    if (current.requiredAction && (actionNonce ?? current.requiredAction.actionNonce) !== current.requiredAction.actionNonce) {
+      throw new ConflictError({ message: "Change Plan action nonce is missing or stale." });
+    }
     const adapter = this.requireMatchingAdapter(current);
     if (adapter.discard) await adapter.discard(this.context(current.origin), current);
     const cancelled = await this.deps.repository.transition(current.planId, {

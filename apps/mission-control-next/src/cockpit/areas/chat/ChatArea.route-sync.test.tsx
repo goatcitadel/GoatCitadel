@@ -40,12 +40,14 @@ const evidence = (selection: ChatLocationSelection): ChatSelectionEvidence => ({
 });
 let controller: ReturnType<typeof useChatOwnerNavigation>, review: ReturnType<typeof useChatSelectionReview>;
 let publishSelection: (selection: ChatLocationSelection) => void;
+let navigateOwner: ReturnType<typeof useCockpitRoute>["navigate"];
 let failHydration: () => void;
 let draft: ReturnType<typeof useSessionDraft<{ text: string }>>;
 let mounts = 0,
   unmounts = 0;
 function Probe() {
   const route = useCockpitRoute();
+  navigateOwner = route.navigate;
   const [selected, setSelected] = useState<ChatLocationSelection>({ sessionId: "session-a" });
   const [hydrationFailed, setHydrationFailed] = useState(false);
   controller = useChatOwnerNavigation(scope.activeWorkspaceId, scope.activeCitadelId);
@@ -187,6 +189,22 @@ describe("cockpit controller route publication", () => {
     expect(new URLSearchParams(window.location.search).get("sessionId")).toBe("session-a");
   });
 
+  it("drops late retained Chat selection after returning an exact setup plan to Channels", async () => {
+    window.history.replaceState(null, "", "/chat?channelPlan=plan-a&channelDraft=draft-a&channelRevision=1&channelWorkspace=workspace-a&shell=cockpit");
+    await render();
+    const lateRequest = controller.request;
+    await act(async () => controller.request("chat", { sessionId: "session-b" }));
+    const returned = "/settings/channels?channelPlan=plan-a&channelDraft=draft-a&channelWorkspace=workspace-a&shell=cockpit";
+    await act(async () => navigateOwner(returned));
+    expect(window.location.pathname + window.location.search).toBe(returned);
+    await act(async () => {
+      publishSelection({ sessionId: "session-b" });
+      lateRequest("chat", { sessionId: "session-c" });
+    });
+    expect(window.location.pathname + window.location.search).toBe(returned);
+    expect(new URLSearchParams(window.location.search).has("channelRevision")).toBe(false);
+    expect(new URLSearchParams(window.location.search).has("sessionId")).toBe(false);
+  });
   it("holds browser Back while the draft is unsaved, then preserves the mounted draft once confirmed", async () => {
     await render();
     await act(async () => {

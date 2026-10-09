@@ -9,6 +9,7 @@ export const channelSetupRouteMethods = [
   "reviewChannelSetupConnection",
   "getChannelSetupDefinition",
   "getChannelSetupDraft",
+  "getChannelSetupDraftEvidence",
   "listChannelSetupDefinitions",
   "listChannelSetupDrafts",
   "setChannelSetupDraftSecrets",
@@ -16,6 +17,16 @@ export const channelSetupRouteMethods = [
   "testChannelSetupDraft",
   "updateChannelSetupDraft",
   "validateChannelSetupDraft",
+  "discoverChannelSetupTelegramTargets",
+  "acknowledgeChannelSetupTest",
+  "getChannelSetupJourney",
+  "startSlackOAuthAttempt",
+  "getChannelOAuthAttempt",
+  "completeSlackOAuthAttempt",
+  "adoptSlackOAuthAttempt",
+  "cancelChannelOAuthAttempt",
+  "cleanupChannelOAuthAttempts",
+  "recoverInterruptedChannelOAuthAttempts",
 ] as const;
 
 export type ChannelSetupRouteMethod = (typeof channelSetupRouteMethods)[number];
@@ -33,6 +44,7 @@ export function createChannelSetupRoutePort(port: ChannelSetupPort): ChannelSetu
     reviewChannelSetupConnection: (...args) => port.reviewChannelSetupConnection(...args),
     getChannelSetupDefinition: (...args) => port.getChannelSetupDefinition(...args),
     getChannelSetupDraft: (...args) => port.getChannelSetupDraft(...args),
+    getChannelSetupDraftEvidence: (...args) => port.getChannelSetupDraftEvidence(...args),
     listChannelSetupDefinitions: (...args) => port.listChannelSetupDefinitions(...args),
     listChannelSetupDrafts: (...args) => port.listChannelSetupDrafts(...args),
     setChannelSetupDraftSecrets: (...args) => port.setChannelSetupDraftSecrets(...args),
@@ -40,6 +52,16 @@ export function createChannelSetupRoutePort(port: ChannelSetupPort): ChannelSetu
     testChannelSetupDraft: (...args) => port.testChannelSetupDraft(...args),
     updateChannelSetupDraft: (...args) => port.updateChannelSetupDraft(...args),
     validateChannelSetupDraft: (...args) => port.validateChannelSetupDraft(...args),
+    discoverChannelSetupTelegramTargets: (...args) => port.discoverChannelSetupTelegramTargets(...args),
+    acknowledgeChannelSetupTest: (...args) => port.acknowledgeChannelSetupTest(...args),
+    getChannelSetupJourney: (...args) => port.getChannelSetupJourney(...args),
+    startSlackOAuthAttempt: (...args) => port.startSlackOAuthAttempt(...args),
+    getChannelOAuthAttempt: (...args) => port.getChannelOAuthAttempt(...args),
+    completeSlackOAuthAttempt: (...args) => port.completeSlackOAuthAttempt(...args),
+    adoptSlackOAuthAttempt: (...args) => port.adoptSlackOAuthAttempt(...args),
+    cancelChannelOAuthAttempt: (...args) => port.cancelChannelOAuthAttempt(...args),
+    cleanupChannelOAuthAttempts: (...args) => port.cleanupChannelOAuthAttempts(...args),
+    recoverInterruptedChannelOAuthAttempts: (...args) => port.recoverInterruptedChannelOAuthAttempts(...args),
   };
 }
 

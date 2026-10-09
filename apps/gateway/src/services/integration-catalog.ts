@@ -456,7 +456,7 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         placeholder: "https://cloud.example.com",
         required: true,
         description:
-          "Public HTTPS origin for your Nextcloud Talk instance. Register GoatCitadel's webhook path under this reverse-proxied domain.",
+          "Origin of the Nextcloud Talk instance used for outbound bot requests. Register the public HTTPS Gateway callback URL separately; it may use a different host.",
       }),
       text("tokenEnv", "Token ENV Var", {
         placeholder: "NEXTCLOUD_TALK_TOKEN",
@@ -521,7 +521,7 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
   "channel.zalouser": {
     catalogId: "channel.zalouser",
     title: "Zalo Personal Connection",
-    description: "Configure a zca serve bridge for a personal Zalo session and default recipient target.",
+    description: "Configure an authenticated zca serve bridge for a personal Zalo session and default recipient target.",
     allowAdvancedJson: true,
     fields: [
       text("label", "Connection Label", { defaultValue: "Zalo Personal" }),
@@ -531,8 +531,9 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       }),
       text("authTokenEnv", "Bearer Token ENV Var", {
         placeholder: "ZALOUSER_AUTH_TOKEN",
+        required: true,
         secretRef: true,
-        advanced: true,
+        description: "Required authenticated bridge credential. Supported credential aliases remain available in advanced configuration.",
       }),
       text("profile", "Profile", {
         placeholder: "work",

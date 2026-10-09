@@ -21,6 +21,7 @@ export interface SlackOAuthConfig {
   scopes?: string;
   brokerAuthorizeUrl?: string;
   origin?: string;
+  attemptId?: string;
 }
 
 export interface SlackOAuthStartResult {
@@ -93,6 +94,7 @@ export function buildSlackOAuthStart(input: SlackOAuthConfig): SlackOAuthStartRe
     nonce: randomBytes(16).toString("base64url"),
     issuedAt: Date.now(),
   };
+  if (input.attemptId) statePayload.attemptId = input.attemptId;
   if (input.origin) {
     statePayload.origin = input.origin;
   }
@@ -115,7 +117,9 @@ export function buildSlackOAuthStart(input: SlackOAuthConfig): SlackOAuthStartRe
 }
 
 export function verifySlackOAuthState(state: string, stateSecret: string, maxAgeMs = 10 * 60 * 1000): boolean {
-  const [encoded, signature] = state.split(".");
+  const parts = state.split(".");
+  if (parts.length !== 2) return false;
+  const [encoded, signature] = parts;
   if (!encoded || !signature) {
     return false;
   }
@@ -125,10 +129,16 @@ export function verifySlackOAuthState(state: string, stateSecret: string, maxAge
   }
   try {
     const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as { issuedAt?: unknown };
-    return typeof payload.issuedAt === "number" && Date.now() - payload.issuedAt <= maxAgeMs;
+    return typeof payload.issuedAt === "number" && Number.isFinite(payload.issuedAt)
+      && payload.issuedAt <= Date.now() && Date.now() - payload.issuedAt <= maxAgeMs;
   } catch {
     return false;
   }
+}
+
+/** Definite provider rejection, distinct from an interrupted exchange with unknown outcome. */
+export class SlackOAuthExchangeRejectedError extends Error {
+  public constructor() { super("Slack rejected the OAuth code exchange."); }
 }
 
 export async function exchangeSlackOAuthCode(input: {
@@ -153,6 +163,7 @@ export async function exchangeSlackOAuthCode(input: {
     timeoutMs: 5_000,
     label: "Slack OAuth",
   });
+  if (response.status < 500 && payload.ok === false) throw new SlackOAuthExchangeRejectedError();
   if (response.status < 200 || response.status >= 300 || payload.ok === false) {
     throw new Error(
       payload.error ? `Slack OAuth failed: ${payload.error}` : `Slack OAuth failed with HTTP ${response.status}.`,

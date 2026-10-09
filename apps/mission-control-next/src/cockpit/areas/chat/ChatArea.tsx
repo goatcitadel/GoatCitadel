@@ -76,6 +76,7 @@ export function ChatArea({
         onOpenStartHere={() => navigate("/settings/first-run?shell=cockpit")}
         onOpenPersonalitiesSettings={() => navigate("/settings/general?shell=cockpit#work-personality")}
         onOpenProviderSettings={() => navigate("/settings/models?shell=cockpit#providers")}
+        onReturnToChannels={(href) => navigate(href)}
         onOpenLocalAiSettings={() => navigate("/settings/models?shell=cockpit#local-ai")}
         onOpenLibraryArtifacts={() => navigate("/library/artifacts?shell=cockpit")}
         onOpenLibraryImports={() => navigate("/library/knowledge?shell=cockpit")}

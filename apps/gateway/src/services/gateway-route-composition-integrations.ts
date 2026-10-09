@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import path from "node:path";
+import { ChannelOAuthStagingService } from "./channel-oauth-staging-service.js";
 import type {
   ExternalSideEffectRunListQuery,
   IntegrationCatalogEntry,
@@ -76,6 +79,12 @@ export function composeIntegrationChannelRouteDependencies(
   });
   const notificationRouting = createNotificationRoutingServiceForGateway(gateway);
   const channelSetupDeps = createChannelSetupHostForGateway(gateway, integrationDiagnostics, integrationChannel);
+  const channelOAuth = new ChannelOAuthStagingService({
+    installationId: "root-" + createHash("sha256").update(path.resolve(gateway.config.rootDir)).digest("hex").slice(0, 24),
+    storage: gateway.storage, channelSecrets: channelSetupDeps.channelSecrets,
+    recentChannelSetupTests: gateway.recentChannelSetupTests,
+    fetcher: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
+  });
   const channelSetup = createChannelSetupRoutePort({
     createChannelSetupDraft: (input) => channelSetupService.createChannelSetupDraft(channelSetupDeps, input),
     createChannelSetupRepairDraft: (connectionId) =>
@@ -88,13 +97,18 @@ export function composeIntegrationChannelRouteDependencies(
       channelSetupService.reviewChannelSetupConnection(channelSetupDeps, draftId, input),
     setChannelSetupDraftSecrets: (draftId, input) =>
       channelSetupService.setChannelSetupDraftSecrets(channelSetupDeps, draftId, input),
-    discardChannelSetupDraft: (draftId, expectedRevision) =>
-      channelSetupService.discardChannelSetupDraft(channelSetupDeps, draftId, expectedRevision),
+    discardChannelSetupDraft: async (draftId, expectedRevision) => {
+      const result = await channelSetupService.discardChannelSetupDraft(channelSetupDeps, draftId, expectedRevision);
+      try { await channelOAuth.cancelForDraft(draftId); }
+      catch { throw Object.assign(new Error("The draft was discarded, but staged OAuth cleanup needs recovery."), { mutationCommitted: true }); }
+      return result;
+    },
     getChannelSetupDefinition: (catalogId) =>
       channelSetupService.getChannelSetupDefinition(channelSetupDeps, catalogId),
     listChannelSetupDefinitions: () => channelSetupService.listChannelSetupDefinitions(channelSetupDeps),
     listChannelSetupDrafts: (options) => channelSetupService.listChannelSetupDrafts(channelSetupDeps, options),
     getChannelSetupDraft: (draftId) => channelSetupService.getChannelSetupDraft(channelSetupDeps, draftId),
+    getChannelSetupDraftEvidence: (draftId, expectedRevision) => channelSetupService.getChannelSetupDraftEvidence(channelSetupDeps, draftId, expectedRevision),
     retestChannelConnection: (connectionId) =>
       channelSetupService.retestChannelConnection(channelSetupDeps, connectionId),
     testChannelSetupDraft: (draftId, expectedRevision) =>
@@ -105,6 +119,16 @@ export function composeIntegrationChannelRouteDependencies(
       }),
     validateChannelSetupDraft: (draftId, expectedRevision) =>
       channelSetupService.validateChannelSetupDraft(channelSetupDeps, draftId, expectedRevision),
+    discoverChannelSetupTelegramTargets: (input) => channelSetupService.discoverChannelSetupTelegramTargets(channelSetupDeps, input),
+    acknowledgeChannelSetupTest: (draftId, input, actorId) => channelSetupService.acknowledgeChannelSetupTest(channelSetupDeps, draftId, input, actorId),
+    getChannelSetupJourney: (connectionId) => channelSetupService.getChannelSetupJourney(channelSetupDeps, connectionId),
+    startSlackOAuthAttempt: (actor, input, config) => channelOAuth.start(actor, input, config),
+    getChannelOAuthAttempt: (actor, input) => channelOAuth.status(actor, input),
+    completeSlackOAuthAttempt: (state, config, code, denied) => channelOAuth.callback(state, config, code, denied),
+    adoptSlackOAuthAttempt: (actor, input, onCommitted) => channelOAuth.adopt(actor, input, onCommitted),
+    cancelChannelOAuthAttempt: (actor, input) => channelOAuth.cancel(actor, input),
+    cleanupChannelOAuthAttempts: () => channelOAuth.cleanupExpired(),
+    recoverInterruptedChannelOAuthAttempts: () => channelOAuth.recoverInterrupted(),
   });
   const commsDeps = createCommsHostForGateway(gateway, integrationChannel);
   const comms = createCommsRoutePort({
@@ -522,7 +546,18 @@ export function createChannelSetupHostForGateway(
   integrationDiagnostics = createIntegrationDiagnosticsServiceForGateway(gateway),
   integrationChannel = createIntegrationChannelServiceForGateway(gateway, integrationDiagnostics),
 ): channelSetupService.ChannelSetupHost {
-  return composeChannelSetupHost(gateway, integrationDiagnostics, integrationChannel);
+  return {
+    ...composeChannelSetupHost(gateway, integrationDiagnostics, integrationChannel),
+    fetchWithTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
+    isConnectionUrlAllowlisted: (url) => gateway.isConnectionUrlAllowlisted(url),
+    resolveConnectionSecret: (config, directKey, envKey, catalogId) => gateway.resolveConnectionSecret(config, directKey, envKey, catalogId),
+    getChannelCapabilities: (id) => integrationChannel.getIntegrationConnectionChannelCapabilities(id),
+    getChannelRuntimeStatus: (id) => integrationChannel.getIntegrationConnectionChannelRuntimeStatus(id),
+    listChannelDeliveries: async (id) => (await gateway.storage.commsDeliveries.list(id, 100)).map((item) => ({
+      deliveryId: item.deliveryId, status: item.deliveryStatus ?? item.status,
+      providerMessageId: item.providerMessageId, updatedAt: item.updatedAt,
+    })),
+  };
 }
 
 export function createIntegrationChannelServiceForGateway(

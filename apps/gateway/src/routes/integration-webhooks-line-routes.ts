@@ -78,6 +78,7 @@ export function registerLineWebhookRoutes(fastify: FastifyInstance): void {
           eventType: event.eventType,
           bindingTarget: event.room ?? event.peer,
           inboundAccessConfig: connection.config,
+          acceptedConnectionRevision: connection.revision,
           message: {
             eventId: event.eventId,
             account: event.account,

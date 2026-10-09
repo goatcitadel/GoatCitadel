@@ -234,7 +234,7 @@ describe("channel setup routes", () => {
     });
   });
 
-  it("validates, tests, and finalizes channel setup drafts", async () => {
+  it("validates and tests drafts but requires governed activation review", async () => {
     const validateChannelSetupDraft = vi.fn(() => ({
       draftId: "11111111-1111-1111-1111-111111111111",
       draftRevision: 2,
@@ -312,15 +312,9 @@ describe("channel setup routes", () => {
       url: "/api/v1/channels/drafts/11111111-1111-1111-1111-111111111111/finalize",
       payload: { expectedRevision: 3 },
     });
-    expect(finalizeResponse.statusCode).toBe(200);
-    expect(finalizeChannelSetupDraft).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111", 3, expect.any(Function));
-    expect(finalizeResponse.json()).toEqual(
-      expect.objectContaining({
-        connection: expect.objectContaining({
-          connectionId: "22222222-2222-2222-2222-222222222222",
-        }),
-      }),
-    );
+    expect(finalizeResponse.statusCode).toBe(409);
+    expect(finalizeChannelSetupDraft).not.toHaveBeenCalled();
+    expect(finalizeResponse.json()).toMatchObject({ code: "CHANNEL_ACTIVATION_REVIEW_UNAVAILABLE" });
   });
 
   it("creates repair and rotate-secret drafts and supports re-test", async () => {

@@ -5,7 +5,6 @@ import { ConflictError, SemanticValidationError, type ChannelSetupDraft } from "
 import {
   projectChannelSetupDraftForPublicResponse,
   projectChannelSetupDraftsForPublicResponse,
-  projectChannelSetupFinalizeResultForPublicResponse,
   projectChannelSetupTestResultForPublicResponse,
   projectChannelSetupValidationResultForPublicResponse,
 } from "../services/channel-setup-public-projection.js";
@@ -28,12 +27,27 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       reply.header("pragma", "no-cache");
     }
   });
+  fastify.post("/api/v1/channels/telegram/discover-targets", { logLevel: "silent", config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request, reply) => {
+    const schema = z.discriminatedUnion("source", [z.object({ source: z.literal("draft"), draftId: z.string().uuid(), expectedRevision: z.number().int().positive(), setupCode: z.string().max(128).optional() }).strict(), z.object({ source: z.literal("connection"), connectionId: z.string().uuid(), expectedConnectionRevision: z.string().regex(/^[a-f0-9]{64}$/), setupCode: z.string().max(128).optional() }).strict()]);
+    const parsed = schema.safeParse(request.body);
+    reply.header("cache-control", "no-store");
+    if (!parsed.success) return reply.code(400).send({ error: "Choose a reviewed Telegram draft or connection for discovery." });
+    try { return reply.send(await fastify.services.channelSetup.discoverChannelSetupTelegramTargets(parsed.data)); }
+    catch (error) { return sendRouteError(reply, error, request.log); }
+  });
   fastify.get("/api/v1/channels/drafts/:draftId", async (request, reply) => {
     const params = channelDraftParamsSchema.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     try {
       return reply.send(projectChannelSetupDraftForPublicResponse(await fastify.services.channelSetup.getChannelSetupDraft(params.data.draftId)));
     } catch (error) { return sendRouteError(reply, error, request.log); }
+  });
+  fastify.get("/api/v1/channels/drafts/:draftId/evidence", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (request, reply) => {
+    const params = channelDraftParamsSchema.safeParse(request.params);
+    const query = z.object({ expectedRevision: z.coerce.number().int().positive() }).strict().safeParse(request.query);
+    if (!params.success || !query.success) return reply.code(400).send({ error: "A draft ID and exact positive expectedRevision are required." });
+    try { return reply.send(await fastify.services.channelSetup.getChannelSetupDraftEvidence(params.data.draftId, query.data.expectedRevision)); }
+    catch (error) { return sendRouteError(reply, error, request.log); }
   });
   fastify.post("/api/v1/channels/drafts/:draftId/connection-review", async (request, reply) => {
     const params = channelDraftParamsSchema.safeParse(request.params);
@@ -199,7 +213,7 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
 
   fastify.post("/api/v1/channels/drafts/:draftId/finalize", async (request, reply) => {
     const params = channelDraftParamsSchema.safeParse(request.params);
-    const body = channelDraftActionSchema.safeParse(request.body);
+    const body = channelDraftActionSchema.extend({ workspaceId: z.string().trim().min(1).max(128).optional() }).safeParse(request.body);
     if (!params.success || !body.success) {
       return reply
         .code(400)
@@ -230,7 +244,7 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
         }
         const plan = await evolution.create({
           actor: {
-            workspaceId: "default",
+            workspaceId: body.data.workspaceId ?? "default",
             actorId: request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`,
             surface: "settings",
             requestId: request.id,
@@ -245,18 +259,27 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
           finalized: false,
         });
       }
-      const finalized = await fastify.services.channelSetup.finalizeChannelSetupDraft(
-        params.data.draftId,
-        body.data.expectedRevision,
-        async () => { await markMutationCommitted(request); },
-      );
-      return reply.send(projectChannelSetupFinalizeResultForPublicResponse(finalized));
+      return reply.code(409).send({ error: "Channel activation requires Change Plan review in Chat. Enable change management, then create and review the channel plan.", code: "CHANNEL_ACTIVATION_REVIEW_UNAVAILABLE" });
     } catch (error) {
       await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });
 
+  fastify.post("/api/v1/channels/drafts/:draftId/test-acknowledgements", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request, reply) => {
+    const params = channelDraftParamsSchema.safeParse(request.params);
+    const body = z.object({ expectedRevision: z.number().int().positive(), evidenceId: z.string().uuid(), acknowledgement: z.enum(["cleanup", "receipt"]) }).strict().safeParse(request.body);
+    if (!params.success || !body.success) return reply.code(400).send({ error: "A current draft revision and exact test evidence acknowledgement are required." });
+    try { const result = await fastify.services.channelSetup.acknowledgeChannelSetupTest(params.data.draftId, body.data, request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`); await markMutationCommitted(request); return reply.send(projectChannelSetupTestResultForPublicResponse(result)); }
+    catch (error) { await markMutationCommittedFromError(request, error); return sendRouteError(reply, error, request.log); }
+  });
+  fastify.get("/api/v1/channels/connections/:connectionId/journey", async (request, reply) => {
+    const params = connectionParamsSchema.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: "A valid channel connection ID is required." });
+    reply.header("cache-control", "no-store");
+    try { return reply.send(await fastify.services.channelSetup.getChannelSetupJourney(params.data.connectionId)); }
+    catch (error) { return sendRouteError(reply, error, request.log); }
+  });
   fastify.post("/api/v1/channels/connections/:connectionId/repair-draft", async (request, reply) => {
     const params = connectionParamsSchema.safeParse(request.params);
     if (!params.success) {

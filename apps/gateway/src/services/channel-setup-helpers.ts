@@ -7,16 +7,19 @@ import type {
   ChannelSetupValidationResult,
   IntegrationConnection,
 } from "@goatcitadel/contracts";
+import { normalizeGuidedChannelInboundAccess } from "./channel-setup-inbound-access.js";
 import { INTEGRATION_CATALOG } from "./integration-catalog.js";
 import { requireChannelSetupDefinition } from "./channel-setup-definitions.js";
 import { requireReviewedChannelConnection } from "./channel-setup-connection-review.js";
 import {
   resolveReusableChannelSetupTestResult,
+  buildChannelSetupRecentTestSignature,
   type ChannelSetupRecentTestCacheEntry,
 } from "./channel-setup-test-cache.js";
 
 export interface ChannelSetupHost {
   getIntegrationConnection(connectionId: string): Promise<IntegrationConnection>;
+  resolveConnectionSecret?: (config: Record<string, unknown>, directKey: string, envKey: string, catalogId: string) => string | undefined;
 }
 
 export function buildDefaultChannelSetupDraft(definition: ChannelSetupDefinition): Record<string, unknown> {
@@ -82,6 +85,7 @@ export async function buildEphemeralChannelConnection(
       ...currentConfig,
       ...preservedSecrets,
       ...nextConfig,
+      ...normalizeGuidedChannelInboundAccess(catalog.key, draft, currentConfig),
     },
     createdAt: draft.createdAt,
     updatedAt: new Date().toISOString(),
@@ -97,8 +101,9 @@ export async function getReusableChannelSetupTestResult(
   const connection = await buildEphemeralChannelConnection(host, draft, runtime.definition.adapter.secretFieldKeys);
   return resolveReusableChannelSetupTestResult({
     cache,
-    draft,
+    draft: { ...draft, contentVersion: runtime.definition.wizard.contentVersion, validationVersion: runtime.definition.validation.validationVersion },
     connection,
     testVersion: runtime.definition.testing.testVersion,
+    signature: buildChannelSetupRecentTestSignature(draft, connection, runtime.definition.testing.testVersion, { contentVersion: runtime.definition.wizard.contentVersion, validationVersion: runtime.definition.validation.validationVersion, secretFieldKeys: runtime.definition.adapter.secretFieldKeys, resolveConnectionSecret: host.resolveConnectionSecret }),
   });
 }

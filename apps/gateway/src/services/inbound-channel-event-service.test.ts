@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventIngestService, resolveSessionRoute } from "@goatcitadel/gateway-core";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
+import { CHANNEL_INGRESS_ACCEPTED_REVISION_KEY } from "@goatcitadel/contracts";
 import type { ChatMessageRecord, ChatSendMessageResponse } from "@goatcitadel/contracts";
 import {
   InboundChannelEventService,
@@ -25,6 +26,8 @@ describe("InboundChannelEventService", () => {
     }
     vi.restoreAllMocks();
   });
+
+  it("binds accepted ingress to its trusted revision and strips provider spoofing while preserving retry identity", async () => { const harness = await createHarness(); const input = buildInput({ acceptedConnectionRevision: "a".repeat(64) }); input.message.metadata = { [CHANNEL_INGRESS_ACCEPTED_REVISION_KEY]: "spoofed" }; const first = await harness.service.accept(input); const original = harness.storage.inboundChannelEvents.get(first.inboundEventId)!; expect(original.payload[CHANNEL_INGRESS_ACCEPTED_REVISION_KEY]).toBe("a".repeat(64)); expect((original.payload.message as { metadata?: Record<string, unknown> }).metadata?.[CHANNEL_INGRESS_ACCEPTED_REVISION_KEY]).toBeUndefined(); const retry = await harness.service.accept({ ...input, acceptedConnectionRevision: "b".repeat(64) }); expect(retry.inboundEventId).toBe(first.inboundEventId); expect(harness.storage.inboundChannelEvents.get(first.inboundEventId)?.payload[CHANNEL_INGRESS_ACCEPTED_REVISION_KEY]).toBe("a".repeat(64)); });
 
   it("returns after durable acceptance while the model turn remains in flight", async () => {
     const response = deferred<ChatSendMessageResponse>();

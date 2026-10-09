@@ -1,3 +1,4 @@
+import { withGuidedJourney } from "./channel-setup-definitions/guided-journey.js";
 import type { ChannelSetupDefinition } from "@goatcitadel/contracts";
 import { createDiscordDefinition } from "./channel-setup-definitions/discord.js";
 import { createSlackDefinition } from "./channel-setup-definitions/slack.js";
@@ -18,20 +19,20 @@ import type { ChannelSetupRuntimeDefinition } from "./channel-setup-definitions/
 export type { ChannelSetupRuntimeDefinition } from "./channel-setup-definitions/common.js";
 
 const RUNTIME_DEFINITIONS: Record<string, ChannelSetupRuntimeDefinition> = {
-  "channel.discord": createDiscordDefinition(),
-  "channel.slack": createSlackDefinition(),
-  "channel.telegram": createTelegramDefinition(),
-  "channel.ntfy": createNtfyDefinition(),
-  "channel.google-chat": createGoogleChatDefinition(),
-  "channel.teams": createTeamsDefinition(),
-  "channel.whatsapp": createWhatsAppDefinition(),
-  "channel.signal": createSignalDefinition(),
-  "channel.mattermost": createMattermostDefinition(),
-  "channel.imessage": createIMessageDefinition(),
-  "channel.nextcloud-talk": createNextcloudTalkDefinition(),
-  "channel.line": createLineDefinition(),
-  "channel.zalo": createZaloDefinition(),
-  "channel.zalouser": createZaloUserDefinition(),
+  "channel.discord": withGuidedJourney(createDiscordDefinition()),
+  "channel.slack": withGuidedJourney(createSlackDefinition()),
+  "channel.telegram": withGuidedJourney(createTelegramDefinition()),
+  "channel.ntfy": withGuidedJourney(createNtfyDefinition()),
+  "channel.google-chat": withGuidedJourney(createGoogleChatDefinition()),
+  "channel.teams": withGuidedJourney(createTeamsDefinition()),
+  "channel.whatsapp": withGuidedJourney(createWhatsAppDefinition()),
+  "channel.signal": withGuidedJourney(createSignalDefinition()),
+  "channel.mattermost": withGuidedJourney(createMattermostDefinition()),
+  "channel.imessage": withGuidedJourney(createIMessageDefinition()),
+  "channel.nextcloud-talk": withGuidedJourney(createNextcloudTalkDefinition()),
+  "channel.line": withGuidedJourney(createLineDefinition()),
+  "channel.zalo": withGuidedJourney(createZaloDefinition()),
+  "channel.zalouser": withGuidedJourney(createZaloUserDefinition()),
 };
 
 export function getChannelSetupDefinition(catalogId: string): ChannelSetupDefinition | undefined {

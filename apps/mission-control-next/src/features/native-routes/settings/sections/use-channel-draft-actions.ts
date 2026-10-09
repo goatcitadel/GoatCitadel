@@ -9,6 +9,8 @@ import {
   updateChannelSetupDraft,
   validateChannelSetupDraft,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { acknowledgeChannelSetupTest } from "@goatcitadel/mission-control-shared/api/channel-setup-operations";
+import { channelProofExpired, finalizeDisabledReason } from "../channel-setup/channel-wizard-model";
 import { formatJson, parseJsonObject } from "../helpers/input-format";
 import { describeIntegrationConnectionError } from "./useIntegrationConnectionReview";
 import { assertChannelDraft, beginChannelOperation } from "./channel-setup-state";
@@ -63,11 +65,12 @@ export function useChannelDraftActions(s: ChannelSetupState, onPlanReady: (plan:
     return latest;
   }
   async function persist(op: Operation, valuesOverride?: Record<string, unknown>) {
-    if (!s.selectedDraft || !s.selectedDefinition || s.channelDraft.hasRemoteChanges) return undefined;
+    if (!s.selectedDraft || !s.selectedDefinition || s.channelDraft.hasRemoteChanges || s.needsConnectionReview) return undefined;
     const input = s.channelDraft.value;
     const generation = s.inputEpoch.current;
     const values = valuesOverride ?? (s.advancedMode ? parseJsonObject(input.advancedText) : input.values);
-    const submitted = { ...input, values, advancedText: formatJson(values) };
+    // Acknowledge the exact editor snapshot, including its raw advanced text; payload normalization is separate.
+    const submitted = input;
     const draft = await freshDraft(s.selectedDraft, Number(s.channelDraft.baseRevision));
     if (!s.isCurrentDraft() || !currentInput(input) || s.inputEpoch.current !== generation) return undefined;
     if (!s.draftHasChanges(values)) return draft;
@@ -144,6 +147,7 @@ export function useChannelDraftActions(s: ChannelSetupState, onPlanReady: (plan:
   async function run<T>(kind: NonNullable<ChannelSetupState["busyAction"]>, action: (op: Operation) => Promise<T>) {
     const op = beginChannelOperation();
     if (!op) return undefined;
+    s.evidenceOperationEpoch.current += 1;
     s.setBusyAction(kind);
     try {
       return await action(op);
@@ -155,14 +159,13 @@ export function useChannelDraftActions(s: ChannelSetupState, onPlanReady: (plan:
       if (s.isCurrentDraft()) s.setBusyAction(null);
     }
   }
-  const handleSave = async (values?: Record<string, unknown>): Promise<boolean> =>
-    Boolean(
+  const handleSaveReceipt = async (values?: Record<string, unknown>): Promise<ChannelSetupDraft | undefined> =>
       await run("save", async (op) => {
         const saved = await persist(op, values);
         if (saved && s.isCurrentDraft()) s.setNotice({ tone: "success", message: "Channel draft saved." });
         return saved;
-      }),
-    );
+      });
+  const handleSave = async (values?: Record<string, unknown>): Promise<boolean> => Boolean(await handleSaveReceipt(values));
   const check = async (kind: "validate" | "test", values?: Record<string, unknown>): Promise<void> => {
     if (s.needsConnectionReview) return;
     await run(kind, async (op) => {
@@ -170,22 +173,27 @@ export function useChannelDraftActions(s: ChannelSetupState, onPlanReady: (plan:
       if (!current || !s.isCurrentDraft()) return;
       const input = latestInput.current;
       const generation = s.inputEpoch.current;
+      // A confirmed save may replace plaintext input with canonical redacted values between renders.
+      const inputStillReviewed = () => currentInput(input) || currentInput(canonical(current));
       const validation = await op.write(
         () => validateChannelSetupDraft(current.draftId, current.revision),
         (result) => assertCheck(result, current),
         current.draftId,
+        current.connectionId,
+        current.revision,
       );
-      if (!s.isCurrentDraft() || !currentInput(input) || s.inputEpoch.current !== generation) return;
+      if (!s.isCurrentDraft() || !inputStillReviewed() || s.inputEpoch.current !== generation) return;
       let result = validation;
       let resultKind: "validate" | "test" = "validate";
       if (kind === "test" && validation.status !== "error") {
         result = await op.write(
           () => testChannelSetupDraft(current.draftId, validation.draftRevision),
           (value) => assertCheck(value, { ...current, revision: validation.draftRevision }),
+          current.draftId,
         );
         resultKind = "test";
       }
-      if (!s.isCurrentDraft() || !currentInput(input) || s.inputEpoch.current !== generation) return;
+      if (!s.isCurrentDraft() || !inputStillReviewed() || s.inputEpoch.current !== generation) return;
       s.setValidationRevision(result.draftRevision);
       s.setValidationResult({ ...result, kind: resultKind });
       s.setNotice({
@@ -200,8 +208,7 @@ export function useChannelDraftActions(s: ChannelSetupState, onPlanReady: (plan:
     if (!draft || s.needsConnectionReview) return;
     if (
       s.draftHasChanges(values) ||
-      s.validationResult?.kind !== "test" ||
-      s.validationResult.status !== "ok" ||
+      Boolean(finalizeDisabledReason(false, s.validationResult)) ||
       s.validationRevision !== draft.revision
     ) {
       s.setNotice({
@@ -214,7 +221,7 @@ export function useChannelDraftActions(s: ChannelSetupState, onPlanReady: (plan:
     const generation = s.inputEpoch.current;
     await run("finalize", async (op) => {
       await freshDraft(draft, draft.revision);
-      if (!s.isCurrentDraft() || !currentInput(input) || s.inputEpoch.current !== generation) return;
+      if (!s.isCurrentDraft() || !currentInput(input) || s.inputEpoch.current !== generation || channelProofExpired(s.validationResult)) return;
       const plan = await op.write(
         () =>
           createChangePlan({
@@ -243,6 +250,28 @@ export function useChannelDraftActions(s: ChannelSetupState, onPlanReady: (plan:
         message: `Change Plan ${plan.planId} is ready for its required action in Chat. Review its current fields, credentials, confirmation, and approval as requested by the Gateway. The draft has not been finalized yet.`,
       });
       onPlanReady(plan);
+    });
+  };
+  const handleAcknowledgeTest = async (acknowledgement: "cleanup" | "receipt"): Promise<void> => {
+    const draft = s.selectedDraft, evidence = s.validationResult;
+    if (!draft || s.draftDirty || s.needsConnectionReview || s.channelDraft.hasRemoteChanges ||
+      evidence?.kind !== "test" || channelProofExpired(evidence) || !evidence.evidenceId || s.validationRevision !== draft.revision) return;
+    const input = s.channelDraft.value, generation = s.inputEpoch.current;
+    await run("test", async (op) => {
+      await freshDraft(draft, draft.revision);
+      if (!s.isCurrentDraft() || !currentInput(input) || s.inputEpoch.current !== generation || channelProofExpired(s.validationResult)) return;
+      const result = await op.write(() => acknowledgeChannelSetupTest(draft.draftId, {
+        expectedRevision: draft.revision, evidenceId: evidence.evidenceId!, acknowledgement,
+      }), (value) => {
+        if (value.draftId !== draft.draftId || value.draftRevision !== draft.revision ||
+          !value.evidenceId || value.evidenceId === evidence.evidenceId || !value.finalizationEligibility)
+          throw new Error("The acknowledgment did not return new evidence for this exact draft revision.");
+      }, draft.draftId);
+      if (!s.isCurrentDraft() || !currentInput(input) || s.inputEpoch.current !== generation) return;
+      s.setValidationRevision(result.draftRevision);
+      s.setValidationResult({ ...result, kind: "test" });
+      s.setNotice({ tone: result.status === "warn" ? "warning" : result.status === "error" ? "error" : "success",
+        message: "The Gateway recorded the reviewed acknowledgment. Test warnings remain visible." });
     });
   };
   const handleAcceptConnectionReview = async () => {
@@ -280,9 +309,11 @@ export function useChannelDraftActions(s: ChannelSetupState, onPlanReady: (plan:
   s.saveRef.current = () => handleSave();
   return {
     handleSave,
+    handleSaveReceipt,
     handleValidate: (values?: Record<string, unknown>) => check("validate", values),
     handleTest: (values?: Record<string, unknown>) => check("test", values),
     handleFinalize,
+    handleAcknowledgeTest,
     handleAcceptConnectionReview,
   };
 }

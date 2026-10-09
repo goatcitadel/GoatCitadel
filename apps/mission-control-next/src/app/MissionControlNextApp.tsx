@@ -1,3 +1,4 @@
+import { parseAppRoute as parseChannelReturnRoute } from "./route-model";
 /* eslint-disable max-lines -- The canonical shell keeps route selection, global overlays, and shared workspace state in one owner while route pages remain lazily split. */
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ShieldCheck } from "lucide-react";
@@ -1090,6 +1091,7 @@ export function renderRouteContent(input: {
         onOpenStartHere={() => input.navigate({ area: "settings", section: "onboarding", theme: route.theme })}
         onOpenPersonalitiesSettings={openPersonalitiesSettings}
         onOpenProviderSettings={openProviderSettings}
+        onReturnToChannels={(href) => input.navigate({ ...parseChannelReturnRoute(href), theme: route.theme })}
         onOpenLocalAiSettings={openLocalAiSettings}
         onOpenLibraryArtifacts={openLibraryArtifacts}
         onOpenLibraryImports={openLibraryImports}
@@ -1101,6 +1103,10 @@ export function renderRouteContent(input: {
           input.navigate({
             area: "chat",
             theme: route.theme,
+            channelPlan: route.channelPlan,
+            channelDraft: route.channelDraft,
+            channelWorkspace: route.channelWorkspace,
+            channelRevision: route.channelRevision,
             sessionId: options?.sessionId ?? undefined,
             turnId: options?.turnId ?? undefined,
             artifactId: options?.artifactId ?? undefined,

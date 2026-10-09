@@ -44,6 +44,7 @@ interface DiscordProbeInput {
   webhookUrl?: string;
   includeSandboxSend: boolean;
   runtimeReadiness?: "required" | "deferred";
+  deferDestination?: boolean;
   runtimeStatus?: Pick<DiscordRuntimeStatus, "ready" | "lastError" | "connectedBotTag">;
   fetcher: (url: string, init?: RequestInit) => Promise<Response>;
   checkedAt?: string;
@@ -218,6 +219,7 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
       key: "slack_sandbox_send",
       label: "Sandbox send",
       status: "pass",
+      providerMessageId: asString(send.payload.ts),
       message: "Sandbox message post succeeded.",
     });
     const messageTs = asString(send.payload.ts);
@@ -354,6 +356,7 @@ export async function runTelegramBotLiveChecks(input: TelegramProbeInput): Promi
       key: "telegram_sandbox_send",
       label: "Sandbox send",
       status: "pass",
+      providerMessageId: asNumber(asRecord(send.payload.result).message_id)?.toString(),
       message: "Sandbox message post succeeded.",
     });
     const messageId = asNumber(send.payload.result && asRecord(send.payload.result).message_id);
@@ -480,6 +483,12 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
   }
 
+  if (!input.channelId && input.deferDestination) {
+    probe.steps.push({ key: "discord_channel_access", label: "DM destination", status: "skipped", disposition: "deferred", message: "The direct-message destination is verified after activation, pairing and the first DM." });
+    if (input.includeSandboxSend) probe.steps.push({ key: "discord_sandbox_send", label: "DM delivery", status: "skipped", disposition: "deferred", message: "Send verification awaits the first paired DM; bot authentication remains required." });
+    probe.steps.push(buildDiscordRuntimeProbeStep(input.runtimeStatus, input.runtimeReadiness));
+    return { checks: mapProbeStepsToChecks(probe.steps), probe };
+  }
   if (!input.channelId) {
     probe.steps.push({
       key: "discord_channel_access",
@@ -596,6 +605,7 @@ export async function runDiscordBotLiveChecks(input: DiscordProbeInput): Promise
         key: "discord_sandbox_send",
         label: "Sandbox send",
         status: "pass",
+      providerMessageId: asString(send.payload.id),
         message: "Sandbox message post succeeded.",
       });
 
@@ -790,6 +800,7 @@ export async function runMattermostBotLiveChecks(input: MattermostProbeInput): P
       key: "mattermost_sandbox_send",
       label: "Sandbox send",
       status: "pass",
+      providerMessageId: asString(send.payload.id),
       message: "Sandbox post succeeded.",
     });
     const postId = asString(send.payload.id);
@@ -938,6 +949,7 @@ export async function runWhatsAppCloudLiveChecks(input: WhatsAppProbeInput): Pro
       key: "whatsapp_sandbox_send",
       label: "Sandbox send",
       status: "pass",
+      providerMessageId: asString(asRecord(asRecordArray(send.payload.messages)[0]).id),
       message: "Sandbox message post succeeded.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
@@ -1165,6 +1177,7 @@ export async function runIMessageBridgeLiveChecks(input: IMessageProbeInput): Pr
       key: "imessage_sandbox_send",
       label: "Sandbox send",
       status: "pass",
+      providerMessageId: extractBlueBubblesProbeMessageId(sendPayload.payload),
       message: "Sandbox send succeeded.",
     });
     const messageId = extractBlueBubblesProbeMessageId(sendPayload.payload);
@@ -1284,6 +1297,7 @@ export async function runSignalBridgeLiveChecks(input: SignalProbeInput): Promis
       key: "signal_sandbox_send",
       label: "Sandbox send",
       status: "pass",
+      providerMessageId: asNumber(asRecord(send.payload.result).timestamp)?.toString(),
       message: "Sandbox bridge send succeeded.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
@@ -1318,6 +1332,7 @@ export async function runNtfyLiveChecks(input: NtfyProbeInput): Promise<BotProbe
       key: "ntfy_sandbox_send",
       label: "Sandbox send",
       status: "skipped",
+      disposition: input.dryRun ? "deferred" : "blocking",
       message: input.dryRun
         ? "Sandbox publish skipped because this connection is configured for dry-run validation."
         : "Sandbox publish skipped for non-destructive probe mode; ntfy has no separate auth-only endpoint.",
@@ -1361,12 +1376,15 @@ export async function runNtfyLiveChecks(input: NtfyProbeInput): Promise<BotProbe
       key: "ntfy_sandbox_send",
       label: "Sandbox send",
       status: "pass",
+      providerMessageId: asString(parseJsonRecord(detail).id),
       message: "Sandbox notification publish was accepted by ntfy; confirm receipt on the configured topic.",
     });
     probe.steps.push({
       key: "ntfy_sandbox_cleanup",
       label: "Sandbox cleanup",
       status: "skipped",
+      disposition: "deferred",
+      cleanupStatus: "unsupported",
       message: "ntfy does not expose a portable delete operation for a published notification.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
@@ -1442,6 +1460,7 @@ export async function runZaloBotLiveChecks(input: ZaloProbeInput): Promise<BotPr
       key: "zalo_sandbox_send",
       label: "Sandbox send",
       status: "pass",
+      providerMessageId: asString(asRecord(send.payload.data).message_id),
       message: "Sandbox OA send succeeded.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
@@ -1466,6 +1485,11 @@ export async function runZaloUserBridgeLiveChecks(input: ZalouserProbeInput): Pr
     checkedAt,
     steps: [],
   };
+
+  if (!input.authorizationHeader?.trim()) {
+    probe.steps.push({ key: "zalouser_auth", label: "Bridge authentication", status: "fail", disposition: "blocking", message: "An authenticated zca bridge credential is required before probing.", failureCategory: "missing_input" });
+    return { checks: mapProbeStepsToChecks(probe.steps), probe };
+  }
 
   if (!input.includeSandboxSend) {
     probe.steps.push({
@@ -1520,6 +1544,7 @@ export async function runZaloUserBridgeLiveChecks(input: ZalouserProbeInput): Pr
       key: "zalouser_sandbox_send",
       label: "Sandbox send",
       status: "pass",
+      providerMessageId: asString(asRecord(send.payload.data).messageId) ?? asString(send.payload.messageId),
       message: "Sandbox personal-session send succeeded.",
     });
     return { checks: mapProbeStepsToChecks(probe.steps), probe };
@@ -1536,6 +1561,10 @@ export async function runZaloUserBridgeLiveChecks(input: ZalouserProbeInput): Pr
 }
 
 function mapProbeStepsToChecks(steps: ChannelProbeReport["steps"]): ConnectorDiagnosticReport["checks"] {
+  for (const step of steps) {
+    step.disposition ??= step.status === "skipped" ? "blocking" : step.key.endsWith("_sandbox_cleanup") ? "advisory" : "blocking";
+    if (step.key.endsWith("_sandbox_cleanup")) step.cleanupStatus ??= step.status === "pass" ? "completed" : step.status === "skipped" ? "unsupported" : "manual_required";
+  }
   return steps
     .filter((step) => step.status !== "skipped")
     .map((step) => ({
@@ -1682,6 +1711,7 @@ function buildDiscordRuntimeProbeStep(
       key: "discord_runtime_ready",
       label: "Gateway runtime",
       status: "skipped",
+      disposition: "deferred",
       message: "Gateway runtime readiness will be checked after this draft creates a durable connection.",
     };
   }

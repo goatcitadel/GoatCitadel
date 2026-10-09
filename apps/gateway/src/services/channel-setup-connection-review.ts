@@ -23,6 +23,7 @@ interface ChannelConnectionReviewHost {
 export async function requireReviewedChannelConnection(
   host: { getIntegrationConnection(connectionId: string): Promise<IntegrationConnection> },
   draft: ChannelSetupDraft,
+  options?: { mutationPhase: "before_side_effects" },
 ): Promise<IntegrationConnection | undefined> {
   if (!draft.connectionId) return undefined;
   const connection = await host.getIntegrationConnection(draft.connectionId);
@@ -31,7 +32,9 @@ export async function requireReviewedChannelConnection(
       code: "WRITE_CONFLICT",
       message:
         "The channel connection changed. Your draft is retained. Review the current connection before testing or finalizing.",
-      details: { reason: "CHANNEL_CONNECTION_REVIEW_REQUIRED", connectionId: draft.connectionId },
+      details: { reason: "CHANNEL_CONNECTION_REVIEW_REQUIRED", connectionId: draft.connectionId,
+        ...(options ? { mutationPhase: options.mutationPhase, draftId: draft.draftId, draftRevision: draft.revision } : {}),
+      },
     });
   }
   return connection;

@@ -98,7 +98,7 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
           title: "Validate the draft",
           body: [
             paragraph(
-              "Guided test runs the readiness checks for this draft: the base URL shape, the configured token reference, and the default room id used for operator delivery.",
+              "Guided test sends one signed sandbox message to the selected room using the existing bot API. Auth and room membership are verified by that request; confirmation of receipt and signed inbound delivery remains explicit after activation.",
             ),
           ],
         },
@@ -129,7 +129,7 @@ export function createNextcloudTalkDefinition(): ChannelSetupRuntimeDefinition {
     },
     testing: {
       testVersion: "2026.04.nextcloud-talk.v1",
-      levels: ["structural", "semantic", "manual-confirm"],
+      levels: ["structural", "semantic", "live-send", "manual-confirm"],
       safePreFinalize: true,
       supportsManualConfirmation: true,
     },

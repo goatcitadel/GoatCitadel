@@ -1,8 +1,16 @@
+export { getChannelSetupJourney } from "./channel-setup-journey-service.js";
+export { acknowledgeChannelSetupTest, getChannelSetupDraftEvidence } from "./channel-setup-evidence-service.js";
+import { persistChannelSetupTestEvidence, restoreChannelSetupTestEvidence, buildCurrentChannelSetupEvidenceSignature } from "./channel-setup-evidence-service.js";
+import { protectChannelOAuthDraftMetadata } from "./channel-oauth-draft-metadata.js";
+import { evaluateChannelSetupEligibility } from "./channel-setup-eligibility.js";
+export { discoverChannelSetupTelegramTargets } from "./channel-setup-telegram-discovery.js";
 import { assertDraftRevision, custodyInitialDraftSecrets, hydrateChannelSetupDraftSecrets, sanitizeChannelSetupHydration, requireChannelSecretCustody } from "./channel-setup-draft-security.js";
 export { reviewChannelSetupConnection } from "./channel-setup-connection-review.js";
 import { randomUUID } from "node:crypto";
 import type {
   ChannelSetupDefinition,
+  ChannelCapabilities,
+  ChannelRuntimeStatus,
   ChannelSetupDraft,
   ChannelSetupDraftCreateInput,
   ChannelSetupDraftUpdateInput,
@@ -14,7 +22,7 @@ import type {
   ConnectorDiagnosticReport,
   IntegrationConnection,
 } from "@goatcitadel/contracts";
-import { SECRET_REDACTION_MARKER, ValidationError } from "@goatcitadel/contracts";
+import { SECRET_REDACTION_MARKER, ValidationError, ConflictError } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import {
   buildChannelSetupValidationResult,
@@ -27,7 +35,6 @@ import {
   requireChannelSetupDefinition,
 } from "./channel-setup-definitions.js";
 import {
-  buildChannelSetupRecentTestSignature,
   type ChannelSetupRecentTestCacheEntry,
 } from "./channel-setup-test-cache.js";
 import { preserveChannelSetupDraftSecretsForPublicUpdate } from "./channel-setup-public-projection.js";
@@ -35,7 +42,13 @@ import type { ChannelSecretCustodyService } from "./channel-secret-custody-servi
 import { requireReviewedChannelConnection } from "./channel-setup-connection-review.js";
 
 export interface ChannelSetupHost {
-  readonly storage: Pick<Storage, "channelSetupDrafts">;
+  readonly storage: Pick<Storage, "channelSetupDrafts"> & Partial<Pick<Storage, "channelSetupEvidence" | "inboundChannelEvents">>;
+  fetchWithTimeout?: (url: string, init?: RequestInit) => Promise<Response>;
+  isConnectionUrlAllowlisted?: (url: string) => boolean;
+  resolveConnectionSecret?: (config: Record<string, unknown>, directKey: string, envKey: string, catalogId: string) => string | undefined;
+  getChannelCapabilities?: (connectionId: string) => Promise<ChannelCapabilities>;
+  getChannelRuntimeStatus?: (connectionId: string) => Promise<ChannelRuntimeStatus>;
+  listChannelDeliveries?: (connectionId: string) => Promise<Array<{ deliveryId: string; status: string; providerMessageId?: string; updatedAt: string }>>;
   readonly recentChannelSetupTests: Map<string, ChannelSetupRecentTestCacheEntry>;
   commitChannelSetupConnection(
     draftId: string,
@@ -208,13 +221,14 @@ export async function updateChannelSetupDraft(
   const effectiveInput = options.reconcilePublicProjection
     ? preserveChannelSetupDraftSecretsForPublicUpdate(current, input)
     : input;
+  const protectedInput = protectChannelOAuthDraftMetadata(current, effectiveInput);
   const runtime = requireChannelSetupDefinition(current.catalogId);
-  const publicDraft = effectiveInput.draft
-    ? stripGenericSecretFields(effectiveInput.draft, runtime.definition.adapter.secretFieldKeys)
+  const publicDraft = protectedInput.draft
+    ? stripGenericSecretFields(protectedInput.draft, runtime.definition.adapter.secretFieldKeys)
     : undefined;
   host.recentChannelSetupTests.delete(draftId);
   const updated = await host.storage.channelSetupDrafts.update(draftId, {
-    ...effectiveInput,
+    ...protectedInput,
     expectedRevision: current.revision,
     ...(publicDraft ? { draft: publicDraft } : {}),
     secretState: current.secretState ?? {},
@@ -251,9 +265,17 @@ export async function validateChannelSetupDraft(
 ): Promise<ChannelSetupValidationResult> {
   const draft = await host.storage.channelSetupDrafts.get(draftId);
   assertDraftRevision(draft, expectedRevision);
-  await requireReviewedChannelConnection(host, draft);
+  await requireReviewedChannelConnection(host, draft, { mutationPhase: "before_side_effects" });
   const runtime = requireChannelSetupDefinition(draft.catalogId);
-  const issues = runtime.validate(hydrateChannelSetupDraftSecrets(host, draft));
+  let validationDraft = hydrateChannelSetupDraftSecrets(host, draft);
+  if (draft.catalogId === "channel.teams" && host.resolveConnectionSecret) {
+    // Inspect the endpoint only inside Gateway custody. Saved/env-backed URLs
+    // must receive the same migration and supported-trigger checks as new ones.
+    const connection = await buildEphemeralChannelConnection(host, validationDraft);
+    const endpoint = host.resolveConnectionSecret(connection.config, "webhookUrl", "webhookUrlEnv", draft.catalogId);
+    if (endpoint) validationDraft = { ...validationDraft, draft: { ...validationDraft.draft, webhookUrl: endpoint } };
+  }
+  const issues = runtime.validate(validationDraft);
   const result = buildChannelSetupValidationResult(draft, runtime.definition.validation.levels, issues);
   const updated = await host.storage.channelSetupDrafts.update(draftId, {
     expectedRevision: draft.revision,
@@ -301,12 +323,21 @@ export async function testChannelSetupDraft(
       checkedAt: new Date().toISOString(),
       recommendedNextAction: "Resolve the required setup fields before running a live test.",
     };
+    let fingerprint: string | undefined;
+    try {
+      const connection = await buildEphemeralChannelConnection(host, hydrateChannelSetupDraftSecrets(host, validatedDraft));
+      fingerprint = buildCurrentChannelSetupEvidenceSignature(validatedDraft, connection, host);
+    } catch (error) {
+      if (error instanceof ConflictError) throw error;
+      // Unnormalizable failed input remains an exact-owner failure barrier, never an older pass.
+      blocked.recommendedNextAction = "Required setup validation failed and its inputs could not be normalized. Correct the fields and retest.";
+    }
     const updated = await host.storage.channelSetupDrafts.update(draftId, {
       expectedRevision: validatedDraft.revision,
       lastTestedAt: blocked.checkedAt,
       lastFailureCategory: firstFailureCategory(blocked.issues),
     });
-    return { ...blocked, draftRevision: updated.revision };
+    return persistChannelSetupTestEvidence(host, validatedDraft, { ...blocked, draftRevision: updated.revision, finalizationEligibility: { allowed: false, blockingReasons: blocked.issues.map((issue) => issue.message) } }, fingerprint);
   }
 
   const runtime = requireChannelSetupDefinition(validatedDraft.catalogId);
@@ -316,11 +347,7 @@ export async function testChannelSetupDraft(
     hydratedDraft,
     runtime.definition.adapter.secretFieldKeys,
   );
-  const testSignature = buildChannelSetupRecentTestSignature(
-    validatedDraft,
-    connection,
-    runtime.definition.testing.testVersion,
-  );
+  const testSignature = buildCurrentChannelSetupEvidenceSignature(validatedDraft, connection, host);
   const liveChecks = await host.runIntegrationConnectionLiveChecks(connection, {
     includeSandboxSend: true,
     ...(draft.catalogId === "channel.discord" && !draft.connectionId
@@ -329,7 +356,7 @@ export async function testChannelSetupDraft(
   });
   await requireReviewedChannelConnection(host, validatedDraft);
   const checks = [...host.buildIntegrationConnectionChecks(connection), ...liveChecks.checks];
-  const issues = checks.flatMap((check) => mapDiagnosticCheckToChannelIssues(check));
+  const issues = [...validation.issues, ...checks.flatMap((check) => mapDiagnosticCheckToChannelIssues(check))];
   const status = issues.some((issue) => issue.level === "error")
     ? "error"
     : issues.some((issue) => issue.level === "warn")
@@ -353,7 +380,8 @@ export async function testChannelSetupDraft(
     lastTestedAt: result.checkedAt,
     lastFailureCategory: firstFailureCategory(result.issues),
   });
-  const finalResult = { ...result, draftRevision: updated.revision };
+  result.finalizationEligibility = evaluateChannelSetupEligibility(result, connection);
+  const finalResult = await persistChannelSetupTestEvidence(host, validatedDraft, { ...result, draftRevision: updated.revision }, testSignature);
   if (result.status === "error") {
     host.recentChannelSetupTests.delete(draftId);
   } else {
@@ -397,7 +425,11 @@ export async function finalizeChannelSetupDraft(
   }
   const validatedDraft = await host.storage.channelSetupDrafts.get(draftId);
   assertDraftRevision(validatedDraft, validation.draftRevision);
-  const reusableTest = await getReusableChannelSetupTestResult(host, host.recentChannelSetupTests, hydrateChannelSetupDraftSecrets(host, validatedDraft));
+  const hydratedValidated = hydrateChannelSetupDraftSecrets(host, validatedDraft);
+  const reusableConnection = await buildEphemeralChannelConnection(host, hydratedValidated);
+  const reusableTest = host.storage.channelSetupEvidence
+    ? await restoreChannelSetupTestEvidence(host, validatedDraft, reusableConnection)
+    : await getReusableChannelSetupTestResult(host, host.recentChannelSetupTests, hydratedValidated);
   if (reusableTest) {
     host.recordDevDiagnostic({
       level: "info",
@@ -418,20 +450,17 @@ export async function finalizeChannelSetupDraft(
     });
   }
   const test = reusableTest ?? (await testChannelSetupDraft(host, draftId, validatedDraft.revision));
-  if (test.status !== "ok") {
-    throw new Error(
-      test.status === "warn"
-        ? "Channel setup draft still has warning-level live checks. Resolve warnings before finalizing."
-        : "Channel setup draft still has failing live checks.",
-    );
-  }
+  const eligibility = test.finalizationEligibility ?? evaluateChannelSetupEligibility(test, reusableConnection);
+  if (!eligibility.allowed) throw new ValidationError({ message: eligibility.blockingReasons.join(" ") || "Required channel setup checks are incomplete." });
 
   const readyDraft = await host.storage.channelSetupDrafts.get(draftId);
   if (readyDraft.revision !== test.draftRevision) {
     throw new Error("Channel setup draft changed after its live test; run the test again before finalizing.");
   }
   const ephemeral = await buildEphemeralChannelConnection(host, hydrateChannelSetupDraftSecrets(host, readyDraft));
+  const priorEvidence = test.evidenceId && host.storage.channelSetupEvidence ? await host.storage.channelSetupEvidence.get(test.evidenceId) : undefined;
   const payload = {
+    ...(priorEvidence ? { setupEvidence: { ...priorEvidence, evidenceId: randomUUID(), createdAt: undefined, phase: "activation" as const, priorEvidenceId: priorEvidence.evidenceId, checkedAt: new Date().toISOString(), finalizationEligibility: eligibility } } : {}),
     connectionId: readyDraft.connectionId ?? randomUUID(),
     catalogId: ephemeral.catalogId,
     kind: ephemeral.kind,
@@ -570,10 +599,12 @@ export async function discardChannelSetupDraft(
   assertDraftRevision(current, expectedRevision);
   const deleted = await host.storage.channelSetupDrafts.delete(draftId, current.revision);
   if (deleted) {
+    try {
     for (const state of Object.values(current.secretState ?? {})) {
       if (state.secretRef && state.custody === "temporary") host.channelSecrets?.deleteTemporary(state.secretRef);
     }
     host.recentChannelSetupTests.delete(draftId);
+    } catch (cause) { throw Object.assign(new Error("The channel draft was discarded. Review credential cleanup before retrying.", { cause }), { mutationCommitted: true }); }
   }
   return deleted;
 }

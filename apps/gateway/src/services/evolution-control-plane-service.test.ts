@@ -239,6 +239,35 @@ const request: ChangePlanRuntimeConfigurationRequest = {
 };
 
 describe("EvolutionControlPlaneService", () => {
+  it("rejects a stale cancellation nonce before adapter discard or any plan transition", async () => {
+    const f = fixture();
+    const plan = await f.service.create({ actor, request });
+    const beforeEvents = f.sync.listEvents(plan.planId);
+    const transition = vi.spyOn(f.repository, "transition");
+
+    await expect(f.service.cancel(actor, plan.planId, plan.revision, "stale-action-nonce")).rejects.toThrow("nonce is missing or stale");
+
+    expect(f.adapter.discardCount).toBe(0);
+    expect(f.adapter.applyCount).toBe(0);
+    expect(transition).not.toHaveBeenCalled();
+    expect(await f.service.get(actor, plan.planId)).toEqual(plan);
+    expect(f.sync.listEvents(plan.planId)).toEqual(beforeEvents);
+  });
+
+  it.each(["explicit", "omitted"] as const)("preserves cancellation with a current or compatibility %s action nonce", async (mode) => {
+    const f = fixture();
+    const plan = await f.service.create({ actor, request });
+    const transition = vi.spyOn(f.repository, "transition");
+
+    const cancelled = mode === "omitted" ? await f.service.cancel(actor, plan.planId, plan.revision) : await f.service.cancel(actor, plan.planId, plan.revision, plan.requiredAction!.actionNonce);
+
+    expect(cancelled.status).toBe("cancelled");
+    expect(f.adapter.discardCount).toBe(1);
+    expect(f.adapter.applyCount).toBe(0);
+    expect(transition).toHaveBeenCalledExactlyOnceWith(plan.planId, expect.objectContaining({ expectedRevision: plan.revision, status: "cancelled", actionNonce: plan.requiredAction!.actionNonce }));
+    expect(f.sync.listEvents(plan.planId).filter((event) => event.eventType === "cancelled")).toHaveLength(1);
+  });
+
   it("does not invoke the mutation owner before exact confirmation", async () => {
     const { service, adapter } = fixture();
     const plan = await service.create({ actor, request });

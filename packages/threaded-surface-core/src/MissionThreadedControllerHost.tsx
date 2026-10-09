@@ -1,3 +1,4 @@
+import { WorkspaceChannelPlanReview } from "./chat/WorkspaceChannelPlanReview";
 import { createChatActiveSessionPresentation } from "./chat/controller/createChatActiveSessionPresentation";
 import { createChatChangePlanReceipt } from "./chat/controller/createChatChangePlanReceipt";
 import { createChatContextDockProps } from "./chat/controller/createChatContextDockProps";
@@ -145,6 +146,7 @@ export function MissionThreadedControllerHost({
   onOpenStartHere = () => undefined,
   onOpenPersonalitiesSettings = () => undefined,
   onOpenProviderSettings = () => undefined,
+  onReturnToChannels,
   onOpenLocalAiSettings = () => undefined,
   onOpenLibraryArtifacts = () => undefined,
   onOpenLibraryImports = () => undefined,
@@ -646,7 +648,7 @@ export function MissionThreadedControllerHost({
       metadataActions: session.metadataActions,
     }),
   };
-  return renderChatControllerFrame({
+  const frame = renderChatControllerFrame({
     lockSurface,
     renderWhileLoading,
     error: errorState.error,
@@ -673,4 +675,5 @@ export function MissionThreadedControllerHost({
     planOAuth: actions.planOAuth,
     sessionControls: session.sessionControls,
   });
+  return <><WorkspaceChannelPlanReview workspaceId={workspaceId} routeSearch={routeSearch} onReturnToChannels={onReturnToChannels} onOpenApprovals={onOpenApprovals} />{frame}</>;
 }

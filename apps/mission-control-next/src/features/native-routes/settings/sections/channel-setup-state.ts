@@ -32,13 +32,13 @@ export function beginChannelOperation() {
   owner = token;
   publish({ pending: true });
   return {
-    async write<T>(dispatch: () => Promise<T>, validate: (value: T) => void, draftId?: string): Promise<T> {
+    async write<T>(dispatch: () => Promise<T>, validate: (value: T) => void, draftId?: string, connectionId?: string, expectedRevision?: number): Promise<T> {
       try {
         const result = await dispatch();
         validate(result);
         return result;
       } catch (cause) {
-        if (!isChannelPrecommitConflict(cause, draftId))
+        if (!isChannelPrecommitConflict(cause, draftId, connectionId, expectedRevision))
           publish({
             pending: true,
             uncertain:
@@ -55,15 +55,18 @@ export function beginChannelOperation() {
     },
   };
 }
-export function isChannelPrecommitConflict(cause: unknown, draftId?: string) {
+export function isChannelPrecommitConflict(cause: unknown, draftId?: string, connectionId?: string, expectedRevision?: number) {
   if (!draftId || !isApiRequestError(cause) || cause.status !== 409 || !cause.body || typeof cause.body !== "object")
     return false;
   const body = cause.body as Record<string, unknown>;
   const details = body.details as Record<string, unknown> | undefined;
   return (
     body.code === "WRITE_CONFLICT" &&
-    details?.draftId === draftId &&
-    details.reason === "CHANNEL_DRAFT_REVISION_CONFLICT" &&
+    ((details?.draftId === draftId && details.reason === "CHANNEL_DRAFT_REVISION_CONFLICT") ||
+      (Boolean(connectionId) && Number.isSafeInteger(expectedRevision) &&
+        details?.mutationPhase === "before_side_effects" && details.draftId === draftId &&
+        details.draftRevision === expectedRevision && details.connectionId === connectionId &&
+        details.reason === "CHANNEL_CONNECTION_REVIEW_REQUIRED")) &&
     body.committed !== true &&
     body.mutationCommitted !== true &&
     details.committed !== true &&

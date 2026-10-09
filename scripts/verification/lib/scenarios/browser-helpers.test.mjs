@@ -168,6 +168,23 @@ test("browser logging retains only bounded query-free loopback network metadata"
   assert.doesNotMatch(serialized, /must-not-leak|external\.example|authorization|provider failure/u);
 });
 
+test("browser console location retains only a query-free loopback path and numeric source position", () => {
+  const page = new EventEmitter();
+  const browserLog = attachBrowserLogging(page);
+  const emit = (url) => page.emit("console", {
+    type: () => "error", text: () => "resource failed",
+    location: () => ({ url, lineNumber: 0, columnNumber: 7 }),
+  });
+  emit("http://127.0.0.1:3310/api/v1/change-plans/plan-a/responses?token=must-not-leak");
+  emit("https://external.example/private?token=must-not-leak");
+  page.emit("console", { type: () => "error", text: () => "missing location" });
+  const messages = browserLog.getSnapshot().consoleMessages;
+  assert.deepEqual(messages[0].location, { path: "/api/v1/change-plans/plan-a/responses", lineNumber: 0, columnNumber: 7 });
+  assert.equal(messages[1].location, undefined);
+  assert.equal(messages[2].location, undefined);
+  assert.doesNotMatch(JSON.stringify(messages), /must-not-leak|external\.example|token=/u);
+});
+
 test("browser logging marks native network metadata as truncated after its bounded limit", () => {
   const page = new EventEmitter();
   const browserLog = attachBrowserLogging(page);

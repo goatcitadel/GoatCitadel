@@ -53,7 +53,8 @@ describe("channel setup recent-test cache", () => {
       testVersion: draft.testVersion,
     });
 
-    expect(reusable).toBe(result);
+    expect(reusable).toEqual({ ...result, proofExpiresAt: new Date(Date.parse(result.checkedAt) + 300000).toISOString() });
+    expect(result).not.toHaveProperty("proofExpiresAt");
     expect(cache.size).toBe(1);
   });
 
@@ -79,7 +80,7 @@ describe("channel setup recent-test cache", () => {
     });
 
     expect(reusable).not.toBe(result);
-    expect(reusable).toEqual({ ...result, draftRevision: draft.revision });
+    expect(reusable).toEqual({ ...result, draftRevision: draft.revision, proofExpiresAt: new Date(Date.parse(result.checkedAt) + 300000).toISOString() });
     expect(cache.size).toBe(1);
   });
 

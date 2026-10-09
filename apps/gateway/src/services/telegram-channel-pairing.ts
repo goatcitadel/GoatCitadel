@@ -1,3 +1,4 @@
+import { resolveAllowedSenders, type TelegramChannelPairingList, type IntegrationConnection } from "@goatcitadel/contracts";
 import { randomInt } from "node:crypto";
 
 export interface TelegramPairingDecision {
@@ -112,6 +113,7 @@ export function approveTelegramPairingCode(
     actorId: match.actorId,
     displayName: match.displayName,
     configPatch: {
+      allowedSenders: [...new Set([...resolveAllowedSenders(config), match.actorId.trim().toLowerCase()])],
       telegramPairing: {
         approved,
         pending: pending.filter((item) => item.code !== normalizedCode),
@@ -190,4 +192,36 @@ function readString(value: unknown): string | undefined {
 
 function readBoolean(value: unknown): boolean {
   return value === true || (typeof value === "string" && ["true", "1", "yes", "on"].includes(value.toLowerCase()));
+}
+
+
+/** Revoke only this actor; the caller commits both trust gates with one connection CAS. */
+export function revokeTelegramPairingActor(config: Record<string, unknown>, actorId: string): Record<string, unknown> {
+  const actor = actorId.trim();
+  const state = readPairingState(config);
+  return {
+    allowedSenders: resolveAllowedSenders(config).filter((sender) => sender !== actor.toLowerCase()),
+    telegramPairing: {
+      approved: state.approved.filter((entry) => entry.actorId !== actor),
+      pending: state.pending.filter((entry) => entry.actorId !== actor),
+    },
+  };
+}
+
+export function listTelegramPairingState(connection: IntegrationConnection, now: Date = new Date()): TelegramChannelPairingList {
+  const state = readPairingState(connection.config);
+  const legacyOpen = connection.config.inboundAccessMode === "open_legacy" ||
+    (!connection.config.inboundAccessMode && resolveAllowedSenders(connection.config).length === 0) ||
+    readBoolean(connection.config.telegramAllowAllUsers) || readBoolean(connection.config.allowAllTelegramUsers);
+  return {
+    connectionId: connection.connectionId,
+    connectionRevision: connection.revision,
+    inboundAccessMode: connection.config.inboundAccessMode === "allowlist" ? "allowlist" : "open_legacy",
+    allowedSenders: [...resolveAllowedSenders(connection.config)],
+    ...(legacyOpen ? { legacyOpenWarning: "This connection retains an open legacy posture. Review sender access; a pairing change does not close an explicit allow-all setting." } : {}),
+    items: [
+      ...state.pending.filter((entry) => Date.parse(entry.expiresAt) > now.getTime()).map((entry) => ({ ...entry, status: "pending" as const })),
+      ...state.approved.map((entry) => ({ ...entry, status: "approved" as const })),
+    ].slice(0, 100),
+  };
 }

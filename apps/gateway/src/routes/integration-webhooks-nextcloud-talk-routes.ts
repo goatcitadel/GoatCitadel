@@ -109,6 +109,7 @@ export function registerNextcloudTalkWebhookRoutes(fastify: FastifyInstance): vo
           eventType: parsed.eventType,
           bindingTarget: parsed.room,
           inboundAccessConfig: connection.config,
+          acceptedConnectionRevision: connection.revision,
           message: {
             eventId: parsed.eventId,
             account: parsed.account,

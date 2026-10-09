@@ -305,6 +305,7 @@ export async function startNewDiscordRouteSession(
 export async function acceptDiscordRuntimeSlashCommand(
   host: DiscordRuntimeBridgeHost,
   input: {
+    acceptedConnectionRevision?: string;
     connectionId: string;
     target: string;
     actorId: string;
@@ -321,6 +322,7 @@ export async function acceptDiscordRuntimeSlashCommand(
   const durableCommand = await buildDurableDiscordCommand(host, input.commandText, input.metadata);
   return host.acceptInboundChannelEvent({
     channel: "discord",
+    acceptedConnectionRevision: input.acceptedConnectionRevision,
     connectionId: input.connectionId,
     idempotencyKey: `discord:${input.connectionId}:interaction:${input.sourceCommandId}`,
     eventType: "discord-gateway-slash-command",
@@ -742,6 +744,7 @@ function readString(value: unknown): string | undefined {
 export async function handleDiscordRuntimeInbound(
   host: DiscordRuntimeBridgeHost,
   input: {
+    acceptedConnectionRevision?: string;
     connectionId: string;
     target: string;
     actorId: string;
@@ -757,6 +760,7 @@ export async function handleDiscordRuntimeInbound(
   const route = await resolveDiscordInboundRoute(host, input);
   await host.acceptInboundChannelEvent({
     channel: "discord",
+    acceptedConnectionRevision: input.acceptedConnectionRevision,
     connectionId: input.connectionId,
     idempotencyKey: `discord:${input.connectionId}:${input.sourceMessageId}`,
     eventType: "discord-gateway-message",

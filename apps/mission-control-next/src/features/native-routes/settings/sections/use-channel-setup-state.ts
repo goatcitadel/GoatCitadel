@@ -4,6 +4,7 @@ import {
   fetchChannelSetupDefinitions,
   fetchChannelSetupDrafts,
   fetchIntegrationConnections,
+  fetchSettings,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { nativeLoad, nativeLoadIssues, useAsyncLoad, type Notice } from "../SettingsShared";
 import type { ChannelSetupWizardFeedback } from "../channel-setup/ChannelSetupWizard";
@@ -19,17 +20,21 @@ import { useChannelMutationState } from "./channel-setup-state";
 export function useChannelSetupState(activeWorkspaceId: string) {
   const saveRef = useRef<() => Promise<boolean>>(async () => false);
   const mutation = useChannelMutationState();
+  const evidenceOperationEpoch = useRef(0);
   const load = useCallback(async () => {
-    const [definitions, drafts, connections] = await Promise.all([
+    const [definitions, drafts, connections, runtimeSettings] = await Promise.all([
       nativeLoad("Channel definitions", fetchChannelSetupDefinitions(), { items: [] }),
       nativeLoad("Channel drafts", fetchChannelSetupDrafts({ limit: 100 }), { items: [] }),
       nativeLoad("Channel connections", fetchIntegrationConnections("channel"), { items: [] }),
+      nativeLoad("Runtime settings", fetchSettings(), null),
     ]);
     return {
-      issues: nativeLoadIssues([definitions, drafts, connections]),
+      issues: nativeLoadIssues([definitions, drafts, connections, runtimeSettings]),
       definitions: definitions.data.items,
       drafts: drafts.data.items,
       connections: connections.data.items,
+      connectorDiagnosticsEnabled: typeof runtimeSettings.data?.features?.connectorDiagnosticsV1Enabled === "boolean"
+        ? runtimeSettings.data.features.connectorDiagnosticsV1Enabled : undefined,
     };
   }, []);
   const { loading, error, data, reload, updateData } = useAsyncLoad(load, [load]);
@@ -232,6 +237,7 @@ export function useChannelSetupState(activeWorkspaceId: string) {
     saveRef,
     mutation,
     inputEpoch,
+    evidenceOperationEpoch,
   };
 }
 export type ChannelSetupState = ReturnType<typeof useChannelSetupState>;

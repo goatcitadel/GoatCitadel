@@ -451,6 +451,7 @@ describe("integration-diagnostics-service contract behavior", () => {
         }),
         createIntegrationConnection("zalouser", "channel", {
           baseUrl: "http://127.0.0.1:9876",
+          authToken: "bridge-token",
           defaultTarget: "group:ops",
         }),
       ];
@@ -556,11 +557,13 @@ describe("integration-diagnostics-service contract behavior", () => {
     );
     expect(slackWebhookOnly.checks).toEqual([
       expect.objectContaining({
-        key: "auth_live",
-        status: "warn",
-        message: expect.stringContaining("Webhook-mode Slack connections cannot be probed"),
+        key: "slack_sandbox_send",
+        status: "fail",
+        message: expect.stringContaining("outside the outbound network allowlist"),
       }),
     ]);
+
+    expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
 
     const missingRuntimeInput = await runIntegrationConnectionLiveChecks(
       host,

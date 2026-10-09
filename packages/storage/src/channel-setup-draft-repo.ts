@@ -10,6 +10,8 @@ import type {
 } from "@goatcitadel/contracts";
 import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { IntegrationConnectionRepository } from "./integration-connection-repo.js";
+import { ChannelSetupEvidenceRepository } from "./channel-setup-evidence-repo.js";
+import type { ChannelSetupEvidenceCreateInput } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface ChannelSetupDraftRow {
@@ -210,6 +212,7 @@ export class ChannelSetupDraftRepository {
     expectedRevision: number,
     input: Pick<IntegrationConnection, "connectionId" | "catalogId" | "kind" | "key" | "label" | "enabled" | "status" | "config"> & {
       lastSyncAt: string;
+      setupEvidence?: ChannelSetupEvidenceCreateInput;
     },
   ): IntegrationConnection {
     return this.withLock(draftId, () => {
@@ -229,6 +232,15 @@ export class ChannelSetupDraftRepository {
             lastSyncAt: input.lastSyncAt, lastError: null,
           })
         : connections.create(input);
+      if (input.setupEvidence) {
+        if (input.setupEvidence.phase !== "activation" || input.setupEvidence.draftId !== draftId || input.setupEvidence.catalogId !== current.catalogId) {
+          throw new ValidationError({ message: "Activation evidence must belong to this channel setup." });
+        }
+        new ChannelSetupEvidenceRepository(this.db).create({
+          ...input.setupEvidence, connectionId: connection.connectionId, connectionRevision: connection.revision,
+          activationDraftRevision: current.revision,
+        });
+      }
       this.delete(draftId, current.revision);
       return connection;
     });

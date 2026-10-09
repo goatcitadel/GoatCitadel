@@ -25,6 +25,7 @@ export function ThreadedSurfaceRoute({
   onOpenStartHere,
   onOpenPersonalitiesSettings,
   onOpenProviderSettings,
+  onReturnToChannels,
   onOpenLocalAiSettings,
   onOpenLibraryArtifacts,
   onOpenLibraryImports,
@@ -49,6 +50,7 @@ export function ThreadedSurfaceRoute({
   onOpenStartHere?: () => void;
   onOpenPersonalitiesSettings?: () => void;
   onOpenProviderSettings?: () => void;
+  onReturnToChannels?: (href: string) => void;
   onOpenLocalAiSettings?: () => void;
   onOpenLibraryArtifacts?: () => void;
   onOpenLibraryImports?: () => void;
@@ -77,6 +79,7 @@ export function ThreadedSurfaceRoute({
       onOpenStartHere={onOpenStartHere}
       onOpenPersonalitiesSettings={onOpenPersonalitiesSettings}
       onOpenProviderSettings={onOpenProviderSettings}
+      onReturnToChannels={onReturnToChannels}
       onOpenLocalAiSettings={onOpenLocalAiSettings}
       onOpenLibraryArtifacts={onOpenLibraryArtifacts}
       onOpenLibraryImports={onOpenLibraryImports}

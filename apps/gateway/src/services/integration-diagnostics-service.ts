@@ -1,3 +1,4 @@
+import { runNextcloudTalkLiveChecks } from "./nextcloud-talk-live-probes.js";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
 import { evaluateChannelInboundAccess } from "@goatcitadel/contracts";
 import type {
@@ -327,12 +328,8 @@ export function buildIntegrationConnectionChecks(
         );
         checks.push({
           key: "auth",
-          status: connectionUrlHelpers.isConnectionValueLocalUrl(baseUrl) || hasAuth ? "pass" : "warn",
-          message: connectionUrlHelpers.isConnectionValueLocalUrl(baseUrl)
-            ? "Local zca bridge does not require authentication."
-            : hasAuth
-              ? "Zalo User bridge authentication is configured."
-              : "Bridge authentication is not configured.",
+          status: hasAuth ? "pass" : "fail",
+          message: hasAuth ? "Zalo User bridge authentication is configured." : "An authenticated zca bridge credential is required.",
         });
         requireText(
           "target",
@@ -536,6 +533,8 @@ export async function runIntegrationConnectionLiveChecks(
     case "slack": {
       const token = resolveSecret("botToken", "botTokenEnv") ?? resolveSecret("token", "tokenEnv");
       if (!token) {
+        const webhookUrl = resolveSecret("webhookUrl", "webhookUrlEnv");
+        if (webhookUrl) return runGovernedWebhookLiveChecks(deps, { channelKey: "slack", webhookUrl, includeSandboxSend: options.includeSandboxSend, fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init) });
         return {
           checks: [
             {
@@ -623,17 +622,17 @@ export async function runIntegrationConnectionLiveChecks(
       });
     }
     case "google-chat":
-      return runWebhookDestinationLiveChecks({
+      return runGovernedWebhookLiveChecks(deps, {
         channelKey: "google-chat",
-        webhookUrl: deps.readConnectionConfigValue(config, "webhookUrl"),
+        webhookUrl: resolveSecret("webhookUrl", "webhookUrlEnv"),
         includeSandboxSend: options.includeSandboxSend,
         defaultThreadKey: deps.readConnectionConfigValue(config, "defaultThreadKey"),
         fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     case "teams":
-      return runWebhookDestinationLiveChecks({
+      return runGovernedWebhookLiveChecks(deps, {
         channelKey: "teams",
-        webhookUrl: deps.readConnectionConfigValue(config, "webhookUrl"),
+        webhookUrl: resolveSecret("webhookUrl", "webhookUrlEnv"),
         includeSandboxSend: options.includeSandboxSend,
         cardTitle: deps.readConnectionConfigValue(config, "cardTitle"),
         fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
@@ -684,6 +683,14 @@ export async function runIntegrationConnectionLiveChecks(
         includeSandboxSend: options.includeSandboxSend,
         fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
+    }
+    case "nextcloud-talk": {
+      const baseUrl = deps.readConnectionConfigValue(config, "baseUrl");
+      const token = resolveSecret("token", "tokenEnv");
+      const roomId = deps.readConnectionConfigValue(config, "defaultRoomId");
+      if (!baseUrl || !token || !roomId) return { checks: [{ key: "nextcloud_input", status: "fail", message: "Nextcloud Talk requires its URL, token and room before probing." }] };
+      if (!deps.isConnectionUrlAllowlisted(baseUrl)) return { checks: [{ key: "nextcloud_network", status: "fail", message: "The Nextcloud Talk host is outside the network allowlist." }] };
+      return runNextcloudTalkLiveChecks({ baseUrl, token, roomId, includeSandboxSend: options.includeSandboxSend, fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init) });
     }
     case "line": {
       const channelAccessToken =
@@ -800,18 +807,29 @@ async function runDiscordConnectionLiveChecks(
     deps.resolveConnectionSecret(config, "botToken", "botTokenEnv", connection.catalogId) ??
     deps.resolveConnectionSecret(config, "token", "tokenEnv", connection.catalogId);
   const runtimeMode = deps.readConnectionConfigValue(config, "runtimeMode") === "gateway" ? "gateway" : "bridge";
+  const webhookUrl = deps.resolveConnectionSecret(config, "webhookUrl", "webhookUrlEnv", connection.catalogId);
+  if (!token && webhookUrl && runtimeMode === "bridge") return runGovernedWebhookLiveChecks(deps, { channelKey: "discord", webhookUrl, includeSandboxSend: options.includeSandboxSend, fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init) });
   return runDiscordBotLiveChecks({
     token,
     channelId: deps.readConnectionConfigValue(config, "defaultChannelId"),
     guildId: deps.readConnectionConfigValue(config, "defaultGuildId"),
     runtimeMode,
-    webhookUrl: deps.readConnectionConfigValue(config, "webhookUrl"),
+    webhookUrl,
     includeSandboxSend: options.includeSandboxSend,
     runtimeReadiness: options.discordRuntimeReadiness,
+    deferDestination: runtimeMode === "gateway" && deps.readConnectionConfigValue(config, "guildPolicy") === "off" && !deps.readConnectionConfigValue(config, "defaultChannelId"),
     runtimeStatus:
       runtimeMode === "gateway" && options.discordRuntimeReadiness !== "deferred"
         ? deps.getDiscordRuntimeStatus(connection.connectionId)
         : undefined,
     fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
   });
+}
+
+async function runGovernedWebhookLiveChecks(deps: IntegrationDiagnosticsPort, input: Parameters<typeof runWebhookDestinationLiveChecks>[0]): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
+  if (input.webhookUrl && !deps.isConnectionUrlAllowlisted(input.webhookUrl)) {
+    const step = { key: input.channelKey.replace(/-/g, "_") + "_sandbox_send", label: "Webhook destination", status: "fail" as const, disposition: "blocking" as const, message: "The webhook destination is outside the outbound network allowlist." };
+    return { checks: [{ key: step.key, status: "fail", message: step.message }], probe: { kind: input.channelKey + "_webhook", checkedAt: new Date().toISOString(), steps: [step] } };
+  }
+  return runWebhookDestinationLiveChecks(input);
 }

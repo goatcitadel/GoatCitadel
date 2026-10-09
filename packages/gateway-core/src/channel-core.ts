@@ -626,7 +626,7 @@ const CHANNEL_RULES: Record<string, ChannelRule> = {
     supportNotes: ["Rich media sends currently require URL-backed attachments for the zca bridge."],
     requiredAnyOf: [
       ["baseUrl", "bridgeUrl", "serverUrl"],
-      ["authToken", "authTokenEnv", "authorization", "authorizationEnv"],
+      ["authToken", "authTokenEnv", "authorization", "authorizationEnv", "accessToken", "accessTokenEnv", "basicAuth", "basicAuthEnv"],
     ],
   },
 };

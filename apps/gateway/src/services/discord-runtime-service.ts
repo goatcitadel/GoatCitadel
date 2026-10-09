@@ -34,6 +34,7 @@ import {
 const log = logger.child("discord-runtime-service");
 
 type DiscordInboundEnvelope = {
+  acceptedConnectionRevision?: string;
   connectionId: string;
   target: string;
   actorId: string;
@@ -807,6 +808,7 @@ export class DiscordRuntimeService {
     await this.handleAcceptedMessage(message, async () => {
       await this.callbacks.onInboundMessage({
         connectionId: connection.connectionId,
+        acceptedConnectionRevision: connection.revision,
         target: message.channelId,
         actorId: message.author.id,
         displayName: message.author.globalName ?? message.author.displayName ?? message.author.username,
@@ -852,6 +854,7 @@ export class DiscordRuntimeService {
     const commandText = buildCommandTextFromInteraction(interaction);
     await this.handleAcceptedCommand(interaction, {
       connectionId: connection.connectionId,
+      acceptedConnectionRevision: connection.revision,
       target: interaction.channelId,
       actorId: interaction.user.id,
       displayName: interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,
@@ -911,6 +914,7 @@ export class DiscordRuntimeService {
       await this.handleAcceptedMessage(message, async () => {
         await this.callbacks.onInboundMessage({
           connectionId: connection.connectionId,
+          acceptedConnectionRevision: connection.revision,
           target: message.channelId,
           actorId: message.author.id,
           displayName: message.author.globalName ?? message.author.displayName ?? message.author.username,
@@ -930,6 +934,7 @@ export class DiscordRuntimeService {
       await this.handleAcceptedMessage(message, async () => {
         await this.callbacks.onInboundMessage({
           connectionId: connection.connectionId,
+          acceptedConnectionRevision: connection.revision,
           target: message.channelId,
           actorId: message.author.id,
           displayName: message.author.globalName ?? message.author.displayName ?? message.author.username,
@@ -974,6 +979,7 @@ export class DiscordRuntimeService {
       await this.callbacks.touchPairing(approved.pairingId);
       await this.handleAcceptedCommand(interaction, {
         connectionId: connection.connectionId,
+        acceptedConnectionRevision: connection.revision,
         target: interaction.channelId,
         actorId: interaction.user.id,
         displayName: interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,
@@ -992,6 +998,7 @@ export class DiscordRuntimeService {
     if (dmPolicy === "open") {
       await this.handleAcceptedCommand(interaction, {
         connectionId: connection.connectionId,
+        acceptedConnectionRevision: connection.revision,
         target: interaction.channelId,
         actorId: interaction.user.id,
         displayName: interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,

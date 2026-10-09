@@ -10,6 +10,7 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import {
   ConflictError,
+  CHANNEL_INGRESS_ACCEPTED_REVISION_KEY,
   INBOUND_CHANNEL_COMMAND_RESULT_MAX_BYTES,
   INBOUND_CHANNEL_EVENT_MAX_PAYLOAD_BYTES,
   INBOUND_CHANNEL_EVENT_MAX_PAYLOAD_DEPTH,
@@ -369,6 +370,27 @@ export class InboundChannelEventRepository {
     const identity = normalizeIdentity(input);
     const row = this.getByIdentityStmt.get(identity) as InboundChannelEventRow | undefined;
     return row ? mapRow(row) : undefined;
+  }
+
+  /** Bounded private input to the Gateway's redacted journey projection. */
+  public listByConnection(input: {
+    connectionId: string; channelKey?: string; since?: string; limit?: number;
+  }): InboundChannelEventRecord[] {
+    const limit = input.limit ?? 50;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new ValidationError({ field: "limit", message: "Journey limit must be from 1 through 100." });
+    }
+    const rows = this.db.prepare(`
+      SELECT * FROM inbound_channel_events WHERE connection_id = @connectionId
+        AND (CAST(@channelKey AS TEXT) IS NULL OR channel_key = @channelKey)
+        AND (CAST(@since AS TEXT) IS NULL OR accepted_at >= @since)
+      ORDER BY sequence DESC LIMIT @limit
+    `).all({
+      connectionId: normalizeRequired(input.connectionId, "connectionId"),
+      channelKey: input.channelKey === undefined ? null : normalizeRequired(input.channelKey, "channelKey"),
+      since: input.since === undefined ? null : normalizeTimestamp(input.since, "since"), limit,
+    }) as InboundChannelEventRow[];
+    return rows.map(mapRow);
   }
 
   public accept(input: InboundChannelEventAcceptInput, acceptedAt?: string): InboundChannelEventAcceptResult {
@@ -778,13 +800,17 @@ function mapRow(row: InboundChannelEventRow): InboundChannelEventRecord {
 }
 
 function assertPayloadMatch(existing: InboundChannelEventRecord, input: NormalizedAcceptance): void {
+  // The accepted generation is authority metadata, not part of the provider's
+  // deduplication identity. Rotation must retain the original acceptance record.
+  const existingJson = normalizePayload(existing.payload);
+  const sameProviderPayload = providerPayload(existingJson) === providerPayload(input.payloadJson);
   if (
     existing.laneKey !== input.laneKey ||
     existing.transport !== input.transport ||
     existing.dispatchKind !== input.dispatchKind ||
     (existing.providerSourceId ?? null) !== input.providerSourceId ||
-    existing.payloadHash !== input.payloadHash ||
-    JSON.stringify(existing.payload) !== input.payloadJson
+    createHash("sha256").update(existingJson).digest("hex") !== existing.payloadHash ||
+    !sameProviderPayload
   ) {
     throw new ConflictError({
       code: "STATE_CONFLICT",
@@ -803,6 +829,12 @@ function assertPayloadMatch(existing: InboundChannelEventRecord, input: Normaliz
       },
     });
   }
+}
+
+function providerPayload(json: string): string {
+  const payload = JSON.parse(json) as Record<string, unknown>;
+  delete payload[CHANNEL_INGRESS_ACCEPTED_REVISION_KEY];
+  return JSON.stringify(payload);
 }
 
 function eventIdConflict(existing: InboundChannelEventRecord, input: NormalizedAcceptance): ConflictError {

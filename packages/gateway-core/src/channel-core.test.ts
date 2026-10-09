@@ -275,6 +275,8 @@ describe("describeChannelCapabilities", () => {
     );
   });
 
+  it("recognizes every already supported Zalo User credential alias without enabling inbound routing", () => { for (const key of ["authToken", "authTokenEnv", "authorization", "authorizationEnv", "accessToken", "accessTokenEnv", "basicAuth", "basicAuthEnv"]) { const capabilities = describeChannelCapabilities("zalouser", { baseUrl: "https://zca.example.test", [key]: "configured" }); expect(capabilities.setupReady, key).toBe(true); expect(capabilities.inboundModes).toEqual(["none"]); } expect(describeChannelCapabilities("zalouser", { baseUrl: "https://zca.example.test" }).setupReady).toBe(false); });
+
   it("describes static channel rules and setup diagnostics", () => {
     const staticChannels = [
       ["google-chat", { webhookUrl: "https://chat.test" }],

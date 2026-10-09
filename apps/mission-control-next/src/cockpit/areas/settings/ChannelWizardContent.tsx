@@ -1,5 +1,6 @@
 import type { ChannelSetupRichBlock, ChannelSetupStepDefinition } from "@goatcitadel/contracts";
 import type { ChannelSetupWizardFeedback } from "../../../features/native-routes/settings/channel-setup/channel-wizard-model";
+import { ChannelCheckFeedback } from "../../../features/native-routes/settings/channel-setup/ChannelCheckFeedback";
 
 export function ChannelRichBlocks({ blocks = [] }: { blocks?: ChannelSetupRichBlock[] }) {
   return (
@@ -8,7 +9,8 @@ export function ChannelRichBlocks({ blocks = [] }: { blocks?: ChannelSetupRichBl
         if (block.kind === "paragraph") return <p key={index}>{block.text}</p>;
         if (block.kind === "note")
           return (
-            <aside key={index} className="rounded-md border border-line p-3">
+            <aside key={index} className={`rounded-md border border-line p-3 ${block.tone === "critical" ? "text-status-failed" : block.tone === "warning" ? "text-status-waiting" : "text-fg-secondary"}`}>
+              <span className="mr-2 font-semibold">{block.tone === "critical" ? "Required attention" : block.tone === "warning" ? "Warning" : block.tone === "success" ? "Success" : "Information"}</span>
               <strong className="text-fg">{block.title}</strong>
               <p>{block.text}</p>
             </aside>
@@ -81,46 +83,9 @@ export function ChannelStepHelp({ step }: { step: ChannelSetupStepDefinition }) 
     </>
   );
 }
-export function ChannelFeedback({
-  feedback,
-  error,
-}: {
-  feedback?: ChannelSetupWizardFeedback | null;
-  error?: string | null;
+export function ChannelFeedback({ feedback, error, disabled, onAcknowledge }: {
+  feedback?: ChannelSetupWizardFeedback | null; error?: string | null; disabled?: boolean;
+  onAcknowledge?: (kind: "cleanup" | "receipt") => Promise<void>;
 }) {
-  return (
-    <>
-      {error ? (
-        <p role="alert" className="text-sm text-status-failed">
-          {error}
-        </p>
-      ) : null}
-      {feedback ? (
-        <section aria-label="Channel check result" className="space-y-2 rounded-md border border-line p-3 text-sm">
-          <h4 className="font-medium">
-            {feedback.kind === "test" ? "Live test" : "Validation"}: {feedback.status}
-          </h4>
-          <ul className="space-y-1">
-            {feedback.issues.map((issue, index) => (
-              <li key={index}>{issue.message}</li>
-            ))}
-          </ul>
-          {feedback.probe ? (
-            <section aria-label="Live connection probe">
-              <h5 className="font-medium">Live connection probe</h5>
-              <ul className="space-y-2">
-                {feedback.probe.steps.map((step) => (
-                  <li key={step.key}>
-                    <strong>{step.label}</strong> · {step.status}
-                    <p>{step.message}</p>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
-          {feedback.recommendedNextAction ? <p>Next: {feedback.recommendedNextAction}</p> : null}
-        </section>
-      ) : null}
-    </>
-  );
+  return <ChannelCheckFeedback feedback={feedback} error={error} disabled={disabled} onAcknowledge={onAcknowledge} />;
 }

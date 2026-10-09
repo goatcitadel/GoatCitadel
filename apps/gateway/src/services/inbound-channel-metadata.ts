@@ -1,4 +1,4 @@
-import { redactSecretText } from "@goatcitadel/contracts";
+import { CHANNEL_INGRESS_ACCEPTED_REVISION_KEY, redactSecretText } from "@goatcitadel/contracts";
 
 export function sanitizeMetadata(value: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
   if (!value) {
@@ -6,6 +6,7 @@ export function sanitizeMetadata(value: Record<string, unknown> | undefined): Re
   }
   const sanitized: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
+    if (key === CHANNEL_INGRESS_ACCEPTED_REVISION_KEY) continue;
     const normalizedKey = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
     // callbackQueryId, replyToken, interactionToken, and responseUrl are
     // provider reply capabilities. Routes strip them too, but the durable

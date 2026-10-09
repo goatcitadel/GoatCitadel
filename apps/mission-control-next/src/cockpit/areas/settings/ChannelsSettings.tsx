@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { createChannelPlanReviewHandoff, channelPlanReviewHref } from "@goatcitadel/mission-control-shared/api/channel-plan-handoff";
+import { ChannelEntryControls } from "../../../features/native-routes/settings/channel-setup/ChannelEntryControls";
+import { useChannelReturnNavigation } from "../../../features/native-routes/settings/sections/use-channel-return-navigation";
 import { useChannelSettings } from "../../../features/native-routes/settings/sections/use-channel-settings";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
@@ -8,8 +11,9 @@ import { ChannelOperations } from "./ChannelOperations";
 import { channelInputClass } from "./ChannelWizardFields";
 
 export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
-  const { navigate } = useCockpitRoute();
-  const owner = useChannelSettings(workspaceId, () => navigate("/chat"));
+  const { navigate, search } = useCockpitRoute();
+  const owner = useChannelSettings(workspaceId, (plan) => navigate(channelPlanReviewHref(createChannelPlanReviewHandoff(plan))));
+  useChannelReturnNavigation(owner, search);
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(20);
   const { data, selectedDraft, selectedDefinition, channelDraft, selectedConnection } = owner;
@@ -96,11 +100,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
             >
               Start guided setup
             </Button>
-            {owner.createCatalogId === "channel.slack" ? (
-              <Button disabled={disabled} onClick={() => void owner.handleStartSlackOAuth()}>
-                Connect Slack with OAuth
-              </Button>
-            ) : null}
+
           </div>
         </section>
       ) : owner.panel === "editor" ? (
@@ -187,7 +187,11 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                 channelDraft.setValue((current) => ({ ...current, advancedText }))
               }
               feedback={owner.validationRevision === selectedDraft.revision ? owner.validationResult : null}
-              busyAction={disabled ? (owner.busyAction ?? "save") : null}
+              draftEvidence={owner.draftEvidence}
+              draftEvidenceLoading={owner.draftEvidenceLoading}
+              draftEvidenceError={owner.draftEvidenceError}
+              busyAction={owner.mutation.pending ? owner.busyAction : null}
+              mutationBlocked={disabled}
               reviewRequired={owner.needsConnectionReview || channelDraft.hasRemoteChanges}
               onValuesChange={(values) => {
                 owner.setDraftValues(values);
@@ -206,20 +210,8 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
               onValidate={owner.handleValidate}
               onTest={owner.handleTest}
               onFinalize={owner.handleFinalize}
-              supplementaryActions={
-                <>
-                  {selectedDraft.catalogId === "channel.slack" ? (
-                    <Button disabled={disabled} onClick={() => void owner.handleStartSlackOAuth()}>
-                      Connect Slack with OAuth
-                    </Button>
-                  ) : null}
-                  {selectedDraft.catalogId === "channel.telegram" ? (
-                    <Button disabled={disabled} onClick={() => void owner.handleDiscoverTelegramTargets()}>
-                      Detect Telegram chats
-                    </Button>
-                  ) : null}
-                </>
-              }
+              onAcknowledgeTest={owner.handleAcknowledgeTest}
+              supplementaryActions={<ChannelEntryControls owner={owner} />}
             />
           ) : (
             <p>The selected draft or its setup definition is unavailable. Refresh the Gateway catalog.</p>
@@ -302,7 +294,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
               <Button disabled={disabled} onClick={() => void owner.editConnection()}>
                 Edit channel setup
               </Button>
-              <ChannelOperations key={selectedConnection.connectionId} connection={selectedConnection} />
+              <ChannelOperations key={selectedConnection.connectionId} connection={selectedConnection} onUpdated={owner.reload} connectorDiagnosticsEnabled={data?.connectorDiagnosticsEnabled} />
               <details className="text-sm">
                 <summary className="cursor-pointer">Connection identity</summary>
                 <p className="break-all">

@@ -425,9 +425,9 @@ export function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
       const hasConfiguredWebhook = Boolean(
         readString(draft.draft, "webhookUrl") || draft.hydration?.fieldState.webhookUrl === "configured",
       );
-      if (!defaultChannelId) {
+      if (!defaultChannelId && !(runtimeMode === "gateway" && guildPolicy === "off")) {
         issues.push(requiredFieldIssue("defaultChannelId", "Default channel ID is required."));
-      } else if (!/^\d{10,}$/.test(defaultChannelId)) {
+      } else if (defaultChannelId && !/^\d{10,}$/.test(defaultChannelId)) {
         issues.push(
           malformedFieldIssue("defaultChannelId", "Default channel ID should look like a Discord numeric ID."),
         );

@@ -86,7 +86,7 @@ describe("channel setup definitions", () => {
     const definition = requireChannelSetupDefinition("channel.discord").definition;
     const createBot = definition.wizard.steps.find((step) => step.id === "create-bot");
     const installBot = definition.wizard.steps.find((step) => step.id === "install-bot");
-    const collectValues = definition.wizard.steps.find((step) => step.id === "collect-values");
+    const collectValues = definition.wizard.steps.find((step) => step.id === "collect-values-destinations");
     const testStep = definition.wizard.steps.find((step) => step.id === "test");
     const finishStep = definition.wizard.steps.find((step) => step.id === "finish");
     const content = JSON.stringify(definition.wizard);
@@ -381,24 +381,26 @@ describe("channel setup definitions", () => {
       "intro",
       "instruction",
       "field-collection",
+      "field-collection",
       "test",
       "confirm",
+      "instruction",
     ]);
     const testStep = definition.wizard.steps.find((step) => step.kind === "test");
     expect(testStep?.title).toBe("Validate the draft");
     expect(JSON.stringify(testStep)).toMatch(/dry-run/i);
-    expect(definition.wizard.contentVersion).toBe("2026.08.ntfy.outbound.v2");
+    expect(definition.wizard.contentVersion).toBe("2026.08.ntfy.outbound.v2.guided-2026-10");
   });
 
   it("gives guided Nextcloud Talk setup a test step and a finalize confirmation step", () => {
     const definition = requireChannelSetupDefinition("channel.nextcloud-talk").definition;
 
-    expect(definition.wizard.steps.map((step) => step.kind)).toEqual(["intro", "field-collection", "test", "confirm"]);
+    expect(definition.wizard.steps.map((step) => step.kind)).toEqual(["intro", "field-collection", "field-collection", "field-collection", "test", "confirm", "instruction"]);
     const testStep = definition.wizard.steps.find((step) => step.kind === "test");
     expect(testStep?.title).toBe("Validate the draft");
     expect(JSON.stringify(testStep)).toMatch(/room/i);
-    expect(JSON.stringify(testStep)).not.toMatch(/sandbox send|live send/i);
-    expect(definition.wizard.contentVersion).toBe("2026.08.nextcloud-talk.v2");
+    expect(definition.testing.levels).toContain("live-send");
+    expect(definition.wizard.contentVersion).toBe("2026.08.nextcloud-talk.v2.guided-2026-10");
   });
 
   it("ends every previously test-terminal guided wizard on a finalize confirmation step", () => {
@@ -415,15 +417,16 @@ describe("channel setup definitions", () => {
     for (const { catalogId, contentVersion } of expectations) {
       const definition = requireChannelSetupDefinition(catalogId).definition;
       const steps = definition.wizard.steps;
-      const finishStep = steps[steps.length - 1];
+      const finishStep = steps[steps.length - 2];
+      expect(steps.at(-1)?.stage).toBe("first_message");
       expect(finishStep?.kind, `${catalogId} must end on a confirm step`).toBe("confirm");
       expect(finishStep?.id, `${catalogId} finalize step id`).toBe("finish");
-      expect(steps[steps.length - 2]?.kind, `${catalogId} keeps its test step just before finalize`).toBe("test");
+      expect(steps[steps.length - 3]?.kind, `${catalogId} keeps its test step just before finalize`).toBe("test");
       expect(
         finishStep?.successCriteria?.length ?? 0,
         `${catalogId} confirm step needs success criteria`,
       ).toBeGreaterThan(0);
-      expect(definition.wizard.contentVersion, `${catalogId} contentVersion must be bumped`).toBe(contentVersion);
+      expect(definition.wizard.contentVersion, `${catalogId} contentVersion must be bumped`).toBe(contentVersion + ".guided-2026-10");
     }
   });
 
@@ -616,7 +619,7 @@ describe("channel setup definitions", () => {
     const signal = requireChannelSetupDefinition("channel.signal");
     const wizardText = JSON.stringify(signal.definition.wizard);
 
-    expect(signal.definition.wizard.contentVersion).toBe("2026.08.signal.v4");
+    expect(signal.definition.wizard.contentVersion).toBe("2026.08.signal.v4.guided-2026-10");
     expect(signal.definition.wizard.introSummary).toContain("outbound-only");
     expect(wizardText).toContain("no acknowledgement or replay contract");
     expect(wizardText).not.toContain('"key":"inboundEnabled"');

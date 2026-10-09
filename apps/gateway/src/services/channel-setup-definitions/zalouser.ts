@@ -25,7 +25,7 @@ export function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
       difficulty: "advanced",
       manualModePolicy: "available-secondary",
       introSummary:
-        "Configure a zca bridge URL, optional bearer token, optional profile, and a default Zalo personal-session target.",
+        "Configure a zca bridge URL, bearer token, optional profile, and a default Zalo personal-session target.",
       prerequisites: [
         "A reachable zca bridge endpoint.",
         "A sandbox personal or group target for manual confirmation.",
@@ -64,7 +64,7 @@ export function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
               label: "Bearer token env var",
               type: "text",
               required: false,
-              explanation: "Optional env var name for the zca bearer token when the bridge is not local or open.",
+              explanation: "Name of the env var holding the required zca bearer token.",
               looksLike: "ZALOUSER_AUTH_TOKEN",
               canChangeLater: true,
               placeholder: "ZALOUSER_AUTH_TOKEN",
@@ -119,7 +119,7 @@ export function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
             ),
           ],
           successCriteria: [
-            "The zca bridge URL is reachable with the configured profile and optional bearer token.",
+            "The zca bridge URL is reachable with the configured profile and bearer token.",
             "The sandbox text send reached the default personal or group target.",
             "You confirmed delivery manually in the Zalo conversation.",
           ],
@@ -159,7 +159,7 @@ export function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
       lastReviewedAt: "2026-04-01",
       volatility: "high",
       deprecationRisk: "medium",
-      preferredPathLabel: "zca bridge URL + optional bearer token",
+      preferredPathLabel: "zca bridge URL + bearer token",
     },
   };
 
@@ -263,6 +263,9 @@ export function createZaloUserDefinition(): ChannelSetupRuntimeDefinition {
         issues.push(requiredFieldIssue("baseUrl", "Bridge URL is required."));
       } else if (!looksLikeHttpUrl(baseUrl)) {
         issues.push(malformedFieldIssue("baseUrl", "Bridge URL should start with http:// or https://."));
+      }
+      if (!readString(draft.draft, "authToken") && !readString(draft.draft, "authTokenEnv") && draft.hydration?.fieldState.authToken !== "configured" && draft.hydration?.fieldState.authTokenEnv !== "configured") {
+        issues.push(requiredFieldIssue("authToken", "An authenticated zca bridge credential is required."));
       }
       if (!readString(draft.draft, "defaultTarget")) {
         issues.push(requiredFieldIssue("defaultTarget", "Default recipient is required."));

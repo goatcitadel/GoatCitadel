@@ -8,6 +8,9 @@ export interface ChannelProbeStepRecord {
   status: ChannelProbeStepStatus;
   message: string;
   failureCategory?: ChannelSetupFailureCategory;
+  disposition?: "blocking" | "advisory" | "deferred";
+  providerMessageId?: string;
+  cleanupStatus?: "completed" | "manual_required" | "unsupported" | "unknown";
 }
 
 export interface ChannelProbeReport {

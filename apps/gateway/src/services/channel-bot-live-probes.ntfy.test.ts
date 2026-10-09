@@ -34,7 +34,7 @@ describe("ntfy channel live probes", () => {
       mode: "http_publish",
       steps: [
         { key: "ntfy_sandbox_send", status: "pass" },
-        { key: "ntfy_sandbox_cleanup", status: "skipped" },
+        { key: "ntfy_sandbox_cleanup", status: "skipped", disposition: "deferred", cleanupStatus: "unsupported" },
       ],
     });
     expect(result.checks).toEqual([expect.objectContaining({ key: "ntfy_sandbox_send", status: "pass" })]);
@@ -55,7 +55,7 @@ describe("ntfy channel live probes", () => {
     expect(fetcher).not.toHaveBeenCalled();
     expect(nonDestructive.checks).toEqual([]);
     expect(nonDestructive.probe.steps).toEqual([
-      expect.objectContaining({ key: "ntfy_sandbox_send", status: "skipped" }),
+      expect.objectContaining({ key: "ntfy_sandbox_send", status: "skipped", disposition: "blocking" }),
     ]);
     expect(dryRun.probe).toMatchObject({
       mode: "dry_run",
@@ -63,6 +63,7 @@ describe("ntfy channel live probes", () => {
         expect.objectContaining({
           key: "ntfy_sandbox_send",
           status: "skipped",
+          disposition: "deferred",
           message: expect.stringContaining("dry-run"),
         }),
       ],

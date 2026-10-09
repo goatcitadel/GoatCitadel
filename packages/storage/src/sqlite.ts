@@ -1,3 +1,4 @@
+import { createChannelGuidedSetupSchema } from "./channel-guided-setup-schema.js";
 import { createGovernedRemediationParentReservationSchema } from "./governed-remediation-parent-reservation-schema.js";
 import { upgradeGovernedRemediationResumeVersion } from "./governed-remediation-resume-version.js";
 import { createGovernedRemediationParentResolutionSchema } from "./governed-remediation-parent-resolution-schema.js";
@@ -7361,6 +7362,7 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           `);
         },
       },
+      { version: 252, name: "channel_guided_setup_evidence_and_oauth_attempts", up: createChannelGuidedSetupSchema },
     ],
   },
 ];

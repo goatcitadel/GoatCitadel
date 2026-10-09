@@ -1,3 +1,4 @@
+import { validNavigationId } from "@goatcitadel/mission-control-shared/api/channel-plan-handoff";
 /* eslint-disable max-lines -- Route metadata intentionally centralizes the release surface contract. */
 import type { ChatMode } from "@goatcitadel/contracts";
 
@@ -59,6 +60,11 @@ export type SettingsSection =
 export type ReleaseSurfaceStatus = "ship" | "hide" | "experimental" | "needs_release_polish";
 
 export interface AppRoute {
+  channelPlan?: string;
+  channelDraft?: string;
+  channelRevision?: number;
+  channelWorkspace?: string;
+  channelConnection?: string;
   area: PrimaryArea;
   mode?: ChatMode; // unified-surface conversation mode (chat area only)
   section?: CoworkSection | LibrarySection | OpsSection | SettingsSection;
@@ -1249,7 +1255,15 @@ export function normalizeAppRoute(route: AppRoute): AppRoute {
     return normalizeAppRoute({ ...route, area: "chat", mode: undefined, section: undefined });
   }
 
+  const channelsRoute = route.area === "chat" || (route.area === "settings" && route.section === "channels");
   const base = {
+    ...(channelsRoute ? {
+      ...(validNavigationId(route.channelPlan) ? { channelPlan: route.channelPlan } : {}),
+      ...(validNavigationId(route.channelDraft) ? { channelDraft: route.channelDraft } : {}),
+      ...(validNavigationId(route.channelWorkspace) ? { channelWorkspace: route.channelWorkspace } : {}),
+      ...(route.area === "chat" && Number.isSafeInteger(route.channelRevision) && (route.channelRevision ?? 0) > 0 ? { channelRevision: route.channelRevision } : {}),
+      ...(route.area === "settings" && validNavigationId(route.channelConnection) ? { channelConnection: route.channelConnection } : {}),
+    } : {}),
     area: route.area,
     sessionId: route.sessionId,
     turnId: route.turnId,
@@ -1306,6 +1320,11 @@ export function parseAppRoute(input: string | URL): AppRoute {
   const parsedMode = rawMode === "chat" ? "chat" : undefined;
   const nextRoute: AppRoute = normalizeAppRoute({
     area: routeArea,
+    channelPlan: readParam(params, "channelPlan"),
+    channelDraft: readParam(params, "channelDraft"),
+    channelWorkspace: readParam(params, "channelWorkspace"),
+    channelConnection: readParam(params, "channelConnection"),
+    channelRevision: /^[1-9][0-9]*$/.test(params.get("channelRevision") ?? "") ? Number(params.get("channelRevision")) : undefined,
     section: routeArea === "projects" ? undefined : (routeSection as AppRoute["section"]),
     mode: parsedMode,
     sessionId: readParam(params, "sessionId"),
@@ -1330,6 +1349,11 @@ export function parseAppRoute(input: string | URL): AppRoute {
 export function buildAppHref(route: AppRoute): string {
   const next = normalizeAppRoute(route);
   const params = new URLSearchParams();
+  writeParam(params, "channelPlan", next.channelPlan);
+  writeParam(params, "channelDraft", next.channelDraft);
+  writeParam(params, "channelWorkspace", next.channelWorkspace);
+  writeParam(params, "channelConnection", next.channelConnection);
+  if (next.channelRevision) params.set("channelRevision", String(next.channelRevision));
   writeParam(params, "sessionId", next.sessionId);
   writeParam(params, "turnId", next.turnId);
   writeParam(params, "runId", next.runId);

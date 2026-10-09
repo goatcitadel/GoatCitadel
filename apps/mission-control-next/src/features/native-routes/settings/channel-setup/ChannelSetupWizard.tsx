@@ -1,9 +1,11 @@
+import { useState } from "react";
+import { Dialog } from "../../../../cockpit/ui/Dialog";
+import { ChannelWizardFields } from "./ChannelWizardFieldCollection";
+import { ChannelCheckFeedback } from "./ChannelCheckFeedback";
+import { ChannelDraftEvidencePanel } from "./ChannelDraftEvidencePanel";
 import type {
-  ChannelSetupDraft,
-  ChannelSetupFieldDefinition,
   ChannelSetupRichBlock,
   ChannelSetupStepDefinition,
-  ChannelSetupIssue,
 } from "@goatcitadel/contracts";
 import { Check, CheckCircle2, ChevronLeft, ChevronRight, FileJson2, Play, Save, ShieldCheck } from "lucide-react";
 import { NativeButton } from "../../primitives";
@@ -11,16 +13,17 @@ import { SettingsButtonRow } from "../SettingsShared";
 import { useChannelWizard } from "./use-channel-wizard";
 import {
   isStepComplete,
-  updateFieldValue,
   humanizeStepKind,
+  channelStageLabel,
+  wizardValuesWithDefaults,
   finalizeDisabledReason,
   formatJson,
-  SECRET_REDACTION_MARKER,
   type ChannelSetupWizardProps,
   type ChannelSetupWizardFeedback,
 } from "./channel-wizard-model";
 export type { ChannelSetupWizardFeedback } from "./channel-wizard-model";
 export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
+  const [reviewTest, setReviewTest] = useState<string | null>(null);
   const {
     definition,
     draft,
@@ -42,6 +45,7 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
     activeStepIndex,
     activeStep,
     anyBusy,
+    actionsBlocked,
     visitedStepIds,
     checkedItems,
     setCheckedItems,
@@ -60,6 +64,7 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
     handleFinalize,
     moveForward,
   } = useChannelWizard(props);
+  const testSignature = JSON.stringify([props.scopeId, props.definition.catalog.catalogId, props.draft.draftId, props.draft.revision, props.values, advancedMode, advancedJson, props.label, props.enabled]);
   if (!activeStep) {
     return <p className="mc-next-settings-field-note">This channel definition has no setup steps.</p>;
   }
@@ -92,6 +97,8 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
         </dl>
       </header>
 
+      <details open={definition.wizard.manualModePolicy === "expert-forward" || advancedMode}>
+      <summary>Advanced setup options</summary>
       <div className="mc-next-channel-wizard-mode" role="group" aria-label="Setup editor mode">
         <NativeButton
           variant={advancedMode ? "secondary" : "outline"}
@@ -116,6 +123,7 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
           Advanced JSON
         </NativeButton>
       </div>
+      </details>
 
       <div className="mc-next-channel-wizard-identity">
         <label className="mc-next-settings-field">
@@ -150,6 +158,7 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
           feedback={feedback}
           dirty={dirty}
           reviewRequired={reviewRequired}
+          mutationBlocked={props.mutationBlocked}
           onChange={(next) => {
             setAdvancedJson(next);
             setLocalError(null);
@@ -157,9 +166,10 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
           }}
           onSave={() => void handleSave()}
           onValidate={() => void handleValidate()}
-          onTest={() => void handleTest()}
+          onTest={() => setReviewTest(testSignature)}
           onFinalize={() => void handleFinalize()}
           busyAction={busyAction}
+          onAcknowledgeTest={props.onAcknowledgeTest}
         />
       ) : (
         <div className="mc-next-channel-wizard-layout">
@@ -207,6 +217,7 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
               <h4 ref={stepHeadingRef} id={`channel-step-${activeStep.id}`} tabIndex={-1}>
                 {activeStep.title}
               </h4>
+              <p>{channelStageLabel(activeStep)}</p>
               {activeStep.description ? <span>{activeStep.description}</span> : null}
             </header>
 
@@ -218,20 +229,17 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
               disabled={anyBusy}
               onChange={(key, checked) => setCheckedItems((current) => ({ ...current, [key]: checked }))}
             />
-            <FieldCollection
+            <ChannelWizardFields
               draft={draft}
               fields={activeStep.fields}
-              values={values}
+              values={wizardValuesWithDefaults(definition, values)}
               issues={feedback?.issues ?? []}
               disabled={anyBusy}
-              onChange={(field, next) => {
-                onValuesChange(updateFieldValue(draft, values, field, next));
-                setLocalError(null);
-              }}
+              onChange={(next) => { onValuesChange(next); setLocalError(null); }}
             />
             <Troubleshooting step={activeStep} />
             <SuccessCriteria items={activeStep.successCriteria} />
-            <WizardFeedback feedback={feedback} localError={localError} />
+            <ChannelCheckFeedback feedback={feedback} error={localError} disabled={actionsBlocked} onAcknowledge={props.onAcknowledgeTest} />
 
             <footer className="mc-next-channel-wizard-footer">
               <NativeButton
@@ -243,8 +251,8 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
                 Back
               </NativeButton>
               <SettingsButtonRow>
-                {supplementaryActions}
-                <NativeButton variant="secondary" disabled={anyBusy} onClick={() => void handleSave()}>
+                {activeStep.stage === "identity" || activeStep.stage === "destinations_access" || activeStep.kind === "field-collection" ? supplementaryActions : null}
+                <NativeButton variant="secondary" disabled={actionsBlocked} onClick={() => void handleSave()}>
                   <Save size={16} />
                   {busyAction === "save" ? "Saving…" : "Save draft"}
                 </NativeButton>
@@ -252,7 +260,7 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
                   <>
                     <NativeButton
                       variant="secondary"
-                      disabled={anyBusy || reviewRequired}
+                      disabled={actionsBlocked}
                       onClick={() => void handleValidate()}
                     >
                       <ShieldCheck size={16} />
@@ -260,8 +268,8 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
                     </NativeButton>
                     <NativeButton
                       variant="outline"
-                      disabled={anyBusy || reviewRequired}
-                      onClick={() => void handleTest()}
+                      disabled={actionsBlocked}
+                      onClick={() => setReviewTest(testSignature)}
                     >
                       <Play size={16} />
                       {busyAction === "test" ? "Testing…" : "Run live test"}
@@ -272,7 +280,7 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
                   <NativeButton
                     variant="default"
                     disabled={
-                      anyBusy || reviewRequired || dirty || feedback?.kind !== "test" || feedback.status !== "ok"
+                      actionsBlocked || Boolean(finalizeDisabledReason(dirty, feedback))
                     }
                     title={finalizeDisabledReason(dirty, feedback)}
                     onClick={() => void handleFinalize()}
@@ -281,7 +289,7 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
                     {busyAction === "finalize" ? "Finalizing…" : "Finalize connection"}
                   </NativeButton>
                 ) : activeStepIndex < visibleSteps.length - 1 ? (
-                  <NativeButton variant="default" disabled={anyBusy} onClick={() => void moveForward()}>
+                  <NativeButton variant="default" disabled={actionsBlocked} onClick={() => void moveForward()}>
                     Continue
                     <ChevronRight size={16} />
                   </NativeButton>
@@ -291,6 +299,16 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
           </article>
         </div>
       )}
+      <ChannelDraftEvidencePanel evidence={props.draftEvidence} loading={props.draftEvidenceLoading} error={props.draftEvidenceError} />
+      <Dialog open={reviewTest !== null} title="Run a live channel test?"
+        description="Review this draft and destination. The Gateway may post a visible sandbox message; this action does not activate the connection."
+        onOpenChange={(open) => { if (!open) setReviewTest(null); }}>
+        <p>{definition.catalog.label} · {label || "Unnamed draft"} · revision {draft.revision}</p>
+        {reviewTest !== testSignature ? <p role="alert">The reviewed input changed. Close and review the current draft.</p> : null}
+        <NativeButton disabled={actionsBlocked || reviewTest !== testSignature}
+          onClick={() => { setReviewTest(null); void handleTest(); }}>Run reviewed live test</NativeButton>
+        <NativeButton onClick={() => setReviewTest(null)}>Cancel test</NativeButton>
+      </Dialog>
     </section>
   );
 }
@@ -302,12 +320,14 @@ function AdvancedJsonEditor({
   feedback,
   dirty,
   reviewRequired,
+  mutationBlocked = false,
   busyAction,
   onChange,
   onSave,
   onValidate,
   onTest,
   onFinalize,
+  onAcknowledgeTest,
 }: {
   value: string;
   disabled: boolean;
@@ -315,12 +335,14 @@ function AdvancedJsonEditor({
   feedback?: ChannelSetupWizardFeedback | null;
   dirty: boolean;
   reviewRequired: boolean;
+  mutationBlocked?: boolean;
   busyAction?: ChannelSetupWizardProps["busyAction"];
   onChange: (next: string) => void;
   onSave: () => void;
   onValidate: () => void;
   onTest: () => void;
   onFinalize: () => void;
+  onAcknowledgeTest?: (kind: "cleanup" | "receipt") => Promise<void>;
 }) {
   return (
     <article className="mc-next-channel-wizard-advanced">
@@ -343,23 +365,23 @@ function AdvancedJsonEditor({
           spellCheck={false}
         />
       </label>
-      <WizardFeedback feedback={feedback} localError={localError} />
+      <ChannelCheckFeedback feedback={feedback} error={localError} disabled={disabled || reviewRequired || mutationBlocked} onAcknowledge={onAcknowledgeTest} />
       <SettingsButtonRow>
-        <NativeButton variant="secondary" disabled={disabled} onClick={onSave}>
+        <NativeButton variant="secondary" disabled={disabled || reviewRequired || mutationBlocked} onClick={onSave}>
           <Save size={16} />
           {busyAction === "save" ? "Saving…" : "Save draft"}
         </NativeButton>
-        <NativeButton variant="secondary" disabled={disabled || reviewRequired} onClick={onValidate}>
+        <NativeButton variant="secondary" disabled={disabled || reviewRequired || mutationBlocked} onClick={onValidate}>
           <ShieldCheck size={16} />
           {busyAction === "validate" ? "Validating…" : "Validate"}
         </NativeButton>
-        <NativeButton variant="outline" disabled={disabled || reviewRequired} onClick={onTest}>
+        <NativeButton variant="outline" disabled={disabled || reviewRequired || mutationBlocked} onClick={onTest}>
           <Play size={16} />
           {busyAction === "test" ? "Testing…" : "Run live test"}
         </NativeButton>
         <NativeButton
           variant="default"
-          disabled={disabled || reviewRequired || dirty || feedback?.kind !== "test" || feedback.status !== "ok"}
+          disabled={disabled || reviewRequired || mutationBlocked || Boolean(finalizeDisabledReason(dirty, feedback))}
           title={finalizeDisabledReason(dirty, feedback)}
           onClick={onFinalize}
         >
@@ -368,192 +390,6 @@ function AdvancedJsonEditor({
         </NativeButton>
       </SettingsButtonRow>
     </article>
-  );
-}
-
-function FieldCollection({
-  draft,
-  fields,
-  values,
-  issues,
-  disabled,
-  onChange,
-}: {
-  draft: ChannelSetupDraft;
-  fields?: ChannelSetupFieldDefinition[];
-  values: Record<string, unknown>;
-  issues: ChannelSetupIssue[];
-  disabled: boolean;
-  onChange: (field: ChannelSetupFieldDefinition, next: unknown) => void;
-}) {
-  if (!fields?.length) {
-    return null;
-  }
-  return (
-    <div className="mc-next-channel-wizard-fields">
-      {fields.map((field) => {
-        const fieldIssues = issues.filter((issue) => issue.fieldKey === field.key);
-        const rawValue = values[field.key];
-        const hasReplacement =
-          typeof rawValue === "string" && rawValue.trim().length > 0 && rawValue !== SECRET_REDACTION_MARKER;
-        const configuredSecret = Boolean(
-          field.sensitive &&
-          (rawValue === SECRET_REDACTION_MARKER ||
-            (draft.hydration?.fieldState[field.key] === "configured" && !hasReplacement)),
-        );
-        const inputId = `channel-${draft.draftId}-${field.key}`;
-        const descriptionId = `${inputId}-description`;
-        const errorId = `${inputId}-error`;
-        const currentValue = configuredSecret ? "" : (values[field.key] ?? field.defaultValue ?? "");
-        return (
-          <div key={field.key} className="mc-next-channel-wizard-field">
-            <label htmlFor={inputId}>
-              <span>
-                {field.label}
-                {field.required ? <b aria-label="required">Required</b> : null}
-                {field.sensitive ? <b className="sensitive">Sensitive</b> : null}
-              </span>
-              <FieldInput
-                id={inputId}
-                field={field}
-                value={currentValue}
-                disabled={disabled}
-                configuredSecret={configuredSecret}
-                ariaDescribedBy={[descriptionId, fieldIssues.length ? errorId : ""].filter(Boolean).join(" ")}
-                invalid={fieldIssues.length > 0}
-                required={field.required}
-                onChange={(next) => onChange(field, next)}
-              />
-            </label>
-            <p id={descriptionId}>
-              {configuredSecret ? "A value is configured. Enter a replacement only to rotate it." : field.explanation}
-            </p>
-            {field.whyNeeded ? <p className="mc-next-channel-wizard-why">Why: {field.whyNeeded}</p> : null}
-            {fieldIssues.length > 0 ? (
-              <div id={errorId} className="mc-next-channel-wizard-field-errors" role="alert">
-                {fieldIssues.map((issue) => (
-                  <span key={issue.key}>{issue.message}</span>
-                ))}
-              </div>
-            ) : null}
-            {field.whereToFind?.length || field.looksLike || field.commonMistakes?.length ? (
-              <details className="mc-next-channel-wizard-field-help">
-                <summary>Where to find this</summary>
-                <RichBlocks blocks={field.whereToFind} />
-                {field.looksLike ? (
-                  <p>
-                    <strong>Looks like:</strong> {field.looksLike}
-                  </p>
-                ) : null}
-                {field.commonMistakes?.length ? (
-                  <div>
-                    <strong>Common mistakes</strong>
-                    <ul>
-                      {field.commonMistakes.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-              </details>
-            ) : null}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function FieldInput({
-  id,
-  field,
-  value,
-  disabled,
-  configuredSecret,
-  ariaDescribedBy,
-  invalid,
-  required,
-  onChange,
-}: {
-  id: string;
-  field: ChannelSetupFieldDefinition;
-  value: unknown;
-  disabled: boolean;
-  configuredSecret: boolean;
-  ariaDescribedBy: string;
-  invalid: boolean;
-  required: boolean;
-  onChange: (next: unknown) => void;
-}) {
-  if (field.type === "boolean") {
-    return (
-      <span className="mc-next-settings-toggle">
-        <input
-          id={id}
-          type="checkbox"
-          checked={Boolean(value)}
-          disabled={disabled}
-          aria-describedby={ariaDescribedBy}
-          aria-invalid={invalid}
-          required={required}
-          onChange={(event) => onChange(event.target.checked)}
-        />
-        {value ? "Enabled" : "Disabled"}
-      </span>
-    );
-  }
-  if (field.type === "select") {
-    return (
-      <select
-        id={id}
-        className="mc-next-settings-input"
-        value={String(value ?? "")}
-        disabled={disabled}
-        aria-describedby={ariaDescribedBy}
-        aria-invalid={invalid}
-        required={required}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        {(field.options ?? []).map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-            {option.hint ? ` — ${option.hint}` : ""}
-          </option>
-        ))}
-      </select>
-    );
-  }
-  if (field.type === "textarea") {
-    return (
-      <textarea
-        id={id}
-        className="mc-next-settings-textarea"
-        value={String(value ?? "")}
-        disabled={disabled}
-        placeholder={field.placeholder}
-        aria-describedby={ariaDescribedBy}
-        aria-invalid={invalid}
-        required={required}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    );
-  }
-  const inputType = field.type === "secret" || field.sensitive ? "password" : field.type === "url" ? "url" : "text";
-  return (
-    <input
-      id={id}
-      className="mc-next-settings-input"
-      type={inputType}
-      inputMode={field.type === "id" ? "numeric" : undefined}
-      autoComplete={field.type === "secret" || field.sensitive ? "new-password" : "off"}
-      value={String(value ?? "")}
-      disabled={disabled}
-      placeholder={configuredSecret ? "Configured — enter a replacement to rotate" : field.placeholder}
-      aria-describedby={ariaDescribedBy}
-      aria-invalid={invalid}
-      required={required}
-      onChange={(event) => onChange(event.target.value)}
-    />
   );
 }
 
@@ -681,70 +517,6 @@ function SuccessCriteria({ items }: { items?: string[] }) {
           <li key={item}>{item}</li>
         ))}
       </ul>
-    </section>
-  );
-}
-
-function WizardFeedback({
-  feedback,
-  localError,
-}: {
-  feedback?: ChannelSetupWizardFeedback | null;
-  localError?: string | null;
-}) {
-  if (!feedback && !localError) {
-    return null;
-  }
-  return (
-    <section
-      className={`mc-next-channel-wizard-feedback ${localError ? "error" : (feedback?.status ?? "idle")}`}
-      aria-live="polite"
-    >
-      <strong>
-        {localError
-          ? "Setup needs attention"
-          : feedback?.kind === "test"
-            ? feedback.status === "ok"
-              ? "Live test passed"
-              : "Live test results"
-            : feedback?.status === "ok"
-              ? "Validation passed"
-              : "Validation results"}
-      </strong>
-      {localError ? <p>{localError}</p> : null}
-      {feedback?.issues.length ? (
-        <ul>
-          {feedback.issues.map((issue) => (
-            <li key={issue.key} className={issue.level}>
-              <span>{issue.message}</span>
-              {issue.nextSteps?.length ? <small>{issue.nextSteps.join(" ")}</small> : null}
-            </li>
-          ))}
-        </ul>
-      ) : feedback ? (
-        <p>No issues returned.</p>
-      ) : null}
-      {feedback?.probe?.steps.length ? (
-        <div className="mc-next-channel-wizard-probe" aria-label="Live connection probe">
-          <strong>Connection checks</strong>
-          <ol>
-            {feedback.probe.steps.map((step) => (
-              <li key={step.key} className={step.status}>
-                <span>{step.status}</span>
-                <div>
-                  <b>{step.label}</b>
-                  <small>{step.message}</small>
-                </div>
-              </li>
-            ))}
-          </ol>
-        </div>
-      ) : null}
-      {feedback?.recommendedNextAction ? (
-        <p className="mc-next-channel-wizard-next-action">
-          <strong>Next:</strong> {feedback.recommendedNextAction}
-        </p>
-      ) : null}
     </section>
   );
 }

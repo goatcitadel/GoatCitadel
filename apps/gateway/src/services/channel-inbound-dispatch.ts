@@ -178,6 +178,8 @@ export type IntegrationWebhookRouteLike = {
 };
 
 export type InboundWebhookDispatchOptions = {
+  /** Exact Gateway connection generation whose verified policy admitted this event. */
+  acceptedConnectionRevision?: string;
   channel: string;
   connectionId: string;
   idempotencyKey: string;

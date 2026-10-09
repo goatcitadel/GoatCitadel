@@ -151,6 +151,7 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
             eventType: event.eventType,
             bindingTarget: event.peer,
             inboundAccessConfig: connection.config,
+            acceptedConnectionRevision: connection.revision,
             message: {
               eventId: event.eventId,
               account: event.account,

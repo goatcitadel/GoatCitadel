@@ -24,6 +24,7 @@ describe("channel setup definition loop28 tails", () => {
       },
     });
     expect(hydrated.draft).toEqual({
+      inboundAccessMode: "open_legacy",
       channelAccessTokenEnv: undefined,
       channelSecretEnv: "LINE_CHANNEL_SECRET",
       defaultTarget: "Utarget",
@@ -34,6 +35,7 @@ describe("channel setup definition loop28 tails", () => {
         hydration: hydrated.hydration,
       }),
     ).toEqual({
+      inboundAccessMode: "open_legacy",
       channelAccessToken: "line-token",
       channelSecretEnv: "LINE_CHANNEL_SECRET",
       defaultTarget: "Utarget",
@@ -136,7 +138,7 @@ describe("channel setup definition loop28 tails", () => {
           ...draft(item.catalogId, hydrated.draft, "edit"),
           hydration: hydrated.hydration,
         }),
-      ).toEqual(item.expected);
+      ).toEqual({ ...item.expected, ...(["whatsapp", "nextcloud-talk"].includes(item.key) ? { inboundAccessMode: "open_legacy" } : {}) });
       expect(
         definition.validate({
           ...draft(item.catalogId, hydrated.draft, "retest"),
@@ -171,7 +173,7 @@ describe("channel setup definition loop28 tails", () => {
       {
         catalogId: "channel.zalouser",
         draft: { baseUrl: "zalo-bridge.local" },
-        keys: ["baseUrl_malformed", "defaultTarget_required"],
+        keys: ["baseUrl_malformed", "authToken_required", "defaultTarget_required"],
       },
     ];
 

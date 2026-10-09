@@ -52,9 +52,10 @@ export async function runChannelConnectionReviewLane(context, deps) {
           else await route.continue();
         });
         await page.route(`**${draftUrl}/connection-review`, async route => { reviews += 1; await route.continue(); });
-        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/channels"), { waitUntil: "domcontentloaded" });
+        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/channels?shell=classic&shellScope=visit"), { waitUntil: "domcontentloaded" });
         await waitForVerificationRouteReady(page, { expectedArea: "settings", expectedSection: "channels", readyText: "Drafts" }, NEXT_UI_PACKAGE);
         await page.getByRole("button", { name: /Review channel/ }).last().click();
+        await page.getByText("Advanced setup options", { exact: true }).click();
         await page.getByRole("button", { name: "Advanced JSON", exact: true }).click();
         const input = page.getByLabel("Draft JSON", { exact: true });
         await input.fill(JSON.stringify({ ...draft.draft, defaultChatId: "-1000777777" }));

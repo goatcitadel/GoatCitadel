@@ -2,20 +2,21 @@ import { useState } from "react";
 import type { DiscordPairingRecord, IntegrationConnection } from "@goatcitadel/contracts";
 import { useChannelJourney } from "../../../features/native-routes/settings/channel-setup/use-channel-journey";
 import { useDiscordOperations } from "../../../features/native-routes/settings/channel-setup/use-discord-operations";
+import { ChannelJourneyEvidence } from "../../../features/native-routes/settings/channel-setup/ChannelJourneyEvidence";
+import { TelegramPairingPanel } from "../../../features/native-routes/settings/channel-setup/TelegramPairingPanel";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 
 const timestamp = (value?: string) =>
   value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : "Not observed";
-export function ChannelOperations({ connection }: { connection: IntegrationConnection }) {
-  const journey = useChannelJourney([connection]);
+export function ChannelOperations({ connection, onUpdated, connectorDiagnosticsEnabled }: { connection: IntegrationConnection; onUpdated?: () => Promise<unknown>; connectorDiagnosticsEnabled?: boolean }) {
+  const journey = useChannelJourney([connection], connectorDiagnosticsEnabled);
   const discord = useDiscordOperations([connection]);
   const [review, setReview] = useState<{
     action: "approve" | "revoke";
     pairing: DiscordPairingRecord;
     revision: string;
   } | null>(null);
-  const runtime = journey.result?.runtime;
   const currentPairing = review && discord.snapshot.items.find((item) => item.pairingId === review.pairing.pairingId);
   const currentReview =
     review?.pairing.connectionId === connection.connectionId &&
@@ -36,26 +37,7 @@ export function ChannelOperations({ connection }: { connection: IntegrationConne
               {error}
             </p>
           ))}
-          {runtime ? (
-            <>
-              <p>
-                {runtime.channelKey === "signal"
-                  ? "Signal supports outbound delivery only."
-                  : "Send a message from an allowed account to verify ingress. Approvals remain governed by the Gateway."}
-              </p>
-              <dl className="space-y-1">
-                <dt>Runtime at last observation</dt>
-                <dd>
-                  {runtime.ready ? "Ready" : "Needs attention"} · {timestamp(runtime.lastReadyAt)}
-                </dd>
-                <dt>Latest accepted inbound message</dt>
-                <dd>{timestamp(runtime.lastInboundAt)}</dd>
-                <dt>Latest reconnect</dt>
-                <dd>{timestamp(runtime.lastReconnectAt)}</dd>
-              </dl>
-              {runtime.lastError ? <p role="alert">{runtime.lastError}</p> : null}
-            </>
-          ) : null}
+          <ChannelJourneyEvidence journey={journey.result?.journey} diagnostics={journey.result?.diagnostics} diagnosticsAvailability={journey.result?.diagnosticsAvailability} />
           <p className="text-fg-muted">
             A sent receipt records provider acceptance; it does not confirm that a person read the message.
           </p>
@@ -74,6 +56,7 @@ export function ChannelOperations({ connection }: { connection: IntegrationConne
           ) : null}
         </section>
       ) : null}
+      <TelegramPairingPanel connection={connection} onUpdated={onUpdated} />
       {discord.selectedConnection ? (
         <section aria-label="Discord runtime and pairing" className="space-y-3 text-sm">
           <h4 className="font-semibold">Discord runtime and pairing</h4>

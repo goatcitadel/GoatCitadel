@@ -1,5 +1,10 @@
 # Channel setup connection reviews
 
+The current guided experience and the appended evidence/OAuth migrations are
+documented in [Channels guided setup](./CHANNEL_GUIDED_SETUP.md). The local proof
+below describes the earlier connection-review slice and does not certify a live
+provider setup or the later guided changes.
+
 Channel repair and credential rotation retain the exact connection revision used
 to hydrate the draft. Validation, live checks, cached-test reuse and finalization
 require that review to remain current. A changed connection returns `409

@@ -14,6 +14,8 @@ Use this checklist when adding or upgrading a messaging channel. It is inspired 
 - Keep terminal, filesystem, network mutation, and connector mutation requests policy- and approval-gated.
 - Show active personality, home channel, tool posture, and trust posture in operator surfaces.
 - Add focused tests for normalization, setup validation, command handling, target resolution, and approval rendering.
+- Apply the six-stage guided setup and evidence rules in [Channels guided setup](./CHANNEL_GUIDED_SETUP.md). Keep notification-only requirements distinct from conversation completion.
+- Persist redacted owner-revision-bound checks and activation linkage. Required failures and unknown warnings block activation; optional cleanup needs a real send receipt and explicit acknowledgement.
 
 ## Telegram V1 Expectations
 
@@ -22,7 +24,8 @@ Use this checklist when adding or upgrading a messaging channel. It is inspired 
 - `/sethome` stores the current chat as `defaultChannelId`.
 - `/personality` lists built-in personality overlays.
 - `/tools` explains available tool families and approval requirements.
-- Target discovery uses recent Telegram updates first, then connection-config fallbacks.
+- Target discovery resolves credentials through Gateway custody and returns candidates for explicit selection. Active webhooks use configured/observed destinations; discovery never deletes the webhook, authorizes a sender, or chooses a default.
+- Pairing approval/revocation updates pairing and sender allowlists together under the current connection revision.
 
 ## Curator Rule
 

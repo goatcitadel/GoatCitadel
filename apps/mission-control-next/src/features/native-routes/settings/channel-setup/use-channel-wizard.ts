@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useChannelProofFreshness } from "./use-channel-proof-freshness";
 import { useSessionViewState } from "../../../../hooks/use-session-view-state";
 import {
   isStepVisible,
   formatJson,
   findMissingFieldLabels,
+  wizardValuesWithDefaults,
   type ChannelSetupWizardProps,
 } from "./channel-wizard-model";
 export function useChannelWizard({
@@ -15,6 +17,7 @@ export function useChannelWizard({
   values,
   dirty,
   reviewRequired = false,
+  mutationBlocked = false,
   busyAction = null,
   feedback,
   onValuesChange,
@@ -23,8 +26,9 @@ export function useChannelWizard({
   onTest,
   onFinalize,
 }: ChannelSetupWizardProps) {
+  useChannelProofFreshness(feedback);
   const visibleSteps = useMemo(
-    () => definition.wizard.steps.filter((step) => isStepVisible(step, values)),
+    () => definition.wizard.steps.filter((step) => isStepVisible(step, wizardValuesWithDefaults(definition, values))),
     [definition.wizard.steps, values],
   );
   const viewKey = "channel:" + scopeId + ":" + draft.draftId;
@@ -48,6 +52,7 @@ export function useChannelWizard({
   );
   const activeStep = visibleSteps[activeStepIndex] ?? visibleSteps[0];
   const anyBusy = busyAction !== null;
+  const actionsBlocked = anyBusy || reviewRequired || mutationBlocked;
 
   useEffect(() => {
     setLocalError(null);
@@ -81,6 +86,7 @@ export function useChannelWizard({
     const targetStep = visibleSteps.find((step) => step.fields?.some((field) => field.key === firstFieldIssue));
     if (targetStep) {
       setAdvancedMode(false);
+      shouldFocusStepRef.current = true;
       setActiveStepId(targetStep.id);
     }
   }, [feedback, visibleSteps, setActiveStepId, setAdvancedMode]);
@@ -105,10 +111,6 @@ export function useChannelWizard({
         return undefined;
       }
       const next = parsed as Record<string, unknown>;
-      if (formatJson(next) !== formatJson(values)) {
-        onValuesChange(next);
-      }
-      setAdvancedJson(formatJson(next));
       setLocalError(null);
       return next;
     } catch (error) {
@@ -124,10 +126,13 @@ export function useChannelWizard({
     if (!next) {
       return;
     }
+    if (formatJson(next) !== formatJson(values)) onValuesChange(next);
+    setAdvancedJson(formatJson(next));
     setAdvancedMode(false);
   };
 
   const handleSave = async () => {
+    if (actionsBlocked) return false;
     const next = prepareValues();
     if (!next) {
       return false;
@@ -136,7 +141,7 @@ export function useChannelWizard({
   };
 
   const handleValidate = async () => {
-    if (reviewRequired) return;
+    if (actionsBlocked) return;
     const next = prepareValues();
     if (next) {
       await onValidate(next);
@@ -144,7 +149,7 @@ export function useChannelWizard({
   };
 
   const handleTest = async () => {
-    if (reviewRequired) return;
+    if (actionsBlocked) return;
     const next = prepareValues();
     if (next) {
       await onTest(next);
@@ -152,7 +157,7 @@ export function useChannelWizard({
   };
 
   const handleFinalize = async () => {
-    if (reviewRequired) return;
+    if (actionsBlocked) return;
     const next = prepareValues();
     if (next) {
       await onFinalize(next);
@@ -168,12 +173,18 @@ export function useChannelWizard({
       setLocalError(`Complete the required setup values before continuing: ${missing.join(", ")}.`);
       return;
     }
+    const unchecked = activeStep.checklist?.filter((item) => !checkedItems[`${draft.draftId}:${activeStep.id}:${item.id}`]) ?? [];
+    if (unchecked.length) {
+      setLocalError("Confirm the preparation items before continuing: " + unchecked.map((item) => item.label).join(", ") + ".");
+      return;
+    }
     if ((activeStep.fields?.length ?? 0) > 0 && !(await handleSave())) {
       return;
     }
     setVisitedStepIds((current) => ({ ...current, [activeStep.id]: true }));
     const next = visibleSteps[activeStepIndex + 1];
     if (next) {
+      shouldFocusStepRef.current = true;
       setActiveStepId(next.id);
       setLocalError(null);
     }
@@ -185,6 +196,7 @@ export function useChannelWizard({
     activeStepIndex,
     activeStep,
     anyBusy,
+    actionsBlocked,
     visitedStepIds,
     checkedItems,
     setCheckedItems,

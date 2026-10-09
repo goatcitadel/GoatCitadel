@@ -291,12 +291,12 @@ export function createIMessageDefinition(): ChannelSetupRuntimeDefinition {
           ],
         });
       }
-      if (!bridgeUrl) {
+      if (provider !== "photon" && !bridgeUrl) {
         issues.push(requiredFieldIssue("bridgeUrl", "Bridge URL is required."));
-      } else if (!looksLikeHttpUrl(bridgeUrl)) {
+      } else if (provider !== "photon" && bridgeUrl && !looksLikeHttpUrl(bridgeUrl)) {
         issues.push(malformedFieldIssue("bridgeUrl", "Bridge URL should start with http:// or https://."));
       }
-      if (!hasConfiguredPassword) {
+      if (provider !== "photon" && !hasConfiguredPassword) {
         issues.push({
           key: "imessage_auth_missing",
           level: "error",
@@ -304,7 +304,7 @@ export function createIMessageDefinition(): ChannelSetupRuntimeDefinition {
           failureCategory: "missing_input",
         });
       }
-      if (!readString(draft.draft, "defaultHandle")) {
+      if (provider !== "photon" && !readString(draft.draft, "defaultHandle")) {
         issues.push(requiredFieldIssue("defaultHandle", "Default handle is required."));
       }
       return issues;

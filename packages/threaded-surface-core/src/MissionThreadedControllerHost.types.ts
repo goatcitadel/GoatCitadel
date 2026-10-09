@@ -226,6 +226,7 @@ export interface MissionThreadedControllerHostProps {
   onOpenStartHere?: () => void;
   onOpenPersonalitiesSettings?: () => void;
   onOpenProviderSettings?: () => void;
+  onReturnToChannels?: (href: string) => void;
   onOpenLocalAiSettings?: () => void;
   onOpenLibraryArtifacts?: () => void;
   onOpenLibraryImports?: () => void;

@@ -1,23 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChannelSetupDraft, IntegrationConnection } from "@goatcitadel/contracts";
+import type { ChannelSetupDraft, ChannelSetupEvidenceCreateInput, IntegrationConnection } from "@goatcitadel/contracts";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
 import { buildChannelCapabilityDiagnosticChecks } from "./channel-capability-diagnostic-checks.js";
 import {
   createChannelSetupDraft,
+  discardChannelSetupDraft,
   finalizeChannelSetupDraft,
   reconcileChannelSetupDraftSecretCustody,
   setChannelSetupDraftSecrets,
   testChannelSetupDraft,
   updateChannelSetupDraft,
+  validateChannelSetupDraft,
   type ChannelSetupHost,
 } from "./channel-setup-service.js";
 import { ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
+import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 
 type DraftStore = {
   create: (input: Partial<ChannelSetupDraft> & Pick<ChannelSetupDraft, "catalogId">) => ChannelSetupDraft;
   get: (draftId: string) => ChannelSetupDraft;
   update: (draftId: string, patch: Partial<ChannelSetupDraft> & { expectedRevision: number }) => ChannelSetupDraft;
-  delete: (draftId: string, expectedRevision?: number) => void;
+  delete: (draftId: string, expectedRevision?: number) => boolean;
   listByCatalog: (catalogId: string, limit: number) => ChannelSetupDraft[];
   listByConnection: (connectionId: string, limit: number) => ChannelSetupDraft[];
 };
@@ -76,7 +79,7 @@ function createDraftStore(): DraftStore {
       return updated;
     },
     delete(draftId) {
-      drafts.delete(draftId);
+      return drafts.delete(draftId);
     },
     listByCatalog(catalogId, limit) {
       return [...drafts.values()].filter((item) => item.catalogId === catalogId).slice(0, limit);
@@ -242,6 +245,165 @@ describe("channel-setup-service contract behavior", () => {
     expect(host.buildIntegrationConnectionChecks).not.toHaveBeenCalled();
   });
 
+  it.each(["validate", "test", "finalize"] as const)("marks only the initial %s connection review conflict as before side effects", async (action) => {
+    const host = createHost();
+    const saved = host.createConnectionMock({ catalogId: "channel.teams", label: "Teams", enabled: true, status: "connected", config: { webhookUrlEnv: "TEAMS_WORKFLOW_URL" } });
+    const created = await createChannelSetupDraft(host, { catalogId: "channel.teams", connectionId: saved.connectionId });
+    await host.updateIntegrationConnection(saved.connectionId, { revision: "b".repeat(64) });
+    host.updateConnectionMock.mockClear();
+    const commit = vi.spyOn(host, "commitChannelSetupConnection");
+    const operation = action === "validate" ? validateChannelSetupDraft(host, created.draftId, created.revision) : action === "test" ? testChannelSetupDraft(host, created.draftId, created.revision) : finalizeChannelSetupDraft(host, created.draftId, created.revision);
+
+    await expect(operation).rejects.toMatchObject({ code: "WRITE_CONFLICT", details: { reason: "CHANNEL_CONNECTION_REVIEW_REQUIRED", mutationPhase: "before_side_effects", draftId: created.draftId, draftRevision: created.revision, connectionId: saved.connectionId } });
+
+    expect((await host.storage.channelSetupDrafts.get(created.draftId)).revision).toBe(created.revision);
+    expect(host.runIntegrationConnectionLiveChecks).not.toHaveBeenCalled();
+    expect(host.buildIntegrationConnectionChecks).not.toHaveBeenCalled();
+    expect(commit).not.toHaveBeenCalled();
+    expect(host.updateConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["test", "finalize"] as const)("does not mark a connection change after %s live send as safe to replay or activate", async (action) => {
+    const host = createHost();
+    const saved = host.createConnectionMock({ catalogId: "channel.teams", label: "Teams", enabled: true, status: "connected", config: { webhookUrlEnv: "TEAMS_WORKFLOW_URL" } });
+    const created = await createChannelSetupDraft(host, { catalogId: "channel.teams", connectionId: saved.connectionId });
+    const commit = vi.spyOn(host, "commitChannelSetupConnection");
+    const createEvidence = vi.fn(async (input: ChannelSetupEvidenceCreateInput) => ({ ...input, evidenceId: "synthetic-proof-id", createdAt: new Date().toISOString() }));
+    host.storage.channelSetupEvidence = { create: createEvidence, get: vi.fn(async () => undefined), list: vi.fn(async () => []) } as ChannelSetupHost["storage"]["channelSetupEvidence"];
+    host.runIntegrationConnectionLiveChecks = vi.fn(async () => {
+      // Another Settings operation advances the connection while the external send finishes.
+      await host.updateIntegrationConnection(saved.connectionId, { revision: "b".repeat(64) });
+      return { checks: [{ key: "teams_sandbox_send", status: "pass" as const, message: "Accepted." }], probe: { kind: "teams_webhook", mode: "webhook" as const, checkedAt: new Date().toISOString(), steps: [{ key: "teams_sandbox_send", label: "Sandbox send", status: "pass" as const, message: "Accepted." }] } };
+    });
+    const operation = action === "test" ? testChannelSetupDraft(host, created.draftId, created.revision) : finalizeChannelSetupDraft(host, created.draftId, created.revision);
+    const error = await operation.catch((error: unknown) => error);
+
+    expect(error).toMatchObject({ code: "WRITE_CONFLICT", details: { reason: "CHANNEL_CONNECTION_REVIEW_REQUIRED", connectionId: saved.connectionId } });
+    expect(error).not.toHaveProperty("details.mutationPhase");
+    expect(error).not.toHaveProperty("details.draftId");
+    expect(error).not.toHaveProperty("details.draftRevision");
+    expect(host.runIntegrationConnectionLiveChecks).toHaveBeenCalledOnce();
+    expect(host.updateConnectionMock).toHaveBeenCalledOnce();
+    expect(commit).not.toHaveBeenCalled();
+    expect(createEvidence).not.toHaveBeenCalled();
+    expect(host.recentChannelSetupTests.has(created.draftId)).toBe(false);
+    const retained = await host.storage.channelSetupDrafts.get(created.draftId);
+    expect(retained.connectionRevision).toBe(created.connectionRevision);
+    expect(retained.lastTestedAt).toBeUndefined();
+  });
+
+  it("does not substitute the connection review recovery marker for a stale draft revision", async () => {
+    const host = createHost();
+    const saved = host.createConnectionMock({ catalogId: "channel.teams", label: "Teams", enabled: true, status: "connected", config: { webhookUrlEnv: "TEAMS_WORKFLOW_URL" } });
+    const created = await createChannelSetupDraft(host, { catalogId: "channel.teams", connectionId: saved.connectionId });
+    await host.storage.channelSetupDrafts.update(created.draftId, { expectedRevision: created.revision, label: "New reviewed label" });
+    const error = await validateChannelSetupDraft(host, created.draftId, created.revision).catch((error: unknown) => error);
+
+    expect(error).toMatchObject({ code: "WRITE_CONFLICT", details: { reason: "CHANNEL_DRAFT_REVISION_CONFLICT", draftId: created.draftId } });
+    expect(error).not.toHaveProperty("details.mutationPhase");
+    expect(host.runIntegrationConnectionLiveChecks).not.toHaveBeenCalled();
+    expect(host.updateConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it("retains Teams structural migration warnings after a successful live test and blocks activation", async () => {
+    const host = createHost();
+    const saved = host.createConnectionMock({ catalogId: "channel.teams", label: "Legacy Teams", enabled: true, status: "connected", config: { webhookUrlEnv: "TEAMS_WEBHOOK_URL", cardTitle: "Ops" } });
+    const created = await createChannelSetupDraft(host, { catalogId: "channel.teams", connectionId: saved.connectionId, lifecycleMode: "edit" });
+    const secured = await setChannelSetupDraftSecrets(host, created.draftId, { expectedRevision: created.revision, values: { webhookUrl: "https://outlook.office.com/webhook/synthetic-retired-connector" } });
+    host.runIntegrationConnectionLiveChecks = vi.fn(async () => ({
+      checks: [{ key: "teams_sandbox_send", status: "pass" as const, message: "Workflow accepted the sandbox card." }],
+      probe: { kind: "teams_webhook", mode: "webhook" as const, checkedAt: new Date().toISOString(), steps: [{ key: "teams_sandbox_send", label: "Sandbox send", status: "pass" as const, message: "Accepted." }] },
+    }));
+
+    const result = await testChannelSetupDraft(host, secured.draftId, secured.revision);
+
+    expect(host.runIntegrationConnectionLiveChecks).toHaveBeenCalledOnce();
+    expect(result.status).toBe("warn");
+    expect(result.issues).toEqual([expect.objectContaining({ key: "teams_retired_connector", level: "warn", failureCategory: "deprecated_path", disposition: "blocking" })]);
+    expect(result.finalizationEligibility).toMatchObject({ allowed: false, blockingReasons: [expect.stringContaining("retired")] });
+    await expect(finalizeChannelSetupDraft(host, secured.draftId, result.draftRevision)).rejects.toThrow(/connector webhooks retired/);
+    expect(host.updateConnectionMock).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain("synthetic-retired-connector");
+  });
+
+  it.each(["direct", "env"] as const)("validates an inherited %s Teams connector URL inside custody without re-entry or public draft mutation", async (source) => {
+    const host = createHost();
+    const endpoint = "https://outlook.office.com/webhook/synthetic-inherited-connector";
+    host.resolveConnectionSecret = vi.fn((config: Record<string, unknown>, directKey: string, envKey: string) => typeof config[directKey] === "string" ? config[directKey] as string : config[envKey] === "TEAMS_WEBHOOK_URL" ? endpoint : undefined);
+    const saved = host.createConnectionMock({ catalogId: "channel.teams", label: "Legacy Teams", enabled: true, status: "connected", config: source === "direct" ? { webhookUrl: endpoint } : { webhookUrlEnv: "TEAMS_WEBHOOK_URL" } });
+    const created = await createChannelSetupDraft(host, { catalogId: "channel.teams", connectionId: saved.connectionId });
+    expect(created.draft).not.toHaveProperty("webhookUrl");
+    expect(created.hydration?.fieldState.webhookUrl).toBe("configured");
+
+    const result = await validateChannelSetupDraft(host, created.draftId, created.revision);
+    const stored = await host.storage.channelSetupDrafts.get(created.draftId);
+
+    expect(host.resolveConnectionSecret).toHaveBeenCalledWith(expect.any(Object), "webhookUrl", "webhookUrlEnv", "channel.teams");
+    expect(result).toMatchObject({ status: "warn", issues: [expect.objectContaining({ key: "teams_retired_connector", failureCategory: "deprecated_path" })] });
+    expect(stored.draft).toEqual(created.draft);
+    expect(JSON.stringify({ created, result, stored, diagnostics: host.diagnostics.mock.calls })).not.toContain(endpoint);
+    expect(host.runIntegrationConnectionLiveChecks).not.toHaveBeenCalled();
+  });
+
+  it.each(["direct", "env"] as const)("accepts an inherited %s current Teams Workflow URL without exposing its signature", async (source) => {
+    const host = createHost();
+    const endpoint = "https://defaultenvironment.00.environment.api.powerplatform.com/powerautomate/automations/direct/cu/20/workflows/0123456789abcdef0123456789abcdef/triggers/manual/paths/invoke?api-version=1&sig=synthetic-inherited-signature";
+    host.resolveConnectionSecret = vi.fn((config: Record<string, unknown>, directKey: string, envKey: string) => typeof config[directKey] === "string" ? config[directKey] as string : config[envKey] === "TEAMS_WEBHOOK_URL" ? endpoint : undefined);
+    const saved = host.createConnectionMock({ catalogId: "channel.teams", label: "Teams Workflows", enabled: true, status: "connected", config: source === "direct" ? { webhookUrl: endpoint } : { webhookUrlEnv: "TEAMS_WEBHOOK_URL" } });
+    const created = await createChannelSetupDraft(host, { catalogId: "channel.teams", connectionId: saved.connectionId });
+
+    const result = await validateChannelSetupDraft(host, created.draftId, created.revision);
+    const stored = await host.storage.channelSetupDrafts.get(created.draftId);
+
+    expect(result).toMatchObject({ status: "ok", issues: [] });
+    expect(stored.draft).toEqual(created.draft);
+    expect(stored.draft).not.toHaveProperty("webhookUrl");
+    expect(JSON.stringify({ created, result, stored, diagnostics: host.diagnostics.mock.calls })).not.toContain("synthetic-inherited-signature");
+  });
+
+  it("blocks a retired env-backed Teams URL on create before any live send and keeps the resolved URL ephemeral", async () => {
+    const host = createHost();
+    const endpoint = "https://outlook.office.com/webhook/synthetic-env-connector";
+    host.resolveConnectionSecret = vi.fn((config: Record<string, unknown>) => config.webhookUrlEnv === "TEAMS_WEBHOOK_URL" ? endpoint : undefined);
+    const created = await createChannelSetupDraft(host, { catalogId: "channel.teams" });
+    const configured = await updateChannelSetupDraft(host, created.draftId, { expectedRevision: created.revision, draft: { webhookUrlEnv: "TEAMS_WEBHOOK_URL" } });
+
+    const result = await testChannelSetupDraft(host, configured.draftId, configured.revision);
+    const stored = await host.storage.channelSetupDrafts.get(created.draftId);
+
+    expect(result).toMatchObject({ status: "error", issues: [expect.objectContaining({ key: "teams_retired_connector", level: "error" })], finalizationEligibility: { allowed: false } });
+    expect(host.runIntegrationConnectionLiveChecks).not.toHaveBeenCalled();
+    expect(stored.draft).toEqual(configured.draft);
+    expect(stored.draft).not.toHaveProperty("webhookUrl");
+    expect(JSON.stringify({ configured, result, stored, diagnostics: host.diagnostics.mock.calls })).not.toContain(endpoint);
+  });
+
+  it("keeps provider-echoed Teams callback credentials out of public issues and durable setup evidence input", async () => {
+    const host = createHost();
+    const signature = "synthetic+durable/callback=private";
+    const endpoint = "https://defaultenvironment.00.environment.api.powerplatform.com/powerautomate/automations/direct/cu/20/workflows/0123456789abcdef0123456789abcdef/triggers/manual/paths/invoke?api-version=1&sig=" + encodeURIComponent(signature);
+    const createEvidence = vi.fn(async (input: ChannelSetupEvidenceCreateInput) => ({ ...input, evidenceId: "synthetic-proof-id", createdAt: new Date().toISOString() }));
+    host.storage.channelSetupEvidence = { create: createEvidence, get: vi.fn(async () => undefined), list: vi.fn(async () => []) } as ChannelSetupHost["storage"]["channelSetupEvidence"];
+    host.runIntegrationConnectionLiveChecks = vi.fn(async (connection: IntegrationConnection, options: Parameters<ChannelSetupHost["runIntegrationConnectionLiveChecks"]>[1]) => runWebhookDestinationLiveChecks({
+      channelKey: "teams", webhookUrl: String(connection.config.webhookUrl), includeSandboxSend: options.includeSandboxSend,
+      fetcher: vi.fn(async () => new Response(JSON.stringify({ message: "Workflow permission denied: " + endpoint + " decoded " + signature }), { status: 403 })),
+    }));
+    const created = await createChannelSetupDraft(host, { catalogId: "channel.teams" });
+    const secured = await setChannelSetupDraftSecrets(host, created.draftId, { expectedRevision: created.revision, values: { webhookUrl: endpoint } });
+
+    const result = await testChannelSetupDraft(host, secured.draftId, secured.revision);
+
+    expect(result).toMatchObject({ status: "error", evidenceId: "synthetic-proof-id", finalizationEligibility: { allowed: false } });
+    expect(result.issues[0]?.message).toContain("HTTP 403");
+    expect(result.probe?.steps[0]).toMatchObject({ status: "fail", failureCategory: "permission_mismatch" });
+    expect(createEvidence).toHaveBeenCalledOnce();
+    const publicAndDurable = JSON.stringify({ result, evidenceInput: createEvidence.mock.calls, diagnostics: host.diagnostics.mock.calls });
+    expect(publicAndDurable).not.toContain(endpoint);
+    expect(publicAndDurable).not.toContain(signature);
+    expect(publicAndDurable).not.toContain(encodeURIComponent(signature));
+    expect(publicAndDurable).toContain("[REDACTED]");
+  });
+
   it("finalizes a valid draft into a connected integration and clears draft state", async () => {
     const host = createHost();
     const created = await createChannelSetupDraft(host, {
@@ -359,6 +521,10 @@ describe("channel-setup-service contract behavior", () => {
       },
     });
   });
+
+  it("protects server-adopted OAuth metadata on the actual public update path", async () => { const host = createHost(); const created = await createChannelSetupDraft(host, { catalogId: "channel.slack" }); await expect(updateChannelSetupDraft(host, created.draftId, { expectedRevision: created.revision, draft: { slackInstallId: "forged-install", slackTeamId: "forged-team" } }, { reconcilePublicProjection: true })).rejects.toThrow("explicitly adopt"); const adopted = await host.storage.channelSetupDrafts.update(created.draftId, { expectedRevision: created.revision, draft: { ...created.draft, authMode: "oauth", slackInstallId: "server-install", slackTeamId: "server-team", slackScopes: ["chat:write"] } }); const updated = await updateChannelSetupDraft(host, created.draftId, { expectedRevision: adopted.revision, draft: { targets: [{ label: "Sandbox", channel: "C123", default: true }] } }, { reconcilePublicProjection: true }); expect(updated.draft).toMatchObject({ authMode: "oauth", slackInstallId: "server-install", slackTeamId: "server-team", slackScopes: ["chat:write"] }); await expect(updateChannelSetupDraft(host, created.draftId, { expectedRevision: updated.revision, draft: { ...updated.draft, slackTeamId: "replaced-team" } })).rejects.toThrow("explicitly adopt"); });
+
+  it("reports a committed discard when temporary credential cleanup fails", async () => { const host = createHost(); const draft = await createChannelSetupDraft(host, { catalogId: "channel.telegram" }); const secured = await setChannelSetupDraftSecrets(host, draft.draftId, { expectedRevision: draft.revision, values: { botToken: "test-token" } }); host.channelSecrets!.deleteTemporary = vi.fn(() => { throw new Error("Keychain unavailable"); }); await expect(discardChannelSetupDraft(host, secured.draftId, secured.revision)).rejects.toMatchObject({ mutationCommitted: true }); expect(() => host.storage.channelSetupDrafts.get(secured.draftId)).toThrow("Missing draft"); });
 
   it("keeps channel credentials in secure custody and rejects generic secret writes", async () => {
     const host = createHost();

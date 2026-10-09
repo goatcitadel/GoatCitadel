@@ -127,6 +127,7 @@
     "verify:integrations:revisions": "node scripts/verification/run.mjs integration-connection-revisions",
     "verify:mcp:revisions": "node scripts/verification/run.mjs mcp-server-revisions",
     "verify:channels:revisions": "node scripts/verification/run.mjs channel-connection-review",
+    "verify:channels:guided": "node scripts/verification/run.mjs channel-guided-setup",
     "verify:realtime:truth": "node scripts/verification/run.mjs realtime-truth",
     "verify:journeys": "node scripts/verification/run.mjs journeys",
     "verify:architecture:metrics": "node scripts/verification/run.mjs architecture-metrics",

@@ -8,6 +8,7 @@ import {
 } from "./integration-catalog.js";
 
 describe("integration-catalog", () => {
+  it("requires visible authenticated Zalo User setup and separates Talk server from Gateway callbacks", () => { const zalo = getIntegrationFormSchema("channel.zalouser"); expect(zalo?.description).toContain("authenticated"); const auth = zalo?.fields.find((field) => field.key === "authTokenEnv"); expect(auth).toMatchObject({ required: true }); expect(auth?.advanced).not.toBe(true); const nextcloud = getIntegrationFormSchema("channel.nextcloud-talk"); expect(nextcloud?.fields.find((field) => field.key === "baseUrl")?.description).toContain("different host"); });
   it("includes OpenClaw-style channel entries with guided setup forms", () => {
     const catalogIds = [
       "channel.line",

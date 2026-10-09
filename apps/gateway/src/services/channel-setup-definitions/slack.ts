@@ -313,6 +313,9 @@ export function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       const targets = normalizeSlackTargets(draft.draft);
       const defaultTarget = targets.find((target) => target.default) ?? targets[0];
       return compactRecord({
+        authMode: readString(draft.draft, "authMode") ?? readLegacyString(draft, "authMode"),
+        slackInstallerUserId: readString(draft.draft, "slackInstallerUserId") ?? readLegacyString(draft, "slackInstallerUserId"),
+        oauthConnectedAt: readString(draft.draft, "oauthConnectedAt") ?? readLegacyString(draft, "oauthConnectedAt"),
         slackInstallId: readString(draft.draft, "slackInstallId") ?? readLegacyString(draft, "slackInstallId"),
         slackTeamId: readString(draft.draft, "slackTeamId") ?? readLegacyString(draft, "slackTeamId"),
         slackTeamName: readString(draft.draft, "slackTeamName") ?? readLegacyString(draft, "slackTeamName"),

@@ -1607,3 +1607,9 @@ function buildReplayGapRealtimeEvent(rawPayload: string): RealtimeEvent {
     },
   };
 }
+
+export * from "./channel-oauth.js";
+
+export * from "./channel-setup-operations.js";
+
+export * from "./channel-plan-handoff.js";

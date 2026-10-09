@@ -118,6 +118,20 @@ describe("slack oauth service", () => {
     expect(summarizeSlackOAuthInstall(redacted).scopes).toEqual(["chat:write", "channels:read"]);
   });
 
+  it("rejects future timestamps, expired state and extra signature parts", () => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 60_000);
+    const future = buildSlackOAuthStart({ clientId: "client", clientSecret: "synthetic-secret", redirectUri: "https://example.test/callback", stateSecret: "state-secret" });
+    clock.mockReturnValue(now);
+    expect(verifySlackOAuthState(future.state!, "state-secret")).toBe(false);
+    clock.mockReturnValue(now - 11 * 60_000);
+    const expired = buildSlackOAuthStart({ clientId: "client", clientSecret: "synthetic-secret", redirectUri: "https://example.test/callback", stateSecret: "state-secret" });
+    clock.mockReturnValue(now);
+    expect(verifySlackOAuthState(expired.state!, "state-secret")).toBe(false);
+    const current = buildSlackOAuthStart({ clientId: "client", clientSecret: "synthetic-secret", redirectUri: "https://example.test/callback", stateSecret: "state-secret" });
+    expect(verifySlackOAuthState(current.state! + ".ignored", "state-secret")).toBe(false);
+    clock.mockRestore();
+  });
   it("parses comma and whitespace separated scopes", () => {
     expect(parseScopes("chat:write channels:read, groups:read")).toEqual([
       "chat:write",

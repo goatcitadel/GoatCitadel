@@ -121,6 +121,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
             eventType: TELEGRAM_APPROVAL_CALLBACK_EVENT_TYPE,
             bindingTarget: target,
             inboundAccessConfig: connection.config,
+            acceptedConnectionRevision: connection.revision,
             message: {
               // The callback query id is an ephemeral provider reply handle.
               // Use the secret-free durable admission identity for settlement.
@@ -196,6 +197,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
             eventType: TELEGRAM_CHANNEL_COMMAND_EVENT_TYPE,
             bindingTarget: commandEligible,
             inboundAccessConfig: connection.config,
+            acceptedConnectionRevision: connection.revision,
             message: {
               eventId: parsed.eventId,
               account: parsed.account,
@@ -232,6 +234,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
           eventType: parsed.eventType,
           bindingTarget: target,
           inboundAccessConfig: connection.config,
+          acceptedConnectionRevision: connection.revision,
           message: {
             eventId: parsed.eventId,
             account: parsed.account,

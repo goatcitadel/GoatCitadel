@@ -370,6 +370,7 @@ describe("channel bot live probes loop 18 failure coverage", () => {
 
     const zaloUserSkipped = await runZaloUserBridgeLiveChecks({
       baseUrl: "https://zalo-user.example.com/",
+      authorizationHeader: "Bearer bridge-token",
       includeSandboxSend: false,
       fetcher: vi.fn(),
     });
@@ -749,6 +750,7 @@ describe("channel bot live probes loop 18 failure coverage", () => {
 
     const zaloUserMissingTarget = await runZaloUserBridgeLiveChecks({
       baseUrl: "https://zalo-user.example.com/",
+      authorizationHeader: "Bearer bridge-token",
       defaultTarget: " ",
       includeSandboxSend: true,
       fetcher: vi.fn(),
@@ -763,6 +765,7 @@ describe("channel bot live probes loop 18 failure coverage", () => {
 
     const zaloUserTransportFailure = await runZaloUserBridgeLiveChecks({
       baseUrl: "https://zalo-user.example.com/",
+      authorizationHeader: "Bearer bridge-token",
       defaultTarget: "user:operator",
       includeSandboxSend: true,
       fetcher: vi.fn(async () => {

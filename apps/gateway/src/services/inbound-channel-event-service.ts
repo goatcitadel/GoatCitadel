@@ -2,6 +2,7 @@ import { sanitizeMetadata } from "./inbound-channel-metadata.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   redactSecretText,
+  CHANNEL_INGRESS_ACCEPTED_REVISION_KEY,
   type ChannelActivityInput,
   type ChatSendMessageResponse,
   type InboundChannelEventClaim,
@@ -870,6 +871,9 @@ function buildStoredPayload(input: DurableInboundChannelAcceptInput): Record<str
   }
   assignDefined(payload, "voiceRequest", input.voiceRequest ? persistVoiceRequest(input.voiceRequest) : undefined);
   assignDefined(payload, "voiceFallbackContent", normalizeOptionalString(input.voiceFallbackContent));
+  if (input.acceptedConnectionRevision && /^[a-f0-9]{64}$/.test(input.acceptedConnectionRevision)) {
+    (payload as unknown as Record<string, unknown>)[CHANNEL_INGRESS_ACCEPTED_REVISION_KEY] = input.acceptedConnectionRevision;
+  }
   return payload as unknown as Record<string, unknown>;
 }
 

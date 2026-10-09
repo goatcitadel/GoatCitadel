@@ -1,11 +1,12 @@
-import type {
-  ChannelProbeReport,
-  ChannelSetupFailureCategory,
-  ConnectorDiagnosticReport,
+import {
+  redactSecretText,
+  type ChannelProbeReport,
+  type ChannelSetupFailureCategory,
+  type ConnectorDiagnosticReport,
 } from "@goatcitadel/contracts";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
 
-type WebhookChannelKey = "google-chat" | "teams";
+type WebhookChannelKey = "google-chat" | "teams" | "slack" | "discord";
 
 interface RunWebhookLiveChecksInput {
   channelKey: WebhookChannelKey;
@@ -22,7 +23,7 @@ export async function runWebhookDestinationLiveChecks(
 ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const prefix = input.channelKey.replace(/-/g, "_");
-  const connectionLabel = input.channelKey === "google-chat" ? "Google Chat" : "Teams";
+  const connectionLabel = input.channelKey === "google-chat" ? "Google Chat" : input.channelKey === "teams" ? "Teams" : input.channelKey === "slack" ? "Slack" : "Discord";
   const probe: ChannelProbeReport = {
     kind: `${prefix}_webhook`,
     mode: "webhook",
@@ -64,11 +65,11 @@ export async function runWebhookDestinationLiveChecks(
     };
   }
 
-  const request = buildWebhookProbeRequest(input);
   try {
+    const request = buildWebhookProbeRequest(input);
     const response = await input.fetcher(request.url, request.init);
     if (!response.ok) {
-      const detail = await readWebhookProbeDetail(response);
+      const detail = await readWebhookProbeDetail(response, [input.webhookUrl, request.url]);
       probe.steps.push({
         key: `${prefix}_sandbox_send`,
         label: "Sandbox send",
@@ -99,7 +100,7 @@ export async function runWebhookDestinationLiveChecks(
       key: `${prefix}_sandbox_send`,
       label: "Sandbox send",
       status: "warn",
-      message: `Probe failed before ${connectionLabel} responded: ${(error as Error).message}`,
+      message: `Probe outcome is uncertain because ${connectionLabel} did not provide a response. Inspect the destination before sending again.`,
       failureCategory: "platform_unavailable",
     });
     return {
@@ -110,6 +111,7 @@ export async function runWebhookDestinationLiveChecks(
 }
 
 function mapProbeStepsToChecks(steps: ChannelProbeReport["steps"]): ConnectorDiagnosticReport["checks"] {
+  for (const step of steps) step.disposition ??= "blocking";
   return steps
     .filter((step) => step.status !== "skipped")
     .map((step) => ({
@@ -140,6 +142,8 @@ function buildWebhookProbeRequest(input: RunWebhookLiveChecksInput): { url: stri
       },
     };
   }
+
+  if (input.channelKey === "slack" || input.channelKey === "discord") return { url: input.webhookUrl ?? "", init: { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input.channelKey === "slack" ? { text: probeMessage } : { content: probeMessage }) } };
 
   const title = input.cardTitle?.trim() || "GoatCitadel";
   return {
@@ -179,28 +183,63 @@ function buildWebhookProbeRequest(input: RunWebhookLiveChecksInput): { url: stri
   };
 }
 
-async function readWebhookProbeDetail(response: Response): Promise<string | undefined> {
-  const text = (
-    await readBoundedResponseText(response, {
+async function readWebhookProbeDetail(response: Response, webhookUrls: readonly string[]): Promise<string | undefined> {
+  let text: string;
+  try {
+    text = (await readBoundedResponseText(response, {
       maxBytes: 64 * 1024,
       timeoutMs: 5_000,
       label: "channel webhook probe",
-    })
-  ).trim();
-  if (!text) {
+    })).trim();
+  } catch {
+    // The HTTP status is already known even when the optional body is unreadable.
     return undefined;
   }
+  if (!text) return undefined;
   try {
     const payload = JSON.parse(text) as Record<string, unknown>;
     for (const candidate of [payload.error, payload.description, payload.message]) {
-      if (typeof candidate === "string" && candidate.trim().length > 0) {
-        return candidate.trim();
-      }
+      if (typeof candidate === "string" && candidate.trim()) return sanitizeWebhookProbeDetail(candidate.trim(), webhookUrls);
     }
-  } catch {
-    return text;
+  } catch { return sanitizeWebhookProbeDetail(text, webhookUrls); }
+  return sanitizeWebhookProbeDetail(text, webhookUrls);
+}
+
+function sanitizeWebhookProbeDetail(text: string, webhookUrls: readonly string[]): string {
+  const secrets = new Set<string>();
+  const addForms = (value: string) => {
+    if (!value) return;
+    secrets.add(value);
+    secrets.add(value.replaceAll("/", "\\/"));
+    try { secrets.add(encodeURIComponent(value)); secrets.add(encodeURI(value)); } catch { secrets.add(JSON.stringify(value).slice(1, -1)); }
+    try { secrets.add(decodeURIComponent(value)); } catch { secrets.add(JSON.stringify(value).slice(1, -1)); }
+    secrets.add(new URLSearchParams({ credential: value }).toString().slice("credential=".length));
+  };
+  for (const value of webhookUrls) {
+    addForms(value);
+    try {
+      const url = new URL(value);
+      addForms(url.toString());
+      for (const [key, credential] of url.searchParams) {
+        if (/^(?:sig|signature|key|api[_-]?key|token|access[_-]?token|auth|authorization|code|secret|client[_-]?secret)$/i.test(key)) addForms(credential);
+      }
+      for (const part of url.search.slice(1).split("&")) {
+        const separator = part.indexOf("=");
+        const key = new URLSearchParams(part).keys().next().value;
+        if (separator >= 0 && key && /^(?:sig|signature|key|api[_-]?key|token|access[_-]?token|auth|authorization|code|secret|client[_-]?secret)$/i.test(key)) addForms(part.slice(separator + 1));
+      }
+      // Slack and Discord callback credentials can live in the path rather than a query.
+      const pathCredential = url.pathname.match(/\/(?:api\/(?:v[0-9]+\/)?webhooks\/[^/]+|services\/[^/]+\/[^/]+)\/([^/]+)\/?$/i)?.[1];
+      if (pathCredential) addForms(pathCredential);
+    } catch { continue; }
   }
-  return text;
+  let safe = text;
+  for (const credential of [...secrets].sort((left, right) => right.length - left.length)) {
+    if (credential) safe = safe.split(credential).join("[REDACTED]");
+  }
+  // Redact before bounding, so truncation cannot retain a partial known credential.
+  // Leave room for the HTTP status and diagnostic label in the 2048-character public field.
+  return redactSecretText(safe).value.slice(0, 1800);
 }
 
 function inferWebhookFailureCategory(statusCode: number): ChannelSetupFailureCategory {

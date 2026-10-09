@@ -112,6 +112,7 @@ export function registerSlackWebhookRoutes(fastify: FastifyInstance): void {
           eventType: parsed.eventType,
           bindingTarget: parsed.room ?? parsed.peer,
           inboundAccessConfig: connection.config,
+          acceptedConnectionRevision: connection.revision,
           message: {
             eventId: parsed.eventId,
             account: parsed.account,

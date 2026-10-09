@@ -1,3 +1,4 @@
+import { preserveChannelPlanReviewHref } from "@goatcitadel/mission-control-shared/api/channel-plan-handoff";
 import { useCallback, useContext, useLayoutEffect, useRef, useState } from "react";
 import { canonicalJsonString, type ChatMode } from "@goatcitadel/contracts";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
@@ -34,7 +35,7 @@ export function useChatOwnerNavigation(workspaceId: string, citadelId?: string) 
   if (scope.current.identity !== identity) scope.current = { identity };
   const renderedScope = scope.current;
   const mounted = useRef(true);
-  const pending = useRef<{ selection: ChatLocationSelection; history: string; scope: object } | null>(null);
+  const pending = useRef<{ selection: ChatLocationSelection; history: string; scope: object; href: string } | null>(null);
   const [, changed] = useState(0);
   useLayoutEffect(() => {
     mounted.current = true;
@@ -44,11 +45,11 @@ export function useChatOwnerNavigation(workspaceId: string, citadelId?: string) 
     getGatewayApiBaseUrl() === installation && window.location.pathname === "/chat", [available, installation, renderedScope]);
   const request = useCallback((_surface: ChatMode, selection: ChatLocationSelection = {}) => {
     if (!current()) return;
-    const href = chatSelectionHref(selection);
+    const href = preserveChannelPlanReviewHref(chatSelectionHref(selection), window.location.search, workspaceId);
     if (cockpitHref(window.location.pathname + window.location.search + window.location.hash) === href) return;
-    pending.current = { selection: { ...selection }, history: readCockpitHistory(), scope: renderedScope };
+    pending.current = { selection: { ...selection }, history: readCockpitHistory(), scope: renderedScope, href };
     changed((version) => version + 1);
-  }, [current, renderedScope]);
+  }, [current, renderedScope, workspaceId]);
   const publish = useCallback((evidence: ChatSelectionEvidence) => {
     const request = pending.current;
     if (!request) return;
@@ -59,7 +60,7 @@ export function useChatOwnerNavigation(workspaceId: string, citadelId?: string) 
     if (!chatSelectionMatches(request.selection, evidence, workspaceId)) return;
     pending.current = null;
     // No arbitrary href is accepted: the only destination is the bound current Chat selection.
-    commitCockpitNavigation(chatSelectionHref(request.selection));
+    commitCockpitNavigation(request.href);
   }, [current, renderedScope, workspaceId]);
   return { request, publish };
 }

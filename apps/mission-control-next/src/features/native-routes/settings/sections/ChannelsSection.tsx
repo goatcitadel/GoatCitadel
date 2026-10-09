@@ -1,4 +1,8 @@
-import { ExternalLink, Plus, RefreshCw } from "lucide-react";
+import { Plus } from "lucide-react";
+import { createChannelPlanReviewHandoff, channelPlanReviewRouteFields } from "@goatcitadel/mission-control-shared/api/channel-plan-handoff";
+import { ChannelEntryControls } from "../channel-setup/ChannelEntryControls";
+import { TelegramPairingPanel } from "../channel-setup/TelegramPairingPanel";
+import { useChannelReturnNavigation } from "./use-channel-return-navigation";
 import {
   SettingsActionList,
   SettingsButtonRow,
@@ -23,7 +27,13 @@ import { IntegrationConnectionReview } from "./IntegrationConnectionReview";
 import { useChannelSettings } from "./use-channel-settings";
 
 export function ChannelsSection({ activeWorkspaceId, navigate, route }: SettingsSectionProps) {
-  const owner = useChannelSettings(activeWorkspaceId, () => navigate({ area: "chat", theme: route.theme }));
+  const owner = useChannelSettings(activeWorkspaceId, (plan) => navigate({ area: "chat", theme: route.theme,
+    ...channelPlanReviewRouteFields(createChannelPlanReviewHandoff(plan)) }));
+  useChannelReturnNavigation(owner, new URLSearchParams({
+    ...(route.channelWorkspace ? { channelWorkspace: route.channelWorkspace } : {}),
+    ...(route.channelDraft ? { channelDraft: route.channelDraft } : {}),
+    ...(route.channelConnection ? { channelConnection: route.channelConnection } : {}),
+  }).toString());
   const {
     loading,
     error,
@@ -58,8 +68,6 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
     handleValidate,
     handleTest,
     handleFinalize,
-    handleStartSlackOAuth,
-    handleDiscoverTelegramTargets,
     handleCreate,
     leave,
     selectedConnectionId,
@@ -110,12 +118,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                   }}
                 />
                 <SettingsButtonRow>
-                  {createCatalogId === "channel.slack" ? (
-                    <NativeButton variant="default" onClick={() => void handleStartSlackOAuth()}>
-                      <ExternalLink size={16} />
-                      Connect Slack
-                    </NativeButton>
-                  ) : null}
+
                   <NativeButton
                     variant="default"
                     disabled={!createCatalogId || owner.mutation.pending || Boolean(owner.mutation.uncertain)}
@@ -193,8 +196,12 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                     enabled={draftEnabled}
                     dirty={draftDirty}
                     feedback={validationRevision === selectedDraft.revision ? validationResult : null}
-                    busyAction={owner.mutation.pending || owner.mutation.uncertain ? (busyAction ?? "save") : null}
-                    reviewRequired={needsConnectionReview}
+                    draftEvidence={owner.draftEvidence}
+                    draftEvidenceLoading={owner.draftEvidenceLoading}
+                    draftEvidenceError={owner.draftEvidenceError}
+                    busyAction={owner.mutation.pending ? busyAction : null}
+                    mutationBlocked={owner.mutation.pending || Boolean(owner.mutation.uncertain)}
+                    reviewRequired={needsConnectionReview || channelDraft.hasRemoteChanges}
                     onValuesChange={(next) => {
                       setDraftValues(next);
                       setValidationResult(null);
@@ -214,22 +221,8 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                     onValidate={handleValidate}
                     onTest={handleTest}
                     onFinalize={handleFinalize}
-                    supplementaryActions={
-                      <>
-                        {selectedDraft.catalogId === "channel.slack" ? (
-                          <NativeButton variant="secondary" onClick={() => void handleStartSlackOAuth()}>
-                            <ExternalLink size={16} />
-                            Connect Slack
-                          </NativeButton>
-                        ) : null}
-                        {selectedDraft.catalogId === "channel.telegram" ? (
-                          <NativeButton variant="secondary" onClick={() => void handleDiscoverTelegramTargets()}>
-                            <RefreshCw size={16} />
-                            Detect Telegram chats
-                          </NativeButton>
-                        ) : null}
-                      </>
-                    }
+                    onAcknowledgeTest={owner.handleAcknowledgeTest}
+                    supplementaryActions={<ChannelEntryControls owner={owner} />}
                   />
                 ) : selectedDraft ? (
                   <SettingsEmptyState label="The setup definition for this draft is unavailable. Refresh or repair the Gateway catalog." />
@@ -322,9 +315,10 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
                 </p>
                 <p>{selectedConnection.lastError}</p>
                 <NativeButton onClick={() => void editConnection()}>Edit setup</NativeButton>
-                <ChannelJourneyPanel connections={[selectedConnection]} />
+                <ChannelJourneyPanel connections={[selectedConnection]} connectorDiagnosticsEnabled={data.connectorDiagnosticsEnabled} />
                 <NativeDisclosureCard id="channel-operations" title="Connection operations">
                   <DiscordConnectionOperationsPanel connections={[selectedConnection]} />
+                  <TelegramPairingPanel connection={selectedConnection} onUpdated={reload} />
                   <dl>
                     <dt>Connection ID</dt>
                     <dd>{selectedConnection.connectionId}</dd>

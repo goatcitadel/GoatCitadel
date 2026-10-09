@@ -1,3 +1,4 @@
+import { CHANNEL_GUIDED_SETUP_POSTGRES_SQL } from "../channel-guided-setup-schema.js";
 import { GOVERNED_REMEDIATION_PARENT_RESERVATION_POSTGRES_SQL } from "../governed-remediation-parent-reservation-schema.js";
 import { GOVERNED_REMEDIATION_RESUME_VERSION_POSTGRES_SQL } from "../governed-remediation-resume-version.js";
 import { GOVERNED_REMEDIATION_PARENT_RESOLUTION_POSTGRES_SQL } from "../governed-remediation-parent-resolution-schema.js";
@@ -15038,6 +15039,12 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         FOR EACH ROW EXECUTE FUNCTION gc_chat_delegation_step_instruction_snapshot_immutable();
     `,
     integritySha256: "3bd160c4ee905f45f5dae335227e252757a4c2560abc64f00b29115b7ab2e041",
+  },
+  {
+    version: 198,
+    name: "channel_guided_setup_evidence_and_oauth_attempts",
+    sql: CHANNEL_GUIDED_SETUP_POSTGRES_SQL,
+    integritySha256: "a0d90a450d133bf69e06819c0f854e0f09a235979f73bc0631ea9e2aadc18e84",
   },
 ];
 

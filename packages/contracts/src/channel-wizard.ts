@@ -50,7 +50,16 @@ export type ChannelSetupStepKind =
   | "test"
   | "confirm";
 
-export type ChannelSetupFieldType = "text" | "secret" | "url" | "id" | "select" | "boolean" | "textarea";
+export type ChannelSetupFieldType = "text" | "secret" | "url" | "id" | "select" | "boolean" | "textarea" | "target-list" | "sender-list";
+
+export type ChannelSetupStage = "prerequisites" | "identity" | "destinations_access" | "checks" | "activation" | "first_message";
+
+export interface ChannelSetupFinalizationEligibility {
+  allowed: boolean;
+  blockingReasons: string[];
+  evidenceId?: string;
+  requiresAcknowledgement?: boolean;
+}
 
 export type ChannelSetupRichBlock =
   | { kind: "paragraph"; text: string }
@@ -77,9 +86,13 @@ export interface ChannelSetupFieldDefinition {
   looksLike?: string;
   commonMistakes?: string[];
   sensitive?: boolean;
+  advanced?: boolean;
   canChangeLater?: boolean;
   placeholder?: string;
   options?: ChannelSetupFieldOption[];
+  targetAddressKey?: "channel" | "chatId";
+  inputMode?: "text" | "numeric" | "decimal" | "email" | "tel" | "url" | "search" | "none";
+  visibleWhenFieldEquals?: { fieldKey: string; value: string | boolean };
 }
 
 export interface ChannelSetupChecklistItem {
@@ -98,6 +111,8 @@ export interface ChannelSetupTroubleshootingItem {
 
 export interface ChannelSetupStepDefinition {
   id: string;
+  stage?: ChannelSetupStage;
+  requiredAnyOf?: string[][];
   kind: ChannelSetupStepKind;
   title: string;
   description?: string;
@@ -260,6 +275,7 @@ export interface ChannelSetupConnectionReviewInput {
 
 export interface ChannelSetupIssue {
   key: string;
+  disposition?: "blocking" | "advisory" | "deferred";
   level: "info" | "warn" | "error";
   message: string;
   detail?: string;
@@ -278,6 +294,8 @@ export interface ChannelSetupValidationResult {
 }
 
 export interface ChannelSetupTestResult {
+  /** Gateway deadline derived from the original checkedAt; acknowledgements never extend it. */
+  proofExpiresAt?: string;
   draftId: string;
   draftRevision: number;
   status: ChannelSetupStatus;
@@ -286,6 +304,8 @@ export interface ChannelSetupTestResult {
   checkedAt: string;
   recommendedNextAction?: string;
   probe?: ChannelProbeReport;
+  evidenceId?: string;
+  finalizationEligibility?: ChannelSetupFinalizationEligibility;
 }
 
 export interface ChannelSetupFinalizeResult {

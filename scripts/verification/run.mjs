@@ -56,6 +56,7 @@ import {
   runIntegrationConnectionRevisionsLane,
   runMcpServerRevisionsLane,
   runChannelConnectionReviewLane,
+  runChannelGuidedSetupLane,
   runMeshReadinessLane,
   runOperatorProofLane,
   runOrchestrationPerformanceLane,
@@ -125,6 +126,7 @@ const VALID_LANES = new Set([
   "integration-connection-revisions",
   "mcp-server-revisions",
   "channel-connection-review",
+  "channel-guided-setup",
   "realtime-truth",
   "architecture-metrics",
   "code-mode-sandbox",
@@ -205,6 +207,7 @@ const REVIEW_LANES = new Set([
   "integration-connection-revisions",
   "mcp-server-revisions",
   "channel-connection-review",
+  "channel-guided-setup",
   "realtime-truth",
   "architecture-metrics",
   "code-mode-sandbox",
@@ -418,6 +421,8 @@ async function runLockedVerification(lane, options) {
       await runIntegrationConnectionRevisionsLane(context);
     } else if (lane === "mcp-server-revisions") {
       await runMcpServerRevisionsLane(context);
+    } else if (lane === "channel-guided-setup") {
+      await runChannelGuidedSetupLane(context);
     } else if (lane === "channel-connection-review") {
       await runChannelConnectionReviewLane(context);
     } else if (lane === "realtime-truth") {

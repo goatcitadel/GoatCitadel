@@ -70,7 +70,7 @@ describe("channel setup route tails", () => {
     await expectStatus("POST", "/api/v1/channels/drafts/not-a-uuid/test", 400);
     await expectError("POST", `/api/v1/channels/drafts/${DRAFT_ID}/test`, 404, "test failed", { expectedRevision: 1 });
     await expectStatus("POST", "/api/v1/channels/drafts/not-a-uuid/finalize", 400);
-    await expectError("POST", `/api/v1/channels/drafts/${DRAFT_ID}/finalize`, 500, "Internal server error", {
+    await expectError("POST", `/api/v1/channels/drafts/${DRAFT_ID}/finalize`, 409, "Channel activation requires Change Plan review in Chat. Enable change management, then create and review the channel plan.", {
       expectedRevision: 1,
     });
     await expectStatus("POST", "/api/v1/channels/connections/not-a-uuid/repair-draft", 400);
@@ -175,12 +175,8 @@ describe("channel setup route tails", () => {
         requestCount: 17,
       });
     }
-    expect(finalized.json().connection.config).toMatchObject({
-      botToken: "[REDACTED]",
-      webhookUrl: "[REDACTED]",
-      botTokenEnv: "SLACK_BOT_TOKEN",
-      channelId: "C-OLD",
-    });
+    expect(finalized.statusCode).toBe(409);
+    expect(channelSetup.finalizeChannelSetupDraft).not.toHaveBeenCalled();
     for (const response of [validated, tested, retested]) {
       expect(response.body).not.toContain("probe-short");
       expect(response.body).not.toContain("validation-short");
@@ -227,7 +223,7 @@ describe("channel setup route tails", () => {
     const response = await app.inject({
       method: "POST",
       url: `/api/v1/channels/drafts/${DRAFT_ID}/finalize`,
-      payload: { expectedRevision: rawDraft.revision },
+      payload: { expectedRevision: rawDraft.revision, workspaceId: "workspace-channel" },
     });
 
     expect(response.statusCode).toBe(202);
@@ -240,11 +236,14 @@ describe("channel setup route tails", () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         expectedTargetRevision: rawDraft.revision,
+        actor: expect.objectContaining({ workspaceId: "workspace-channel" }),
         request: { kind: "channel_connection", channelKind: "channel.slack", draftId: DRAFT_ID },
       }),
     );
     expect(response.body).not.toContain("bot-short");
   });
+
+  it("cannot activate when the change-management service is disabled", async () => { const finalizeChannelSetupDraft = vi.fn(); app = buildApp({ finalizeChannelSetupDraft }, { isEnabled: vi.fn(async () => false) }); const response = await app.inject({ method: "POST", url: `/api/v1/channels/drafts/${DRAFT_ID}/finalize`, payload: { expectedRevision: 1 } }); expect(response.statusCode).toBe(409); expect(finalizeChannelSetupDraft).not.toHaveBeenCalled(); });
 
   async function expectStatus(
     method: "GET" | "POST" | "PATCH",
@@ -265,7 +264,7 @@ describe("channel setup route tails", () => {
   ): Promise<void> {
     const response = await app!.inject({ method, url, payload });
     expect(response.statusCode).toBe(statusCode);
-    expect(response.json()).toEqual({ error });
+    expect(response.json()).toMatchObject({ error });
   }
 });
 
