@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ApprovalRequest } from "@goatcitadel/contracts";
-import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
+import { canonicalJsonString, type ApprovalRequest } from "@goatcitadel/contracts";
+import { createSqliteAsyncStorage, sealChatTurnCapabilityProfile, Storage } from "@goatcitadel/storage";
 import { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
 import { CapabilitySystemService } from "./capability-system-service.js";
 import { CapabilityCandidateChangePlanAdapter } from "./capability-candidate-change-plan-adapter.js";
@@ -12,7 +12,10 @@ import { EvolutionControlPlaneAdapterRegistry } from "./evolution-control-plane-
 import { EvolutionControlPlaneService } from "./evolution-control-plane-service.js";
 import { readChangePlanApprovalDisposition } from "./evolution-control-plane-approval-disposition.js";
 import { WorkflowSkillCaptureService } from "./workflow-skill-capture-service.js";
-import { bindWorkflowCaptureTurnAuthor } from "./workflow-capture-author-test-fixtures.js";
+import { persistPreparedChatCapabilityAdmission } from "./chat-durable-run-service.js";
+import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import { SessionControlRuntimeOwner } from "./session-control-runtime-owner.js";
+import { SessionControlService } from "./session-control-service.js";
 
 const actor = { workspaceId: "default", actorId: "capture-operator", surface: "chat" as const, sessionId: "session" };
 const captureActor = { actorId: actor.actorId, authActorSource: "loopback" as const };
@@ -174,3 +177,112 @@ describe("captured capability Change Plan refusal", () => {
     expect(h.unavailable).not.toHaveBeenCalled();
   }, 30_000);
 });
+
+const fixtureHash = (text: string) => createHash("sha256").update(text).digest("hex");
+
+/**
+ * Binds a fixture turn's author the way a real admitted Chat turn does: a sealed capability profile carrying the
+ * authenticated actor, persisted with the operator turn admission and closed as completed. Workflow capture refuses
+ * a turn whose only author signal is the display actor, so fixtures that capture a workflow need this binding.
+ * Returns the trace fields that reference the profile.
+ */
+async function bindWorkflowCaptureTurnAuthor(
+  storage: Storage,
+  input: {
+    turnId: string;
+    sessionId: string;
+    workspaceId: string;
+    userContent: string;
+    actor: { actorId: string; authActorSource: "loopback" };
+    timestamp: string;
+  },
+): Promise<{ capabilityProfileId: string; capabilityProfileHash: string }> {
+  const { turnId, sessionId, workspaceId, userContent, actor, timestamp } = input;
+  const profile = sealChatTurnCapabilityProfile({
+    profileId: `profile-${turnId}`,
+    schemaVersion: "chat.turn.capability-profile.v1",
+    identity: {
+      turnId,
+      sessionId,
+      workspaceId,
+      citadelId: "personal",
+      operatorId: actor.actorId,
+      authActorId: actor.actorId,
+      authActorSource: actor.authActorSource,
+    },
+    source: { channel: "chat", account: "operator" },
+    catalog: {
+      snapshotId: `catalog-${turnId}`,
+      inspectableHash: fixtureHash("[]"),
+      callableHash: fixtureHash("[]"),
+      inspectableCount: 0,
+      callableCount: 0,
+    },
+    selection: {
+      contentHash: fixtureHash(canonicalJsonString(userContent)),
+      effectiveProviderId: "test",
+      effectiveModel: "test",
+      allowedFallbacks: [],
+      mode: "chat",
+      webMode: "off",
+      memory: {
+        mode: "off",
+        retrievalMode: "standard",
+        workspaceId,
+        sessionId,
+        contextManifestRef: `chat-memory-scope:${fixtureHash(sessionId)}`,
+        writeApprovalRequired: true,
+      },
+      thinkingLevel: "standard",
+      speedMode: "standard",
+      subagentPolicy: "off",
+      toolAutonomy: "manual",
+      tools: [],
+      modelNameAllowMap: [],
+      trustedSkills: [],
+    },
+    governance: {
+      activeGrants: [],
+      permission: { profileId: "safe", approvalMode: "approve_all", profileHash: fixtureHash("safe") },
+      policyDecisions: [],
+      authReadiness: [
+        { kind: "provider", ref: "test", status: "ready", reasonCodes: [] },
+        { kind: "channel", ref: "chat", status: "ready", reasonCodes: [] },
+      ],
+      approval: { mode: "approve_all", selectedToolCount: 0, toolsRequiringApproval: [], approvalGranted: false },
+    },
+    preflightFingerprint: fixtureHash(turnId),
+    createdAt: timestamp,
+  });
+  const asyncStorage = createSqliteAsyncStorage(storage);
+  const owner = new SessionControlRuntimeOwner(new SessionControlService(asyncStorage));
+  const turnAdmission = await owner.admitOperatorChatTurn({
+    sessionId,
+    turnId,
+    request: { content: userContent, authActorId: actor.actorId, authActorSource: actor.authActorSource },
+    actorId: actor.actorId,
+    idempotencyKey: `admit:${turnId}`,
+    correlationId: `admit:${turnId}`,
+  });
+  await asyncStorage.runImmediateTransaction(async () => {
+    await persistPreparedChatCapabilityAdmission(asyncStorage, {
+      turnId,
+      capabilityProfile: profile,
+      turnAdmission,
+      capabilityCatalogSnapshot: {
+        snapshotId: profile.catalog.snapshotId,
+        inspectableEntries: [],
+        callableEntries: [],
+        createdAt: timestamp,
+      },
+    } as unknown as PreparedAgentChatTurn);
+  });
+  await owner.closeTurnWrite({
+    admission: turnAdmission,
+    status: "completed",
+    actorId: actor.actorId,
+    idempotencyKey: `complete:${turnId}`,
+    correlationId: `complete:${turnId}`,
+  });
+  return { capabilityProfileId: profile.profileId, capabilityProfileHash: profile.hashes.profileHash };
+}
