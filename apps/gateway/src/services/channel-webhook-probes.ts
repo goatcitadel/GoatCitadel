@@ -95,7 +95,7 @@ export async function runWebhookDestinationLiveChecks(
       checks: mapProbeStepsToChecks(probe.steps),
       probe,
     };
-  } catch (error) {
+  } catch {
     probe.steps.push({
       key: `${prefix}_sandbox_send`,
       label: "Sandbox send",

@@ -30,6 +30,10 @@ export function useChannelSetupEntry(s: ChannelSetupState, saveDraft?: () => Pro
       attempt.draftId !== s.selectedDraftId || !Number.isSafeInteger(attempt.revision) || attempt.revision < 1)
       throw new Error("The OAuth receipt does not belong to this workspace and channel draft.");
   }
+  // The poll reads the render-current receipt check without restarting on every render.
+  const assertAttemptRef = useRef(assertAttempt);
+  assertAttemptRef.current = assertAttempt;
+  const selectedCatalogId = s.selectedDraft?.catalogId;
   const refreshOAuthAttempt = async () => {
     if (!oauthAttemptId || s.selectedDraft?.catalogId !== "channel.slack") return;
     try {
@@ -41,7 +45,7 @@ export function useChannelSetupEntry(s: ChannelSetupState, saveDraft?: () => Pro
     } catch (cause) { if (s.isCurrentDraft()) setOAuthError(getErrorMessage(cause)); }
   };
   useEffect(() => {
-    if (!oauthAttemptId || s.selectedDraft?.catalogId !== "channel.slack") return;
+    if (!oauthAttemptId || selectedCatalogId !== "channel.slack") return;
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let polls = 0;
@@ -50,7 +54,7 @@ export function useChannelSetupEntry(s: ChannelSetupState, saveDraft?: () => Pro
       try {
         const attempt = await fetchChannelOAuthAttempt({ workspaceId: scope.workspaceId, attemptId: oauthAttemptId });
         if (!active || current.current.draftId !== scope.draftId || current.current.workspaceId !== scope.workspaceId) return;
-        assertAttempt(attempt);
+        assertAttemptRef.current(attempt);
         if (attempt.attemptId !== oauthAttemptId) throw new Error("The OAuth attempt identity changed.");
         setOAuthAttempt(attempt); setOAuthError(null);
         if ((attempt.status === "pending" || attempt.status === "exchanging") && ++polls < 30) timer = setTimeout(() => void refresh(), 2000);
@@ -58,7 +62,7 @@ export function useChannelSetupEntry(s: ChannelSetupState, saveDraft?: () => Pro
     };
     void refresh();
     return () => { active = false; if (timer) clearTimeout(timer); };
-  }, [oauthAttemptId, selectedScope]);
+  }, [oauthAttemptId, selectedScope, selectedCatalogId]);
   async function create(catalogId: string, connectionId?: string) {
     const op = beginChannelOperation();
     if (!op) return;

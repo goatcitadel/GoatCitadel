@@ -30,7 +30,7 @@ export function useChannelWizard({
   useChannelProofFreshness(feedback);
   const visibleSteps = useMemo(
     () => definition.wizard.steps.filter((step) => isStepVisible(step, wizardValuesWithDefaults(definition, values))),
-    [definition.wizard.steps, values],
+    [definition, values],
   );
   const viewKey = "channel:" + scopeId + ":" + draft.draftId;
   const [activeStepId, setActiveStepId] = useSessionViewState(viewKey + ":step", visibleSteps[0]?.id ?? "");

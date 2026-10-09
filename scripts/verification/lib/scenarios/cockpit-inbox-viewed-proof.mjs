@@ -14,7 +14,7 @@ export function assertInboxDeliverableProjection({ projection, workspaceId, task
   const item = matches[0];
   assert.match(item.version, /^[a-f0-9]{64}$/u);
   assert.ok(["operator", "browser_local"].includes(projection.readStatus?.scope));
-  const { version, read, ...publicItem } = item;
+  const { version: _version, read, ...publicItem } = item;
   if (projection.readStatus.scope === "operator") assert.equal(typeof read, "boolean");
   assert.deepEqual(publicItem, {
     id: `task_deliverable:${deliverable.deliverableId}`,
@@ -38,7 +38,7 @@ export function assertInboxOwnerUnchanged(before, after) {
       // This rolling coverage warning is authored anew on each Gateway read.
       // All identity, scope, content, coverage, counts and persisted timestamps remain exact.
       if (item.group === "updates") {
-        const { read, ...stable } = item;
+        const { read: _read, ...stable } = item;
         return stable;
       }
       if (item.id !== "spend_coverage:seven_days" || item.kind !== "spend_coverage") return item;

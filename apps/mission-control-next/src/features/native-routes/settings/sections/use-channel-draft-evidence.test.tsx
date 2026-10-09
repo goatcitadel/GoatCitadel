@@ -32,11 +32,12 @@ const onPlan = vi.fn();
 const text = (node: ReactTestInstance): string => node.children.map((child) => typeof child === "string" ? child : text(child)).join(" ").replace(/\s+/g, " ");
 function button(view: ReactTestRenderer, label: string) { return view.root.findAllByType("button").find((item) => text(item).trim() === label)!; }
 function Harness({ shell = "cockpit" }: { shell?: "classic" | "cockpit" }) {
-  owner = useChannelSetupState("default");
+  const state = useChannelSetupState("default");
+  owner = state;
   actions = useChannelDraftActions(owner, onPlan);
   const saved = useChannelDraftEvidence(owner);
   const opened = useRef(false);
-  useEffect(() => { if(owner.data && !opened.current) { opened.current=true; owner.setSelectedDraftId(initialDraft.draftId); owner.setPanel("editor"); } }, [owner.data]);
+  useEffect(() => { if(state.data && !opened.current) { opened.current=true; state.setSelectedDraftId(initialDraft.draftId); state.setPanel("editor"); } }, [state]);
   if(!owner.selectedDraft || owner.panel !== "editor") return <p>Select a saved draft</p>;
   const props = { scopeId: "default", definition, draft: owner.selectedDraft, values: owner.draftValues, label: owner.draftLabel, enabled: owner.draftEnabled, dirty: owner.draftDirty, feedback: owner.validationRevision === owner.selectedDraft.revision ? owner.validationResult : null, busyAction: owner.busyAction, mutationBlocked: owner.mutation.pending || Boolean(owner.mutation.uncertain), draftEvidence: saved.draftEvidence, draftEvidenceLoading: saved.draftEvidenceLoading, draftEvidenceError: saved.draftEvidenceError,
     onValuesChange: owner.setDraftValues, onLabelChange: owner.setDraftLabel, onEnabledChange: owner.setDraftEnabled, onDirty: () => owner.setValidationResult(null), onSave: actions.handleSave, onValidate: actions.handleValidate, onTest: actions.handleTest, onFinalize: actions.handleFinalize, onAcknowledgeTest: actions.handleAcknowledgeTest };

@@ -5,7 +5,11 @@ import type { ChannelSettingsOwner } from "./use-channel-settings";
 /** A return URL selects only the fresh plan's canonical records; retained edits still use the leave guard. */
 export function useChannelReturnNavigation(owner: ChannelSettingsOwner, search: string) {
   const applied = useRef<string | null>(null);
+  const latestOwner = useRef(owner);
+  latestOwner.current = owner;
   useEffect(() => {
+    // This render's owner, read through the synced ref so the effect stays keyed on the link and scope fields.
+    const owner = latestOwner.current;
     const returnKey = owner.activeWorkspaceId + ":" + search;
     if (!owner.data || applied.current === returnKey) return;
     const params = new URLSearchParams(search);

@@ -318,7 +318,8 @@ export class ChannelConnectionChangePlanAdapter implements EvolutionControlPlane
 /** Only registered public identity/routing values belong in the review receipt. */
 function settingsReviewSummary(definition: ChannelSetupDefinition, draft: ChannelSetupDraft): string {
   const clean = (value: unknown): string => typeof value === "string"
-    ? redactSecretText(value.replace(/[\u0000-\u001f\u007f]/gu, " ").replace(/(?:https?:\/\/|keychain:)[^\s]+/giu, "[private endpoint]")).value.slice(0, 96)
+    ? // eslint-disable-next-line no-control-regex -- review receipts must replace control characters in operator-supplied text.
+      redactSecretText(value.replace(/[\u0000-\u001f\u007f]/gu, " ").replace(/(?:https?:\/\/|keychain:)[^\s]+/giu, "[private endpoint]")).value.slice(0, 96)
     : "";
   const parts = [`${clean(draft.label) || definition.catalog.label}; ${draft.enabled ? "enabled after approval" : "saved disabled"}; draft revision ${draft.revision}.`];
   const key = definition.catalog.catalogId;

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { it } from "node:test";
+import { setImmediate } from "node:timers";
 import {
   assertComposerConfirmation,
   assertComposerPlan,
