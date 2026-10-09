@@ -9,6 +9,7 @@
  * Pattern reference: comms-service.ts, settings-auth-service.ts.
  */
 
+import { chatListPreview } from "./chat-list-preview.js";
 import { createHash, randomUUID } from "node:crypto";
 import { logger, resolveSessionRoute } from "@goatcitadel/gateway-core";
 import {
@@ -85,10 +86,14 @@ export async function listChatSessions(
   const scope = query.scope ?? "all";
   const view = query.view ?? "active";
   const includeHidden = query.includeHidden ?? false;
-  const limit = query.sessionId !== undefined ? 1 : Math.max(1, Math.min(1000, Math.floor(query.limit ?? 200)));
+  if (query.sessionIds !== undefined && (!query.sessionIds.length || query.sessionIds.length > 100 || query.sessionId !== undefined || query.cursor !== undefined)) {
+    throw new Error("Session membership requires 1 to 100 IDs and no sessionId or cursor");
+  }
+  const limit = query.sessionIds?.length ?? (query.sessionId !== undefined ? 1 : Math.max(1, Math.min(1000, Math.floor(query.limit ?? 200))));
   const candidates = await storage.chatSessionLists.listCandidates({
     workspaceId,
     sessionId: query.sessionId,
+    sessionIds: query.sessionIds,
     scope,
     view,
     includeHidden,
@@ -240,6 +245,8 @@ export async function listChatSessions(
   });
 
   const page = records.slice(0, limit);
+  const previews = await storage.chatMessages.latestVisibleTextBySessionIds(page.map((record) => record.sessionId));
+  for (const record of page) record.lastMessagePreview = chatListPreview(previews.get(record.sessionId));
   if (query.includeActivity !== true || page.length === 0) return page;
   // One read for the whole page; the caller gates this on the session status feature.
   const summaries = await storage.chatTurnTraces.summarizeBySessionIds(page.map((record) => record.sessionId));

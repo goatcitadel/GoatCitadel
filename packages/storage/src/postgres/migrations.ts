@@ -15046,6 +15046,26 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     sql: CHANNEL_GUIDED_SETUP_POSTGRES_SQL,
     integritySha256: "a0d90a450d133bf69e06819c0f854e0f09a235979f73bc0631ea9e2aadc18e84",
   },
+  {
+    // Parity with SQLite v253. Older installs stored an unsalted hash of the
+    // credential request BODY for these two routes (an offline oracle for API
+    // keys, Basic passwords and tokens). The gateway now fingerprints them
+    // path-only (`credential_route_redacted_v1`), which never equals a historical
+    // body hash, so reuse of an old key already conflicts. Overwriting the stored
+    // hash with a fixed sentinel — sha256 hex of the literal
+    // "credential_route_historical_payload_hash_purged_v1" — preserves that
+    // replay/conflict behavior exactly while removing the oracle. Rows are kept so
+    // completed keys stay blocked; no other route or column is touched.
+    version: 199,
+    name: "purge_credential_route_idempotency_payload_hashes",
+    sql: `
+      UPDATE mutation_idempotency
+      SET payload_hash = 'ce1d02d6a6ff6eab5660c3fe4ac10944c7c34bc153672d6ab46120cd84ef3617'
+      WHERE route_path IN ('/api/v1/secrets/providers/:providerId', '/api/v1/auth/settings')
+        AND payload_hash <> 'ce1d02d6a6ff6eab5660c3fe4ac10944c7c34bc153672d6ab46120cd84ef3617';
+    `,
+    integritySha256: "fcfeb0ba7a7fdc3b238aa782ee6566d1b0875bcf80759929d7549f5917a84fdd",
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

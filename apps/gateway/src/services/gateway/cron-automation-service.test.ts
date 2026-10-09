@@ -537,6 +537,19 @@ describe("cron schedule helpers", () => {
     expect(() => normalizeCronSchedule("* * *")).toThrow("Cron schedule must look like");
   });
 
+  it("reads weekday ranges and lists as the days they name", () => {
+    expect(parseSimpleCronSchedule("0 9 * * 1-5")?.weekdays).toEqual([1, 2, 3, 4, 5]);
+    expect(parseSimpleCronSchedule("0 9 * * 1-3,5")?.weekdays).toEqual([1, 2, 3, 5]);
+    expect(parseSimpleCronSchedule("0 9 * * 0,6")?.weekdays).toEqual([0, 6]);
+    expect(parseSimpleCronSchedule("0 9 * * 1-5 UTC")).toMatchObject({ weekdays: [1, 2, 3, 4, 5], timeZone: "UTC" });
+  });
+
+  it("rejects weekday tokens that are not exact days or ascending ranges", () => {
+    for (const weekday of ["1x", "5-1", "1-7", "1-", "-5", "1,,2", "1--5", "01x"]) {
+      expect(parseSimpleCronSchedule(`0 9 * * ${weekday}`)).toBeNull();
+    }
+  });
+
   it("rejects malformed schedules and no-op normalization inputs", () => {
     expect(normalizeCronEndAt(null)).toBeUndefined();
     expect(normalizeCronEndAt(" ")).toBeUndefined();

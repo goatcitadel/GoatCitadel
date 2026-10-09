@@ -867,13 +867,13 @@ describe("Postgres migration ledger compatibility", () => {
 
   it("models one canonical final shape after bootstrap replacement and dynamic catalog normalization", () => {
     const manifest = buildCanonicalPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
-    // Reviewed committed registry through v197; keep independent drift tripwires.
-    assert.equal(manifest.tables.length, 364);
+    // Reviewed committed registry through v199 (v198 adds channel_setup_evidence and channel_oauth_attempts: +2 tables, +32 columns, +6 indexes (4 explicit plus 2 unique-constraint backing indexes); v199 is data-only); keep independent drift tripwires.
+    assert.equal(manifest.tables.length, 366);
     assert.equal(
       manifest.tables.reduce((count, table) => count + table.columns.length, 0),
-      5_025,
+      5_057,
     );
-    assert.equal(manifest.indexes.length, 758);
+    assert.equal(manifest.indexes.length, 764);
     assert.deepEqual(manifest.indexes.find((index) => index.name === "idx_memory_items_enumeration")?.keys, [
       "updated_at desc",
       "item_id desc",
@@ -1027,8 +1027,8 @@ describe("Postgres migration ledger compatibility", () => {
 
   it("covers every canonical IF NOT EXISTS table and index and fails closed on catalog issues", () => {
     const manifest = buildPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
-    assert.equal(manifest.tables.length, 364);
-    assert.equal(manifest.indexes.length, 775);
+    assert.equal(manifest.tables.length, 366);
+    assert.equal(manifest.indexes.length, 781);
     assert.equal(
       manifest.tables.every((table) => table.columns.length > 0),
       true,

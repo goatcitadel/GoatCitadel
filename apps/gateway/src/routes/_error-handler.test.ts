@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { ConflictError } from "@goatcitadel/contracts";
+import { ConflictError, FeatureDisabledError } from "@goatcitadel/contracts";
 import { sendRouteError } from "./_error-handler.js";
 
 describe("sendRouteError", () => {
+  it("preserves the disabled-feature wire contract through the shared handler", () => {
+    const reply = createReply();
+    const payload = sendRouteError(reply as never, new FeatureDisabledError("codeModeV1Enabled"), { warn: vi.fn(), error: vi.fn() } as never);
+    expect(reply.code).toHaveBeenCalledWith(409);
+    expect(payload).toMatchObject({ code: "FEATURE_DISABLED", details: { flag: "codeModeV1Enabled" } });
+  });
   it("returns typed GoatError responses with their declared status and body", () => {
     const reply = createReply();
     const log = {

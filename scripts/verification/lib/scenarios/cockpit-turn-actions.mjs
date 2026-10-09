@@ -1,6 +1,6 @@
 // Phones keep Retry and Copy inline and move the other turn actions into one
-// "More turn actions" menu. These helpers drive either layout by accessible name.
-export const MORE_TURN_ACTIONS = "More turn actions";
+// "More message actions" menu. These helpers drive either layout by accessible name.
+export const MORE_TURN_ACTIONS = "More message actions";
 
 function controls(scope, name) {
   return {

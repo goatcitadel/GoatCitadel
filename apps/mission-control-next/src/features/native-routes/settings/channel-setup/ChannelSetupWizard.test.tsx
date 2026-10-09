@@ -1,5 +1,5 @@
 import { __resetSessionViewStateForTests } from "../../../../hooks/use-session-view-state";
-import { __resetSessionDraftsForTests, hasSessionDraft } from "../../library/session-drafts";
+import { __resetCredentialInputsForTests as __resetSessionDraftsForTests, hasCredentialInput as hasSessionDraft } from "../credential-input-owner";
 import { DraftLeaveDialog } from "../../library/DraftLeaveDialog";
 // @vitest-environment happy-dom
 import { useState, type ComponentProps } from "react";
@@ -1374,7 +1374,9 @@ describe("local channel editing while owner writes are blocked", () => {
     renderer.unmount();
   });
 
-  for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+  // Only the Classic wizard offers Advanced JSON; the cockpit editor accepts typed fields only so credentials
+  // always travel through the secure-input owner (allowAdvancedInput: false).
+  for (const Component of [ChannelSetupWizard]) {
     it("keeps advanced text editable while review/unknown outcomes block writes in " + Component.name, async () => {
       const props = createWizardProps({ reviewRequired: true, mutationBlocked: true });
       let renderer!: ReactTestRenderer;
@@ -1384,7 +1386,7 @@ describe("local channel editing while owner writes are blocked", () => {
       await changeValue(renderer.root.findByType("textarea"), '{"retained":"editable"}');
       expect(renderer.root.findByType("textarea").props.value).toBe('{"retained":"editable"}');
       expect(findButton(renderer.root, "Save draft").props.disabled).toBe(true);
-      expect(findButton(renderer.root, Component === ChannelDraftEditor ? "Review live test" : "Run live test").props.disabled).toBe(true);
+      expect(findButton(renderer.root, "Run live test").props.disabled).toBe(true);
       await click(findButton(renderer.root, "Save draft"));
       expect(props.onSave).not.toHaveBeenCalled();
       renderer.unmount();

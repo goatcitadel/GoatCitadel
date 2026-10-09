@@ -424,7 +424,8 @@ describe("chat rendering tail coverage", () => {
     vi.stubGlobal("__GOATCITADEL_OPENUI_RENDERER__", true);
     renderer.unmount();
     renderer = create(<AssistantMessageRenderer role="assistant" content={`\`\`\`openui\n${openUiProgram}\n\`\`\``} />);
-    await waitForRenderedContent(renderer, "Renderer ready");
+    // The renderer loads lazily, and the program text already shows in the code fallback; wait for the renderer itself.
+    await waitForRenderedContent(renderer, '"gc-openui-renderer"');
     expect(renderer.root.findAllByProps({ className: "gc-openui-renderer" })).toHaveLength(1);
     expect(normalizedTextOf(renderer.toJSON())).toContain("Structured UI rendered.");
 

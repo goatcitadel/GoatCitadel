@@ -8,7 +8,9 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { useFormDirty } from "../library/use-form-dirty";
+import { dispatchTrackedMutation, type TrackedAttempt } from "./mutation-attempt-tracking";
 import {
+  AUTH_ROUTE_PATTERNS,
   authSnapshot,
   beginAuthAttempt,
   finishAuthAttempt,
@@ -102,6 +104,7 @@ export function useGatewayAuthContinuation(
     const secret = credential.trim();
     let dispatched = false,
       acknowledged = false;
+    let transport: TrackedAttempt | undefined;
     setMessage(null);
     try {
       if (reviewedAction.kind === "secure_input" && !secret) return;
@@ -119,23 +122,29 @@ export function useGatewayAuthContinuation(
         return;
       }
       dispatched = true;
-      const next =
-        reviewedAction.kind === "secure_input"
-          ? await submitChangePlanGatewayAuthCredential(
-              intent.planId,
-              { workspaceId: "default" },
-              {
-                expectedRevision: intent.revision,
-                actionId: reviewedAction.actionId,
-                actionNonce: reviewedAction.actionNonce,
-                credential: secret,
-              },
-            )
-          : await confirmChangePlan(
-              intent.planId,
-              { workspaceId: "default" },
-              { expectedRevision: intent.revision, actionNonce: reviewedAction.actionNonce },
-            );
+      const next = await dispatchTrackedMutation(
+        AUTH_ROUTE_PATTERNS,
+        () =>
+          reviewedAction.kind === "secure_input"
+            ? submitChangePlanGatewayAuthCredential(
+                intent.planId,
+                { workspaceId: "default" },
+                {
+                  expectedRevision: intent.revision,
+                  actionId: reviewedAction.actionId,
+                  actionNonce: reviewedAction.actionNonce,
+                  credential: secret,
+                },
+              )
+            : confirmChangePlan(
+                intent.planId,
+                { workspaceId: "default" },
+                { expectedRevision: intent.revision, actionNonce: reviewedAction.actionNonce },
+              ),
+        (tracked) => {
+          transport = tracked;
+        },
+      );
       requireAuthPlan(next, pending.submitted as GatewayAuthValues, pending.baseRevision);
       if (
         binding(next) !== binding(intent) ||
@@ -154,7 +163,7 @@ export function useGatewayAuthContinuation(
         setMessage("The current authentication action could not be verified. No action was sent.");
     } finally {
       if (live.current.mounted) setCredential("");
-      finishAuthAttempt(control.key, dispatched && !acknowledged);
+      finishAuthAttempt(control.key, dispatched && !acknowledged, transport);
     }
   }
   return {

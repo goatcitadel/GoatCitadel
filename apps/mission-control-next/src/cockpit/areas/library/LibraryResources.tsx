@@ -1,3 +1,6 @@
+import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
+import { LibraryLinkedArtifact } from "./LibraryLinkedArtifact";
 import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -7,6 +10,9 @@ import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { Sheet } from "../../ui/Sheet";
 import { LibraryResourceDetail } from "./LibraryResourceDetail";
+import { LibraryFileUpload } from "./LibraryFileUpload";
+import { LibraryNotesWorkspace } from "./LibraryNotesWorkspace";
+import { LibraryMemoryWorkspace } from "./LibraryMemoryWorkspace";
 import {
   loadLibraryResources,
   resourceBinding,
@@ -18,6 +24,14 @@ import {
 
 const TITLES = { memory: "Memory", notes: "Notes", files: "Files", artifacts: "Artifacts" } as const;
 export function LibraryResources({
+  kind, workspaceId, citadelId,
+}: { kind: ResourceKind; workspaceId: string; citadelId: string }) {
+  if (kind === "notes") return <LibraryNotesWorkspace key={workspaceId} workspaceId={workspaceId} />;
+  if (kind === "memory") return <LibraryMemoryWorkspace key={workspaceId} workspaceId={workspaceId} citadelId={citadelId} />;
+  return <LibraryResourceDirectory kind={kind} workspaceId={workspaceId} citadelId={citadelId} />;
+}
+
+function LibraryResourceDirectory({
   kind,
   workspaceId,
   citadelId,
@@ -26,14 +40,19 @@ export function LibraryResources({
   workspaceId: string;
   citadelId: string;
 }) {
+  const route = useCockpitRoute();
+  const params = new URLSearchParams(route.search);
+  const projectId = kind === "artifacts" ? params.get("projectId") ?? undefined : undefined;
+  const artifactId = kind === "artifacts" ? params.get("artifactId") ?? undefined : undefined;
+  const access = useProjectAccess(JSON.stringify([workspaceId, citadelId]));
   const [draftQuery, setDraftQuery] = useState("");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("active");
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
   const [selected, setSelected] = useState<string>();
   const resourceQuery = useQuery({
-    queryKey: ["library", "resources", kind, workspaceId, citadelId, query, status, cursors.at(-1)],
-    queryFn: () => loadLibraryResources({ kind, workspaceId, citadelId, query, status, cursor: cursors.at(-1) }),
+    queryKey: ["library", "resources", kind, workspaceId, citadelId, access.identity, projectId, query, status, cursors.at(-1)],
+    queryFn: () => loadLibraryResources({ kind, workspaceId, citadelId, projectId, query, status, cursor: cursors.at(-1) }),
     staleTime: 0,
   });
   // The last good directory window (and an open preview) stays while it is read again.
@@ -72,6 +91,9 @@ export function LibraryResources({
           Refresh {TITLES[kind].toLowerCase()}
         </Button>
       </header>
+      {artifactId ? <LibraryLinkedArtifact key={JSON.stringify([access.identity, projectId, artifactId])} artifactId={artifactId} projectId={projectId} workspaceId={workspaceId} citadelId={citadelId} /> : null}
+      {projectId ? <p className="break-all text-sm">Project artifact scope: {projectId}</p> : null}
+      {kind === "files" ? <LibraryFileUpload workspaceId={workspaceId} citadelId={citadelId} /> : null}
       <form
         className="flex flex-wrap items-end gap-2"
         onSubmit={(event) => {

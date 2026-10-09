@@ -120,6 +120,8 @@ public sealed class EventStreamService
         payload = new ApprovalNotificationPayload
         {
             ApprovalId = approvalId,
+            WorkspaceId = eventPayload?["workspaceId"]?.GetValue<string>() ??
+                eventPayload?["linkage"]?["workspaceId"]?.GetValue<string>() ?? root["links"]?["workspaceId"]?.GetValue<string>(),
             Kind = eventPayload?["kind"]?.GetValue<string>(),
             RiskLevel = eventPayload?["riskLevel"]?.GetValue<string>(),
             Status = eventPayload?["status"]?.GetValue<string>(),
@@ -190,7 +192,13 @@ public sealed class EventStreamService
             {
                 Title = "GoatCitadel is waiting",
                 Body = "Work is paused until the operator responds.",
-                RoutePath = "/ops/approvals",
+                RoutePath = string.IsNullOrWhiteSpace(eventPayload?["approvalId"]?.GetValue<string>() ?? root["links"]?["approvalId"]?.GetValue<string>())
+                    ? "/inbox"
+                    : new ApprovalNotificationPayload
+                    {
+                        ApprovalId = eventPayload?["approvalId"]?.GetValue<string>() ?? root["links"]!["approvalId"]!.GetValue<string>(),
+                        WorkspaceId = eventPayload?["workspaceId"]?.GetValue<string>() ?? root["links"]?["workspaceId"]?.GetValue<string>(),
+                    }.RoutePath,
             };
             return true;
         }

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  ConflictError,
   NotFoundError,
   PolicyViolationError,
   ValidationError,
@@ -15,6 +16,11 @@ import {
   type BrowserSessionStateSummary,
 } from "@goatcitadel/contracts";
 import type { AsyncGatewaySqlRepository } from "@goatcitadel/storage";
+import {
+  findBrowserSessionEventPayload,
+  findSessionCreatedByRequestId,
+  runBrowserSessionTransaction,
+} from "./browser-session-request-replay.js";
 
 export interface BrowserSessionRuntimeDependencies {
   gatewaySql: AsyncGatewaySqlRepository;
@@ -63,10 +69,45 @@ const SCOPE_RANK: Record<BrowserSessionGrantScope, number> = {
 
 export class BrowserSessionRuntimeService {
   private schemaReady?: Promise<void>;
+  private readonly rotating = new Map<string, Promise<BrowserSessionGrantRecord>>();
+  private readonly granting = new Map<string, { fingerprint: string; grant: Promise<BrowserSessionGrantRecord> }>();
+  private readonly creatingSessions = new Map<string, Promise<BrowserSessionRecord>>();
 
   public constructor(private readonly deps: BrowserSessionRuntimeDependencies) {}
 
   public async createSession(input: BrowserSessionCreateInput = {}): Promise<BrowserSessionRecord> {
+    const requestId = input.requestId?.trim();
+    if (!requestId) {
+      return await this.insertSession(input);
+    }
+    const inFlight = this.creatingSessions.get(requestId);
+    if (inFlight) {
+      const session = await inFlight;
+      assertSameSessionRequest(session, input);
+      return session;
+    }
+    const pending = this.createRequestedSession(requestId, input).finally(() =>
+      this.creatingSessions.delete(requestId),
+    );
+    this.creatingSessions.set(requestId, pending);
+    return await pending;
+  }
+
+  private async createRequestedSession(
+    requestId: string,
+    input: BrowserSessionCreateInput,
+  ): Promise<BrowserSessionRecord> {
+    await this.waitForSchema();
+    const priorSessionId = await findSessionCreatedByRequestId(this.deps, requestId);
+    if (priorSessionId) {
+      const session = await this.requireSession(priorSessionId);
+      assertSameSessionRequest(session, input);
+      return session;
+    }
+    return await this.insertSession(input, requestId);
+  }
+
+  private async insertSession(input: BrowserSessionCreateInput, requestId?: string): Promise<BrowserSessionRecord> {
     await this.waitForSchema();
     const now = new Date().toISOString();
     const session: BrowserSessionRecord = {
@@ -78,28 +119,38 @@ export class BrowserSessionRuntimeService {
       createdAt: now,
       updatedAt: now,
     };
-    await this.deps.gatewaySql
-      .prepare(
-        `
-        INSERT INTO browser_sessions (
-          session_id, workspace_id, label, status, created_by, created_at, updated_at, closed_at
-        ) VALUES (
-          @sessionId, @workspaceId, @label, @status, @createdBy, @createdAt, @updatedAt, NULL
+    // The row and its request-ID event commit together, so a replay can always find what it created.
+    await this.transaction(async () => {
+      await this.deps.gatewaySql
+        .prepare(
+          `
+          INSERT INTO browser_sessions (
+            session_id, workspace_id, label, status, created_by, created_at, updated_at, closed_at
+          ) VALUES (
+            @sessionId, @workspaceId, @label, @status, @createdBy, @createdAt, @updatedAt, NULL
+          )
+        `,
         )
-      `,
-      )
-      .run({
-        sessionId: session.sessionId,
-        workspaceId: session.workspaceId ?? null,
+        .run({
+          sessionId: session.sessionId,
+          workspaceId: session.workspaceId ?? null,
+          label: session.label,
+          status: session.status,
+          createdBy: session.createdBy,
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+        });
+      await this.recordEvent(session.sessionId, "session_created", session.createdBy, {
         label: session.label,
-        status: session.status,
-        createdBy: session.createdBy,
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
+        ...(requestId ? { requestId } : {}),
       });
-    await this.recordEvent(session.sessionId, "session_created", session.createdBy, { label: session.label });
+    });
     await this.publish("browser_session_created", { sessionId: session.sessionId, workspaceId: session.workspaceId });
     return session;
+  }
+
+  private async transaction<T>(callback: () => Promise<T>): Promise<T> {
+    return await runBrowserSessionTransaction(this.deps, callback);
   }
 
   public async listSessions(
@@ -149,31 +200,41 @@ export class BrowserSessionRuntimeService {
 
   public async closeSession(sessionId: string, actorId = "operator"): Promise<BrowserSessionRecord> {
     await this.waitForSchema();
-    const current = await this.requireSession(sessionId);
-    if (current.status === "closed") {
-      return current;
-    }
+    await this.requireSession(sessionId);
     const now = new Date().toISOString();
-    await this.deps.gatewaySql
-      .prepare(
-        `
-        UPDATE browser_sessions
-        SET status = 'closed', updated_at = @updatedAt, closed_at = @closedAt
-        WHERE session_id = @sessionId
-      `,
-      )
-      .run({ sessionId, updatedAt: now, closedAt: now });
-    await this.deps.gatewaySql
-      .prepare(
-        `
-        UPDATE browser_session_grants
-        SET revoked_at = @revokedAt
-        WHERE session_id = @sessionId AND revoked_at IS NULL
-      `,
-      )
-      .run({ sessionId, revokedAt: now });
-    await this.recordEvent(sessionId, "session_closed", actorId, {});
-    await this.publish("browser_session_closed", { sessionId });
+    // Grants are revoked and the session closed in one transaction. A replay on an
+    // already-closed session still finishes any revocation an earlier close left behind.
+    const changed = await this.transaction(async () => {
+      const revoked = await this.deps.gatewaySql
+        .prepare(
+          `
+          UPDATE browser_session_grants
+          SET revoked_at = @revokedAt
+          WHERE session_id = @sessionId AND revoked_at IS NULL
+        `,
+        )
+        .run({ sessionId, revokedAt: now });
+      const closed = await this.deps.gatewaySql
+        .prepare(
+          `
+          UPDATE browser_sessions
+          SET status = 'closed', updated_at = @updatedAt, closed_at = @closedAt
+          WHERE session_id = @sessionId AND status = 'active'
+        `,
+        )
+        .run({ sessionId, updatedAt: now, closedAt: now });
+      if (closed.changes === 0 && revoked.changes === 0) {
+        return false;
+      }
+      await this.recordEvent(sessionId, "session_closed", actorId, {
+        revokedGrantCount: revoked.changes,
+        ...(closed.changes === 0 ? { completedEarlierClose: true } : {}),
+      });
+      return true;
+    });
+    if (changed) {
+      await this.publish("browser_session_closed", { sessionId });
+    }
     return await this.requireSession(sessionId);
   }
 
@@ -182,23 +243,72 @@ export class BrowserSessionRuntimeService {
     input: BrowserSessionGrantInput,
     actorId = "operator",
   ): Promise<BrowserSessionGrantRecord> {
+    const requestId = input.requestId?.trim();
+    if (!requestId) {
+      return await this.insertGrant(sessionId, input, actorId);
+    }
+    // A request ID makes a lost response replayable: the same request returns the same grant.
+    const key = JSON.stringify([sessionId, requestId]);
+    const fingerprint = grantRequestFingerprint(input);
+    const inFlight = this.granting.get(key);
+    if (inFlight) {
+      if (inFlight.fingerprint !== fingerprint) throw grantRequestConflict();
+      return await inFlight.grant;
+    }
+    const grant = this.createRequestedGrant(sessionId, requestId, fingerprint, input, actorId).finally(() =>
+      this.granting.delete(key),
+    );
+    this.granting.set(key, { fingerprint, grant });
+    return await grant;
+  }
+
+  private async createRequestedGrant(
+    sessionId: string,
+    requestId: string,
+    fingerprint: string,
+    input: BrowserSessionGrantInput,
+    actorId: string,
+  ): Promise<BrowserSessionGrantRecord> {
+    await this.waitForSchema();
+    await this.requireSession(sessionId);
+    const prior = await this.findEventPayload(sessionId, "grant_created", "requestId", requestId);
+    if (prior) {
+      if (prior.requestFingerprint !== fingerprint) throw grantRequestConflict();
+      return await this.requireGrant(sessionId, String(prior.grantId));
+    }
+    return await this.insertGrant(sessionId, input, actorId, { requestId, requestFingerprint: fingerprint });
+  }
+
+  private async insertGrant(
+    sessionId: string,
+    input: BrowserSessionGrantInput,
+    actorId: string,
+    request: { requestId?: string; requestFingerprint?: string } = {},
+  ): Promise<BrowserSessionGrantRecord> {
     await this.waitForSchema();
     const session = await this.requireSession(sessionId);
     if (session.status !== "active") {
       throw new ValidationError({ message: "Cannot create a grant for a closed browser session." });
     }
-    const now = new Date().toISOString();
-    const grant: BrowserSessionGrantRecord = {
-      grantId: randomUUID(),
-      sessionId,
-      actorId: requireTrimmed(input.actorId, "actorId"),
-      scopes: normalizeScopes(input.scopes),
-      allowedHosts: normalizeHosts(input.allowedHosts),
-      createdAt: now,
-      expiresAt: input.ttlSeconds
-        ? new Date(Date.now() + normalizeTtl(input.ttlSeconds) * 1000).toISOString()
-        : undefined,
-    };
+    const grant = buildGrant(sessionId, input, input.ttlSeconds ? ttlExpiry(input.ttlSeconds) : undefined);
+    // The row and its request-ID event commit together, so a replay can always find what it created.
+    await this.transaction(async () => {
+      // Re-checked inside the transaction: a close that committed after the check above wins.
+      if ((await this.requireSession(sessionId)).status !== "active") {
+        throw new ValidationError({ message: "Cannot create a grant for a closed browser session." });
+      }
+      await this.writeGrant(grant, actorId, request);
+    });
+    await this.publish("browser_session_grant_created", { sessionId, grantId: grant.grantId });
+    return grant;
+  }
+
+  /** Inserts a grant row and its creation event. Callers own the surrounding transaction. */
+  private async writeGrant(
+    grant: BrowserSessionGrantRecord,
+    actorId: string,
+    request: { requestId?: string; requestFingerprint?: string } = {},
+  ): Promise<void> {
     await this.deps.gatewaySql
       .prepare(
         `
@@ -218,14 +328,13 @@ export class BrowserSessionRuntimeService {
         createdAt: grant.createdAt,
         expiresAt: grant.expiresAt ?? null,
       });
-    await this.recordEvent(sessionId, "grant_created", actorId, {
+    await this.recordEvent(grant.sessionId, "grant_created", actorId, {
       grantId: grant.grantId,
       grantActorId: grant.actorId,
       scopes: grant.scopes,
       allowedHosts: grant.allowedHosts,
+      ...(request.requestId ? { requestId: request.requestId, requestFingerprint: request.requestFingerprint } : {}),
     });
-    await this.publish("browser_session_grant_created", { sessionId, grantId: grant.grantId });
-    return grant;
   }
 
   public async revokeGrant(
@@ -235,23 +344,31 @@ export class BrowserSessionRuntimeService {
   ): Promise<BrowserSessionGrantRecord> {
     await this.waitForSchema();
     await this.requireSession(sessionId);
-    const current = await this.requireGrant(sessionId, grantId);
-    if (current.revokedAt) {
-      return current;
-    }
+    await this.requireGrant(sessionId, grantId);
     const now = new Date().toISOString();
-    await this.deps.gatewaySql
+    // Conditional: only the request that actually revokes records the event.
+    const changed = await this.transaction(async () => {
+      if (!(await this.revokeIfActive(sessionId, grantId, now))) return false;
+      await this.recordEvent(sessionId, "grant_revoked", actorId, { grantId });
+      return true;
+    });
+    if (changed) {
+      await this.publish("browser_session_grant_revoked", { sessionId, grantId });
+    }
+    return await this.requireGrant(sessionId, grantId);
+  }
+
+  private async revokeIfActive(sessionId: string, grantId: string, revokedAt: string): Promise<boolean> {
+    const result = await this.deps.gatewaySql
       .prepare(
         `
         UPDATE browser_session_grants
         SET revoked_at = @revokedAt
-        WHERE session_id = @sessionId AND grant_id = @grantId
+        WHERE session_id = @sessionId AND grant_id = @grantId AND revoked_at IS NULL
       `,
       )
-      .run({ sessionId, grantId, revokedAt: now });
-    await this.recordEvent(sessionId, "grant_revoked", actorId, { grantId });
-    await this.publish("browser_session_grant_revoked", { sessionId, grantId });
-    return await this.requireGrant(sessionId, grantId);
+      .run({ sessionId, grantId, revokedAt });
+    return result.changes === 1;
   }
 
   public async rotateGrant(
@@ -259,26 +376,75 @@ export class BrowserSessionRuntimeService {
     grantId: string,
     actorId = "operator",
   ): Promise<BrowserSessionGrantRecord> {
+    const key = JSON.stringify([sessionId, grantId]);
+    const inFlight = this.rotating.get(key);
+    if (inFlight) {
+      return await inFlight;
+    }
+    const pending = this.rotateGrantOnce(sessionId, grantId, actorId).finally(() => this.rotating.delete(key));
+    this.rotating.set(key, pending);
+    return await pending;
+  }
+
+  private async rotateGrantOnce(
+    sessionId: string,
+    grantId: string,
+    actorId: string,
+  ): Promise<BrowserSessionGrantRecord> {
     await this.waitForSchema();
-    const current = await this.revokeGrant(sessionId, grantId, actorId);
-    const remainingTtlSeconds = current.expiresAt
-      ? Math.floor((new Date(current.expiresAt).getTime() - Date.now()) / 1000)
-      : undefined;
-    const rotated = await this.createGrant(
+    const session = await this.requireSession(sessionId);
+    const current = await this.requireGrant(sessionId, grantId);
+    if (current.revokedAt) {
+      // A replayed rotation returns its recorded successor; any other revoked grant stays withdrawn.
+      const prior = await this.findEventPayload(sessionId, "grant_rotated", "previousGrantId", grantId);
+      if (prior) {
+        return await this.requireGrant(sessionId, String(prior.grantId));
+      }
+      throw new ConflictError({ message: "This grant is revoked. Rotation cannot restore withdrawn access." });
+    }
+    if (session.status !== "active") {
+      throw new ConflictError({ message: "Cannot rotate a grant on a closed browser session." });
+    }
+    if (current.expiresAt && Date.parse(current.expiresAt) <= Date.now()) {
+      throw new ConflictError({ message: "This grant has expired. Rotation cannot extend it." });
+    }
+    // The successor keeps the exact original expiry, or none when the original had none.
+    const successor = buildGrant(
       sessionId,
-      {
-        actorId: current.actorId,
-        scopes: current.scopes,
-        allowedHosts: current.allowedHosts,
-        ttlSeconds: remainingTtlSeconds && remainingTtlSeconds > 0 ? remainingTtlSeconds : undefined,
-      },
-      actorId,
+      { actorId: current.actorId, scopes: current.scopes, allowedHosts: current.allowedHosts },
+      current.expiresAt,
     );
-    await this.recordEvent(sessionId, "grant_rotated", actorId, {
-      previousGrantId: grantId,
-      grantId: rotated.grantId,
+    const now = new Date().toISOString();
+    await this.transaction(async () => {
+      // Re-checked inside the transaction: a concurrent close or revoke wins, and no successor is created.
+      if ((await this.requireSession(sessionId)).status !== "active") {
+        throw new ConflictError({ message: "Cannot rotate a grant on a closed browser session." });
+      }
+      if (!(await this.revokeIfActive(sessionId, grantId, now))) {
+        throw new ConflictError({
+          message: "This grant was revoked while rotating. Rotation cannot restore withdrawn access.",
+        });
+      }
+      await this.recordEvent(sessionId, "grant_revoked", actorId, { grantId });
+      await this.writeGrant(successor, actorId);
+      await this.recordEvent(sessionId, "grant_rotated", actorId, {
+        previousGrantId: grantId,
+        grantId: successor.grantId,
+      });
     });
-    return rotated;
+    await this.publish("browser_session_grant_revoked", { sessionId, grantId });
+    await this.publish("browser_session_grant_created", { sessionId, grantId: successor.grantId });
+    return successor;
+  }
+
+  /** The newest event of this type whose payload field equals the value, with a string grant ID. */
+  private async findEventPayload(
+    sessionId: string,
+    eventType: BrowserSessionEventType,
+    field: "requestId" | "previousGrantId",
+    value: string,
+  ): Promise<Record<string, unknown> | undefined> {
+    return await findBrowserSessionEventPayload(this.deps, sessionId, eventType, field, value);
   }
 
   public async listEvents(sessionId: string, limit = 100): Promise<BrowserSessionEventRecord[]> {
@@ -631,6 +797,54 @@ function normalizeHost(raw: string): string {
   } catch {
     return value;
   }
+}
+
+/** A replayed session request must name the same workspace and label. */
+function assertSameSessionRequest(session: BrowserSessionRecord, input: BrowserSessionCreateInput): void {
+  const label = input.label?.trim() || "Shared browser session";
+  if (session.workspaceId !== (input.workspaceId?.trim() || undefined) || session.label !== label) {
+    throw new ConflictError({
+      code: "ALREADY_EXISTS",
+      message: "This request ID already created a different browser session. Refresh sessions before creating another.",
+    });
+  }
+}
+
+/** The exact normalized grant request: actor, scopes, hosts and expiry duration. */
+function grantRequestFingerprint(input: BrowserSessionGrantInput): string {
+  return JSON.stringify([
+    requireTrimmed(input.actorId, "actorId"),
+    [...normalizeScopes(input.scopes)].sort(),
+    [...normalizeHosts(input.allowedHosts)].sort(),
+    input.ttlSeconds ? normalizeTtl(input.ttlSeconds) : null,
+  ]);
+}
+
+function grantRequestConflict(): ConflictError {
+  return new ConflictError({
+    code: "ALREADY_EXISTS",
+    message: "This request ID already created a different grant. Refresh grants before requesting again.",
+  });
+}
+
+function ttlExpiry(ttlSeconds: number): string {
+  return new Date(Date.now() + normalizeTtl(ttlSeconds) * 1000).toISOString();
+}
+
+function buildGrant(
+  sessionId: string,
+  input: Pick<BrowserSessionGrantInput, "actorId" | "scopes" | "allowedHosts">,
+  expiresAt: string | undefined,
+): BrowserSessionGrantRecord {
+  return {
+    grantId: randomUUID(),
+    sessionId,
+    actorId: requireTrimmed(input.actorId, "actorId"),
+    scopes: normalizeScopes(input.scopes),
+    allowedHosts: normalizeHosts(input.allowedHosts),
+    createdAt: new Date().toISOString(),
+    expiresAt,
+  };
 }
 
 function normalizeLimit(value: number | undefined): number {

@@ -1,6 +1,8 @@
-import { useCallback, useRef, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
 import type { ChatAttachmentRecord, ChatMode, ChatSessionPrefsPatch, ChatSessionRecord } from "@goatcitadel/contracts";
 import { uploadChatAttachment } from "@goatcitadel/mission-control-shared/api/client";
+import { getGatewayAccessRevision, getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import type { CommandSuggestionItem } from "../chat-command-suggestions";
 
 export function isPlanningModeToggleShortcut(input: {
@@ -86,30 +88,45 @@ export function useChatComposerInteractions(input: {
 
   const dragDepthRef = useRef(0);
 
+  const [attachmentUpload, setAttachmentUpload] = useState<{ pending: number; error: string | null }>({ pending: 0, error: null });
+  const uploadScope = JSON.stringify([getGatewayApiBaseUrl(), getGatewayAccessRevision(), getGatewayCallerScope(), selectedSession?.workspaceId, selectedSession?.sessionId]);
+  const uploadScopeRef = useRef(uploadScope);
+  uploadScopeRef.current = uploadScope;
+  const uploadOwnerRef = useRef<object | null>(null);
+  useEffect(() => {
+    // Idempotent reset: keeping the same idle state avoids a render loop when a caller's setSending is not stable.
+    setAttachmentUpload((current) => (current.pending === 0 && current.error === null ? current : { pending: 0, error: null }));
+    return () => {
+      if (uploadOwnerRef.current) { uploadOwnerRef.current = null; setSending(false); }
+    };
+  }, [uploadScope, setSending]);
   const uploadAttachments = useCallback(
     async (files: File[]) => {
-      if (files.length === 0 || sending) return;
-      const session = await ensureSession();
+      if (files.length === 0 || sending || uploadOwnerRef.current) return;
+      const owner = {};
+      uploadOwnerRef.current = owner;
+      const access = getGatewayAccessRevision();
+      const caller = getGatewayCallerScope();
+      const current = () => uploadOwnerRef.current === owner && uploadScopeRef.current === uploadScope
+        && access === getGatewayAccessRevision() && caller === getGatewayCallerScope();
       setSending(true);
+      setAttachmentUpload({ pending: files.length, error: null });
       try {
-        const uploaded = await Promise.all(
-          files.map((file) =>
-            uploadChatAttachment({
-              sessionId: session.sessionId,
-              projectId: selectedSession?.projectId ?? undefined,
-              file,
-            }),
-          ),
-        );
-        setPendingAttachments((current) => [...current, ...uploaded]);
-        setError(null);
+        const session = await ensureSession();
+        if (!current()) return;
+        const uploaded = await Promise.all(files.map((file) => uploadChatAttachment({
+          sessionId: session.sessionId, projectId: session.projectId ?? selectedSession?.projectId ?? undefined, file,
+        })));
+        if (!current()) return;
+        setPendingAttachments((attachments) => [...attachments, ...uploaded]);
+        setAttachmentUpload({ pending: 0, error: null });
       } catch (err) {
-        setError((err as Error).message);
+        if (current()) setAttachmentUpload({ pending: 0, error: (err as Error).message });
       } finally {
-        setSending(false);
+        if (current()) { uploadOwnerRef.current = null; setSending(false); }
       }
     },
-    [ensureSession, selectedSession?.projectId, sending, setError, setPendingAttachments, setSending],
+    [ensureSession, selectedSession?.projectId, sending, setPendingAttachments, setSending, uploadScope],
   );
 
   const handleComposerKeyDown = useCallback(
@@ -289,6 +306,7 @@ export function useChatComposerInteractions(input: {
   );
 
   return {
+    attachmentUpload,
     uploadAttachments,
     handleComposerKeyDown,
     handleComposerPaste,

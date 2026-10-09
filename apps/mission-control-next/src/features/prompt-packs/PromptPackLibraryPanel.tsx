@@ -71,7 +71,7 @@ export function PromptPackLibraryPanel({
         </div>
         <ClipboardCopy size={16} />
       </div>
-      <div className="mc-pp-pack-list" role="list" aria-label="Prompt packs">
+      <div className="mc-pp-pack-list" role="group" aria-label="Prompt packs">
         {packs.map((pack) => (
           <button
             key={pack.packId}

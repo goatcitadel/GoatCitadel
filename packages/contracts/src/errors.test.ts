@@ -3,6 +3,7 @@ import {
   NotFoundError,
   ValidationError,
   ConflictError,
+  FeatureDisabledError,
   PolicyViolationError,
   ToolExecutionError,
   ExternalServiceError,
@@ -14,6 +15,13 @@ import {
 } from "./errors.js";
 
 describe("GoatError hierarchy", () => {
+  it("serializes disabled features with a flag while preserving ordinary conflicts", () => {
+    const error = new FeatureDisabledError("memoryLifecycleAdminV1Enabled");
+    expect(error).toBeInstanceOf(GoatError);
+    expect(error.httpStatus).toBe(409);
+    expect(error.toJSON()).toEqual({ error: "Feature flag memoryLifecycleAdminV1Enabled is disabled.", code: "FEATURE_DISABLED", details: { flag: "memoryLifecycleAdminV1Enabled" } });
+    expect(new ConflictError({ message: "Stale" }).code).toBe("STATE_CONFLICT");
+  });
   it("NotFoundError with entity+id", () => {
     const err = new NotFoundError({ entity: "AgentProfile", id: "abc123" });
     expect(err).toBeInstanceOf(Error);

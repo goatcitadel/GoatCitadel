@@ -1,8 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { createInvalidationBatcher, throttleIntervalFor } from "./invalidation-batcher";
 import { toast } from "sonner";
-import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import {
+  getGatewayApiBaseUrl,
+  getGatewayAccessRevision,
+  subscribeGatewayAccessChange,
+} from "@goatcitadel/mission-control-shared/api/client-core";
+import {
+  getGatewayCallerScope,
+  subscribeGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
 import {
   connectEventStream,
@@ -140,28 +148,73 @@ export function createRealtimeSink(queryClient: QueryClient): { sink: RealtimeSi
 }
 
 /**
- * Reads the Inbox through the query cache for a toast decision. A read already in flight began before
- * this event and may miss it, so it is replaced (its waiters receive the new result). Events delivered
- * in the same tick share one read, and a batched Inbox invalidation joins it instead of starting another.
+ * Retains live notification waiters across replaced reads. Only a successful owner fetch settles
+ * them, never a cached/manual projection. Each later tick replaces a pre-event read; same-tick
+ * signals share one read (GL-63). No polling or retry is introduced on owner/auth failures.
  */
 function createInboxReader(queryClient: QueryClient) {
-  const tickReads = new Map<string, Promise<OperatorInboxResponse>>();
-  return (workspaceId: string): Promise<OperatorInboxResponse> => {
-    const pending = tickReads.get(workspaceId);
-    if (pending) return pending;
-    const queryKey = queryKeys.inbox(workspaceId);
-    const inFlight = queryClient.getQueryCache().find({ queryKey, exact: true });
-    if (inFlight?.state.fetchStatus === "fetching") void inFlight.cancel({ silent: true });
-    const read = queryClient.fetchQuery({
-      queryKey,
-      queryFn: ({ signal }) => fetchOperatorInbox(workspaceId, { signal }),
-      staleTime: 0,
-    });
-    tickReads.set(workspaceId, read);
-    setTimeout(() => {
-      if (tickReads.get(workspaceId) === read) tickReads.delete(workspaceId);
-    }, 0);
-    return read;
+  const pending = new Map<
+    string,
+    {
+      promise: Promise<OperatorInboxResponse>;
+      resolve: (projection: OperatorInboxResponse) => void;
+      reject: (error: unknown) => void;
+    }
+  >();
+  const ticks = new Map<string, { timer: ReturnType<typeof setTimeout>; promise: Promise<OperatorInboxResponse> }>();
+  const cache = queryClient.getQueryCache();
+  const unsubscribe = cache.subscribe((event) => {
+    if (event.type !== "updated") return;
+    const key = JSON.stringify(event.query.queryKey);
+    const waiting = pending.get(key);
+    if (!waiting) return;
+    if (event.action.type === "success" && !event.action.manual) {
+      pending.delete(key);
+      waiting.resolve(event.query.state.data as OperatorInboxResponse);
+    } else if (event.action.type === "error") {
+      pending.delete(key);
+      waiting.reject(event.action.error);
+    }
+  });
+  return {
+    read(workspaceId: string): Promise<OperatorInboxResponse> {
+      const queryKey = queryKeys.inbox(workspaceId);
+      const key = JSON.stringify(queryKey);
+      const tick = ticks.get(key);
+      if (tick) return tick.promise;
+      let waiting = pending.get(key);
+      if (!waiting) {
+        let resolve!: (projection: OperatorInboxResponse) => void;
+        let reject!: (error: unknown) => void;
+        const promise = new Promise<OperatorInboxResponse>((yes, no) => {
+          resolve = yes;
+          reject = no;
+        });
+        waiting = { promise, resolve, reject };
+        pending.set(key, waiting);
+      }
+      ticks.set(key, { timer: setTimeout(() => ticks.delete(key), 0), promise: waiting.promise });
+      const inFlight = cache.find({ queryKey, exact: true });
+      if (inFlight?.state.fetchStatus === "fetching") void inFlight.cancel({ silent: true });
+      void queryClient
+        .fetchQuery({
+          queryKey,
+          queryFn: ({ signal }) => fetchOperatorInbox(workspaceId, { signal }),
+          staleTime: 0,
+          retry: false,
+        })
+        .catch(() => {
+          /* Intentionally ignored: cache success/error owns settlement; replacement cancellation retains waiters. */
+        });
+      return waiting.promise;
+    },
+    dispose() {
+      unsubscribe();
+      for (const tick of ticks.values()) clearTimeout(tick.timer);
+      ticks.clear();
+      for (const waiting of pending.values()) waiting.reject(new Error("Notification scope retired"));
+      pending.clear();
+    },
   };
 }
 
@@ -197,6 +250,19 @@ export function useCockpitRealtime(input: {
     workspaceRef.current = { id: workspaceId, generation: workspaceRef.current.generation + 1 };
   }
   const installation = getGatewayApiBaseUrl();
+  const accessRevision = useSyncExternalStore(subscribeGatewayAccessChange, getGatewayAccessRevision, () => 0);
+  const caller = getGatewayCallerScope();
+  const callerEpoch = useRef(0);
+  const [callerGeneration, setCallerGeneration] = useState(0);
+  // Even a same-render caller away-and-back change retires outstanding attention and actions.
+  useEffect(
+    () =>
+      subscribeGatewayCallerScope(() => {
+        callerEpoch.current += 1;
+        setCallerGeneration(callerEpoch.current);
+      }),
+    [],
+  );
   const currentScope = useRef({ installation, enabled, generation: 0 });
   if (currentScope.current.installation !== installation || currentScope.current.enabled !== enabled) {
     currentScope.current = { installation, enabled, generation: currentScope.current.generation + 1 };
@@ -207,13 +273,16 @@ export function useCockpitRealtime(input: {
     const generation = currentScope.current.generation;
     const delivered = new Set<string>();
     const { sink, dispose } = createRealtimeSink(queryClient);
-    const readInbox = createInboxReader(queryClient);
+    const inboxReader = createInboxReader(queryClient);
     const isCurrent = () =>
       active &&
       currentScope.current.enabled &&
       currentScope.current.generation === generation &&
       currentScope.current.installation === installation &&
-      getGatewayApiBaseUrl() === installation;
+      getGatewayApiBaseUrl() === installation &&
+      getGatewayAccessRevision() === accessRevision &&
+      getGatewayCallerScope() === caller &&
+      callerEpoch.current === callerGeneration;
     const disconnect = connectEventStream(
       (event, delivery) => {
         if (!isCurrent()) return;
@@ -235,7 +304,8 @@ export function useCockpitRealtime(input: {
           isCurrent() &&
           workspaceRef.current.id === scopeWorkspaceId &&
           workspaceRef.current.generation === workspaceGeneration;
-        void readInbox(scopeWorkspaceId)
+        void inboxReader
+          .read(scopeWorkspaceId)
           .then((projection) => {
             if (!isCurrentWorkspace()) return;
             const item = resolveInboxNotificationItem(projection, event, notification, scopeWorkspaceId);
@@ -277,10 +347,11 @@ export function useCockpitRealtime(input: {
     );
     return () => {
       active = false;
+      inboxReader.dispose();
       dispose();
       disconnect();
       resetEventStreamStatus();
     };
-  }, [queryClient, enabled, installation]);
+  }, [queryClient, enabled, installation, accessRevision, caller, callerGeneration]);
   return enabled ? streamState : "closed";
 }

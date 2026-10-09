@@ -1,3 +1,10 @@
+import {
+  prepareTestbenchRuntime,
+  buildTestbenchGatewayEnv,
+  buildTestbenchEnvOmit,
+} from "../../../testbench-runtime.mjs";
+import { collectVerificationSecretEnvKeys } from "./usability-coverage.mjs";
+
 export async function runAuthMatrixLane(context, _options = {}, deps) {
   const {
     assertApprovalIngressMatrix,
@@ -39,16 +46,23 @@ export async function runAuthMatrixLane(context, _options = {}, deps) {
     GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "false",
   };
   let deviceAndCompanion;
-  const stack = await startVerificationStack(context, {
-    includeUi: false,
-    gatewayEnv: {
-      GOATCITADEL_AUTH_MODE: "token",
-      GOATCITADEL_AUTH_TOKEN: operatorToken,
-      GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN: approvalCreateToken,
-      GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "false",
-    },
-  });
+  const runtimeRoot = await prepareTestbenchRuntime({ runId: context.runId, stubBaseUrl: "http://127.0.0.1:1/v1" });
+  let stack;
   try {
+    const gatewayEnv = buildTestbenchGatewayEnv(runtimeRoot);
+    const omitEnv = buildTestbenchEnvOmit(await collectVerificationSecretEnvKeys(path.join(runtimeRoot, "config")));
+    stack = await startVerificationStack(context, {
+      includeUi: false,
+      runtimeRoot,
+      gatewayEnvOmit: omitEnv,
+      gatewayEnv: {
+        ...gatewayEnv,
+        GOATCITADEL_AUTH_MODE: "token",
+        GOATCITADEL_AUTH_TOKEN: operatorToken,
+        GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN: approvalCreateToken,
+        GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "false",
+      },
+    });
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-auth-matrix", operatorHeaders);
     await runScenario(
       context,
@@ -191,7 +205,7 @@ export async function runAuthMatrixLane(context, _options = {}, deps) {
         assertOk(activeBeforeRestart, "read authenticated events with active device before restart");
         const gatewayPidToken = stack.gateway?.child?.pid;
 
-        stack.gateway = await restartGatewayProcess(context, stack, basicGatewayEnv);
+        stack.gateway = await restartGatewayProcess(context, stack, { ...gatewayEnv, ...basicGatewayEnv }, { omitEnv });
         const gatewayPidBasic = stack.gateway?.child?.pid;
         assertDistinctOwnedRestart(gatewayPidToken, gatewayPidBasic, "token-to-basic");
 
@@ -237,7 +251,7 @@ export async function runAuthMatrixLane(context, _options = {}, deps) {
           throw new Error(`revoked device credential was not denied immediately (${deniedImmediately.status})`);
         }
 
-        stack.gateway = await restartGatewayProcess(context, stack, basicGatewayEnv);
+        stack.gateway = await restartGatewayProcess(context, stack, { ...gatewayEnv, ...basicGatewayEnv }, { omitEnv });
         const gatewayPidBasicRestarted = stack.gateway?.child?.pid;
         assertDistinctOwnedRestart(gatewayPidBasic, gatewayPidBasicRestarted, "basic-revocation-persistence");
         const basicOperatorAfterRestart = await requestJson(stack.gatewayUrl, "/api/v1/admin/retention", {
@@ -289,7 +303,7 @@ export async function runAuthMatrixLane(context, _options = {}, deps) {
       },
     );
   } finally {
-    await stopVerificationStack(stack);
+    await stopVerificationStack(stack ?? { runtimeRoot });
   }
 }
 

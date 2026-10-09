@@ -66,6 +66,7 @@ function ComposerHarness(
     initialDraft?: string;
     lastEditableDraft?: string | null;
     sending?: boolean;
+    sessionId?: string;
   } = {},
 ) {
   const [draft, setDraft] = useState(props.initialDraft ?? "Review this with $rea");
@@ -92,7 +93,7 @@ function ComposerHarness(
     error,
     dockOpen,
     sending,
-    selectedSession: { sessionId: "session-1", projectId: "project-1" } as any,
+    selectedSession: { sessionId: props.sessionId ?? "session-1", projectId: "project-1" } as any,
     messageMode: "cowork",
     ensureSession: vi.fn(async () => ({ sessionId: "session-1" }) as any),
     handleSend: handleSendMock,
@@ -165,8 +166,9 @@ describe("useChatComposerInteractions", () => {
       expect.objectContaining({ sessionId: "session-1", projectId: "project-1" }),
     );
     expect(latestState?.pendingAttachmentIds).toContain("uploaded");
+    expect(latest?.attachmentUpload).toEqual({ pending: 0, error: null });
     expect(latestState?.sending).toBe(false);
-    expect(latestState?.error).toBeNull();
+    expect(latestState?.error).toBe("initial error");
 
     await act(async () => {
       latest?.handleComposerKeyDown(makeKeyEvent("ArrowDown"));
@@ -397,7 +399,8 @@ describe("useChatComposerInteractions", () => {
     await act(async () => {
       await latest?.uploadAttachments([makeFile("bad.txt")]);
     });
-    expect(latestState?.error).toBe("upload failed");
+    expect(latest?.attachmentUpload.error).toBe("upload failed");
+    expect(latestState?.error).toBe("initial error");
 
     uploadChatAttachmentMock.mockClear();
     await act(async () => {
@@ -430,4 +433,19 @@ describe("applyComposerSuggestion", () => {
   it("keeps slash command suggestions as full composer replacements", () => {
     expect(applyComposerSuggestion("ignored", "/plan on")).toBe("/plan on ");
   });
+});
+
+it("does not attach a late upload to another selected conversation", async () => {
+  let finish!: (value: unknown) => void;
+  uploadChatAttachmentMock.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+  let renderer!: ReturnType<typeof create>;
+  await act(async () => { renderer = create(React.createElement(ComposerHarness, { sessionId: "session-1" })); });
+  let pending!: Promise<void>;
+  await act(async () => { pending = latest!.uploadAttachments([makeFile()]); });
+  expect(latest!.attachmentUpload.pending).toBe(1);
+  await act(async () => renderer.update(React.createElement(ComposerHarness, { sessionId: "session-2" })));
+  await act(async () => { finish({ attachmentId: "late", fileName: "notes.txt" }); await pending; });
+  expect(latestState!.pendingAttachmentIds).not.toContain("late");
+  expect(latest!.attachmentUpload.pending).toBe(0);
+  await act(async () => renderer.unmount());
 });

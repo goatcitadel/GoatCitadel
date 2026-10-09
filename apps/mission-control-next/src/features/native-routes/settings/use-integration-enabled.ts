@@ -13,6 +13,8 @@ export const canToggleIntegration = (record: IntegrationConnection) =>
   hasIntegrationConnectionBinding(record) &&
   ["model_provider", "productivity", "automation", "platform"].includes(record.kind);
 
+const LIST_REFRESHING_NOTICE = "The connection list is refreshing. Nothing was changed; try again when it finishes.";
+
 export function useIntegrationEnabled({
   workspaceId,
   available,
@@ -24,8 +26,16 @@ export function useIntegrationEnabled({
 }) {
   const [review, setReview] = useState<{ connection: IntegrationConnection; enabled: boolean } | null>(null);
   const [checking, setChecking] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNoticeState] = useState<string | null>(null);
+  // A lock message mirrors the locked connection's shared attempt (even after its review closes); once an outcome
+  // check settles that attempt, the copy goes with it.
+  const [noticeLockId, setNoticeLockId] = useState<string | null>(null);
+  const setNotice = (text: string | null, lockedConnectionId: string | null = null) => {
+    setNoticeState(text);
+    setNoticeLockId(lockedConnectionId);
+  };
   const attempt = useIntegrationConnectionMutation(review?.connection.connectionId ?? "");
+  const lockAttempt = useIntegrationConnectionMutation(noticeLockId ?? "");
   const live = useRef({ workspaceId, available, epoch: 0, mounted: true, busy: false });
   if (live.current.workspaceId !== workspaceId) {
     live.current.workspaceId = workspaceId;
@@ -55,11 +65,13 @@ export function useIntegrationEnabled({
     try {
       const current = await fetchIntegrationConnection(connection.connectionId);
       if (!scopeCurrent(epoch)) return;
-      if (
-        !live.current.available ||
-        !canToggleIntegration(current) ||
-        !integrationConnectionReviewMatches(connection, current)
-      ) {
+      // The directory began refreshing during the read: that is not a changed connection, and its refetch is already
+      // running, so say so instead of reloading again.
+      if (!live.current.available) {
+        setNotice(LIST_REFRESHING_NOTICE);
+        return;
+      }
+      if (!canToggleIntegration(current) || !integrationConnectionReviewMatches(connection, current)) {
         setNotice("The connection changed. Refresh and review its current saved state.");
         await reload();
         return;
@@ -87,7 +99,13 @@ export function useIntegrationEnabled({
     setNotice(null);
     try {
       const current = await fetchIntegrationConnection(requested.connection.connectionId);
-      if (!isCurrent()) return;
+      if (!scopeCurrent(epoch)) return;
+      // A directory refresh started during confirmation: nothing was sent. Keep the review so the operator can
+      // confirm again once the list settles, and say why the click did nothing.
+      if (!live.current.available) {
+        setNotice(LIST_REFRESHING_NOTICE);
+        return;
+      }
       if (!canToggleIntegration(current) || !integrationConnectionReviewMatches(requested.connection, current)) {
         setReview(null);
         setNotice("The connection changed after review. Refresh and review it again.");
@@ -106,7 +124,10 @@ export function useIntegrationEnabled({
         );
         setReview(null);
       } else {
-        setNotice(result.message);
+        setNotice(
+          result.message,
+          result.status === "uncertain" || result.status === "locked" ? requested.connection.connectionId : null,
+        );
         if (result.status === "conflict") setReview(null);
       }
       try {
@@ -121,5 +142,13 @@ export function useIntegrationEnabled({
       if (live.current.mounted) setChecking(false);
     }
   }
-  return { review, checking, notice, attempt, requestReview, cancel, confirm };
+  return {
+    review,
+    checking,
+    notice: noticeLockId && lockAttempt.phase !== "uncertain" ? null : notice,
+    attempt,
+    requestReview,
+    cancel,
+    confirm,
+  };
 }

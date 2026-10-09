@@ -22,7 +22,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/durable", () => ({
 const callbacks = vi.hoisted(() => ({ confirm: undefined as ComponentProps<"button">["onClick"] }));
 vi.mock("../../ui/Button", () => ({
   Button: ({ children, ...props }: ComponentProps<"button">) => {
-    if (children === "Cancel child") callbacks.confirm = props.onClick;
+    if (children === "Cancel task") callbacks.confirm = props.onClick;
     return <button {...props} type={props.type ?? "button"}>{children}</button>;
   },
 }));
@@ -148,8 +148,8 @@ afterEach(async () => {
 });
 
 it("keeps an owner conflict visible inside the dialog through refresh and requires a fresh review", async () => {
-  await click(container, "Cancel child");
-  expect(dialog().textContent).toContain("Child version 3 · Watcher revision 5");
+  await click(container, "Cancel task");
+  expect(dialog().textContent).toContain("Task version 3 · Watcher revision 5");
   control.mockRejectedValue(
     new ApiRequestError("409", {
       kind: "http",
@@ -160,32 +160,32 @@ it("keeps an owner conflict visible inside the dialog through refresh and requir
     }),
   );
   state.tasks[0]!.childVersion = 4;
-  await click(dialog(), "Cancel child");
+  await click(dialog(), "Cancel task");
   expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("Close this review");
-  expect(dialog().textContent).toContain("Child version 3 · Watcher revision 5");
-  expect(buttons(dialog(), "Cancel child")[0]!.disabled).toBe(true);
+  expect(dialog().textContent).toContain("Task version 3 · Watcher revision 5");
+  expect(buttons(dialog(), "Cancel task")[0]!.disabled).toBe(true);
   expect(control).toHaveBeenCalledTimes(1);
   await click(dialog(), "Keep running");
   await click(container, "Refresh");
-  await click(container, "Cancel child");
-  expect(dialog().textContent).toContain("Child version 4 · Watcher revision 5");
-  expect(buttons(dialog(), "Cancel child")[0]!.disabled).toBe(false);
+  await click(container, "Cancel task");
+  expect(dialog().textContent).toContain("Task version 4 · Watcher revision 5");
+  expect(buttons(dialog(), "Cancel task")[0]!.disabled).toBe(false);
 });
 
 it("withholds a locally stale confirmation and never upgrades reviewed versions after refresh", async () => {
-  await click(container, "Cancel child");
+  await click(container, "Cancel task");
   state.tasks[0]!.childVersion = 4;
   // The same refresh is also used by the active polling owner.
   await click(container, "Refresh");
-  await click(dialog(), "Cancel child");
+  await click(dialog(), "Cancel task");
   expect(control).not.toHaveBeenCalled();
   expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("changed before");
-  expect(dialog().textContent).toContain("Child version 3");
+  expect(dialog().textContent).toContain("Task version 3");
 });
 
 it("closes a review across URL ABA and rejects its retained control", async () => {
-  await click(container, "Cancel child");
-  const oldButton = buttons(dialog(), "Cancel child")[0]!;
+  await click(container, "Cancel task");
+  const oldButton = buttons(dialog(), "Cancel task")[0]!;
   await act(async () => {
     window.history.pushState(null, "", "/chat?sessionId=other");
     window.dispatchEvent(new Event("goatcitadel:cockpit-location"));
@@ -200,34 +200,34 @@ it("closes a review across URL ABA and rejects its retained control", async () =
 });
 
 it("shows and retains an unknown outcome inside review with no duplicate confirmation", async () => {
-  await click(container, "Cancel child");
+  await click(container, "Cancel task");
   control.mockRejectedValue(new Error("lost response"));
-  await click(dialog(), "Cancel child");
+  await click(dialog(), "Cancel task");
   expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("unconfirmed");
-  expect(buttons(dialog(), "Cancel child")[0]!.disabled).toBe(true);
+  expect(buttons(dialog(), "Cancel task")[0]!.disabled).toBe(true);
   await click(dialog(), "Keep running");
   await click(container, "Refresh");
-  expect(buttons(container, "Cancel child")[0]!.disabled).toBe(true);
+  expect(buttons(container, "Cancel task")[0]!.disabled).toBe(true);
   expect(control).toHaveBeenCalledTimes(1);
 });
 
 it("a dismissed or replaced dialog's retained confirmation cannot write", async () => {
-  await click(container, "Cancel child");
+  await click(container, "Cancel task");
   const dismissed = callbacks.confirm!;
   await click(dialog(), "Keep running");
   await act(async () => {
     dismissed({} as Parameters<typeof dismissed>[0]);
   });
   expect(control).not.toHaveBeenCalled();
-  await click(container, "Cancel child");
+  await click(container, "Cancel task");
   const replaced = callbacks.confirm!;
   await click(dialog(), "Keep running");
-  await click(container, "Cancel child");
+  await click(container, "Cancel task");
   await act(async () => {
     replaced({} as Parameters<typeof replaced>[0]);
   });
   expect(control).not.toHaveBeenCalled();
-  expect(buttons(dialog(), "Cancel child")[0]!.disabled).toBe(false);
+  expect(buttons(dialog(), "Cancel task")[0]!.disabled).toBe(false);
 });
 
 it("guards exact run evidence navigation while retaining the real draft and unknown control lock", async () => {
@@ -240,12 +240,12 @@ it("guards exact run evidence navigation while retaining the real draft and unkn
       </CockpitNavigationProvider>,
     );
   });
-  await click(container, "Cancel child");
+  await click(container, "Cancel task");
   control.mockRejectedValue(new Error("Control response was lost"));
-  await click(dialog(), "Cancel child");
+  await click(dialog(), "Cancel task");
   await click(dialog(), "Keep running");
   expect(control).toHaveBeenCalledTimes(1);
-  expect(buttons(container, "Cancel child")[0]!.disabled).toBe(true);
+  expect(buttons(container, "Cancel task")[0]!.disabled).toBe(true);
   await act(async () => {
     draft.setValue({ text: "Retained draft" });
   });
@@ -277,7 +277,7 @@ it("guards exact run evidence navigation while retaining the real draft and unkn
   expect(mounts).toBe(1);
   expect(unmounts).toBe(0);
   expect(container.textContent).toContain("unconfirmed");
-  expect(buttons(container, "Cancel child")[0]!.disabled).toBe(true);
+  expect(buttons(container, "Cancel task")[0]!.disabled).toBe(true);
   expect(control).toHaveBeenCalledTimes(1);
   expect(assign).not.toHaveBeenCalled();
   expect(reload).not.toHaveBeenCalled();

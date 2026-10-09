@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { it } from "node:test";
+import { setImmediate } from "node:timers";
 import {
   assertComposerConfirmation,
   assertComposerPlan,
@@ -10,7 +11,7 @@ import {
   COMPOSER_SCHEMA,
   composerPackMarkdown,
 } from "./cockpit-chat-composer-evidence.mjs";
-import { selectComposerConversation } from "./cockpit-chat-composer-proof.mjs";
+import { observePendingWait, selectComposerConversation } from "./cockpit-chat-composer-proof.mjs";
 
 const digest = (content) => createHash("sha256").update(content).digest("hex");
 const expected = {
@@ -223,7 +224,7 @@ it("switches the real conversation control without replacing the browser documen
     ["select", session.sessionId],
   ]);
   await selectComposerConversation(page, "desktop", session);
-  assert.deepEqual(calls[0], ["navigation", { name: "Threads", exact: true }]);
+  assert.deepEqual(calls[0], ["navigation", { name: "Conversations", exact: true }]);
   assert.equal(calls[1][0], "button");
   assert.ok(calls[1][1].name.test(`${session.title}active`));
   assert.ok(!calls[1][1].name.test("Composer ltitle"));
@@ -278,4 +279,26 @@ it("requires exact confirmation nonce/revision and independently read terminal p
     assert.throws(() => assertComposerConfirmation({ ...value, receipt: changed, owner: structuredClone(changed) }));
   }
   assert.throws(() => assertComposerConfirmation({ ...value, owner: plan }));
+});
+
+
+it("observes pending wait rejection immediately while preserving its exact awaited error", async () => {
+  const error = new Error("Synthetic response wait failed");
+  const pending = observePendingWait(Promise.reject(error));
+  // node:test fails on an unhandled rejection during this action-sized gap.
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(pending, (cause) => cause === error);
+  assert.equal(await observePendingWait(Promise.resolve("canonical response")), "canonical response");
+});
+it("allows an action failure to reach cleanup while its outstanding wait rejects", async () => {
+  let reject;
+  const actionError = new Error("Synthetic selection failed");
+  let cleaned = false;
+  await assert.rejects(async () => {
+    observePendingWait(new Promise((_, fail) => { reject = fail; }));
+    try { throw actionError; }
+    finally { cleaned = true; reject(new Error("Page closed during cleanup")); }
+  }, (cause) => cause === actionError);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(cleaned, true);
 });

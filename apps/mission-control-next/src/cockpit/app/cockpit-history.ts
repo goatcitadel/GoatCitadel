@@ -1,6 +1,7 @@
+import { resolveCockpitCompatibility } from "./cockpit-compatibility";
 import { SHELL_HISTORY_POSITION, SHELL_NAVIGATION_EVENTS } from "../../app/shell-transition";
 import { buildSettingsIndex } from "../areas/settings/settings-index";
-import { COCKPIT_LOCATION_EVENT, nextCockpitPosition, readCockpitLocation } from "./cockpit-back-guard";
+import { COCKPIT_LOCATION_EVENT, afterCockpitSheetsClose, nextCockpitPosition, readCockpitLocation } from "./cockpit-back-guard";
 import type { CockpitNavigationOptions } from "./cockpit-navigation-context";
 
 export { COCKPIT_LOCATION_EVENT };
@@ -33,7 +34,8 @@ export function readCockpitHistory() {
 export function cockpitHref(href: string): string | null {
   if (!href.startsWith("/") || href.startsWith("//") || href.includes("\\")) return null;
   try {
-    const target = new URL(href, "http://cockpit.invalid");
+    const resolution = resolveCockpitCompatibility(href);
+    const target = new URL(resolution.kind === "native" ? resolution.href : href, "http://cockpit.invalid");
     if (target.origin !== "http://cockpit.invalid" || target.username || target.password) return null;
     if (target.searchParams.getAll("shell").some((shell) => shell !== "cockpit")) return null;
     target.searchParams.set("shell", "cockpit");
@@ -65,11 +67,15 @@ export function retainsSettingsPage(from: string, to: string): boolean {
 }
 
 /** Internal commit for current reviewed frame/link capabilities and bound canonical Chat synchronization. */
-export function commitCockpitNavigation(href: string, options?: CockpitNavigationOptions): boolean {
+export function commitCockpitNavigation(href: string, options?: CockpitNavigationOptions, isCurrent: () => boolean = () => true): boolean {
+  if (!isCurrent()) return false;
   const destination = cockpitHref(href);
   if (!destination) return false;
   const current = window.location.pathname + window.location.search + window.location.hash;
-  if (cockpitHref(current) === destination) return false;
+  const actual = new URL(current, "http://cockpit.invalid");
+  actual.searchParams.set("shell", "cockpit");
+  if (actual.pathname + actual.search + actual.hash === destination) return false;
+  if (afterCockpitSheetsClose(() => commitCockpitNavigation(href, options, isCurrent))) return true;
   // A replaced entry keeps its state, position included. A pushed entry is numbered after the shown one.
   if (options?.replace) window.history.replaceState(window.history.state, "", destination);
   else window.history.pushState({ [SHELL_HISTORY_POSITION]: nextCockpitPosition() }, "", destination);

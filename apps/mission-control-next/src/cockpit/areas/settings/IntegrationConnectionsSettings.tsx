@@ -9,9 +9,14 @@ import {
   canToggleIntegration,
   useIntegrationEnabled,
 } from "../../../features/native-routes/settings/use-integration-enabled";
-import { useIntegrationConnectionMutation } from "../../../features/native-routes/settings/integration-connection-mutation";
+import {
+  checkIntegrationAttemptOutcome,
+  useIntegrationConnectionMutation,
+} from "../../../features/native-routes/settings/integration-connection-mutation";
 import { Button } from "../../ui/Button";
 import { IntegrationManagementSettings } from "./IntegrationManagementSettings";
+import { useDraftLeave } from "../../../features/native-routes/library/DraftLeaveDialog";
+import { McpDraftLeave } from "./McpDraftLeave";
 
 const PAGE_SIZE = 20;
 export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: string }) {
@@ -22,6 +27,7 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [search, setSearch] = useState("");
   const [managementOpen, setManagementOpen] = useState(false);
+  const leave = useDraftLeave();
   const ready = !connections.isError && Array.isArray(connections.data?.items);
   const control = useIntegrationEnabled({
     workspaceId,
@@ -50,10 +56,11 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
           availability still apply.
         </p>
       </header>
-      <Button aria-expanded={managementOpen} onClick={() => setManagementOpen(value => !value)}>
+      <Button aria-expanded={managementOpen} onClick={() => managementOpen ? leave.request(() => setManagementOpen(false)) : setManagementOpen(true)}>
         {managementOpen ? "Hide connection management" : "Add and manage integrations"}
       </Button>
       {managementOpen ? <IntegrationManagementSettings workspaceId={workspaceId} /> : null}
+      <McpDraftLeave {...leave.dialogProps} />
       <Button
         size="sm"
         disabled={connections.isFetching || control.checking || control.attempt.pending}
@@ -111,12 +118,20 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
                 connection={connection}
                 disabled={connections.isFetching || control.checking || Boolean(reviewed)}
                 onReview={() => void control.requestReview(connection)}
+                onSettled={() => {
+                  // Close only this row's now-stale review; another row's open review is untouched.
+                  if (control.review?.connection.connectionId === connection.connectionId) control.cancel();
+                }}
+                readback={async () => {
+                  const read = await connections.refetch();
+                  if (read.isError) throw read.error;
+                }}
               />
             ))}
           </ul>
           {!filtered.length ? (
             <p className="text-sm text-fg-muted">
-              No saved integrations match this view. Connection setup is available in the classic Settings view.
+              No saved integrations match this view. Use Add and manage integrations to set up a connection.
             </p>
           ) : null}
           {filtered.length > limit ? (
@@ -146,20 +161,28 @@ function IntegrationRow({
   connection,
   disabled,
   onReview,
+  onSettled,
+  readback,
 }: {
   connection: IntegrationConnection;
   disabled: boolean;
   onReview: () => void;
+  /** Closes a review that a settled lost toggle made stale. */
+  onSettled: () => void;
+  /** The canonical directory read that must succeed before a settled outcome unlocks this row. */
+  readback: () => Promise<unknown>;
 }) {
   const attempt = useIntegrationConnectionMutation(connection.connectionId);
+  const [notice, setNotice] = useState<string | null>(null);
   return (
     <li className="rounded-md border border-line-subtle bg-sunken p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <h4 className="break-words text-sm font-semibold text-fg">{connection.label}</h4>
           <p className="mt-1 text-sm text-fg-secondary">
-            {connection.enabled ? "Enabled" : "Disabled"} · {humanizeToken(connection.status)}
+            {connection.enabled ? "Enabled" : "Disabled"} · Connectivity unverified
           </p>
+          <p className="text-xs text-fg-muted">Configured status: {humanizeToken(connection.status)}. A saved status does not verify connectivity; run diagnostics in connection management.</p>
           <p className="mt-1 break-words text-xs text-fg-muted">
             {connection.workspaceId ? "Workspace-bound connection" : "Unbound · Personal Citadel policy"}
           </p>
@@ -196,6 +219,27 @@ function IntegrationRow({
       {attempt.phase === "uncertain" ? (
         <p role="alert" className="mt-2 text-sm text-status-waiting">
           {attempt.message}
+        </p>
+      ) : null}
+      {attempt.phase === "uncertain" && attempt.transport ? (
+        <Button
+          size="sm"
+          className="mt-2"
+          disabled={attempt.checking}
+          onClick={() =>
+            void checkIntegrationAttemptOutcome(connection.connectionId, readback).then((settled) => {
+              if (!settled) return;
+              setNotice(settled);
+              onSettled();
+            })
+          }
+        >
+          {attempt.checking ? "Checking outcome…" : "Check outcome"}
+        </Button>
+      ) : null}
+      {notice && attempt.phase !== "uncertain" ? (
+        <p role="status" className="mt-2 text-sm text-fg-secondary">
+          {notice}
         </p>
       ) : null}
     </li>

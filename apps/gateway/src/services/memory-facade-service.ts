@@ -15,6 +15,8 @@ export interface KnowledgeFacadePort {
   ): Promise<ToolInvokeResult | Record<string, unknown>>;
 }
 
+// Omit absent optional executable arguments before policy evaluation. JSON-backed
+// approval persistence drops undefined keys; the strict mutation guard must stay intact.
 const KNOWLEDGE_SESSION = "session:operator:knowledge";
 const KNOWLEDGE_AGENT = "operator";
 
@@ -50,12 +52,12 @@ export async function knowledgeMemoryWrite(
     {
       toolName: "memory.write",
       args: {
-        namespace: input.namespace,
-        title: input.title,
+        ...(input.namespace !== undefined ? { namespace: input.namespace } : {}),
+        ...(input.title !== undefined ? { title: input.title } : {}),
         content: input.content,
-        tags: input.tags,
-        metadata: input.metadata,
-        source: input.source,
+        ...(input.tags !== undefined ? { tags: input.tags } : {}),
+        ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+        ...(input.source !== undefined ? { source: input.source } : {}),
       },
       sessionId: input.sessionId ?? KNOWLEDGE_SESSION,
       agentId: input.agentId ?? KNOWLEDGE_AGENT,
@@ -73,10 +75,10 @@ export async function knowledgeMemorySearch(
     {
       toolName: "memory.search",
       args: {
-        namespace: input.namespace,
+        ...(input.namespace !== undefined ? { namespace: input.namespace } : {}),
         query: input.query,
-        limit: input.limit,
-        filters: input.filters,
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        ...(input.filters !== undefined ? { filters: input.filters } : {}),
       },
       sessionId: input.sessionId ?? KNOWLEDGE_SESSION,
       agentId: input.agentId ?? KNOWLEDGE_AGENT,
@@ -95,11 +97,11 @@ export async function knowledgeDocsIngest(
       toolName: "docs.ingest",
       args: {
         sourceType: input.sourceType,
-        source: input.source,
-        namespace: input.namespace,
-        title: input.title,
-        chunking: input.chunking,
-        metadata: input.metadata,
+        ...(input.source !== undefined ? { source: input.source } : {}),
+        ...(input.namespace !== undefined ? { namespace: input.namespace } : {}),
+        ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.chunking !== undefined ? { chunking: input.chunking } : {}),
+        ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
       },
       sessionId: input.sessionId ?? KNOWLEDGE_SESSION,
       agentId: input.agentId ?? KNOWLEDGE_AGENT,
@@ -117,10 +119,10 @@ export async function knowledgeEmbeddingsIndex(
     {
       toolName: "embeddings.index",
       args: {
-        namespace: input.namespace,
-        documentId: input.documentId,
-        force: input.force,
-        embeddingProfile: input.embeddingProfile,
+        ...(input.namespace !== undefined ? { namespace: input.namespace } : {}),
+        ...(input.documentId !== undefined ? { documentId: input.documentId } : {}),
+        ...(input.force !== undefined ? { force: input.force } : {}),
+        ...(input.embeddingProfile !== undefined ? { embeddingProfile: input.embeddingProfile } : {}),
       },
       sessionId: input.sessionId ?? KNOWLEDGE_SESSION,
       agentId: input.agentId ?? KNOWLEDGE_AGENT,
@@ -138,10 +140,10 @@ export async function knowledgeEmbeddingsQuery(
     {
       toolName: "embeddings.query",
       args: {
-        namespace: input.namespace,
+        ...(input.namespace !== undefined ? { namespace: input.namespace } : {}),
         query: input.query,
-        limit: input.limit,
-        embeddingProfile: input.embeddingProfile,
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        ...(input.embeddingProfile !== undefined ? { embeddingProfile: input.embeddingProfile } : {}),
       },
       sessionId: input.sessionId ?? KNOWLEDGE_SESSION,
       agentId: input.agentId ?? KNOWLEDGE_AGENT,

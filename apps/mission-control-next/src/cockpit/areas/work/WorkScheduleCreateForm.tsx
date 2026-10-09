@@ -2,6 +2,8 @@ import type { FormEvent } from "react";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
 import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
+import { ScheduleAdvancedFields, type ScheduleSettingsDraft } from "./ScheduleAdvancedFields";
+import { ScheduleTiming } from "./ScheduleTiming";
 const CREATE_ACTIONS = [
   "task",
   "improvement",
@@ -25,6 +27,8 @@ export function WorkScheduleCreateForm({
   onAction,
   onSubmit,
   onClose,
+  advanced,
+  onAdvanced,
 }: {
   name: string;
   schedule: string;
@@ -38,6 +42,8 @@ export function WorkScheduleCreateForm({
   onAction: (value: CreateScheduleAction) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onClose: () => void;
+  advanced: ScheduleSettingsDraft;
+  onAdvanced: (key: keyof ScheduleSettingsDraft, value: string) => void;
 }) {
   return (
     <form
@@ -59,18 +65,7 @@ export function WorkScheduleCreateForm({
           className="rounded-md border border-line bg-canvas p-2 text-fg"
         />
       </label>
-      <label className="grid gap-1 text-sm text-fg-secondary">
-        Cron schedule
-        <input
-          required
-          value={schedule}
-          disabled={locked}
-          onChange={(event) => {
-            onSchedule(event.target.value);
-          }}
-          className="rounded-md border border-line bg-canvas p-2 font-mono text-fg"
-        />
-      </label>
+      <ScheduleTiming value={schedule} disabled={locked} onChange={onSchedule} />
       <label className="grid gap-1 text-sm text-fg-secondary">
         Action
         <select
@@ -88,12 +83,13 @@ export function WorkScheduleCreateForm({
           ))}
         </select>
       </label>
-      <p className="text-xs text-fg-muted">The Gateway validates the schedule and owns future runs.</p>
+      <p className="text-xs text-fg-muted">Gateway-wide schedule. The Gateway validates timing and owns future runs. Times run in UTC unless the expression ends with a timezone name (for example 0 9 * * * America/New_York); verify the next-run receipt. Creation does not prove a scheduled job executed.</p>
+      <ScheduleAdvancedFields value={advanced} locked={locked} onChange={onAdvanced} />
       {createUncertain ? (
         <ClassicOwnerLink href="/ops/schedules?shell=classic" scope={scope} label="Review in Ops before retrying" />
       ) : null}
       <div className="flex gap-2">
-        <Button type="submit" variant="primary" disabled={busy || locked}>
+        <Button type="submit" variant="primary" disabled={busy || locked || !schedule.trim()}>
           Create schedule
         </Button>
         <Button

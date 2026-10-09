@@ -75,10 +75,10 @@ const approvalOutcomes: Record<ApprovalResolutionOutcome, StatusPresentation> = 
 };
 
 const riskLevels: Record<ApprovalRequest["riskLevel"], StatusPresentation> = {
-  safe: status("Safe", "neutral"),
-  caution: status("Caution", "waiting"),
-  danger: status("Danger", "failed"),
-  nuclear: status("Nuclear", "failed"),
+  safe: status("Low", "neutral"),
+  caution: status("Medium", "waiting"),
+  danger: status("High", "failed"),
+  nuclear: status("Critical", "failed"),
 };
 
 export function humanizeToken(value: string): string {

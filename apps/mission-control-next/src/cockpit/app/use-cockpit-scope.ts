@@ -17,6 +17,7 @@ export function useCockpitScope(
   open: boolean,
   choice: { citadelId: string; workspaceId: string },
   closePicker: () => void,
+  destination?: string,
 ) {
   const preferences = useUiPreferences();
   const { isTransitionPending } = useCockpitNavigation();
@@ -24,7 +25,7 @@ export function useCockpitScope(
   const installation = getGatewayApiBaseUrl();
   const history = useSyncExternalStore(subscribeCockpitHistory, readCockpitHistory, () => "server");
   const identity = JSON.stringify([installation, preferences.activeCitadelId, preferences.activeWorkspaceId]);
-  const editorIdentity = JSON.stringify([identity, history, choice.citadelId, choice.workspaceId, open]);
+  const editorIdentity = JSON.stringify([identity, history, choice.citadelId, choice.workspaceId, open, destination]);
   const token = useRef({ identity: editorIdentity, alive: true, ownedClose: null as string | null });
   if (token.current.identity !== editorIdentity) {
     if (token.current.ownedClose === editorIdentity) {
@@ -94,7 +95,7 @@ export function useCockpitScope(
     if (citadelId === preferences.activeCitadelId && workspaceId === preferences.activeWorkspaceId) return;
     // This single owner-commanded close allows the shared leave dialog to replace the picker.
     // Reopening, changing the choice, leaving the route/scope, or unmounting creates a new token.
-    renderedToken.ownedClose = JSON.stringify([identity, history, choice.citadelId, choice.workspaceId, false]);
+    renderedToken.ownedClose = JSON.stringify([identity, history, choice.citadelId, choice.workspaceId, false, destination]);
     closePicker();
     requestTransition(async (review) => {
       const controller = new AbortController();
@@ -142,7 +143,11 @@ export function useCockpitScope(
           throw new Error(
             "This workspace is no longer available in the selected Citadel. Reopen the scope picker and review its current directory.",
           );
-        const href = `/${area === "gallery" ? "chat" : area}?shell=cockpit`;
+        const target = new URL((destination && cockpitHref(destination)) || `/${area === "gallery" ? "chat" : area}?shell=cockpit`, window.location.origin);
+        // Incoming links are requests only. Rewrite their scope after the directory review succeeds.
+        if (target.searchParams.has("citadelId")) target.searchParams.set("citadelId", citadelId);
+        if (target.searchParams.has("workspaceId")) target.searchParams.set("workspaceId", workspaceId);
+        const href = target.pathname + target.search + target.hash;
         const sameRoute =
           cockpitHref(window.location.pathname + window.location.search + window.location.hash) === href;
         if (!sameRoute && !review.navigate(href, { replace: true })) return;

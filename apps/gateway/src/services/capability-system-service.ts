@@ -69,6 +69,7 @@ import {
   ConflictError,
   NotFoundError,
   redactStructuredSecrets,
+  SemanticValidationError,
   ValidationError,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
@@ -116,6 +117,7 @@ import { CODE_MODE_DOCKER_DEFAULT_COMMAND, isDigestPinnedImageRef } from "./code
 import { assertCodeModeSandboxAvailable, resolveCodeModeSandboxMetadata } from "./code-mode-sandbox-runner.js";
 import { AutonomousActivationGrantService } from "./autonomous-activation-grant-service.js";
 import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
+import { resolveCandidateLifecycleWorkspace } from "./capability-candidate-lifecycle-scope.js";
 import { validateSkillContent } from "./skill-content-validation.js";
 import {
   captureSkillContentIntegritySync,
@@ -895,6 +897,7 @@ export class CapabilitySystemService {
       candidateId,
       action: "candidate_promoted",
       mutation: { candidateId, versionId: selected.versionId },
+      scopeVersion: selected,
       versions,
       currentRevision,
       requesterId,
@@ -929,6 +932,7 @@ export class CapabilitySystemService {
       candidateId,
       action: "candidate_revoked",
       mutation: { candidateId, selectedVersionId: selected.versionId, targetVersionIds },
+      scopeVersion: selected,
       versions,
       currentRevision,
       requesterId,
@@ -963,6 +967,7 @@ export class CapabilitySystemService {
       candidateId,
       action: "candidate_rolled_back",
       mutation: { candidateId, targetVersionId: target.versionId },
+      scopeVersion: target,
       versions,
       currentRevision,
       requesterId,
@@ -1002,21 +1007,44 @@ export class CapabilitySystemService {
     };
   }
 
+  /**
+   * The workspace a lifecycle approval is reviewed in: the selected immutable
+   * version's own recorded scope (or its exact originating Code run), resolved
+   * from server state only. Legacy versions with no recorded scope keep their
+   * unscoped approval; contradictory or unavailable origins still fail closed.
+   */
+  private async resolveLifecycleApprovalWorkspace(
+    candidateId: string,
+    selected: CandidateSkillVersionRecord,
+  ): Promise<string | undefined> {
+    try {
+      return await resolveCandidateLifecycleWorkspace(await this.getCandidateDetail(candidateId), selected, (runId) =>
+        this.getCodeModeRun(runId),
+      );
+    } catch (error) {
+      if (error instanceof SemanticValidationError) return undefined;
+      throw error;
+    }
+  }
+
   private async commitCapabilityLifecycleApproval(input: {
     candidateId: string;
     action: CapabilityLifecycleApprovalAction;
     mutation: Record<string, unknown>;
+    scopeVersion: CandidateSkillVersionRecord;
     versions: CandidateSkillVersionRecord[];
     currentRevision: number;
     requesterId?: string;
     preview: Record<string, unknown>;
   }): Promise<CapabilityCandidateMutationPendingOutcome> {
+    const { candidateId } = input;
     const requesterId = normalizeCapabilityRequesterId(input.requesterId);
+    const workspaceId = await this.resolveLifecycleApprovalWorkspace(candidateId, input.scopeVersion);
     const binding = buildCapabilityLifecycleApprovalBinding({
-      subjectId: input.candidateId,
+      subjectId: candidateId,
       action: input.action,
       mutation: input.mutation,
-      expectedState: buildCandidateVersionsStateMaterial(input.candidateId, input.versions, input.currentRevision),
+      expectedState: buildCandidateVersionsStateMaterial(candidateId, input.versions, input.currentRevision),
     });
     const approvalId = deriveCapabilityLifecycleApprovalId(binding);
     const payload = buildCapabilityLifecycleApprovalPayload({ binding, requesterId, mutation: input.mutation });
@@ -1028,6 +1056,7 @@ export class CapabilitySystemService {
           riskLevel: "danger",
           payload,
           preview: { ...input.preview },
+          ...(workspaceId ? { linkage: { workspaceId } } : {}),
         },
         CAPABILITY_LIFECYCLE_APPROVAL_TTL_MS,
       );
@@ -1062,7 +1091,7 @@ export class CapabilitySystemService {
       await this.options.publishRealtime("capability_mutation_approval_requested", "capabilities", {
         approvalId,
         action: binding.action,
-        candidateId: input.candidateId,
+        candidateId,
       });
     }
     return {

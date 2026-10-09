@@ -259,6 +259,7 @@ export function useChatOutboundExecution(
     handleDenyPending,
     handleSubmitUserInput,
     handleSelectBranchTurn,
+    refreshThreadAndApprovals,
   } = useChatOperatorPrompts({
     selectedSessionId,
     selectedSession,
@@ -1109,7 +1110,7 @@ export function useChatOutboundExecution(
           onTemplateInvocationSentRef.current?.(item);
         }
         const completedSessionId = session.sessionId;
-        void loadSidebar(undefined, { bypassCache: true, preferredSessionId: completedSessionId }).catch(
+        void loadSidebar(undefined, { bypassCache: true, preferredSessionId: completedSessionId, reconcileLoadedRange: true }).catch(
           (sidebarError: unknown) => {
             recordClientDiagnostic({
               level: "warn",
@@ -1282,6 +1283,7 @@ export function useChatOutboundExecution(
     handleDenyPending,
     handleSubmitUserInput,
     handleSelectBranchTurn,
+    refreshThreadAndApprovals,
     optimisticUserMessage,
     streamStatus,
     streamingPreview,

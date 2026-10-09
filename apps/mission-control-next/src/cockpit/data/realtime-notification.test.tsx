@@ -1,14 +1,17 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OperatorInboxResponse, RealtimeEvent } from "@goatcitadel/contracts";
 import type { UiNotificationPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitRealtime } from "./realtime";
+import { queryKeys } from "./query-keys";
+import { setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 
 const mocks = vi.hoisted(() => ({
   installation: "http://owner-a.invalid",
+  accessRevision: 0,
   connect: vi.fn(),
   read: vi.fn(),
   show: vi.fn(),
@@ -18,8 +21,10 @@ const mocks = vi.hoisted(() => ({
   sound: vi.fn(),
   desktop: vi.fn(),
 }));
-vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>()),
   getGatewayApiBaseUrl: () => mocks.installation,
+  getGatewayAccessRevision: () => mocks.accessRevision,
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/shell-client", () => ({ connectEventStream: mocks.connect }));
 vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({ fetchOperatorInbox: mocks.read }));
@@ -94,6 +99,8 @@ async function emit(value = event, replayed = false) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.installation = "http://owner-a.invalid";
+  mocks.accessRevision = 0;
+  setGatewayCallerScope("");
   mocks.connect.mockImplementation((callback) => {
     onEvent = callback;
     return disconnect;
@@ -110,6 +117,159 @@ afterEach(() => {
   container.remove();
   vi.restoreAllMocks();
 });
+it("retains four distinct live targets through repeated cancellation and active owner refetch", async () => {
+  const records = Array.from({ length: 4 }, (_, index) => ({
+    ...item,
+    id: `approval:burst-${index}`,
+    title: `Current approval ${index}`,
+    source: { workspaceId: "w", approvalId: `burst-${index}` },
+  }));
+  const reads: Array<{ signal: AbortSignal; resolve: (value: OperatorInboxResponse) => void }> = [];
+  mocks.read.mockImplementation(
+    (_workspace, { signal }: { signal: AbortSignal }) =>
+      new Promise((resolve, reject) => {
+        reads.push({ signal, resolve });
+        signal.addEventListener("abort", () => reject(new DOMException("Replaced", "AbortError")), { once: true });
+      }),
+  );
+  const key = queryKeys.inbox("w");
+  client.setQueryData(key, { ...projection, items: [] });
+  const observer = new QueryObserver(client, {
+    queryKey: key,
+    staleTime: Infinity,
+    queryFn: ({ signal }) => mocks.read("w", { signal }) as Promise<OperatorInboxResponse>,
+  });
+  const unsubscribe = observer.subscribe(() => undefined);
+  try {
+    await render();
+    for (let index = 0; index < records.length; index++) {
+      await emit({
+        ...event,
+        eventId: `burst-event-${index}`,
+        sequence: index + 1,
+        links: { workspaceId: "w", approvalId: records[index]!.source.approvalId },
+      });
+      // Both broad and exact invalidation are production paths. Leave their reads in flight.
+      await act(async () => {
+        void client.invalidateQueries({ queryKey: ["approvals"] });
+        void client.invalidateQueries({ queryKey: key });
+      });
+    }
+    expect(reads.filter((read) => read.signal.aborted).length).toBeGreaterThanOrEqual(4);
+    expect(mocks.warning).not.toHaveBeenCalled();
+    await act(async () => {
+      reads.at(-1)!.resolve({ ...projection, items: records });
+    });
+    expect(mocks.warning.mock.calls.map(([title]) => title).sort()).toEqual(
+      records.map((record) => record.title).sort(),
+    );
+    expect(mocks.warning).toHaveBeenCalledTimes(4);
+    await emit({ ...event, eventId: "repeat", links: { approvalId: "burst-0" } });
+    await act(async () => {
+      reads.at(-1)!.resolve({ ...projection, items: records });
+    });
+    expect(mocks.warning).toHaveBeenCalledTimes(4);
+    for (const [, options] of mocks.warning.mock.calls) options.action.onClick();
+    expect(mocks.navigate.mock.calls.map(([url]) => url).sort()).toEqual(
+      records.map((record) => `/inbox?approvalId=${record.source.approvalId}&workspaceId=w`).sort(),
+    );
+  } finally {
+    unsubscribe();
+  }
+});
+it("retires pending reads and shown actions immediately on caller revision change", async () => {
+  await render();
+  await emit();
+  const action = mocks.warning.mock.calls[0]![1].action;
+  let finish!: (value: OperatorInboxResponse) => void;
+  mocks.read.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  await emit({ ...event, eventId: "pending", links: { approvalId: "b" } });
+  mocks.accessRevision++;
+  action.onClick();
+  await act(async () =>
+    finish({ ...projection, items: [{ ...item, id: "approval:b", source: { workspaceId: "w", approvalId: "b" } }] }),
+  );
+  expect(mocks.navigate).not.toHaveBeenCalled();
+  expect(mocks.warning).toHaveBeenCalledTimes(1);
+});
+it("withholds permission failures without polling or retrying", async () => {
+  mocks.read.mockRejectedValue(Object.assign(new Error("Forbidden"), { status: 403 }));
+  await render();
+  await emit();
+  await new Promise((resolve) => setTimeout(resolve, 160));
+  expect(mocks.read).toHaveBeenCalledTimes(1);
+  expect(mocks.warning).not.toHaveBeenCalled();
+});
+it("retires old pending signals across a same-render caller away-and-back change", async () => {
+  let finish!: (value: OperatorInboxResponse) => void;
+  mocks.read.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  await render();
+  const previousEvent = onEvent;
+  await emit();
+  await act(async () => {
+    setGatewayCallerScope("other");
+    setGatewayCallerScope("");
+  });
+  await act(async () => finish(projection));
+  await act(async () => previousEvent(event, { replayed: false }));
+  expect(mocks.warning).not.toHaveBeenCalled();
+  expect(mocks.read).toHaveBeenCalledTimes(1);
+  mocks.read.mockResolvedValue(projection);
+  await emit();
+  expect(mocks.warning).toHaveBeenCalledOnce();
+});
+it("does not promote manual cache writes into notification authority", async () => {
+  let finish!: (value: OperatorInboxResponse) => void;
+  mocks.read.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  await render();
+  await emit();
+  await act(async () => {
+    client.setQueryData(queryKeys.inbox("w"), projection);
+  });
+  expect(mocks.warning).not.toHaveBeenCalled();
+  await act(async () => finish(projection));
+  expect(mocks.warning).toHaveBeenCalledOnce();
+});
+it.each(["missing", "ambiguous", "expired", "foreign"])(
+  "withholds %s owner records after a replaced read",
+  async (kind) => {
+    const finish: Array<(value: OperatorInboxResponse) => void> = [];
+    mocks.read.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish.push(resolve);
+        }),
+    );
+    await render();
+    await emit();
+    await emit({ ...event, eventId: "replacement" });
+    const items =
+      kind === "missing"
+        ? []
+        : kind === "ambiguous"
+          ? [item, { ...item, id: "duplicate" }]
+          : kind === "expired"
+            ? [{ ...item, expiresAt: "2000-01-01" }]
+            : [{ ...item, source: { ...item.source, workspaceId: "foreign" } }];
+    await act(async () => finish.at(-1)!({ ...projection, items }));
+    expect(mocks.warning).not.toHaveBeenCalled();
+  },
+);
 describe("cockpit owner-backed notifications", () => {
   it("reads the current Inbox, groups repeats, and opens the exact item", async () => {
     await render();
@@ -124,7 +284,7 @@ describe("cockpit owner-backed notifications", () => {
     expect(options.description).toBe(item.summary);
     expect(options.duration).toBe(6000);
     options.action.onClick();
-    expect(mocks.navigate).toHaveBeenCalledWith("/inbox?workspaceId=w&item=approval%3Aa");
+    expect(mocks.navigate).toHaveBeenCalledWith("/inbox?approvalId=a&workspaceId=w");
   });
   it("uses current reviewed navigation without reconnecting the stream or replaying a shown toast", async () => {
     await render();
@@ -140,7 +300,7 @@ describe("cockpit owner-backed notifications", () => {
       expect(disconnect).not.toHaveBeenCalled();
       expect(mocks.warning).toHaveBeenCalledTimes(1);
       expect(original).not.toHaveBeenCalled();
-      expect(current).toHaveBeenCalledWith("/inbox?workspaceId=w&item=approval%3Aa");
+      expect(current).toHaveBeenCalledWith("/inbox?approvalId=a&workspaceId=w");
       await render({ workspaceId: "foreign" });
       action.onClick();
       expect(current).toHaveBeenCalledTimes(1);
@@ -177,7 +337,7 @@ describe("cockpit owner-backed notifications", () => {
   it("does not reuse an Inbox request begun before the live signal", async () => {
     let finish!: (value: OperatorInboxResponse) => void;
     const oldRead = client.fetchQuery({
-      queryKey: ["approvals", "operator-inbox", "w"],
+      queryKey: queryKeys.inbox("w"),
       queryFn: () =>
         new Promise<OperatorInboxResponse>((resolve) => {
           finish = resolve;

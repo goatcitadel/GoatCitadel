@@ -7,6 +7,24 @@ namespace GoatCitadel.MissionControl.Windows.Tests;
 public sealed class EventStreamServiceTests
 {
     [TestMethod]
+    public void WaitingAttentionPreservesCanonicalApprovalLink()
+    {
+        Assert.IsTrue(EventStreamService.TryParseOperatorAttentionNotification("""
+            {"eventType":"orchestration_event","payload":{"event":"paused_for_approval"},"links":{"approvalId":"a /?","workspaceId":"w /?"}}
+            """, out var payload));
+        Assert.AreEqual("/inbox?approvalId=a%20%2F%3F&workspaceId=w%20%2F%3F", payload.RoutePath);
+    }
+
+    [TestMethod]
+    public void ApprovalDestinationsPreserveRecordAndWorkspaceEncoding()
+    {
+        Assert.IsTrue(EventStreamService.TryParseApprovalNotification("""
+            {"eventType":"approval_created","payload":{"approvalId":"a /?","linkage":{"workspaceId":"w /?"}}}
+            """, out var payload));
+        Assert.AreEqual("/inbox?approvalId=a%20%2F%3F&workspaceId=w%20%2F%3F", payload.RoutePath);
+    }
+
+    [TestMethod]
     public void BuildsEventStreamUrlWithEncodedToken()
     {
         Assert.AreEqual(
@@ -47,7 +65,7 @@ public sealed class EventStreamServiceTests
             """{"eventType":"orchestration_event","payload":{"event":"run_paused_for_approval"}}""",
             out var waiting));
         Assert.AreEqual("GoatCitadel is waiting", waiting.Title);
-        Assert.AreEqual("/ops/approvals", waiting.RoutePath);
+        Assert.AreEqual("/inbox", waiting.RoutePath);
     }
 
     [TestMethod]

@@ -56,6 +56,7 @@ import {
   buildChatModePrefsPatch,
   classifyToolEffectPotential,
   ConflictError,
+  FeatureDisabledError,
   DEFAULT_CITADEL_ID,
   inferProviderForModelId,
   isChatTurnActiveStatus,
@@ -815,6 +816,7 @@ import {
   createChannelSetupDraft,
 } from "./channel-setup-service.js";
 import { EngineeringLearningService } from "./engineering-learning-service.js";
+import { readVerifiedCodeModeSource, resolveEngineeringLearningSourceRoot } from "./engineering-learning-sources.js";
 import { resolvePackagedRuntimeAppDir, RuntimeReleaseTrustService } from "./runtime-release-trust-service.js";
 import { RuntimeAuthorityProjectionService } from "./runtime-authority-projection-service.js";
 import { createDefaultArtifactProbers, createDurableTaskAutoBlockBridge } from "./gateway-kanban-wiring.js";
@@ -1449,11 +1451,17 @@ export class GatewayService {
       },
     });
     this.engineeringLearningService = new EngineeringLearningService({
+      readVerifiedSource: (runId, workspaceId) =>
+        readVerifiedCodeModeSource(this.capabilitySystemService, runId, workspaceId),
       storage: this.storage,
       rootDir: config.rootDir,
       isEnabled: async () => await this.isFeatureEnabled("engineeringLearningsV1Enabled"),
       createApproval: async (input) => await this.createApproval(input),
-      resolveSourceRoot: async (input) => await this.resolveEngineeringLearningSourceRoot(input),
+      resolveSourceRoot: async (input) =>
+        await resolveEngineeringLearningSourceRoot(
+          { storage: this.storage, rootDir: this.config.rootDir, workspaceDir: this.config.assistant.workspaceDir },
+          input,
+        ),
       resolveProjectId: async (sessionId) => (await this.storage.chatSessionProjects.get(sessionId))?.projectId,
       appendAudit: async (payload) => {
         void (await this.storage.audit.append("approvals", payload));
@@ -11731,7 +11739,7 @@ export class GatewayService {
 
   public async requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): Promise<void> {
     if (!(await this.isFeatureEnabled(flag))) {
-      throw new ConflictError({ message: `Feature flag ${flag} is disabled.`, details: { flag } });
+      throw new FeatureDisabledError(flag);
     }
   }
 
@@ -12227,35 +12235,6 @@ export class GatewayService {
       approvedPaths: sameRoot ? current.approvedPaths : [sourceScope],
       dispatchGeneration: createHash("sha256").update(dispatchMarker, "utf8").digest("hex"),
     });
-  }
-
-  /** @internal */ public async resolveEngineeringLearningSourceRoot(input: {
-    sessionId?: string;
-    projectId?: string;
-  }): Promise<string | undefined> {
-    if (input.sessionId) {
-      const workbench = await this.storage.chatSessionWorkbench.get(input.sessionId);
-      if (
-        workbench?.worktreeStatus === "ready" &&
-        workbench.worktreePath &&
-        workbench.worktreePath !== "[outside-root]"
-      ) {
-        const worktreePath = path.resolve(this.config.rootDir, workbench.worktreePath.replace(/^\.\//, ""));
-        if (fsSync.existsSync(worktreePath)) return fsSync.realpathSync(worktreePath);
-      }
-    }
-    const projectId =
-      input.projectId ??
-      (input.sessionId ? (await this.storage.chatSessionProjects.get(input.sessionId))?.projectId : undefined);
-    const project = projectId ? await this.storage.chatProjects.find(projectId) : undefined;
-    if (!project) return undefined;
-    const workspaceRoot = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir);
-    const projectPath = fsSync.realpathSync(path.resolve(workspaceRoot, project.workspacePath));
-    try {
-      return readRealGitTopLevel(projectPath);
-    } catch {
-      return projectPath;
-    }
   }
 
   /** @internal */ public async ensureSessionInternalToolGrant(

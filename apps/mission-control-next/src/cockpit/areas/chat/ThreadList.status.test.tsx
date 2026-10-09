@@ -69,7 +69,7 @@ describe("ThreadList status for searched conversations", () => {
       renderSessionLabel: (sessionId: string) => (sessionId === "searched" ? "Deploy plan" : "Older chat"),
     } as unknown as MissionThreadedSessionRailData;
     await act(async () => root.render(<ThreadList rail={rail} />));
-    const rows = [...container.querySelectorAll('nav[aria-label="Threads"] li')];
+    const rows = [...container.querySelectorAll('nav[aria-label="Conversations"] li')];
     expect(rows).toHaveLength(2);
     expect(rows[0]?.textContent).toContain("Deploy plan");
     expect(rows[0]?.textContent).toContain("Waiting on you");

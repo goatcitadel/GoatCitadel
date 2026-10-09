@@ -156,3 +156,30 @@ async function createFixture(
 
   return root;
 }
+
+describe("raw-color budget token sources", () => {
+  const palette = Array.from(
+    { length: 100 },
+    (_, index) => `  --c-${index}: #${(index + 0x100000).toString(16)};`,
+  ).join("\n");
+  const rawColorCheck = (root: string) =>
+    readDesignQualityEvidence(root).checks.find((check) => check.id === "mission-control.raw-color-budget");
+
+  it("treats the dedicated cockpit token file as a token source", async () => {
+    const root = await createFixture();
+    const cockpitStyles = path.join(root, "apps", "mission-control-next", "src", "cockpit", "styles");
+    await fs.mkdir(cockpitStyles, { recursive: true });
+    await fs.writeFile(path.join(cockpitStyles, "cockpit-tokens.css"), `:root {\n${palette}\n}\n`, "utf8");
+    expect(rawColorCheck(root)?.status).toBe("passing");
+  });
+
+  it("still counts raw colors in every other cockpit stylesheet, including a look-alike name", async () => {
+    for (const name of ["cockpit.css", "not-cockpit-tokens.css"]) {
+      const root = await createFixture();
+      const cockpitStyles = path.join(root, "apps", "mission-control-next", "src", "cockpit", "styles");
+      await fs.mkdir(cockpitStyles, { recursive: true });
+      await fs.writeFile(path.join(cockpitStyles, name), `:root {\n${palette}\n}\n`, "utf8");
+      expect(rawColorCheck(root)?.status, name).toBe("blocking");
+    }
+  });
+});

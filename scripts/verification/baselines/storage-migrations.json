@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 252,
+      "expectedCount": 253,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 252,
+      "expectedLastVersion": 253,
       "migrations": [
         {
           "version": 1,
@@ -1772,15 +1772,22 @@
           "groupName": "canonical",
           "definitionSha256": "41348be1e73750713f5165de8762effddfa3bcfc4977b091a03de9ad5816fb77",
           "implementationSha256": "b2116ef7dea2e06ef5d3de98f90d69872a9471cf1d68c67e53329d60f5cf9a6b"
+        },
+        {
+          "version": 253,
+          "name": "purge_credential_route_idempotency_payload_hashes",
+          "groupName": "canonical",
+          "definitionSha256": "d410aadc035b84d3d0788746097b057d48828885c23b8b317ba59ec1968f9e31",
+          "implementationSha256": "2a635d59c99a74af243dff379ebbff6576d8b14c014c6a3009ad53fdb595e045"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 198,
+      "expectedCount": 199,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 198,
+      "expectedLastVersion": 199,
       "migrations": [
         {
           "version": 1,
@@ -2972,6 +2979,13 @@
           "name": "channel_guided_setup_evidence_and_oauth_attempts",
           "definitionSha256": "92549d350c2504cbe121262c57a1d41ff9485fd62d0f987ffadc21182b28b800",
           "runtimeIntegritySha256": "a0d90a450d133bf69e06819c0f854e0f09a235979f73bc0631ea9e2aadc18e84"
+        },
+        {
+          "version": 199,
+          "name": "purge_credential_route_idempotency_payload_hashes",
+          "definitionSha256": "bf3c4404f48ad8896d5bfe116c69cb27cd2ca72cbfce1ef3596004049d9df6db",
+          "sqlPayloadSha256": "e26cbaa6c1a7a36491ce6165477bbbf452889736606ed345f63bb24da1f5e657",
+          "runtimeIntegritySha256": "fcfeb0ba7a7fdc3b238aa782ee6566d1b0875bcf80759929d7549f5917a84fdd"
         }
       ]
     }

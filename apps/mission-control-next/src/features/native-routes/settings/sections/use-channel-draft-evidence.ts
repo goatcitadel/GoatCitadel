@@ -12,6 +12,9 @@ export function useChannelDraftEvidence(s: ChannelSetupState) {
   const scope = JSON.stringify([s.activeWorkspaceId, s.selectedDraftId, s.panel, s.selectedConnectionId, s.createCatalogId, draft?.revision]);
   const [read, setRead] = useState<{ scope: string; evidence?: ChannelSetupDraftEvidence; loading: boolean; error?: string }>();
   useEffect(() => {
+    // This render's state, read through the synced ref so the read stays keyed on `scope` alone.
+    const s = latest.current;
+    const draft = s.selectedDraft;
     if (s.panel !== "editor" || !draft || s.busyAction || (s.mutation.pending && !s.mutation.uncertain)) return;
     let current = true;
     const inputEpoch = s.inputEpoch.current;

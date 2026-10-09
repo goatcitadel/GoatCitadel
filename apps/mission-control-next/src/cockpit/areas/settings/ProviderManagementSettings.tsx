@@ -15,6 +15,7 @@ import { Dialog } from "../../ui/Dialog";
 import { ProviderProfileFields, providerFieldClass } from "./ProviderProfileFields";
 import { ProviderProfileReview } from "./ProviderProfileReview";
 import { ProviderChangeStatus } from "./ProviderChangeStatus";
+import { ProviderOutcomeCheck } from "./ProviderOutcomeCheck";
 import { ProviderDraftLeave } from "./ProviderDraftLeave";
 import { ProviderOAuthSettings } from "./ProviderOAuthSettings";
 import { useProviderCodexSetup } from "../../../features/native-routes/settings/sections/use-provider-codex-setup";
@@ -200,11 +201,7 @@ export function ProviderManagementSettings() {
           {notice.message}
         </p>
       ) : null}
-      {profile.mutation.uncertain ? (
-        <p role="alert" className="text-sm text-status-waiting">
-          {profile.mutation.uncertain}
-        </p>
-      ) : null}
+      <ProviderOutcomeCheck mutation={profile.mutation} reload={catalog.reload} />
       <ProviderChangeStatus
         change={profile.providerChange.change}
         onRefresh={profile.providerChange.refresh}
@@ -239,11 +236,7 @@ export function ProviderManagementSettings() {
               </Button>
             </div>
           ) : null}
-          {profile.mutation.uncertain ? (
-            <p role="alert" className="text-sm text-status-waiting">
-              {profile.mutation.uncertain}
-            </p>
-          ) : null}
+          <ProviderOutcomeCheck mutation={profile.mutation} reload={catalog.reload} />
           {profile.saveOperationError ? (
             <p role="alert" className="text-sm text-status-waiting">
               {profile.saveOperationError}

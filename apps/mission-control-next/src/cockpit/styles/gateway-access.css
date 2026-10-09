@@ -1,0 +1,109 @@
+/* Shared credential custody, with native Cockpit presentation outside the ready shell. */
+.cockpit-access {
+  color: var(--cockpit-text);
+}
+.cockpit-access .gateway-access-shell {
+  max-width: 48rem;
+  margin: 2rem auto;
+}
+.cockpit-access .gateway-access-card {
+  padding: clamp(1rem, 4vw, 2rem);
+  border: 1px solid var(--cockpit-border);
+  border-radius: 0.75rem;
+  background: var(--cockpit-raised);
+}
+.cockpit-access .gateway-access-title {
+  font-size: var(--text-2xl);
+  font-weight: 700;
+}
+.cockpit-access .gateway-access-card > * + * {
+  margin-top: 1rem;
+}
+.cockpit-access .gateway-access-header,
+.cockpit-access .gateway-access-meta,
+.cockpit-access .gateway-access-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+.cockpit-access .gateway-access-progress {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+.cockpit-access .gateway-access-progress li {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background: var(--cockpit-sunken);
+  border-radius: 0.375rem;
+}
+.cockpit-access .gateway-access-progress small,
+.cockpit-access .gateway-access-row label {
+  display: block;
+}
+.cockpit-access .gateway-access-row {
+  display: grid;
+  gap: 0.375rem;
+  margin-top: 0.875rem;
+}
+.cockpit-access :is(input, select, button) {
+  min-height: 2.75rem;
+  max-width: 100%;
+  border: 1px solid var(--cockpit-border-strong);
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--cockpit-canvas);
+  color: var(--cockpit-text);
+}
+.cockpit-access :is(input, select) {
+  width: 100%;
+}
+.cockpit-access :is(button, summary) {
+  cursor: pointer;
+}
+.cockpit-access :disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.cockpit-access :focus-visible {
+  outline: 3px solid var(--cockpit-accent);
+  outline-offset: 3px;
+}
+.cockpit-access :is(p, small) {
+  overflow-wrap: anywhere;
+}
+.cockpit-access .gateway-access-error {
+  color: var(--cockpit-failed);
+}
+.cockpit-access .gc-switch-root {
+  min-width: 3rem;
+}
+.cockpit-access .gc-switch-root[data-state="checked"] {
+  background: var(--cockpit-accent);
+  color: var(--cockpit-accent-ink);
+}
+.cockpit-access .gc-switch-thumb {
+  display: block;
+  width: 0.75rem;
+  height: 0.75rem;
+  background: currentColor;
+  border-radius: 50%;
+}
+.cockpit-access .gc-switch-root[data-state="checked"] .gc-switch-thumb {
+  margin-left: auto;
+}
+@media (forced-colors: active) {
+  .cockpit-access :is(.gateway-access-card, input, select, button) {
+    border-color: ButtonText;
+    background: Canvas;
+    color: CanvasText;
+  }
+  .cockpit-access :focus-visible {
+    outline-color: Highlight;
+  }
+  .cockpit-access .gc-switch-root[data-state="checked"] {
+    outline: 2px solid Highlight;
+  }
+}

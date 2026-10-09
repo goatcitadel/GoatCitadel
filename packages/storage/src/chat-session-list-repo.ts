@@ -9,6 +9,7 @@ export interface ChatSessionListCandidate {
 }
 
 export interface ChatSessionListCandidateQuery {
+  sessionIds?: string[];
   sessionId?: string;
   workspaceId: string;
   scope?: ChatSessionScope | "all";
@@ -61,6 +62,11 @@ export class ChatSessionListRepository {
       if (!sessionId) return [];
       clauses.push("s.session_id = ?");
       params.push(sessionId);
+    }
+    if (input.sessionIds !== undefined) {
+      if (!input.sessionIds.length || input.sessionIds.length > 100) throw new Error("Session membership requires 1 to 100 IDs");
+      clauses.push(`s.session_id IN (${input.sessionIds.map(() => "?").join(",")})`);
+      params.push(...input.sessionIds);
     }
     const scope = input.scope ?? "all";
     const view = input.view ?? "active";

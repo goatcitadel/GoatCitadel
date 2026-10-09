@@ -3,6 +3,8 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionRecord, ChatThreadResponse } from "@goatcitadel/contracts";
 import { useChatSessionData, type ChatHistoryView } from "./useChatSessionData";
+import { setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { useChatSessionControls } from "./useChatSessionControls";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -28,6 +30,12 @@ const fetchSkillsMock = vi.fn();
 const fetchThreadKnowledgeAttachmentsMock = vi.fn();
 const recordClientDiagnosticMock = vi.fn();
 const recordChatRefreshPhaseMock = vi.fn();
+const assignChatSessionProjectMock = vi.fn();
+const assignmentErrors = vi.hoisted(() => ({ ApiRequestError: class extends Error {
+  status: number;
+  constructor(message: string, status: number) { super(message); this.status = status; }
+} }));
+let latestAssignment: ReturnType<typeof useChatSessionControls>["handleAssignProject"] | null = null;
 
 let latestRefreshSubscription: {
   callback: (signal: any) => Promise<void> | void;
@@ -35,7 +43,10 @@ let latestRefreshSubscription: {
 } | null = null;
 let latestHarness: HarnessSnapshot | null = null;
 
-vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
+  ...await original<typeof import("@goatcitadel/mission-control-shared/api/client")>(),
+  ApiRequestError: assignmentErrors.ApiRequestError,
+  assignChatSessionProject: (...args: unknown[]) => assignChatSessionProjectMock(...args),
   fetchChatCommandCatalog: (...args: unknown[]) => fetchChatCommandCatalogMock(...args),
   fetchChatGeneratedArtifacts: (...args: unknown[]) => fetchChatGeneratedArtifactsMock(...args),
   fetchChatHistoryWindow: (...args: unknown[]) => fetchChatHistoryWindowMock(...args),
@@ -196,6 +207,7 @@ function Harness(props: {
   initialSelectedSessionId?: string | null;
   routeSessionId?: string;
   runtimeLlmConfig?: any;
+  assignmentControls?: boolean;
 }) {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(props.initialSelectedSessionId ?? null);
   const errorsRef = useRef<string[]>([]);
@@ -236,6 +248,19 @@ function Harness(props: {
     errors: errorsRef.current,
     applyFetchedThread: applyFetchedThread.current,
   };
+  return props.assignmentControls ? <AssignmentControls snapshot={latestHarness} workspaceId={props.workspaceId ?? "workspace-1"} /> : null;
+}
+
+function AssignmentControls({ snapshot, workspaceId }: { snapshot: HarnessSnapshot; workspaceId: string }) {
+  const noop = () => undefined;
+  const selected = snapshot.result.sessions?.items.find((item) => item.sessionId === snapshot.selectedSessionId);
+  const controls = useChatSessionControls({ workspaceId, historyView: "active", sessionMode: "chat", selectedProjectId: "all",
+    selectedSessionId: snapshot.selectedSessionId, selectedSession: selected ? { ...selected, workspaceId, revision: 7 } : null,
+    renameTitle: "", folderName: "", tagsValue: "", setSelectedProjectId: noop, setSelectedSessionId: snapshot.setSelectedSessionId,
+    setHistoryView: noop, setError: (message) => { if (message) snapshot.errors.push(message); }, setSending: noop,
+    setQueuedOutbound: noop, setSessions: snapshot.result.setSessions, setThread: snapshot.result.setThread,
+    loadSidebar: snapshot.result.loadSidebar, setBinding: snapshot.result.setBinding });
+  latestAssignment = controls.handleAssignProject;
   return null;
 }
 
@@ -567,7 +592,7 @@ describe("useChatSessionData", () => {
       workspaceId: "workspace-pagination",
       cursor: "cursor-page-2",
       includeActivity: true,
-    });
+    }, { signal: expect.any(AbortSignal) });
     expect(latestHarness?.result.sessions?.items.map((item) => item.sessionId)).toEqual([
       "session-1",
       "session-2",
@@ -1325,7 +1350,7 @@ describe("useChatSessionData", () => {
       cursor: "search-page-two",
       surface: undefined,
       includeActivity: true,
-    });
+    }, { signal: expect.any(AbortSignal) });
     expect(latestHarness!.result.sessions?.items.map((item) => item.sessionId)).toEqual(["search-one", "search-two"]);
     expect(latestHarness!.result.sessions?.items[1]?.searchHits).toEqual([{ source: "title", excerpt: "search-two" }]);
     expect(latestHarness!.selectedSessionId).toBe("search-one");
@@ -1490,4 +1515,257 @@ describe("useChatSessionData", () => {
     expect(latestHarness!.result.sessions?.items.some((item) => item.sessionId === "old-target")).toBe(false);
     await act(async () => renderer.unmount());
   });
+  it.each([false, true])("preserves newer selection when the real post-assignment sidebar read settles (conflict: %s)", async (conflict) => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<Harness workspaceId={`workspace-assignment-${conflict}`} initialSelectedSessionId="session-1" assignmentControls />); await flushEffects(8); });
+    await act(async () => { await flushEffects(8); });
+    let resolveRead!: (value: { items: ChatSessionRecord[] }) => void;
+    fetchChatSessionsMock.mockReturnValueOnce(new Promise((resolve) => { resolveRead = resolve; }));
+    if (conflict) assignChatSessionProjectMock.mockRejectedValueOnce(new assignmentErrors.ApiRequestError("stale assignment", 409));
+    else assignChatSessionProjectMock.mockResolvedValueOnce({});
+    let pending!: Promise<void>;
+    await act(async () => { pending = latestAssignment!("destination"); await flushEffects(8); });
+    expect(assignChatSessionProjectMock).toHaveBeenCalledExactlyOnceWith("session-1", "destination", 7);
+    expect(typeof resolveRead).toBe("function");
+    await act(async () => { latestHarness!.setSelectedSessionId("session-2"); });
+    expect(latestHarness!.selectedSessionId).toBe("session-2");
+    await act(async () => { resolveRead({ items: [{ ...makeSession("session-1"), projectId: "destination" }, makeSession("session-2")] }); await pending; });
+    expect(latestHarness!.result.sessions?.items[0]?.projectId).toBe("destination");
+    expect(latestHarness!.selectedSessionId).toBe("session-2");
+    await act(async () => renderer.unmount());
+  });
+
+
+});
+
+it("rereads the canonical batched list when thread settlement disagrees with retained activity", async () => {
+  setupApiDefaults();
+  const waiting = { ...makeSession("session-1"), activity: { latestTurn: { turnId: "turn-1", status: "waiting_for_approval" } } };
+  fetchChatSessionsMock.mockResolvedValueOnce({ items: [waiting] }).mockImplementation(async (query) => ({ items: [{ ...waiting, activity: { latestTurn: { turnId: "turn-1", status: "completed" } } }], ...(query.sessionIds ? { membership: { sessionIds: query.sessionIds, complete: true } } : {}) }));
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(<Harness workspaceId="settlement-preview" initialSelectedSessionId="session-1" />); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(fetchChatSessionsMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+  expect(latestHarness!.result.sessions?.items[0]?.activity?.latestTurn?.status).toBe("completed");
+  await act(async () => renderer!.unmount());
+});
+
+it.each(["later", "first"])("preserves two loaded pages, cursor and selection when settling with route %s", async (routeSessionId) => {
+  setupApiDefaults();
+  let settled = false;
+  const first = { ...makeSession("first"), workspaceId: "settlement-pages", pinned: true };
+  const later = () => ({ ...makeSession("later"), workspaceId: "settlement-pages", activity: { latestTurn: { turnId: "turn-1", status: settled ? "completed" : "running" } } });
+  fetchChatSessionsMock.mockImplementation(async (query) => query.sessionIds ? { items: [first, later()], membership: { sessionIds: query.sessionIds, complete: true } } : query.sessionId ? { items: [later()] }
+    : query.cursor === "page-two" ? { items: [later()], nextCursor: "page-three" }
+    : { items: [first], nextCursor: "page-two" });
+  fetchChatThreadMock.mockImplementation(async (id) => ({ ...makeThread(id), turns: makeThread(id).turns.map((turn) => ({ ...turn, trace: { ...turn.trace, status: "running" } })) }));
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(<Harness workspaceId="settlement-pages" routeSessionId={routeSessionId} />); });
+  await act(async () => { await latestHarness!.result.loadSidebar("active", { append: true }); latestHarness!.setSelectedSessionId("later"); });
+  const ids = latestHarness!.result.sessions!.items.map((item) => item.sessionId);
+  const cursor = latestHarness!.result.sidebarNextCursor;
+  expect(ids).toContain("first"); expect(ids).toContain("later"); expect(cursor).toBe("page-three");
+  fetchChatSessionsMock.mockClear(); settled = true;
+  await act(async () => { latestHarness!.result.setThread(makeThread("later")); });
+  expect(fetchChatSessionsMock.mock.calls.filter(([query]) => !query.sessionIds).map(([query]) => query.cursor)).toEqual([undefined, "page-two"]);
+  expect(latestHarness!.result.sessions!.items.map((item) => item.sessionId)).toEqual(ids);
+  expect(latestHarness!.result.sidebarNextCursor).toBe(cursor);
+  expect(latestHarness!.selectedSessionId).toBe("later");
+  await act(async () => { await latestHarness!.result.refreshViewState({ refreshSidebar: true, refreshSession: "none" }); });
+  expect(latestHarness!.result.sessions!.items.map((item) => item.sessionId)).toEqual(ids);
+  expect(latestHarness!.result.sidebarNextCursor).toBe(cursor);
+  expect(latestHarness!.selectedSessionId).toBe("later");
+  expect(latestHarness!.result.sessions!.items.find((item) => item.sessionId === "later")!.activity!.latestTurn!.status).toBe("completed");
+  await act(async () => renderer!.unmount());
+});
+
+it("rejects a late loaded-range projection after the verified caller changes", async () => {
+  setupApiDefaults(); setGatewayCallerScope("settlement-actor-a");
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(<Harness workspaceId="settlement-caller" />); });
+  const before = latestHarness!.result.sessions;
+  let resolveRead!: (value: unknown) => void;
+  fetchChatSessionsMock.mockImplementationOnce(() => new Promise((resolve) => { resolveRead = resolve; }));
+  let pending!: Promise<void>;
+  await act(async () => { pending = latestHarness!.result.loadSidebar(undefined, { reconcileLoadedRange: true }); });
+  setGatewayCallerScope("settlement-actor-b");
+  await act(async () => { resolveRead({ items: [{ ...makeSession("session-1"), title: "Previous caller result" }] }); await pending; });
+  expect(latestHarness!.result.sessions).toBe(before);
+  await act(async () => renderer!.unmount()); setGatewayCallerScope("");
+});
+
+
+it.each(["later", "outside"])("retains loaded range through actual URL target %s and canonical membership changes", async (target) => {
+  setupApiDefaults();
+  const workspaceId = `membership-${target}`;
+  const record = (id: string) => ({ ...makeSession(id), workspaceId });
+  let canonical = ["first", "later", "moved", "removed"];
+  let changed = false;
+  fetchChatSessionsMock.mockImplementation(async (query) => {
+    if (query.sessionIds) return { items: query.sessionIds.filter((id: string) => canonical.includes(id)).map(record), membership: { sessionIds: query.sessionIds, complete: true } };
+    if (query.sessionId) return { items: [record(query.sessionId)] };
+    return query.cursor ? { items: changed ? [] : [record("later"), record("moved"), record("removed")], nextCursor: "third" }
+      : { items: (changed ? ["new", "first"] : ["first"]).map(record), nextCursor: "second" };
+  });
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(<Harness workspaceId={workspaceId} routeSessionId="first" />); await flushEffects(8); });
+  await act(async () => { await latestHarness!.result.loadSidebar(undefined, { append: true }); });
+  const before = latestHarness!.result.sessions!.items.map((item) => item.sessionId);
+  fetchChatSessionsMock.mockClear();
+  await act(async () => { renderer.update(<Harness workspaceId={workspaceId} routeSessionId={target} />); await flushEffects(8); });
+  expect(latestHarness!.result.sessions!.items.map((item) => item.sessionId)).toEqual(target === "outside" ? [...before, target] : before);
+  expect(latestHarness!.result.sidebarNextCursor).toBe("third");
+  expect(latestHarness!.selectedSessionId).toBe(target);
+  expect(fetchChatSessionsMock.mock.calls.every(([query]) => query.sessionId === "outside")).toBe(true);
+  changed = true; canonical = ["first", "later", "moved", "new", "outside"];
+  await act(async () => { await latestHarness!.result.refreshViewState({ refreshSidebar: true, refreshSession: "none" }); });
+  expect(latestHarness!.result.sessions!.items.map((item) => item.sessionId)).toEqual(["first", "later", "moved", ...(target === "outside" ? [target] : []), "new"]);
+  expect(latestHarness!.selectedSessionId).toBe(target);
+  expect(latestHarness!.result.sidebarNextCursor).toBe("third");
+  expect(fetchChatSessionsMock.mock.calls.some(([query]) => query.cursor === "second")).toBe(true);
+  const retained = latestHarness!.result.sessions;
+  fetchChatSessionsMock.mockImplementation(async (query) => query.sessionIds ? { items: [], membership: { sessionIds: query.sessionIds, complete: false } } : { items: [] });
+  await act(async () => { await expect(latestHarness!.result.loadSidebar(undefined, { reconcileLoadedRange: true })).rejects.toThrow("membership could not be verified"); });
+  expect(latestHarness!.result.sessions).toBe(retained);
+  await act(async () => renderer.unmount());
+});
+
+
+it("retains uncertainty on a failed or stale bounded search membership read", async () => {
+  setupApiDefaults();
+  const workspaceId = "search-membership";
+  const record = { ...makeSession("searched"), workspaceId };
+  fetchChatSessionSearchMock.mockResolvedValue({ items: [{ session: record, hits: [] }] });
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(<Harness workspaceId={workspaceId} searchQuery="needle" />); await flushEffects(8); });
+  const before = latestHarness!.result.sessions;
+  fetchChatSessionsMock.mockRejectedValueOnce(new Error("membership offline"));
+  await act(async () => { await expect(latestHarness!.result.loadSidebar(undefined, { reconcileLoadedRange: true })).rejects.toThrow("membership offline"); });
+  expect(latestHarness!.result.sessions).toBe(before);
+  let resolveMembership!: (value: unknown) => void;
+  fetchChatSessionsMock.mockImplementationOnce((query) => {
+    expect(query).toMatchObject({ sessionIds: ["searched"], workspaceId, q: "needle", view: "active" });
+    return new Promise((resolve) => { resolveMembership = resolve; });
+  });
+  let pending!: Promise<void>;
+  await act(async () => { pending = latestHarness!.result.loadSidebar(undefined, { reconcileLoadedRange: true }); await flushEffects(8); });
+  await act(async () => { renderer.update(<Harness workspaceId={workspaceId} searchQuery="changed" historyView="archived" />); await flushEffects(8); });
+  const next = latestHarness!.result.sessions;
+  await act(async () => { resolveMembership({ items: [], membership: { sessionIds: ["searched"], complete: true } }); await pending; });
+  expect(latestHarness!.result.sessions).toBe(next);
+  fetchChatSessionSearchMock.mockResolvedValue({ items: [] });
+  fetchChatSessionsMock.mockImplementation(async (query) => ({ items: [], membership: { sessionIds: query.sessionIds, complete: true } }));
+  await act(async () => { await latestHarness!.result.loadSidebar(undefined, { reconcileLoadedRange: true }); });
+  expect(latestHarness!.result.sessions!.items).toEqual([]);
+  expect(fetchChatSessionsMock).toHaveBeenLastCalledWith(expect.objectContaining({ q: "changed", view: "archived" }), expect.anything());
+  await act(async () => renderer.unmount());
+});
+
+it("invalidates an out-of-range exact target when only the URL selection changes", async () => {
+  setupApiDefaults();
+  const workspaceId = "route-generation";
+  const record = (id: string) => ({ ...makeSession(id), workspaceId });
+  let resolveExact!: (value: unknown) => void;
+  fetchChatSessionsMock.mockImplementation(async (query) => {
+    if (query.sessionId) return new Promise((resolve) => { resolveExact = resolve; });
+    return { items: [record(query.cursor ? "later" : "first")], nextCursor: query.cursor ? "third" : "second" };
+  });
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(<Harness workspaceId={workspaceId} routeSessionId="first" />); await flushEffects(8); });
+  await act(async () => { await latestHarness!.result.loadSidebar(undefined, { append: true }); });
+  await act(async () => { renderer.update(<Harness workspaceId={workspaceId} routeSessionId="outside" />); await flushEffects(8); });
+  const exact = fetchChatSessionsMock.mock.calls.find(([query]) => query.sessionId)!;
+  await act(async () => { renderer.update(<Harness workspaceId={workspaceId} routeSessionId="later" />); await flushEffects(8); });
+  expect(exact[1].signal.aborted).toBe(true);
+  await act(async () => { resolveExact({ items: [record("outside")] }); await flushEffects(8); });
+  expect(latestHarness!.selectedSessionId).toBe("later");
+  expect(latestHarness!.result.sessions!.items.map((item) => item.sessionId)).toEqual(["first", "later"]);
+  expect(latestHarness!.result.sidebarNextCursor).toBe("third");
+  await act(async () => renderer.unmount());
+});
+
+
+it("verifies every retained record in batches of at most 100 without per-row requests", async () => {
+  setupApiDefaults();
+  const rows = Array.from({ length: 201 }, (_, index) => makeSession(`bounded-${index}`));
+  fetchChatSessionsMock.mockImplementation(async (query) => query.sessionIds
+    ? { items: rows.filter((row) => query.sessionIds.includes(row.sessionId)), membership: { sessionIds: query.sessionIds, complete: true } }
+    : { items: rows, nextCursor: "continue" });
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(<Harness workspaceId="membership-batches" />); await flushEffects(8); });
+  fetchChatSessionsMock.mockClear();
+  await act(async () => { await latestHarness!.result.loadSidebar(undefined, { reconcileLoadedRange: true }); });
+  const batches = fetchChatSessionsMock.mock.calls.filter(([query]) => query.sessionIds).map(([query]) => query.sessionIds);
+  expect(batches.map((ids) => ids.length)).toEqual([100, 100, 1]);
+  expect(batches.flat()).toEqual(rows.map((row) => row.sessionId));
+  expect(latestHarness!.result.sessions!.items.map((row) => row.sessionId)).toEqual(rows.map((row) => row.sessionId));
+  expect(latestHarness!.result.sidebarNextCursor).toBe("continue");
+  await act(async () => renderer.unmount());
+});
+
+
+it.each(["loaded", "outside"].flatMap((target) => ["success", "failure", "abort"].map((outcome) => ({ target, outcome }))))(
+  "releases displaced append loading on URL selection ($target, late $outcome)", async ({ target, outcome }) => {
+    setupApiDefaults();
+    const workspaceId = `append-${target}-${outcome}`;
+    const row = (id: string) => ({ ...makeSession(id), workspaceId });
+    fetchChatSessionsMock.mockImplementation(async (query) => query.sessionId ? { items: [row(query.sessionId)] }
+      : query.cursor ? { items: [row("next")], nextCursor: "third" } : { items: [row("first"), row("loaded")], nextCursor: "second" });
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<Harness workspaceId={workspaceId} routeSessionId="first" />); await flushEffects(8); });
+    let resolveAppend!: (value: unknown) => void;
+    let rejectAppend!: (cause: Error) => void;
+    fetchChatSessionsMock.mockImplementationOnce(() => new Promise((resolve, reject) => { resolveAppend = resolve; rejectAppend = reject; }));
+    let pending!: Promise<void>;
+    await act(async () => { pending = latestHarness!.result.loadSidebar(undefined, { append: true }); });
+    expect(latestHarness!.result.sidebarLoadingMore).toBe(true);
+    const append = fetchChatSessionsMock.mock.calls.at(-1)!;
+    await act(async () => { renderer.update(<Harness workspaceId={workspaceId} routeSessionId={target} />); await flushEffects(8); });
+    expect(latestHarness!.result.sidebarLoadingMore).toBe(false);
+    expect(append[1].signal.aborted).toBe(true);
+    expect(latestHarness!.selectedSessionId).toBe(target);
+    expect(latestHarness!.result.sidebarNextCursor).toBe("second");
+    await act(async () => {
+      if (outcome === "success") resolveAppend({ items: [row("obsolete")], nextCursor: "obsolete-cursor" });
+      else rejectAppend(outcome === "abort" ? new DOMException("Displaced", "AbortError") : new Error("Late append failure"));
+      await pending;
+    });
+    const retained = ["first", "loaded", ...(target === "outside" ? [target] : [])];
+    expect(latestHarness!.result.sessions!.items.map((item) => item.sessionId)).toEqual(retained);
+    expect(latestHarness!.result.sidebarLoadingMore).toBe(false);
+    expect(latestHarness!.result.sidebarNextCursor).toBe("second");
+    await act(async () => { await latestHarness!.result.loadSidebar(undefined, { append: true }); });
+    expect(latestHarness!.result.sessions!.items.map((item) => item.sessionId)).toEqual([...retained, "next"]);
+    expect(latestHarness!.result.sidebarNextCursor).toBe("third");
+    expect(latestHarness!.selectedSessionId).toBe(target);
+    expect(latestHarness!.errors).not.toContain("Late append failure");
+    await act(async () => renderer.unmount());
+  },
+);
+
+it("reconciles isolated canonical deletion after archive settled without reloading another selected transcript", async () => {
+  setupApiDefaults();
+  let ids = ["selected", "archive", "delete"];
+  fetchChatSessionsMock.mockImplementation(async (query) => query.sessionIds
+    ? { items: ids.filter((id) => query.sessionIds.includes(id)).map((id) => makeSession(id)), membership: { sessionIds: query.sessionIds, complete: true } }
+    : { items: ids.map((id) => makeSession(id)), nextCursor: query.cursor ? "third" : "second" });
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(<Harness workspaceId="isolated-delete" initialSelectedSessionId="selected" />); await flushEffects(8); });
+  await act(async () => { await latestHarness!.result.loadSidebar(undefined, { append: true }); });
+  const threadReads = fetchChatThreadMock.mock.calls.length;
+  const emit = async (eventType: string, sessionId: string) => {
+    await act(async () => { await latestRefreshSubscription!.callback({ topic: "chat", timestamp: Date.now() + 1000, eventId: sessionId, reason: eventType, eventType, source: "chat", sessionId }); });
+  };
+  ids = ["selected", "delete"];
+  await emit("chat_session_updated", "archive");
+  expect(latestHarness!.result.sessions!.items.map((item) => item.sessionId)).toEqual(ids);
+  fetchChatSessionsMock.mockClear();
+  ids = ["selected"];
+  await emit("chat_session_deleted", "delete");
+  expect(fetchChatSessionsMock.mock.calls.some(([query]) => query.sessionIds?.includes("delete"))).toBe(true);
+  expect(latestHarness!.result.sessions!.items.map((item) => item.sessionId)).toEqual(ids);
+  expect(fetchChatThreadMock).toHaveBeenCalledTimes(threadReads);
+  expect(latestHarness!.selectedSessionId).toBe("selected");
+  expect(latestHarness!.result.sidebarNextCursor).toBe("third");
+  await act(async () => renderer.unmount());
 });

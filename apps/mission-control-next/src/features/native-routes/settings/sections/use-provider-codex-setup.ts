@@ -11,6 +11,7 @@ import {
 } from "./provider-save-contract";
 import {
   beginProviderMutation,
+  dispatchProviderMutation,
   finishProviderMutation,
   isProviderPrecommitConflict,
   retainProviderMutationUncertainty,
@@ -79,7 +80,9 @@ export function useProviderCodexSetup({
       const draft = { provider: buildChatGptOAuthProviderDraft(), transport: createEmptyLlmTransportDraft() };
       const { request: _transport, ...profile } = providerSaveInput(draft);
       attempted = true;
-      const updated = await patchSettings({ expectedRevision: revision, llm: { upsertProvider: profile } });
+      const updated = await dispatchProviderMutation(() =>
+        patchSettings({ expectedRevision: revision, llm: { upsertProvider: profile } }),
+      );
       const next =
         updated.changePlanReceipt && !["completed", "applied"].includes(updated.changePlanReceipt.status)
           ? { ...updated.llm, revision: updated.revision, changePlanReceipt: updated.changePlanReceipt }

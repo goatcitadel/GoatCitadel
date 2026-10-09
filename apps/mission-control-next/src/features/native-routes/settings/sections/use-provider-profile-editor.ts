@@ -34,6 +34,7 @@ import { matchesProviderTransportReceipt } from "./provider-transport-receipt";
 import type { ProviderCatalog, ProviderNoticeSetter } from "./provider-section-types";
 import {
   beginProviderMutation,
+  dispatchProviderMutation,
   finishProviderMutation,
   isProviderPrecommitConflict,
   retainProviderMutationUncertainty,
@@ -215,11 +216,13 @@ export function useProviderProfileEditor({
       let transportConfirmed = false;
       let next: LlmRuntimeConfigResponse & { changePlanReceipt?: RuntimeSettingsResponse["changePlanReceipt"] };
       if (saveOperation.kind === "transport") {
-        const updated = await updateProviderTransport({
-          expectedRevision: revision,
-          providerId: saveOperation.providerId,
-          request: saveOperation.request,
-        });
+        const updated = await dispatchProviderMutation(() =>
+          updateProviderTransport({
+            expectedRevision: revision,
+            providerId: saveOperation.providerId,
+            request: saveOperation.request,
+          }),
+        );
         next = await fetchLlmConfig();
         if ("changePlanReceipt" in updated || !matchesProviderTransportReceipt(updated, next, submitted, revision)) {
           throw new Error(
@@ -229,11 +232,13 @@ export function useProviderProfileEditor({
         transportConfirmed = true;
       } else {
         if (submitted.governedCreation && creationRequest) {
-          const plan = await createChangePlan({
-            workspaceId: "default",
-            surface: "settings",
-            request: creationRequest,
-          });
+          const plan = await dispatchProviderMutation(() =>
+            createChangePlan({
+              workspaceId: "default",
+              surface: "settings",
+              request: creationRequest,
+            }),
+          );
           if (
             plan.origin.workspaceId !== "default" ||
             plan.origin.surface !== "settings" ||
@@ -246,10 +251,12 @@ export function useProviderProfileEditor({
             );
           next = { ...latest, changePlanReceipt: plan };
         } else {
-          const updated = await patchSettings({
-            expectedRevision: revision,
-            llm: { upsertProvider: saveOperation.profile },
-          });
+          const updated = await dispatchProviderMutation(() =>
+            patchSettings({
+              expectedRevision: revision,
+              llm: { upsertProvider: saveOperation.profile },
+            }),
+          );
           next =
             updated.changePlanReceipt && !["completed", "applied"].includes(updated.changePlanReceipt.status)
               ? { ...updated.llm, revision: updated.revision, changePlanReceipt: updated.changePlanReceipt }

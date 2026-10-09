@@ -142,9 +142,9 @@ export function describeToolApprovalModeHelp(value: ToolApprovalMode): string {
     return "Every otherwise-allowed tool call asks first; useful for audits and first-run learning.";
   }
   if (value === "bypass") {
-    return "Allowed tools run without normal prompts in local profiles except nuclear-risk, risky-shell, and read work outside the active read posture. Remote Hardened rejects this mode; hard policy blocks still apply.";
+    return "Allowed tools run without normal prompts in local profiles except Critical risk, risky-shell, and read work outside the active read posture. Remote Hardened rejects this mode; hard policy blocks still apply.";
   }
-  return "Low-risk allowed tools can run, but caution, danger, and nuclear-risk work asks first.";
+  return "Low risk allowed tools can run, but Medium, High, and Critical risk work asks first.";
 }
 
 export function describePermissionProfile(profile: PermissionProfileRecord): string {

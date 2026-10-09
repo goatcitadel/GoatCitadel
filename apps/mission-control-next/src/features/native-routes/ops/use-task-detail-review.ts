@@ -58,8 +58,9 @@ export function useTaskDetailReview(task: TaskRecord, workspaceId: string) {
       ownerGeneration: live.current.ownerGeneration,
     });
   };
-  const confirm = async (onConfirmed: (saved: TaskRecord) => void) => {
-    const origin = visibleReview;
+  const confirm = async (onConfirmed: (saved: TaskRecord) => void, directChange?: TaskDetailChange) => {
+    // Routine board edits use the same fresh preflight and receipt owner without a risk dialog.
+    const origin = directChange ? { task, change: directChange, key, generation: live.current.generation, ownerGeneration: live.current.ownerGeneration } : visibleReview;
     if (!origin) return;
     const viewCurrent = () =>
       live.current.mounted && live.current.key === origin.key && live.current.generation === origin.generation;

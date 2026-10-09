@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
+import { createSqliteAsyncStorage, sealChatTurnCapabilityProfile, Storage } from "@goatcitadel/storage";
 import { WorkflowSkillCaptureService } from "./workflow-skill-capture-service.js";
 import { CapabilitySystemService } from "./capability-system-service.js";
 import { resolveCallableSkillActivation } from "./callable-skill-activation.js";
@@ -11,7 +11,11 @@ import {
   buildGovernedActivatedSkillReceipts,
   renderGovernedActivatedSkillInstructions,
 } from "./governed-skill-instruction-service.js";
-import type { ChatTurnCapabilityProfileRecord } from "@goatcitadel/contracts";
+import { canonicalJsonString, type ChatTurnCapabilityProfileRecord } from "@goatcitadel/contracts";
+import { SessionControlRuntimeOwner } from "./session-control-runtime-owner.js";
+import { SessionControlService } from "./session-control-service.js";
+import { persistPreparedChatCapabilityAdmission } from "./chat-durable-run-service.js";
+import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 
 const actor = { actorId: "capture-operator", authActorSource: "loopback" as const };
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -46,7 +50,7 @@ async function harness() {
     rootDir: root,
     candidateRoot: "candidates",
   });
-  const seed = (id: string, user: string, assistant: string, sessionId = "session") => {
+  const seed = async (id: string, user: string, assistant: string, sessionId = "session", bound = true) => {
     const timestamp = "2026-09-08T01:00:00.000Z";
     storage.chatSessionMeta.ensure(sessionId, timestamp, "default");
     storage.chatMessages.upsert({
@@ -69,6 +73,47 @@ async function harness() {
       content: assistant,
       timestamp,
     });
+    // This fixture models historical profile-bound records through the real sealed
+    // repository. Current profile-free public turns are covered in the integration test.
+    const profile = bound ? sealChatTurnCapabilityProfile({
+      profileId: `profile-${id}`, schemaVersion: "chat.turn.capability-profile.v1",
+      identity: { turnId: id, sessionId, workspaceId: "default", citadelId: "personal",
+        operatorId: actor.actorId, authActorId: actor.actorId, authActorSource: actor.authActorSource },
+      source: { channel: "chat", account: "operator" },
+      catalog: { snapshotId: `catalog-${id}`, inspectableHash: hash("[]"), callableHash: hash("[]"), inspectableCount: 0, callableCount: 0 },
+      selection: {
+        contentHash: hash(canonicalJsonString(user)), effectiveProviderId: "test", effectiveModel: "test", allowedFallbacks: [],
+        mode: "chat", webMode: "off", memory: { mode: "off", retrievalMode: "standard", workspaceId: "default", sessionId,
+          contextManifestRef: `chat-memory-scope:${hash(sessionId)}`, writeApprovalRequired: true },
+        thinkingLevel: "standard", speedMode: "standard", subagentPolicy: "off", toolAutonomy: "manual",
+        tools: [], modelNameAllowMap: [], trustedSkills: [],
+      },
+      governance: { activeGrants: [], permission: { profileId: "safe", approvalMode: "approve_all", profileHash: hash("safe") },
+        policyDecisions: [], authReadiness: [
+          { kind: "provider", ref: "test", status: "ready", reasonCodes: [] },
+          { kind: "channel", ref: "chat", status: "ready", reasonCodes: [] },
+        ],
+        approval: { mode: "approve_all", selectedToolCount: 0, toolsRequiringApproval: [], approvalGranted: false } },
+      preflightFingerprint: hash(id), createdAt: timestamp,
+    }) : undefined;
+    if (profile) {
+      const asyncStorage = createSqliteAsyncStorage(storage);
+      const owner = new SessionControlRuntimeOwner(new SessionControlService(asyncStorage));
+      const turnAdmission = await owner.admitOperatorChatTurn({
+        sessionId, turnId: id, request: { content: user, authActorId: actor.actorId, authActorSource: actor.authActorSource },
+        actorId: actor.actorId, idempotencyKey: `admit:${id}`, correlationId: `admit:${id}`,
+      });
+      await asyncStorage.runImmediateTransaction(async () => {
+        await persistPreparedChatCapabilityAdmission(asyncStorage, {
+          turnId: id, capabilityProfile: profile, turnAdmission,
+          capabilityCatalogSnapshot: { snapshotId: profile.catalog.snapshotId, inspectableEntries: [], callableEntries: [], createdAt: timestamp },
+        } as unknown as PreparedAgentChatTurn);
+      });
+      await owner.closeTurnWrite({
+        admission: turnAdmission, status: "completed", actorId: actor.actorId,
+        idempotencyKey: `complete:${id}`, correlationId: `complete:${id}`,
+      });
+    }
     storage.chatTurnTraces.create({
       turnId: id,
       sessionId,
@@ -80,11 +125,12 @@ async function harness() {
       memoryMode: "off",
       thinkingLevel: "standard",
       completion: { status: "complete", repaired: false, providerCallCount: 1 },
+      ...(profile ? { capabilityProfileId: profile.profileId, capabilityProfileHash: profile.hashes.profileHash } : {}),
       startedAt: timestamp,
       finishedAt: timestamp,
     });
   };
-  seed("source", "Review the work item", "Read the supplied file, check the result, and report discrepancies.");
+  await seed("source", "Review the work item", "Read the supplied file, check the result, and report discrepancies.");
   return { root, storage, service, seed };
 }
 describe("workflow skill capture", () => {
@@ -112,7 +158,7 @@ describe("workflow skill capture", () => {
     expect(prepared.prompt).toContain("source-tool");
     expect(prepared.prompt).toContain("resultSha256");
     expect(prepared.prompt).not.toContain("An incidental private file value");
-    h.seed("draft", prepared.prompt, markdown);
+    await h.seed("draft", prepared.prompt, markdown);
     h.storage.chatToolRuns.patch("source-tool", { result: { content: "Changed canonical result" } });
     await expect(
       h.service.stage("session", { draftTurnId: "draft", reviewedContentSha256: hash(markdown) }, actor),
@@ -134,7 +180,7 @@ describe("workflow skill capture", () => {
     await expect(h.service.prepare("session", { sourceTurnId: "source" }, actor)).rejects.toThrow(
       "settled tool results",
     );
-    h.seed("large", "A".repeat(33_000), "B".repeat(33_000));
+    await h.seed("large", "A".repeat(33_000), "B".repeat(33_000));
     await expect(h.service.prepare("session", { sourceTurnId: "large" }, actor)).rejects.toThrow(
       "combined workflow evidence",
     );
@@ -147,7 +193,7 @@ describe("workflow skill capture", () => {
       "/tmp/private-task/report.md",
     ].entries()) {
       const draft = `${markdown}\nUse ${value}.`;
-      h.seed(`private-${index}`, (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt, draft);
+      await h.seed(`private-${index}`, (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt, draft);
       await expect(
         h.service.stage("session", { draftTurnId: `private-${index}`, reviewedContentSha256: hash(draft) }, actor),
       ).rejects.toThrow("named inputs");
@@ -156,13 +202,13 @@ describe("workflow skill capture", () => {
   });
   it("rejects an authority change between review and the candidate transaction", async () => {
     const h = await harness();
-    h.seed("draft", (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt, markdown);
-    const read = h.storage.chatMessages.get.bind(h.storage.chatMessages);
+    await h.seed("draft", (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt, markdown);
+    const read = h.storage.chatTurnCapabilityProfiles.get.bind(h.storage.chatTurnCapabilityProfiles);
     let draftReads = 0;
-    vi.spyOn(h.storage.chatMessages, "get").mockImplementation((messageId) => {
-      const message = read(messageId);
-      if (messageId === "draft-user" && ++draftReads > 1 && message) return { ...message, actorId: "changed-operator" };
-      return message;
+    vi.spyOn(h.storage.chatTurnCapabilityProfiles, "get").mockImplementation((profileId) => {
+      const profile = read(profileId);
+      if (profileId === "profile-draft" && ++draftReads > 1) return { ...profile, identity: { ...profile.identity, authActorId: "changed-operator" } };
+      return profile;
     });
     await expect(
       h.service.stage("session", { draftTurnId: "draft", reviewedContentSha256: hash(markdown) }, actor),
@@ -171,32 +217,44 @@ describe("workflow skill capture", () => {
   });
   it("uses the frozen authenticated identity when Chat's display actor is operator", async () => {
     const h = await harness();
-    h.seed("draft", (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt, markdown);
+    await h.seed("draft", (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt, markdown);
     const user = h.storage.chatMessages.get("draft-user")!;
     h.storage.chatMessages.upsert({ ...user, actorId: "operator" });
     const request = { draftTurnId: "draft", reviewedContentSha256: hash(markdown) };
+    const originalRead = h.storage.chatTurnCapabilityProfiles.get.bind(h.storage.chatTurnCapabilityProfiles);
+    const profile = originalRead("profile-draft");
+    const read = vi.spyOn(h.storage.chatTurnCapabilityProfiles, "get").mockImplementation(id =>
+      id === profile.profileId ? { ...profile, identity: { ...profile.identity, authActorId: "another-operator" } } : originalRead(id));
     await expect(h.service.stage("session", request, actor)).rejects.toThrow("capture request changed");
-    h.storage.chatTurnTraces.patch("draft", { capabilityProfileId: "profile", capabilityProfileHash: hash("profile") });
-    // The profile repository independently verifies sealed bytes; exercise its
-    // authenticated output here without manufacturing a session admission.
-    const profile = {
-      profileId: "profile",
-      hashes: { profileHash: hash("profile") },
-      identity: {
-        turnId: "draft",
-        sessionId: "session",
-        workspaceId: "default",
-        authActorId: "another-operator",
-      },
-    } as ChatTurnCapabilityProfileRecord;
-    const read = vi.spyOn(h.storage.chatTurnCapabilityProfiles, "get").mockReturnValue(profile);
-    await expect(h.service.stage("session", request, actor)).rejects.toThrow("capture request changed");
-    read.mockReturnValue({ ...profile, identity: { ...profile.identity, authActorId: actor.actorId } });
+    read.mockRestore();
     expect(await h.service.stage("session", request, actor)).toMatchObject({ activationPerformed: false });
+    expect(h.storage.chatTurnCapabilityProfiles.get(profile.profileId)).toEqual(profile);
+  });
+  it("does not treat any legacy message actor label as authenticated author evidence", async () => {
+    const h = await harness();
+    await h.seed("unbound", (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt, markdown, "session", false);
+    const request = { draftTurnId: "unbound", reviewedContentSha256: hash(markdown) };
+    for (const actorId of [actor.actorId, "custom-import-label", "operator"]) {
+      h.storage.chatMessages.upsert({ ...h.storage.chatMessages.get("unbound-user")!, actorId });
+      await expect(h.service.stage("session", request, actor)).rejects.toThrow("authenticated author is unavailable");
+    }
+    expect(h.storage.capabilityProposals.list(100)).toEqual([]);
+  });
+  it("preserves the original historical-profile workflow hash without a new author field", async () => {
+    const h = await harness();
+    const profile = h.storage.chatTurnCapabilityProfiles.get("profile-source");
+    const prepared = await h.service.prepare("session", { sourceTurnId: "source" }, actor);
+    expect(prepared.sourceSha256).toBe(hash(canonicalJsonString({
+      workspaceId: "default", sessionId: "session", turnId: "source",
+      user: h.storage.chatMessages.get("source-user")!.content,
+      assistant: h.storage.chatMessages.get("source-assistant")!.content,
+      userAuthority: "operator", authenticatedActorId: actor.actorId,
+      capabilityProfileId: profile.profileId, capabilityProfileHash: profile.hashes.profileHash,
+    })));
   });
   it("requires canonical approval, reuses exact instructions in its workspace, and removes revoked skills", async () => {
     const h = await harness();
-    h.seed("draft", (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt, markdown);
+    await h.seed("draft", (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt, markdown);
     const captured = await h.service.stage(
       "session",
       { draftTurnId: "draft", reviewedContentSha256: hash(markdown) },
@@ -276,7 +334,7 @@ describe("workflow skill capture", () => {
   it("stages a real immutable candidate and proposal, replays safely, and never activates or writes memory", async () => {
     const h = await harness();
     const prepared = await h.service.prepare("session", { sourceTurnId: "source" }, actor);
-    h.seed("draft", prepared.prompt, markdown);
+    await h.seed("draft", prepared.prompt, markdown);
     const request = { draftTurnId: "draft", reviewedContentSha256: hash(markdown) };
     const first = await h.service.stage("session", request, actor);
     expect(first).toMatchObject({ activationPerformed: false, behavioralValidation: "not_run", revision: 1 });
@@ -297,7 +355,7 @@ describe("workflow skill capture", () => {
     await expect(h.service.prepare("session", { sourceTurnId: "source" }, {})).rejects.toThrow(
       "authenticated operator",
     );
-    h.seed("draft", (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt, markdown);
+    await h.seed("draft", (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt, markdown);
     await expect(
       h.service.stage("session", { draftTurnId: "draft", reviewedContentSha256: hash("changed") }, actor),
     ).rejects.toThrow("draft changed");
@@ -305,7 +363,7 @@ describe("workflow skill capture", () => {
   });
   it("replays a revision after its fence advances and rejects a competing stale draft", async () => {
     const h = await harness();
-    h.seed("first", (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt, markdown);
+    await h.seed("first", (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt, markdown);
     const original = await h.service.stage(
       "session",
       { draftTurnId: "first", reviewedContentSha256: hash(markdown) },
@@ -316,8 +374,8 @@ describe("workflow skill capture", () => {
       { sourceTurnId: "source", targetCandidateId: original.candidateId, expectedRevision: original.revision },
       actor,
     );
-    h.seed("revision", prepared.prompt, markdown);
-    h.seed("competitor", prepared.prompt, markdown);
+    await h.seed("revision", prepared.prompt, markdown);
+    await h.seed("competitor", prepared.prompt, markdown);
     const request = { draftTurnId: "revision", reviewedContentSha256: hash(markdown) };
     const revised = await h.service.stage("session", request, actor);
     expect(revised.revision).toBe(2);
@@ -329,7 +387,7 @@ describe("workflow skill capture", () => {
   it("rejects incomplete instructions and tampered artifacts", async () => {
     const h = await harness();
     const prepared = await h.service.prepare("session", { sourceTurnId: "source" }, actor);
-    h.seed("incomplete", prepared.prompt, "Not a reusable skill.");
+    await h.seed("incomplete", prepared.prompt, "Not a reusable skill.");
     await expect(
       h.service.stage(
         "session",
@@ -337,7 +395,7 @@ describe("workflow skill capture", () => {
         actor,
       ),
     ).rejects.toThrow("needs revision");
-    h.seed("draft", prepared.prompt, markdown);
+    await h.seed("draft", prepared.prompt, markdown);
     const request = { draftTurnId: "draft", reviewedContentSha256: hash(markdown) };
     const result = await h.service.stage("session", request, actor);
     const candidate = h.storage.candidateSkillVersions.get(result.versionId);

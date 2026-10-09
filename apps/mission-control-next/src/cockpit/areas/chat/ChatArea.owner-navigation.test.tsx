@@ -92,7 +92,6 @@ describe("cockpit Chat owner navigation", () => {
     host.onOpenApprovals();
     host.onOpenTasks();
     host.onOpenStartHere();
-    host.onOpenOpsRuntime();
     host.onOpenPersonalitiesSettings();
     host.onOpenProviderSettings();
     host.onOpenLocalAiSettings();
@@ -101,7 +100,6 @@ describe("cockpit Chat owner navigation", () => {
       "/inbox?shell=cockpit",
       "/work?shell=cockpit",
       "/settings/first-run?shell=cockpit",
-      "/system/health?shell=cockpit",
       "/settings/general?shell=cockpit#work-personality",
       "/settings/models?shell=cockpit#providers",
       "/settings/models?shell=cockpit#local-ai",
@@ -120,12 +118,20 @@ describe("cockpit Chat owner navigation", () => {
     await act(async () => {
       mocks.hostProps!.onOpenLibraryImports();
     });
+    await act(async () => { mocks.hostProps!.onOpenOpsRuntime(); });
+    // Approvals and Library imports are native in the cockpit; only the Ops runtime still hands off to Classic.
+    expect(mocks.switchShell.mock.calls.map(([shell, options]) => [shell, options.href])).toEqual([
+      ["classic", "/ops/runtime?shell=classic&shellScope=visit"],
+    ]);
+    for (const [, options] of mocks.switchShell.mock.calls) {
+      expect(options.isCurrent()).toBe(true);
+      expect(options.signal).toBeInstanceOf(AbortSignal);
+    }
+    expect(assign).not.toHaveBeenCalled();
     expect(mocks.navigate.mock.calls.map(([href]) => href)).toEqual([
       "/inbox?item=approval:approval%2Fone%3Ftwo&workspaceId=workspace-a&shell=cockpit",
-      "/library/knowledge?shell=cockpit",
+      "/library/knowledge?shell=cockpit#external-sources",
     ]);
-    expect(mocks.switchShell).not.toHaveBeenCalled();
-    expect(assign).not.toHaveBeenCalled();
   });
 
   it("shows the shared draft-leave review and prevents stale scope continuation", async () => {
@@ -133,8 +139,9 @@ describe("cockpit Chat owner navigation", () => {
     await act(async () => {
       draft.setValue({ name: "Unsaved" });
     });
+    // The Ops runtime still uses the shared guarded Classic handoff (Library imports are native now).
     await act(async () => {
-      (document.querySelector('a[aria-label="Open specialist fallback"]') as HTMLAnchorElement).click();
+      mocks.hostProps!.onOpenOpsRuntime();
     });
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Unsaved changes");
     const oldKeep = [...document.querySelectorAll("button")].find(
@@ -160,10 +167,10 @@ describe("cockpit Chat owner navigation", () => {
     mocks.switchShell.mockRejectedValueOnce(new Error("synthetic import failure"));
     await render();
     await act(async () => {
-      (document.querySelector('a[aria-label="Open specialist fallback"]') as HTMLAnchorElement).click();
+      mocks.hostProps!.onOpenOpsRuntime();
     });
     expect(container.querySelector('[role="alert"]')?.textContent).toBe(
-      "The owner view could not open. Your current drafts are still available.",
+      "The view could not open. Your current drafts are still available.",
     );
     expect(window.location.pathname).toBe("/chat");
   });

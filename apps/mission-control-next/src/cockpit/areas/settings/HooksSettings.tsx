@@ -264,7 +264,17 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
         }}
       >
         <div className="flex flex-wrap gap-2">
-          <Button variant="danger" disabled={s.mutation.locked} onClick={() => void s.confirmReview()}>
+          <Button
+            variant={
+              s.review &&
+              (s.review.kind === "delete" ||
+                (s.review.kind === "create" ? s.review.input.mode : s.review.hook.mode) !== "observe")
+                ? "danger"
+                : "primary"
+            }
+            disabled={s.mutation.locked}
+            onClick={() => void s.confirmReview()}
+          >
             Apply reviewed hook action
           </Button>
           <Button disabled={s.mutation.pending} onClick={s.cancelReview}>

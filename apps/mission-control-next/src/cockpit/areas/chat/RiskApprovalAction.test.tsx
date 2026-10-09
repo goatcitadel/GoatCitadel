@@ -51,6 +51,128 @@ afterEach(() => {
 });
 
 describe("risk approval action", () => {
+  it.each([
+    ["Home", 0],
+    ["End", 1200],
+  ])("keeps %s inside focused action evidence without native ancestor scrolling or approval", async (key, top) => {
+    const onApprove = vi.fn();
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("nuclear")}
+          reviewedApproval={{ ...reviewedApproval, riskLevel: "nuclear" }}
+          pending={false}
+          onApprove={onApprove}
+        />,
+      ),
+    );
+    await act(async () => container.querySelector("button")?.click());
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    const region = dialog.querySelector<HTMLElement>('[aria-label="Approval action evidence"]')!;
+    Object.defineProperties(region, { scrollHeight: { value: 1600 }, clientHeight: { value: 400 } });
+    dialog.scrollTop = 640;
+    region.scrollTop = 180;
+    region.scrollLeft = 12;
+    region.focus();
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    await act(async () => { region.dispatchEvent(event); });
+    // Happy DOM has no browser scroll default; cancellation is what prevents the native ancestor chain.
+    expect(event.defaultPrevented).toBe(true);
+    expect(region.scrollTop).toBe(top);
+    expect(region.scrollLeft).toBe(12);
+    expect(dialog.scrollTop).toBe(640);
+    expect(document.activeElement).toBe(region);
+    expect(region.textContent).toContain("pnpm test");
+    expect(region.textContent).toContain("workspace/note.txt");
+    expect(dialogButton("Approve once").disabled).toBe(true);
+    expect(onApprove).not.toHaveBeenCalled();
+  });
+
+  it("leaves page, arrow, Tab, modified shortcuts and nested editing controls to native behavior", async () => {
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction approval={approval("danger")} reviewedApproval={reviewedApproval}
+          pending={false} onApprove={vi.fn()} />,
+      ),
+    );
+    await act(async () => container.querySelector("button")?.click());
+    const region = document.querySelector<HTMLElement>('[aria-label="Approval action evidence"]')!;
+    region.scrollTop = 180;
+    region.focus();
+    const nativeKeys: KeyboardEventInit[] = [
+      ...["PageUp", "PageDown", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Tab"].map((key) => ({ key })),
+      { key: "Tab", shiftKey: true },
+      ...["Home", "End"].flatMap((key) => [
+        { key, ctrlKey: true }, { key, metaKey: true }, { key, altKey: true }, { key, shiftKey: true },
+        { key, isComposing: true },
+      ]),
+    ];
+    for (const init of nativeKeys) {
+      const event = new KeyboardEvent("keydown", { ...init, bubbles: true, cancelable: true });
+      region.dispatchEvent(event);
+      expect(event.defaultPrevented, JSON.stringify(init)).toBe(false);
+      expect(region.scrollTop).toBe(180);
+    }
+    for (const tag of ["input", "textarea", "select", "button", "a", "summary", "div"]) {
+      const control = document.createElement(tag);
+      control.tabIndex = 0;
+      if (tag === "div") control.contentEditable = "true";
+      region.append(control);
+      control.focus();
+      for (const key of ["Home", "End"]) {
+        const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+        control.dispatchEvent(event);
+        expect(event.defaultPrevented, `${tag} ${key}`).toBe(false);
+        expect(region.scrollTop).toBe(180);
+        expect(document.activeElement).toBe(control);
+      }
+      control.remove();
+    }
+  });
+
+  it("retains Escape dismissal from the focused evidence without an approval", async () => {
+    const onApprove = vi.fn();
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction approval={approval("danger")} reviewedApproval={reviewedApproval}
+          pending={false} onApprove={onApprove} />,
+      ),
+    );
+    await act(async () => container.querySelector("button")?.click());
+    const region = document.querySelector<HTMLElement>('[aria-label="Approval action evidence"]')!;
+    region.focus();
+    await act(async () => {
+      region.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(onApprove).not.toHaveBeenCalled();
+  });
+
+  it("keeps long action metadata complete in its named keyboard scroller without dispatch on Cancel", async () => {
+    const target = `folder/${"a".repeat(250)}`;
+    const onApprove = vi.fn();
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={{ ...approval("danger"), reason: target }}
+          reviewedApproval={{ ...reviewedApproval, preview: { targets: [target], selector: target } }}
+          pending={false}
+          onApprove={onApprove}
+        />,
+      ),
+    );
+    await act(async () => container.querySelector("button")?.click());
+    const region = document.querySelector<HTMLElement>('[role="region"][aria-label="Approval action evidence"]')!;
+    expect(region.classList.contains("wrap-anywhere")).toBe(true);
+    expect(region.classList.contains("max-w-full")).toBe(true);
+    expect(region.textContent).toContain(target);
+    expect(region.textContent).toContain(`Selector: ${target}`);
+    expect(region.tabIndex).toBe(0);
+    region.focus();
+    expect(document.activeElement).toBe(region);
+    await act(async () => dialogButton("Cancel").click());
+    expect(onApprove).not.toHaveBeenCalled();
+  });
   it("requires a second confirmation before a danger approval", async () => {
     const onApprove = vi.fn();
     await act(async () =>
@@ -65,7 +187,7 @@ describe("risk approval action", () => {
     );
     await act(async () => container.querySelector("button")?.click());
     expect(onApprove).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("Confirm danger risk action");
+    expect(document.body.textContent).toContain("Confirm high risk action");
     expect(document.body.textContent).toContain("pnpm test");
     expect(document.body.textContent).toContain("workspace/note.txt");
     const confirm = [...document.body.querySelectorAll("button")].find(
@@ -102,9 +224,9 @@ describe("risk approval action", () => {
       ),
     );
     await act(async () => container.querySelector("button")?.click());
-    expect(document.body.textContent).toContain("Full persisted action preview");
     expect(document.body.textContent).toContain(command);
-    expect(document.body.querySelector("details")?.open).toBe(true);
+    expect(document.body.textContent).toContain(command);
+    expect(document.body.querySelector("details[open]")).toBeNull();
   });
 
   it("keeps a specific browser selector actionable while a generic summary is insufficient", async () => {
@@ -151,7 +273,7 @@ describe("risk approval action", () => {
       ),
     );
     await act(async () => container.querySelector("button")?.click());
-    expect(document.body.textContent).toContain("Confirm nuclear risk action");
+    expect(document.body.textContent).toContain("Confirm critical risk action");
     expect(document.body.textContent).toContain("pnpm test");
     const confirm = () =>
       [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Approve once")!;

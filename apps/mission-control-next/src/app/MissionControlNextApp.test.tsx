@@ -7,7 +7,7 @@ const appMocks = vi.hoisted(() => ({
   activeCitadelId: "personal",
   activeWorkspaceId: "workspace-1",
   authRejectionListener: undefined as
-    | ((rejection: { authMode: "token" | "basic"; path: string; status: 401 }) => void)
+    | ((rejection: { authMode: "token" | "basic"; path: string; status: 401; hadStoredAuth?: boolean }) => void)
     | undefined,
   closeEventStream: vi.fn(),
   connectEventStream: vi.fn(),
@@ -57,6 +57,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/shell-client", () => ({
   fetchWorkspaces: appMocks.fetchWorkspaces,
   getGatewayApiBaseUrl: appMocks.getGatewayApiBaseUrl,
   preflightGatewayAccess: appMocks.preflightGatewayAccess,
+  fetchGatewayCurrentAccess: vi.fn(async () => ({ actorId: null, actorSource: "none", operatorAccess: true, readStatusScope: "browser_local" })),
   subscribeGatewayAuthRejection: appMocks.subscribeGatewayAuthRejection,
 }));
 
@@ -796,6 +797,8 @@ describe("MissionControlNextApp", () => {
         authMode: "token",
         path: "/api/v1/dashboard/state",
         status: 401,
+        // Active (stored) credentials were rejected, as the case name says; a missing credential reads "required".
+        hadStoredAuth: true,
       });
     });
 

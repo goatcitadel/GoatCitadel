@@ -8,6 +8,8 @@ export const LibraryArea = preloadable(async () => ({ default: (await import("..
 export const SystemArea = preloadable(async () => ({ default: (await import("../areas/system/SystemArea")).SystemArea }));
 export const Gallery = preloadable(async () => ({ default: (await import("./Gallery")).Gallery }));
 
+export const ChatProjects = preloadable(async () => ({ default: (await import("../areas/chat/ChatProjects")).ChatProjects }));
+
 const LOADERS = { inbox: InboxArea, work: WorkArea, library: LibraryArea, system: SystemArea, settings: SettingsArea, gallery: Gallery };
 
 export function preloadCockpitArea(area: CockpitArea): void {

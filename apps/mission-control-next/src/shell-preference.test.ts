@@ -104,3 +104,11 @@ describe("shell preference", () => {
     expect(target.searchParams.get("shell")).toBe("classic");
   });
 });
+
+it.each(["activity", "quality", "diagnostics"])("preserves the %s view and record through Classic rollback", (view) => {
+  const target = new URL(buildShellSwitchUrl(`http://localhost/system/${view}?workspaceId=w&runId=keep#record`, "classic"));
+  expect(target.pathname).toBe(`/ops/${view}`);
+  expect(target.searchParams.get("workspaceId")).toBe("w");
+  expect(target.searchParams.get("runId")).toBe("keep");
+  expect(target.hash).toBe("#record");
+});

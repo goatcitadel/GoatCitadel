@@ -73,7 +73,7 @@ export function ChatQueueBar({
               <p>
                 {item.id === "__overflow__"
                   ? "Additional queued work stays staged until the current turn finishes."
-                  : `${formatQueueAction(item.action)}${item.paused ? " · paused after reload" : ""}`}
+                  : `${formatQueueAction(item.action)}${item.paused ? " · paused until resumed" : ""}`}
               </p>
             </div>
             {item.id === "__overflow__" ? null : (

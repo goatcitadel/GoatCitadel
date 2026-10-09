@@ -385,6 +385,7 @@ describe("shared API wrapper tail coverage", () => {
     await expectCall(system.verifyBackup("backup.zip"), "/api/v1/admin/backups/verify", { method: "POST" });
     await expectCall(system.fetchCostSummary(), "/api/v1/costs/summary?scope=day");
     await expectCall(system.fetchCostSummary("agent"), "/api/v1/costs/summary?scope=agent");
+    await expectCall(system.fetchModelUsageEvents("workspace/a", "2026-10-01T00:00:00Z", "2026-10-06T00:00:00Z"), "/api/v1/ops/workspaces/workspace%2Fa/model-usage?from=2026-10-01T00%3A00%3A00Z&to=2026-10-06T00%3A00%3A00Z&limit=50");
     await expectCall(system.runCheaper(), "/api/v1/costs/run-cheaper", { method: "POST" });
     await expectCall(system.fetchRealtimeEvents(20, " cursor "), "/api/v1/events?limit=20&cursor=cursor");
     await expectCall(system.fetchDashboardState(), "/api/v1/dashboard/state");

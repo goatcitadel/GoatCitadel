@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchObserveRunTrace } from "@goatcitadel/mission-control-shared/api/durable";
 import { WorkArea } from "./WorkArea";
 
+vi.mock("./WorkWaitingDecisions", () => ({ WorkWaitingDecisions: () => null }));
 vi.mock("@goatcitadel/mission-control-shared/api/durable", () => ({
   fetchObserveRunTrace: vi.fn(), fetchDurableRunHistory: vi.fn(),
 }));

@@ -1,9 +1,14 @@
 import { useSyncExternalStore } from "react";
 import { canonicalJsonString, isChangePlanRequest, isChangePlanStatus, type ChangePlanProviderConnectionRequest, type ChangePlanRecord } from "@goatcitadel/contracts";
+import type { TrackedAttempt } from "../../../features/native-routes/settings/mutation-attempt-tracking";
 
 export interface ProviderConnectionAttempt {
   request: ChangePlanProviderConnectionRequest;
   baseRevision: number;
+  /** The Change Plan idempotency key: replaying a create with it returns the same plan, never a second one. */
+  planKey?: string;
+  /** The last write's identity, kept so a lost response can be settled from the Gateway's record of it. */
+  transport?: TrackedAttempt;
   plan?: ChangePlanRecord;
   busy: boolean;
   uncertain: boolean;

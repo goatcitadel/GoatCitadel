@@ -1,3 +1,4 @@
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useRef, useState } from "react";
 import {
   fetchEvidenceReceipt,
@@ -109,9 +110,9 @@ export function RunSignedReceipt({ runId }: { runId: string }) {
       {verification.reasons.length ? <ul className="list-disc pl-5 text-sm text-status-failed">{verification.reasons.map((reason, index) => <li key={`${reason}-${index}`}>{reason}</li>)}</ul>
         : verification.valid ? <p className="text-sm text-fg-secondary">The Gateway reported no integrity failures for this receipt.</p>
           : <p className="text-sm text-status-failed">The Gateway did not provide a verification reason. Do not rely on this receipt.</p>}
-      <details className="text-sm text-fg-secondary"><summary className="cursor-pointer text-accent">Expert receipt payload</summary>
+      <TechnicalDetails label="Receipt technical details">
         <pre className="mt-2 max-h-80 overflow-auto rounded-md border border-line-subtle bg-sunken p-3 text-xs">{JSON.stringify(receipt, null, 2)}</pre>
-      </details>
+      </TechnicalDetails>
     </div> : !busy && !error ? <p className="mt-3 text-sm text-fg-muted">Inspect to see signature, lineage, effects, and artifact counts.</p> : null}
   </section>;
 }

@@ -57,6 +57,12 @@ import type { IntegrationCatalogEntry, IntegrationConnection } from "./types.js"
 
 import { request } from "./client-core.js";
 
+export async function discardChannelSetupDraft(draftId: string, expectedRevision: number): Promise<{ draftId: string; deleted: boolean }> {
+  return request(`/api/v1/channels/drafts/${encodeURIComponent(draftId)}`, {
+    method: "DELETE", body: JSON.stringify({ expectedRevision }),
+  });
+}
+
 export async function fetchIntegrationCatalog(
   kind?: IntegrationCatalogEntry["kind"],
 ): Promise<{ items: IntegrationCatalogEntry[] }> {

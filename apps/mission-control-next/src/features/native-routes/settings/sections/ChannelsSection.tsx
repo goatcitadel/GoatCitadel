@@ -20,11 +20,12 @@ import { ChannelSetupWizard } from "../channel-setup/ChannelSetupWizard";
 import { DiscordConnectionOperationsPanel } from "../channel-setup/DiscordConnectionOperationsPanel";
 import { ChannelJourneyPanel } from "../channel-setup/ChannelJourneyPanel";
 import { formatDateTime } from "../helpers/input-format";
-import { hasSessionDraft } from "../../library/session-drafts";
+import { hasCredentialInput as hasSessionDraft } from "../credential-input-owner";
 import { FocusedDetail } from "../../shared/FocusedDetail";
 import { DetailInspector } from "../../../../components/DetailInspector";
 import { IntegrationConnectionReview } from "./IntegrationConnectionReview";
 import { useChannelSettings } from "./use-channel-settings";
+import { ChannelOutcomeCheck } from "./ChannelOutcomeCheck";
 
 export function ChannelsSection({ activeWorkspaceId, navigate, route }: SettingsSectionProps) {
   const owner = useChannelSettings(activeWorkspaceId, (plan) => navigate({ area: "chat", theme: route.theme,
@@ -85,6 +86,7 @@ export function ChannelsSection({ activeWorkspaceId, navigate, route }: Settings
     <SettingsSectionShell loading={loading && !data} error={error} onRetry={reload}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {owner.mutation.uncertain ? <p role="alert">{owner.mutation.uncertain}</p> : null}
+      <ChannelOutcomeCheck reload={reload} />
       {data ? (
         <SettingsStack>
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />

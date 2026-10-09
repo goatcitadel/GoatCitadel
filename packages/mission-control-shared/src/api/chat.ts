@@ -150,6 +150,7 @@ export interface ChatProjectsResponse {
 }
 
 export interface ChatSessionsResponse {
+  membership?: import("@goatcitadel/contracts").ChatSessionListMembership;
   items: ChatSessionRecord[];
   nextCursor?: string;
 }
@@ -300,6 +301,7 @@ export async function hardDeleteChatProject(
 
 export async function fetchChatSessions(
   input?: {
+    sessionIds?: string[];
     sessionId?: string;
     scope?: "mission" | "external" | "all";
     citadelId?: string;
@@ -319,6 +321,7 @@ export async function fetchChatSessions(
   options: { signal?: AbortSignal } = {},
 ): Promise<ChatSessionsResponse> {
   const query = new URLSearchParams();
+  if (input?.sessionIds !== undefined) query.set("sessionIds", JSON.stringify(input.sessionIds));
   if (input?.sessionId !== undefined) query.set("sessionId", input.sessionId);
   if (input?.scope) query.set("scope", input.scope);
   if (input?.citadelId) query.set("citadelId", input.citadelId);

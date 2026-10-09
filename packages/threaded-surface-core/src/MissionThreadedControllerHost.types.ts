@@ -233,7 +233,7 @@ export interface MissionThreadedControllerHostProps {
   onOpenOpsRuntime?: () => void;
   onNavigateSurface?: (
     surface: ChatMode,
-    options?: { sessionId?: string | null; turnId?: string | null; artifactId?: string | null },
+    options?: { sessionId?: string | null; turnId?: string | null; artifactId?: string | null; messageId?: string; sequence?: number },
   ) => void;
   // `origin` distinguishes a passive session-mode sync (the selected session's
   // own stored mode, e.g. on arrival or session switch) from an active operator

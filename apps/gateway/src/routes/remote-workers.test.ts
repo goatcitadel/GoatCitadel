@@ -550,12 +550,13 @@ describe("remote worker operator assignment + reconciliation routes HX-507B", ()
     expect(getNativeOutputArtifact).toHaveBeenCalledTimes(1);
   });
 
+  // Labels keep the secret-shaped error out of the printed test title (artifact redaction scans reporter output).
   it.each([
-    [new RemoteWorkerRuntimeReadUnavailableError(), 503],
-    [new NotFoundError("Remote worker assignment not found"), 404],
-    [new ConflictError({ message: "Remote worker assignment generation changed" }), 409],
-    [new Error("secret=private-provider-value"), 500],
-  ])("maps runtime read failures without exposing owner details: %s", async (error, status) => {
+    ["runtime read unavailable", new RemoteWorkerRuntimeReadUnavailableError(), 503],
+    ["assignment not found", new NotFoundError("Remote worker assignment not found"), 404],
+    ["generation conflict", new ConflictError({ message: "Remote worker assignment generation changed" }), 409],
+    ["unexpected secret-bearing error", new Error("secret=private-provider-value"), 500],
+  ])("maps runtime read failures without exposing owner details: %s", async (_label, error, status) => {
     const { app: instance } = await harness({ getAssignmentRuntime: vi.fn(async () => { throw error; }) });
     const response = await instance.inject({ method: "GET", url: "/api/v1/ops/workspaces/workspace-a/remote-worker-assignments/assign-a/runtime" });
     expect(response.statusCode).toBe(status);

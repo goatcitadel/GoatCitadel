@@ -42,11 +42,12 @@ function handlers(): TurnActionHandlers {
 const labels = () => [...container.querySelectorAll("button")].map((button) => button.textContent?.trim());
 
 describe("Chat turn actions", () => {
-  it("keeps every action inline on wider screens", async () => {
+  it("keeps Copy visible and secondary actions in a menu on wider screens", async () => {
     await act(async () =>
       root.render(<ChatTurnActions turn={turn} actions={handlers()} streaming={false} readOnly={false} hasAnswer onCopy={vi.fn()} />),
     );
-    expect(labels()).toEqual(expect.arrayContaining(["Copy answer", "Fork", "Edit and resend", "Run details", "Save answer"]));
+    expect(labels()).toEqual(expect.arrayContaining(["Copy answer", "More"]));
+    expect(labels()).not.toContain("Edit and resend");
   });
 
   it("keeps Copy visible on phones and moves the rest behind a 44 px More menu", async () => {
@@ -56,7 +57,7 @@ describe("Chat turn actions", () => {
       root.render(<ChatTurnActions turn={turn} actions={handlers()} streaming={false} readOnly={false} hasAnswer onCopy={onCopy} />),
     );
     expect(labels()).not.toContain("Fork");
-    const more = container.querySelector('button[aria-label="More turn actions"]')!;
+    const more = container.querySelector('button[aria-label="More message actions"]')!;
     expect(more.className).toContain("min-h-11");
     const copy = [...container.querySelectorAll("button")].find((button) => button.textContent === "Copy answer")!;
     expect(copy.className).toContain("min-h-11");

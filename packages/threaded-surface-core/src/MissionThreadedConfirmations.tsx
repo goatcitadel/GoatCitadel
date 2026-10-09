@@ -98,13 +98,13 @@ export function MissionThreadedConfirmations({
     <>
       <ConfirmModal
         open={Boolean(forkConfirm)}
-        title="Fork conversation from this turn?"
+        title="Start a new conversation from this message?"
         message={
           forkConfirm
-            ? `Create an independent chat containing ${forkConfirm.turnCount} turn${forkConfirm.turnCount === 1 ? "" : "s"}, ${forkConfirm.attachmentCount} attachment${forkConfirm.attachmentCount === 1 ? "" : "s"}, and ${forkConfirm.artifactCount} artifact${forkConfirm.artifactCount === 1 ? "" : "s"}. Original execution evidence is retained as read-only provenance, not replayed.`
+            ? `Create an independent chat containing ${forkConfirm.turnCount} message exchange${forkConfirm.turnCount === 1 ? "" : "s"}, ${forkConfirm.attachmentCount} attachment${forkConfirm.attachmentCount === 1 ? "" : "s"}, and ${forkConfirm.artifactCount} artifact${forkConfirm.artifactCount === 1 ? "" : "s"}. Original execution evidence is retained as read-only provenance, not replayed.`
             : ""
         }
-        confirmLabel={forkPending ? "Forking..." : "Create fork"}
+        confirmLabel={forkPending ? "Creating conversation..." : "Create conversation"}
         pending={forkPending}
         cancelDisabled={forkPending}
         disableDismiss={forkPending}
@@ -159,7 +159,7 @@ export function MissionThreadedConfirmations({
       />
       <ConfirmModal
         open={Boolean(sessionDeleteConfirm)}
-        title="Delete session permanently"
+        title="Delete conversation permanently"
         message={sessionDeleteConfirm ? getDeleteSessionConfirmationMessage(sessionDeleteConfirm.label) : ""}
         confirmLabel={sessionControlPending === "delete" ? "Deleting..." : "Delete permanently"}
         danger

@@ -8,13 +8,18 @@ import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-in
 import { InboxApprovalDetail } from "./InboxApprovalDetail";
 
 const api = vi.hoisted(() => ({
+  fetchApprovalReplay: vi.fn(async () => ({ approval: { ...approval, status: "approved", linkage: {workspaceId:"default"} }, effects: [], events: [] })),
   fetchApproval: vi.fn(),
   fetchApprovals: vi.fn(),
   fetchOperatorInbox: vi.fn(),
   fetchDurableRun: vi.fn(),
+  fetchRuntimeLifecycle: vi.fn(async (): Promise<Record<string, unknown>> => ({ approval: { ...approval, linkage: { workspaceId: "default" } }, canonical: { approvalId: approval.approvalId }, turns: [] })),
 }));
-vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({ fetchApproval: api.fetchApproval }));
-vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ fetchApprovals: api.fetchApprovals }));
+vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
+  fetchApproval: api.fetchApproval,
+  fetchApprovalReplay: api.fetchApprovalReplay,
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ fetchApprovals: api.fetchApprovals, fetchApprovalReplay: api.fetchApprovalReplay, fetchRuntimeLifecycle: api.fetchRuntimeLifecycle, fetchDurableRun: api.fetchDurableRun }));
 vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({
   fetchOperatorInbox: api.fetchOperatorInbox,
 }));
@@ -28,7 +33,7 @@ vi.mock("./InboxApprovalActions", () => ({
   }: {
     checking?: boolean;
     onResolved: (message: string) => void;
-    onInvalidated: () => void;
+    onInvalidated: (message?: string) => void;
   }) => (
     <>
       <button type="button" disabled={checking}>
@@ -37,9 +42,10 @@ vi.mock("./InboxApprovalActions", () => ({
       <button type="button" onClick={() => onResolved("Approved decision recorded.")}>
         Record decision
       </button>
-      <button type="button" onClick={onInvalidated}>
+      <button type="button" onClick={() => onInvalidated()}>
         Report changed record
       </button>
+      <button type="button" onClick={() => onInvalidated("Specialist evidence changed. Refresh and review the current target before approving.")}>Report specialist change</button>
     </>
   ),
 }));
@@ -97,6 +103,14 @@ afterEach(() => {
 });
 
 describe("Inbox approval detail", () => {
+  it.each(["llama_cpp_setup", "llama_cpp_configuration", "unrelated"])("exposes the native setup return only for the supported %s target", async targetResourceId => {
+    api.fetchApproval.mockResolvedValue({...approval,kind:"change_plan_effect",payload:{targetResourceId},linkage:{workspaceId:"default"}});
+    await act(async()=>root.render(<QueryClientProvider client={client}><InboxApprovalDetail item={item} workspaceId="default"/></QueryClientProvider>));
+    await settleUntil(()=>Boolean(container.textContent?.includes("Decision controls")));
+    const link=[...container.querySelectorAll('a')].find(item=>item.textContent==='Return to llama.cpp setup');
+    if(targetResourceId==='unrelated') expect(link).toBeUndefined();
+    else expect(link?.getAttribute('href')).toBe('/settings/models?shell=cockpit#local-ai');
+  });
   it("keeps the approval and its decision controls while the record is rechecked", async () => {
     await act(async () =>
       root.render(
@@ -154,6 +168,7 @@ describe("Inbox approval detail", () => {
   it.each([
     ["Record decision", "Approved decision recorded."],
     ["Report changed record", "The approval changed. Review the refreshed record before deciding."],
+    ["Report specialist change", "Specialist evidence changed. Refresh and review the current target before approving."],
   ])("drops the settled record while the queue is re-read after %s", async (action, notice) => {
     await act(async () =>
       root.render(
@@ -180,9 +195,10 @@ describe("Inbox approval detail", () => {
     expect(container.textContent).not.toContain("Decision controls");
     expect([...container.querySelectorAll('[role="status"]')].map((node) => node.textContent)).toContain(notice);
     await act(async () => release());
-    await settleUntil(() => Boolean(container.textContent?.includes("no longer waiting")));
-    expect(container.textContent).toContain("This approval is no longer waiting.");
+    await settleUntil(() => !container.textContent?.includes("Loading the current approval"));
+    expect(container.textContent).not.toContain("This approval is no longer waiting.");
     expect(container.textContent).toContain(notice);
+    expect(document.activeElement?.textContent).toBe(notice);
   });
 
   it("opens with one read of the approval by id and no Inbox or queue read", async () => {
@@ -214,8 +230,14 @@ describe("Inbox approval detail", () => {
         </QueryClientProvider>,
       ),
     );
-    await settleUntil(() => Boolean(container.textContent?.includes("no longer waiting")));
-    expect(container.textContent).toContain("This approval is no longer waiting.");
+    await settleUntil(() =>
+      Boolean(
+        container.textContent?.includes(_label === "a decided approval" ? "Decision recorded" : "no longer waiting"),
+      ),
+    );
+    expect(container.textContent).toContain(
+      _label === "a decided approval" ? "Decision recorded: approved" : "This approval is no longer waiting.",
+    );
     expect(container.textContent).not.toContain("Decision controls");
     expect(container.querySelector('[role="alert"]')).toBeNull();
   });
@@ -237,12 +259,19 @@ it("retains decided approval evidence without decision controls", async () => {
 });
 
 it("shows linked execution independently of the approved decision", async () => {
-  api.fetchApproval.mockResolvedValue({
-    ...approval,
-    status: "approved",
-    linkage: { workspaceId: "default", durableRunId: "run-a" },
+  api.fetchApproval.mockResolvedValue({ ...approval, status: "approved", linkage: { workspaceId: "default" } });
+  // The original run comes from the Gateway canonical lifecycle, never from an approval-supplied run id.
+  api.fetchRuntimeLifecycle.mockResolvedValueOnce({
+    approval: { ...approval, linkage: { workspaceId: "default" } },
+    canonical: { approvalId: approval.approvalId, runId: "run-a" },
+    turns: [],
   });
-  api.fetchDurableRun.mockResolvedValue({ runId: "run-a", status: "waiting", payload: { workspaceId: "default" } });
+  api.fetchDurableRun.mockResolvedValueOnce({
+    runId: "run-a",
+    workflowKey: "remediation.apply",
+    status: "waiting",
+    payload: { workspaceId: "default" },
+  });
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -250,8 +279,8 @@ it("shows linked execution independently of the approved decision", async () => 
       </QueryClientProvider>,
     ),
   );
-  await settleUntil(() => Boolean(container.textContent?.includes("Run status: Waiting")));
-  expect(container.textContent).toContain("Run status: Waiting");
+  await settleUntil(() => Boolean(container.textContent?.includes("Original linked work: waiting")));
+  expect(container.textContent).toContain("Original linked work: waiting");
   expect(container.textContent).toContain("Approved");
   expect(container.textContent).not.toContain("Decision controls");
 });

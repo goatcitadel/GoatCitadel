@@ -114,14 +114,15 @@ describe("structured field interaction", () => {
     expect(text(r.root)).not.toContain("forged-local-value");
     r.unmount();
   });
-  it("invalidates reviewed live tests when local advanced JSON changes in either shell", async () => {
-    for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
+  it("invalidates reviewed live tests when local advanced JSON changes in the Classic wizard", async () => {
+    // The cockpit editor is typed-fields-only so credentials always travel through secure inputs.
+    for (const Component of [ChannelSetupWizard]) {
       const definition = definitions[0]!, draft = makeDraft(definition);
       const onTest = vi.fn(async () => undefined);
       const props = { definition, draft, values: {}, label: "Sandbox", enabled: true, dirty: false, onValuesChange: vi.fn(), onLabelChange: vi.fn(), onEnabledChange: vi.fn(), onDirty: vi.fn(), onSave: vi.fn(async () => true), onValidate: vi.fn(async () => undefined), onTest, onFinalize: vi.fn(async () => undefined) };
       const r = await render(<Component {...props} />);
       await act(async () => button(r.root, "Advanced JSON").props.onClick());
-      const review = button(r.root, Component === ChannelDraftEditor ? "Review live test" : "Run live test");
+      const review = button(r.root, "Run live test");
       await act(async () => review.props.onClick());
       const textarea = r.root.findByType("textarea");
       await act(async () => textarea.props.onChange({ target: { value: '{"defaultChannel":"changed"}' } }));
@@ -129,6 +130,13 @@ describe("structured field interaction", () => {
       expect(onTest).not.toHaveBeenCalled();
       r.unmount();
     }
+  });
+  it("offers no Advanced JSON in the cockpit editor", async () => {
+    const definition = definitions[0]!, draft = makeDraft(definition);
+    const props = { definition, draft, values: {}, label: "Sandbox", enabled: true, dirty: false, onValuesChange: vi.fn(), onLabelChange: vi.fn(), onEnabledChange: vi.fn(), onDirty: vi.fn(), onSave: vi.fn(async () => true), onValidate: vi.fn(async () => undefined), onTest: vi.fn(async () => undefined), onFinalize: vi.fn(async () => undefined) };
+    const r = await render(<ChannelDraftEditor {...props} />);
+    expect(r.root.findAllByType("button").some((item) => text(item).trim() === "Advanced JSON")).toBe(false);
+    r.unmount();
   });
   it("keeps a warning visible and binds optional cleanup acknowledgement to exact evidence", async () => {
     const onAcknowledge = vi.fn(async () => undefined);

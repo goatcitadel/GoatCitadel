@@ -64,6 +64,18 @@ beforeEach(() => { vi.clearAllMocks(); queryClient = new QueryClient({ defaultOp
 afterEach(() => { act(() => root.unmount()); queryClient.clear(); container.remove(); window.history.replaceState(null, "", "/"); });
 
 describe("Settings section tabs", () => {
+  it.each(["/settings/onboarding", "/settings/models#onboarding", "/settings/first-run"])("renders native first run at %s", async (path) => {
+    await render(path);
+    await vi.waitFor(() => expect(container.textContent).toContain("First run owner"));
+    expect(container.textContent).not.toContain("Models owner");
+  });
+  it("keeps Models default on the provider owner and opens native Get started from its tab", async () => {
+    await render("/settings/models");
+    await vi.waitFor(() => expect(container.textContent).toContain("Models owner"));
+    await activate("Get started");
+    await vi.waitFor(() => expect(container.textContent).toContain("First run owner"));
+    expect(window.location.hash).toBe("#onboarding");
+  });
   it("keeps the real read-only Library inspection links in Tools and preserves unknown callability", async () => {
     await render("/settings/safety?shell=cockpit#approval-mode");
     expect(active()).toBe("Tools");
@@ -80,12 +92,15 @@ describe("Settings section tabs", () => {
     await act(async () => tools.click());
     expect(window.location.pathname + window.location.search).toBe("/library?shell=cockpit&type=tool");
   });
-  it("routes capability selections and hooks to the actual active scope owners", async () => {
+  it("withholds hidden capability owners on direct links and routes visible hooks to the active scope", async () => {
     await render("/settings/citadel?shell=cockpit#citadel-capabilities");
-    expect(container.querySelector('[aria-label="citadel capabilities citadel-a retained draft"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="citadel capabilities citadel-a retained draft"]')).toBeNull();
     expect(container.querySelector('[aria-label="workspace capabilities workspace-a retained draft"]')).toBeNull();
-    await activate("Workspace capabilities");
-    expect(container.querySelector('[aria-label="workspace capabilities workspace-a retained draft"]')).not.toBeNull();
+    expect(tab("Workspace capabilities")).toBeUndefined();
+    expect(container.textContent).toContain("Settings destination unavailable");
+    await render("/settings/citadel?shell=cockpit#workspace-capabilities");
+    expect(container.querySelector('[aria-label="workspace capabilities workspace-a retained draft"]')).toBeNull();
+    expect(container.textContent).toContain("Technical display preferences do not enable it");
     const entries = buildSettingsIndex().flatMap((page) => page.entries);
     expect(entries.find((entry) => entry.section === "citadel-capabilities")?.href).toBe("/settings/citadel#citadel-capabilities");
     expect(entries.find((entry) => entry.section === "workspace-capabilities")?.href).toBe("/settings/citadel#workspace-capabilities");
@@ -99,43 +114,43 @@ describe("Settings section tabs", () => {
     expect(container.querySelector('a[href="/settings/general?shell=classic"]')).toBeNull();
     expect(owner.mounted.mock.calls.map(([name]) => name)).toEqual(["Appearance owner"]);
     expect(container.querySelector('[aria-label="Personality owner retained draft"]')).toBeNull();
-    await activate("Personalities");
+    await activate("Personalities · Experimental");
     const draft = container.querySelector<HTMLInputElement>('[aria-label="Personality owner retained draft"]')!;
     await fill(draft, "Unsaved voice");
     expect(window.location.hash).toBe("#work-personality"); expect(window.location.search).toBe("?shell=cockpit");
     await activate("Appearance");
     expect(draft.closest('[role="tabpanel"]')?.hasAttribute("hidden")).toBe(true);
-    await activate("Personalities"); expect(draft.value).toBe("Unsaved voice");
+    await activate("Personalities · Experimental"); expect(draft.value).toBe("Unsaved voice");
     await fill(container.querySelector('input[type="search"]')!, "notifications");
     expect(container.querySelector('a[href="/settings/general#appearance"]')).not.toBeNull();
     await fill(container.querySelector('input[type="search"]')!, "");
-    expect(active()).toBe("Personalities"); expect(draft.value).toBe("Unsaved voice");
+    expect(active()).toBe("Personalities · Experimental"); expect(draft.value).toBe("Unsaved voice");
     expect(owner.mounted.mock.calls.map(([name]) => name)).toEqual(["Appearance owner", "Personality owner"]);
     expect(owner.unmounted).not.toHaveBeenCalled();
   });
   it("moves keyboard focus without implicit activation and binds the panel to its tab", async () => {
     await render();
     await act(async () => { tab("Appearance").focus(); tab("Appearance").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
-    await vi.waitFor(() => expect(document.activeElement).toBe(tab("Personalities")));
+    await vi.waitFor(() => expect(document.activeElement).toBe(tab("Personalities · Experimental")));
     expect(active()).toBe("Appearance");
     expect(owner.mounted.mock.calls.map(([name]) => name)).toEqual(["Appearance owner"]);
-    await activate("Personalities");
-    const panel = document.getElementById(tab("Personalities").getAttribute("aria-controls")!)!;
+    await activate("Personalities · Experimental");
+    const panel = document.getElementById(tab("Personalities · Experimental").getAttribute("aria-controls")!)!;
     expect(panel.getAttribute("role")).toBe("tabpanel"); expect(panel.hasAttribute("hidden")).toBe(false);
-    expect(panel.getAttribute("aria-labelledby")).toBe(tab("Personalities").id);
-    await act(async () => tab("Personalities").dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })));
+    expect(panel.getAttribute("aria-labelledby")).toBe(tab("Personalities · Experimental").id);
+    await act(async () => tab("Personalities · Experimental").dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })));
     await vi.waitFor(() => expect(document.activeElement).toBe(tab("Appearance")));
-    expect(active()).toBe("Personalities");
+    expect(active()).toBe("Personalities · Experimental");
     expect(container.querySelector('[role="tablist"]')?.classList.contains("overflow-x-auto")).toBe(true);
     expect(container.querySelector('[role="tablist"]')?.classList.contains("max-w-full")).toBe(true);
   });
   it("restores exact section on Back and hash changes while supporting existing section routes", async () => {
-    await render("/settings/personalities?shell=cockpit"); expect(active()).toBe("Personalities");
-    await activate("Appearance"); await activate("Personalities");
+    await render("/settings/personalities?shell=cockpit"); expect(active()).toBe("Personalities · Experimental");
+    await activate("Appearance"); await activate("Personalities · Experimental");
     await act(async () => window.history.back());
     await vi.waitFor(() => expect(active()).toBe("Appearance"));
     await act(async () => { window.location.hash = "work-personality"; window.dispatchEvent(new HashChangeEvent("hashchange")); });
-    expect(active()).toBe("Personalities"); expect(owner.unmounted).not.toHaveBeenCalled();
+    expect(active()).toBe("Personalities · Experimental"); expect(owner.unmounted).not.toHaveBeenCalled();
   });
   it("keeps all grouped owner destinations in ordered tabs and preserves explicit detailed links", async () => {
     const pages = buildSettingsIndex(); expect(pages.flatMap((page) => page.entries)).toHaveLength(25);
@@ -143,10 +158,16 @@ describe("Settings section tabs", () => {
       window.history.replaceState(null, "", `/settings/${page.id}?shell=cockpit`);
       await act(async () => window.dispatchEvent(new PopStateEvent("popstate")));
       await act(async () => root.render(settingsView()));
-      expect([...container.querySelectorAll('[role="tab"]')].map((item) => item.textContent)).toEqual(page.entries.map((entry) => entry.tabLabel ?? entry.label));
+      expect([...container.querySelectorAll('[role="tab"]')].map((item) => item.textContent)).toEqual(page.entries.filter(entry => entry.discoverable).map((entry) => `${entry.tabLabel ?? entry.label}${entry.releaseStatus === "experimental" ? " · Experimental" : ""}`));
       for (const entry of page.entries.filter((item) => item.destination === "detailed")) expect(container.querySelector(`a[href="${entry.href}"]`)).not.toBeNull();
     }
     expect(selectedSettingsSection(pages.find((page) => page.id === "safety")!, "safety", "approval-mode")).toBe("tools");
     expect(selectedSettingsSection(pages[0]!, "general", "application-updates")).toBe("general");
   });
+});
+
+it.each(["/settings/unknown?shell=cockpit", "/settings/general?shell=cockpit#unknown"]) ("does not silently substitute another panel for %s", async (href) => {
+ await render(href);
+ expect(container.textContent).toContain("Settings destination unavailable");
+ expect(container.querySelector('[aria-label="Appearance owner retained draft"]')).toBeNull();
 });

@@ -80,7 +80,7 @@ export const secretsRoutes: FastifyPluginAsync = async (fastify) => {
             credentialStorage: parsedBody.data.storage ?? "keychain",
             ...(parsedBody.data.envVar ? { credentialEnvVar: parsedBody.data.envVar } : {}),
           },
-          idempotencyKey: `provider-secret-save:${request.id}:${parsedBody.data.expectedRevision}`,
+          idempotencyKey: `provider-secret-save:${request.idempotencyKey || request.id}:${parsedBody.data.expectedRevision}`,
           expectedTargetRevision: parsedBody.data.expectedRevision,
         });
         if (plan.requiredAction?.kind !== "secure_input") {
@@ -144,7 +144,7 @@ export const secretsRoutes: FastifyPluginAsync = async (fastify) => {
             credentialAction: "remove_api_key",
             credentialDeleteScope: parsedBody.data.storage ?? "all",
           },
-          idempotencyKey: `provider-secret-delete:${request.id}:${parsedBody.data.expectedRevision}`,
+          idempotencyKey: `provider-secret-delete:${request.idempotencyKey || request.id}:${parsedBody.data.expectedRevision}`,
           expectedTargetRevision: parsedBody.data.expectedRevision,
         });
         if (plan.requiredAction?.kind !== "confirmation") {

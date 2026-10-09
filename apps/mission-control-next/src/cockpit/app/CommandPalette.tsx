@@ -23,7 +23,11 @@ import {
 } from "./CommandPaletteResults";
 import type { PaletteObject } from "./command-palette-search";
 
-const SETTINGS = buildSettingsIndex().flatMap((page) => page.entries);
+const SETTINGS = buildSettingsIndex({ discovery: true }).flatMap((page) => page.entries);
+const DESTINATIONS = [
+  ...COCKPIT_AREAS.map(entry => ({ ...entry, terms: entry.area === "inbox" ? "approvals attention decisions" : entry.area === "system" ? "health diagnostics status operations" : entry.label })),
+  { area: "settings", label: "Settings", path: "/settings/general", terms: "settings preferences account configuration" },
+];
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const shellSwitch = useCockpitShellSwitch();
@@ -73,6 +77,11 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       ? newChat.attempt
       : undefined;
   const matches = (text: string) => text.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
+  const destinations = DESTINATIONS.filter(entry => matches(`Go to ${entry.label} ${entry.terms}`));
+  const settingsMatches = SETTINGS.filter(entry => matches(`settings ${entry.label} ${entry.searchTerms}`));
+  const commandMatches = matches("New chat conversation") || matches("Choose default model provider models switch");
+  const preferenceMatches = matches("Switch theme light dark") || matches("Switch density comfortable compact") || matches("Switch to classic Mission Control");
+  const noMatches = Boolean(query.trim()) && !commandMatches && !preferenceMatches && !destinations.length && !settingsMatches.length && !search.groups.some(group => group.items.length) && !search.loading;
   function selectObject(item: PaletteObject) {
     run(() => {
       if ("href" in item.target) navigate(item.target.href);
@@ -126,7 +135,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           ) : null}
           <div className="max-h-80 overflow-y-auto p-1">
             <Command.List aria-busy={search.loading}>
-              <Command.Group heading="Commands" className="text-xs text-fg-muted">
+              <Command.Group heading="Commands" hidden={!commandMatches} className="text-xs text-fg-muted">
                 {matches("New chat conversation") ? (
                   <Command.Item
                     value="new-chat"
@@ -169,8 +178,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                   </Command.Item>
                 ) : null}
               </Command.Group>
-              <Command.Group heading="Go to" className="text-xs text-fg-muted">
-                {COCKPIT_AREAS.filter((entry) => matches(`Go to ${entry.label}`)).map((entry) => (
+              <Command.Group heading="Go to" hidden={!destinations.length} className="text-xs text-fg-muted">
+                {destinations.map((entry) => (
                   <Command.Item
                     key={entry.area}
                     value={`go-${entry.area}`}
@@ -181,7 +190,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                   </Command.Item>
                 ))}
               </Command.Group>
-              <Command.Group heading="Preferences" className="text-xs text-fg-muted">
+              <Command.Group heading="Preferences" hidden={!preferenceMatches} className="text-xs text-fg-muted">
                 {matches("Switch theme light dark") ? (
                   <Command.Item
                     value="theme"
@@ -210,8 +219,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                   </Command.Item>
                 ) : null}
               </Command.Group>
-              <Command.Group heading="Settings" className="text-xs text-fg-muted">
-                {SETTINGS.filter((entry) => matches(`${entry.label} ${entry.searchTerms}`)).map((entry) => (
+              <Command.Group heading="Settings" hidden={!settingsMatches.length} className="text-xs text-fg-muted">
+                {settingsMatches.map((entry) => (
                   <Command.Item
                     key={entry.section}
                     value={`settings-${entry.section}`}
@@ -219,11 +228,13 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                     className={PALETTE_ITEM_CLASS}
                   >
                     Settings · {entry.label}
+                    {entry.releaseStatus === "experimental" ? " · Experimental" : ""}
                   </Command.Item>
                 ))}
               </Command.Group>
               <CommandPaletteResults groups={search.groups} onSelect={selectObject} />
             </Command.List>
+            {noMatches ? <p role="status" className="px-3 py-2 text-sm text-fg-secondary">No matching commands or returned records. Try a destination such as Settings, approvals, health, or a different search term.</p> : null}
             {search.loading ? (
               <p role="status" className="px-3 py-2 text-sm text-fg-secondary">
                 Searching current owners…

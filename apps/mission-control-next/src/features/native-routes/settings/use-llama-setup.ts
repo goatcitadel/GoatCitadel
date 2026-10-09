@@ -9,11 +9,20 @@ import {
   stageLlamaCppManagedSelection,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import {
+  classifyMutationAttempt,
+  fetchMutationAttempt,
+} from "@goatcitadel/mission-control-shared/api/mutation-attempts";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { useSessionDraft } from "../library/session-drafts";
 import { useSettingsApprovalContinuation } from "./use-settings-approval-continuation";
 import { useLlamaSetupEvidence } from "./use-llama-setup-evidence";
+import { dispatchTrackedMutation, UNSETTLED_ATTEMPT_MESSAGES, type TrackedAttempt } from "./mutation-attempt-tracking";
 import {
+  LLAMA_ROUTE_PATTERNS,
   beginLlamaAttempt,
+  beginLlamaCheck,
+  endLlamaCheck,
   finishLlamaAttempt,
   llamaCanonicalDraft,
   llamaPlanBinding,
@@ -25,6 +34,7 @@ import {
   requireLlamaConfirmationReceipt,
   requireLlamaPlan,
   useLlamaSetupState,
+  type LlamaRecovery,
   type LlamaSetupChange,
   type LlamaSetupDraft,
 } from "./llama-setup-state";
@@ -181,6 +191,11 @@ export function useLlamaSetup(workspaceId: string) {
       epoch = life.current.epoch;
     let dispatched = false,
       acknowledged = false;
+    // The lost write's identity and what settling it needs (public values only).
+    let transport: TrackedAttempt | undefined, recovery: LlamaRecovery | undefined;
+    const track = (tracked: TrackedAttempt | undefined) => {
+      transport = tracked;
+    };
     setReview(null);
     setNotice(null);
     try {
@@ -200,7 +215,12 @@ export function useLlamaSetup(workspaceId: string) {
           )
             throw new Error("Managed files unavailable.");
           dispatched = true;
-          const selected = await stageLlamaCppManagedSelection({ workspaceId, modelId: intent.submitted.model });
+          recovery = { kind: "stage", workspaceId };
+          const selected = await dispatchTrackedMutation(
+            LLAMA_ROUTE_PATTERNS,
+            () => stageLlamaCppManagedSelection({ workspaceId, modelId: intent.submitted.model }),
+            track,
+          );
           if (
             !selected.selectionId?.trim() ||
             selected.modelId !== intent.submitted.model ||
@@ -237,11 +257,19 @@ export function useLlamaSetup(workspaceId: string) {
           };
         }
         dispatched = true;
-        const created = await createChangePlan({
-          workspaceId,
-          surface: "settings",
-          request: { kind: "runtime_configuration", change },
-        });
+        const planKey = `llama-setup:${crypto.randomUUID()}`;
+        recovery = { kind: "create", workspaceId, change, settingsRevision: latest.settingsRevision, planKey };
+        const created = await dispatchTrackedMutation(
+          LLAMA_ROUTE_PATTERNS,
+          () =>
+            createChangePlan({
+              workspaceId,
+              surface: "settings",
+              request: { kind: "runtime_configuration", change },
+              idempotencyKey: planKey,
+            }),
+          track,
+        );
         requireLlamaPlan(created, workspaceId, { change, revision: latest.settingsRevision });
         if (!confirmationAvailable(created)) throw new Error("The created plan has no current confirmation action.");
         if (getGatewayApiBaseUrl() !== installation) throw new Error("Gateway changed.");
@@ -273,10 +301,16 @@ export function useLlamaSetup(workspaceId: string) {
           return;
         }
         dispatched = true;
-        const receipt = await confirmChangePlan(
-          fresh.planId,
-          { workspaceId },
-          { expectedRevision: fresh.revision, actionNonce: fresh.requiredAction!.actionNonce },
+        recovery = { kind: "confirm", workspaceId, planId: fresh.planId };
+        const receipt = await dispatchTrackedMutation(
+          LLAMA_ROUTE_PATTERNS,
+          () =>
+            confirmChangePlan(
+              fresh.planId,
+              { workspaceId },
+              { expectedRevision: fresh.revision, actionNonce: fresh.requiredAction!.actionNonce },
+            ),
+          track,
         );
         requireLlamaConfirmationReceipt(fresh, receipt);
         if (getGatewayApiBaseUrl() !== installation) throw new Error("Gateway changed.");
@@ -300,7 +334,98 @@ export function useLlamaSetup(workspaceId: string) {
       if (!dispatched && current(epoch))
         setNotice("Current setup evidence could not be verified. No setup change was sent.");
     } finally {
-      finishLlamaAttempt(installation, dispatched && !acknowledged);
+      finishLlamaAttempt(installation, dispatched && !acknowledged, { transport, recovery });
+    }
+  }
+
+  /**
+   * Settles a lost setup write from the Gateway's record of that exact attempt, then canonical evidence. A lost
+   * confirmation re-reads its plan (revision and nonce refuse a duplicate). A lost create replays its plan key only
+   * when the Gateway recorded it as committed, which returns that one plan; a released create is never replayed. A
+   * lost model staging leaves no plan, and staged selections expire on their own. Anything else keeps the lock.
+   */
+  async function checkOutcome() {
+    const checking = beginLlamaCheck(installation);
+    if (!checking?.transport || !checking.recovery) return;
+    const { transport, recovery } = checking;
+    let replay: TrackedAttempt | undefined;
+    // Every read, replay and adoption must stay on the installation the attempt was made against.
+    const sameGateway = () => getGatewayApiBaseUrl() === installation;
+    const otherGateway = () =>
+      endLlamaCheck(installation, checking, {
+        message:
+          "The Gateway connection changed to a different Gateway, so this setup outcome was not checked. Return to the original Gateway to check it.",
+      });
+    try {
+      if (!sameGateway()) return otherGateway();
+      const verdict = classifyMutationAttempt(
+        await fetchMutationAttempt(transport.attemptKey, transport.method, transport.routePattern),
+      );
+      if (verdict !== "committed" && verdict !== "failed_confirm_by_readback") {
+        endLlamaCheck(installation, checking, { message: UNSETTLED_ATTEMPT_MESSAGES[verdict] ?? checking.message });
+        return;
+      }
+      if (!sameGateway()) return otherGateway();
+      if (recovery.kind === "create" && recovery.replayed && verdict !== "committed") {
+        endLlamaCheck(installation, checking, {
+          message:
+            "The plan replay was released after an error, but the original plan may exist. Setup writes stay locked; inspect the recorded plan before continuing.",
+        });
+        return;
+      }
+      let message: string;
+      if (recovery.kind === "confirm") {
+        const saved = await withFreshReads(() =>
+          fetchChangePlan(recovery.planId, { workspaceId: recovery.workspaceId }),
+        );
+        requireLlamaPlan(saved, recovery.workspaceId);
+        if (!sameGateway()) return otherGateway();
+        rememberLlamaPlan(installation, saved);
+        message =
+          verdict === "committed"
+            ? "The Gateway recorded this setup confirmation as processed. The plan was re-read; approval and runtime settlement remain with the Gateway."
+            : "The Gateway released this setup confirmation after an error and the plan was re-read. Review its current step before acting again.";
+      } else if (recovery.kind === "create" && verdict === "committed") {
+        const created = await dispatchTrackedMutation(
+          LLAMA_ROUTE_PATTERNS,
+          () =>
+            createChangePlan({
+              workspaceId: recovery.workspaceId,
+              surface: "settings",
+              request: { kind: "runtime_configuration", change: recovery.change },
+              idempotencyKey: recovery.planKey,
+            }),
+          (tracked) => {
+            replay = tracked;
+          },
+        );
+        requireLlamaPlan(created, recovery.workspaceId, {
+          change: recovery.change,
+          revision: recovery.settingsRevision,
+        });
+        if (!sameGateway()) return otherGateway();
+        rememberLlamaPlan(installation, created);
+        message =
+          "The Gateway recorded this setup plan; it was recovered by its plan key. Review its canonical confirmation before requesting approval.";
+      } else {
+        await withFreshReads(() => fetchLlamaCppSetup(recovery.workspaceId, new AbortController().signal));
+        if (!sameGateway()) return otherGateway();
+        message =
+          recovery.kind === "create"
+            ? "The Gateway released this setup plan request after an error, so it was not replayed. Review the setup again against current evidence."
+            : "The Gateway handled the model selection without a recorded plan; staged selections expire on their own. Review the setup again.";
+      }
+      endLlamaCheck(installation, checking);
+      if (life.current.mounted) setNotice(message);
+      await evidence.refresh();
+    } catch {
+      endLlamaCheck(installation, checking, {
+        message:
+          "The outcome check failed, so setup writes stay locked. Check again, or inspect the recorded plan and runtime.",
+        ...(replay && recovery.kind === "create"
+          ? { transport: replay, recovery: { ...recovery, replayed: true } }
+          : {}),
+      });
     }
   }
   return {
@@ -324,6 +449,7 @@ export function useLlamaSetup(workspaceId: string) {
     refresh,
     checkServer,
     confirmReview,
+    checkOutcome,
     setDraft: draft.setValue,
     prepareReview: () => {
       if (canPrepare && projection)

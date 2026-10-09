@@ -10,6 +10,20 @@ import { __resetManagedRuntimeUncertaintyForTests } from "../../../features/nati
 import { ManagedRuntimeSettings } from "./ManagedRuntimeSettings";
 
 const api = vi.hoisted(() => ({ fetchSettings: vi.fn(), patchSettings: vi.fn(), fetchChangePlan: vi.fn() }));
+// Each owner write reports the attempt it dispatched, as the real capture would for its Gateway route.
+const attempts = vi.hoisted(() => ({ paths: [] as string[], read: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  captureMutationAttempt: (dispatch: () => Promise<unknown>, onAttempt: (attempt: unknown) => void) => {
+    const path = attempts.paths.shift();
+    if (path) onAttempt({ attemptKey: "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b", method: "PATCH", path });
+    return dispatch();
+  },
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  fetchMutationAttempt: attempts.read,
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   ...api,
   isApiRequestError: (value: unknown) => Boolean(value && typeof value === "object" && "status" in value),
@@ -155,6 +169,12 @@ describe("native managed runtime configuration", () => {
     expect(button("Review runtime changes").disabled).toBe(false);
     expect(api.patchSettings).not.toHaveBeenCalled();
   });
+  it("shows the llama.cpp lifecycle beside the saved configuration", async () => {
+    await render();
+    expect(container.querySelector('[aria-label="llama.cpp lifecycle"]')).not.toBeNull();
+    expect(button("Refresh runtime status")).toBeDefined();
+  });
+
   it("shows exact configuration and host-wide consequence before a cancelable save", async () => {
     await render();
     await changeAlias("reviewed-model");
@@ -173,6 +193,22 @@ describe("native managed runtime configuration", () => {
     expect(container.textContent).toContain("Process: Stopped");
     expect(container.textContent).toContain("Read-only evidence");
     expect(container.querySelectorAll("input")).toHaveLength(4);
+  });
+  it("checks a lost runtime save's outcome and releases the lock after readback", async () => {
+    attempts.paths.length = 0;
+    attempts.paths.push("/api/v1/settings");
+    api.patchSettings.mockRejectedValue(new Error("lost response"));
+    await render();
+    await changeAlias("reviewed-model");
+    await act(async () => button("Review runtime changes").click());
+    await act(async () => confirmation.onConfirm());
+    await vi.waitFor(() => expect(container.textContent).toContain("Save outcome is uncertain"));
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    await act(async () => button("Check outcome").click());
+    await vi.waitFor(() => expect(container.textContent).toContain("recorded this runtime change as processed"));
+    expect(container.textContent).not.toContain("Save outcome is uncertain");
+    expect(button("Check outcome")).toBeUndefined();
+    expect(api.patchSettings).toHaveBeenCalledTimes(1);
   });
   it("keeps external launch configuration with its owner", async () => {
     owner.llamaCpp.managementMode = "external";

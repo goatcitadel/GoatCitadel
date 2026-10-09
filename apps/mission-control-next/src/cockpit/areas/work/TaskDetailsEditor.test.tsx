@@ -86,15 +86,14 @@ async function click(label: string): Promise<void> {
 }
 
 describe("cockpit task details editor", () => {
-  it("saves only after confirmation using the current scoped revision", async () => {
+  it("saves ordinary details with a fresh scoped revision without a risk dialog", async () => {
     const saved = task({ revision: 3, title: "Updated title" });
     vi.mocked(updateTask).mockResolvedValue(saved);
     vi.mocked(fetchTask).mockResolvedValueOnce(task()).mockResolvedValue(saved);
     await render();
     await changeTitle("Updated title");
-    await click("Review details");
-    expect(updateTask).not.toHaveBeenCalled();
-    await click("Confirm details");
+    await click("Save task details");
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
     await vi.waitFor(() =>
       expect(updateTask).toHaveBeenCalledWith("task-a", {
         workspaceId: "workspace-a",
@@ -111,8 +110,7 @@ describe("cockpit task details editor", () => {
     vi.mocked(fetchTask).mockResolvedValue(task({ revision: 3 }));
     await render();
     await changeTitle("Updated title");
-    await click("Review details");
-    await click("Confirm details");
+    await click("Save task details");
     await vi.waitFor(() => expect(container.textContent).toContain("changed during review"));
     expect(updateTask).not.toHaveBeenCalled();
   });
@@ -121,8 +119,7 @@ describe("cockpit task details editor", () => {
     vi.mocked(updateTask).mockRejectedValue(new Error("Response lost"));
     await render();
     await changeTitle("Updated title");
-    await click("Review details");
-    await click("Confirm details");
+    await click("Save task details");
     await vi.waitFor(() => expect(container.textContent).toContain("task action outcome is unconfirmed"));
     expect(container.querySelector<HTMLInputElement>("input")).toBeNull();
     expect(
@@ -144,8 +141,7 @@ describe("cockpit task details editor", () => {
     );
     await render();
     await changeTitle("Updated title");
-    await click("Review details");
-    await click("Confirm details");
+    await click("Save task details");
     await act(async () => root.render(null));
     await act(async () => resolve(task()));
     expect(updateTask).not.toHaveBeenCalled();

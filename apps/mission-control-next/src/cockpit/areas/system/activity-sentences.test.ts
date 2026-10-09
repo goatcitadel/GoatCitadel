@@ -1,6 +1,6 @@
 import type { RealtimeEvent } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
-import { activityRunLabel, collapseActivity, describeActivity } from "./activity-sentences";
+import { activityMetadata, activityOwnerPath, activityRunLabel, collapseActivity, describeActivity } from "./activity-sentences";
 
 let sequence = 0;
 function event(kind: string, overrides: Partial<RealtimeEvent> = {}): RealtimeEvent {
@@ -74,6 +74,15 @@ describe("describeActivity (SY-01)", () => {
 });
 
 describe("collapseActivity", () => {
+  it("keeps different host/source/record identities separate and never collapses distinct actions", () => {
+    const events = [event("llamacpp_refreshed", { payload: { type: "llamacpp_refreshed", hostname: "BLD" } }), event("llamacpp_refreshed", { payload: { type: "llamacpp_refreshed", hostname: "Other" } }), event("task_updated", { links: { taskId: "task-a" } }), event("task_updated", { links: { taskId: "task-b" } })];
+    expect(collapseActivity(events)).toHaveLength(4);
+    expect(activityMetadata(events[0]!)).toContainEqual(["Reported host", "BLD"]);
+    expect(activityMetadata(event("custom", { source: "" }))).toContainEqual(["Source", "Unknown source"]);
+    expect(activityOwnerPath(events[2]!)).toContain("/work/tasks/task-a");
+    expect(activityOwnerPath(event("approval_created", { links: { approvalId: "a/?", workspaceId: "w", runId: "r" } }))).toContain("/inbox?approvalId=a%2F%3F");
+    expect(activityOwnerPath(event("custom", { payload: { sessionId: "untrusted-inferred" } }))).toBeNull();
+  });
   it("collapses 96 identical consecutive events into one row with a count and span", () => {
     const start = Date.parse("2026-10-05T10:00:00.000Z");
     const events = Array.from({ length: 96 }, (_, index) =>

@@ -71,7 +71,7 @@ export function ToolsSection({ activeWorkspaceId, route, navigate }: SettingsSec
     toolPattern: selectedToolName,
     decision: "allow",
     scope: "workspace",
-    grantType: "persistent",
+    grantType: "ttl",
     scopeRef: activeWorkspaceId,
     expiresAt: defaultExpiry,
   };

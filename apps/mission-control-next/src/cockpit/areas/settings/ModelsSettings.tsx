@@ -10,6 +10,11 @@ import { ProviderConnectionSettings } from "./ProviderConnectionSettings";
 import { ProviderManagementSettings } from "./ProviderManagementSettings";
 import { ProviderRoutingSettings } from "./ProviderRoutingSettings";
 import { ProviderAdviceSettings } from "./ProviderAdviceSettings";
+import { useDraftLeave } from "../../../features/native-routes/library/DraftLeaveDialog";
+import { McpDraftLeave } from "./McpDraftLeave";
+import { getDirtySectionKeys } from "../../../features/native-routes/library/use-form-dirty";
+import { sessionDraftSectionKey } from "../../../features/native-routes/library/session-drafts";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 
 /** The Models settings section: the provider owners plus the shared guided model setup. */
 export function ModelsSettings() {
@@ -17,6 +22,9 @@ export function ModelsSettings() {
   // Kept here, outside the guided card: a failed re-read after a change unmounts the card, and the
   // change's result must stay on screen next to the error.
   const [notice, setNotice] = useState<string | null>(null);
+  const { mode } = useUiPreferences();
+  const [expertOpen, setExpertOpen] = useState(mode === "advanced");
+  const leave = useDraftLeave();
   const onboarding = useQuery({
     queryKey: ["system", "onboarding"],
     queryFn: fetchOnboardingState,
@@ -24,12 +32,7 @@ export function ModelsSettings() {
   });
   return (
     <>
-      <ProviderCatalogSettings />
-      <ProviderConnectionSettings />
-      <ProviderManagementSettings />
-      <ProviderRoutingSettings />
-      <ProviderAdviceSettings />
-      <section aria-label="Model setup" className="mt-4 border-t border-line-subtle pt-4">
+      <section aria-label="Model setup" className="mt-4">
         <h3 className="font-display text-md font-semibold text-fg">Guided model setup</h3>
         <p className="mt-1 text-sm text-fg-secondary">
           Review the Gateway default, connection evidence, and model choices before using Chat.
@@ -65,6 +68,23 @@ export function ModelsSettings() {
           </p>
         ) : null}
       </section>
+      <section aria-label="Advanced providers" className="mt-4 border-t border-line-subtle pt-4">
+        <Button aria-expanded={expertOpen} aria-controls="expert-provider-controls"
+          onClick={() => expertOpen
+            ? leave.request(() => setExpertOpen(false), getDirtySectionKeys().filter((key) => /^(provider|provider-secret|provider-endpoint):system:/.test(sessionDraftSectionKey(key)) || sessionDraftSectionKey(key) === "provider-routing:system"))
+            : setExpertOpen(true)}>
+          Advanced provider configuration
+        </Button>
+        <p className="mt-2 text-xs text-fg-muted">Inspect catalogs, edit profiles, test connections, and review routing advice.</p>
+        {expertOpen ? <div id="expert-provider-controls" className="mt-4 grid gap-4">
+          <ProviderCatalogSettings />
+          <ProviderConnectionSettings />
+          <ProviderManagementSettings />
+          <ProviderRoutingSettings />
+          <ProviderAdviceSettings />
+        </div> : null}
+      </section>
+      <McpDraftLeave {...leave.dialogProps} />
     </>
   );
 }

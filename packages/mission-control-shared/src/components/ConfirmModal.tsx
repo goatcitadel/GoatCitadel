@@ -1,3 +1,4 @@
+import { useAccessBoundReview } from "../hooks/use-access-bound-review";
 import { globalCopy } from "../content/copy";
 import { GCModal } from "./ui";
 
@@ -32,10 +33,11 @@ export function ConfirmModal({
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
+  const accessCurrent = useAccessBoundReview(open, onCancel);
   return (
     <GCModal
       className={className}
-      open={open}
+      open={open && accessCurrent}
       onOpenChange={(nextOpen) => {
         if (!nextOpen) {
           onCancel();
@@ -47,7 +49,7 @@ export function ConfirmModal({
       cancelLabel={cancelLabel}
       danger={danger}
       confirmPending={pending}
-      confirmDisabled={confirmDisabled}
+      confirmDisabled={confirmDisabled || !accessCurrent}
       dismissDisabled={disableDismiss || cancelDisabled || pending}
       onConfirm={onConfirm}
     />

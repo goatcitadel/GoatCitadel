@@ -1,5 +1,17 @@
 import type { MemoryEmbeddingProfileRequest } from "./memory.js";
 
+export interface KnowledgeApprovalResultQuery {
+  workspaceId: string;
+  sessionId: string;
+  toolName: "docs.ingest" | "embeddings.index" | "embeddings.query";
+}
+export interface KnowledgeApprovalResult {
+  approvalId: string;
+  state: "pending" | "denied" | "failed" | "blocked" | "uncertain" | "completed";
+  message: string;
+  result?: Record<string, unknown>;
+}
+
 export interface MemoryWriteInput {
   namespace: string;
   title: string;

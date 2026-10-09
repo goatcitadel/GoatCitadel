@@ -4,6 +4,7 @@ import type {
   BackupVerifyResponse,
   MediaCreateJobRequest,
   MediaJobRecord,
+  ModelUsageEventListResponse,
   RetentionPolicy,
   RetentionPruneResult,
 } from "@goatcitadel/contracts";
@@ -73,6 +74,12 @@ export async function fetchCostSummary(
   scope: "day" | "session" | "agent" | "task" = "day",
 ): Promise<CostSummaryResponse> {
   return request<CostSummaryResponse>(`/api/v1/costs/summary?scope=${scope}`);
+}
+
+/** Bounded canonical attempts in one workspace, separate from installation day totals. */
+export async function fetchModelUsageEvents(workspaceId: string, from: string, to: string): Promise<ModelUsageEventListResponse> {
+  const query = new URLSearchParams({ from, to, limit: "50" });
+  return request<ModelUsageEventListResponse>(`/api/v1/ops/workspaces/${encodeURIComponent(workspaceId)}/model-usage?${query}`);
 }
 
 export async function runCheaper(): Promise<{ mode: string; actions: string[] }> {

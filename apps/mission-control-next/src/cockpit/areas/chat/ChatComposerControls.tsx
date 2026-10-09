@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { Popover } from "radix-ui";
 import { SlidersHorizontal } from "lucide-react";
-import type { ChatWebMode } from "@goatcitadel/contracts";
+import type { ChatCompletionReasoningEffort, ChatWebMode } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 
 type Controls = Pick<
   MissionThreadedActiveSessionSurfaceProps,
+  | "routePreflight"
   | "providerOptions"
   | "selectedProviderId"
   | "selectedModel"
@@ -35,8 +36,6 @@ type Controls = Pick<
   | "onAcknowledgeRouteBoundary"
 >;
 
-const THINKING_LEVELS = ["off", "minimal", "standard", "extended", "deep", "max", "ultra"] as const;
-
 const WEB_MODES: readonly { value: ChatWebMode; label: string }[] = [
   { value: "auto", label: "Auto" },
   { value: "off", label: "Off" },
@@ -44,7 +43,8 @@ const WEB_MODES: readonly { value: ChatWebMode; label: string }[] = [
   { value: "deep", label: "Deep" },
 ];
 
-export function ChatComposerControls({ props }: { props: Controls }) {
+export function ChatComposerControls({ props, reasoningEfforts }: { props: Controls; reasoningEfforts?: ChatCompletionReasoningEffort[] }) {
+  const supported = reasoningEfforts?.length ? [...new Set<Controls["currentThinkingLevel"]>([...reasoningEfforts.map((effort) => ({ none: "off", low: "minimal", medium: "standard", high: "extended", xhigh: "deep", max: "max", ultra: "ultra" } as const)[effort])])] : null;
   const selectedProvider = props.providerOptions.find((provider) => provider.providerId === props.selectedProviderId);
   const disabled = props.historicalReadOnly || props.sending;
   const [optionsOpen, setOptionsOpen] = useState(false);
@@ -57,7 +57,7 @@ export function ChatComposerControls({ props }: { props: Controls }) {
           aria-label="Provider"
           value={props.selectedProviderId ?? ""}
           disabled={disabled || props.modelSwitchDisabled}
-          onChange={(event) => props.onRequestProviderChange(event.target.value)}
+          onChange={(event) => { if (event.target.value) props.onRequestProviderChange(event.target.value); }}
           className="max-w-32 rounded-md border border-line bg-canvas px-1 py-1 text-fg max-sm:min-h-11 max-sm:max-w-full"
         >
           <option value="">Choose</option>
@@ -78,7 +78,7 @@ export function ChatComposerControls({ props }: { props: Controls }) {
           aria-label="Model"
           value={props.selectedModel ?? ""}
           disabled={disabled || props.modelSwitchDisabled || !selectedProvider}
-          onChange={(event) => props.onRequestModelChange(event.target.value)}
+          onChange={(event) => { if (event.target.value) props.onRequestModelChange(event.target.value); }}
           className="max-w-36 rounded-md border border-line bg-canvas px-1 py-1 text-fg max-sm:min-h-11 max-sm:max-w-full"
         >
           <option value="">Choose</option>
@@ -97,13 +97,14 @@ export function ChatComposerControls({ props }: { props: Controls }) {
         <select
           aria-label="Thinking effort"
           value={props.currentThinkingLevel}
-          disabled={disabled}
-          onChange={(event) => props.onSetThinkingLevel(event.target.value as Controls["currentThinkingLevel"])}
+          disabled={disabled || !supported}
+          onChange={(event) => { const level = event.target.value as Controls["currentThinkingLevel"]; if (supported?.includes(level)) props.onSetThinkingLevel(level); }}
           className="rounded-md border border-line bg-canvas px-1 py-1 text-fg max-sm:min-h-11"
         >
-          {THINKING_LEVELS.map((level) => (
+          {supported && !supported.includes(props.currentThinkingLevel) ? <option value={props.currentThinkingLevel} disabled>{humanizeToken(props.currentThinkingLevel)} · current, unsupported by this model</option> : null}
+          {(supported ?? [props.currentThinkingLevel]).map((level) => (
             <option key={level} value={level}>
-              {humanizeToken(level)}
+              {humanizeToken(level)}{!supported ? " · support unverified" : ""}
             </option>
           ))}
         </select>
@@ -129,17 +130,19 @@ export function ChatComposerControls({ props }: { props: Controls }) {
       {" "}
       <button
         type="button"
+        title="Plan before acting. The Gateway still governs every tool and approval."
         aria-pressed={props.planningMode === "advisory"}
         disabled={disabled}
         onClick={props.onTogglePlanningMode}
         className="rounded-md border border-line px-2 py-1 text-fg-secondary hover:border-accent aria-[pressed=true]:border-accent max-sm:min-h-11"
       >
-        Plan
+        Plan {props.planningMode === "advisory" ? "on" : "off"}
       </button>
       <label className="flex items-center gap-1">
         Web
         <select
           aria-label="Web search"
+          title="Off disables web preference; Auto chooses when useful; Quick and Deep request search depth. Gateway policy and available tools still apply."
           value={props.currentWebMode}
           disabled={disabled || !props.onSetWebMode}
           onChange={(event) => props.onSetWebMode?.(event.target.value as ChatWebMode)}
@@ -154,12 +157,13 @@ export function ChatComposerControls({ props }: { props: Controls }) {
       </label>
       <button
         type="button"
+        title="Request review of the answer before completion; availability follows the runtime."
         aria-pressed={props.currentReviewDepth !== "off"}
         disabled={disabled}
         onClick={props.onToggleReviewMode}
         className="rounded-md border border-line px-2 py-1 text-fg-secondary hover:border-accent aria-[pressed=true]:border-accent max-sm:min-h-11"
       >
-        Review
+        Review {props.currentReviewDepth === "off" ? "off" : "on"}
       </button>
     </>
   );
@@ -188,7 +192,7 @@ export function ChatComposerControls({ props }: { props: Controls }) {
       ) : null}
       {props.routeBoundaryAckRequired && !props.routeBoundaryAcknowledged ? (
         <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-status-waiting bg-sunken p-2 text-xs text-fg-secondary">
-          <span>The selected route may continue on another runtime if it fails.</span>
+          <span>Route: {props.routePreflight?.effectiveProviderId ?? "provider unrecorded"} / {props.routePreflight?.effectiveModel ?? "model unrecorded"} · {humanizeToken(props.routePreflight?.runtimeClass ?? "unknown")}. Fallback may send conversation content to another runtime, including outside this computer. {props.routePreflight?.degradedReason ?? props.routePreflight?.normalizationReason}</span>
           <button
             type="button"
             onClick={props.onAcknowledgeRouteBoundary}

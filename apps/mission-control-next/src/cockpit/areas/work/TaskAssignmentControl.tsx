@@ -6,7 +6,6 @@ import { useTaskDetailReview } from "../../../features/native-routes/ops/use-tas
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
-import { Dialog } from "../../ui/Dialog";
 import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 
 export function TaskAssignmentControl({ task, workspaceId }: { task: TaskRecord; workspaceId: string }) {
@@ -21,10 +20,6 @@ export function TaskAssignmentControl({ task, workspaceId }: { task: TaskRecord;
   const { busy, uncertain } = owner;
   const [notice, setNotice] = useState<string | null>(null);
   const error = owner.message;
-  const reviewed =
-    owner.review?.change.kind === "assignment"
-      ? { task: owner.review.task, target: owner.review.change.assignedAgentId }
-      : null;
   const executionOwned = Boolean(task.agenticContext || task.proactiveContext);
   const active = agents.isError ? [] : (agents.data?.items.filter((item) => item.lifecycleStatus === "active") ?? []);
   const currentAgent = active.find((item) => item.agentId === task.assignedAgentId);
@@ -46,7 +41,7 @@ export function TaskAssignmentControl({ task, workspaceId }: { task: TaskRecord;
         client.invalidateQueries({ queryKey: ["tasks", "work-task", workspaceId, updated.taskId] }),
         client.invalidateQueries({ queryKey: queryKeys.workTasks(workspaceId) }),
       ]);
-    });
+    }, { kind: "assignment", assignedAgentId: target || null });
   }
 
   return (
@@ -105,11 +100,11 @@ export function TaskAssignmentControl({ task, workspaceId }: { task: TaskRecord;
             size="sm"
             disabled={!canReview}
             onClick={() => {
-              owner.begin(task, { kind: "assignment", assignedAgentId: target || null });
+              void assign();
               setNotice(null);
             }}
           >
-            Review assignment
+            Save task assignment
           </Button>
         </div>
       ) : null}
@@ -131,27 +126,7 @@ export function TaskAssignmentControl({ task, workspaceId }: { task: TaskRecord;
           className="mt-2 inline-block text-sm font-medium text-accent underline"
         />
       ) : null}
-      <Dialog
-        open={Boolean(reviewed)}
-        onOpenChange={(open) => {
-          if (!open && !busy) owner.invalidate();
-        }}
-        title="Confirm task assignment"
-        description={`Change the board owner for ${reviewed?.task.title ?? "this task"} to ${
-          reviewed?.target
-            ? (active.find((agent) => agent.agentId === reviewed.target)?.name ?? "the selected agent")
-            : "unassigned"
-        }. The Gateway will check the current task revision. No run starts from this change.`}
-      >
-        <div className="flex gap-2">
-          <Button size="sm" disabled={busy} onClick={() => void assign()}>
-            Confirm assignment
-          </Button>
-          <Button size="sm" disabled={busy} onClick={owner.invalidate}>
-            Cancel
-          </Button>
-        </div>
-      </Dialog>
+
     </section>
   );
 }

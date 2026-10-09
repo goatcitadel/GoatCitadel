@@ -12,7 +12,7 @@ export function ThreadList({
   rail: MissionThreadedSessionRailData;
   projectOptions?: readonly ChatProjectFilterOption[];
 }) {
-  const sessions = rail.missionSessions;
+  const sessions = [...rail.missionSessions, ...(rail.externalSessions ?? [])];
   // Status comes with the sessions list, so the rail makes no request of its own.
   const activity = useThreadActivity(sessions);
   return (
@@ -47,7 +47,7 @@ export function ThreadList({
           ))}
         </div>
       </div>
-      <nav aria-label="Threads" className="min-h-0 flex-1 overflow-hidden p-1">
+      <nav aria-label="Conversations" className="min-h-0 flex-1 overflow-hidden p-1">
         {sessions.length ? (
           <WindowedRecordList
             items={sessions}
@@ -57,20 +57,32 @@ export function ThreadList({
             className="h-full min-h-0"
           >
             {(session) => (
+              <div>
               <button
                 type="button"
                 onClick={() => rail.onSelectSession(session.sessionId)}
+                aria-label={rail.renderSessionLabel(session.sessionId)}
                 aria-current={session.sessionId === rail.selectedSessionId ? "page" : undefined}
                 className="flex w-full items-start rounded-md p-2 text-left hover:bg-sunken aria-[current=page]:bg-sunken"
               >
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm text-fg">{rail.renderSessionLabel(session.sessionId)}</span>
+                  <span className="line-clamp-2 break-words text-sm font-medium text-fg">{rail.renderSessionLabel(session.sessionId)}</span>
                   <span className="block truncate text-xs text-fg-muted">
                     {session.projectName ?? humanizeToken(session.lifecycleStatus)}
                   </span>
+                  <time dateTime={session.lastActivityAt} className="block text-xs text-fg-muted">
+                    {Number.isFinite(Date.parse(session.lastActivityAt)) ? new Date(session.lastActivityAt).toLocaleString() : "Activity time unavailable"}
+                  </time>
+                  {session.lastMessagePreview ? <span className="line-clamp-2 break-words text-xs text-fg-secondary">{session.lastMessagePreview}</span> : null}
                   <ThreadRowStatus record={activity[session.sessionId]} />
                 </span>
               </button>
+              {session.searchHits?.map((hit) => <button key={hit.messageId} type="button"
+                onClick={() => rail.onSelectSession(session.sessionId, { searchHit: hit })}
+                className="block w-full rounded-md px-2 py-1 text-left text-xs text-fg-secondary hover:bg-sunken">
+                <span className="line-clamp-2">{hit.excerpt}</span><span className="text-accent">Open matching message</span>
+              </button>)}
+              </div>
             )}
           </WindowedRecordList>
         ) : rail.loading ? (

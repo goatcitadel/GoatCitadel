@@ -123,6 +123,13 @@ const settingsMocks = vi.hoisted(() => {
     enableAddon: fn(),
     exportCapabilityPack: fn(),
     discoverTelegramTargets: fn(),
+    discoverTelegramSetupTargets: fn(),
+    fetchTelegramChannelPairings: fn(),
+    approveTelegramChannelPairing: fn(),
+    revokeTelegramChannelPairing: fn(),
+    acknowledgeChannelSetupTest: fn(),
+    fetchChannelSetupJourney: fn(),
+    fetchChannelSetupDraftEvidence: fn(),
     fetchAddonStatus: fn(),
     fetchAddonsCatalog: fn(),
     fetchActiveLocalOperatorOverrides: fn(),
@@ -314,6 +321,17 @@ const settingsMocks = vi.hoisted(() => {
   };
 });
 
+// The live-test review renders through a portal; render it inline so the reviewed action is reachable.
+vi.mock("../../cockpit/ui/Dialog", () => ({ Dialog: ({ open, children, title }: { open: boolean; children: import("react").ReactNode; title: string }) => open ? <div role="dialog" aria-label={title}>{children}</div> : null }));
+vi.mock("@goatcitadel/mission-control-shared/api/channel-setup-operations", () => ({
+  discoverTelegramSetupTargets: settingsMocks.discoverTelegramSetupTargets,
+  fetchTelegramChannelPairings: settingsMocks.fetchTelegramChannelPairings,
+  approveTelegramChannelPairing: settingsMocks.approveTelegramChannelPairing,
+  revokeTelegramChannelPairing: settingsMocks.revokeTelegramChannelPairing,
+  acknowledgeChannelSetupTest: settingsMocks.acknowledgeChannelSetupTest,
+  fetchChannelSetupJourney: settingsMocks.fetchChannelSetupJourney,
+  fetchChannelSetupDraftEvidence: settingsMocks.fetchChannelSetupDraftEvidence,
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/tasks", async (importOriginal) => ({
   ...await importOriginal<object>(), fetchTask: settingsMocks.fetchTask,
 }));
@@ -1082,6 +1100,15 @@ function setupResponses() {
   settingsMocks.discoverTelegramTargets.mockResolvedValue({
     items: [{ id: "chat-1", label: "Ops Chat", chatId: "123", kind: "group" }],
   });
+  // Main's draft-scoped discovery; the other operations reject as the unmocked network calls did.
+  settingsMocks.discoverTelegramSetupTargets.mockResolvedValue({
+    items: [{ id: "chat-1", label: "Ops Chat", chatId: "123", kind: "group", source: "recent_update" }],
+    warnings: [],
+    webhookActive: false,
+  });
+  settingsMocks.fetchChannelSetupDraftEvidence.mockImplementation(async (...args: unknown[]) => ({ draftId: args[0], draftRevision: args[1], items: [] }));
+  for (const operation of [settingsMocks.fetchTelegramChannelPairings, settingsMocks.approveTelegramChannelPairing, settingsMocks.revokeTelegramChannelPairing, settingsMocks.acknowledgeChannelSetupTest, settingsMocks.fetchChannelSetupJourney])
+    operation.mockRejectedValue(new Error("Unavailable in this test"));
   settingsMocks.updateChannelSetupDraft.mockImplementation(async (_id: string, input: { expectedRevision: number; label?: string; enabled?: boolean; draft?: Record<string, unknown> }) => {
     channelOwner = { ...channelOwner, revision: input.expectedRevision + 1, label: input.label ?? channelOwner.label,
       enabled: input.enabled ?? channelOwner.enabled, draft: input.draft ?? channelOwner.draft };
@@ -2505,17 +2532,19 @@ describe("SettingsNativePage broad native sections", () => {
     );
     await click(findButton(channels.root, "Guided setup"));
     await click(findButton(channels.root, "Detect Telegram chats"));
-    expect(settingsMocks.discoverTelegramTargets).toHaveBeenCalledWith({
-      botToken: undefined,
-      botTokenEnv: "TELEGRAM_TOKEN",
-      setupCode: "SETUP2",
-    });
+    // Detection saves the draft and discovers through it; raw tokens never leave the secure owner.
+    expect(settingsMocks.discoverTelegramSetupTargets).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "draft", setupCode: "SETUP2" }),
+    );
+    expect(settingsMocks.discoverTelegramTargets).not.toHaveBeenCalled();
     await click(findButton(channels.root, "Advanced JSON"));
     await click(findButton(channels.root, "Save draft"));
     await click(findButton(channels.root, "Advanced JSON"));
     await click(findButton(channels.root, "Validate"));
     await click(findButton(channels.root, "Advanced JSON"));
     await click(findButton(channels.root, "Run live test"));
+    // Live tests run only after an explicit review of the exact draft.
+    await click(findButton(channels.root, "Run reviewed live test"));
     expect(settingsMocks.updateChannelSetupDraft).toHaveBeenCalledWith(
       "draft-1",
       expect.objectContaining({
@@ -2569,7 +2598,8 @@ describe("SettingsNativePage broad native sections", () => {
         decision: "deny",
         scope: "session",
         scopeRef: "session-1",
-        grantType: "persistent",
+        grantType: "ttl",
+        expiresAt: expect.any(String),
       }),
     );
     await click(findButton(tools.root, "All grants"));
@@ -3741,7 +3771,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(page.root.findByProps({ value: "Default draft" })).toBeTruthy();
   });
 
-  it("covers channel draft selection warnings and Slack OAuth polling branches", async () => {
+  it("covers channel draft selection warnings and Slack draft creation", async () => {
     settingsMocks.fetchChannelSetupDefinitions.mockResolvedValueOnce({ items: [] });
     const emptyChannels = await mount("channels");
     await click(findButton(emptyChannels.root, "Connect channel"));
@@ -3768,88 +3798,7 @@ describe("SettingsNativePage broad native sections", () => {
     await click(populatedCreateButton);
     expect(settingsMocks.createChannelSetupDraft).toHaveBeenCalledWith({ catalogId: "channel.slack" });
 
-    settingsMocks.fetchSlackOAuthStatus.mockResolvedValueOnce({
-      configured: false,
-      mode: "self_owned",
-      scopes: [],
-      missing: [],
-      connections: [],
-    });
-    const unconfiguredSlack = await mount("channels");
-    await click(findButton(unconfiguredSlack.root, "Connect channel"));
-    await click(findButton(unconfiguredSlack.root, "Connect Slack"));
-    expect(collectText(unconfiguredSlack.root)).toContain(
-      "Slack OAuth needs configuration first: missing OAuth settings.",
-    );
-
-    vi.useFakeTimers();
-    installBrowser();
-    settingsMocks.createChannelSetupDraft.mockClear();
-    settingsMocks.startSlackOAuth.mockResolvedValueOnce({
-      authorizationUrl: "https://slack.com/oauth/v2/authorize?state=loop24",
-      state: "loop24",
-      configured: true,
-      mode: "self_owned",
-      scopes: ["chat:write"],
-    });
-    settingsMocks.fetchSlackOAuthStatus
-      .mockResolvedValueOnce({
-        configured: true,
-        mode: "self_owned",
-        scopes: ["chat:write"],
-        missing: [],
-        connections: [
-          {
-            connection: {
-              connectionId: "slack-old",
-              config: { oauthConnectedAt: "2026-05-14T00:00:00.000Z" },
-            },
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        configured: true,
-        mode: "self_owned",
-        scopes: ["chat:write"],
-        missing: [],
-        connections: [
-          {
-            connection: {
-              connectionId: "slack-new",
-              config: { oauthConnectedAt: "2026-05-15T00:00:00.000Z" },
-            },
-          },
-        ],
-      });
-    settingsMocks.createChannelSetupDraft.mockResolvedValueOnce({
-      draftId: "draft-slack",
-      revision: 1,
-      connectionId: "slack-new",
-      catalogId: "channel.slack",
-      enabled: true,
-      draft: {},
-      lifecycleMode: "edit",
-      updatedAt: "2026-05-15T00:00:00.000Z",
-    });
-
-    try {
-      const configuredSlack = await mount("channels");
-      await click(findButton(configuredSlack.root, "Connect channel"));
-      await click(findButton(configuredSlack.root, "Connect Slack"));
-      expect(window.open).toHaveBeenCalledWith(
-        "https://slack.com/oauth/v2/authorize?state=loop24",
-        "_blank",
-        "noopener,noreferrer",
-      );
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(2000);
-      });
-      await flush();
-      expect(settingsMocks.createChannelSetupDraft).not.toHaveBeenCalled();
-      expect(collectText(configuredSlack.root)).toContain("Slack connection evidence changed.");
-    } finally {
-      vi.useRealTimers();
-    }
+    // The create panel only starts a Slack draft; OAuth is draft-bound and covered in ChannelSetupWizard.test.tsx.
   });
 
   it("covers integration catalog list selection and selected Slack draft connect branches", async () => {
@@ -3892,24 +3841,17 @@ describe("SettingsNativePage broad native sections", () => {
           enabled: true,
           lifecycleMode: "create",
           draft: {},
+          secretState: {},
+          revision: 1,
           createdAt: "2026-04-24T12:00:00.000Z",
           updatedAt: "2026-04-24T12:00:00.000Z",
         },
       ],
     });
-    settingsMocks.fetchSlackOAuthStatus.mockResolvedValueOnce({
-      configured: false,
-      mode: "self_owned",
-      scopes: [],
-      missing: [],
-      connections: [],
-    });
     const slackDraft = await mount("channels");
     await click(findButton(slackDraft.root, "Slack setup"));
-    const slackConnectButtons = buttons(slackDraft.root, "Connect Slack");
-    expect(slackConnectButtons.length).toBe(1);
-    await click(slackConnectButtons.at(-1)!);
-    expect(collectText(slackDraft.root)).toContain("Slack OAuth needs configuration first: missing OAuth settings.");
+    // A selected Slack draft offers exactly one draft-bound OAuth connect action.
+    expect(buttons(slackDraft.root, "Connect Slack with OAuth").length).toBe(1);
   });
 
   it("covers provider editor, secret, model probe, and ChatGPT OAuth setup branches", async () => {

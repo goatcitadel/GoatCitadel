@@ -1,3 +1,4 @@
+import { setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { __resetWorkbenchSessionDraftsForTests } from "./workbench-session-drafts";
 import React from "react";
 import { act, create as createRenderer, type ReactTestRenderer } from "react-test-renderer";
@@ -168,6 +169,7 @@ function primeSuccessMocks() {
 
 describe("useChatWorkbench", () => {
   beforeEach(() => {
+    setGatewayCallerScope("");
     __resetWorkbenchSessionDraftsForTests();
     latest = null;
     storage = new Map<string, string>();
@@ -980,4 +982,15 @@ describe("useChatWorkbench", () => {
     expect(apiMocks.saveChatSessionWorkbenchFile).not.toHaveBeenCalled();
   });
 
+it("isolates retained workbench input by server caller and restores only the original caller draft", async () => {
+ setGatewayCallerScope("actor-a");let renderer!: ReactTestRenderer;
+ await act(async()=>{renderer=create(<Harness/>);await flushAsyncEffects();});
+ await act(async()=>latest!.setWorkbenchDraftContent("actor A draft"));
+ await act(async()=>renderer.unmount());setGatewayCallerScope("actor-b");
+ await act(async()=>{renderer=create(<Harness/>);await flushAsyncEffects();});
+ expect(latest!.workbenchDraftContent).not.toBe("actor A draft");expect(latest!.hasDirtyWorkbenchDraft).toBe(false);
+ await act(async()=>renderer.unmount());setGatewayCallerScope("actor-a");
+ await act(async()=>{renderer=create(<Harness/>);await flushAsyncEffects();});expect(latest!.workbenchDraftContent).toBe("actor A draft");
+ await act(async()=>renderer.unmount());setGatewayCallerScope("");
+});
 });

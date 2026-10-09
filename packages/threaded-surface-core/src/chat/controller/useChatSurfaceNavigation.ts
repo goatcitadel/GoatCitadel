@@ -56,30 +56,32 @@ export function useChatSurfaceNavigation({
       };
       if (sessionId === selection.selectedSessionId) {
         openRequestedHistory();
-        setSelectedTurnId(options?.turnId ?? null);
+        setSelectedTurnId(options?.turnId ?? options?.searchHit?.turnId ?? null);
         setSelectedContextTurnIds([]);
         setPendingThreadContext(null);
         setActiveGeneratedArtifact(null);
         setSessionRailOpen(false);
         onNavigateSurface?.(surfaceState.messageMode, {
           sessionId,
-          turnId: options?.turnId ?? null,
+          turnId: options?.turnId ?? options?.searchHit?.turnId ?? null,
           artifactId: null,
+          ...(!options?.turnId && !options?.searchHit?.turnId && options?.searchHit ? { messageId: options.searchHit.messageId, sequence: options.searchHit.sequence } : {}),
         });
         return;
       }
       {
         setSelectedSessionId(sessionId);
         openRequestedHistory();
-        setSelectedTurnId(options?.turnId ?? null);
+        setSelectedTurnId(options?.turnId ?? options?.searchHit?.turnId ?? null);
         setSelectedContextTurnIds([]);
         setPendingThreadContext(null);
         setActiveGeneratedArtifact(null);
         setSessionRailOpen(false);
         onNavigateSurface?.(surfaceState.messageMode, {
           sessionId,
-          turnId: options?.turnId ?? null,
+          turnId: options?.turnId ?? options?.searchHit?.turnId ?? null,
           artifactId: null,
+          ...(!options?.turnId && !options?.searchHit?.turnId && options?.searchHit ? { messageId: options.searchHit.messageId, sequence: options.searchHit.sequence } : {}),
         });
       }
     },

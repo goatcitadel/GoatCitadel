@@ -171,12 +171,12 @@ export async function runCockpitChatBackgroundActiveProof({ context, browser, st
       await capture("detached-reloaded");
       stage = "reattach same child and cancel review without a write";
       assert.equal(await control("reattach", () => section().getByRole("button", { name: "Bring to foreground", exact: true }).click()), true);
-      await section().getByRole("button", { name: "Cancel child", exact: true }).click();
-      const dialog = page.getByRole("dialog", { name: "Cancel this child run?", exact: true });
+      await section().getByRole("button", { name: "Cancel task", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Cancel this background task?", exact: true });
       await dialog.waitFor();
       assertIntegrationDialogBounds({ viewport, dialog: await dialog.boundingBox(), buttons: {
         keep: await dialog.getByRole("button", { name: "Keep running", exact: true }).boundingBox(),
-        cancel: await dialog.getByRole("button", { name: "Cancel child", exact: true }).boundingBox(),
+        cancel: await dialog.getByRole("button", { name: "Cancel task", exact: true }).boundingBox(),
       } });
       await capture("cancel-review");
       assert.equal(writes.length, 2);
@@ -186,7 +186,7 @@ export async function runCockpitChatBackgroundActiveProof({ context, browser, st
       const readReviewed = async () => {
         // The response may belong to a concurrently finishing poll. Bind the
         // actual frozen dialog versions, not that transport, to the live owner.
-        const shown = /Child version (\d+) · Watcher revision (\d+)/.exec(await dialog.innerText());
+        const shown = /Task version (\d+) · Watcher revision (\d+)/.exec(await dialog.innerText());
         assert.ok(shown, "The review must show its exact child and watcher versions.");
         current = await readBound();
         const reviewed = { ...current, watcherRevision: Number(shown[2]), childVersion: Number(shown[1]) };
@@ -202,7 +202,7 @@ export async function runCockpitChatBackgroundActiveProof({ context, browser, st
         const observe = item => { if (item.request().method() === "POST" && new URL(item.url()).pathname === controlRoute()) response = item; };
         page.on("response", observe);
         try {
-          await dialog.getByRole("button", { name: "Cancel child", exact: true }).click();
+          await dialog.getByRole("button", { name: "Cancel task", exact: true }).click();
           await poll(async () => response || (await dialog.getByRole("alert").allTextContents()).some(text => text.includes("changed before")), Boolean, "explicit cancellation outcome");
           if (response) {
             lastControl = { before: reviewed, status: response.status(), request: response.request().postDataJSON(), action: "cancel", scope };
@@ -222,13 +222,13 @@ export async function runCockpitChatBackgroundActiveProof({ context, browser, st
       };
       const closeRejectedReview = async (name) => {
         await dialog.getByRole("alert").filter({ hasText: "Close this review" }).waitFor();
-        assert.equal(await dialog.getByRole("button", { name: "Cancel child", exact: true }).isDisabled(), true);
+        assert.equal(await dialog.getByRole("button", { name: "Cancel task", exact: true }).isDisabled(), true);
         await capture(name);
         await dialog.getByRole("button", { name: "Keep running", exact: true }).click(); await dialog.waitFor({ state: "hidden" });
         assert.equal(fixture.counts().childStreams, 1); assert.equal(fixture.counts().held, 1);
       };
       stage = "real lease advancement invalidates an explicit cancellation review";
-      await section().getByRole("button", { name: "Cancel child", exact: true }).click(); await dialog.waitFor();
+      await section().getByRole("button", { name: "Cancel task", exact: true }).click(); await dialog.waitFor();
       const staleReview = await readReviewed();
       const leaseBefore = await api(runRoute(activeIdentity.childRunId));
       const leaseAfter = await poll(() => api(runRoute(activeIdentity.childRunId)), run =>
@@ -255,7 +255,7 @@ export async function runCockpitChatBackgroundActiveProof({ context, browser, st
         const freshRail = observedRead.body;
         assert.deepEqual(freshRail.scope, { workspaceId: scope.workspaceId, sessionId: scope.sessionId, verified: true });
         assert.equal(freshRail.tasks[0].watcherId, activeIdentity.watcherId); assert.equal(freshRail.tasks[0].childRunId, activeIdentity.childRunId);
-        await section().getByRole("button", { name: "Cancel child", exact: true }).click(); await dialog.waitFor();
+        await section().getByRole("button", { name: "Cancel task", exact: true }).click(); await dialog.waitFor();
         cancelled = await confirmReviewed(await readReviewed());
         if (!cancelled) {
           await closeRejectedReview(`cancel-conflict-${reviewIndex}`);

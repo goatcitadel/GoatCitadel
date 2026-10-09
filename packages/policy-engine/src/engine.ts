@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- policy evaluation rules remain co-located to keep branching behavior reviewable. */
 import fs from "node:fs";
+import { knowledgeApprovalPreview } from "./knowledge-approval-preview.js";
 import { admitNativeRuntimeWithPolicy, type NativeRuntimePolicyAdmissionInput } from "./native-runtime-admission.js";
 import { NATIVE_INSTALLATION_POLICY, snapshotNativeInstallationPolicyRequest } from "./native-installation-policy.js";
 import { isDeepStrictEqual } from "node:util";
@@ -1871,6 +1872,8 @@ export class ToolPolicyEngine {
   }
 
   private buildApprovalPreview(request: ToolInvokeRequest): Record<string, unknown> {
+    const knowledge = knowledgeApprovalPreview(request);
+    if (knowledge) return knowledge;
     const preview: Record<string, unknown> = {
       toolName: request.toolName,
       sessionId: request.sessionId,

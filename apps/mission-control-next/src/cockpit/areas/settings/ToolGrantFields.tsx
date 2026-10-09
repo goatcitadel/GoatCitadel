@@ -97,6 +97,29 @@ export function ToolGrantFields({
           <option value="one_time">One use</option>
         </select>
       </div>
+      <label className="text-sm text-fg-secondary">
+        Lifetime preset
+        <select
+          className={inputClass}
+          value=""
+          onChange={(event) => {
+            const value = event.target.value;
+            if (value === "persistent") onChange({ ...draft, grantType: "persistent" });
+            else if (value)
+              onChange({
+                ...draft,
+                grantType: "ttl",
+                expiresAt: new Date(Date.now() + Number(value) * 1000).toISOString(),
+              });
+          }}
+        >
+          <option value="">Choose a lifetime</option>
+          <option value="3600">1 hour</option>
+          <option value="86400">1 day</option>
+          <option value="604800">7 days</option>
+          <option value="persistent">Until revoked</option>
+        </select>
+      </label>
       {draft.grantType === "ttl" ? (
         <div>
           <label htmlFor={`${id}-expiry`} className="text-sm text-fg-secondary">

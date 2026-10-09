@@ -321,6 +321,7 @@ describe("LibraryExternalSourcesSection", () => {
     const renderer = await renderSection(vi.fn());
     expect(markupOf(renderer)).toContain("You don't have permission to do that.");
     expect(markupOf(renderer)).not.toContain("Configure access");
+    expect(renderer.root.findAllByType("button")).toHaveLength(0);
     renderer.unmount();
   });
 

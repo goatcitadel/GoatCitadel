@@ -1801,7 +1801,7 @@ async function executeOperation(page, operation, state) {
     }
     case "click-turn-action": {
       // Phones move every turn action except Retry and Copy into "More turn actions".
-      const turn = page.locator('article[aria-label="Conversation turn"]').last();
+      const turn = page.locator('article[aria-label="Conversation messages"]').last();
       await clickTurnAction(turn, operation.name, { timeout: ACTION_TIMEOUT_MS });
       return { kind: operation.kind, accessibleName: operation.name };
     }
@@ -1935,7 +1935,7 @@ async function executeOperation(page, operation, state) {
     }
     case "assert-single-failure": {
       const failureMessage = /^This turn failed before completion\. Retry once, or narrow the request/iu;
-      const turn = page.locator('article[aria-label="Conversation turn"]');
+      const turn = page.locator('article[aria-label="Conversation messages"]');
       await turn.getByText(failureMessage).waitFor({ state: "visible" });
       const [messageCopies, failedBadges, retryControls, duplicateAlerts] = await Promise.all([
         page.getByText(failureMessage).count(),

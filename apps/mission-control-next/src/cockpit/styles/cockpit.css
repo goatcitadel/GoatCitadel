@@ -1,29 +1,12 @@
 @import "tailwindcss";
+@import "./accessible-controls.css";
+@import "./gateway-access.css";
+@import "./cockpit-tokens.css";
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/hanken-grotesk";
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 @custom-variant compact (&:where([data-density="compact"], [data-density="compact"] *));
-
-:root {
-  --cockpit-canvas: #f0f8ff;
-  --cockpit-raised: #ffffff;
-  --cockpit-sunken: #deeffa;
-  --cockpit-overlay: #ffffff;
-  --cockpit-text: #142536;
-  --cockpit-text-secondary: #334a5a;
-  --cockpit-text-muted: #506574;
-  --cockpit-border-subtle: rgba(18, 69, 93, 0.15);
-  --cockpit-border: rgba(18, 69, 93, 0.24);
-  --cockpit-border-strong: rgba(18, 69, 93, 0.38);
-  --cockpit-accent: #006f85;
-  --cockpit-accent-ink: #f6fbff;
-  --cockpit-running: #006f85;
-  --cockpit-waiting: #855500;
-  --cockpit-done: #08734e;
-  --cockpit-failed: #a72e48;
-  --cockpit-neutral: #506574;
-}
 
 html[data-shell="cockpit"] {
   /* Classic owner CSS can be loaded by a cancelled lazy handoff. Keep the
@@ -54,26 +37,6 @@ html[data-shell="cockpit"] {
   --r-lg: 12px;
   --focus-ring: 2px solid var(--cockpit-accent);
   --focus-ring-offset: 2px;
-}
-
-[data-theme="dark"] {
-  --cockpit-canvas: #122235;
-  --cockpit-raised: #1a3045;
-  --cockpit-sunken: #0f1d2d;
-  --cockpit-overlay: #244057;
-  --cockpit-text: #f4fbff;
-  --cockpit-text-secondary: #d3e3ed;
-  --cockpit-text-muted: #b0c8d5;
-  --cockpit-border-subtle: rgba(178, 224, 245, 0.14);
-  --cockpit-border: rgba(178, 224, 245, 0.24);
-  --cockpit-border-strong: rgba(178, 224, 245, 0.38);
-  --cockpit-accent: #5ce9ff;
-  --cockpit-accent-ink: #0c2530;
-  --cockpit-running: #5ce9ff;
-  --cockpit-waiting: #ffd166;
-  --cockpit-done: #59e6aa;
-  --cockpit-failed: #ff8292;
-  --cockpit-neutral: #b0c8d5;
 }
 
 @theme {
@@ -111,7 +74,7 @@ html[data-shell="cockpit"] {
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
-  --shadow-overlay: 0 12px 32px rgb(0 0 0 / 0.28), 0 2px 8px rgb(0 0 0 / 0.16);
+  --shadow-overlay: 0 12px 32px var(--cockpit-shadow-strong), 0 2px 8px var(--cockpit-shadow-soft);
   --animate-pulse-live: pulse-live 1.6s ease-in-out infinite;
 }
 
@@ -169,6 +132,13 @@ html[data-shell="cockpit"] [data-sonner-toaster] {
   --normal-text: var(--cockpit-text);
   --normal-border: var(--cockpit-border-strong);
   font-family: var(--font-sans);
+}
+
+/* Overflow notifications stay queued, but opacity alone would leave their
+   hidden actions in keyboard navigation. Sonner restores visibility as they enter
+   the visible group; expanded visible cards keep their full-size actions. */
+html[data-shell="cockpit"] [data-sonner-toast][data-visible="false"] {
+  visibility: hidden;
 }
 
 html[data-shell="cockpit"] [data-sonner-toast] {
@@ -237,7 +207,7 @@ html[data-shell="cockpit"] .mc-dialog-content {
     position: fixed;
     inset: 0;
     z-index: 50;
-    background: rgb(5 17 29 / 0.52);
+    background: var(--cockpit-scrim);
   }
   html[data-shell="cockpit"] .mc-dialog-content {
     position: fixed;
@@ -394,7 +364,7 @@ html[data-shell="cockpit"] .mc-dialog-content {
     color: var(--cockpit-text-secondary);
     font-size: var(--text-xs);
   }
-  @media (max-width: 639px) {
+  @media (width < 640px) {
     .cockpit-chat-host .mc-next-threaded-loading-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
@@ -597,6 +567,7 @@ html[data-shell="cockpit"] .mc-dialog-content {
   }
   .cockpit-chat-documents .generated-artifact-viewer {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     min-width: 0;
     gap: 0.65rem;
     color: var(--cockpit-text-secondary);
@@ -604,8 +575,17 @@ html[data-shell="cockpit"] .mc-dialog-content {
   }
   .cockpit-chat-documents .generated-artifact-header {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     min-width: 0;
     gap: 0.45rem;
+  }
+  .cockpit-chat-documents .generated-artifact-body,
+  .cockpit-chat-documents .generated-artifact-fallback,
+  .cockpit-chat-documents .generated-artifact-code-block,
+  .cockpit-chat-documents .generated-artifact-meta,
+  .cockpit-chat-documents .generated-artifact-meta > * {
+    min-width: 0;
+    max-width: 100%;
   }
   .cockpit-chat-documents .generated-artifact-copy {
     display: grid;
@@ -647,12 +627,12 @@ html[data-shell="cockpit"] .mc-dialog-content {
     width: 100%;
     min-height: 12rem;
     border: 0;
-    background: #fff;
+    background: var(--cockpit-document-surface);
   }
   .cockpit-chat-documents .generated-artifact-mermaid {
     overflow: auto;
     border-radius: 6px;
-    background: #fff;
+    background: var(--cockpit-document-surface);
     padding: 0.5rem;
   }
   .cockpit-chat-documents .generated-artifact-mermaid svg {
@@ -674,7 +654,7 @@ html[data-shell="cockpit"] .mc-dialog-content {
 }
 
 @layer utilities {
-  @media (max-width: 639px) {
+  @media (width < 640px) {
     .cockpit-inspector {
       inset: auto 0 4rem;
       width: 100%;

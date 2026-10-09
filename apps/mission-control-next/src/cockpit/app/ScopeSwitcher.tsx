@@ -1,10 +1,9 @@
+import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { getCitadelStructureSnapshot } from "@goatcitadel/mission-control-shared/api/citadels";
+import { useCitadelName } from "../data/use-citadel-name";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
-import { hasCitadelRecord } from "../../features/native-routes/settings/directory-lifecycle-binding";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
-import { CHECKING_FOR_CHANGES, recordView } from "../data/record-view";
+import { CHECKING_FOR_CHANGES } from "../data/record-view";
 import { readCockpitHistory } from "./cockpit-history";
 import { Compass } from "lucide-react";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -13,6 +12,7 @@ import { Dialog } from "../ui/Dialog";
 import { useCockpitScope } from "./use-cockpit-scope";
 
 export function ScopeSwitcher({
+  destination,
   compact = false,
   workspaceName = "Workspace",
   open: controlledOpen,
@@ -20,6 +20,7 @@ export function ScopeSwitcher({
   hideTrigger = false,
   returnFocusRef,
 }: {
+  destination?: string;
   compact?: boolean;
   workspaceName?: string;
   open?: boolean;
@@ -31,14 +32,8 @@ export function ScopeSwitcher({
   const trigger = useRef<HTMLButtonElement>(null);
   const installation = getGatewayApiBaseUrl(),
     history = readCockpitHistory();
-  const visible = useMediaQuery("(min-width: 640px)") && !hideTrigger;
-  const activeCitadel = useQuery({
-    queryKey: ["system", "directory", "active-citadel", installation, activeCitadelId],
-    queryFn: ({ signal }) => getCitadelStructureSnapshot(activeCitadelId, { signal }),
-    enabled: visible && Boolean(activeCitadelId),
-    // staleTime already refreshes a stale Citadel; forcing a refetch on every mount multiplied boot requests.
-    staleTime: 30_000,
-  });
+  const visible = useMediaQuery(RESPONSIVE_QUERIES.abovePhone) && !hideTrigger;
+  const citadelName = useCitadelName(activeCitadelId, visible);
   const focusIdentity = JSON.stringify([installation, activeCitadelId, activeWorkspaceId, history]);
   const focusView = useRef({ identity: focusIdentity });
   if (focusView.current.identity !== focusIdentity) focusView.current = { identity: focusIdentity };
@@ -49,9 +44,12 @@ export function ScopeSwitcher({
   const setOpen = onOpenChange ?? setLocalOpen;
   const [target, setTarget] = useState({ citadelId: activeCitadelId, workspaceId: activeWorkspaceId });
   useEffect(() => {
-    if (open) setTarget({ citadelId: activeCitadelId, workspaceId: activeWorkspaceId });
-  }, [open, activeCitadelId, activeWorkspaceId]);
-  const owner = useCockpitScope(open, target, () => setOpen(false));
+    if (open) {
+      const requested = new URL(destination ?? window.location.href, window.location.origin).searchParams;
+      setTarget({ citadelId: requested.get("citadelId") || activeCitadelId, workspaceId: requested.get("workspaceId") || activeWorkspaceId });
+    }
+  }, [open, activeCitadelId, activeWorkspaceId, destination]);
+  const owner = useCockpitScope(open, target, () => setOpen(false), destination);
   // The picker closes before the central leave modal. Its detached Switch button
   // cannot restore focus when consent is cancelled or the accepted preflight fails.
   useEffect(() => {
@@ -83,17 +81,6 @@ export function ScopeSwitcher({
     return () => window.cancelAnimationFrame(frame);
   });
   // NV-03: the last known Citadel name stays during a refetch; "Reading" only before the first answer.
-  const citadelView = recordView(activeCitadel);
-  const record = citadelView.record?.record;
-  const citadelName =
-    citadelView.phase === "loading"
-      ? "Reading Citadel..."
-      : citadelView.record?.citadelId === activeCitadelId &&
-          hasCitadelRecord(record) &&
-          record.citadelId === activeCitadelId &&
-          record.lifecycleStatus === "active"
-        ? record.name
-        : "Citadel unavailable";
   return (
     <>
       {!hideTrigger ? (

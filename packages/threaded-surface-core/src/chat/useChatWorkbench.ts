@@ -1,5 +1,7 @@
-import { acknowledgeWorkbenchDraft, discardWorkbenchSessionDraft, getWorkbenchDraft, listWorkbenchDrafts, rebaseWorkbenchDraft, updateWorkbenchDraft, useWorkbenchDraftVersion } from "./workbench-session-drafts.js";
-import { useCallback, useEffect, useRef, useState } from "react";
+import * as draftOwner from "./workbench-session-drafts.js";
+import { useWorkbenchDraftVersion } from "./workbench-session-drafts.js";
+import { getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { useMemo, useCallback, useEffect, useRef, useState } from "react";
 import type {
   ChatSessionWorkbenchDiffResponse,
   ChatSessionWorkbenchFileDiffResponse,
@@ -154,6 +156,23 @@ function resolveWorkbenchFileCandidates(input: {
 
 export function useChatWorkbench(input: { sessionId: string | null; enabled: boolean }) {
   const { sessionId, enabled } = input;
+  const callerScope = getGatewayCallerScope();
+  const draftHelpers = useMemo(() => {
+    const scoped = (id: string) => callerScope ? JSON.stringify([callerScope, id]) : id;
+    return {
+      getWorkbenchDraft: (id: string, path: string) => draftOwner.getWorkbenchDraft(scoped(id), path),
+      listWorkbenchDrafts: (id: string | null) => draftOwner.listWorkbenchDrafts(id ? scoped(id) : null),
+      updateWorkbenchDraft: (id: string, file: ChatSessionWorkbenchFileResponse, content: string) => draftOwner.updateWorkbenchDraft(scoped(id), file, content),
+      discardWorkbenchSessionDraft: (id: string, path: string) => draftOwner.discardWorkbenchSessionDraft(scoped(id), path),
+      acknowledgeWorkbenchDraft: (id: string, file: ChatSessionWorkbenchFileResponse, content: string) => draftOwner.acknowledgeWorkbenchDraft(scoped(id), file, content),
+      rebaseWorkbenchDraft: (id: string, file: ChatSessionWorkbenchFileResponse) => draftOwner.rebaseWorkbenchDraft(scoped(id), file),
+    };
+  }, [callerScope]);
+  const { getWorkbenchDraft, listWorkbenchDrafts } = draftHelpers;
+  // Callbacks read the render-current caller-scoped helpers through a synced ref, so a caller-scope
+  // change never re-keys refresh/reset effects yet drafts are never written under a stale caller.
+  const draftHelpersRef = useRef(draftHelpers);
+  draftHelpersRef.current = draftHelpers;
   const [state, setState] = useState<ChatSessionWorkbenchRecord | null>(null);
   const [tree, setTree] = useState<ChatSessionWorkbenchTreeResponse | null>(null);
   const [selectedFile, setSelectedFile] = useState<ChatSessionWorkbenchFileResponse | null>(null);
@@ -240,7 +259,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
       setSelectedFile(nextFile);
       setSelectedFileDiff(nextFileDiff);
       setState(nextFile.state);
-      const retained = sessionId ? getWorkbenchDraft(sessionId, nextFile.path) : undefined;
+      const retained = sessionId ? draftHelpersRef.current.getWorkbenchDraft(sessionId, nextFile.path) : undefined;
       const nextContent = retained?.content ?? nextFile.content;
       draftContentRef.current = nextContent;
       setDraftContent(nextContent);
@@ -291,7 +310,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
         return true;
       } catch (cause) {
         if (isCurrentSession(requestSessionId)) {
-          const retained = getWorkbenchDraft(requestSessionId, relativePath);
+          const retained = draftHelpersRef.current.getWorkbenchDraft(requestSessionId, relativePath);
           if (retained) { selectedFileRef.current = retained.base; setSelectedFile(retained.base); setSelectedFileDiff(null); draftContentRef.current = retained.content; setDraftContent(retained.content); }
           setError(retained ? "Current file unavailable. This is your retained draft; saving requires a current file read." : describeWorkbenchActionError(cause, "Unable to load workbench file."));
         }
@@ -394,7 +413,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
   const saveFile = useCallback(async () => {
     if (!sessionId || !selectedFileRef.current || savingRef.current) return false;
     const requestSessionId = sessionId, activeFile = selectedFileRef.current;
-    const draft = getWorkbenchDraft(sessionId, activeFile.path);
+    const draft = draftHelpersRef.current.getWorkbenchDraft(sessionId, activeFile.path);
     if (!draft) return true;
     const submitted = draft.content;
     savingRef.current = true; setBusy(true); setSaving(true);
@@ -408,12 +427,12 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
       }
       const nextFile = await saveChatSessionWorkbenchFile(requestSessionId, { path: activeFile.path, content: submitted, expectedRevision: draft.base.revision });
       if (nextFile.path !== activeFile.path || nextFile.state.sessionId !== requestSessionId || nextFile.content !== submitted) throw new Error("The Gateway did not confirm the submitted file contents. Your draft is preserved.");
-      const clean = acknowledgeWorkbenchDraft(requestSessionId, nextFile, submitted);
+      const clean = draftHelpersRef.current.acknowledgeWorkbenchDraft(requestSessionId, nextFile, submitted);
       if (isCurrentSession(requestSessionId)) fileReadRef.current += 1;
       if (!isCurrentSession(requestSessionId)) return clean;
       if (selectedFileRef.current?.path === activeFile.path) {
         selectedFileRef.current = nextFile; setSelectedFile(nextFile);
-        const nextContent = getWorkbenchDraft(requestSessionId, activeFile.path)?.content ?? nextFile.content;
+        const nextContent = draftHelpersRef.current.getWorkbenchDraft(requestSessionId, activeFile.path)?.content ?? nextFile.content;
         draftContentRef.current = nextContent; setDraftContent(nextContent);
       }
       setError(null);
@@ -573,7 +592,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
 
   const discardDraft = useCallback(() => {
     const file = selectedFileRef.current;
-    if (sessionId && file) discardWorkbenchSessionDraft(sessionId, file.path);
+    if (sessionId && file) draftHelpersRef.current.discardWorkbenchSessionDraft(sessionId, file.path);
     draftContentRef.current = file?.content ?? "";
     setDraftContent(draftContentRef.current);
     setError(null);
@@ -582,14 +601,14 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
   const updateDraft = useCallback((content: string) => {
     const file = selectedFileRef.current;
     if (!sessionId || !file || !isCurrentSession(sessionId)) return;
-    updateWorkbenchDraft(sessionId, file, content);
-    draftContentRef.current = content; dirtyDraftRef.current = Boolean(getWorkbenchDraft(sessionId, file.path));
+    draftHelpersRef.current.updateWorkbenchDraft(sessionId, file, content);
+    draftContentRef.current = content; dirtyDraftRef.current = Boolean(draftHelpersRef.current.getWorkbenchDraft(sessionId, file.path));
     setDraftContent(content);
   }, [isCurrentSession, sessionId]);
 
   const reviewCurrentFile = useCallback(() => {
     const file = selectedFileRef.current;
-    if (sessionId && file) rebaseWorkbenchDraft(sessionId, file);
+    if (sessionId && file) draftHelpersRef.current.rebaseWorkbenchDraft(sessionId, file);
     setError(null);
   }, [sessionId]);
 

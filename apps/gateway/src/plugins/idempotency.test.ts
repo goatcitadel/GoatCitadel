@@ -57,6 +57,13 @@ class FakeMutationIdempotencyStore {
     this.updateStatus(input, "failed");
   }
 
+  public get(input: { method: string; routePath: string; idempotencyKey: string; actorScope?: string }) {
+    const row = this.rows.get(this.toKey(input));
+    return row
+      ? { ...input, actorScope: input.actorScope ?? "", payloadHash: row.payloadHash, status: row.status, claimToken: "fake-claim-token", createdAt: "2026-10-08T00:00:00.000Z", updatedAt: "2026-10-08T00:00:01.000Z" }
+      : undefined;
+  }
+
   public getStatus(input: {
     method: string;
     routePath: string;
@@ -90,12 +97,14 @@ class FakeMutationIdempotencyStore {
 
 async function buildApp(
   handler: (app: FastifyInstance) => void,
+  options: { store?: FakeMutationIdempotencyStore; actorId?: string } = {},
 ): Promise<{ app: FastifyInstance; store: FakeMutationIdempotencyStore }> {
-  const store = new FakeMutationIdempotencyStore();
+  const store = options.store ?? new FakeMutationIdempotencyStore();
+  const actorId = options.actorId ?? "operator:test";
   const app = Fastify();
-  app.decorateRequest("authActorId", "operator:test");
+  app.decorateRequest("authActorId", actorId);
   app.addHook("onRequest", async (request) => {
-    request.authActorId = "operator:test";
+    request.authActorId = actorId;
   });
   await app.register(idempotencyHeaderPlugin, { mutationStore: store });
   handler(app);
@@ -104,6 +113,101 @@ async function buildApp(
 
 afterEach(() => {
   // no-op placeholder so future per-test cleanup is centralized
+});
+
+describe("mutation attempt read", () => {
+  const route = "/api/v1/example/attempt";
+  const read = (app: FastifyInstance, key: string, query = `method=POST&route=${encodeURIComponent(route)}`) =>
+    app.inject({ method: "GET", url: `/api/v1/mutation-attempts/${encodeURIComponent(key)}?${query}` });
+
+  it("reports the caller's own recorded attempt outcome without its fingerprint or claim token", async () => {
+    const built = await buildApp((fastify) => {
+      fastify.post(route, async (request, reply) =>
+        (request.body as { fail?: boolean }).fail ? reply.code(422).send({ error: "invalid" }) : { ok: true });
+    });
+    try {
+      await built.app.inject({ method: "POST", url: route, headers: { "Idempotency-Key": "attempt-done" }, payload: {} });
+      await built.app.inject({ method: "POST", url: route, headers: { "Idempotency-Key": "attempt-failed" }, payload: { fail: true } });
+      const done = await read(built.app, "attempt-done");
+      expect(done.statusCode).toBe(200);
+      expect(done.headers["cache-control"]).toBe("no-store");
+      expect(done.json()).toEqual({ attempt: { status: "completed", claimExpired: false, updatedAt: "2026-10-08T00:00:01.000Z" } });
+      expect(done.body).not.toMatch(/payloadHash|claimToken|fake-claim-token/u);
+      expect((await read(built.app, "attempt-failed")).json().attempt.status).toBe("failed");
+      expect((await read(built.app, "never-sent")).json()).toEqual({ attempt: { status: "absent" } });
+    } finally {
+      await built.app.close();
+    }
+  });
+
+  it("reports an attempt that is still running as pending", async () => {
+    let release!: () => void;
+    const built = await buildApp((fastify) => {
+      fastify.post(route, async () => {
+        await new Promise<void>((resolve) => { release = resolve; });
+        return { ok: true };
+      });
+    });
+    try {
+      const running = built.app.inject({ method: "POST", url: route, headers: { "Idempotency-Key": "attempt-running" }, payload: {} });
+      await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+      expect((await read(built.app, "attempt-running")).json().attempt.status).toBe("pending");
+      release();
+      await running;
+      expect((await read(built.app, "attempt-running")).json().attempt.status).toBe("completed");
+    } finally {
+      await built.app.close();
+    }
+  });
+
+  it("never reveals another caller's attempt", async () => {
+    const store = new FakeMutationIdempotencyStore();
+    const owner = await buildApp((fastify) => { fastify.post(route, async () => ({ ok: true })); }, { store, actorId: "operator:one" });
+    const other = await buildApp((fastify) => { fastify.post(route, async () => ({ ok: true })); }, { store, actorId: "operator:two" });
+    try {
+      await owner.app.inject({ method: "POST", url: route, headers: { "Idempotency-Key": "shared-key" }, payload: {} });
+      expect((await read(owner.app, "shared-key")).json().attempt.status).toBe("completed");
+      expect((await read(other.app, "shared-key")).json()).toEqual({ attempt: { status: "absent" } });
+    } finally {
+      await owner.app.close();
+      await other.app.close();
+    }
+  });
+
+  it.each([
+    ["a read method", "method=GET&route=%2Fapi%2Fv1%2Fexample%2Fattempt"],
+    ["a route outside the API", "method=POST&route=%2Fhealthz"],
+    ["the realtime events route", "method=POST&route=%2Fapi%2Fv1%2Fgateway%2Fevents"],
+    ["a missing route", "method=POST"],
+    ["a concrete URL instead of the route pattern", "method=POST&route=%2Fapi%2Fv1%2Fsecrets%2Fproviders%2Fopenai"],
+    ["an unregistered route pattern", "method=POST&route=%2Fapi%2Fv1%2Fnot-registered%2F%3Aid"],
+    ["a registered pattern under another method", "method=DELETE&route=%2Fapi%2Fv1%2Fsecrets%2Fproviders%2F%3AproviderId"],
+  ])("refuses %s rather than answering absent", async (_label, query) => {
+    const built = await buildApp((fastify) => {
+      fastify.post("/api/v1/secrets/providers/:providerId", async () => ({ ok: true }));
+    });
+    try {
+      const response = await read(built.app, "any-key", query);
+      expect(response.statusCode).toBe(400);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.body).not.toContain("absent");
+    } finally {
+      await built.app.close();
+    }
+  });
+
+  it("answers for the registered route pattern of a parameterised route", async () => {
+    const built = await buildApp((fastify) => {
+      fastify.post("/api/v1/secrets/providers/:providerId", async () => ({ ok: true }));
+    });
+    try {
+      await built.app.inject({ method: "POST", url: "/api/v1/secrets/providers/openai", headers: { "Idempotency-Key": "pattern-key" }, payload: {} });
+      const response = await read(built.app, "pattern-key", "method=POST&route=%2Fapi%2Fv1%2Fsecrets%2Fproviders%2F%3AproviderId");
+      expect(response.json().attempt.status).toBe("completed");
+    } finally {
+      await built.app.close();
+    }
+  });
 });
 
 describe("idempotencyHeaderPlugin", () => {
@@ -370,6 +474,143 @@ describe("idempotencyHeaderPlugin", () => {
           .digest("hex"),
       );
       expect(JSON.stringify(claim.mock.calls)).not.toContain("gc-canary-secret");
+    } finally {
+      await built.app.close();
+    }
+  });
+
+  it.each([
+    ["POST", "/api/v1/secrets/providers/:providerId", "/api/v1/secrets/providers/provider-one", { apiKey: "gc-canary-provider-key", expectedRevision: 3 }],
+    ["DELETE", "/api/v1/secrets/providers/:providerId", "/api/v1/secrets/providers/provider-one", { expectedRevision: 3, note: "gc-canary-delete" }],
+    ["PATCH", "/api/v1/auth/settings", "/api/v1/auth/settings", { mode: "basic", basicPassword: "gc-canary-basic-password", token: "gc-canary-token", expectedRevision: "r1" }],
+  ] as const)("never durably fingerprints the credential body of %s %s", async (method, route, url, payload) => {
+    let calls = 0;
+    const built = await buildApp((fastify) => {
+      fastify.route({ method, url: route, handler: async () => { calls += 1; return { ok: true }; } });
+    });
+    const claim = vi.spyOn(built.store, "claim");
+    try {
+      const first = await built.app.inject({ method, url, headers: { "Idempotency-Key": "credential-attempt-1" }, payload });
+      const second = await built.app.inject({ method, url, headers: { "Idempotency-Key": "credential-attempt-2" },
+        payload: Object.fromEntries(Object.entries(payload).map(([key, value]) => [key, typeof value === "string" ? `${value}-changed` : value])) });
+      expect(first.statusCode).toBe(200);
+      expect(second.statusCode).toBe(200);
+      expect(calls).toBe(2);
+      const [firstHash, secondHash] = claim.mock.calls.map(([input]) => input.payloadHash);
+      expect(firstHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(secondHash).toBe(firstHash);
+      expect(firstHash).not.toBe(createHash("sha256").update(JSON.stringify(payload)).digest("hex"));
+      expect(JSON.stringify(claim.mock.calls)).not.toContain("gc-canary");
+    } finally {
+      await built.app.close();
+    }
+  });
+
+  it.each([
+    ["PATCH", "/api/v1/settings", { llm: { upsertProvider: { providerId: "p", apiKey: "gc-canary-settings-key" } }, auth: { basicPassword: "gc-canary-settings-pass" }, expectedRevision: "r1" }],
+    ["POST", "/api/v1/onboarding/bootstrap", { auth: { token: "gc-canary-onboarding-token" }, upsertProvider: { apiKey: "gc-canary-onboarding-key", headers: { Authorization: "gc-canary-header" } } }],
+    ["POST", "/api/v1/change-plans/:planId/provider-secret", { apiKey: "gc-canary-plan-key", expectedRevision: 2 }],
+    ["POST", "/api/v1/change-plans/:planId/channel-secrets", { values: { botToken: "gc-canary-bot" }, expectedRevision: 2 }],
+    ["POST", "/api/v1/workspaces/:workspaceId/hooks", { name: "hook", secret: "gc-canary-webhook-secret" }],
+    ["POST", "/api/v1/mesh/join", { token: "gc-canary-join-token", nodeName: "node" }],
+  ] as const)("redacts secret-named fields of %s %s before fingerprinting, keeping non-secret drift detection", async (method, route, payload) => {
+    const built = await buildApp((fastify) => {
+      fastify.route({ method, url: route, handler: async () => ({ ok: true }) });
+    });
+    const claim = vi.spyOn(built.store, "claim");
+    const url = route.replace(":planId", "plan-1").replace(":workspaceId", "ws-1");
+    const swapSecrets = (value: unknown): unknown =>
+      typeof value === "string" ? (value.startsWith("gc-canary") ? `${value}-other` : value)
+        : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, swapSecrets(item)])) : value;
+    try {
+      await built.app.inject({ method, url, headers: { "Idempotency-Key": "secret-field-1" }, payload });
+      await built.app.inject({ method, url, headers: { "Idempotency-Key": "secret-field-2" }, payload: swapSecrets(payload) as object });
+      await built.app.inject({ method, url, headers: { "Idempotency-Key": "secret-field-3" }, payload: { ...payload, nonSecretMarker: "changed" } });
+      const [first, swapped, drifted] = claim.mock.calls.map(([input]) => input.payloadHash);
+      expect(swapped).toBe(first);
+      expect(drifted).not.toBe(first);
+      expect(JSON.stringify(claim.mock.calls)).not.toContain("gc-canary");
+    } finally {
+      await built.app.close();
+    }
+  });
+
+  it.each([
+    ["more secret-named fields", { pwd: "gc-canary-a", otpCode: 1, pin: "gc-canary-b", signingKey: "gc-canary-c", accessKey: "gc-canary-d", dsn: "gc-canary-e", connectionString: "gc-canary-f", jwt: "gc-canary-g", rootPath: "gc-canary-h", certificate: "gc-canary-i" }],
+    ["URL userinfo in a non-secret field", { endpoint: "https://user:gc-canary-userinfo@example.invalid/path" }],
+    ["token-shaped values", { note: "sk-gccanary0000000000000000", other: "ghp_gccanary000000000000000000", slack: "xoxb-gccanary-000", aws: "AKIAGCCANARY00000000", jwt2: "eyJhbGciOiJIUzI1NiJ9.gccanary.signature" }],
+    ["flag-style secret arguments", { args: ["--token", "gc-canary-arg", "--password=gc-canary-eq", "--verbose"] }],
+    ["a deep secret beyond the depth cap", { deep: Array.from({ length: 40 }).reduce<unknown>((inner) => ({ inner }), { note: "gc-canary-deep" }) }],
+  ] as const)("never fingerprints %s", async (_label, payload) => {
+    const built = await buildApp((fastify) => {
+      fastify.post("/api/v1/example/unlisted", async () => ({ ok: true }));
+    });
+    const claim = vi.spyOn(built.store, "claim");
+    try {
+      await built.app.inject({ method: "POST", url: "/api/v1/example/unlisted", headers: { "Idempotency-Key": "scrub-1" }, payload });
+      const serialized = JSON.stringify(claim.mock.calls);
+      expect(serialized).not.toContain("gc-canary");
+      expect(serialized).not.toContain("gccanary");
+      const swapped = JSON.parse(JSON.stringify(payload).replaceAll("gc-canary", "gc-canary-x").replaceAll("gccanary", "gccanaryx"));
+      await built.app.inject({ method: "POST", url: "/api/v1/example/unlisted", headers: { "Idempotency-Key": "scrub-2" }, payload: swapped });
+      expect(claim.mock.calls[1]![0].payloadHash).toBe(claim.mock.calls[0]![0].payloadHash);
+    } finally {
+      await built.app.close();
+    }
+  });
+
+  it("redacts a flag value that contains a newline", async () => {
+    const built = await buildApp((fastify) => {
+      fastify.post("/api/v1/example/newline", async () => ({ ok: true }));
+    });
+    const claim = vi.spyOn(built.store, "claim");
+    try {
+      await built.app.inject({ method: "POST", url: "/api/v1/example/newline", headers: { "Idempotency-Key": "newline-1" }, payload: { args: ["--token=gc-canary-a\nmore"] } });
+      await built.app.inject({ method: "POST", url: "/api/v1/example/newline", headers: { "Idempotency-Key": "newline-2" }, payload: { args: ["--token=gc-canary-b\nother"] } });
+      expect(claim.mock.calls[1]![0].payloadHash).toBe(claim.mock.calls[0]![0].payloadHash);
+    } finally {
+      await built.app.close();
+    }
+  });
+
+  it("redacts a long inline flag value", async () => {
+    const built = await buildApp((fastify) => {
+      fastify.post("/api/v1/example/long-flag", async () => ({ ok: true }));
+    });
+    const claim = vi.spyOn(built.store, "claim");
+    try {
+      await built.app.inject({ method: "POST", url: "/api/v1/example/long-flag", headers: { "Idempotency-Key": "long-flag-1" }, payload: { args: [`--token=${"a".repeat(400)}`] } });
+      await built.app.inject({ method: "POST", url: "/api/v1/example/long-flag", headers: { "Idempotency-Key": "long-flag-2" }, payload: { args: [`--token=${"b".repeat(400)}`] } });
+      expect(claim.mock.calls[1]![0].payloadHash).toBe(claim.mock.calls[0]![0].payloadHash);
+    } finally {
+      await built.app.close();
+    }
+  });
+
+  it("fingerprints adversarial flag-like strings in linear time", async () => {
+    const built = await buildApp((fastify) => {
+      fastify.post("/api/v1/example/adversarial", { bodyLimit: 2 * 1024 * 1024 }, async () => ({ ok: true }));
+    });
+    try {
+      const hostile = `--${"key".repeat(60_000)}!`;
+      const started = performance.now();
+      const response = await built.app.inject({ method: "POST", url: "/api/v1/example/adversarial", headers: { "Idempotency-Key": "adversarial-1" }, payload: { args: [hostile, hostile] } });
+      expect(response.statusCode).toBe(200);
+      expect(performance.now() - started).toBeLessThan(2_000);
+    } finally {
+      await built.app.close();
+    }
+  });
+
+  it("does not fingerprint a primitive JSON body", async () => {
+    const built = await buildApp((fastify) => {
+      fastify.post("/api/v1/example/primitive", async () => ({ ok: true }));
+    });
+    const claim = vi.spyOn(built.store, "claim");
+    try {
+      await built.app.inject({ method: "POST", url: "/api/v1/example/primitive", headers: { "Idempotency-Key": "primitive-1", "content-type": "application/json" }, payload: JSON.stringify("gc-canary-primitive") });
+      await built.app.inject({ method: "POST", url: "/api/v1/example/primitive", headers: { "Idempotency-Key": "primitive-2", "content-type": "application/json" }, payload: JSON.stringify("gc-canary-primitive-other") });
+      expect(claim.mock.calls[1]![0].payloadHash).toBe(claim.mock.calls[0]![0].payloadHash);
     } finally {
       await built.app.close();
     }

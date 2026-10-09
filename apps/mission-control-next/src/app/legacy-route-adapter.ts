@@ -107,7 +107,7 @@ export function adaptLegacyUrl(input: string | URL): AppRoute | null {
 export function resolveRouteFromLocation(input: string | URL): AppRoute {
   const url = typeof input === "string" ? new URL(input, "http://goatcitadel.local") : input;
   const legacy = adaptLegacyUrl(url);
-  return legacy ?? parseAppRoute(url);
+  return legacy ?? adaptDirectCompatibilityUrl(url) ?? parseAppRoute(url);
 }
 
 export function coerceLegacyHrefToNext(input: string | URL): string | null {
@@ -125,6 +125,10 @@ export function coerceLegacyHrefToNext(input: string | URL): string | null {
  */
 export function coerceCompatibilityHrefToNext(input: string | URL): string | null {
   const url = typeof input === "string" ? new URL(input, "http://goatcitadel.local") : input;
+  // Native notification URLs must also work when the operator explicitly retains Classic.
+  if (url.pathname.replace(/\/+$/u, "") === "/inbox") {
+    return `/ops/approvals${url.search}${url.hash}`;
+  }
   const route = adaptLegacyUrl(url) ?? adaptDirectCompatibilityUrl(url);
   return route ? `${buildAppHref(route)}${url.hash}` : null;
 }
@@ -132,6 +136,11 @@ export function coerceCompatibilityHrefToNext(input: string | URL): string | nul
 function adaptDirectCompatibilityUrl(url: URL): AppRoute | null {
   const path = url.pathname.length > 1 ? url.pathname.replace(/\/+$/u, "") : url.pathname;
   switch (path.toLowerCase()) {
+    case "/inbox": {
+      const classic = new URL(url);
+      classic.pathname = "/ops/approvals";
+      return parseAppRoute(classic);
+    }
     case "/cowork":
     case "/code":
     case "/settings/safety":

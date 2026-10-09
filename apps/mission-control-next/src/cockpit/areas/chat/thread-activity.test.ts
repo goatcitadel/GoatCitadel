@@ -10,15 +10,15 @@ describe("canonical visible thread activity", () => {
       latestTurn: { turnId: "latest", status: "completed", startedAt: "2026-10-01T00:00:00Z" },
       durableRuns: [{ runId: "old", status: "failed", workerHealth: "released", recoveryState: "none" }],
     });
-    expect(projectThreadActivity(record, "w", "s").label).toBe("Last turn completed");
+    expect(projectThreadActivity(record, "w", "s").label).toBe("Last response completed");
     if (record.work.availability !== "available") throw new Error("Fixture work required");
     record.work.value.latestTurn!.status = "failed";
-    expect(projectThreadActivity(record, "w", "s").label).toBe("Last turn failed");
+    expect(projectThreadActivity(record, "w", "s").label).toBe("Last response failed");
     record.work.value.latestTurn = undefined;
     expect(projectThreadActivity(record, "w", "s").label).toBe("Status unavailable");
     expect(projectThreadActivity(statusRecord(), "foreign", "s").label).toBe("Status unavailable");
     expect(projectThreadActivity(statusRecord(), "w", "foreign").label).toBe("Status unavailable");
-    expect(projectThreadActivity(statusRecord(), "w", "s").label).toBe("No recorded turns");
+    expect(projectThreadActivity(statusRecord(), "w", "s").label).toBe("No messages yet");
   });
   it("uses explicit active counts and rejects malformed counts", () => {
     const record = statusRecord();
@@ -36,7 +36,7 @@ describe("canonical visible thread activity", () => {
     const observedAt = "2026-10-05T10:00:00Z";
     expect(projectSessionActivity(session())).toEqual({ label: "Status unavailable", tone: "neutral" });
     expect(projectSessionActivity(session({ observedAt, latestTurn: null, turnCounts: counts })).label).toBe(
-      "No recorded turns",
+      "No messages yet",
     );
     expect(
       projectSessionActivity(session({ observedAt, latestTurn: null, turnCounts: { ...counts, running: 1 } })),
@@ -48,7 +48,7 @@ describe("canonical visible thread activity", () => {
     ).toBe("Waiting on you");
     const latestTurn = { turnId: "t", status: "failed" as const, startedAt: "2026-10-05T09:59:00Z" };
     expect(projectSessionActivity(session({ observedAt, latestTurn, turnCounts: counts })).label).toBe(
-      "Last turn failed",
+      "Last response failed",
     );
     expect(projectSessionActivity(session({ observedAt: "not a time", latestTurn, turnCounts: counts })).label).toBe(
       "Status unavailable",

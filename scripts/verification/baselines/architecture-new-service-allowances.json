@@ -752,9 +752,9 @@
     {
       "planStep": "C2",
       "path": "apps/gateway/src/services/workflow-skill-capture-service.ts",
-      "maxDependencyMemberAccesses": 23,
+      "maxDependencyMemberAccesses": 24,
       "maxHostCallbacks": 0,
-      "reason": "Explicit capture owns frozen workflow evidence and immutable inactive skill proposals. Storage access is narrowed to nine required repositories/operations; activation and memory lifecycle owners are not exposed through this port.",
+      "reason": "Explicit capture owns frozen workflow evidence and immutable inactive skill proposals. Storage access is narrowed to nine required repositories/operations; activation and memory lifecycle owners are not exposed through this port. Operator-delegated clarification 2026-10-08 raises the reviewed cap 23->24 for one real new read: passing storage to the durable author-binding owner.",
       "evidence": ".tmp/architecture-capture-review-tests.log: capture cases cover settled effects, actor/source/review hashes, transaction drift, redaction, stale revisions, activation/reuse/revocation and no memory writes; typecheck and lint pass."
     },
     {
@@ -1744,9 +1744,9 @@
     {
       "planStep": "mission-control-cockpit:phase-3",
       "path": "apps/gateway/src/services/inbox-projection-service.ts",
-      "maxDependencyMemberAccesses": 24,
+      "maxDependencyMemberAccesses": 26,
       "maxHostCallbacks": 0,
-      "reason": "Reviewed new Phase 3 Inbox owner for the authorized Mission Control cockpit roadmap. Aggregates bounded workspace-scoped reads through eleven narrowed repository ports and existing memory, improvement, durable, and runtime-health owners. Pure projections are separate; this owner exposes no mutation or activation port. Missing, partial, and conflicting owner evidence remains explicit. Original baseline, inventory, and existing-owner caps are unchanged.",
+      "reason": "Reviewed new Phase 3 Inbox owner for the authorized Mission Control cockpit roadmap. Aggregates bounded workspace-scoped reads through eleven narrowed repository ports and existing memory, improvement, durable, and runtime-health owners. Pure projections are separate; this owner exposes no mutation or activation port. Missing, partial, and conflicting owner evidence remains explicit. Original baseline, inventory, and existing-owner caps are unchanged. Operator-delegated clarification 2026-10-08 raises the reviewed cap 24->26 for two real new reads: the read-status owner's systemSettings port and the listBackups manifest key that stops a stale backup-trust cache.",
       "evidence": "2026-09-30 focused inbox-projection-service, inbox route, and chat-workbench-service suites pass 63 tests, including foreign workspace exclusion, contradictory linkage, scoped pagination, owner failures, bounded redacted projections, and non-mutating previews. Architecture artifact 2026-09-30T11-35-51-528Z-architecture-metrics-fb85fd44 records raw Inbox dependency accesses 24 and host callbacks 0 before this registration. Existing-owner debt remains separately failing."
     },
     {
@@ -1788,6 +1788,54 @@
       "maxHostCallbacks": 0,
       "reason": "Independently reviewed inherited Settings setup owner introduced in 26cedae10ab242ed71a45f0da8f8ba22d2bd8d94, absent from the pinned baseline inventory. Composes canonical settings, runtime, catalog, selection and Change Plan projections plus explicitly requested normal scoped Chat diagnostics. Preserves manual tool posture and stale-route checks; no new provider execution authority. Original baseline, inventory and caps remain unchanged.",
       "evidence": "docs/MISSION_CONTROL_COCKPIT_ARCHITECTURE_OWNER_REVIEW.md and docs/LLAMA_CPP_SETUP.md record origin and responsibility. Setup unit tests cover completed-plan projection, hidden scoped Chat with web/memory/delegation off, completion failure, changed-settings staleness and missing-route errors. Part of 142 passing focused tests with 4 existing skips on 2026-09-30; raw dependencies11/callbacks0. No host model was started or called."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/inbox-read-status-service.ts",
+      "maxDependencyMemberAccesses": 3,
+      "maxHostCallbacks": 0,
+      "reason": "Reviewed new per-operator Inbox read-status owner (cockpit remediation P4). Reads and compare-and-sets only the narrowed systemSettings get/compareAndSet port; the Inbox projection owner constructs it and keeps no read-state logic. Original baseline, inventory and existing-owner caps are unchanged.",
+      "evidence": "2026-10-08: inbox-read-status-service, inbox-projection-service and inbox route suites pass within 11 suites / 133 tests; repository counter measures 3 dependency accesses and 0 host callbacks."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/knowledge-approval-result.ts",
+      "maxDependencyMemberAccesses": 6,
+      "maxHostCallbacks": 0,
+      "reason": "Reviewed new Knowledge approval-result read owner (cockpit remediation P5). Re-derives every external-source snapshot identity from the immutable approval payload and evaluates tool access before returning a redacted result. The route port calls it directly, so KnowledgeFacadeService and the memory composition return to their original limits.",
+      "evidence": "2026-10-08: knowledge-result route and memory-facade-approval suites pass within 15 suites / 213 tests; tool access is still evaluated before any result. Repository counter measures 6 dependency accesses and 0 host callbacks."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/workflow-skill-capture-authority.ts",
+      "maxDependencyMemberAccesses": 3,
+      "maxHostCallbacks": 0,
+      "reason": "Reviewed new workflow-capture author-binding owner (cockpit remediation P5). Binds a profile-free turn to its original admitted durable request through narrowed durableRuns and sessionMutationAdmissions reads; the capture service keeps its fail-closed author check.",
+      "evidence": "2026-10-08: workflow-skill-capture service and integration suites pass within 11 suites / 133 tests; repository counter measures 3 dependency accesses and 0 host callbacks."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/engineering-learning-canonical-source.ts",
+      "maxDependencyMemberAccesses": 2,
+      "maxHostCallbacks": 0,
+      "reason": "Reviewed new Engineering canonical-source verification owner (cockpit remediation P5), moved verbatim out of EngineeringLearningService so that existing owner returns to its original limit. Reads only the readVerifiedSource and resolveProjectId ports.",
+      "evidence": "2026-10-08: engineering-learning service, source and route suites pass (3 suites / 22 tests); repository counter measures 2 dependency accesses and 0 host callbacks."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/engineering-learning-sources.ts",
+      "maxDependencyMemberAccesses": 5,
+      "maxHostCallbacks": 0,
+      "reason": "Reviewed C0 extraction from GatewayService: the Engineering source-root resolver moved verbatim and the verified Code Mode source read, so GatewayService does not grow. Reads three narrowed storage repositories plus root and workspace directories; Code Mode reads stay behind CapabilitySystemService scope checks.",
+      "evidence": "2026-10-08: 5 new engineering-learning-sources tests (verified-evidence selection, fail-closed missing evidence, ready worktree, outside-root refusal, unknown project) plus engineering suites pass; repository counter measures 5 dependency accesses and 0 host callbacks."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/browser-session-request-replay.ts",
+      "maxDependencyMemberAccesses": 3,
+      "maxHostCallbacks": 0,
+      "reason": "Reviewed new browser-session request-ID replay owner (cockpit remediation). Holds the session-created request lookup, the grant event-payload lookup and the immediate-transaction wrapper moved out of BrowserSessionRuntimeService, which returns to its original limit. It makes 3 real gatewaySql reads; the counter scores 0 because the deps type is a Pick alias, so the cap records the 3 reads found by inspection.",
+      "evidence": "2026-10-08: browser-session-runtime-service and browser-sessions route suites pass within 15 suites / 213 tests, including request-ID replay, conflicting replay and rotation replay. Independent review confirmed 3 deps.gatewaySql reads that the counter scores as 0."
     },
     {
       "planStep": "C0",

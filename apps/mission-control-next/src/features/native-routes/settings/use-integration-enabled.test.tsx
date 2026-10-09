@@ -98,6 +98,16 @@ describe("reviewed integration enabled control", () => {
     expect(current.config).toEqual(connection().config);
     expect(current.status).toBe("connected");
   });
+  it("keeps the lock notice for the locked connection after its review is closed", async () => {
+    api.fetchIntegrationConnection.mockImplementation(async () => current);
+    api.updateIntegrationConnection.mockRejectedValue(new Error("lost acknowledgement"));
+    await review();
+    await act(async () => control.confirm());
+    expect(control.notice).toMatch(/outcome is unconfirmed/);
+    act(() => control.cancel());
+    expect(control.review).toBeNull();
+    expect(control.notice).toMatch(/outcome is unconfirmed/);
+  });
   it("cancels a review without an owner mutation", async () => {
     await review();
     await act(async () => control.cancel());
@@ -110,6 +120,42 @@ describe("reviewed integration enabled control", () => {
     await review();
     expect(api.fetchIntegrationConnection).not.toHaveBeenCalled();
     expect(control.review).toBeNull();
+  });
+  it("says so when the directory starts refreshing during confirmation, changes nothing and keeps the review", async () => {
+    await review();
+    const read = deferred<IntegrationConnection>();
+    api.fetchIntegrationConnection.mockReturnValueOnce(read.promise);
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = control.confirm();
+    });
+    available = false;
+    await render();
+    await act(async () => {
+      read.resolve(current);
+      await pending;
+    });
+    expect(api.updateIntegrationConnection).not.toHaveBeenCalled();
+    expect(control.notice).toMatch(/refreshing\. Nothing was changed/);
+    expect(control.review).not.toBeNull();
+  });
+  it("says the list is refreshing, not that the connection changed, when a refresh starts during review", async () => {
+    const read = deferred<IntegrationConnection>();
+    api.fetchIntegrationConnection.mockReturnValueOnce(read.promise);
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = control.requestReview(current);
+    });
+    available = false;
+    await render();
+    await act(async () => {
+      read.resolve(current);
+      await pending;
+    });
+    expect(control.review).toBeNull();
+    expect(control.notice).toMatch(/refreshing\. Nothing was changed/);
+    expect(control.notice).not.toMatch(/connection changed/);
+    expect(reload).not.toHaveBeenCalled();
   });
   it("rejects changed revision or binding after confirmation review", async () => {
     await review();

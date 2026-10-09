@@ -1,7 +1,4 @@
-import type {
-  EventStreamConnectionState,
-  GatewayAccessPreflightResult,
-} from "../api/shell-client";
+import type { EventStreamConnectionState, GatewayAccessPreflightResult } from "../api/shell-client";
 
 export type GatewayAccessCheckingState = {
   status: "checking";
@@ -69,6 +66,16 @@ export function deriveShellGatewayAccessState(
       detail: access.healthDetail,
     };
   }
+
+  if (access.status === "access-blocked")
+    return {
+      status: "access-blocked",
+      label: "Access blocked",
+      tone: "warning",
+      summary: access.message,
+      nextStep: "Use an operator credential or a permitted device surface. No automatic retry is scheduled.",
+      detail: access.healthDetail,
+    };
 
   if (access.status === "unreachable") {
     return {

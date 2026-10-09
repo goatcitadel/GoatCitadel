@@ -75,7 +75,10 @@ export function classicFallbackPath(pathname: string): string {
   const [, segment, detail] = pathname.split("/");
   if (segment === "inbox") return "/ops/approvals";
   if (segment === "work") return "/ops/kanban";
-  if (segment === "system") return detail === "spend" ? "/ops/costs" : "/ops/runtime";
+  if (segment === "system") {
+    if (detail && ["activity", "quality", "diagnostics"].includes(detail)) return `/ops/${detail}`;
+    return detail === "spend" ? "/ops/costs" : "/ops/runtime";
+  }
   if (segment === "settings") {
     const cockpitOnlySettings: Record<string, string> = {
       models: "/settings/onboarding",

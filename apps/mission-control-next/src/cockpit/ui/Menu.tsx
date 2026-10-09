@@ -15,7 +15,7 @@ export function MenuContent({ className, ...props }: ComponentPropsWithoutRef<ty
 
 export function MenuItem({ className, ...props }: ComponentPropsWithoutRef<typeof DropdownMenu.Item>) {
   return <DropdownMenu.Item className={cn(
-    "flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-fg outline-none data-[highlighted]:bg-sunken",
+    "cockpit-menu-item flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-fg outline-none data-[highlighted]:bg-sunken",
     className,
   )} {...props} />;
 }

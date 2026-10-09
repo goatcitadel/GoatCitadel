@@ -12,7 +12,7 @@ import type { CheckDef, RouteKey, RunOptions } from "../runner/types";
 import { detectTarget, type DevVerificationStatus, type TargetInfo } from "../gateway-target/detect-target";
 import type { TargetRequest } from "../gateway-target/resolve-target";
 
-export type GatewayAccessStatus = "ready" | "needs-auth" | "unreachable" | "misconfigured";
+export type GatewayAccessStatus = "ready" | "needs-auth" | "access-blocked" | "unreachable" | "misconfigured";
 
 export interface TestbenchDeps {
   readonly apiBase: () => string;
@@ -100,6 +100,8 @@ function describeBlockedAccess(status: Exclude<GatewayAccessStatus, "ready">, me
         title: "Gateway unreachable",
         detail: `${message} If this is an installed GoatCitadel, open the test bench from the dev server on port 5173: production gateways only accept browser requests from allowlisted origins (by default ports 5173, 4173, and 8787).`,
       };
+    case "access-blocked":
+      return { phase: "blocked", title: "Caller access is blocked", detail: message };
     case "misconfigured":
       return { phase: "blocked", title: "Gateway access is misconfigured", detail: message };
   }

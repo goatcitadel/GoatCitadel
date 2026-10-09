@@ -10,6 +10,7 @@ import { getErrorMessage } from "../SettingsShared";
 import type { ProviderCatalog, ProviderNoticeSetter } from "./provider-section-types";
 import {
   beginProviderMutation,
+  dispatchProviderMutation,
   finishProviderMutation,
   isProviderPrecommitConflict,
   retainProviderMutationUncertainty,
@@ -146,13 +147,15 @@ export function useProviderRouting({
         return false;
       }
       attempted = true;
-      const updated = await patchSettings({
-        expectedRevision: revision,
-        llm: {
-          activeProviderId: normalizedProviderId,
-          activeModel: normalizedModel,
-        },
-      });
+      const updated = await dispatchProviderMutation(() =>
+        patchSettings({
+          expectedRevision: revision,
+          llm: {
+            activeProviderId: normalizedProviderId,
+            activeModel: normalizedModel,
+          },
+        }),
+      );
       const settled = routingChange.receive(
         updated,
         { providerId: normalizedProviderId, model: normalizedModel },

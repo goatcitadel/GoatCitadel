@@ -45,6 +45,12 @@ const SECRET_SENSITIVE_REMOTE_WORKER_CONTROL_ROUTES = new Set([
   "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/revoke",
 ]);
 const SECRET_SENSITIVE_MOBILE_PUSH_ROUTES = new Set(["/api/v1/mobile/current-device/push"]);
+/**
+ * Provider credentials and Gateway auth settings carry raw secrets (API keys, tokens, Basic passwords). Their
+ * bodies must never be fingerprinted durably: an unsalted hash of a low-entropy password is an offline oracle.
+ * A key binds one attempt to its concrete path; the owner's expectedRevision governs explicit retries.
+ */
+const SECRET_SENSITIVE_CREDENTIAL_ROUTES = new Set(["/api/v1/secrets/providers/:providerId", "/api/v1/auth/settings"]);
 const MOBILE_PUSH_REGISTRATION_PATH = "/api/v1/mobile/current-device/push";
 const SECURE_CONFIGURATION_ROUTE =
   "/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/secure-configuration";
@@ -176,7 +182,63 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
     }
     return payload;
   });
+
+  /**
+   * Caller-scoped outcome of one mutation attempt, by the Idempotency-Key the caller chose. It lets a client settle a
+   * lost response from the Gateway's own durable claim instead of guessing: completed = committed, failed = the claim
+   * was released after an error status without a commit mark (commit state unproven: a handler can commit and then
+   * fail, so confirm by the owner's readback), pending = still running (or an expired claim), absent = never recorded
+   * for this caller. It never returns the payload fingerprint or the claim token.
+   *
+   * Client rule: "absent" is not proof that nothing ran (a delayed request can still arrive). Settle a lost response
+   * by re-sending with the SAME key, which the claim makes safe whatever the answer; never mint a new key because of
+   * "absent". A pending claim with claimExpired is unknown, not failed. `route` must be the registered route pattern
+   * (for example /api/v1/secrets/providers/:providerId), never a concrete URL: anything else is refused, so a wrong
+   * route can never read as "absent".
+   */
+  fastify.get("/api/v1/mutation-attempts/:idempotencyKey", ATTEMPT_READ_ROUTE_OPTIONS, async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    // Exactly the key the claim stored: no trimming, so a read can never alias a different stored key.
+    const key = (request.params as { idempotencyKey?: string }).idempotencyKey ?? "";
+    const query = request.query as { method?: unknown; route?: unknown };
+    const method = typeof query.method === "string" ? query.method.toUpperCase() : "";
+    const routePath = typeof query.route === "string" ? query.route : "";
+    if (!key.trim() || key.length > 256 || !MUTATING_HTTP_METHODS.has(method) || !isTrackedAttemptRoute(routePath)) {
+      return reply.code(400).send({ error: "An attempt read needs its key, a mutating method and a tracked API route." });
+    }
+    if (!fastify.hasRoute({ method: method as "POST", url: routePath })) {
+      return reply.code(400).send({ error: "unknown_route: pass the registered route pattern for this method." });
+    }
+    if (!options.mutationStore?.get) {
+      return reply.code(503).send({ error: "Mutation attempts are not recorded by this Gateway." });
+    }
+    const record = await options.mutationStore.get({
+      method,
+      routePath,
+      idempotencyKey: key,
+      actorScope: request.authActorId?.trim() || "",
+    });
+    if (!record) return { attempt: { status: "absent" } };
+    const claimExpired =
+      record.status === "pending" && typeof record.claimExpiresAt === "string"
+        ? Date.parse(record.claimExpiresAt) < Date.now()
+        : false;
+    return { attempt: { status: record.status, claimExpired, updatedAt: record.updatedAt } };
+  });
 });
+
+const ATTEMPT_READ_ROUTE_OPTIONS = { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } };
+
+function isTrackedAttemptRoute(routePath: string): boolean {
+  return (
+    routePath.length <= 512 &&
+    routePath.startsWith("/api/v1/") &&
+    routePath !== GATEWAY_EVENTS_PATH &&
+    !isGenericChannelInboundPath(routePath) &&
+    !isWebhookOrInboundPath(routePath) &&
+    !CANONICAL_IDEMPOTENCY_OWNER_ROUTES.has(routePath)
+  );
+}
 
 /**
  * Marks that the canonical mutation transaction committed. A later transport,
@@ -260,6 +322,66 @@ function hashCanonicalPayload(value: unknown): string {
 }
 
 /**
+ * Default deny for the generic fingerprint: any field whose name suggests a credential is replaced before hashing,
+ * at any depth, so no route can durably fingerprint a secret by omission from the explicit lists above. Non-secret
+ * fields still detect a reused key with a changed request. Over-matching only weakens drift detection.
+ */
+const SECRET_FIELD_NAME = new RegExp(
+  [
+    "api[-_]?key", "token", "password", "passwd", "passphrase", "secret", "credential", "private[-_]?key",
+    "authorization", "cookie", "^values?$", "^headers$", "pwd", "passcode", "otp", "^pin$", "^pat$", "bearer", "jwt",
+    "hmac", "signature", "signing", "access[-_]?key", "session[-_]?key", "encryption[-_]?key", "(?:^|[-_])key$",
+    "pem", "certificate", "^dsn$", "connection[-_]?string", "(?:^|[-_])auth$", "^code$", "root[-_]?path",
+  ].join("|"),
+  "iu",
+);
+const REDACTED_SECRET_FIELD = "[redacted-secret-field]";
+const MAX_REDACTION_DEPTH = 32;
+/** Credentials embedded in otherwise ordinary strings: URL userinfo and well-known token shapes. */
+const URL_USERINFO = /(\/\/)[^/@\s:]+:[^/@\s]+@/gu;
+const TOKEN_SHAPED = /^(?:sk-|ghp_|gho_|ghs_|github_pat_|xox[abprs]-|AKIA|eyJ[\w-]*\.[\w-]+\.)/u;
+/** Flag names are checked in bounded, regex-free steps: nested quantifiers here would be a ReDoS on request bodies. */
+const MAX_FLAG_LENGTH = 256;
+const FLAG_NAME = /^--?[\w-]{1,128}$/u;
+const SECRET_FLAG_WORDS = ["token", "password", "passwd", "secret", "key", "auth", "credential"] as const;
+function readSecretFlag(item: string): { hasInlineValue: boolean } | null {
+  if (!item.startsWith("-")) return null;
+  // Only the flag name is bounded: an inline value of any length after "=" is always redacted.
+  const equals = item.indexOf("=");
+  const name = equals < 0 ? item : item.slice(0, equals);
+  if (name.length > MAX_FLAG_LENGTH || !FLAG_NAME.test(name)) return null;
+  const lower = name.toLowerCase();
+  return SECRET_FLAG_WORDS.some((word) => lower.includes(word)) ? { hasInlineValue: equals >= 0 } : null;
+}
+function scrubString(value: string): string {
+  if (TOKEN_SHAPED.test(value)) return REDACTED_SECRET_FIELD;
+  return value.replace(URL_USERINFO, "$1[redacted-userinfo]@");
+}
+function redactSecretFields(value: unknown, depth = 0): unknown {
+  // Fail closed: anything past the depth cap is not fingerprinted.
+  if (depth > MAX_REDACTION_DEPTH) return REDACTED_SECRET_FIELD;
+  if (typeof value === "string") return depth === 0 ? REDACTED_SECRET_FIELD : scrubString(value);
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) {
+    return value.map((item, index) => {
+      const previous = index > 0 ? value[index - 1] : undefined;
+      if (typeof item === "string") {
+        const flag = readSecretFlag(item);
+        if (flag?.hasInlineValue) return item.slice(0, item.indexOf("=") + 1) + REDACTED_SECRET_FIELD;
+        if (typeof previous === "string" && readSecretFlag(previous)?.hasInlineValue === false) return REDACTED_SECRET_FIELD;
+      }
+      return redactSecretFields(item, depth + 1);
+    });
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+      key,
+      SECRET_FIELD_NAME.test(key) ? REDACTED_SECRET_FIELD : redactSecretFields(item, depth + 1),
+    ]),
+  );
+}
+
+/**
  * The generic idempotency owner durably retains this digest. Secure runtime
  * input routes therefore must not derive it from the request body: even the
  * generic route may receive a malicious extra secret before strict validation.
@@ -285,6 +407,12 @@ function hashMutationPayload(request: FastifyRequest): string {
     // Do not fingerprint values, names, or unvalidated extra fields here.
     return hashCanonicalPayload({
       kind: routePath.startsWith("/api/v1/integrations/") ? "integration_connection_redacted_v1" : "citadel_vault_redacted_v1",
+      path: request.url.split("?", 1)[0] || request.url,
+    });
+  }
+  if (SECRET_SENSITIVE_CREDENTIAL_ROUTES.has(routePath)) {
+    return hashCanonicalPayload({
+      kind: "credential_route_redacted_v1",
       path: request.url.split("?", 1)[0] || request.url,
     });
   }
@@ -322,7 +450,7 @@ function hashMutationPayload(request: FastifyRequest): string {
       enabled,
     });
   }
-  return hashCanonicalPayload((request as { body?: unknown }).body ?? null);
+  return hashCanonicalPayload(redactSecretFields((request as { body?: unknown }).body ?? null));
 }
 
 function stableStringify(value: unknown): string {

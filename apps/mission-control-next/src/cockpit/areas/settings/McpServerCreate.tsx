@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { McpServerRecord } from "@goatcitadel/contracts";
+import { canonicalJsonString, type McpServerRecord, type McpServerTemplateRecord } from "@goatcitadel/contracts";
+import { getGatewayAccessRevision } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { fetchMcpTemplates } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useMcpCreation } from "../../../features/native-routes/settings/use-mcp-creation";
-import { createMcpFormFromTemplate } from "../../../features/native-routes/settings/sections/mcp-editor-drafts";
+import { useMcpTemplateReplacement } from "../../../features/native-routes/settings/use-mcp-template-replacement";
 import type { McpCreateInput } from "../../../features/native-routes/settings/mcp-create-binding";
 import { useDraftLeave } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { Button } from "../../ui/Button";
@@ -12,6 +13,7 @@ import { Dialog } from "../../ui/Dialog";
 import { McpDraftLeave } from "./McpDraftLeave";
 import { McpCreateFields } from "./McpCreateFields";
 import { McpCreateReview } from "./McpCreateReview";
+import { McpOutcomeCheck } from "../../../features/native-routes/settings/McpOutcomeCheck";
 
 export function McpServerCreate({ workspaceId, onClose }: { workspaceId: string; onClose: () => void }) {
   const client = useQueryClient(),
@@ -19,6 +21,7 @@ export function McpServerCreate({ workspaceId, onClose }: { workspaceId: string;
   const [reviewed, setReviewed] = useState<McpCreateInput | null>(null),
     [templateLimit, setTemplateLimit] = useState(12);
   const [created, setCreated] = useState<McpServerRecord | null>(null);
+  const openedAccess = useRef(getGatewayAccessRevision()).current;
   const templates = useQuery({ queryKey: ["settings", "mcp-templates"], queryFn: fetchMcpTemplates, retry: false });
   const control = useMcpCreation({
     workspaceId,
@@ -33,12 +36,25 @@ export function McpServerCreate({ workspaceId, onClose }: { workspaceId: string;
   });
   const close = () => leave.request(onClose, [control.draft.key]);
   const templateItems = !templates.isError && Array.isArray(templates.data?.items) ? templates.data.items : [];
+  const replacement = useMcpTemplateReplacement({ workspaceId, draft: control.draft, templates: templateItems,
+    available: !control.mutation.locked && !templates.isFetching && !templates.isError,
+    isTemplateCurrent: (template) => {
+      const state = client.getQueryState<{ items: McpServerTemplateRecord[] }>(["settings", "mcp-templates"]);
+      return state?.status === "success" && state.fetchStatus === "idle"
+        && Boolean(state.data?.items.some(item => canonicalJsonString(item) === canonicalJsonString(template)));
+    },
+  });
   return (
     <>
       <Dialog
         open
         onOpenChange={(open) => {
-          if (!open) close();
+          if (!open) {
+            // Access recovery retains caller-bound input; it cannot open a
+            // leave decision for the now-invalid authorization review.
+            if (openedAccess !== getGatewayAccessRevision()) onClose();
+            else close();
+          }
         }}
         title="Register MCP server"
         description="Review a new installation-wide saved configuration. Runtime connections and tool use remain separate governed actions."
@@ -48,6 +64,7 @@ export function McpServerCreate({ workspaceId, onClose }: { workspaceId: string;
             <p role={control.notice.tone === "error" ? "alert" : "status"}>{control.notice.message}</p>
           ) : null}
           {control.mutation.message ? <p role="status">{control.mutation.message}</p> : null}
+          <McpOutcomeCheck target={{ kind: "create" }} buttonComponent={Button} />
           {created ? (
             <p role="status">
               Saved server ID: <code className="break-all font-mono">{created.serverId}</code>
@@ -55,12 +72,7 @@ export function McpServerCreate({ workspaceId, onClose }: { workspaceId: string;
           ) : null}
           {!reviewed ? (
             <>
-              <McpCreateFields
-                draft={control.draft.value}
-                disabled={control.mutation.locked}
-                onChange={control.draft.setValue}
-              />
-              <details>
+              <details open>
                 <summary>Use an advertised template</summary>
                 {templates.isFetching ? <p role="status">Reading templates…</p> : null}
                 {templates.isError ? (
@@ -74,7 +86,7 @@ export function McpServerCreate({ workspaceId, onClose }: { workspaceId: string;
                       <Button
                         size="sm"
                         disabled={control.mutation.locked || templates.isFetching}
-                        onClick={() => control.draft.setValue(createMcpFormFromTemplate(template))}
+                        onClick={() => replacement.request(template)}
                       >
                         Use {template.label} template
                       </Button>
@@ -91,6 +103,11 @@ export function McpServerCreate({ workspaceId, onClose }: { workspaceId: string;
                   review.
                 </p>
               </details>
+              <McpCreateFields
+                draft={control.draft.value}
+                disabled={control.mutation.locked}
+                onChange={control.draft.setValue}
+              />
               <Button
                 variant="primary"
                 disabled={control.mutation.locked}
@@ -121,6 +138,15 @@ export function McpServerCreate({ workspaceId, onClose }: { workspaceId: string;
             </>
           )}
           <Button onClick={close}>Close registration</Button>
+        </div>
+      </Dialog>
+      <Dialog open={Boolean(replacement.replacement)} onOpenChange={(open) => { if (!open) replacement.cancel(); }}
+        title="Replace MCP registration draft?"
+        description="Replacing discards the current input and copies the advertised template. Keeping the draft preserves every field.">
+        <p className="text-sm text-fg-secondary">Template: {replacement.replacement?.label}</p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button onClick={replacement.cancel}>Keep current draft</Button>
+          <Button variant="primary" onClick={replacement.confirm}>Replace draft with template</Button>
         </div>
       </Dialog>
       <McpDraftLeave {...leave.dialogProps} />

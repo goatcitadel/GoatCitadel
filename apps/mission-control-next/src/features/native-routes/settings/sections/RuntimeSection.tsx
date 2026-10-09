@@ -517,6 +517,15 @@ export function RuntimeSection(props: SettingsSectionProps) {
                       </SettingsButtonRow>
                       {llamaControl.notice ? <p role="status">{llamaControl.notice}</p> : null}
                       {llamaControl.uncertain ? <p role="alert">{llamaControl.uncertain}</p> : null}
+                      {llamaControl.uncertain && llamaControl.checkable ? (
+                        <NativeButton
+                          variant="outline"
+                          disabled={llamaControl.checking}
+                          onClick={() => void llamaControl.checkOutcome()}
+                        >
+                          {llamaControl.checking ? "Checking outcome…" : "Check outcome"}
+                        </NativeButton>
+                      ) : null}
                       {llamaControl.inputError ? <p role="alert">{llamaControl.inputError}</p> : null}
                     </>
                   ) : (

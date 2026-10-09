@@ -102,14 +102,9 @@ describe("Work task detail", () => {
       select.value = "blocked";
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review change");
+    const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Save task status");
     if (!review) throw new Error("Missing review control");
     await act(async () => review.click());
-    const confirm = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent === "Confirm status change",
-    );
-    if (!confirm) throw new Error("Missing confirmation control");
-    await act(async () => confirm.click());
     await vi.waitFor(() => expect(container.textContent).toContain("This task changed"));
     expect(updateTask).not.toHaveBeenCalled();
   });
@@ -129,14 +124,9 @@ describe("Work task detail", () => {
       select.value = "blocked";
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review change");
+    const review = [...container.querySelectorAll("button")].find((button) => button.textContent === "Save task status");
     if (!review) throw new Error("Missing review control");
     await act(async () => review.click());
-    const confirm = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent === "Confirm status change",
-    );
-    if (!confirm) throw new Error("Missing confirmation control");
-    await act(async () => confirm.click());
     await vi.waitFor(() =>
       expect(updateTask).toHaveBeenCalledWith("task-a", {
         workspaceId: "workspace-a",

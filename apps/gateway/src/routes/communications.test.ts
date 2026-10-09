@@ -127,6 +127,132 @@ describe("communications routes", () => {
     expect(gmailSend).not.toHaveBeenCalled();
   });
 
+  it("carries a bounded draft workspace into the send approval linkage", async () => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput) => ({
+      approvalId: "22222222-2222-4222-8222-222222222222",
+      kind: input.kind,
+      riskLevel: input.riskLevel,
+      status: "pending",
+      payload: input.payload,
+      preview: input.preview,
+      linkage: input.linkage,
+      createdAt: "2026-06-05T12:00:00.000Z",
+      explanationStatus: "not_requested",
+    }));
+    app = Fastify();
+    decorateServices(app, {
+      integrations: {
+        listIntegrationConnections: vi.fn(() => [
+          {
+            connectionId: "11111111-1111-4111-8111-111111111111",
+            catalogId: "automation.gmail",
+            kind: "automation",
+            key: "gmail",
+            label: "Bound mail",
+            enabled: true,
+            status: "connected",
+            workspaceId: "workspace-mail",
+            config: { address: "operator@example.test" },
+            createdAt: "2026-06-01T00:00:00.000Z",
+            updatedAt: "2026-06-02T00:00:00.000Z",
+          },
+        ]),
+      },
+      approvals: { createApproval },
+      comms: { commsGmailRead: vi.fn(), commsCalendarList: vi.fn() },
+    });
+    await app.register(communicationsRoutes);
+    const draft = {
+      accountId: "11111111-1111-4111-8111-111111111111",
+      to: ["operator@example.test"],
+      subject: "Status",
+      bodyText: "Ready.",
+    };
+
+    for (const workspaceId of ["", " ", "w".repeat(257)]) {
+      const rejected = await app.inject({
+        method: "POST",
+        url: "/api/v1/mail/drafts",
+        payload: { ...draft, workspaceId },
+      });
+      expect(rejected.statusCode).toBe(400);
+    }
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/mail/drafts",
+      payload: { ...draft, workspaceId: "workspace-mail" },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ workspaceId: "workspace-mail", status: "draft" });
+
+    const sent = await app.inject({
+      method: "POST",
+      url: `/api/v1/mail/drafts/${created.json().draftId}/send`,
+      payload: {},
+    });
+
+    expect(sent.json()).toMatchObject({ status: "approval_required", workspaceId: "workspace-mail" });
+    expect(createApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        linkage: {
+          actionType: "communications.mail.send",
+          connectorId: draft.accountId,
+          workspaceId: "workspace-mail",
+        },
+      }),
+    );
+  });
+
+  it("refuses a workspace draft for a mail account bound to another workspace", async () => {
+    const connection = (connectionId: string, workspaceId?: string) => ({
+      connectionId,
+      catalogId: "automation.gmail",
+      kind: "automation",
+      key: "gmail",
+      label: connectionId,
+      enabled: true,
+      status: "connected",
+      ...(workspaceId ? { workspaceId } : {}),
+      config: { address: `${connectionId}@example.test` },
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-02T00:00:00.000Z",
+    });
+    const createApproval = vi.fn();
+    app = Fastify();
+    decorateServices(app, {
+      integrations: {
+        listIntegrationConnections: vi.fn(() => [
+          connection("acct-foreign", "workspace-other"),
+          connection("acct-unbound"),
+        ]),
+      },
+      approvals: { createApproval },
+      comms: { commsGmailRead: vi.fn(), commsCalendarList: vi.fn() },
+    });
+    await app.register(communicationsRoutes);
+    const draft = {
+      to: ["operator@example.test"],
+      subject: "Status",
+      bodyText: "Ready.",
+      workspaceId: "workspace-mail",
+    };
+
+    const refused = await app.inject({
+      method: "POST",
+      url: "/api/v1/mail/drafts",
+      payload: { ...draft, accountId: "acct-foreign" },
+    });
+    expect(refused.statusCode).toBe(404);
+    expect(refused.body).not.toContain("draftId");
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/api/v1/mail/drafts",
+      payload: { ...draft, accountId: "acct-unbound" },
+    });
+    expect(accepted.statusCode).toBe(201);
+    expect(createApproval).not.toHaveBeenCalled();
+  });
+
   it("uses a disabled uncredentialed fixture only in dev verification without provider calls", async () => {
     const commsGmailRead = vi.fn(async () => ({ messages: [{ id: "real-message" }] }));
     const commsCalendarList = vi.fn(async () => ({ items: [{ id: "real-event" }] }));

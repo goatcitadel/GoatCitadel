@@ -20,6 +20,20 @@ const api = vi.hoisted(() => ({
   navigate: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ ...api, isApiRequestError: () => false }));
+// Each owner write reports the attempt it dispatched, as the real capture would for its Gateway route.
+const attempts = vi.hoisted(() => ({ paths: [] as string[], read: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  captureMutationAttempt: (dispatch: () => Promise<unknown>, onAttempt: (attempt: unknown) => void) => {
+    const path = attempts.paths.shift();
+    if (path) onAttempt({ attemptKey: "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b", method: "PATCH", path });
+    return dispatch();
+  },
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  fetchMutationAttempt: attempts.read,
+}));
 vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: api.navigate }) }));
 const modals = new Map<string, ComponentProps<typeof ConfirmModal>>();
 vi.mock("@goatcitadel/mission-control-shared/components/ConfirmModal", () => ({
@@ -110,6 +124,23 @@ describe("native Gateway authentication", () => {
     expect(JSON.stringify(renderer.toJSON())).toContain("outcome is uncertain");
     expect(api.patchGatewayAuthSettings).toHaveBeenCalledOnce();
   });
+  it("checks a lost save's outcome from the Gateway's record and releases the lock after readback", async () => {
+    attempts.paths.length = 0;
+    attempts.paths.push("/api/v1/auth/settings");
+    api.patchGatewayAuthSettings.mockRejectedValue(new Error("lost response"));
+    await click("Configure access");
+    await act(async () =>
+      renderer.root.findByProps({ type: "checkbox" }).props.onChange({ target: { checked: true } }),
+    );
+    await click("Save access settings");
+    await act(async () => modals.get("Apply Gateway authentication changes?")!.onConfirm());
+    expect(JSON.stringify(renderer.toJSON())).toContain("outcome is uncertain");
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    await click("Check outcome");
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("outcome is uncertain");
+    expect(JSON.stringify(renderer.toJSON())).toContain("recorded this authentication change as processed");
+    expect(api.patchGatewayAuthSettings).toHaveBeenCalledOnce();
+  });
 });
 
 it.each([false, true])(
@@ -165,3 +196,7 @@ it.each([false, true])(
     expect(api.patchGatewayAuthSettings).toHaveBeenCalledOnce();
   },
 );
+
+vi.mock("../../../app/use-current-access", () => ({
+  useCurrentAccess: () => ({ isSuccess: true, data: { actorId: null, actorSource: "none", operatorAccess: true } }),
+}));

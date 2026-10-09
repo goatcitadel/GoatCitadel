@@ -12,6 +12,10 @@ import { __resetIntegrationConnectionMutationsForTests } from "../integration-co
 
 const api = vi.hoisted(() => ({ fetchIntegrationCatalog: vi.fn(), fetchIntegrationConnections: vi.fn(), fetchIntegrationConnection: vi.fn(), fetchSettings: vi.fn(), fetchIntegrationFormSchema: vi.fn(), createIntegrationConnection: vi.fn(), updateIntegrationConnection: vi.fn(), deleteIntegrationConnection: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", async importOriginal => ({ ...await importOriginal<object>(), ...api }));
+// Each owner write reports the attempt it dispatched, as the real capture would for its Gateway route.
+const attempts = vi.hoisted(() => ({ paths: [] as string[], read: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async importOriginal => ({ ...await importOriginal<object>(), captureMutationAttempt: (dispatch: () => Promise<unknown>, onAttempt: (attempt: unknown) => void) => { const path = attempts.paths.shift(); if (path) onAttempt({ attemptKey: "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b", method: "PATCH", path }); return dispatch(); } }));
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async importOriginal => ({ ...await importOriginal<object>(), fetchMutationAttempt: attempts.read }));
 const renderers: ReactTestRenderer[] = [];
 const connection = (revision = "a", patch: Partial<IntegrationConnection> = {}): IntegrationConnection => ({ connectionId: "fixture-connection", catalogId: "productivity.github", kind: "productivity", key: "github", label: "Fixture GitHub", enabled: true, status: "connected", config: { owner: "original-owner", apiKey: "[REDACTED]" }, revision: revision.repeat(64), createdAt: "2026-09-13T00:00:00.000Z", updatedAt: "2026-09-13T00:00:00.001Z", ...patch });
 const failure = (status = 409) => new ApiRequestError(status === 409 ? "Connection changed" : "Synthetic read unavailable", { kind: "http", method: "PATCH", path: "/api/v1/integrations/connections/fixture-connection", status, body: status === 409 ? {code:"WRITE_CONFLICT",details:{reason:"INTEGRATION_CONNECTION_REVISION_CONFLICT"}} : status === 404 ? {code:"ENTITY_NOT_FOUND"} : undefined });
@@ -118,6 +122,22 @@ describe("reviewed integration settings", () => {
     expect(api.deleteIntegrationConnection).toHaveBeenLastCalledWith("fixture-connection", "b".repeat(64));
     expect(textOf(page.root)).toContain("No integration connections yet");
     expect(api.fetchIntegrationConnections).toHaveBeenCalledTimes(1);
+  });
+  it("settles a lost connection save through Check outcome after a canonical directory read", async () => {
+    attempts.paths.length = 0;
+    const page = await mount(); await edit(page);
+    attempts.paths.push("/api/v1/integrations/connections/fixture-connection");
+    api.updateIntegrationConnection.mockRejectedValueOnce(new Error("Response lost after dispatch"));
+    await click(page, "Save changes");
+    expect(textOf(page.root)).toContain("outcome is unconfirmed");
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    const reads = api.fetchIntegrationConnections.mock.calls.length;
+    await click(page, "Check outcome");
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    expect(api.fetchIntegrationConnections.mock.calls.length).toBeGreaterThan(reads);
+    expect(textOf(page.root)).not.toContain("outcome is unconfirmed");
+    expect(textOf(page.root)).toContain("recorded this integration change as processed");
+    expect(api.updateIntegrationConnection).toHaveBeenCalledTimes(1);
   });
   it("retains an unknown save lock after review acceptance and remount", async () => {
     const page = await mount(); await edit(page);

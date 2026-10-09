@@ -46,7 +46,7 @@ type Input = {
   workspaceId: NonNullable<MissionThreadedControllerHostProps["workspaceId"]>;
   coordination: Pick<
     ReturnType<typeof useChatControllerCoordination>,
-    "lastCapabilitySuggestionSyncKeyRef" | "lastSpecialistSuggestionSyncKeyRef"
+    "lastCapabilitySuggestionSyncKeyRef" | "lastSpecialistSuggestionSyncKeyRef" | "activeStreamRef"
   >;
   workbenchRequested: boolean;
   localNotices: ChatThreadNotice[];
@@ -293,7 +293,7 @@ export function useChatSurfaceComposition({
       session.sessionData.historicalWindowLoading ||
       session.sessionData.historicalWindowError,
     );
-  const canSend =
+  const composerAdmissionReady =
     Boolean(
       resolveOutboundDraftContent(
         draft,
@@ -301,7 +301,6 @@ export function useChatSurfaceComposition({
         submission.orchestration.editingTurnId ? "edit" : "send",
       ),
     ) &&
-    !sending &&
     !execution.outbound.pendingApproval &&
     !(execution.outbound.pendingUserInput && !isBackgroundChatUserInputPrompt(execution.outbound.pendingUserInput)) &&
     !routeBlocked &&
@@ -315,6 +314,8 @@ export function useChatSurfaceComposition({
     session.externalSourceAttachments.selectedAttachmentIds.length === 0 &&
     session.documentContext.pendingDocumentContextRefs.length === 0 &&
     (!routeBoundaryAckRequired || submission.currentRouteBoundaryAcknowledged);
+  const canSend = composerAdmissionReady && !sending;
+  const canSendWhileRunning = composerAdmissionReady && sending && Boolean(coordination.activeStreamRef.current) && !submission.orchestration.editingTurnId;
   const profileDependentAdmissionBlockReason = oneShotContext.modelCouncilEnabled
     ? "Model council is temporarily unavailable. Turn Council off to send."
     : oneShotContext.workspaceSnapshotRequest
@@ -343,6 +344,7 @@ export function useChatSurfaceComposition({
     capabilityProfileInspection,
     routeBoundaryAckRequired,
     canSend,
+    canSendWhileRunning,
     handleAgenticControl,
     proactiveSuggestionCount,
   } as const;

@@ -14,7 +14,7 @@ import { ChannelWizardFields, channelInputClass } from "./ChannelWizardFields";
 import { ChannelFeedback, ChannelRichBlocks, ChannelStepHelp } from "./ChannelWizardContent";
 
 export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
-  const wizard = useChannelWizard(props);
+  const wizard = useChannelWizard({ ...props, allowAdvancedInput: false });
   const [reviewTest, setReviewTest] = useState<string | null>(null);
   const signature = JSON.stringify([
     props.scopeId,
@@ -37,7 +37,7 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
         <p className="text-sm text-fg-secondary">{props.definition.wizard.introSummary}</p>
         <p className="mt-1 text-xs text-fg-muted">
           {props.definition.wizard.difficulty} · about {props.definition.wizard.estimatedMinutes} minutes · draft
-          revision {props.draft.revision} · {props.dirty ? "Unsaved input" : "Saved draft"}
+          version {props.draft.revision} · {props.dirty ? "Unsaved input" : "Saved draft"}
         </p>
       </header>
       <label className="block text-sm">
@@ -65,9 +65,7 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
         <Button aria-pressed={!wizard.advancedMode} disabled={anyBusy} onClick={wizard.switchToGuidedMode}>
           Guided setup
         </Button>
-        <Button aria-pressed={wizard.advancedMode} disabled={anyBusy} onClick={() => wizard.setAdvancedMode(true)}>
-          Advanced JSON
-        </Button>
+        <p className="text-xs text-fg-muted">Use the adapter's typed fields. Credentials are held by the dedicated secure-input owner and sent only through secure fields.</p>
       </div>
       </details>
       {wizard.advancedMode ? (
@@ -209,7 +207,7 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
         }}
       >
         <p className="text-sm">
-          {props.definition.catalog.label} · {props.label || "Unnamed draft"} · reviewed draft revision{" "}
+          {props.definition.catalog.label} · {props.label || "Unnamed draft"} · reviewed draft version{" "}
           {props.draft.revision}
         </p>
         {reviewTest !== signature ? (

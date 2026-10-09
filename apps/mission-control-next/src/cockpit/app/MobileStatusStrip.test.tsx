@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MobileStatusStrip } from "./MobileStatusStrip";
 
 const health = vi.hoisted(() => ({ digest: vi.fn() }));
-vi.mock("../areas/system/system-health-sources", () => ({ loadSystemHealthDigest: health.digest }));
+vi.mock("../areas/system/system-health-sources", async (importOriginal) => ({ ...(await importOriginal<typeof import("../areas/system/system-health-sources")>()), loadSystemHealthDigest: health.digest }));
 vi.mock("../data/use-operator-inbox", () => ({ useOperatorInbox: () => ({ data: undefined, isError: false }) }));
 vi.mock("../../features/desktop-updates/desktop-update-bridge", () => ({ useDesktopUpdates: () => null }));
 

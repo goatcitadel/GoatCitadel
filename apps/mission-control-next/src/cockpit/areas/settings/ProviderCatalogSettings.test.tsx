@@ -44,6 +44,12 @@ describe("cockpit provider catalog", () => {
     expect(catalog.loadModelsForProvider).not.toHaveBeenCalled();
     assign.mockRestore();
   });
+  it("offers read-only connection details for the inspected provider without reading credentials up front", async () => {
+    await render();
+    const details = container.querySelector("details")!;
+    expect(details.querySelector("summary")?.textContent).toBe("Connection details");
+    expect(details.open).toBe(false);
+  });
   it("keeps the saved model visible when a fresh catalog no longer lists it", async () => {
     catalog.providers = [{ ...provider, models: ["available-model"] }];
     await render();

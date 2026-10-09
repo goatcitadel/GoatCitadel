@@ -132,7 +132,7 @@ export async function runChatAsyncClarificationProof(context, deps) {
             );
             assert.equal(new URL(page.url()).searchParams.has("shell"), false);
             await page
-              .getByRole("textbox", { name: "Message", exact: true })
+              .getByRole("combobox", { name: "Message", exact: true })
               .fill(
                 "Ask one optional style question with user_input.request, continue by checking session.status, then finish using the reply if available.",
               );

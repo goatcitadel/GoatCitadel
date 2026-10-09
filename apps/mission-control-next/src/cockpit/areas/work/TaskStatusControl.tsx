@@ -5,7 +5,6 @@ import { humanizeToken } from "@goatcitadel/mission-control-shared/content/statu
 import { useTaskDetailReview } from "../../../features/native-routes/ops/use-task-detail-review";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
-import { Dialog } from "../../ui/Dialog";
 import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { TASK_STATUSES } from "./work-tasks";
 
@@ -22,8 +21,6 @@ export function TaskStatusControl({
   const owner = useTaskDetailReview(task, workspaceId);
   const [target, setTarget] = useState(task.status);
   const [notice, setNotice] = useState("");
-  const reviewed =
-    owner.review?.change.kind === "status" ? { task: owner.review.task, target: owner.review.change.status } : null;
   const executionOwned = Boolean(task.agenticContext || task.proactiveContext);
   async function changeStatus() {
     await owner.confirm((updated) => {
@@ -36,7 +33,7 @@ export function TaskStatusControl({
         queryClient.invalidateQueries({ queryKey: queryKeys.workTasks(workspaceId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) }),
       ]);
-    });
+    }, { kind: "status", status: target });
   }
   return (
     <section aria-label="Task status" className="rounded-lg border border-line bg-raised p-4">
@@ -77,11 +74,11 @@ export function TaskStatusControl({
             size="sm"
             disabled={owner.locked || target === task.status}
             onClick={() => {
-              owner.begin(task, { kind: "status", status: target });
+              void changeStatus();
               setNotice("");
             }}
           >
-            Review change
+            Save task status
           </Button>
         </div>
       ) : null}
@@ -112,24 +109,7 @@ export function TaskStatusControl({
           label="Review task in Ops"
         />
       ) : null}
-      <Dialog
-        open={Boolean(reviewed)}
-        onOpenChange={(open) => {
-          if (!open && !owner.busy) owner.invalidate();
-        }}
-        title="Change task status"
-        description={`Move ${reviewed?.task.title ?? "this task"} from ${humanizeToken(reviewed?.task.status ?? "")}
-        to ${humanizeToken(reviewed?.target ?? "")}. Gateway will check the current revision. This does not control a run.`}
-      >
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" disabled={owner.locked} onClick={() => void changeStatus()}>
-            Confirm status change
-          </Button>
-          <Button size="sm" variant="secondary" disabled={owner.busy} onClick={owner.invalidate}>
-            Cancel
-          </Button>
-        </div>
-      </Dialog>
+
     </section>
   );
 }

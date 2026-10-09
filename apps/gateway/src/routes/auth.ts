@@ -1,3 +1,5 @@
+import type { GatewayCurrentAccess } from "@goatcitadel/contracts";
+import { hasOperatorControlPlaneAccess } from "../plugins/auth.js";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { markMutationCommitted } from "../plugins/idempotency.js";
@@ -117,6 +119,28 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
   });
   const authAdmin = fastify.services.authAdmin;
+  fastify.get(
+    "/api/v1/auth/current",
+    withRouteAccess(fastify, "authenticated-read", { config: { rateLimit: { max: RATE_LIMIT_READ_MAX } } }),
+    async (request, reply) => {
+      const identified = request.authActorSource !== "none" && request.authActorId !== "anonymous";
+      const operatorAccess = hasOperatorControlPlaneAccess(fastify, request.authActorSource);
+      const result: GatewayCurrentAccess = {
+        actorId: identified ? request.authActorId : null,
+        actorSource: request.authActorSource,
+        operatorAccess,
+        readStatusScope:
+          identified && operatorAccess && ["token", "basic"].includes(request.authActorSource)
+            ? "operator"
+            : request.authActorSource === "none" || request.authActorSource === "loopback"
+              ? "browser_local"
+              : "unavailable",
+        ...(request.authDeviceId ? { deviceId: request.authDeviceId } : {}),
+        ...(request.authGrantId ? { grantId: request.authGrantId } : {}),
+      };
+      return reply.header("Cache-Control", "no-store").send(result);
+    },
+  );
 
   fastify.post("/api/v1/auth/sse-token", operatorAuthRoute, async (request, reply) => {
     const authMode = fastify.gatewayConfig.assistant.auth.mode;

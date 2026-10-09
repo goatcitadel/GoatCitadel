@@ -43,10 +43,14 @@ export function LocalAiSection(_props: SettingsSectionProps) {
       {(["download", "serve"] as const).map((kind) => {
         const state = control.stateFor(kind);
         return state?.message && state.message !== notice?.message ? (
-          <SettingsNotice
-            key={kind}
-            notice={{ tone: state.phase === "uncertain" ? "error" : "info", message: state.message }}
-          />
+          <div key={kind}>
+            <SettingsNotice notice={{ tone: state.phase === "uncertain" ? "error" : "info", message: state.message }} />
+            {state.phase === "uncertain" && state.transport ? (
+              <NativeButton variant="outline" disabled={state.checking} onClick={() => void control.checkOutcome(kind)}>
+                {state.checking ? "Checking outcome…" : "Check outcome"}
+              </NativeButton>
+            ) : null}
+          </div>
         ) : null;
       })}
       <SettingsLoadWarnings issues={data?.issues ?? []} onRetry={reload} />

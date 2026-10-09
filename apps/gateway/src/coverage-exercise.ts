@@ -526,7 +526,7 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
   );
   assertExpectedStatus("memory items list", memoryItems, [200, 409]);
   if (memoryItems.statusCode === 409) {
-    assert.equal((memoryItems.body as { code?: unknown }).code, "STATE_CONFLICT");
+    assert.equal((memoryItems.body as { code?: unknown }).code, "FEATURE_DISABLED");
   }
   if (Array.isArray(memoryItems.body.items) && memoryItems.body.items.length > 0) {
     const itemId = memoryItems.body.items[0]!.itemId;

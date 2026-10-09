@@ -70,7 +70,6 @@ type Input = {
     | "historicalContinuationError"
     | "loadHistoricalContinuation"
     | "thread"
-    | "loadSessionCoreState"
   >;
   contextActions: Pick<ReturnType<typeof useChatContextActions>, "delegationSuggestion" | "setDelegationSuggestion">;
   sessionStatus: Pick<ReturnType<typeof useChatSessionStatus>, "panel" | "refresh" | "stopFanout" | "close">;
@@ -87,6 +86,7 @@ type Input = {
     | "handleApprovePending"
     | "handleDenyPending"
     | "handleSubmitUserInput"
+    | "refreshThreadAndApprovals"
   >;
   orchestration: Pick<
     ReturnType<typeof useChatSurfaceOrchestration>,
@@ -226,7 +226,6 @@ export function createChatTranscriptProps({
   const { handleApprovePending } = outbound;
   const { handleDenyPending } = outbound;
   const { handleSubmitUserInput } = outbound;
-  const { loadSessionCoreState } = sessionData;
 
   return {
     loading: sessionData.messagesLoading,
@@ -351,6 +350,6 @@ export function createChatTranscriptProps({
     onSubmitUserInput: (response) => {
       if (!blockHistoricalMutation()) void handleSubmitUserInput(response);
     },
-    onRefreshThread: () => void loadSessionCoreState(selectedSession.sessionId, { includeThread: true }),
+    onRefreshThread: () => void outbound.refreshThreadAndApprovals(),
   };
 }

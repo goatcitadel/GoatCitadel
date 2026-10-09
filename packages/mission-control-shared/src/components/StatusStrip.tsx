@@ -1,3 +1,4 @@
+import { RESPONSIVE_QUERIES } from "../hooks/responsive-breakpoints";
 import { useEffect, useState } from "react";
 import { StatCard } from "./StatCard";
 
@@ -22,7 +23,7 @@ function readCompactViewport(): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
     return false;
   }
-  return window.matchMedia("(max-width: 639px)").matches;
+  return window.matchMedia(RESPONSIVE_QUERIES.phone).matches;
 }
 
 function formatUsd(value: number): string {
@@ -58,7 +59,7 @@ export function StatusStrip({
       return undefined;
     }
 
-    const media = window.matchMedia("(max-width: 639px)");
+    const media = window.matchMedia(RESPONSIVE_QUERIES.phone);
     const handleChange = (event: MediaQueryListEvent | MediaQueryList) => {
       setCompactViewport(event.matches);
     };

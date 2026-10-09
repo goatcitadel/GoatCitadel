@@ -30,11 +30,8 @@ import {
   type IncrementalDisplayTextState,
 } from "./assistant-display-text";
 import { AssistantStreamingTailContext, HighlightedCode } from "./HighlightedCode";
-import {
-  canRenderOpenUiStructuredBlock,
-  isGoatOpenUiRendererEnabled,
-  OpenUiStructuredBlockRenderer,
-} from "./OpenUiStructuredBlock";
+import { LazyOpenUiStructuredBlock } from "./LazyOpenUiStructuredBlock";
+import { isGoatOpenUiRendererEnabled } from "./openui-flag";
 
 export type AssistantStreamPresentationMode = "smooth" | "instant";
 
@@ -380,11 +377,7 @@ function AssistantCodeBlock({
 
   const copyLabel = copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy unavailable" : "Copy code";
 
-  if (allowGeneratedUi && isOpenUiBlock && isGoatOpenUiRendererEnabled() && canRenderOpenUiStructuredBlock(trimmed)) {
-    return <OpenUiStructuredBlockRenderer source={trimmed} />;
-  }
-
-  return (
+  const codeBlock = (
     <div className="mc-assistant-code-shell" data-language={language ?? undefined}>
       <div className="mc-assistant-code-header">
         <span className="mc-assistant-code-language">{language ?? "code"}</span>
@@ -407,6 +400,11 @@ function AssistantCodeBlock({
       </pre>
     </div>
   );
+  // A generated OpenUI block renders only when the flag is on and its source parses; the renderer loads on demand.
+  if (allowGeneratedUi && isOpenUiBlock && isGoatOpenUiRendererEnabled()) {
+    return <LazyOpenUiStructuredBlock source={trimmed} fallback={codeBlock} />;
+  }
+  return codeBlock;
 }
 
 const MemoizedMarkdownBlock = memo(function MemoizedMarkdownBlock({

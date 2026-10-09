@@ -7,7 +7,7 @@ import {
 import { useSessionDraft } from "../library/session-drafts";
 import { createOpsSavedBoardsDraft, type OpsSavedBoardsDraft } from "./OpsSavedBoardsModel";
 import type { OpsSavedBoardsEditorSession } from "./OpsSavedBoardsEditor";
-import { commitReviewedBoard, type ReviewedBoardMutation } from "./board-mutation";
+import { BoardReviewConflict, commitReviewedBoard, type ReviewedBoardMutation } from "./board-mutation";
 import { useBoardMutationState } from "./board-mutation-state";
 import { useBoardMutationView } from "./use-board-mutation-view";
 export function useBoardEditor(
@@ -15,8 +15,22 @@ export function useBoardEditor(
   board: OpsSavedBoardRecord | undefined,
   onSaved: (saved: OpsSavedBoardRecord, isCurrent: () => boolean) => Promise<void>,
 ) {
-  const [base] = useState(board),
+  const [base, setBase] = useState(board),
     [idempotencyKey] = useState(() => `ops-board-${crypto.randomUUID()}`);
+  // A newer canonical revision of the edited board, from the owner query or from the owner's pre-save read.
+  const [foundNewer, setFoundNewer] = useState<OpsSavedBoardRecord>();
+  const [createIdentityTaken, setCreateIdentityTaken] = useState(false);
+  const newer = [foundNewer, board]
+    .filter((record): record is OpsSavedBoardRecord =>
+      Boolean(
+        base &&
+        record &&
+        record.boardId === base.boardId &&
+        record.workspaceId === base.workspaceId &&
+        record.revision > base.revision,
+      ),
+    )
+    .sort((left, right) => right.revision - left.revision)[0];
   const canonical: OpsSavedBoardsEditorSession = {
     mode: base ? "edit" : "create",
     ...(base ? { boardId: base.boardId, expectedRevision: base.revision } : { idempotencyKey }),
@@ -25,6 +39,15 @@ export function useBoardEditor(
   const store = useSessionDraft(`ops-board:${workspaceId}:${base?.boardId ?? "create"}`, canonical, base?.revision, {
     label: "Board layout",
   });
+  // A retained draft reopened against a board that moved on is just as stale as one overtaken while open.
+  const retainedBehind =
+    base &&
+    store.isDirty &&
+    typeof store.value.expectedRevision === "number" &&
+    store.value.expectedRevision < base.revision
+      ? base
+      : undefined;
+  const conflict = newer ?? retainedBehind;
   const view = useBoardMutationView([workspaceId, board]),
     attempt = useBoardMutationState(workspaceId, base?.boardId);
   const [review, setReview] = useState<ReviewedBoardMutation | null>(null),
@@ -91,11 +114,53 @@ export function useBoardEditor(
       if (current()) {
         setReview(null);
         setMessage(error instanceof Error ? error.message : "The board could not be saved.");
+        if (error instanceof BoardReviewConflict) {
+          if (base && error.current) setFoundNewer(error.current);
+          else if (!base) setCreateIdentityTaken(true);
+        }
       }
     }
   }
+  /** Keeps the draft and re-targets it at the newer revision; nothing is saved until a new review is confirmed. */
+  function adoptCurrent() {
+    if (!conflict || locked) return;
+    // Without edits there is nothing to keep: re-targeting would resave stale content over the newer revision.
+    if (!store.isDirty) return discardForCurrent();
+    view.invalidate();
+    setReview(null);
+    setBase(conflict);
+    setFoundNewer(undefined);
+    store.setValue({ ...store.value, boardId: conflict.boardId, expectedRevision: conflict.revision });
+    setMessage(null);
+  }
+  /** Drops the draft and continues from the newer canonical revision. */
+  function discardForCurrent() {
+    if (!conflict || locked) return;
+    view.invalidate();
+    setReview(null);
+    setBase(conflict);
+    setFoundNewer(undefined);
+    store.discard();
+    setMessage(null);
+  }
+  /** A new create identity is a separate board; only offered after the reviewed identity was found to exist. */
+  function freshCreateIdentity() {
+    if (base || !createIdentityTaken || locked) return;
+    view.invalidate();
+    setReview(null);
+    store.setValue({ ...store.value, idempotencyKey: `ops-board-${crypto.randomUUID()}` });
+    setCreateIdentityTaken(false);
+    setMessage(null);
+  }
   return {
     base,
+    conflict,
+    hasEdits: store.isDirty,
+    adoptCurrent,
+    discardForCurrent,
+    createIdentityTaken,
+    freshCreateIdentity,
+    createIdentity: store.value.idempotencyKey ?? idempotencyKey,
     draft: store.value.draft,
     setDraft,
     store,

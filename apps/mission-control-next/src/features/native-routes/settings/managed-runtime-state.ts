@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { isChangePlanRequest, type ChangePlanRecord } from "@goatcitadel/contracts";
 import { isApiRequestError, type RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/client";
+import { settleTrackedAttempt, type TrackedAttempt } from "./mutation-attempt-tracking";
 
 export const MANAGED_RUNTIME_DRAFT_KEY = "runtime:system:llama:configuration";
 export interface ManagedRuntimeValues {
@@ -102,26 +103,55 @@ export function isManagedRuntimeRevisionConflict(error: unknown, revision: numbe
   );
 }
 
-// Lost mutation responses remain locked across both Settings shells for this app lifetime.
-let uncertain: string | undefined;
+// Lost mutation responses remain locked across both Settings shells for this app lifetime, unless the Gateway's
+// record of the identified attempt settles them (`transport` holds the key, method and route; never the body).
+export const RUNTIME_ROUTE_PATTERNS = ["/api/v1/settings"] as const;
+type RuntimeLock = { message: string; transport?: TrackedAttempt; checking?: boolean };
+let lock: RuntimeLock | undefined;
 const listeners = new Set<() => void>();
+function publish(next: RuntimeLock | undefined) {
+  lock = next;
+  for (const listener of listeners) listener();
+}
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
 export function useManagedRuntimeUncertainty() {
   return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-    () => uncertain,
+    subscribe,
+    () => lock?.message,
     () => undefined,
   );
 }
-export function retainManagedRuntimeUncertainty(message: string) {
-  uncertain = message;
-  for (const listener of listeners) listener();
+export function useManagedRuntimeLock() {
+  return useSyncExternalStore(
+    subscribe,
+    () => lock,
+    () => undefined,
+  );
+}
+export function retainManagedRuntimeUncertainty(message: string, transport?: TrackedAttempt) {
+  publish({
+    message: transport
+      ? `${message} Check its outcome to settle it from the Gateway's record of this attempt.`
+      : message,
+    ...(transport ? { transport } : {}),
+  });
+}
+/** Settles the lock from the Gateway's record and a canonical readback; returns the operator notice when settled. */
+export async function checkManagedRuntimeOutcome(readback: () => Promise<unknown>): Promise<string | undefined> {
+  const current = lock;
+  if (!current?.transport || current.checking) return undefined;
+  const checking = { ...current, checking: true };
+  publish(checking);
+  const result = await settleTrackedAttempt(current.transport, readback, "runtime change");
+  if (lock !== checking) return undefined;
+  publish(result.settled ? undefined : { ...current, message: result.message });
+  return result.settled ? result.message : undefined;
 }
 export function __resetManagedRuntimeUncertaintyForTests() {
-  uncertain = undefined;
-  for (const listener of listeners) listener();
+  publish(undefined);
 }

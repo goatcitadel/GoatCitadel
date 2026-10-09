@@ -212,7 +212,7 @@ html[data-shell="cockpit"] .cockpit-build-editor {
   font-size: var(--text-xs);
 }
 
-@media (max-width: 1023px) {
+@media (width < 1024px) {
   .cockpit-build-editor .mc-next-workbench-body { grid-template-columns: minmax(0, 1fr); align-content: start; }
   .cockpit-build-editor .mc-next-workbench-sidebar { max-height: none; align-self: start; overflow: visible; }
 }

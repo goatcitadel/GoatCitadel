@@ -70,7 +70,7 @@ describe("Chat session controls", () => {
     await act(async () => { trigger().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
     expect(trigger().getAttribute("aria-expanded")).toBe("true");
     expect(item("Inspect conversation")).toBeDefined();
-    expect(item("Fork from latest turn")).toBeDefined();
+    expect(item("New conversation from latest message")).toBeDefined();
     const menu = document.body.querySelector('[role="menu"]') as HTMLElement;
     await act(async () => { menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     expect(document.body.querySelector('[role="menu"]')).toBeNull();
@@ -82,6 +82,6 @@ describe("Chat session controls", () => {
   it("disables fork when the conversation has no turn to fork from", async () => {
     await act(async () => root.render(<ChatSessionOverflow dock={dock()} />));
     await openWithPointer();
-    expect(item("Fork from latest turn")?.getAttribute("aria-disabled")).toBe("true");
+    expect(item("New conversation from latest message")?.getAttribute("aria-disabled")).toBe("true");
   });
 });

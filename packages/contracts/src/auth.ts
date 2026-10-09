@@ -87,3 +87,13 @@ export interface DeviceAccessGrantListResponse {
 export interface DeviceAccessGrantRevokeResponse {
   grant: DeviceAccessGrantRecord;
 }
+
+/** Current request principal; configuration mode never establishes caller identity. */
+export interface GatewayCurrentAccess {
+  actorId: string | null;
+  actorSource: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion" | "a2a_peer" | "mesh_node";
+  operatorAccess: boolean;
+  readStatusScope: "operator" | "browser_local" | "unavailable";
+  deviceId?: string;
+  grantId?: string;
+}

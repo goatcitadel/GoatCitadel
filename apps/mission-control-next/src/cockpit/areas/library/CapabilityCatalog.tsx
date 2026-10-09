@@ -1,3 +1,4 @@
+import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Virtuoso } from "react-virtuoso";
@@ -94,7 +95,7 @@ export function CapabilityCatalog() {
     enabled: !catalog.isError && Boolean(catalog.data),
     refetchInterval: 60_000,
   });
-  const isPhone = useMediaQuery("(width < 640px)");
+  const isPhone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const view = catalog.isError ? undefined : catalog.data;
   const items = view?.items ?? EMPTY_ITEMS;
   const callableKnown = view?.callableKnown ?? false;
@@ -115,7 +116,7 @@ export function CapabilityCatalog() {
   return <section className={`${AREA_COLUMN} flex h-full min-h-0 flex-col gap-3 p-4 sm:p-6`}>
     <header className="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h1 className="font-display text-xl font-semibold text-fg">Library</h1>
+        <h1 className="font-display text-xl font-semibold text-fg">Skills and tools</h1>
         <p className="text-sm text-fg-secondary">Inspect skills, tools, and other capabilities from the Gateway catalog.</p>
       </div>
       <Button size="sm" onClick={() => { void catalog.refetch(); void workspacePolicyQuery.refetch(); }} disabled={catalog.isFetching || workspacePolicyQuery.isFetching}>
@@ -150,7 +151,7 @@ export function CapabilityCatalog() {
           </select>
         </label>
       </div>
-      <p role="status" className="text-xs text-fg-muted">{filtered.length} of {items.length} capabilities shown{view.issues.length ? " · partial catalog" : ""}</p>
+      <p role="status" className="text-xs text-fg-muted">{filtered.length} of {items.length} capabilities shown. Usage dates appear only when recorded; inspect a capability for availability and provenance.{view.issues.length ? " · partial catalog" : ""}</p>
       {missingSelection ? <EmptyState title="Capability unavailable" description="The linked capability is not in this catalog view. Refresh its owner evidence or return to the catalog."
         action={<Button size="sm" onClick={() => route.navigate(catalogHref(location.filters), { replace: true })}>Return to catalog</Button>} /> : null}
       {filtered.length ? <div className="flex min-h-0 flex-1 gap-3">
@@ -165,7 +166,7 @@ export function CapabilityCatalog() {
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium text-fg">{presentCapabilityTitle(item)}</span>
                 <span className="block truncate text-xs text-fg-muted">{presentCapabilityDescription(item)}</span>
-                <span className="block truncate text-xs text-fg-muted"><CapabilityLastUsed usage={usage} /></span>
+                {usage.status === "recorded" ? <span className="block truncate text-xs text-fg-muted"><CapabilityLastUsed usage={usage} /></span> : null}
               </span>
               {item.trustLabel ? <span className="hidden text-xs text-fg-muted md:block">{humanizeToken(item.trustLabel)}</span> : null}
               <StatusBadge status={presented} />

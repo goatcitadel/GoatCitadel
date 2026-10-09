@@ -2,7 +2,7 @@ import type { DesktopUpdateStatus } from "@goatcitadel/contracts";
 import type { BackupTrustState } from "./backup-trust";
 import type { HealthCheck } from "./health-overview";
 import { backupHealthCheck, deriveHealthChecks } from "./health-overview";
-import type { SystemHealthSources } from "./system-health-sources";
+import { retainedHealthObservations, staleHealthSources, type SystemHealthSources } from "./system-health-sources";
 
 function unknown(id: HealthCheck["id"], title: string, detail: string, inspectPath: string): HealthCheck {
   return { id, title, detail, inspectPath, status: { label: "Unknown", tone: "neutral" } };
@@ -20,6 +20,30 @@ function notSetUp(
 }
 
 export function deriveSystemHealthChecks(
+  sources: SystemHealthSources,
+  updates: DesktopUpdateStatus | null,
+  backupTrust?: BackupTrustState,
+): HealthCheck[] {
+  const checks = deriveCurrentSystemHealthChecks(sources, updates, backupTrust);
+  const stale = staleHealthSources(sources);
+  if (!stale.length) return checks;
+  const earlier = deriveCurrentSystemHealthChecks(retainedHealthObservations(sources), updates, backupTrust);
+  const affected: Record<keyof SystemHealthSources, readonly HealthCheck["id"][]> = {
+    summary: ["gateway", "database", "service", "backups"], llama: ["models"], npu: ["models"],
+    connections: ["integrations", "channels"], channels: ["channels"], workers: ["remote_workers"],
+  };
+  return checks.map((check) => {
+    const missing = stale.filter((source) => affected[source.name].includes(check.id));
+    if (!missing.length || (check.id === "backups" && backupTrust && backupTrust !== "unknown")) return check;
+    const observed = missing.map(({ name, observedAt }) => `${name}: ${observedAt ? new Date(observedAt).toLocaleString() : "time unavailable"}`).join("; ");
+    // Current actionable evidence remains authoritative even if another contributing source is stale.
+    const actionable = check.status.tone === "waiting" || check.status.tone === "failed";
+    return { ...check, notSetUp: false, status: actionable ? check.status : { label: "Stale", tone: "neutral" },
+      detail: `${check.detail} Retained observation is stale (last observed ${observed}). ${earlier.find((item) => item.id === check.id)?.detail ?? "Earlier evidence is incomplete."}` };
+  });
+}
+
+function deriveCurrentSystemHealthChecks(
   sources: SystemHealthSources,
   updates: DesktopUpdateStatus | null,
   backupTrust?: BackupTrustState,

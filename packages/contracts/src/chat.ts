@@ -265,6 +265,8 @@ export interface ChatSessionRecord {
   tags?: string[];
   projectId?: string;
   projectName?: string;
+  /** Secret-redacted visible user/assistant text, at most 160 Unicode characters. */
+  lastMessagePreview?: string;
   searchHits?: ChatSessionSearchHitRecord[];
   lastHandoff?: ChatSessionHandoffRecord;
   delegationParent?: ChatSessionDelegationParentRecord;
@@ -297,7 +299,15 @@ export interface ChatSessionCreateInput {
   includeInHistory?: boolean;
 }
 
+/** Complete scoped membership for a bounded explicit list; absence is authoritative only when complete. */
+export interface ChatSessionListMembership {
+  sessionIds: string[];
+  complete: boolean;
+}
+
 export interface ChatSessionListQuery {
+  /** Bounded (1..100) membership read; incompatible with sessionId/cursor. */
+  sessionIds?: string[];
   /** Exact record lookup, still constrained by workspace and visibility. */
   sessionId?: string;
   scope?: ChatSessionScope | "all";

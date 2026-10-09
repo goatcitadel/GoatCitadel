@@ -1,12 +1,44 @@
 import { useSyncExternalStore } from "react";
 import { canonicalJsonString, type IntegrationConnection } from "@goatcitadel/contracts";
 import { isApiRequestError, updateIntegrationConnection } from "@goatcitadel/mission-control-shared/api/client";
+import { dispatchTrackedMutation, settleTrackedAttempt, type TrackedAttempt } from "./mutation-attempt-tracking";
 
 type UpdateInput = Parameters<typeof updateIntegrationConnection>[1];
+/** `transport` identifies a lost write (key, method, route; never its body) so its outcome can be read. */
 interface Attempt {
   phase: "idle" | "saving" | "saved" | "uncertain";
   message?: string;
+  transport?: TrackedAttempt;
+  checking?: boolean;
 }
+/** The Gateway routes the integration owners write through; a lost write on any other route is not checkable. */
+export const INTEGRATION_ROUTE_PATTERNS = [
+  "/api/v1/integrations/connections",
+  "/api/v1/integrations/connections/:connectionId",
+  "/api/v1/integrations/connections/:connectionId/actions/:actionId",
+  "/api/v1/integrations/connections/:connectionId/discord/reconnect",
+  "/api/v1/integrations/external-connectors/services/:sourceId/:serviceId/actions/:actionId/stage",
+  "/api/v1/integrations/external-connectors/services/:sourceId/:serviceId/actions/:actionId/review",
+  "/api/v1/integrations/plugins/install",
+  "/api/v1/integrations/plugins/:pluginId/enable",
+  "/api/v1/integrations/plugins/:pluginId/disable",
+  "/api/v1/notifications/rules",
+  "/api/v1/notifications/rules/:ruleId",
+  "/api/v1/notifications/targets",
+  "/api/v1/notifications/targets/:targetId",
+  "/api/v1/notifications/targets/:targetId/test",
+  "/api/v1/notifications/presence",
+  "/api/v1/workspaces/:workspaceId/hooks",
+  "/api/v1/workspaces/:workspaceId/hooks/:hookId",
+  "/api/v1/workspaces/:workspaceId/hooks/:hookId/test",
+  "/api/v1/workspaces/:workspaceId/hooks/runs/:runId/redrive",
+  "/api/v1/voice/google-meet/sessions",
+  "/api/v1/voice/google-meet/sessions/:sessionId/stop",
+  "/api/v1/voice/realtime/client-secret",
+  "/api/v1/durable/runs",
+  "/api/v1/channels/drafts/:draftId",
+] as const;
+const CHECKABLE = " Check its outcome to settle it from the Gateway's record of this attempt.";
 const IDLE: Attempt = { phase: "idle" };
 const attempts = new Map<string, Attempt>();
 const listeners = new Set<() => void>();
@@ -21,13 +53,36 @@ function setAttempt(id: string, next: Attempt) {
   attempts.set(id, next);
   for (const listener of listeners) listener();
 }
+export function readIntegrationAttempt(id: string) {
+  return getAttempt(id);
+}
+/**
+ * Settles an uncertain integration write from the Gateway's record of that exact attempt and the owner's canonical
+ * `readback`. Only a committed or released attempt unlocks; anything else keeps the lock. Returns the settled notice.
+ */
+export async function checkIntegrationAttemptOutcome(id: string, readback: () => Promise<unknown>) {
+  const current = getAttempt(id);
+  if (current.phase !== "uncertain" || !current.transport || current.checking) return undefined;
+  const checking = { ...current, checking: true };
+  setAttempt(id, checking);
+  const result = await settleTrackedAttempt(current.transport, readback, "integration change");
+  if (getAttempt(id) !== checking) return undefined;
+  setAttempt(id, result.settled ? IDLE : { ...current, message: result.message });
+  return result.settled ? result.message : undefined;
+}
 export function useIntegrationConnectionMutation(id: string) {
   const attempt = useSyncExternalStore(
     subscribe,
     () => getAttempt(id),
     () => IDLE,
   );
-  return { ...attempt, pending: attempt.phase === "saving", locked: ["saving", "uncertain"].includes(attempt.phase) };
+  return {
+    ...attempt,
+    pending: attempt.phase === "saving",
+    locked: ["saving", "uncertain"].includes(attempt.phase),
+    /** Settles this key's lost write; see checkIntegrationAttemptOutcome. */
+    checkOutcome: (readback: () => Promise<unknown>) => checkIntegrationAttemptOutcome(id, readback),
+  };
 }
 export function hasIntegrationConnectionBinding(
   value: IntegrationConnection | undefined | null,
@@ -131,8 +186,15 @@ export async function commitIntegrationConnectionUpdate({
     return { status: "cancelled", message: "Review the current connection before saving." };
   }
   setAttempt(id, { phase: "saving" });
+  let transport: TrackedAttempt | undefined;
   try {
-    const updated = await updateIntegrationConnection(id, input);
+    const updated = await dispatchTrackedMutation(
+      INTEGRATION_ROUTE_PATTERNS,
+      () => updateIntegrationConnection(id, input),
+      (tracked) => {
+        transport = tracked;
+      },
+    );
     if (!receiptMatches(reviewed, input, updated)) throw new Error("Unverified connection receipt");
     await verify?.(updated);
     setAttempt(id, { phase: "saved", message: "Connection change acknowledged by the Gateway." });
@@ -146,8 +208,9 @@ export async function commitIntegrationConnectionUpdate({
       };
     }
     const message =
-      "The connection change outcome is unconfirmed. Refresh and inspect the saved connection. Repeating its update is locked for this app session.";
-    setAttempt(id, { phase: "uncertain", message });
+      "The connection change outcome is unconfirmed. Refresh and inspect the saved connection. Repeating its update is locked for this app session." +
+      (transport ? CHECKABLE : "");
+    setAttempt(id, { phase: "uncertain", message, ...(transport ? { transport } : {}) });
     return { status: "uncertain", message };
   }
 }
@@ -163,8 +226,11 @@ export function beginIntegrationMutation(key: string) {
       verify: (receipt: T) => void | Promise<void>,
       knownRejected?: (error: unknown) => boolean,
     ) {
+      let transport: TrackedAttempt | undefined;
       try {
-        const receipt = await dispatch();
+        const receipt = await dispatchTrackedMutation(INTEGRATION_ROUTE_PATTERNS, dispatch, (tracked) => {
+          transport = tracked;
+        });
         await verify(receipt);
         return receipt;
       } catch (error) {
@@ -172,7 +238,9 @@ export function beginIntegrationMutation(key: string) {
           setAttempt(key, {
             phase: "uncertain",
             message:
-              "The integration action outcome is uncertain. Further attempts are locked in this app session. Inspect the Gateway owner and recorded evidence before continuing.",
+              "The integration action outcome is uncertain. Further attempts are locked in this app session. Inspect the Gateway owner and recorded evidence before continuing." +
+              (transport ? CHECKABLE : ""),
+            ...(transport ? { transport } : {}),
           });
         throw error;
       }

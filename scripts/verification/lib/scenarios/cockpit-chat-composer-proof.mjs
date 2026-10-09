@@ -99,27 +99,27 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
             }
           });
           const openSession = async (id) => {
-            const threadReady = page.waitForResponse(
+            const threadReady = observePendingWait(page.waitForResponse(
               (response) =>
                 response.request().method() === "GET" &&
                 new URL(response.url()).pathname === `/api/v1/chat/sessions/${encodeURIComponent(id)}/thread`,
-            );
+            ));
             await page.goto(
               buildVerificationUiUrl(stack.uiUrl, `/chat?sessionId=${encodeURIComponent(id)}&shell=cockpit`),
               { waitUntil: "domcontentloaded" },
             );
             assert.equal((await threadReady).ok(), true, "Conversation owner could not hydrate the requested scope");
-            await page.getByRole("textbox", { name: "Message", exact: true }).waitFor({ timeout: 30_000 });
+            await page.getByRole("combobox", { name: "Message", exact: true }).waitFor({ timeout: 30_000 });
             assert.equal(new URL(page.url()).searchParams.get("sessionId"), id);
           };
           const switchSession = async (target) => {
             const documentStarted = await page.evaluate(() => performance.timeOrigin);
-            const threadReady = page.waitForResponse(
+            const threadReady = observePendingWait(page.waitForResponse(
               (response) =>
                 response.request().method() === "GET" &&
                 new URL(response.url()).pathname ===
                   `/api/v1/chat/sessions/${encodeURIComponent(target.sessionId)}/thread`,
-            );
+            ));
             await selectComposerConversation(page, variant, target);
             const response = await threadReady;
             assert.equal(response.ok(), true, "Conversation owner could not hydrate the selected scope");
@@ -139,7 +139,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
               documentAfter: await page.evaluate(() => performance.timeOrigin),
             });
           };
-          const draft = page.getByRole("textbox", { name: "Message", exact: true });
+          const draft = page.getByRole("combobox", { name: "Message", exact: true });
           await openSession(sessionId);
 
           stage = "slash keyboard palette";
@@ -166,13 +166,13 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
           const removed = { fileName: `remove-${token}.txt`, content: `Removed synthetic attachment ${token}.` };
           const uploads = [];
           for (const item of [retained, removed]) {
-            const responsePromise = page.waitForResponse(
+            const responsePromise = observePendingWait(page.waitForResponse(
               (response) =>
                 new URL(response.url()).pathname === "/api/v1/chat/attachments" &&
                 response.request().method() === "POST" &&
                 response.request().postDataJSON()?.fileName === item.fileName,
-            );
-            const picker = page.waitForEvent("filechooser");
+            ));
+            const picker = observePendingWait(page.waitForEvent("filechooser"));
             await page.getByRole("button", { name: "Attach files", exact: true }).click();
             await (
               await picker
@@ -200,12 +200,12 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
           assert.equal(await page.getByRole("button", { name: `Remove ${removed.fileName}`, exact: true }).count(), 0);
 
           stage = "at keyboard file attachment";
-          const contextUpload = page.waitForResponse(
+          const contextUpload = observePendingWait(page.waitForResponse(
             (response) =>
               new URL(response.url()).pathname === "/api/v1/chat/attachments" &&
               response.request().method() === "POST" &&
               response.request().postDataJSON()?.fileName === fileName,
-          );
+          ));
           await draft.fill(`@${fileName}`);
           await chooseKeyboardSuggestion(page, draft, new RegExp(`^${escapeRegex(fileName)}(?:\\s|$)`, "u"));
           const contextResponse = await contextUpload;
@@ -471,7 +471,7 @@ export async function selectComposerConversation(page, variant, session) {
     await page.getByRole("combobox", { name: "Choose conversation", exact: true }).selectOption(session.sessionId);
   } else {
     await page
-      .getByRole("navigation", { name: "Threads", exact: true })
+      .getByRole("navigation", { name: "Conversations", exact: true })
       .getByRole("button", {
         name: new RegExp(`^${escapeRegex(session.title)}`, "u"),
       })
@@ -503,12 +503,12 @@ async function changePreferences({
   select,
   checkCancel,
 }) {
-  const created = page.waitForResponse(
+  const created = observePendingWait(page.waitForResponse(
     (response) =>
       new URL(response.url()).pathname === "/api/v1/change-plans" &&
       response.request().method() === "POST" &&
       response.request().postDataJSON()?.request?.kind === "session_model",
-  );
+  ));
   await select();
   const response = await created;
   assert.equal(response.ok(), true, `Session model review failed: HTTP ${response.status()} ${await response.text()}`);
@@ -526,9 +526,9 @@ async function changePreferences({
     await review.click();
   }
   const confirmationPath = `/api/v1/change-plans/${encodeURIComponent(plan.planId)}/confirmations`;
-  const confirmed = page.waitForResponse(
+  const confirmed = observePendingWait(page.waitForResponse(
     (response) => response.request().method() === "POST" && new URL(response.url()).pathname === confirmationPath,
-  );
+  ));
   await dialog.getByRole("button", { name: "Apply exact change", exact: true }).click();
   const confirmedResponse = await confirmed;
   assert.equal(confirmedResponse.ok(), true, "The exact model confirmation failed.");
@@ -567,4 +567,12 @@ async function waitUntil(page, predicate, message, attempts = 80) {
 }
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+
+/** Observe rejection before starting an action. Awaiters still receive the original
+ * failure, while a failed action can reach its reporting/finally cleanup safely. */
+export function observePendingWait(pending) {
+  void pending.catch(() => undefined);
+  return pending;
 }

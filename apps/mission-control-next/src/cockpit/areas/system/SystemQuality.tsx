@@ -10,7 +10,7 @@ import { QualityGates } from "./quality/QualityGates";
 import { QualityEvaluations } from "./quality/QualityEvaluations";
 import { QualityDesign } from "./quality/QualityDesign";
 import { QualityExports } from "./quality/QualityExports";
-import { QualityNotes, qualityTimestamp } from "./quality/QualityEvidence";
+import { QualityGlobalWarnings, QualityNotes, qualityTimestamp } from "./quality/QualityEvidence";
 
 const VIEWS = [{ id: "gates", label: "Gates" }, { id: "evaluations", label: "Evaluations" }, { id: "design", label: "Design" }] as const;
 
@@ -32,7 +32,7 @@ export function SystemQuality() {
       <div className="space-y-1 rounded-md border border-line bg-sunken p-3 text-sm text-fg-secondary">
         <p>Evidence observed {qualityTimestamp(snapshot.generatedAt)}.</p>
         <p>{snapshot.metricScope.note}</p>
-        <QualityNotes items={snapshot.warnings} />
+        <QualityNotes items={snapshot.warnings.filter(item => item !== snapshot.metricScope.note)} />
       </div>
       <div role="tablist" aria-label="Quality evidence" className="flex gap-1 rounded-md bg-sunken p-1">
         {VIEWS.map((item) => <button key={item.id} id={`quality-tab-${item.id}`} role="tab" type="button"
@@ -40,8 +40,10 @@ export function SystemQuality() {
           className="min-h-9 flex-1 rounded px-3 text-sm font-medium text-fg-secondary hover:bg-raised aria-selected:bg-raised aria-selected:text-fg">{item.label}</button>)}
       </div>
       <section role="tabpanel" id={`quality-panel-${view}`} aria-labelledby={`quality-tab-${view}`}>
+        <QualityGlobalWarnings.Provider value={[...snapshot.warnings, snapshot.metricScope.note]}>
         {view === "gates" ? <QualityGates snapshot={snapshot} reload={() => proof.refetch()} /> : view === "evaluations"
           ? <QualityEvaluations source={snapshot.evalProof} /> : <QualityDesign source={snapshot.designQuality} />}
+        </QualityGlobalWarnings.Provider>
       </section>
       {snapshot.nextChecks.length ? <details className="rounded-lg border border-line bg-raised p-4">
         <summary className="cursor-pointer text-sm font-semibold text-fg">Recorded next checks</summary>

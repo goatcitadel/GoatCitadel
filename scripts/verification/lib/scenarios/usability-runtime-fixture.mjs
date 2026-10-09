@@ -30,6 +30,7 @@ export async function prepareUsabilityRuntime(runId, baseUrl, options = {}) {
     await fs.writeFile(path.join(config, filename), `${JSON.stringify(configured[section], null, 2)}\n`);
   }
   // Skills are shipped source inputs; private workspace copies are not.
+  if (options.copySkills === false) return root;
   const skills = path.join(sourceRoot, "skills");
   try {
     await fs.stat(skills);

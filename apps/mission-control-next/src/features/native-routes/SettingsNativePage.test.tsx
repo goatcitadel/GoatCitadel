@@ -3,6 +3,7 @@ import { __resetAuthAttemptsForTests } from "./settings/gateway-auth-state";
 import { __resetToolGrantActionsForTests } from "./settings/use-tool-grant-actions";
 import { __resetSettingsChangesForTests } from "./settings/use-settings-change";
 import { __resetProviderMutationStateForTests } from "./settings/sections/provider-mutation-state";
+import { __resetCredentialInputsForTests } from "./settings/credential-input-owner";
 import { __resetIntegrationConnectionMutationsForTests } from "./settings/integration-connection-mutation";
 import { __resetDeviceAccessRevocationsForTests } from "./settings/use-device-access-revocation";
 import { __resetPersonalityDefaultForTests } from "./settings/use-personality-default";
@@ -1601,6 +1602,8 @@ beforeEach(async () => {
   __resetSettingsChangesForTests();
   __resetAuthAttemptsForTests();
   __resetProviderMutationStateForTests();
+  // Retained credential submissions are module state; a secret saved by an earlier case must not leak into the next.
+  __resetCredentialInputsForTests();
   vi.clearAllMocks();
   for (const reset of resetSettingsUnitMocks) reset();
   mocks.fetchLlmConfig.mockImplementation(async () => mocks.providerCatalogState.config);
@@ -3340,7 +3343,7 @@ describe("SettingsNativePage tools", () => {
     await flushAsyncUpdates();
 
     const grantTypeSelect = renderer!.root.findAll(
-      (node) => node.type === "select" && node.props?.value === "persistent",
+      (node) => node.type === "select" && node.props?.value === "ttl",
     )[0];
     await act(async () => {
       grantTypeSelect!.props.onChange({ target: { value: "ttl" } });

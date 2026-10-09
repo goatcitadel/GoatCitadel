@@ -102,7 +102,7 @@ function MermaidArtifactRenderer({ source }: { source: string }) {
       <div className="generated-artifact-fallback">
         <p className="generated-artifact-fallback-title">Mermaid render failed</p>
         <p className="generated-artifact-fallback-copy">{error}</p>
-        <pre className="generated-artifact-code-block">{source}</pre>
+        <pre role="region" aria-label="Diagram source" tabIndex={0} className="generated-artifact-code-block">{source}</pre>
       </div>
     );
   }
@@ -159,7 +159,7 @@ export function GeneratedArtifactViewer({
         ) : null}
         {artifact.kind === "mermaid" ? <MermaidArtifactRenderer source={artifact.content} /> : null}
         {artifact.kind === "code" || artifact.kind === "text" ? (
-          <pre className="generated-artifact-code-block">{artifact.content}</pre>
+          <pre role="region" aria-label={`Artifact source: ${artifact.title}`} tabIndex={0} className="generated-artifact-code-block">{artifact.content}</pre>
         ) : null}
       </div>
     </article>

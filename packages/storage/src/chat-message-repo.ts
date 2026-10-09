@@ -612,6 +612,24 @@ export class ChatMessageRepository {
     return row ? this.mapRow(row) : undefined;
   }
 
+  /** Bounded batch discovery read; never includes system messages, parts or attachments. */
+  public latestVisibleTextBySessionIds(sessionIds: string[]): Map<string, string> {
+    const ids = [...new Set(sessionIds.filter(Boolean))];
+    const result = new Map<string, string>();
+    for (let offset = 0; offset < ids.length; offset += 400) {
+      const batch = ids.slice(offset, offset + 400);
+      const rows = this.db.prepare(`
+        SELECT session_id, content FROM (
+          SELECT session_id, content, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY seq DESC) AS position
+          FROM chat_messages WHERE session_id IN (${batch.map(() => "?").join(", ")})
+            AND role IN ('user', 'assistant') AND TRIM(content) <> ''
+        ) visible WHERE position = 1
+      `).all(...batch) as Array<{ session_id: string; content: string }>;
+      for (const row of rows) result.set(row.session_id, row.content);
+    }
+    return result;
+  }
+
   public listByMessageIds(messageIds: string[]): Map<string, ChatMessageRecord> {
     const uniqueMessageIds = [...new Set(messageIds.map((item) => item.trim()).filter(Boolean))];
     const messagesById = new Map<string, ChatMessageRecord>();

@@ -35,13 +35,14 @@ export function Gallery() {
       <Button variant="primary">Primary</Button><Button>Secondary</Button><Button variant="ghost">Ghost</Button>
       <Button variant="danger">Danger</Button><Button disabled>Unavailable</Button><Button size="sm">Small</Button>
       <Tooltip label="More options"><IconButton label="More options" icon={<MoreHorizontal aria-hidden="true" className="size-4" />} /></Tooltip>
+      <IconButton disabled label="Unavailable options" icon={<MoreHorizontal aria-hidden="true" className="size-4" />} />
     </section>
     <section aria-label="Status and shortcuts" className="flex flex-wrap items-center gap-2">
       {STATUSES.map((status) => <StatusBadge key={status.label} status={status} />)}<Kbd>Ctrl K</Kbd>
     </section>
     <section aria-label="Menus and overlays" className="flex flex-wrap gap-2">
       <Menu><MenuTrigger className="rounded-md border border-line px-3 py-2 text-sm">Open menu</MenuTrigger>
-        <MenuContent><MenuItem>First action</MenuItem><MenuItem>Second action</MenuItem></MenuContent></Menu>
+        <MenuContent><MenuItem>First action</MenuItem><MenuItem disabled>Unavailable action</MenuItem><MenuItem>Second action</MenuItem></MenuContent></Menu>
       <Button onClick={() => setDialogOpen(true)}>Open dialog</Button>
       <Button onClick={() => setSheetOpen(true)}>Open sheet</Button>
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen} title="Example dialog" description="A focused decision surface."><p className="text-sm text-fg-secondary">Dialog content</p></Dialog>

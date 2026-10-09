@@ -11,8 +11,11 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
     <section aria-label="Integration connection details" className="space-y-4 rounded-md border border-line p-4">
       <h3 className="break-words font-semibold">{connection.label}</h3>
       <p className="text-sm text-fg-secondary">
-        {connection.enabled ? "Enabled" : "Disabled"} · Saved status: {connection.status}
+        {connection.enabled ? "Enabled" : "Disabled"} · Configured status: {connection.status}
       </p>
+      <p className="text-sm text-fg-secondary">{s.diagnostics?.connectorId === connection.connectionId
+        ? `Latest diagnostics: ${s.diagnostics.status}, observed ${s.diagnostics.checkedAt}. This result does not establish ongoing connectivity.`
+        : "Connectivity unverified. Saved configuration does not prove a working connection."}</p>
       <p className="text-xs text-fg-muted">
         {connection.workspaceId
           ? `Bound workspace: ${connection.workspaceId}`

@@ -621,6 +621,8 @@ describe("MemoryLifecycleService", () => {
       subjectKind: "memory_item_batch",
       itemIds: ["batch-1", "batch-2"],
     });
+    expect(harness.storage.approvals.get(envelope.pendingApproval.approvalId)?.preview).toMatchObject({ reviewKind: "memory.lifecycle.batch", reviewedItems: [ { itemId: "batch-1", target: "Original title", requestedTitle: "Updated batch title", pinnedSummary: "Pin item" }, { itemId: "batch-2", consequence: "Forget this item from active recall." } ] });
+    expect(JSON.stringify(harness.storage.approvals.get(envelope.pendingApproval.approvalId)?.preview)).not.toContain("sk-should-not-enter-ledger");
     expect(readApprovalFirstItem(harness, "batch-1")).toMatchObject({ title: "Original title" });
 
     harness.storage.approvals.resolve(envelope.pendingApproval.approvalId, {
@@ -2526,6 +2528,32 @@ function countApprovalFirstRows(harness: ApprovalFirstMemoryHarness, table: stri
   return Number(row?.count ?? 0);
 }
 
+describe("exact lifecycle patch approval review", () => {
+  // Labels keep the secret-shaped case out of the test title, which reporters print and artifact redaction scans.
+  it.each([
+    ["single sentence", "Single sentence"],
+    ["multi-line", "  First line\nSecond line\n"],
+    ["secret-shaped content", "password=private-review-value"],
+  ])("persists readable immutable changes: %s", async (_label, content) => {
+    const harness = createApprovalFirstMemoryHarness("readable-preview");
+    insertApprovalFirstMemoryItem(harness, { itemId: "review-values" });
+    const patch = { title: "Requested title", content, pinned: false, ttlOverrideSeconds: null, metadata: { privateField: "withheld-value" } };
+    const result = await harness.service.requestMemoryItemPatchApproval("review-values", patch, harness.requesterId);
+    const approval = harness.storage.approvals.get(result.pendingApproval.approvalId);
+    expect(approval.preview).toMatchObject({
+      target: "Original title", requestedTitle: "Requested title",
+      requestedContent: content.replace("private-review-value", "[REDACTED]"),
+      pinnedSummary: "Requested pinned state: unpinned", ttlSummary: "Requested TTL: clear override",
+    });
+    expect(JSON.stringify(approval.preview)).not.toContain("withheld-value");
+    expect(JSON.stringify(approval.preview)).not.toContain("private-review-value");
+    expect(approval.preview.withheldSummary).toMatch(/metadata/i);
+    patch.content = "changed after capture";
+    expect(JSON.stringify(harness.storage.approvals.get(result.pendingApproval.approvalId).preview)).not.toContain("changed after capture");
+    expect(readApprovalFirstItem(harness, "review-values").content).toBe("Original content");
+  });
+});
+
 describe("memory lifecycle approval resolution effect", () => {
   function createEffectsService(harness: ApprovalFirstMemoryHarness) {
     const backgroundTasks = new Set<Promise<void>>();
@@ -2660,5 +2688,44 @@ describe("memory lifecycle approval resolution effect", () => {
     expect(enqueued.find((effect) => effect.effectKind === "memory_lifecycle_apply")).toBeUndefined();
     effectsService.stopWorker();
     expect(readApprovalFirstItem(harness, "effect-reject-1")).toMatchObject({ title: "Original title" });
+  });
+});
+describe("quality scan trusted actor provenance", () => {
+  const actor = "token:0123456789abcdef";
+  it("persists a real near-duplicate finding and the full authenticated fingerprint", async () => {
+    const h = createApprovalFirstMemoryHarness("quality-token");
+    insertApprovalFirstMemoryItem(h, { itemId: "quality-a" });
+    insertApprovalFirstMemoryItem(h, { itemId: "quality-b" });
+    const result = await h.service.runMemoryQualityScan({ workspaceId: h.workspaceId }, actor);
+    expect(result.createdCount).toBeGreaterThan(0);
+    expect(result.issues).toContainEqual(expect.objectContaining({ kind: "near_duplicate", metadata: expect.objectContaining({ scannedBy: actor }) }));
+    const persisted = await h.service.listMemoryQualityIssues({ workspaceId: h.workspaceId });
+    expect(persisted).toEqual(result.issues);
+    const repeated = await h.service.runMemoryQualityScan({ workspaceId: h.workspaceId }, actor);
+    expect(repeated.createdCount).toBe(0);
+    expect(repeated.updatedCount).toBe(result.issueCount);
+  });
+  it.each(["title", "namespace"])("still rejects secret-like user %s before quality persistence", async field => {
+    const h = createApprovalFirstMemoryHarness("quality-user-secret");
+    insertApprovalFirstMemoryItem(h, { itemId: "quality-secret", expiresAt: "2020-01-01T00:00:00.000Z" });
+    const value = "token:0123456789abcdef";
+    h.storage.gatewaySql.prepare(field === "title" ? "UPDATE memory_items SET title = ? WHERE item_id = ?" : "UPDATE memory_items SET namespace = ? WHERE item_id = ?").run(value, "quality-secret");
+    await expect(h.service.runMemoryQualityScan({ workspaceId: h.workspaceId }, actor)).rejects.toThrow(/secret-like payloads/);
+    expect(await h.service.listMemoryQualityIssues({ workspaceId: h.workspaceId })).toEqual([]);
+  });
+  it("does not exempt user metadata named scannedBy or secret-bearing feedback", async () => {
+    const h = createApprovalFirstMemoryHarness("quality-feedback-secret");
+    for (const input of [{ note: "password=synthetic-private-value" }, { metadata: { scannedBy: actor } }]) {
+      await expect(h.service.recordMemoryFeedback({ workspaceId: h.workspaceId, kind: "missing", targetKind: "context", ...input }, actor)).rejects.toThrow(/secret-like payloads/);
+    }
+    expect(await h.service.listMemoryFeedback({ workspaceId: h.workspaceId })).toEqual([]);
+  });
+  it("keeps the browser content guard on user titles", async () => {
+    const h = createApprovalFirstMemoryHarness("quality-browser-guard");
+    insertApprovalFirstMemoryItem(h, { itemId: "quality-browser", expiresAt: "2020-01-01T00:00:00.000Z" });
+    const envelope = createUntrustedContentEnvelope("browser.extract", "Untrusted page text");
+    h.storage.gatewaySql.prepare("UPDATE memory_items SET title = ? WHERE item_id = ?").run(envelope.canary, "quality-browser");
+    await expect(h.service.runMemoryQualityScan({ workspaceId: h.workspaceId }, actor)).rejects.toThrow(/Browser content guard/);
+    expect(await h.service.listMemoryQualityIssues({ workspaceId: h.workspaceId })).toEqual([]);
   });
 });

@@ -1,3 +1,4 @@
+import { DocumentProposalTarget, DocumentProposalDiff } from "./DocumentProposalTarget";
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { DocumentPatchProposalRecord, OperatorInboxItem, OperatorInboxResponse } from "@goatcitadel/contracts";
@@ -196,15 +197,14 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
             {proposal.authorKind === "assistant" ? "Assistant" : "Operator"} proposed a full replacement of this{" "}
             {proposal.targetKind === "personal_note" ? "note" : "generated artifact"}.
           </p>
+          <DocumentProposalTarget proposal={proposal} />
           <p className="break-words text-xs text-fg-muted">
-            Target: {proposal.targetId} · State: {proposal.state}
+            Target ID: {proposal.targetId} · State: {proposal.state}
             {proposal.baseRevision ? ` · Base revision ${proposal.baseRevision}` : " · Base content hash recorded"}
           </p>
           <div className="space-y-2 rounded-md border border-line bg-sunken p-3">
             <h4 className="font-medium text-fg">Server-derived replacement diff</h4>
-            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-fg-secondary">
-              {reviewable ? proposal.derivedDiff : proposal.derivedDiff.slice(0, 4_000)}
-            </pre>
+            <DocumentProposalDiff diff={reviewable ? proposal.derivedDiff : proposal.derivedDiff.slice(0, 4_000)} />
           </div>
           {!reviewable ? (
             <p className="text-fg-secondary">
@@ -263,7 +263,8 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
       >
         {review ? (
           <div className="mb-3 space-y-2 text-sm text-fg-secondary">
-            <p className="break-words">Target: {review.proposal.targetId}</p>
+            <DocumentProposalTarget proposal={review.proposal} />
+            <DocumentProposalDiff diff={review.proposal.derivedDiff} />
             <p>
               Author: {review.proposal.authorKind} · Proposal: {review.proposal.proposalId}
             </p>

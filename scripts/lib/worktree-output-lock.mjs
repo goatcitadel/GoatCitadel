@@ -74,6 +74,17 @@ export function worktreeOutputLockPath(repoRoot) {
   return path.join(path.resolve(repoRoot), LOCK_RELATIVE_PATH);
 }
 
+/** Build control metadata only. Runtime fixture scrubbing must never use this exception. */
+export async function inheritedWorktreeOutputLockEnvironment(repoRoot, environment = process.env) {
+  const keys = [WORKTREE_OUTPUT_LOCK_LEASE_ENV, WORKTREE_OUTPUT_LOCK_PATH_ENV, WORKTREE_OUTPUT_LOCK_ROOT_ENV];
+  if (!keys.some(key => normalizeText(environment[key]))) return {};
+  if (!keys.every(key => normalizeText(environment[key]))) throw new Error("Inherited worktree output-lock metadata is incomplete.");
+  // Reuse the established identity/token/live-owner validator; never acquire a new lease here.
+  const lease = await acquireWorktreeOutputLock({ repoRoot, environment });
+  if (!lease.inherited) throw new Error("Expected an inherited worktree output lock.");
+  return Object.fromEntries(keys.map(key => [key, environment[key]]));
+}
+
 async function inheritWorktreeOutputLock({ environment, inheritedToken, lockPath, repoRoot }) {
   const inheritedPath = normalizeText(environment[WORKTREE_OUTPUT_LOCK_PATH_ENV]);
   const inheritedRoot = normalizeText(environment[WORKTREE_OUTPUT_LOCK_ROOT_ENV]);
@@ -84,7 +95,9 @@ async function inheritWorktreeOutputLock({ environment, inheritedToken, lockPath
     );
   }
   const metadata = await readLockMetadata(lockPath);
-  if (!metadata || metadata.token !== inheritedToken) {
+  if (!metadata || metadata.token !== inheritedToken || !samePath(metadata.repoRoot ?? "", repoRoot) ||
+    metadata.hostname !== os.hostname() || !Number.isSafeInteger(metadata.pid) || metadata.pid <= 0 ||
+    !(await isProcessAlive(metadata.pid))) {
     throw new Error(
       `Inherited worktree output lock is no longer valid at ${lockPath}. ` +
         "The owning verification/build process may have exited; retry the top-level command.",

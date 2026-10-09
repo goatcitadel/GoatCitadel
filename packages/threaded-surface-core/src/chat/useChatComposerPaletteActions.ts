@@ -100,7 +100,7 @@ export function useChatComposerPaletteActions({
             await handleAttachKnowledgeUrlValue(item.action.url);
             break;
           case "launch_external_source":
-            pushLocalNotice("Opened the governed external-source attachment flow.");
+            pushLocalNotice("Open External sources in Library to review and admit a source before attaching it to this conversation.", "warning");
             break;
           case "explore_workspace":
             pushLocalNotice("Explore workspace delegation is temporarily unavailable.", "warning");

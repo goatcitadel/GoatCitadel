@@ -69,6 +69,14 @@ const artifact = (): ChatGeneratedArtifactRecord => ({
 });
 beforeEach(() => vi.resetAllMocks());
 
+it("forwards project artifact scope and withholds records from another project", async () => {
+  api.artifacts.mockResolvedValue({ items: [{ ...artifact(), projectId: "mine-project" }, { ...artifact(), artifactId: "foreign", projectId: "other-project" }] });
+  const page = await loadLibraryResources({ ...query, kind: "artifacts", projectId: "mine-project" });
+  expect(api.artifacts).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "mine", projectId: "mine-project" }));
+  expect(page.items).toHaveLength(1);
+  expect(resourceId(page.items[0]!)).toContain("artifact");
+});
+
 describe("scoped native Library owner reads", () => {
   it("preserves canonical global memory, withholds foreign/conflicting scope, and forwards opaque pagination", async () => {
     api.memory.mockResolvedValue({

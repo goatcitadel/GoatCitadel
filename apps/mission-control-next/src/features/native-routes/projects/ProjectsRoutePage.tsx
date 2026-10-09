@@ -837,7 +837,7 @@ function ProjectsWorkspace({
                 }
               />
             ) : null}
-            <NativeDisclosureCard id="project-governance" title="Project settings" subtitle="Governed delegation and project scope" lazy><ProjectAutomaticFanoutCard project={routedProject} workspaceId={activeWorkspaceId} /></NativeDisclosureCard>
+            <NativeDisclosureCard id="project-governance" title="Project settings" subtitle="Governed delegation and project scope" lazy><ProjectAutomaticFanoutCard project={routedProject} workspaceId={activeWorkspaceId} citadelId={activeCitadelId} /></NativeDisclosureCard>
             <div className="mc-next-project-thread-groups">
               {SURFACES.map((surface) => (
                 <ProjectThreadGroup

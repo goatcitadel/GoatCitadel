@@ -4,7 +4,7 @@ import { upsertNotificationPresence } from "@goatcitadel/mission-control-shared/
 const PRESENCE_INTERVAL_MS = 45_000;
 const PRESENCE_TTL_MS = 90_000;
 const CLIENT_STORAGE_KEY = "goatcitadel.notification-client-id";
-const LEASE_STORAGE_KEY = "goatcitadel.notification-lease-id";
+const ephemeralIdentifiers = new Map<string, string>();
 
 export function useNotificationPresenceLease(workspaceId: string, sessionId?: string): void {
   useEffect(() => {
@@ -17,7 +17,8 @@ export function useNotificationPresenceLease(workspaceId: string, sessionId?: st
     )
       return;
     const clientId = sessionIdentifier(CLIENT_STORAGE_KEY);
-    const leaseId = sessionIdentifier(LEASE_STORAGE_KEY);
+    // Each mounted scope owns its lease, so delayed cleanup cannot retire its successor.
+    const leaseId = randomIdentifier();
     let disposed = false;
 
     const publish = async (forceAway = false) => {
@@ -55,11 +56,22 @@ export function useNotificationPresenceLease(workspaceId: string, sessionId?: st
   }, [sessionId, workspaceId]);
 }
 
+function randomIdentifier(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function sessionIdentifier(key: string): string {
-  const storage = window.sessionStorage;
-  const existing = storage?.getItem(key);
-  if (existing) return existing;
-  const value = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  storage?.setItem(key, value);
-  return value;
+  try {
+    const storage = window.sessionStorage;
+    const existing = storage?.getItem(key);
+    if (existing) return existing;
+    const value = ephemeralIdentifiers.get(key) ?? randomIdentifier();
+    ephemeralIdentifiers.set(key, value);
+    storage?.setItem(key, value);
+    return value;
+  } catch {
+    const value = ephemeralIdentifiers.get(key) ?? randomIdentifier();
+    ephemeralIdentifiers.set(key, value);
+    return value;
+  }
 }

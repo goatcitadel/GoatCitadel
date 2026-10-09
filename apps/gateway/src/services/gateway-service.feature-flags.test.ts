@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ConflictError } from "@goatcitadel/contracts";
+import { FeatureDisabledError } from "@goatcitadel/contracts";
 
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
@@ -121,12 +121,15 @@ describe("GatewayService durable feature flags", () => {
     );
   });
 
-  it("throws a typed conflict when a feature-gated runtime path is disabled", async () => {
+  it("throws a typed disabled-feature error when a feature-gated runtime path is disabled", async () => {
     const { gateway } = createGatewayHarness();
 
     await expect(
       GatewayService.prototype.requireFeatureEnabled.call(gateway, "memoryLifecycleAdminV1Enabled"),
-    ).rejects.toThrow(ConflictError);
+    ).rejects.toThrow(FeatureDisabledError);
+    await expect(gateway.requireFeatureEnabled("memoryLifecycleAdminV1Enabled")).rejects.toMatchObject({
+      code: "FEATURE_DISABLED", httpStatus: 409, details: { flag: "memoryLifecycleAdminV1Enabled" },
+    });
   });
 
   describe("autonomy master kill switch (autonomyV1Disabled)", () => {

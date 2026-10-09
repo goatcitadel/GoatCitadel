@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type { SqliteSchemaTableBlueprint } from "./sqlite.js";
 import { createDatabase, createSqliteSchemaBlueprint } from "./sqlite.js";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
+import { assertPostgresMigrationIntegrity } from "./postgres/migrator.js";
 import { buildPostgresRuntimeSchemaSql } from "./postgres/runtime-schema.js";
 import {
   buildPostgresRuntimeSchemaSqlFromBlueprint,
@@ -859,6 +861,26 @@ describe("Postgres runtime schema generation", () => {
     }
     assert.match(sql, /LIMIT 250/);
     assert.match(sql, /FOR UPDATE/);
+  });
+
+  it("ships a forward Postgres purge of historical credential-route idempotency payload hashes", () => {
+    const migration = POSTGRES_MIGRATIONS.find(
+      (item) => item.name === "purge_credential_route_idempotency_payload_hashes",
+    );
+    assert.ok(migration, "expected credential-route idempotency payload hash purge migration");
+    assert.equal(migration.version, 199);
+    assert.equal(migration.batchedStatements, undefined);
+    assert.match(migration.integritySha256 ?? "", /^[a-f0-9]{64}$/);
+    const sentinel = createHash("sha256").update("credential_route_historical_payload_hash_purged_v1").digest("hex");
+    const sql = migration.sql.replace(/\s+/g, " ").trim();
+    assert.match(sql, /^UPDATE mutation_idempotency SET payload_hash = '[a-f0-9]{64}' WHERE /);
+    assert.ok(sql.includes(`SET payload_hash = '${sentinel}'`));
+    assert.ok(sql.includes(`payload_hash <> '${sentinel}'`));
+    assert.ok(sql.includes("route_path IN ('/api/v1/secrets/providers/:providerId', '/api/v1/auth/settings')"));
+    assert.doesNotMatch(sql, /DELETE/i);
+    assert.equal((sql.match(/\bSET\b/g) ?? []).length, 1);
+    assert.equal(sql.split(";").filter((part) => part.trim()).length, 1);
+    assertPostgresMigrationIntegrity(migration);
   });
 
   it("auto-derives capability_scope_assignments into the runtime schema", () => {

@@ -91,6 +91,8 @@ export function FirstRunArea() {
                 workspaceId={activeWorkspaceId}
                 onReload={setup.refresh}
                 onModelReady={() => setup.setStep("safety")}
+                canContinue={Boolean(progress.modelReady && !query.isFetching && !setup.checking && !completion.locked && !approval.locked)}
+                onContinue={() => void setup.continueModel()}
               />
             ) : null}
             {step === "safety" ? (
@@ -141,11 +143,12 @@ export function FirstRunArea() {
               Refresh checks
             </Button>
             {!state.completed ? (
-              <Button variant="primary" disabled={!setup.canFinish} onClick={() => void finish()}>
+              <Button variant="primary" aria-describedby="first-run-finish-prerequisite" disabled={!setup.canFinish} onClick={() => void finish()}>
                 {completion.attempt?.phase === "pending" ? "Confirming setup…" : "Finish setup and open Chat"}
               </Button>
             ) : null}
           </div>
+          <p id="first-run-finish-prerequisite" role="status" className="text-sm text-fg-secondary">{setup.finishPrerequisite}</p>
           {setup.notice || completion.notice ? (
             <p role="status" className="text-sm text-fg-secondary">
               {completion.notice ?? setup.notice}

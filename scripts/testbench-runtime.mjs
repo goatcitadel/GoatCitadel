@@ -48,7 +48,7 @@ async function copyTrackedSkills(sourceRoot, runtimeRoot, trackedFiles) {
 export async function prepareTestbenchRuntime({ runId, stubBaseUrl, sourceRoot = repoRoot, tempParent }) {
   // Ask git first so a failure leaves no half-built runtime root behind.
   const trackedSkillFiles = listTrackedSkillFiles(sourceRoot);
-  const runtimeRoot = await prepareUsabilityRuntime(runId, stubBaseUrl, { sourceRoot, tempParent });
+  const runtimeRoot = await prepareUsabilityRuntime(runId, stubBaseUrl, { sourceRoot, tempParent, copySkills: false });
   try {
     await copyTrackedSkills(sourceRoot, runtimeRoot, trackedSkillFiles);
     await fs.mkdir(path.join(runtimeRoot, "home"), { recursive: true });

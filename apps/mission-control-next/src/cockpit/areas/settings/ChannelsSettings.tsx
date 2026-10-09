@@ -5,9 +5,11 @@ import { useChannelReturnNavigation } from "../../../features/native-routes/sett
 import { useChannelSettings } from "../../../features/native-routes/settings/sections/use-channel-settings";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
+import { ChannelOutcomeCheck } from "../../../features/native-routes/settings/sections/ChannelOutcomeCheck";
 import { ChannelDraftEditor } from "./ChannelDraftEditor";
 import { ChannelDraftLeave } from "./ChannelDraftLeave";
 import { ChannelOperations } from "./ChannelOperations";
+import { ChannelLifecycleControls } from "./ChannelLifecycleControls";
 import { channelInputClass } from "./ChannelWizardFields";
 
 export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
@@ -53,6 +55,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
           {owner.mutation.uncertain}
         </p>
       ) : null}
+      <ChannelOutcomeCheck reload={owner.reload} buttonComponent={Button} />
       {data?.issues.length ? (
         <div role="alert" className="text-sm text-status-waiting">
           {data.issues.map((issue) => (
@@ -278,6 +281,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                     <Button onClick={() => owner.draftSelectionGuard.requestTransition(item.draftId)}>
                       Edit {item.label || item.catalogId}
                     </Button>
+                    <ChannelLifecycleControls workspaceId={workspaceId} selection={{ draft: item }} reload={owner.reload} />
                   </li>
                 ))}
             </ul>
@@ -295,6 +299,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                 Edit channel setup
               </Button>
               <ChannelOperations key={selectedConnection.connectionId} connection={selectedConnection} onUpdated={owner.reload} connectorDiagnosticsEnabled={data?.connectorDiagnosticsEnabled} />
+              <ChannelLifecycleControls key={`lifecycle:${selectedConnection.connectionId}`} workspaceId={workspaceId} selection={{ connection: selectedConnection }} reload={owner.reload} />
               <details className="text-sm">
                 <summary className="cursor-pointer">Connection identity</summary>
                 <p className="break-all">

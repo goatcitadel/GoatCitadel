@@ -1,0 +1,47 @@
+/* Cockpit colour tokens: the only place cockpit styles declare raw colours. The design-quality gate treats this
+   file (and only this file) as a cockpit token source; cockpit.css and every other stylesheet use these names. */
+
+:root {
+  --cockpit-canvas: #f0f8ff;
+  --cockpit-raised: #ffffff;
+  --cockpit-sunken: #deeffa;
+  --cockpit-overlay: #ffffff;
+  --cockpit-text: #142536;
+  --cockpit-text-secondary: #334a5a;
+  --cockpit-text-muted: #506574;
+  --cockpit-border-subtle: rgba(18, 69, 93, 0.15);
+  --cockpit-border: rgba(18, 69, 93, 0.24);
+  --cockpit-border-strong: rgba(18, 69, 93, 0.38);
+  --cockpit-accent: #006f85;
+  --cockpit-accent-ink: #f6fbff;
+  --cockpit-running: #006f85;
+  --cockpit-waiting: #855500;
+  --cockpit-done: #08734e;
+  --cockpit-failed: #a72e48;
+  --cockpit-neutral: #506574;
+  --cockpit-shadow-strong: rgb(0 0 0 / 0.28);
+  --cockpit-shadow-soft: rgb(0 0 0 / 0.16);
+  /* Modal backdrop and generated-document canvases keep these values in both themes. */
+  --cockpit-scrim: rgb(5 17 29 / 0.52);
+  --cockpit-document-surface: #fff;
+}
+
+[data-theme="dark"] {
+  --cockpit-canvas: #122235;
+  --cockpit-raised: #1a3045;
+  --cockpit-sunken: #0f1d2d;
+  --cockpit-overlay: #244057;
+  --cockpit-text: #f4fbff;
+  --cockpit-text-secondary: #d3e3ed;
+  --cockpit-text-muted: #b0c8d5;
+  --cockpit-border-subtle: rgba(178, 224, 245, 0.14);
+  --cockpit-border: rgba(178, 224, 245, 0.24);
+  --cockpit-border-strong: rgba(178, 224, 245, 0.38);
+  --cockpit-accent: #5ce9ff;
+  --cockpit-accent-ink: #0c2530;
+  --cockpit-running: #5ce9ff;
+  --cockpit-waiting: #ffd166;
+  --cockpit-done: #59e6aa;
+  --cockpit-failed: #ff8292;
+  --cockpit-neutral: #b0c8d5;
+}

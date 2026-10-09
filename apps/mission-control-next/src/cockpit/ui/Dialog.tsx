@@ -1,3 +1,4 @@
+import { useAccessBoundReview } from "@goatcitadel/mission-control-shared/hooks/use-access-bound-review";
 import { useRef, type ComponentProps, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
@@ -11,6 +12,7 @@ export function Dialog({
   description,
   children,
   onCloseAutoFocus,
+  onOpenAutoFocus,
   contentClassName,
   closeLabel = "Close dialog",
   actions,
@@ -24,15 +26,18 @@ export function Dialog({
   description?: string;
   children: ReactNode;
   onCloseAutoFocus?: ComponentProps<typeof DialogPrimitive.Content>["onCloseAutoFocus"];
+  onOpenAutoFocus?: ComponentProps<typeof DialogPrimitive.Content>["onOpenAutoFocus"];
 }) {
+  const accessCurrent = useAccessBoundReview(open, () => onOpenChange(false));
   const returnFocus = useRef<HTMLElement | null>(null);
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
+    <DialogPrimitive.Root open={open && accessCurrent} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-canvas/70" />
         <DialogPrimitive.Content
-          onOpenAutoFocus={() => {
+          onOpenAutoFocus={(event) => {
             returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            onOpenAutoFocus?.(event);
           }}
           onCloseAutoFocus={
             onCloseAutoFocus ??

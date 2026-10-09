@@ -62,7 +62,7 @@ export function registerTelegramIntegrationRoutes(fastify: FastifyInstance): voi
         fetcher: (url, init) => fetch(url, init),
       });
       return reply.send({ items });
-    } catch (error) {
+    } catch {
       return reply.code(502).send({ error: "Telegram target discovery could not complete. Check credentials, provider availability and the current delivery mode." });
     }
   });
@@ -98,7 +98,7 @@ export function registerTelegramIntegrationRoutes(fastify: FastifyInstance): voi
           directory,
           ...(query.data.query ? { resolution: resolveChannelTarget(directory, query.data.query) } : {}),
         });
-      } catch (error) {
+      } catch {
         return reply.code(502).send({ error: "Telegram target discovery could not complete. Check credentials, provider availability and the current delivery mode." });
       }
     },

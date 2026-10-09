@@ -206,7 +206,7 @@ describe("cockpit tool approval rule", () => {
     expect(api.patchSettings).not.toHaveBeenCalled();
     expect(confirmation).toMatchObject({ open: true, danger: true, confirmDisabled: false });
     expect(confirmation.message).toContain("settings revision 2");
-    expect(confirmation.message).toContain("Deny rules, nuclear-risk and risky-shell approvals");
+    expect(confirmation.message).toContain("Deny rules, Critical risk and risky-shell approvals");
     await act(async () => confirmation.onConfirm());
     expect(api.patchSettings).toHaveBeenCalledExactlyOnceWith({ expectedRevision: 2, toolApprovalMode: "bypass" });
     expect(container.textContent).toContain("draft remains unsaved");

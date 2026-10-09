@@ -1,3 +1,5 @@
+import { useLibraryOperation } from "./use-library-operation";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useEffect, useRef, useState } from "react";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
@@ -10,6 +12,8 @@ import {
   type LibraryResource,
 } from "./library-resources";
 import { readLibraryResource, type ResourcePreview } from "./library-resource-preview";
+import { LibraryFileDownload } from "./LibraryFileDownload";
+import { LibraryArtifactDownload } from "./LibraryArtifactDownload";
 
 export function LibraryResourceDetail({
   resource,
@@ -20,27 +24,32 @@ export function LibraryResourceDetail({
   workspaceId: string;
   citadelId: string;
 }) {
+  const access = useLibraryOperation(JSON.stringify(["resource-preview", workspaceId, citadelId]));
+  const isCurrent = access.current;
   const [preview, setPreview] = useState<{ binding: string; data?: ResourcePreview; error?: string }>();
-  const binding = JSON.stringify([workspaceId, citadelId, resourceBinding(resource)]);
+  const binding = JSON.stringify([access.identity, workspaceId, citadelId, resourceBinding(resource)]);
   const generation = useRef(0);
   useEffect(() => {
     const token = ++generation.current;
     void readLibraryResource(resource, workspaceId, citadelId)
       .then((data) => {
-        if (generation.current === token) setPreview({ binding, data });
+        if (generation.current === token && isCurrent()) setPreview({ binding, data });
       })
       .catch((cause: unknown) => {
-        if (generation.current === token) setPreview({ binding, error: describeApiError(cause).summary });
+        if (generation.current === token && isCurrent()) setPreview({ binding, error: describeApiError(cause).summary });
       });
     return () => {
       generation.current += 1;
     };
-  }, [binding, resource, workspaceId, citadelId]);
+  }, [binding, resource, workspaceId, citadelId, isCurrent]);
   const active = preview?.binding === binding ? preview : undefined;
   return (
     <div className="grid min-w-0 gap-3">
       <h3 className="break-words font-display text-lg font-semibold text-fg">{resourceTitle(resource)}</h3>
       <p className="text-sm text-fg-secondary">{resourceDescription(resource)}</p>
+      <TechnicalDetails label="Exact resource timestamps"><p>{resource.kind === "files" ? resource.item.modifiedAt : resource.item.createdAt}</p></TechnicalDetails>
+      {resource.kind === "files" ? <LibraryFileDownload key={binding} file={resource.item} /> : null}
+      {resource.kind === "artifacts" ? <LibraryArtifactDownload key={binding} artifact={resource.item} workspaceId={workspaceId} citadelId={citadelId} /> : null}
       {!active ? (
         <p role="status" className="text-sm text-fg-muted">
           Loading resource preview…

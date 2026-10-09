@@ -44,6 +44,12 @@ function body(init: RequestInit | undefined): unknown {
  * response never claims an executed mutation.
  */
 describe("memory lifecycle approval client", () => {
+  it("reads an exact scoped Knowledge receipt with GET and never dispatches the operation", async () => {
+    apiMocks.request.mockResolvedValue({ approvalId: "approval/a", state: "pending", message: "Pending" });
+    await memory.fetchKnowledgeApprovalResult("approval/a", { workspaceId: "workspace a", sessionId: "session/a", toolName: "embeddings.query" });
+    expect(lastCall()).toEqual(["/api/v1/knowledge/approvals/approval%2Fa/result?workspaceId=workspace+a&sessionId=session%2Fa&toolName=embeddings.query", undefined]);
+    expect(apiMocks.request).toHaveBeenCalledTimes(1);
+  });
   it("patchMemoryItem sends the patch and resolves the pending-approval envelope", async () => {
     const outcome = await memory.patchMemoryItem("memory-1", { title: "New title" });
     expect(lastCall()[0]).toBe("/api/v1/memory/items/memory-1");

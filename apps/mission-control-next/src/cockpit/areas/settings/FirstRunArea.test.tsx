@@ -54,7 +54,7 @@ async function render() {
       </QueryClientProvider>,
     ),
   );
-  await vi.waitFor(() => expect(container.textContent).toContain("Connection verified"));
+  await vi.waitFor(() => expect(container.textContent).toContain("Configured for a first send"));
 }
 async function safety() {
   await act(async () =>
@@ -99,6 +99,42 @@ afterEach(() => {
 });
 
 describe("native first-run setup", () => {
+  it("keeps release-engineering readiness prose out of the first-answer model step", async () => {
+    owner = { ...owner, setupReadiness: { ...owner.setupReadiness!, items: owner.setupReadiness!.items.map((item) => item.id === "provider" ? { ...item, detail: "Check release evidence before public readiness claims" } : item) } };
+    await render();
+    expect(container.textContent).not.toContain("before public readiness claims");
+    expect(container.textContent).not.toContain("Connection verified");
+    expect(container.textContent).toContain("Send a Chat message after setup to check the first answer");
+  });
+  it("continues with an existing ready model without opening provider editors", async () => {
+    await render();
+    expect(button("Continue to safety").disabled).toBe(false);
+    await click("Continue to safety");
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Set your safety posture");
+    expect(api.completeOnboarding).not.toHaveBeenCalled();
+  });
+  it("does not continue when the fresh model read loses readiness", async () => {
+    await render();
+    owner = { ...owner, setupReadiness: { ...owner.setupReadiness!, items: owner.setupReadiness!.items.map((item) => item.id === "provider" ? { ...item, status: "blocked" as const } : item) } };
+    await click("Continue to safety");
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Choose a model");
+    expect(button("Continue to safety").disabled).toBe(true);
+    expect(container.querySelector("#first-run-finish-prerequisite")?.textContent).toContain("Connect a provider");
+    expect(api.completeOnboarding).not.toHaveBeenCalled();
+  });
+  it("explains pending completion and prevents a duplicate Finish", async () => {
+    await render();
+    await safety();
+    await click("Keep current rule");
+    const response = deferred<{ state: OnboardingState; appliedAt: string }>();
+    api.completeOnboarding.mockReturnValueOnce(response.promise);
+    await click("Finish setup and open Chat");
+    expect(button("Confirming setup…").disabled).toBe(true);
+    expect(container.querySelector("#first-run-finish-prerequisite")?.textContent).toContain("Wait for the Gateway");
+    expect(api.completeOnboarding).toHaveBeenCalledTimes(1);
+    owner = { ...owner, completed: true, completedAt: "2026-09-30T12:00:00.000Z", completedBy: "operator" };
+    await act(async () => response.resolve({ state: owner, appliedAt: owner.completedAt! }));
+  });
   it("connects through the guided model owner and moves on to safety when the model is ready", async () => {
     await render();
     expect(container.textContent).not.toContain("Guided model owner ready");
@@ -121,6 +157,7 @@ describe("native first-run setup", () => {
   it("requires fresh safety review then exact owner completion before Chat", async () => {
     await render();
     expect(button("Finish setup and open Chat").disabled).toBe(true);
+    expect(container.querySelector("#first-run-finish-prerequisite")?.textContent).toContain("Review the current approval rule");
     await safety();
     await click("Keep current rule");
     expect(api.fetchOnboardingState).toHaveBeenCalledTimes(2);
@@ -165,7 +202,7 @@ describe("native first-run setup", () => {
     api.fetchOnboardingState.mockRejectedValueOnce(new Error("owner unavailable"));
     await click("Refresh checks");
     await vi.waitFor(() => expect(container.textContent).toContain("Setup state unavailable"));
-    expect(container.textContent).not.toContain("Connection verified");
+    expect(container.textContent).not.toContain("Configured for a first send");
     expect(api.completeOnboarding).not.toHaveBeenCalled();
   });
   it("preserves an uncertain completion lock after a native remount", async () => {

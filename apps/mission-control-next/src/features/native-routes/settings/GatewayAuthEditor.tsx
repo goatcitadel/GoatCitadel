@@ -24,7 +24,11 @@ export function GatewayAuthEditor({
   available: boolean;
   reload: () => Promise<unknown>;
   onReviewApproval?: (approvalId: string) => void;
-  renderApprovalAction?: (plan: ChangePlanRecord | undefined, receipt: NonNullable<RuntimeSettingsResponse["changePlanReceipt"]>, pending: boolean) => ReactNode;
+  renderApprovalAction?: (
+    plan: ChangePlanRecord | undefined,
+    receipt: NonNullable<RuntimeSettingsResponse["changePlanReceipt"]>,
+    pending: boolean,
+  ) => ReactNode;
   cockpit?: boolean;
   buttonComponent?: ComponentType<ButtonHTMLAttributes<HTMLButtonElement>>;
 }) {
@@ -73,8 +77,8 @@ export function GatewayAuthEditor({
         </p>
       ))}
       {settings?.auth?.allowLoopbackBypass ? (
-        <p role="status">
-          Loopback bypass is enabled. Local requests may access the Gateway without full authentication.
+        <p role="status" className="rounded-md border border-status-waiting p-3 text-status-waiting">
+          Caution: Loopback bypass is enabled. Local requests may access the Gateway without full authentication.
         </p>
       ) : null}
       <Action className={button} disabled={!control.ready} onClick={() => setEditing(true)}>
@@ -204,6 +208,15 @@ export function GatewayAuthEditor({
       {control.attempt ? (
         <p role={control.attempt.state === "uncertain" ? "alert" : "status"}>{control.attempt.message}</p>
       ) : null}
+      {control.attempt?.state === "uncertain" && control.attempt.transport ? (
+        <Action
+          className={button}
+          disabled={Boolean(control.attempt.checking)}
+          onClick={() => void control.checkOutcome()}
+        >
+          {control.attempt.checking ? "Checking outcome…" : "Check outcome"}
+        </Action>
+      ) : null}
       {change.change ? (
         <section
           aria-label="Authentication change status"
@@ -217,10 +230,13 @@ export function GatewayAuthEditor({
             Refresh authentication change status
           </Action>
           {!confirmed && action?.kind === "approval" && action.approvalId && receipt ? (
-            renderApprovalAction ? renderApprovalAction(change.change?.plan, receipt, control.attempt?.state === "pending")
-              : onReviewApproval ? <Action className={button} onClick={() => onReviewApproval(action.approvalId!)}>
-                  Review required approval
-                </Action> : null
+            renderApprovalAction ? (
+              renderApprovalAction(change.change?.plan, receipt, control.attempt?.state === "pending")
+            ) : onReviewApproval ? (
+              <Action className={button} onClick={() => onReviewApproval(action.approvalId!)}>
+                Review required approval
+              </Action>
+            ) : null
           ) : null}
           {approved.visible ? (
             <div>

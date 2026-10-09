@@ -1,3 +1,4 @@
+import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useRef, useState } from "react";
 import { Activity, Inbox, LayoutGrid, Library, MessageSquare, MoreHorizontal, Search, Settings } from "lucide-react";
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
@@ -18,6 +19,9 @@ import { useCockpitRoute } from "./use-cockpit-route";
 import { useCockpitPreload } from "./use-cockpit-preload";
 import { MobileStatusStrip } from "./MobileStatusStrip";
 import { WorkRunningIndicator } from "./WorkRunningIndicator";
+import { useWorkspaceName } from "../data/use-workspace-name";
+import { useCitadelName } from "../data/use-citadel-name";
+import { TechnicalDetails } from "../ui/TechnicalDetails";
 
 const TABS = [
   { area: "chat", label: "Chat", path: "/chat", Icon: MessageSquare },
@@ -34,13 +38,15 @@ export function MobileTabBar({
   streamState?: EventStreamConnectionState;
 }) {
   // The status strip and the Work count read only on phones, where the sidebar is not rendered.
-  const phone = !useMediaQuery("(min-width: 640px)");
+  const phone = !useMediaQuery(RESPONSIVE_QUERIES.abovePhone);
   const { isTransitionPending } = useCockpitNavigation();
   const shellSwitch = useCockpitShellSwitch();
   const { area: current, navigate } = useCockpitRoute();
   const preload = useCockpitPreload();
-  const { activeWorkspaceId, theme, setTheme } = useUiPreferences();
+  const { activeWorkspaceId, activeCitadelId, theme, setTheme } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
+  const workspaceName = useWorkspaceName(activeCitadelId, activeWorkspaceId, phone);
+  const citadelName = useCitadelName(activeCitadelId, phone);
   const inbox = useOperatorInbox(workspaceId);
   const inboxCount = inboxCountLabel(
     !inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId) ? inbox.data : undefined,
@@ -55,6 +61,7 @@ export function MobileTabBar({
   return (
     <>
       <div className="shrink-0 border-t border-line-subtle bg-raised sm:hidden">
+        <p aria-label="Current operating scope" className="truncate px-3 text-xs text-fg-secondary">{citadelName} / {workspaceName ?? "Workspace name unavailable"}</p>
         {phone ? <MobileStatusStrip workspaceId={workspaceId} streamState={streamState} /> : null}
         <nav aria-label="Areas on small screens" className="flex">
           {TABS.map(({ area, label, path, Icon }) => (
@@ -94,17 +101,19 @@ export function MobileTabBar({
             type="button"
             aria-label="More areas and settings"
             aria-expanded={moreOpen}
+            aria-current={current === "system" || current === "settings" ? "page" : undefined}
             onClick={() => {
               if (!isTransitionPending()) setMoreOpen(true);
             }}
             className="flex min-h-12 flex-1 flex-col items-center justify-center gap-0.5 py-1 text-xs text-fg-muted"
           >
             <MoreHorizontal aria-hidden="true" className="size-5" />
-            More
+            {current === "system" ? "System" : current === "settings" ? "Settings" : "More"}
           </button>
         </nav>
       </div>
       <Sheet open={moreOpen} onOpenChange={setMoreOpen} title="More">
+        <TechnicalDetails label="Operating scope identifiers"><p>Citadel: {activeCitadelId}</p><p>Workspace: {workspaceId}</p></TechnicalDetails>
         <div className="grid gap-1">
           <button
             type="button"

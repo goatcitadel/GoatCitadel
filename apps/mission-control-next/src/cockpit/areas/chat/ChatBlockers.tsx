@@ -1,15 +1,16 @@
+import { RiskBadge } from "../../ui/RiskBadge";
 import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { humanizeToken, presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
-import { StatusBadge } from "../../ui/StatusBadge";
-import { Button } from "../../ui/Button";
+import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { useState } from "react";
+import { ApprovalDecisionBar } from "../inbox/ApprovalDecisionBar";
+import { ApprovalSettlement } from "../inbox/ApprovalSettlement";
 import { approvalExpiryLabel } from "../inbox/approval-preview";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
 import { ChatPendingQuestion } from "./ChatPendingQuestion";
-import { RiskApprovalAction } from "./RiskApprovalAction";
 
 type Blockers = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -21,6 +22,7 @@ type Blockers = Pick<
   | "onApprovePending"
   | "onDenyPending"
   | "onSubmitUserInput"
+  | "onRefreshThread"
 >;
 
 export function ChatBlockers({ props }: { props: Blockers }) {
@@ -28,15 +30,18 @@ export function ChatBlockers({ props }: { props: Blockers }) {
   const workspaceId = activeWorkspaceId ?? "default";
   const pendingApproval = props.pendingApproval;
   const approvalId = pendingApproval?.approvalId;
-  const reviewedApproval =
-    useQuery({
-      // The same key as the Inbox approval detail, so moving between them is a cache hit (IN-11).
-      queryKey: ["approvals", "record", workspaceId, approvalId],
-      queryFn: ({ signal }) => nullWhenMissing(fetchApproval(approvalId!, { workspaceId, signal })),
-      // Every risk RiskApprovalAction reviews needs the persisted evidence; only safe and caution are one-click.
-      enabled: Boolean(approvalId && pendingApproval?.riskLevel !== "safe" && pendingApproval?.riskLevel !== "caution"),
-      staleTime: 0,
-    }).data ?? undefined;
+  const [receipt, setReceipt] = useState<{ scope: string; message: string }>();
+  const noticeScope = JSON.stringify([workspaceId, props.selectedSessionId, approvalId]);
+  const notice = receipt?.scope === noticeScope ? receipt.message : "";
+  const recordQuery = useQuery({
+    // The same key as the Inbox approval detail, so moving between them is a cache hit (IN-11).
+    queryKey: ["approvals", "record", workspaceId, approvalId],
+    queryFn: ({ signal }) => nullWhenMissing(fetchApproval(approvalId!, { workspaceId, signal })),
+    // Every risk RiskApprovalAction reviews needs the persisted evidence; only safe and caution are one-click.
+    enabled: Boolean(approvalId),
+    staleTime: 0,
+  });
+  const reviewedApproval = recordQuery.data?.approvalId === approvalId ? recordQuery.data : undefined;
   // Retained stream signals can omit risk metadata. Hydrate only from the
   // matching pending canonical record; unavailable/settled records stay closed.
   const approval =
@@ -53,24 +58,6 @@ export function ChatBlockers({ props }: { props: Blockers }) {
       : pendingApproval;
   const input = props.pendingUserInput;
   const expiry = approvalExpiryLabel(approval?.expiresAt);
-  const approvalReviewKey = JSON.stringify([
-    props.selectedSessionId,
-    approval?.approvalId,
-    approval?.kind,
-    approval?.riskLevel,
-    approval?.toolName,
-    approval?.reason,
-    approval?.expiresAt,
-    approval?.codeHash,
-    approval?.wrapperManifestHash,
-    approval?.capabilitySnapshotId,
-    approval?.inspectPath,
-    approval?.requestedOutputIntent,
-    approval?.saveCandidateOnSuccess,
-    approval?.remainingCount,
-    approval?.affectedResources,
-    approval?.codePreview,
-  ]);
   const chatHref = props.selectedSessionId
     ? `/chat?sessionId=${encodeURIComponent(props.selectedSessionId)}&shell=classic`
     : "/chat?shell=classic";
@@ -88,7 +75,7 @@ export function ChatBlockers({ props }: { props: Blockers }) {
                 {approval.toolName || (approval.kind ? humanizeToken(approval.kind) : "Action request")}
               </p>
             </div>
-            {approval.riskLevel ? <StatusBadge status={presentRiskLevel(approval.riskLevel)} /> : null}
+            {approval.riskLevel ? <RiskBadge risk={approval.riskLevel} /> : null}
           </div>
           {approval.reason ? <p className="mt-2 text-fg-secondary">{approval.reason}</p> : null}
           {approval.affectedResources?.length ? (
@@ -103,18 +90,32 @@ export function ChatBlockers({ props }: { props: Blockers }) {
             </details>
           ) : null}
           {expiry ? <p className="mt-2 text-xs text-fg-muted">{expiry}</p> : null}
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <RiskApprovalAction
-              key={approvalReviewKey}
-              approval={approval}
-              reviewedApproval={reviewedApproval}
-              pending={props.approvalPending}
-              onApprove={() => props.onApprovePending("once")}
+          {notice ? <p role="status">{notice}</p> : null}
+          {reviewedApproval?.status === "pending" ? (
+            <ApprovalDecisionBar
+              approval={reviewedApproval}
+              workspaceId={workspaceId}
+              sessionId={props.selectedSessionId ?? undefined}
+              checking={recordQuery.isFetching || recordQuery.isError || props.approvalPending}
+              onResolved={(message) => {
+                setReceipt({ scope: noticeScope, message });
+                void recordQuery.refetch();
+                props.onRefreshThread();
+              }}
+              onInvalidated={() => { void recordQuery.refetch(); props.onRefreshThread(); }}
             />
-            <Button variant="secondary" size="sm" disabled={props.approvalPending} onClick={props.onDenyPending}>
-              Deny
-            </Button>
-          </div>
+          ) : (
+            <p role="status">
+              {reviewedApproval
+                ? "Decision recorded. Check follow-on work below."
+                : recordQuery.isPending
+                  ? "Checking the current approval…"
+                  : "Current approval unavailable. Open the persisted record before deciding."}
+            </p>
+          )}
+          {reviewedApproval && reviewedApproval.status !== "pending" ? (
+            <ApprovalSettlement approval={reviewedApproval} workspaceId={workspaceId} />
+          ) : null}
           <ClassicOwnerLink
             href={`/ops/approvals?approvalId=${encodeURIComponent(approval.approvalId)}&shell=classic`}
             scope={JSON.stringify([props.selectedSessionId, approval.approvalId])}

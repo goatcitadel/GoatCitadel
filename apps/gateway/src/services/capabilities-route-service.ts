@@ -36,8 +36,14 @@ export type CapabilitiesRoutePort = Pick<
 export class CapabilitiesRouteService {
   public constructor(private readonly capabilities: CapabilitiesRoutePort) {}
 
-  public listCapabilityCatalog(scope: CapabilityCatalogScope, effectiveSkills?: EffectiveCapabilitySet) {
+  public listCapabilityCatalog(
+    scope: CapabilityCatalogScope,
+    effectiveSkills?: EffectiveCapabilitySet,
+    workspaceId?: string,
+  ) {
     // Forward faithfully: omit the arg when unscoped so listCatalog's own default ("ALL") applies.
+    // A workspace-scoped read also projects that workspace's approved candidate instructions.
+    if (workspaceId !== undefined) return this.capabilities.listCatalog(scope, effectiveSkills ?? "ALL", workspaceId);
     return effectiveSkills === undefined
       ? this.capabilities.listCatalog(scope)
       : this.capabilities.listCatalog(scope, effectiveSkills);

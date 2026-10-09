@@ -43,7 +43,9 @@ describe("integrations control routes", () => {
     const listIntegrationConnections = vi.fn(async () => [rawConnection]);
     const createIntegrationConnection = vi.fn(async (input: { config?: Record<string, unknown> }) => ({
       ...rawConnection,
-      config: input.config ?? {},
+      // Response projection still redacts any credential held by the service;
+      // ordinary public creation only submits the supported ENV reference.
+      config: { ...input.config, botToken: "created-short", webhookUrl: "https://hooks.example.test/new?token=created-hook" },
     }));
     app = Fastify();
     decorateIntegrationServices(app, {
@@ -79,8 +81,6 @@ describe("integrations control routes", () => {
         catalogId: "channel.slack",
         label: "Slack",
         config: {
-          botToken: "created-short",
-          webhookUrl: "https://hooks.example.test/new?token=created-hook",
           botTokenEnv: "SLACK_BOT_TOKEN",
           requestCount: 1,
         },
@@ -90,8 +90,8 @@ describe("integrations control routes", () => {
     expect(createIntegrationConnection).toHaveBeenCalledWith(
       expect.objectContaining({
         config: expect.objectContaining({
-          botToken: "created-short",
-          webhookUrl: "https://hooks.example.test/new?token=created-hook",
+          botTokenEnv: "SLACK_BOT_TOKEN",
+          requestCount: 1,
         }),
       }),
       expect.any(Function),

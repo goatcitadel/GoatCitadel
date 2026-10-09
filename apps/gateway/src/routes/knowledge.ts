@@ -1,5 +1,8 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { withRouteAccess } from "./route-access.js";
+import { sendRouteError } from "./_error-handler.js";
+import { projectPublicSecretValue } from "../services/public-secret-projection.js";
 
 const memoryWriteSchema = z.object({
   namespace: z.string().min(1),
@@ -76,6 +79,14 @@ const embeddingQuerySchema = z.object({
 });
 
 export const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
+  fastify.get("/api/v1/knowledge/approvals/:approvalId/result", withRouteAccess(fastify, "operator"), async (request, reply) => {
+    const params = z.object({ approvalId: z.string().min(1).max(256) }).safeParse(request.params);
+    const query = z.object({ workspaceId: z.string().min(1).max(256), sessionId: z.string().min(1).max(256), toolName: z.enum(["docs.ingest", "embeddings.index", "embeddings.query"]) }).strict().safeParse(request.query);
+    if (!params.success || !query.success) return reply.code(400).send({ error: "A bound Knowledge approval and scope are required." });
+    reply.header("Cache-Control", "private, no-store");
+    try { return reply.send(projectPublicSecretValue(await fastify.services.knowledge.knowledgeApprovalResult(params.data.approvalId, query.data))); }
+    catch (error) { return sendRouteError(reply, error, request.log); }
+  });
   fastify.post("/api/v1/knowledge/memory/write", async (request, reply) => {
     const parsed = memoryWriteSchema.safeParse(request.body);
     if (!parsed.success) {

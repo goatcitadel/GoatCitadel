@@ -8,7 +8,7 @@ import {
 import { mcpConnectionReviewMatches } from "./mcp-connection-mutation";
 import { mcpOAuthReview, mcpOAuthUnavailable, validMcpOAuthCompletion, validMcpOAuthStart } from "./mcp-oauth-binding";
 import { readMcpOAuthFlow, writeMcpOAuthFlow } from "./mcp-oauth-flow-state";
-import { IDLE_MCP_ATTEMPT, readMcpServerAttempt, writeMcpServerAttempt } from "./mcp-server-attempts";
+import { IDLE_MCP_ATTEMPT, readMcpServerAttempt, trackMcpWrite, writeMcpServerAttempt } from "./mcp-server-attempts";
 
 export type McpOAuthAction = "start" | "complete";
 type Result =
@@ -102,7 +102,7 @@ export async function commitMcpOAuth({
     dispatched = true;
     let saved: McpServerRecord;
     if (action === "start") {
-      const receipt = await startReviewedMcpOAuth(id, mcpOAuthReview(before));
+      const receipt = await trackMcpWrite(id, () => startReviewedMcpOAuth(id, mcpOAuthReview(before)));
       acknowledged = true;
       if (!validMcpOAuthStart(before, receipt)) throw new Error("Unbound handshake acknowledgement.");
       saved = await fetchMcpServer(id);
@@ -110,11 +110,13 @@ export async function commitMcpOAuth({
         throw new Error("Handshake readback changed.");
       writeMcpOAuthFlow(id, receipt);
     } else {
-      const receipt = await completeReviewedMcpOAuth(id, {
-        ...mcpOAuthReview(before),
-        code: code!.trim(),
-        state: state!,
-      });
+      const receipt = await trackMcpWrite(id, () =>
+        completeReviewedMcpOAuth(id, {
+          ...mcpOAuthReview(before),
+          code: code!.trim(),
+          state: state!,
+        }),
+      );
       acknowledged = true;
       if (!validMcpOAuthCompletion(before, state!, receipt)) throw new Error("Unbound authentication acknowledgement.");
       saved = await fetchMcpServer(id);

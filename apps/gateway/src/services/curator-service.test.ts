@@ -128,6 +128,83 @@ describe("CuratorService.archive", () => {
     await expect(service.archive({ skillId: skills[0].skillId, confirm: true })).rejects.toThrow(/pinned/i);
   });
 
+  function archiveService(
+    skills: SkillListItem[],
+    archiveSkill: (skillId: string) => SkillListItem,
+    publishRealtime: (eventType: string, payload: Record<string, unknown>) => void = () => undefined,
+  ) {
+    return new CuratorService({
+      listSkills: () => skills,
+      archiveSkill,
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-15T12:00:00Z"),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime,
+      cycleDays: 7,
+    });
+  }
+
+  it("refuses an unknown skill with a typed 404 instead of an opaque server error", async () => {
+    const service = archiveService([], () => {
+      throw new Error("archive should not be called for a missing skill");
+    });
+    await expect(service.archive({ skillId: "skill-missing", confirm: true })).rejects.toMatchObject({
+      httpStatus: 404,
+    });
+  });
+
+  it("refuses an immune skill with a typed 409 that names the reason", async () => {
+    const service = archiveService([makeSkill({ name: "alpha", pinned: true })], () => {
+      throw new Error("archive should not be called for an immune skill");
+    });
+    await expect(service.archive({ skillId: "skill-alpha", confirm: true })).rejects.toMatchObject({
+      httpStatus: 409,
+      message: expect.stringMatching(/pinned/i),
+    });
+  });
+
+  it("returns the recorded archive for an already-archived skill without disabling it again", async () => {
+    let calls = 0;
+    const published: string[] = [];
+    const archived = makeSkill({ name: "alpha", state: "disabled", note: "curator:archived manual operator archive" });
+    const service = archiveService(
+      [archived],
+      () => {
+        calls += 1;
+        return archived;
+      },
+      (eventType) => {
+        published.push(eventType);
+      },
+    );
+    const replay = await service.archive({ skillId: "skill-alpha", confirm: true });
+    expect(calls).toBe(0);
+    // A replay is marked as one, reports the readback time, and announces nothing new.
+    expect(replay).toEqual({
+      skillId: "skill-alpha",
+      archived: true,
+      alreadyArchived: true,
+      archivedAt: "2026-05-15T12:00:00.000Z",
+      state: "disabled",
+    });
+    expect(published).toEqual([]);
+  });
+
+  it("archives a live skill without the replay marker and announces it once", async () => {
+    const published: string[] = [];
+    const live = makeSkill({ name: "alpha" });
+    const service = archiveService(
+      [live],
+      () => ({ ...live, state: "disabled", note: "curator:archived" }),
+      (eventType) => {
+        published.push(eventType);
+      },
+    );
+    const response = await service.archive({ skillId: "skill-alpha", confirm: true });
+    expect(response).not.toHaveProperty("alreadyArchived");
+    expect(published).toEqual(["curator"]);
+  });
+
   it("refuses to archive a bundled skill", async () => {
     const skills = [makeSkill({ name: "alpha", source: "bundled" })];
     const service = new CuratorService({

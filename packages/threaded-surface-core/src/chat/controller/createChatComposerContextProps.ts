@@ -201,7 +201,8 @@ export function createChatComposerContextProps({
             canMutate: externalSourceAttachments.canMutate && !historicalModeActive,
             error: externalSourceAttachments.error,
             onToggleSelect: (attachmentId) => {
-              if (externalSourceAttachments.selectedAttachmentIds.includes(attachmentId)) {
+              if (!blockHistoricalMutation() && externalSourceAttachments.selectedAttachmentIds.includes(attachmentId)) {
+                // New turns use live capabilities; only clearing retained intent is available.
                 toggleSelection(attachmentId);
               }
             },

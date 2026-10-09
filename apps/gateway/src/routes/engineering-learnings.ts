@@ -81,7 +81,7 @@ export async function engineeringLearningRoutes(fastify: FastifyInstance): Promi
     const body = proposalSchema.safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: body.error.flatten() });
     try {
-      return reply.code(201).send(await fastify.gatewayRuntime.engineeringLearningService.propose(body.data));
+      return reply.code(201).send(await fastify.gatewayRuntime.engineeringLearningService.proposeFromCanonicalSource(body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

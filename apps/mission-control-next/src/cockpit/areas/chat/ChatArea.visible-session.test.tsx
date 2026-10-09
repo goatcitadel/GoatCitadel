@@ -163,3 +163,21 @@ describe("visible Chat session", () => {
   });
 
 });
+
+
+it("contains native compact side chat in the positioned conversation host with bound draft/actions", async () => {
+  const surface = input("parent");
+  const onDraftChange = vi.fn(); const onSend = vi.fn(); const onClose = vi.fn();
+  surface.btwSideChatProps = { open: true, parentSessionId: "parent", workspaceId: "default", parentTitle: "Parent", childSessionId: "child", draft: "Side draft", thread: null, streamingPreview: null, loading: false, sending: false, error: null, onDraftChange, onSend, onClose };
+  await act(async () => root.render(view(surface)));
+  const panel = container.querySelector('[data-testid="btw-side-chat-panel"]')!;
+  expect(panel.parentElement?.classList.contains("relative")).toBe(true);
+  expect(panel.closest('section[aria-label="Chat"]')).not.toBeNull();
+  expect(panel.querySelector("textarea")?.value).toBe("Side draft");
+  await act(async () => (panel.querySelector('[aria-label="Send side chat message"]') as HTMLButtonElement).click());
+  expect(onSend).toHaveBeenCalledOnce();
+  await act(async () => (panel.querySelector('[aria-label="Close side chat"]') as HTMLButtonElement).click());
+  expect(onClose).toHaveBeenCalledOnce();
+  expect(onDraftChange).not.toHaveBeenCalled();
+  await act(async () => root.unmount());
+});

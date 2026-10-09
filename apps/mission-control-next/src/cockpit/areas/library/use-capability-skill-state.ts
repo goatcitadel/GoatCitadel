@@ -1,3 +1,4 @@
+import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { CapabilityCatalogEntry, SkillRuntimeState } from "@goatcitadel/contracts";
 import {
@@ -85,8 +86,11 @@ export function useCapabilitySkillState({
   onRefresh: () => void;
 }) {
   const skillId = item.skillId ?? "";
+  const access = useProjectAccess(JSON.stringify(["skill-state", skillId]));
+  const attemptKey = access.presentationScope;
   const identity = JSON.stringify([
     workspaceId,
+    access.identity,
     item.capabilityId,
     item.kind,
     skillId,
@@ -112,7 +116,7 @@ export function useCapabilitySkillState({
   const [error, setError] = useState<{ identity: string; message: string }>();
   const attempt = useSyncExternalStore(
     subscribe,
-    () => attempts.get(skillId),
+    () => attempts.get(attemptKey),
     () => undefined,
   );
   const visibleAttempt =
@@ -144,15 +148,15 @@ export function useCapabilitySkillState({
 
   async function confirm() {
     if (!target || locked || !skill) return;
-    const existing = attempts.get(skillId);
+    const existing = attempts.get(attemptKey);
     if (existing && existing.phase !== "recorded") return;
     const current = () =>
-      mounted.current &&
+      access.current() && mounted.current &&
       lifecycle.current.identity === target.identity &&
       lifecycle.current.generation === target.generation;
     if (!current()) return;
     const base = { revision: target.revision };
-    publish(skillId, { ...base, phase: "checking", message: "Checking the current skill…" });
+    publish(attemptKey, { ...base, phase: "checking", message: "Checking the current skill…" });
     setError(undefined);
     let dispatched = false;
     let recorded = false;
@@ -171,11 +175,11 @@ export function useCapabilitySkillState({
         return;
       }
       dispatched = true;
-      publish(skillId, { ...base, phase: "submitted", message: "Requesting skill approval…" });
+      publish(attemptKey, { ...base, phase: "submitted", message: "Requesting skill approval…" });
       const outcome = await updateSkillState(skillId, { expectedRevision: target.revision, state: target.state });
       const approval = validateReceipt(outcome, skillId, target);
       recorded = true;
-      publish(skillId, {
+      publish(attemptKey, {
         ...base,
         phase: "recorded",
         approvalId: approval?.approvalId,
@@ -201,7 +205,7 @@ export function useCapabilitySkillState({
         return;
       }
       if (dispatched) {
-        publish(skillId, {
+        publish(attemptKey, {
           ...base,
           phase: "uncertain",
           message:
@@ -212,7 +216,7 @@ export function useCapabilitySkillState({
       }
       if (current()) setReview(null);
     } finally {
-      if (!dispatched) publish(skillId);
+      if (!dispatched) publish(attemptKey);
     }
   }
 

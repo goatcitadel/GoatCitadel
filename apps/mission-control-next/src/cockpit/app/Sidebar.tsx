@@ -88,7 +88,7 @@ export function Sidebar({
       <button
         type="button"
         aria-label="Search commands and records"
-        title="Search (Ctrl+K)"
+        title="Search (Ctrl / Cmd K)"
         onClick={onOpenPalette}
         className="mb-2 flex h-8 items-center gap-2 rounded-md border border-line px-2 text-sm text-fg-muted hover:border-line-strong"
       >
@@ -96,7 +96,7 @@ export function Sidebar({
         {!collapsed ? (
           <>
             <span className="flex-1 text-left">Search</span>
-            <Kbd>Ctrl K</Kbd>
+            <Kbd>Ctrl / Cmd K</Kbd>
           </>
         ) : null}
       </button>
@@ -108,7 +108,7 @@ export function Sidebar({
               key={entry.area}
               type="button"
               aria-label={entry.area === "inbox" ? inboxNavigationLabel(inboxCount) : entry.label}
-              title={collapsed ? entry.label : undefined}
+              title={`${entry.label} (g then ${entry.shortcut})`}
               aria-current={current === entry.area ? "page" : undefined}
               aria-describedby={entry.area === "work" ? "cockpit-work-running-summary" : undefined}
               onClick={() => navigate(entry.path)}

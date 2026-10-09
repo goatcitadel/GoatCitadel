@@ -97,7 +97,7 @@ export function useChatSessionControls(input: {
   loadSidebar: (nextHistoryView?: ChatHistoryView, options?: ChatSidebarLoadOptions) => Promise<void>;
   onSessionCreated?: (session: ChatSessionRecord) => void;
   initialOutboundSessionCreationRef?: React.MutableRefObject<InitialOutboundSessionCreation | null>;
-  refreshSessionAggregate?: (sessionId: string) => Promise<void>;
+  refreshSessionAggregate?: (sessionId: string, options?: Pick<ChatSidebarLoadOptions, "preserveSelection">) => Promise<void>;
   setSessionMetadataConflictDraft?: (draft: SessionMetadataConflictDraft | null) => void;
   setBinding: React.Dispatch<React.SetStateAction<ChatSessionBindingRecord | null>>;
 }) {
@@ -127,13 +127,15 @@ export function useChatSessionControls(input: {
     setBinding,
   } = input;
 
-  const selectionScopeRef = useRef({ workspaceId, selectedSessionId });
+  const selectionScopeRef = useRef({ workspaceId, selectedSessionId, viewIdentity: input.viewIdentity });
   if (
     selectionScopeRef.current.workspaceId !== workspaceId ||
-    selectionScopeRef.current.selectedSessionId !== selectedSessionId
+    selectionScopeRef.current.selectedSessionId !== selectedSessionId ||
+    selectionScopeRef.current.viewIdentity !== input.viewIdentity
   ) {
-    selectionScopeRef.current = { workspaceId, selectedSessionId };
+    selectionScopeRef.current = { workspaceId, selectedSessionId, viewIdentity: input.viewIdentity };
   }
+  const renderedSelectionScope = selectionScopeRef.current;
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -452,6 +454,13 @@ export function useChatSessionControls(input: {
   const handleAssignProject = useCallback(
     async (value: string) => {
       if (!selectedSession) return;
+      const assignmentScope = renderedSelectionScope;
+      if (selectionScopeRef.current !== assignmentScope) return;
+      if (assignmentScope.selectedSessionId !== selectedSession.sessionId ||
+        assignmentScope.workspaceId !== (selectedSession.workspaceId ?? "default")) return;
+      const installation = getGatewayApiBaseUrl();
+      const isCurrent = () => mountedRef.current && selectionScopeRef.current === assignmentScope &&
+        getGatewayApiBaseUrl() === installation;
       setSessionControlPending("project");
       try {
         await assignChatSessionProject(
@@ -459,12 +468,13 @@ export function useChatSessionControls(input: {
           value === "none" ? undefined : value,
           selectedSession.revision,
         );
-        await loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId });
+        if (isCurrent()) await loadSidebar(historyView, { bypassCache: true, preserveSelection: true });
       } catch (err) {
+        if (!isCurrent()) return;
         if (isSessionRevisionConflict(err)) {
-          await (refreshSessionAggregate?.(selectedSession.sessionId) ??
-            loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId }));
-          setError("This chat changed elsewhere. Review the latest state, then choose the project again.");
+          await (refreshSessionAggregate?.(selectedSession.sessionId, { preserveSelection: true }) ??
+            loadSidebar(historyView, { bypassCache: true, preserveSelection: true }));
+          if (isCurrent()) setError("This chat changed elsewhere. Review the latest state, then choose the project again.");
         } else {
           setError((err as Error).message);
         }
@@ -472,7 +482,7 @@ export function useChatSessionControls(input: {
         setSessionControlPending(null);
       }
     },
-    [historyView, loadSidebar, refreshSessionAggregate, selectedSession, setError],
+    [historyView, loadSidebar, refreshSessionAggregate, selectedSession, setError, renderedSelectionScope],
   );
 
   const handleImportCodeProject = useCallback(

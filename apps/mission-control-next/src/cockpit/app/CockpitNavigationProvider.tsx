@@ -1,3 +1,4 @@
+import { resolveCockpitCompatibility } from "./cockpit-compatibility";
 import {
   useEffect,
   useEffectEvent,
@@ -31,6 +32,11 @@ export function CockpitNavigationProvider({ children }: { children: ReactNode })
   const installation = getGatewayApiBaseUrl();
   const identity = canonicalJsonString([installation, activeCitadelId, activeWorkspaceId]);
   const history = useSyncExternalStore(subscribeCockpitHistory, readCockpitHistory, () => "server");
+  useLayoutEffect(() => {
+    const href = window.location.pathname + window.location.search + window.location.hash;
+    const resolution = resolveCockpitCompatibility(href);
+    if (resolution.kind === "native" && resolution.href !== href) commitCockpitNavigation(resolution.href, { replace: true });
+  }, [history]);
   const view = useRef({ identity, history });
   if (view.current.identity !== identity || view.current.history !== history) view.current = { identity, history };
   const renderedView = view.current;
@@ -73,7 +79,7 @@ export function CockpitNavigationProvider({ children }: { children: ReactNode })
         const result = action({
           isCurrent: current,
           signal: review.signal,
-          navigate: (href, options) => current() && commitCockpitNavigation(href, options),
+          navigate: (href, options) => current() && commitCockpitNavigation(href, options, current),
         });
         void Promise.resolve(result).then(settle, settle);
         return result;
@@ -89,7 +95,7 @@ export function CockpitNavigationProvider({ children }: { children: ReactNode })
     const source = window.location.pathname + window.location.search + window.location.hash;
     if (cockpitHref(source) === destination) return;
     if (retainsSettingsPage(source, destination)) {
-      commitCockpitNavigation(destination, options);
+      commitCockpitNavigation(destination, options, isCurrent);
       return;
     }
     requestTransition((review) => {

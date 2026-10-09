@@ -50,8 +50,11 @@ export interface CuratorArchiveRequest {
 export interface CuratorArchiveResponse {
   skillId: string;
   archived: boolean;
+  /** When `alreadyArchived`, this is the readback time; the original time is in the skill's state history. */
   archivedAt: string;
   state: SkillRuntimeState;
+  /** True when the skill was already archived and nothing changed. */
+  alreadyArchived?: boolean;
 }
 
 export interface CuratorPruneRequest {

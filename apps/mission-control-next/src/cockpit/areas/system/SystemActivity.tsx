@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { SystemOwnerLink } from "./SystemOwnerLink";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { fetchRealtimeEvents } from "@goatcitadel/mission-control-shared/api/system";
@@ -10,7 +11,8 @@ import { ACTIVITY_FALLBACK_MS } from "../../data/activity-feed";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
-import { activityRunLabel, collapseActivity, describeActivity, type ActivityRow } from "./activity-sentences";
+import { RecentSessions } from "./RecentSessions";
+import { activityMetadata, activityOwnerPath, activityRunLabel, collapseActivity, describeActivity, type ActivityRow } from "./activity-sentences";
 
 export const SHOW_BACKGROUND_KEY = "goatcitadel.cockpit.activity.background";
 
@@ -39,11 +41,7 @@ function formattedTime(iso: string): string {
 
 function ActivityItem({ row }: { row: ActivityRow }) {
   const { event } = row;
-  const source = event.links?.sessionId
-    ? `/chat?sessionId=${encodeURIComponent(event.links.sessionId)}&shell=cockpit`
-    : event.links?.runId
-      ? `/work/runs/${encodeURIComponent(event.links.runId)}`
-      : null;
+  const source = activityOwnerPath(event);
   const run = activityRunLabel(row);
   return (
     <li className="rounded-lg border border-line bg-raised p-3">
@@ -57,15 +55,17 @@ function ActivityItem({ row }: { row: ActivityRow }) {
         </time>
       </div>
       <p className="mt-1 text-xs text-fg-muted">{presentEventClass(event.eventClass)}</p>
+      <dl className="mt-2 grid gap-1 text-xs text-fg-secondary sm:grid-cols-2">{activityMetadata(event).map(([label, value]) => <div key={label} className="min-w-0"><dt className="font-medium text-fg">{label}</dt><dd className="break-all">{value}</dd></div>)}</dl>
+      <p className="mt-2 text-xs text-fg-muted">Retained Gateway signal; reported host/device metadata does not establish current target health. {event.eventAuthority ? "Authority is inspectable in technical details." : "Authority was not reported."}</p>
       {source ? (
-        <NativeOwnerLink
+        <SystemOwnerLink
           scope={[event.links?.workspaceId, event.eventId]}
           href={source}
-          className="mt-2 inline-block text-sm font-medium text-accent hover:underline"
         >
           Open source
-        </NativeOwnerLink>
-      ) : null}
+        </SystemOwnerLink>
+      ) : <p className="mt-2 text-xs text-fg-muted">No source record link was supplied by the Gateway.</p>}
+      <TechnicalDetails label="Event identifiers and raw payload"><dl><dt>Event type</dt><dd>{event.eventType}</dd><dt>Event ID</dt><dd>{event.eventId}</dd><dt>Authority</dt><dd>{event.eventAuthority ?? "Unknown"}</dd><dt>Timestamp (UTC)</dt><dd>{event.timestamp}</dd></dl><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(event.payload, null, 2)}</pre></TechnicalDetails>
     </li>
   );
 }
@@ -92,6 +92,7 @@ export function SystemActivity() {
           <p className="mt-1 text-xs text-fg-muted">
             This list keeps recent signals only, not the full history. Open the source record for full details.
           </p>
+          {events.dataUpdatedAt ? <p className="mt-1 text-xs text-fg-muted">Last owner read {new Date(events.dataUpdatedAt).toLocaleString()}{events.isError ? "; retained observations are stale" : ""}. Quiet live events do not prove current health.</p> : null}
         </div>
         <Button size="sm" disabled={events.isFetching} onClick={() => void events.refetch()}>
           <RefreshCw aria-hidden="true" className="size-4" /> Refresh
@@ -145,6 +146,7 @@ export function SystemActivity() {
           />
         )
       ) : null}
+      <RecentSessions />
     </section>
   );
 }

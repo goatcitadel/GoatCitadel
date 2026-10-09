@@ -26,6 +26,7 @@ describe("useNotificationPresenceLease", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     act(() => renderer?.unmount());
     renderer = undefined;
     vi.restoreAllMocks();
@@ -51,4 +52,27 @@ describe("useNotificationPresenceLease", () => {
     );
     renderer = undefined;
   });
+  it("survives denied session storage and retires scopes while renewing focus and visibility", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window, "sessionStorage", "get").mockImplementation(() => { throw new Error("denied"); });
+    await act(async () => { renderer = create(createElement(Harness, {workspaceId: "one", sessionId: "s1"})); });
+    const first = mocks.upsert.mock.calls.at(-1)![0];
+    await act(async () => { vi.advanceTimersByTime(45_000); });
+    expect(mocks.upsert).toHaveBeenCalledTimes(2);
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    await act(async () => { window.dispatchEvent(new Event("blur")); });
+    expect(mocks.upsert).toHaveBeenLastCalledWith(expect.objectContaining({focused: false}));
+    Object.defineProperty(document, "visibilityState", {configurable: true, value: "hidden"});
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(mocks.upsert).toHaveBeenLastCalledWith(expect.objectContaining({visible: false}));
+    await act(async () => { renderer!.update(createElement(Harness, {workspaceId: "two", sessionId: "s2"})); });
+    expect(mocks.upsert.mock.calls.at(-2)![0]).toMatchObject({workspaceId: "one", focused: false, visible: false});
+    expect(mocks.upsert.mock.calls.at(-1)![0]).toMatchObject({workspaceId: "two", sessionId: "s2"});
+    expect(mocks.upsert.mock.calls.at(-1)![0].leaseId).not.toBe(first.leaseId);
+    await act(async () => { renderer!.update(createElement(Harness, {workspaceId: ""})); });
+    const count = mocks.upsert.mock.calls.length;
+    await act(async () => { vi.advanceTimersByTime(90_000); window.dispatchEvent(new Event("focus")); });
+    expect(mocks.upsert).toHaveBeenCalledTimes(count);
+  });
+
 });

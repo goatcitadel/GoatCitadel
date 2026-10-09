@@ -31,13 +31,18 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
     decision: "allow",
     scope: "workspace",
     scopeRef: workspaceId,
-    grantType: "persistent",
+    grantType: "ttl",
     expiresAt: expiry,
   };
-  const editor = useSessionDraft(`tool-grant:${getGatewayApiBaseUrl()}:${workspaceId}:${selectedTool || "new"}`, empty, undefined, {
-    label: "Tool grant",
-    onSave: () => reviewGrant(),
-  });
+  const editor = useSessionDraft(
+    `tool-grant:${getGatewayApiBaseUrl()}:${workspaceId}:${selectedTool || "new"}`,
+    empty,
+    undefined,
+    {
+      label: "Tool grant",
+      onSave: () => reviewGrant(),
+    },
+  );
   const actions = useToolGrantActions(editor.key, () => owner.refetch());
   const createAttempt = actions.attemptFor("create");
   const toolsReady = Boolean(
@@ -262,6 +267,20 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
             </dd>
           </dl>
         ) : null}
+        {review?.kind === "create" &&
+        review.input.decision === "allow" &&
+        (review.input.scope === "global" ||
+          review.input.toolPattern.includes("*") ||
+          review.input.grantType === "persistent") ? (
+          <p role="alert" className="my-3 text-status-waiting">
+            This grant widens access: {review.input.toolPattern} in {review.input.scope}{" "}
+            {review.input.scopeRef ?? "across all contexts"}.{" "}
+            {review.input.grantType === "persistent"
+              ? "It remains available until explicitly revoked."
+              : "Matching actions can use it until its recorded expiry."}{" "}
+            Review every matching target before proceeding.
+          </p>
+        ) : null}
         {record ? (
           <div className="space-y-2 break-words text-sm text-fg">
             <p>
@@ -279,7 +298,16 @@ export function ToolGrantSettings({ workspaceId }: { workspaceId: string }) {
         </p>
         <div className="flex flex-wrap gap-2">
           <Button
-            variant={record ? "danger" : "primary"}
+            variant={
+              record ||
+              (review?.kind === "create" &&
+                review.input.decision === "allow" &&
+                (review.input.scope === "global" ||
+                  review.input.toolPattern.includes("*") ||
+                  review.input.grantType === "persistent"))
+                ? "danger"
+                : "primary"
+            }
             disabled={actions.pending}
             onClick={() => void actions.confirm()}
           >

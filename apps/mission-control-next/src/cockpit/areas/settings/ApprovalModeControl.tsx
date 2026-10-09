@@ -184,7 +184,7 @@ export function ApprovalModeEditor({
         danger
         confirmLabel="Confirm prompt skipping"
         cancelLabel="Keep current rule"
-        message={`Change the installation default from ${describeToolApprovalMode(review?.current ?? current)} to Skip normal prompts at settings revision ${review?.revision ?? "unknown"}. Allowed tools may run without normal prompts. Deny rules, nuclear-risk and risky-shell approvals, read boundaries, and tool grants remain in force.`}
+        message={`Change the installation default from ${describeToolApprovalMode(review?.current ?? current)} to Skip normal prompts at settings revision ${review?.revision ?? "unknown"}. Allowed tools may run without normal prompts. Deny rules, Critical risk and risky-shell approvals, read boundaries, and tool grants remain in force.`}
         pending={control.busy}
         confirmDisabled={!control.reviewCurrent}
         onConfirm={() => void control.confirm()}

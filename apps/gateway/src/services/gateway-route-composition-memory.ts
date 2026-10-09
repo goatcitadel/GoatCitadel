@@ -1,4 +1,5 @@
 import { KnowledgeFacadeService } from "./memory-facade-service.js";
+import { readKnowledgeApprovalResult } from "./knowledge-approval-result.js";
 import { SkillEvaluationService } from "./skill-evaluation-service.js";
 import { SkillHubOperatorService } from "./skill-hub-operator-service.js";
 import { KeychainEvidenceReceiptSigningKeyProvider } from "./evidence-receipt-signing-key.js";
@@ -95,7 +96,15 @@ export function composeMemoryKnowledgeRouteDependencies(
       },
       improvement: gateway.improvementService,
     },
-    knowledge: knowledgeFacade,
+    knowledge: {
+      // The approval-result read is its own owner (knowledge-approval-result); the facade keeps tool invocation only.
+      knowledgeApprovalResult: (approvalId, input) => readKnowledgeApprovalResult(gateway, approvalId, input),
+      knowledgeDocsIngest: (input) => knowledgeFacade.knowledgeDocsIngest(input),
+      knowledgeEmbeddingsIndex: (input) => knowledgeFacade.knowledgeEmbeddingsIndex(input),
+      knowledgeEmbeddingsQuery: (input) => knowledgeFacade.knowledgeEmbeddingsQuery(input),
+      knowledgeMemorySearch: (input) => knowledgeFacade.knowledgeMemorySearch(input),
+      knowledgeMemoryWrite: (input) => knowledgeFacade.knowledgeMemoryWrite(input),
+    },
     memory: gateway.memoryLifecycleService,
     skills: {
       bulkSetSkillState: (skillIds, state, note, expectedRevisionsBySkillId) =>

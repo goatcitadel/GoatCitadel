@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { resolveUiTarget } from "../../lib/ui-target.mjs";
+import { inheritedWorktreeOutputLockEnvironment, WORKTREE_OUTPUT_LOCK_LEASE_ENV, WORKTREE_OUTPUT_LOCK_PATH_ENV, WORKTREE_OUTPUT_LOCK_ROOT_ENV } from "../../lib/worktree-output-lock.mjs";
 import { repoRoot, sanitizeFilePart, spawnVerificationProcess, writeText } from "./shared.mjs";
 
 let gatewayWorkspaceBuildEnsured = false;
@@ -241,6 +242,16 @@ export function buildVerificationProcessEnv(baseEnv, extraEnv = {}, omitEnv = []
   return { ...env, ...extraEnv };
 }
 
+/** Output-emitting builds reuse only validated same-worktree parent control metadata.
+ * Gateway, UI launch and offline restore continue using the fully scrubbed runtime builder.
+ */
+export async function buildVerificationBuildEnv(baseEnv, extraEnv = {}, omitEnv = [], outputRoot = repoRoot) {
+  const leaseEnv = await inheritedWorktreeOutputLockEnvironment(outputRoot, baseEnv);
+  const env = buildVerificationProcessEnv(baseEnv, extraEnv, omitEnv);
+  for (const key of [WORKTREE_OUTPUT_LOCK_LEASE_ENV, WORKTREE_OUTPUT_LOCK_PATH_ENV, WORKTREE_OUTPUT_LOCK_ROOT_ENV]) delete env[key];
+  return { ...env, ...leaseEnv };
+}
+
 export function buildVerificationProcessLogName(name, processLogPrefix) {
   const prefix = typeof processLogPrefix === "string" ? sanitizeFilePart(processLogPrefix.trim()) : "";
   return prefix ? `${prefix}-${name}` : name;
@@ -423,7 +434,7 @@ export async function ensureGatewayWorkspaceBuild(context, options = {}) {
     "$ pnpm --dir <repoRoot> --filter @goatcitadel/gateway... build",
     "",
   ];
-  const result = runPnpmSync(refreshCommands.gateway, options.omitEnv);
+  const result = await runPnpmSync(refreshCommands.gateway, options.omitEnv);
   logLines.push(
     result.stdout ?? "",
     result.stderr ?? "",
@@ -432,7 +443,7 @@ export async function ensureGatewayWorkspaceBuild(context, options = {}) {
     "$ pnpm --dir <repoRoot> --filter @goatcitadel/threaded-surface-core exec tsc -b tsconfig.json --force",
     "",
   );
-  const threadedSurfaceCoreResult = runPnpmSync(refreshCommands.threadedSurfaceCore, options.omitEnv);
+  const threadedSurfaceCoreResult = await runPnpmSync(refreshCommands.threadedSurfaceCore, options.omitEnv);
   logLines.push(
     threadedSurfaceCoreResult.stdout ?? "",
     threadedSurfaceCoreResult.stderr ?? "",
@@ -448,7 +459,7 @@ export async function ensureGatewayWorkspaceBuild(context, options = {}) {
       `$ pnpm --dir <repoRoot> --filter ${missingPackage.dependency} exec tsc -b tsconfig.json --force`,
       "",
     );
-    const forcedResult = runPnpmSync(
+    const forcedResult = await runPnpmSync(
       ["--dir", repoRoot, "--filter", missingPackage.dependency, "exec", "tsc", "-b", "tsconfig.json", "--force"],
       options.omitEnv,
     );
@@ -504,7 +515,7 @@ async function ensureVerificationUiBuild(context, packageName, uiEnv, options = 
     `$ pnpm --dir <repoRoot> --filter ${packageName} build`,
     "",
   ];
-  const result = runPnpmSyncWithEnv(["--dir", repoRoot, "--filter", packageName, "build"], uiEnv, options.omitEnv);
+  const result = await runPnpmSyncWithEnv(["--dir", repoRoot, "--filter", packageName, "build"], uiEnv, options.omitEnv);
   logLines.push(
     result.stdout ?? "",
     result.stderr ?? "",
@@ -528,8 +539,8 @@ function runPnpmSync(args, omitEnv = []) {
   return runPnpmSyncWithEnv(args, {}, omitEnv);
 }
 
-function runPnpmSyncWithEnv(args, extraEnv, omitEnv = []) {
-  const env = buildVerificationProcessEnv(process.env, extraEnv, omitEnv);
+async function runPnpmSyncWithEnv(args, extraEnv, omitEnv = []) {
+  const env = await buildVerificationBuildEnv(process.env, extraEnv, omitEnv);
   if (process.platform === "win32") {
     return spawnSync(WINDOWS_CMD_PATH, ["/d", "/s", "/c", pnpmCommand(), ...args], {
       cwd: repoRoot,

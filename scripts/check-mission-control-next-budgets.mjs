@@ -52,7 +52,22 @@ function requireMatchingAsset(assetFiles, label, matcher) {
 const indexHtml = readIndexHtml();
 const assetFiles = listAssetFiles();
 
-const scriptAssets = extractAssetPaths(indexHtml, /<script[^>]+src="([^"]+)"/g).map(normalizeAssetName);
+// The bundle entry is the one module script. A classic script is allowed only from this explicit pre-paint list: it
+// must be a root-level public file (never a bundle chunk) and stay within its own hard cap.
+const PRE_PAINT_SCRIPTS = new Map([["theme-boot.js", 1024]]);
+const scriptAssets = extractAssetPaths(indexHtml, /<script[^>]+type="module"[^>]+src="([^"]+)"/g).map(normalizeAssetName);
+const classicScripts = [...indexHtml.matchAll(/<script(?![^>]*type="module")[^>]*src="([^"]+)"/g)].map((match) => match[1]);
+for (const scriptPath of classicScripts) {
+  const name = scriptPath.replace(/^\/+/, "");
+  const cap = PRE_PAINT_SCRIPTS.get(name);
+  if (cap === undefined || name.includes("/")) {
+    fail(`Unexpected classic script ${scriptPath} in index.html; only the listed pre-paint scripts may load before the entry.`);
+  }
+  const scriptFile = path.join(distRoot, name);
+  if (!fs.existsSync(scriptFile)) fail(`Pre-paint script ${name} referenced by index.html was not found.`);
+  const size = fs.statSync(scriptFile).size;
+  if (size > cap) fail(`Pre-paint script ${name} is ${size} bytes; cap is ${cap} bytes.`);
+}
 const modulePreloads = extractAssetPaths(indexHtml, /<link rel="modulepreload"[^>]+href="([^"]+)"/g).map(normalizeAssetName);
 const stylesheetAssets = extractAssetPaths(indexHtml, /<link rel="stylesheet"[^>]+href="([^"]+)"/g).map(normalizeAssetName);
 const eagerAssets = new Set([...scriptAssets, ...modulePreloads, ...stylesheetAssets]);
@@ -87,8 +102,37 @@ if (initialCssSize > budgets.initialCssBytes) {
 }
 
 requireMatchingAsset(assetFiles, "threaded surface route chunk", /^ThreadedSurface.*\.js$/);
-requireMatchingAsset(assetFiles, "native route chunk", /^NativeRoutePages-.*\.js$/);
-requireMatchingAsset(assetFiles, "native route stylesheet", /^NativeRoutePages-.*\.css$/);
+const nativeRouteChunk = requireMatchingAsset(assetFiles, "native route chunk", /^NativeRoutePages-.*\.js$/);
+// native-routes.css is shared by the native route pages and primitives, so Rollup names its chunk after the source
+// file (native-routes-*) rather than NativeRoutePages-*. Either way it must ship lazily with the native route chunk.
+const nativeRouteStylesheet = requireMatchingAsset(
+  assetFiles,
+  "native route stylesheet",
+  /^(?:NativeRoutePages|native-routes)-.*\.css$/,
+);
+
+// The files Vite preloads for one lazy import: `import("./<chunk>"),__vite__mapDeps([indices])` indexes the loader's
+// `m.f=[...]` file list. Per-import, so a stylesheet another lazy import needs does not count for this chunk.
+function lazyImportDependencies(source, chunkName) {
+  const fileList = source.match(/m\.f=(\[[^\]]*\])/);
+  const escaped = chunkName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const call = source.match(new RegExp(`import\\("\\./${escaped}"\\),__vite__mapDeps\\((\\[[^\\]]*\\])\\)`));
+  if (!fileList || !call) return [];
+  const files = JSON.parse(fileList[1]);
+  return JSON.parse(call[1]).map((index) => files[index]);
+}
+
+const nativeRouteLoaders = assetFiles.filter((name) => {
+  if (!name.endsWith(".js")) return false;
+  const source = fs.readFileSync(path.join(assetsRoot, name), "utf8");
+  return lazyImportDependencies(source, nativeRouteChunk).includes(`assets/${nativeRouteStylesheet}`);
+});
+if (nativeRouteLoaders.length === 0) {
+  fail(`Native route stylesheet ${nativeRouteStylesheet} is not loaded with ${nativeRouteChunk}.`);
+}
+if (indexHtml.includes(nativeRouteStylesheet)) {
+  fail(`index.html eagerly references the native route stylesheet ${nativeRouteStylesheet}.`);
+}
 requireMatchingAsset(assetFiles, "threaded surface stylesheet", /^ThreadedSurfaceRoute-.*\.css$/);
 requireMatchingAsset(assetFiles, "prompt packs chunk", /^PromptPacksWorkbenchPage-.*\.js$/);
 

@@ -25,6 +25,7 @@ export interface ChannelSetupWizardFeedback {
 }
 
 export interface ChannelSetupWizardProps {
+  allowAdvancedInput?: boolean;
   scopeId?: string;
   advancedValue?: string;
   onAdvancedValueChange?: (value: string) => void;

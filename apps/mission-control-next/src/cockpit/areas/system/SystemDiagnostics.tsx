@@ -1,3 +1,6 @@
+import { AreaHeader } from "../../ui/AreaHeader";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { Callout } from "../../ui/Callout";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { useState } from "react";
@@ -14,6 +17,8 @@ import { useOperatorInbox } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { inboxMatchesWorkspace } from "../inbox/inbox-presentation";
 import { buildRecentDiagnosticsExport } from "./recent-diagnostics-export";
+import { FirstRunVerification } from "../settings/FirstRunVerification";
+import { RuntimeAuthorityMap } from "./RuntimeAuthorityMap";
 
 function timestamp(value: string): string {
   const time = Date.parse(value);
@@ -73,17 +78,12 @@ export function SystemDiagnostics() {
     }
   };
   return <section className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
-    <header className="flex flex-wrap items-start justify-between gap-3">
-      <div><h1 className="font-display text-xl font-semibold text-fg">Diagnostics</h1>
-        <p className="text-sm text-fg-secondary">Recent events, daemon logs, and unresolved recovery records.</p>
-        <p className="mt-1 text-xs text-fg-muted">Export includes only the recent event and log fields shown here. Messages may contain technical details; review the file before sharing.</p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" disabled={diagnostics.isFetching || logs.isFetching || (!diagnostics.data && !logs.data)} onClick={exportRecent}>Export recent diagnostics</Button>
-        <Button size="sm" disabled={fetching} onClick={() => { void diagnostics.refetch(); void logs.refetch(); void inbox.refetch(); }}><RefreshCw aria-hidden="true" className="size-4" /> Refresh</Button>
-      </div>
-    </header>
+    <AreaHeader title="Diagnostics" description="Recent events, daemon logs, and unresolved recovery records." actions={<>
+      <Button size="sm" disabled={diagnostics.isFetching || logs.isFetching || (!diagnostics.data && !logs.data)} onClick={exportRecent}>Export recent diagnostics</Button>
+      <Button size="sm" disabled={fetching} onClick={() => { void diagnostics.refetch(); void logs.refetch(); void inbox.refetch(); }}><RefreshCw aria-hidden="true" className="size-4" /> Refresh</Button>
+    </>}><p className="mt-1 text-xs text-fg-muted">Export includes only the recent event and log fields shown here. Messages may contain technical details; review the file before sharing.</p></AreaHeader>
     {exportNotice ? <p role={exportNotice.tone === "error" ? "alert" : "status"} className={exportNotice.tone === "error" ? "text-sm text-status-failed" : "text-sm text-fg-secondary"}>{exportNotice.message}</p> : null}
+    <FirstRunVerification />
 
     <section aria-labelledby="diagnostics-recovery-title" className="rounded-lg border border-line bg-raised p-4">
       <h2 id="diagnostics-recovery-title" className="font-display text-lg font-semibold text-fg">Durable queue recovery</h2>
@@ -106,10 +106,10 @@ export function SystemDiagnostics() {
       <h2 id="diagnostics-logs-title" className="font-display text-lg font-semibold text-fg">Daemon logs</h2>
       <p className="mt-1 text-xs text-fg-muted">Latest 100 entries reported by the Gateway daemon log API.</p>
       {logs.isLoading ? <p role="status" className="mt-3 text-sm text-fg-muted">Loading daemon logs…</p> : null}
-      {logs.isError ? <p role="alert" className="mt-3 text-sm text-status-failed">Logs unavailable: {describeApiError(logs.error).summary}</p> : null}
+      {logs.isError ? <Callout tone="error">Logs unavailable: {describeApiError(logs.error).summary}</Callout> : null}
       {logs.data && !logs.isError ? logs.data.items.length ? <ul className="mt-3 grid gap-2">{logs.data.items.map((item, index) => <li key={`${item.timestamp}:${index}`} className="rounded-md border border-line-subtle bg-sunken p-3">
-        <details><summary className="cursor-pointer text-sm font-medium text-fg">{humanizeToken(item.level)} · {timestamp(item.timestamp)}</summary>
-          <p className="mt-2 break-words text-sm text-fg-secondary">{item.message}</p></details>
+        <p className="text-xs font-medium text-fg-muted">{humanizeToken(item.level)} · {timestamp(item.timestamp)}</p>
+        <p className="mt-2 break-words text-sm text-fg-secondary">{item.message}</p>
       </li>)}</ul> : <p className="mt-3 text-sm text-fg-muted">No daemon log entries were returned.</p> : null}
     </section>
 
@@ -127,11 +127,13 @@ export function SystemDiagnostics() {
         {filteredEvents.length ? <ul className="mt-3 grid gap-2">{visibleEvents.map((item) => <li key={item.id} className="rounded-lg border border-line bg-raised p-3">
         <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="text-xs font-medium text-fg-muted">{humanizeToken(item.level)} · {humanizeToken(item.category)}</p><h3 className="mt-1 text-sm font-semibold text-fg">{humanizeToken(item.event)}</h3></div>
           <time dateTime={item.timestamp} className="text-xs text-fg-muted">{timestamp(item.timestamp)}</time></div>
-        <details className="mt-2 text-sm text-fg-secondary"><summary className="cursor-pointer font-medium text-accent">Message</summary><p className="mt-2 break-words">{item.message}</p></details>
+        <p className="mt-2 break-words text-sm text-fg-secondary">{item.message}</p>
+        <TechnicalDetails label="Event technical details"><pre className="max-h-64 overflow-auto font-mono text-xs">{JSON.stringify({ id: item.id, event: item.event, category: item.category, timestamp: item.timestamp }, null, 2)}</pre></TechnicalDetails>
         </li>)}</ul> : <p className="mt-3 text-sm text-fg-muted">No warnings or errors were returned in this recent window. Select All events to inspect routine activity.</p>}
         {remainingEvents > 0 ? <Button className="mt-3" size="sm" onClick={() => setShowAllEvents(true)}>Show remaining {remainingEvents} {remainingEvents === 1 ? "event" : "events"}</Button> : null}
       </> : <p className="mt-3 text-sm text-fg-muted">No diagnostic entries were returned in this window.</p> : null}
     </section>
+    <RuntimeAuthorityMap key={workspaceId} workspaceId={workspaceId} />
     <ClassicOwnerLink href="/ops/diagnostics?shell=classic" className="text-sm font-medium text-accent hover:underline" scope={workspaceId} label="Open full Ops diagnostics and export controls" />
   </section>;
 }

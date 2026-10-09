@@ -5,6 +5,7 @@ import type { ProviderNoticeSetter } from "./provider-section-types";
 import { confirmReviewedSettingsPlan, submitReviewedProviderCredential } from "./provider-connection-actions";
 import {
   beginProviderMutation,
+  dispatchProviderMutation,
   finishProviderMutation,
   retainProviderMutationUncertainty,
   useProviderEditorEpoch,
@@ -49,10 +50,11 @@ export function useProviderPlanActions(options: {
       if (canonicalJsonString(fresh) !== canonicalJsonString(plan))
         throw new Error("This reviewed provider action changed. Refresh its status and review it again.");
       attempted = true;
-      const next =
+      const next = await dispatchProviderMutation(() =>
         credential === undefined
-          ? await confirmReviewedSettingsPlan(plan)
-          : await submitReviewedProviderCredential(plan, credential);
+          ? confirmReviewedSettingsPlan(plan)
+          : submitReviewedProviderCredential(plan, credential),
+      );
       acknowledged = true;
       if (viewCurrent()) options.onAcknowledged?.(next);
       if (isCurrent()) options.setPlan(credential === undefined ? null : next);

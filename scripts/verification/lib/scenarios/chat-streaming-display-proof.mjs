@@ -129,7 +129,7 @@ export async function runChatStreamingDisplayProof(context, deps) {
             } while (Date.now() < deadline);
             throw new Error(`Canonical ${userContent} status expected ${status}, observed ${observed}`);
           };
-          const composer = page.getByRole("textbox", { name: "Message", exact: true });
+          const composer = page.getByRole("combobox", { name: "Message", exact: true });
           const send = page.getByRole("button", { name: "Send", exact: true });
           const messages = page.getByLabel("Messages", { exact: true });
           const scroller = messages.locator('[data-virtuoso-scroller="true"]');
@@ -256,7 +256,7 @@ export async function runChatStreamingDisplayProof(context, deps) {
             });
             await page.getByRole("button", { name: "Jump to latest", exact: true }).waitFor({ state: "hidden" });
             assert.equal(stub.advanceControlledStream(), true);
-            await page.locator('article[aria-label="Conversation turn"] pre').waitFor();
+            await page.locator('article[aria-label="Conversation messages"] pre').waitFor();
             await page.waitForFunction(() => {
               const node = document.querySelector('[aria-label="Messages"] [data-virtuoso-scroller="true"]');
               return node && node.scrollHeight - node.scrollTop - node.clientHeight < 5;
@@ -307,8 +307,8 @@ export async function runChatStreamingDisplayProof(context, deps) {
             await navigate(session.sessionId);
             await answerHeading().waitFor();
             assert.equal(await answerHeading().count(), 1);
-            assert.equal(await page.locator('article[aria-label="Conversation turn"] table').count(), 1);
-            assert.equal(await page.locator('article[aria-label="Conversation turn"] pre').count(), 1);
+            assert.equal(await page.locator('article[aria-label="Conversation messages"] table').count(), 1);
+            assert.equal(await page.locator('article[aria-label="Conversation messages"] pre').count(), 1);
             assert.equal(await page.locator(".mc-assistant-streaming-tail").count(), 0);
             await assertLayout();
             await capture("refreshed");
@@ -336,7 +336,7 @@ export async function runChatStreamingDisplayProof(context, deps) {
             const originalBranchIndex = retryTurn.branch.siblingTurnIds.indexOf(completed.turnId);
             assert.ok(originalBranchIndex >= 0);
             await page
-              .getByRole("button", { name: `Switch to branch ${originalBranchIndex + 1}`, exact: true })
+              .getByRole("button", { name: `Switch to version ${originalBranchIndex + 1}`, exact: true })
               .click();
             await answerHeading().waitFor();
             await messages.getByText("SF6 retry branch answer.", { exact: true }).waitFor({ state: "hidden" });
@@ -357,7 +357,7 @@ export async function runChatStreamingDisplayProof(context, deps) {
             const failure = (await thread()).turns.at(-1);
             assert.equal(failure.toolRuns.at(-1).status, "failed");
             const failedActivity = messages
-              .locator('article[aria-label="Conversation turn"]')
+              .locator('article[aria-label="Conversation messages"]')
               .filter({ hasText: "SF6_FAILURE:" })
               .getByLabel("Tool activity for this turn", { exact: true });
             // The Stop control follows execution state; canonical tool evidence
@@ -365,7 +365,7 @@ export async function runChatStreamingDisplayProof(context, deps) {
             await failedActivity.locator("summary").filter({ hasText: "1 failed" }).waitFor();
             assert.match(
               await messages
-                .locator('article[aria-label="Conversation turn"]')
+                .locator('article[aria-label="Conversation messages"]')
                 .filter({ hasText: "SF6_FAILURE:" })
                 .textContent(),
               /1 failed/,

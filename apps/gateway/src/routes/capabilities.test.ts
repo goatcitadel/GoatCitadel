@@ -353,7 +353,8 @@ describe("capabilities routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(resolveEffectiveSkills).toHaveBeenCalledWith("ws-1");
-    expect(listCapabilityCatalog).toHaveBeenCalledWith("inspectable", effective);
+    // The workspace also scopes projection of its approved candidate instructions.
+    expect(listCapabilityCatalog).toHaveBeenCalledWith("inspectable", effective, "ws-1");
   });
 
   it("leaves the catalog call unscoped (argument-identical) when workspaceId is absent", async () => {
@@ -845,10 +846,10 @@ describe("capabilities routes", () => {
       revision: 3,
       latestVersion: { versionId: "version-2" },
       relatedProposals: [{ proposalId: "proposal-1", candidateId: "candidate-1" }],
-      originatingRun: { workspaceId: "workspace-1" },
+      originatingRun: { runId: "run-1", workspaceId: "workspace-1" },
       activationBlocked: false,
       activationBlockers: [],
-      versions: [],
+      versions: [{ candidateId: "candidate-1", versionId: "version-2", originatingRunId: "run-1" }],
     };
     const create = vi.fn(async (input: Record<string, unknown>) => ({
       planId: "plan-capability-1",
@@ -887,6 +888,40 @@ describe("capabilities routes", () => {
       noMutationRequired: false,
       changePlan: { planId: "plan-capability-1", status: "awaiting_input" },
     });
+  });
+
+  it.each(["promote", "revoke", "rollback"])("binds %s to a non-default captured version and rejects stale/foreign linkage", async action => {
+    const version = { candidateId: "captured", versionId: "captured-version", workspaceId: "captured-workspace", sourceKind: "workflow_capture" };
+    const detail = { candidateId: "captured", revision: 3, latestVersion: version, activeVersion: undefined,
+      versions: [version], relatedProposals: [{ proposalId: "captured-proposal", candidateId: "captured" }], activationBlocked: true };
+    const create = vi.fn(async (input: unknown) => input);
+    const direct = vi.fn();
+    app = Fastify();
+    app.decorateRequest("authActorId", "authenticated-operator");
+    app.decorate("services", { capabilities: {
+      getCapabilityCandidateDetail: vi.fn(async () => detail), getCodeModeRun: vi.fn(),
+      promoteCapabilityCandidate: direct, revokeCapabilityCandidate: direct, rollbackCapabilityCandidate: direct,
+    }, evolution: { isEnabled: vi.fn(async () => true), create } } as never);
+    await app.register(capabilitiesRoutes);
+    const selection = action === "rollback" ? { targetVersionId: version.versionId } : {};
+    const response = await app.inject({ method: "POST", url: `/api/v1/capabilities/candidates/captured/${action}`,
+      payload: { expectedRevision: 3, ...selection, workspaceId: "client-forged-scope", actorId: "client-forged-actor" } });
+    expect(response.statusCode, response.body).toBe(202);
+    expect(create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      actor: expect.objectContaining({ workspaceId: "captured-workspace", actorId: "authenticated-operator" }),
+      request: { kind: "capability_candidate", proposalId: "captured-proposal", action: action === "promote" ? "activate" : action, versionId: version.versionId },
+      expectedTargetRevision: 3,
+    }));
+    const stale = await app.inject({ method: "POST", url: `/api/v1/capabilities/candidates/captured/${action}`, payload: { expectedRevision: 2, ...selection } });
+    expect(stale.statusCode).toBe(409);
+    const foreign = await app.inject({ method: "POST", url: `/api/v1/capabilities/candidates/captured/${action}`,
+      payload: { expectedRevision: 3, [action === "rollback" ? "targetVersionId" : "versionId"]: "foreign" } });
+    expect(foreign.statusCode).toBe(action === "revoke" ? 422 : 409);
+    detail.relatedProposals[0]!.candidateId = "foreign";
+    const unlinked = await app.inject({ method: "POST", url: `/api/v1/capabilities/candidates/captured/${action}`, payload: { expectedRevision: 3, ...selection } });
+    expect(unlinked.statusCode).toBe(422);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(direct).not.toHaveBeenCalled();
   });
 
   it("requires candidate revisions and returns structured stale-write conflicts", async () => {

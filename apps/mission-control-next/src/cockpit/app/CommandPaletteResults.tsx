@@ -35,7 +35,7 @@ export function CommandPaletteResults({
 
 /** Coverage is inspectable evidence, not a selectable listbox option. */
 export function CommandPaletteCoverage({ groups }: { groups: PaletteSearchGroup[] }) {
-  return groups.map((group) => (
+  return groups.length ? <details className="px-3 py-2 text-xs text-fg-muted"><summary>Search coverage{groups.some(group => group.error) ? " · Some sources unavailable" : ""}</summary>{groups.map((group) => (
     <section key={group.id} aria-label={`${group.label} search coverage`} className="py-2 text-xs text-fg-muted">
       <p className="px-3 font-medium">{group.label}</p>
       {group.error ? (
@@ -64,7 +64,7 @@ export function CommandPaletteCoverage({ groups }: { groups: PaletteSearchGroup[
         </details>
       )}
     </section>
-  ));
+  ))}</details> : null;
 }
 
 export function PaletteResourcePreview({ resource, scope }: { resource: LibraryResource; scope: PaletteScope }) {

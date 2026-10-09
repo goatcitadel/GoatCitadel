@@ -18,6 +18,7 @@ import {
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { writeImmutableBundle } from "./candidate-skill-artifacts.js";
 import { validateSkillContent } from "./skill-content-validation.js";
+import { readWorkflowCaptureDurableAuthor } from "./workflow-skill-capture-authority.js";
 
 type CaptureActor = { actorId?: string; authActorSource?: ToolPolicyActorContext["authActorSource"] };
 interface CaptureSeed extends WorkflowSkillCaptureRequest {
@@ -34,6 +35,8 @@ interface CaptureDependencies {
     | "chatToolRuns"
     | "chatTurnCapabilityProfiles"
     | "chatTurnTraces"
+    | "durableRuns"
+    | "sessionMutationAdmissions"
     | "runImmediateTransaction"
     | "skillAggregateRevisions"
   >;
@@ -315,8 +318,15 @@ export class WorkflowSkillCaptureService {
     ) {
       throw new ConflictError({ message: "The workflow's authenticated turn binding changed." });
     }
-    const authenticatedActorId =
-      profile?.identity.authActorId ?? (user.actorId !== "operator" ? user.actorId : undefined);
+    // Historical profile hashes remain unchanged. Current profile-free turns
+    // bind to their original admitted durable request, including its messages.
+    const durableAuthor = !profile && trace.durable?.runId
+      ? await readWorkflowCaptureDurableAuthor(this.deps.storage, meta.workspaceId, trace, user)
+      : undefined;
+    const authenticatedActorId = profile?.identity.authActorId ?? durableAuthor?.actorId;
+    if (!authenticatedActorId) {
+      throw new ConflictError({ message: "The workflow's authenticated author is unavailable. Capture a new completed turn." });
+    }
     const toolRuns = await this.deps.storage.chatToolRuns.listByTurn(turnId);
     if (
       toolRuns.length > 100 ||
@@ -350,8 +360,7 @@ export class WorkflowSkillCaptureService {
       workspaceId: meta.workspaceId,
       finishedAt: trace.finishedAt,
       userAuthority: user.sourceAuthority,
-      // Chat stores the display actor "operator". Its frozen profile owns the
-      // authenticated identity; that display label is never an auth fallback.
+      // The display label "operator" is never an authenticated identity.
       authenticatedActorId,
       userContent: user.content,
       assistantContent: assistant.content,
@@ -366,6 +375,7 @@ export class WorkflowSkillCaptureService {
           authenticatedActorId: authenticatedActorId ?? null,
           capabilityProfileId: trace.capabilityProfileId ?? null,
           capabilityProfileHash: trace.capabilityProfileHash ?? null,
+          ...(durableAuthor ? { authorBindingSha256: durableAuthor.bindingSha256 } : {}),
           ...verifiedTools,
         }),
       ),

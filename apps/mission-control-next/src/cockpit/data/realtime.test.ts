@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { resolveChatRefreshPlan } from "@goatcitadel/threaded-surface-core/pure-helpers";
 import { QueryClient } from "@tanstack/react-query";
 import type { RealtimeEvent } from "@goatcitadel/contracts";
 import { subscribeRefresh, type RefreshSignal } from "@goatcitadel/mission-control-shared/state/refresh-bus";
@@ -172,4 +173,18 @@ describe("unmapped event throttle", () => {
       vi.useRealTimers();
     }
   });
+});
+
+
+it.each(["chat_session_deleted", "session_deleted"])("maps %s through the actual Chat refresh owner without reloading another transcript", (eventType) => {
+  const event = { ...base, eventType, source: "chat", links: { sessionId: "deleted" } };
+  const plans: unknown[] = [];
+  const s = sink();
+  s.refresh.mockImplementation((topic, mapped) => {
+    expect(topic).toBe("chat");
+    plans.push(resolveChatRefreshPlan(realtimeRefreshSignal(mapped), false, false, "selected"));
+  });
+  invalidateForEvent(event, s);
+  expect(s.unmapped).not.toHaveBeenCalled();
+  expect(plans).toEqual([{ refreshSidebar: true, refreshSession: "none" }]);
 });

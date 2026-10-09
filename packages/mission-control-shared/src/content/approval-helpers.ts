@@ -1,5 +1,7 @@
 import type { ApprovalRequest, RuntimeLifecycleResponse } from "@goatcitadel/contracts";
 import { presentApprovalOutcome, presentApprovalStatus } from "./status-vocabulary.js";
+import { externalSourceKnowledgeApprovalEvidence } from "./external-source-approval-evidence.js";
+import { communicationsMailSendApprovalEvidence } from "./communications-approval-evidence.js";
 
 export interface ApprovalEvidenceBlock {
   label: string;
@@ -14,8 +16,18 @@ export function approvalResolutionLabel(approval: ApprovalRequest): string {
   return presentApprovalStatus(approval.status).label.toLowerCase();
 }
 
+export interface ApprovalTargetEntry {
+  label: string;
+  value: string;
+}
+
 export interface ApprovalEvidenceModel {
+  scopeSummary?: string;
+  consequence?: string;
+  technicalDetails?: ApprovalEvidenceBlock[];
   targets: string[];
+  /** The same targets as label/value pairs, when the generic builder labelled them. Absent for purpose-specific models. */
+  targetEntries?: ApprovalTargetEntry[];
   commands: string[];
   changes: ApprovalEvidenceBlock[];
   supporting: string[];
@@ -128,9 +140,11 @@ function pushEvidenceBlock(
   seenBlocks: Set<string>,
   label: string,
   content: string,
+  exact = false,
+  preserveWhitespace = false,
 ): void {
-  const normalized = content.trim();
-  if (!normalized) {
+  const normalized = exact && preserveWhitespace ? content : content.trim();
+  if (!normalized.trim() && !(exact && preserveWhitespace && content.length > 0)) {
     return;
   }
   const key = `${label}:${normalized}`;
@@ -140,18 +154,33 @@ function pushEvidenceBlock(
   seenBlocks.add(key);
   codeBlocks.push({
     label,
-    content: truncateEvidence(normalized, 1200),
+    content: exact ? normalized : truncateEvidence(normalized, 1200),
   });
+}
+
+/** Records a target both as its labelled line and as a label/value pair, so a renderer never re-labels it. */
+function addTarget(collector: { targets: Set<string>; targetEntries: Map<string, ApprovalTargetEntry> }, label: string, value: string): void {
+  const line = `${label}: ${value}`;
+  collector.targets.add(line);
+  if (!collector.targetEntries.has(line)) collector.targetEntries.set(line, { label, value });
+}
+
+// Memory lifecycle review summaries are sentences the Gateway already labels ("Requested TTL: 600 seconds",
+// "Unpin item"); a generated key label in front of them would only repeat it ("Ttl Summary: Requested TTL: …").
+function isMemoryLifecycleSummaryKey(reviewKind: unknown, key: string): boolean {
+  return typeof reviewKind === "string" && reviewKind.startsWith("memory.lifecycle.") && /Summary$/.test(key);
 }
 
 function collectApprovalEvidence(
   source: unknown,
   collector: {
     targets: Set<string>;
+    targetEntries: Map<string, ApprovalTargetEntry>;
     commands: Set<string>;
     supporting: Set<string>;
     changes: ApprovalEvidenceBlock[];
     seenBlocks: Set<string>;
+    exact: boolean;
   },
 ): void {
   if (!source || typeof source !== "object") {
@@ -174,37 +203,63 @@ function collectApprovalEvidence(
     }
 
     const record = current as Record<string, unknown>;
+    if (record.reviewKind === "memory.lifecycle.batch" && Array.isArray(record.reviewedItems)) {
+      record.reviewedItems.forEach((item, index) => {
+        if (!item || typeof item !== "object") return;
+        const row = item as Record<string, unknown>;
+        const lines = ["target", "scopeSummary", "consequence", "requestedTitle", "requestedContent", "pinnedSummary", "ttlSummary", "withheldSummary"]
+          .filter(key => typeof row[key] === "string")
+          .map(key => isMemoryLifecycleSummaryKey(record.reviewKind, key) ? String(row[key]) : humanizeKey(key) + ": " + String(row[key]));
+        pushEvidenceBlock(collector.changes, collector.seenBlocks, "Memory target " + (index + 1), lines.join("\n"), collector.exact, true);
+      });
+      continue;
+    }
     for (const [key, value] of Object.entries(record)) {
+      if (typeof record.reviewKind === "string" && record.reviewKind.startsWith("memory.lifecycle.") && ["fieldCodes", "subjectKind", "subjectId", "action"].includes(key)) continue;
+      if (collector.exact && /hash|staging|candidate|remaining|outputIntent/i.test(key) && ["string", "number", "boolean"].includes(typeof value)) {
+        collector.supporting.add(`${humanizeKey(key)}: ${String(value)}`);
+      }
       if (typeof value === "string") {
-        if (isFilesystemKey(key) || /^(candidateId|versionId|subjectId|subjectKind|scopeKind)$/.test(key)) {
-          collector.targets.add(`${humanizeKey(key)}: ${value}`);
+        if (isMemoryLifecycleSummaryKey(record.reviewKind, key)) {
+          collector.supporting.add(collector.exact ? value : truncateEvidence(value, 180));
+        } else if (record.reviewKind === "memory.lifecycle.patch" && (key === "requestedContent" || key === "requestedTitle")) {
+          pushEvidenceBlock(collector.changes, collector.seenBlocks, key === "requestedContent" ? "Requested memory content" : "Requested memory title", value, collector.exact, true);
+        } else if (record.reviewKind === "knowledge.operation" && (key === "query" || key === "source")) {
+          pushEvidenceBlock(collector.changes, collector.seenBlocks, key === "query" ? "Knowledge query" : "Knowledge source", value, collector.exact, true);
+        } else if (isFilesystemKey(key) || /^(candidateId|versionId|subjectId|subjectKind|scopeKind)$/.test(key)) {
+          addTarget(collector, humanizeKey(key), value);
         } else if (isLikelyCommandKey(key) && value.trim()) {
-          collector.commands.add(`${humanizeKey(key)}: ${truncateEvidence(value, 140)}`);
+          collector.commands.add(`${humanizeKey(key)}: ${collector.exact ? value : truncateEvidence(value, 140)}`);
+        } else if (key === "content" && (record.toolName === "memory.write" || record.toolName === "memory.upsert")) {
+          // The server's allowlisted, redacted memory body is review evidence even on one line.
+          pushEvidenceBlock(collector.changes, collector.seenBlocks, "Memory content", value, collector.exact, true);
         } else if (isLikelyCodeKey(key) && value.includes("\n")) {
-          pushEvidenceBlock(collector.changes, collector.seenBlocks, humanizeKey(key), value);
+          pushEvidenceBlock(collector.changes, collector.seenBlocks, humanizeKey(key), value, collector.exact);
         } else if (isLikelySupportKey(key)) {
-          collector.supporting.add(`${humanizeKey(key)}: ${truncateEvidence(value, 180)}`);
+          collector.supporting.add(`${humanizeKey(key)}: ${collector.exact ? value : truncateEvidence(value, 180)}`);
         }
       } else if (Array.isArray(value)) {
         if (value.every((item) => typeof item === "string")) {
           const strings = value.filter((item): item is string => typeof item === "string");
           if (isFilesystemKey(key)) {
-            collector.targets.add(
-              `${humanizeKey(key)}: ${strings.slice(0, 4).join(", ")}${strings.length > 4 ? "…" : ""}`,
+            addTarget(
+              collector,
+              humanizeKey(key),
+              `${(collector.exact ? strings : strings.slice(0, 4)).join(", ")}${!collector.exact && strings.length > 4 ? "…" : ""}`,
             );
           } else if (isLikelyCommandKey(key)) {
             collector.commands.add(
-              `${humanizeKey(key)}: ${strings.slice(0, 3).join(" | ")}${strings.length > 3 ? "…" : ""}`,
+              `${humanizeKey(key)}: ${(collector.exact ? strings : strings.slice(0, 3)).join(" | ")}${!collector.exact && strings.length > 3 ? "…" : ""}`,
             );
           } else if (isLikelyCodeCollectionKey(key)) {
-            for (const item of strings.slice(0, 2)) {
+            for (const item of collector.exact ? strings : strings.slice(0, 2)) {
               if (item.includes("\n")) {
-                pushEvidenceBlock(collector.changes, collector.seenBlocks, humanizeKey(key), item);
+                pushEvidenceBlock(collector.changes, collector.seenBlocks, humanizeKey(key), item, collector.exact);
               }
             }
           } else if (isLikelySupportKey(key)) {
             collector.supporting.add(
-              `${humanizeKey(key)}: ${strings.slice(0, 3).join(", ")}${strings.length > 3 ? "…" : ""}`,
+              `${humanizeKey(key)}: ${(collector.exact ? strings : strings.slice(0, 3)).join(", ")}${!collector.exact && strings.length > 3 ? "…" : ""}`,
             );
           }
         }
@@ -217,7 +272,21 @@ function collectApprovalEvidence(
 }
 
 export function buildApprovalEvidenceModel(...sources: Array<unknown>): ApprovalEvidenceModel | null {
+  return buildEvidence(sources, false);
+}
+/** Exact target/command review; compact summaries must never authorize a truncated action. */
+export function buildApprovalReviewEvidenceModel(...sources: Array<unknown>): ApprovalEvidenceModel | null {
+  return buildEvidence(sources, true);
+}
+/** Purpose-specific approvals must match their own original payload and scope. */
+export function buildApprovalRequestReviewEvidenceModel(approval: ApprovalRequest): ApprovalEvidenceModel | null {
+  if (approval.kind === "external_source.knowledge_snapshot") return externalSourceKnowledgeApprovalEvidence(approval);
+  if (approval.kind === "communications.mail.send") return communicationsMailSendApprovalEvidence(approval);
+  return buildApprovalReviewEvidenceModel(approval.preview);
+}
+function buildEvidence(sources: Array<unknown>, exact: boolean): ApprovalEvidenceModel | null {
   const targets = new Set<string>();
+  const targetEntries = new Map<string, ApprovalTargetEntry>();
   const commands = new Set<string>();
   const supporting = new Set<string>();
   const changes: ApprovalEvidenceBlock[] = [];
@@ -226,10 +295,12 @@ export function buildApprovalEvidenceModel(...sources: Array<unknown>): Approval
   for (const source of sources) {
     collectApprovalEvidence(source, {
       targets,
+      targetEntries,
       commands,
       supporting,
       changes,
       seenBlocks,
+      exact,
     });
   }
 
@@ -237,10 +308,12 @@ export function buildApprovalEvidenceModel(...sources: Array<unknown>): Approval
     return null;
   }
 
+  const targetLines = exact ? [...targets] : [...targets].slice(0, 6);
   return {
-    targets: [...targets].slice(0, 6),
-    commands: [...commands].slice(0, 4),
-    supporting: [...supporting].slice(0, 4),
-    changes: changes.slice(0, 4),
+    targets: targetLines,
+    targetEntries: targetLines.map((line) => targetEntries.get(line) ?? { label: "Target", value: line }),
+    commands: exact ? [...commands] : [...commands].slice(0, 4),
+    supporting: exact ? [...supporting] : [...supporting].slice(0, 4),
+    changes: exact ? changes : changes.slice(0, 4),
   };
 }

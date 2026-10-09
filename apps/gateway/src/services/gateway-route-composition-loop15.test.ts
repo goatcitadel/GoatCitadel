@@ -143,6 +143,7 @@ vi.mock("./skill-evaluation-service.js", () => ({ SkillEvaluationService: mocks.
 import { composeMemoryKnowledgeRouteDependencies } from "./gateway-route-composition-memory.js";
 import { composeSystemRouteDependencies } from "./gateway-route-composition-system.js";
 import { composeToolsMcpRouteDependencies } from "./gateway-route-composition-tools.js";
+import { knowledgeRouteMethods } from "./knowledge-route-service.js";
 
 function fn<TArgs extends unknown[] = unknown[], TResult = unknown>(impl: (...args: TArgs) => TResult) {
   return vi.fn(impl);
@@ -405,6 +406,9 @@ describe("route composition loop 15 delegates", () => {
     expect(await deps.improvement.audit.listSkills()).toEqual([{ skillId: "skill-1" }]);
     expect(deps.improvement.improvement).toBe(gateway.improvementService);
     expect(deps.knowledge.knowledgeDocsIngest({ source: "doc" })).toMatchObject({ realtimeType: "knowledge" });
+    // The knowledge port exposes exactly the route methods: the approval result plus the five facade operations.
+    expect(Object.keys(deps.knowledge).sort()).toEqual([...knowledgeRouteMethods].sort());
+    for (const method of knowledgeRouteMethods) expect(typeof deps.knowledge[method]).toBe("function");
     expect(deps.memory).toBe(gateway.memoryLifecycleService);
     expect(await deps.skills.bulkSetSkillState(["skill-1"], "disabled", "test", { "skill-1": 3 })).toEqual([
       {

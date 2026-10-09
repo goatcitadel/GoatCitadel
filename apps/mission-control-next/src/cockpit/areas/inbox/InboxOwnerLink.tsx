@@ -21,8 +21,16 @@ export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem;
   if (!item.href.startsWith("/") || item.href.startsWith("//")) return null;
   const destination = new URL(item.href, "http://cockpit.invalid");
   if (destination.origin !== "http://cockpit.invalid") return null;
+  if (item.kind === "approval" && item.source.approvalId && destination.pathname === "/ops/approvals" && !destination.searchParams.has("view")) {
+    destination.pathname = "/inbox";
+    destination.searchParams.set("approvalId", item.source.approvalId);
+    destination.searchParams.set("workspaceId", item.source.workspaceId);
+    destination.searchParams.set("shell", "cockpit");
+    destination.searchParams.delete("shellScope");
+  }
+  const href = destination.pathname + destination.search + destination.hash;
   const classic = destination.searchParams.get("shell") === "classic";
-  // Ops and Approvals exist only in the classic shell, so a classic destination says so.
+  // Unported owner destinations remain explicit Classic handoffs.
   const label = classic ? `Open in classic ${area}` : `Open in ${area}`;
   const content = (
     <>
@@ -32,7 +40,7 @@ export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem;
   );
   return classic ? (
     <ClassicOwnerLink
-      href={item.href}
+      href={href}
       scope={JSON.stringify([workspaceId, item.id])}
       label={label}
       inboxOwner
@@ -42,13 +50,13 @@ export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem;
     </ClassicOwnerLink>
   ) : (
     <a
-      href={item.href}
+      href={href}
       data-inbox-owner
       className={className}
       onClick={(event) => {
         if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
         event.preventDefault();
-        navigate(item.href);
+        navigate(href);
       }}
     >
       {content}

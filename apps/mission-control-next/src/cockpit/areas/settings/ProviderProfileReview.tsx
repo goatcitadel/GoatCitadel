@@ -71,6 +71,16 @@ export function ProviderProfileReview({
             Requests and connection checks will use this endpoint with the configured credential. Saving the profile
             does not select it as the installation default.
           </p>
+          {transport && (transport.tls.insecureSkipVerify || transport.proxyTls.insecureSkipVerify) ? (
+            <p role="alert" className="rounded border border-status-waiting p-3 text-status-waiting">
+              Certificate verification will be disabled for{" "}
+              {transport.tls.insecureSkipVerify ? "provider requests" : ""}
+              {transport.tls.insecureSkipVerify && transport.proxyTls.insecureSkipVerify ? " and " : ""}
+              {transport.proxyTls.insecureSkipVerify ? "proxy requests" : ""} to {draft.provider.baseUrl}. An
+              impersonated endpoint could receive prompts, responses and credentials. This applies to this provider
+              across the installation.
+            </p>
+          ) : null}
           {transport ? (
             <details>
               <summary className="cursor-pointer">Reviewed transport configuration</summary>
@@ -121,7 +131,15 @@ export function ProviderProfileReview({
             </p>
           ) : null}
           <div className="flex flex-wrap gap-2">
-            <Button variant="primary" disabled={busy || !current} onClick={onConfirm}>
+            <Button
+              variant={
+                transport && (transport.tls.insecureSkipVerify || transport.proxyTls.insecureSkipVerify)
+                  ? "danger"
+                  : "primary"
+              }
+              disabled={busy || !current}
+              onClick={onConfirm}
+            >
               {kind === "transport" ? "Apply reviewed transport" : "Apply reviewed provider profile"}
             </Button>
             <Button disabled={busy} onClick={onCancel}>

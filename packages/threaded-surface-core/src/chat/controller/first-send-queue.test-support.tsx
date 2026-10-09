@@ -13,11 +13,13 @@ import {
   type SessionMetadataConflictDraft,
   type InitialOutboundSessionCreation,
 } from "../useChatSessionControls";
+import { useChatComposerSendIntent } from "./useChatComposerSendIntent";
 import { useChatSessionRestoration } from "./useChatSessionRestoration";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const api = vi.hoisted(() => ({
+  openBtwSideChat: vi.fn(),
   createChatSession: vi.fn(),
   fetchChatSessionStatus: vi.fn(),
   sendAgentChatMessage: vi.fn(),
@@ -76,6 +78,8 @@ function deferred<T>() {
 }
 type HarnessHandle = {
   send: () => Promise<void>;
+  sendIntent: () => Promise<void>;
+  removeQueue: (id: string) => void;
   setDraft: (text: string) => void;
   setRoute: (route: typeof FIRST_ROUTE) => void;
   resumeQueue: () => void;
@@ -229,8 +233,23 @@ function Harness({ sendOnAssignment = false }: { sendOnAssignment?: boolean }) {
     threadController: { selectedSession: session },
     setRenameTitle: noop,
   });
+  const intent = useChatComposerSendIntent({
+    workspaceId,
+    profileDependentAdmissionBlockReason: null, notices: { pushLocalNotice: noop }, scopedErrors: { setUiError: setError },
+    setFollowThreadOutput: noop, knowledgeActions: { requiresThreadKnowledge: false, attachPendingKnowledgeSources: async () => undefined },
+    orchestration, draft, openBtwSideChat: api.openBtwSideChat, setDraft, coordination: { activeStreamRef },
+    goalActions: { handleSteerMidTurn: async () => undefined }, oneShotContext: { consumeModelCouncilArming: () => undefined, modelCouncilEnabledRef: useRef(false) },
+    selection: { selectedSessionId: sessionId }, pendingAttachments: attachments, setPendingAttachments: setAttachments,
+    sessionData: { prefs: null }, conversationContext: { activeOutboundContext: null }, externalSourceAttachments: { selectedAttachmentIds: [] },
+    pendingDocumentContextRefs: [], knowledgeUrlDraft: "", runVariables: { pendingTemplateInvocation: null },
+    surfaceState: { messageMode: "chat" }, planningMode: "off",
+    multimodal: { imageBusy: false, imageGenerationAvailable: false, handleGenerateImage: async () => false },
+    errorState: { failedAutoImageRecovery: null, setFailedAutoImageRecovery: noop },
+  });
   latest = {
     send: orchestration.handleSend,
+    sendIntent: intent.handleSendWithKnowledge,
+    removeQueue: orchestration.handleRemoveQueuedItem,
     setDraft,
     setRoute,
     resumeQueue: orchestration.handleResumeQueue,

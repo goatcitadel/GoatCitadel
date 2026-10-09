@@ -25,8 +25,19 @@ const api = vi.hoisted(() => ({
   respondToChangePlan: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
+// Each owner write reports the attempt it dispatched, as the real capture would for its Gateway route.
+const attempts = vi.hoisted(() => ({ paths: [] as string[], read: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({
   getGatewayApiBaseUrl: () => "fixture-gateway",
+  captureMutationAttempt: (dispatch: () => Promise<unknown>, onAttempt: (attempt: unknown) => void) => {
+    const path = attempts.paths.shift();
+    if (path) onAttempt({ attemptKey: "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b", method: "POST", path });
+    return dispatch();
+  },
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  fetchMutationAttempt: attempts.read,
 }));
 const navigate = vi.hoisted(() => vi.fn());
 vi.mock("@next/cockpit/app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate }) }));
@@ -88,6 +99,27 @@ async function mount(native = false, workspaceId: string | undefined = "default"
   return { root, host, button, click };
 }
 describe("classic and native llama.cpp setup", () => {
+  it.each([false, true])("settles a lost setup confirmation through Check outcome (native=%s)", async (native) => {
+    attempts.paths.length = 0;
+    const view = await mount(native);
+    await view.click("Check server");
+    await view.click("Finish setup");
+    await view.click("Prepare reviewed setup");
+    await view.click("Review recorded setup");
+    attempts.paths.push("/api/v1/change-plans/plan-1/confirmations");
+    api.confirmChangePlan.mockImplementationOnce(async () => {
+      plan = awaitingLlamaApproval(plan);
+      throw new Error("response lost");
+    });
+    await view.click("Confirm reviewed setup plan");
+    expect(view.host.textContent).toContain("setup outcome is uncertain");
+    attempts.read.mockResolvedValue({ status: "completed", claimExpired: false });
+    await view.click("Check outcome");
+    expect(view.host.textContent).not.toContain("setup outcome is uncertain");
+    expect(view.host.textContent).toContain("recorded this setup confirmation as processed");
+    expect(view.host.textContent).toContain("Awaiting approval");
+    expect(api.confirmChangePlan).toHaveBeenCalledTimes(1);
+  });
   it.each([false, true])(
     "reviews external setup and hands approval to its existing owner (native=%s)",
     async (native) => {

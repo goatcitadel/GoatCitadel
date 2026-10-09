@@ -1,3 +1,4 @@
+import { setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it } from "vitest";
 import { __resetSessionDraftsForTests, hasSessionDraft, useSessionDraft } from "./session-drafts";
@@ -21,8 +22,32 @@ describe("session editor drafts", () => {
     return <input value={draft.value.title} onChange={() => undefined} />;
   }
   beforeEach(() => {
+    setGatewayCallerScope("");
     __resetSessionDraftsForTests();
     __resetFormDirtyRegistryForTests();
+  });
+  it("reacts to a verified caller change while mounted and restores the same caller's bytes", async () => {
+    setGatewayCallerScope("actor-a");
+    await act(async () => { renderer = create(<Editor />); });
+    await act(async () => draft.setValue({ title: "Private A" }));
+    await act(async () => setGatewayCallerScope("actor-b"));
+    expect(draft.value.title).toBe("Canonical");
+    expect(getDirtySectionKeys()).toEqual([]);
+    await act(async () => draft.setValue({ title: "Private B" }));
+    await act(async () => setGatewayCallerScope("actor-a"));
+    expect(draft.value.title).toBe("Private A");
+    await act(async () => renderer.unmount());
+  });
+  it("binds a late version-save acknowledgement to the submitting caller", async () => {
+    setGatewayCallerScope("actor-a");
+    await act(async () => { renderer = create(<Editor id="artifact:v1" />); });
+    await act(async () => draft.setValue({ title: "Private A" }));
+    const submitted = draft;
+    await act(async () => setGatewayCallerScope("actor-b"));
+    await act(async () => { submitted.acceptSavedAs("artifact:v2", { title: "Private A" }, 2, { title: "Private A" }); });
+    await act(async () => renderer.update(<Editor id="artifact:v2" title="Canonical B" />));
+    expect(draft.value.title).toBe("Canonical B");
+    await act(async () => renderer.unmount());
   });
   it("retains text and its base revision across refresh, unmount and reopening", async () => {
     await act(async () => {
@@ -145,4 +170,30 @@ describe("session editor drafts", () => {
     expect(draft.hasRemoteChanges).toBe(false);
     await act(async () => renderer.unmount());
   });
+  it("requires explicit recovery of unattributed input and preserves its original bytes", async () => {
+    setGatewayCallerScope("");
+    await act(async () => { renderer = create(<Editor />); });
+    await act(async () => draft.setValue({ title: "Unattributed input" }));
+    await act(async () => setGatewayCallerScope("verified-actor"));
+    expect(draft.value.title).toBe("Canonical");
+    expect(draft.hasUnattributedDraft).toBe(true);
+    await act(async () => draft.recoverUnattributedDraft());
+    expect(draft.value.title).toBe("Unattributed input");
+    await act(async () => draft.setValue({ title: "Claimed edit" }));
+    await act(async () => setGatewayCallerScope(""));
+    expect(draft.value.title).toBe("Unattributed input");
+    await act(async () => renderer.unmount());
+  });
+  it("keeps caller drafts in their original scope after another principal signs in", async () => {
+ setGatewayCallerScope("actor-a");
+ await act(async()=>{renderer=create(<Editor/>);});
+ await act(async()=>draft.setValue({title:"A unsaved"}));
+ await act(async()=>renderer.unmount());
+ setGatewayCallerScope("actor-b");
+ await act(async()=>{renderer=create(<Editor/>);});
+ expect(draft.value.title).toBe("Canonical");expect(hasSessionDraft("workspace:a:note:1")).toBe(false);
+ await act(async()=>renderer.unmount());setGatewayCallerScope("actor-a");
+ await act(async()=>{renderer=create(<Editor/>);});expect(draft.value.title).toBe("A unsaved");
+ await act(async()=>renderer.unmount());setGatewayCallerScope("");
+ });
 });

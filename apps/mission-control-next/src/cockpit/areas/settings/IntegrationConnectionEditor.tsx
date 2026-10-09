@@ -123,14 +123,11 @@ export function IntegrationConnectionEditor({ owner: s }: { owner: IntegrationSe
             aria-label="Advanced integration configuration JSON"
             className={`${integrationInputClass} font-mono`}
             rows={8}
+            readOnly
             disabled={s.saving}
             value={creating ? s.createConfig : s.detailForm.configText}
-            onChange={(e) =>
-              creating
-                ? s.setCreateConfig(e.target.value)
-                : s.setDetailForm((current) => ({ ...current, configText: e.target.value }))
-            }
           />
+          <span className="text-xs text-fg-muted">Inspection only. Use the supported typed fields; credential input belongs to its secure setup owner.</span>
         </label>
       ) : (
         <IntegrationFormFields
@@ -146,7 +143,7 @@ export function IntegrationConnectionEditor({ owner: s }: { owner: IntegrationSe
       </p>
       <div className="flex flex-wrap gap-2">
         <Button disabled={s.saving} onClick={creating ? s.toggleCreateJson : s.toggleDetailJson}>
-          {json ? "Use guided fields" : "Advanced JSON"}
+          {json ? "Use guided fields" : "Inspect public configuration"}
         </Button>
         <Button variant="primary" disabled={Boolean(blocked)} onClick={() => setReview(signature)}>
           {creating ? "Review new connection" : "Review connection changes"}

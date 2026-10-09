@@ -1,3 +1,4 @@
+import { Field } from "../../ui/Field";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { describeDesktopPermission, useDesktopNotifications } from "../../../features/native-routes/settings/use-desktop-notifications";
 import { Button } from "../../ui/Button";
@@ -9,19 +10,20 @@ export function AppearanceSettings() {
   return <section aria-label="Appearance and attention" className="mt-4 grid gap-4 border-t border-line-subtle pt-4 sm:grid-cols-2">
     <div className="space-y-3">
       <h3 className="text-sm font-semibold text-fg">Appearance</h3>
-      <label className="block text-sm text-fg-secondary">Color theme
-        <select value={prefs.theme} onChange={(event) => prefs.setTheme(event.target.value as "light" | "dark")}
+      <Field label="Settings presentation" help="Guided starts with setup steps. Expert reveals additional configuration; it grants no runtime permissions.">{(field) => <select {...field} value={prefs.mode}
+        onChange={(event) => prefs.setMode(event.target.value as "simple" | "advanced")}
+        className="mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-2 text-fg">
+        <option value="simple">Guided</option><option value="advanced">Expert</option>
+      </select>}</Field>
+      <Field label="Color theme">{(field) => <select {...field} value={prefs.theme} onChange={(event) => prefs.setTheme(event.target.value as "light" | "dark")}
           className="mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-2 text-fg">
           <option value="light">Bright sky</option><option value="dark">Lifted navy</option>
-        </select>
-      </label>
-      <label className="block text-sm text-fg-secondary">Density
-        <select value={prefs.density === "compact" ? "compact" : "comfortable"}
+        </select>}</Field>
+      <Field label="Density" help="Comfortable gives controls more space; Compact keeps information dense.">{(field) => <select {...field} value={prefs.density === "compact" ? "compact" : "comfortable"}
           onChange={(event) => prefs.setDensity(event.target.value as "comfortable" | "compact")}
           className="mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-2 text-fg">
           <option value="comfortable">Comfortable</option><option value="compact">Compact</option>
-        </select>
-      </label>
+        </select>}</Field>
       <label className="flex items-center gap-2 text-sm text-fg-secondary"><input type="checkbox" checked={prefs.showTechnicalDetails}
         onChange={(event) => prefs.setShowTechnicalDetails(event.target.checked)} /> Show technical details</label>
     </div>

@@ -13,6 +13,7 @@ import {
 } from "../../../features/native-routes/ops/OpsSavedBoardsModel";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
+import { SystemDashboardWidget } from "./SystemDashboardWidget";
 
 const ADJUSTMENTS: ReadonlyArray<{ value: OpsSavedBoardsPlacementAdjustment; label: string }> = [
   { value: "left", label: "Move left" },
@@ -28,15 +29,18 @@ const ADJUSTMENTS: ReadonlyArray<{ value: OpsSavedBoardsPlacementAdjustment; lab
 type BoardEditorProps = {
   workspaceId: string;
   board?: OpsSavedBoardRecord;
+  accessAvailable?: boolean;
   onClose: () => void;
+  onConfirmed?: (saved: OpsSavedBoardRecord) => void;
   onSaved: (saved: OpsSavedBoardRecord) => void;
 };
 export function CockpitBoardEditor(props: BoardEditorProps) {
   return <BoardEditorView key={`${props.workspaceId}:${props.board?.boardId ?? "create"}`} {...props} />;
 }
-function BoardEditorView({ workspaceId, board, onClose, onSaved }: BoardEditorProps) {
+function BoardEditorView({ workspaceId, board, accessAvailable = true, onClose, onSaved, onConfirmed }: BoardEditorProps) {
   const client = useQueryClient();
   const owner = useBoardEditor(workspaceId, board, async (saved, isCurrent) => {
+    if (isCurrent()) onConfirmed?.(saved);
     await client.invalidateQueries({ queryKey: queryKeys.systemBoards(workspaceId) });
     await client.invalidateQueries({ queryKey: ["surface", "saved-board", workspaceId, saved.boardId] });
     if (isCurrent()) onSaved(saved);
@@ -44,12 +48,17 @@ function BoardEditorView({ workspaceId, board, onClose, onSaved }: BoardEditorPr
   const { base, draft, setDraft, reviewing, save } = owner;
   const busy = owner.attempt.phase === "pending",
     uncertain = owner.attempt.phase === "uncertain";
-  const message = owner.attempt.message ?? owner.message;
+  const conflict = owner.conflict;
+  const stale = Boolean(conflict);
+  // While a newer revision is offered below, its own recovery copy replaces the owner's generic conflict message.
+  const message = owner.attempt.message ?? (conflict ? null : owner.message);
+  const [preview, setPreview] = useState(false);
   const [widgetKind, setWidgetKind] = useState<OpsSavedBoardWidgetKind>("runtime_truth_summary");
   const [adjustments, setAdjustments] = useState<Record<string, OpsSavedBoardsPlacementAdjustment>>({});
   const setReviewing = (_value: false) => owner.cancelReview();
   function review(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!accessAvailable || stale) return;
     owner.requestReview();
   }
   return (
@@ -65,12 +74,56 @@ function BoardEditorView({ workspaceId, board, onClose, onSaved }: BoardEditorPr
       </div>
       {message ? (
         <p
-          role={uncertain ? "alert" : "status"}
+          role={uncertain || stale ? "alert" : "status"}
           className="rounded-md border border-line bg-sunken p-3 text-sm text-fg"
         >
           {message}
         </p>
       ) : null}
+      {conflict && !uncertain && !owner.hasEdits ? (
+        <div role="alert" className="grid gap-2 rounded-md border border-line bg-sunken p-3 text-sm text-fg">
+          <p>
+            <strong>Revision {conflict.revision} is now current.</strong> You have no unsaved edits.
+          </p>
+          <div>
+            <Button size="sm" disabled={busy} onClick={owner.discardForCurrent}>
+              Load revision {conflict.revision}
+            </Button>
+          </div>
+        </div>
+      ) : conflict && !uncertain ? (
+        <div role="alert" className="grid gap-2 rounded-md border border-line bg-sunken p-3 text-sm text-fg">
+          <p>
+            <strong>Revision {conflict.revision} is now current.</strong> Your draft is kept and nothing has been saved.
+          </p>
+          <p className="text-fg-secondary">
+            Keeping your draft lets you review it against revision {conflict.revision}. Saving your draft replaces the
+            changes in revision {conflict.revision}.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" disabled={busy} onClick={owner.adoptCurrent}>
+              Keep my draft on revision {conflict.revision}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={owner.discardForCurrent}>
+              Discard my draft
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {owner.createIdentityTaken && !uncertain ? (
+        <div className="grid gap-2 rounded-md border border-line bg-sunken p-3 text-sm text-fg">
+          <p>
+            A saved board already uses this create request. Check your saved boards first: a fresh request creates a
+            separate board.
+          </p>
+          <div>
+            <Button size="sm" disabled={busy} onClick={owner.freshCreateIdentity}>
+              Start a fresh create request
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {!accessAvailable ? <p role="status" className="text-sm text-fg-secondary">Current board access has not been verified. Your draft is retained; saving requires a successful authorized read.</p> : null}
       {uncertain ? (
         <ClassicOwnerLink href="/ops/boards?shell=classic" scope={workspaceId} label="Review boards in the classic view" />
       ) : null}
@@ -199,7 +252,8 @@ function BoardEditorView({ workspaceId, board, onClose, onSaved }: BoardEditorPr
           </ol>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button type="submit" variant="primary" disabled={busy || uncertain}>
+          <Button onClick={() => setPreview(value => !value)} disabled={!accessAvailable} aria-pressed={preview}>Preview live widgets</Button>
+          <Button type="submit" variant="primary" disabled={!accessAvailable || busy || uncertain || stale}>
             {base ? "Review changes" : "Review new board"}
           </Button>
           <Button
@@ -212,17 +266,21 @@ function BoardEditorView({ workspaceId, board, onClose, onSaved }: BoardEditorPr
           </Button>
         </div>
       </form>
+      {preview ? <section aria-label="Draft live widget preview" className="grid gap-3">
+        <p className="text-sm text-fg-secondary">Unsaved layout preview. Values read current Gateway owners; this does not save a board or create a historical snapshot.</p>
+        {accessAvailable ? <div className="grid gap-3 sm:grid-cols-2">{draft.placements.map(placement => <SystemDashboardWidget key={placement.widgetId} kind={placement.kind} workspaceId={workspaceId} />)}</div> : <p role="status">Preview unavailable until current board access is verified.</p>}
+      </section> : null}
       {reviewing ? (
-        <div className="grid gap-2 rounded-md border border-line-strong bg-sunken p-3">
+        <div className="grid gap-2 rounded-md border border-line-strong bg-sunken p-3" data-create-identity={base ? undefined : owner.createIdentity}>
           <p className="text-sm text-fg">
             {base ? "Save changes to" : "Create"} {draft.name.trim()} with {draft.placements.length}{" "}
             {draft.placements.length === 1 ? "widget" : "widgets"}?{" "}
             {base
-              ? "The Gateway will check the current revision before saving."
+              ? "The Gateway will check the current version before saving."
               : "The Gateway will validate and save this new layout."}
           </p>
           <div className="flex gap-2">
-            <Button variant="primary" disabled={busy} onClick={() => void save()}>
+            <Button variant="primary" disabled={!accessAvailable || busy || stale} onClick={() => { if (accessAvailable && !stale) void save(); }}>
               {busy ? "Saving…" : "Confirm save"}
             </Button>
             <Button disabled={busy} onClick={() => setReviewing(false)}>

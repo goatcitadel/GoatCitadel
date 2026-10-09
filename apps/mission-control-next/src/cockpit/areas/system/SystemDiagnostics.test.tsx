@@ -5,11 +5,16 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { SystemDiagnostics } from "./SystemDiagnostics";
 
+const preferences = vi.hoisted(() => ({ activeWorkspaceId: "ws-1", showTechnicalDetails: false }));
 const api = vi.hoisted(() => ({ fetchDevDiagnostics: vi.fn(), fetchDaemonLogs: vi.fn(), fetchOperatorInbox: vi.fn() }));
+vi.mock("../settings/FirstRunVerification", () => ({ FirstRunVerification: () => <p>Existing setup verification owner</p> }));
+vi.mock("./RuntimeAuthorityMap", () => ({
+  RuntimeAuthorityMap: ({ workspaceId }: { workspaceId: string }) => <p>Runtime authority owner {workspaceId}</p>,
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/diagnostics", () => ({ fetchDevDiagnostics: api.fetchDevDiagnostics }));
 vi.mock("@goatcitadel/mission-control-shared/api/platform", () => ({ fetchDaemonLogs: api.fetchDaemonLogs }));
 vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({ fetchOperatorInbox: api.fetchOperatorInbox }));
-vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => ({ activeWorkspaceId: "ws-1" }) }));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => preferences }));
 
 describe("cockpit Diagnostics", () => {
   it("keeps scoped recovery visible when daemon logs fail", async () => {
@@ -32,6 +37,16 @@ describe("cockpit Diagnostics", () => {
       expect(container.textContent).toContain("Only the first page was read");
       expect(container.querySelector<HTMLAnchorElement>('a[href="/work/runs/run-1?shell=cockpit"]')).not.toBeNull();
       expect(container.textContent).toContain("Request timed out");
+      expect(container.textContent).not.toContain('"id": "event-1"');
+      preferences.showTechnicalDetails = true;
+      await act(async () => root.render(<QueryClientProvider client={client}><SystemDiagnostics /></QueryClientProvider>));
+      expect(container.querySelector('summary')?.textContent).toBe("Event technical details");
+      expect(container.textContent).toContain('"id": "event-1"');
+      expect(container.textContent).toContain("Run needs recovery");
+      expect(container.textContent).toContain("Request timed out");
+      preferences.showTechnicalDetails = false;
+      expect(container.textContent).toContain("Existing setup verification owner");
+      expect(container.textContent).toContain("Runtime authority owner ws-1");
     } finally {
       act(() => root.unmount());
       client.clear();
