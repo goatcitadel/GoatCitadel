@@ -205,7 +205,8 @@ export async function answerChatUserInputPrompt(
   responder: ChatUserInputPromptResponder,
 ): Promise<ChatUserInputPromptAnswerResponse> {
   await runtime.getSession(sessionId);
-  const trace = await runtime.storage.chatTurnTraces.get(turnId);
+  const storage = runtime.storage;
+  const trace = await storage.chatTurnTraces.get(turnId);
   if (trace.sessionId !== sessionId) {
     throw new Error(`Chat turn ${turnId} does not belong to session ${sessionId}`);
   }
@@ -248,7 +249,7 @@ export async function answerChatUserInputPrompt(
     if ((await runtime.chatAsyncClarificationV1Enabled?.()) !== true || response.kind === "secure_configuration") {
       throw new ConflictError({ message: "Optional clarification is disabled or requires an ordinary answer." });
     }
-    const outcome = await runtime.storage.sessionMutationAdmissions.answerDurableChatOptionalInput({
+    const outcome = await storage.sessionMutationAdmissions.answerDurableChatOptionalInput({
       admissionIdentity,
       durableRunId,
       expectedWaitingRunVersion: durableRun.version,
@@ -322,7 +323,7 @@ export async function answerChatUserInputPrompt(
       if (!scopeRef) {
         throw new ConflictError({ message: "Secure runtime configuration scope is unavailable on this Gateway." });
       }
-      secureReservation = await runtime.storage.sessionMutationAdmissions.reserveDurableChatSecureConfiguration({
+      secureReservation = await storage.sessionMutationAdmissions.reserveDurableChatSecureConfiguration({
         admissionIdentity,
         durableRunId,
         expectedWaitingRunVersion: durableRun.version,
@@ -415,7 +416,7 @@ export async function answerChatUserInputPrompt(
 
   let outcome;
   try {
-    outcome = await runtime.storage.sessionMutationAdmissions.resolveDurableChatUserInput({
+    outcome = await storage.sessionMutationAdmissions.resolveDurableChatUserInput({
       admissionIdentity,
       durableRunId,
       expectedWaitingRunVersion: secureReservation?.run.version ?? durableRun.version,

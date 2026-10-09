@@ -3210,13 +3210,7 @@ export class GatewayService {
               protectedAreas: manifest.protectedAreas,
             },
             rollbackNote: "Automatic compensation is limited to the exact rollback patch bound to this manifest.",
-            linkage: {
-              workspaceId: plan.origin.workspaceId,
-              ...(plan.origin.sessionId ? { sessionId: plan.origin.sessionId } : {}),
-              ...(plan.origin.turnId ? { turnId: plan.origin.turnId } : {}),
-              ...(plan.origin.actorId ? { operatorId: plan.origin.actorId } : {}),
-              actionType: "change_plan_protected_source_update",
-            },
+            linkage: changePlanApprovalLinkage(plan.origin, "change_plan_protected_source_update"),
             ...(plan.expiresAt ? { expiresAt: plan.expiresAt } : {}),
           });
           return approval.approvalId;
@@ -3274,13 +3268,7 @@ export class GatewayService {
             risk: plan.risk,
           },
           rollbackNote: "Any compensation must use rollback material already bound to this exact Change Plan.",
-          linkage: {
-            workspaceId: plan.origin.workspaceId,
-            ...(plan.origin.sessionId ? { sessionId: plan.origin.sessionId } : {}),
-            ...(plan.origin.turnId ? { turnId: plan.origin.turnId } : {}),
-            ...(plan.origin.actorId ? { operatorId: plan.origin.actorId } : {}),
-            actionType: "change_plan_effect",
-          },
+          linkage: changePlanApprovalLinkage(plan.origin, "change_plan_effect"),
           ...(plan.expiresAt ? { expiresAt: plan.expiresAt } : {}),
         });
         return approval.approvalId;
@@ -8457,16 +8445,18 @@ export class GatewayService {
       persistChatStreamChunk: async (chunk, runId) => {
         await this.persistChatStreamChunk(chunk, runId);
       },
-      onDurableRunCommitted: async (run) => {
-        await this.publishRealtime("system", "durable", {
-          type: "durable_run_created",
-          runId: run.runId,
-          workflowKey: run.workflowKey,
-          status: run.status,
-        });
-      },
+      onDurableRunCommitted: async (run) => await this.publishDurableRunCreated(run),
       requestDurableRunProcessing: (runId) => this.requestDurableRunProcessing(runId),
     };
+  }
+
+  private async publishDurableRunCreated(run: Pick<DurableRunRecord, "runId" | "workflowKey" | "status">) {
+    await this.publishRealtime("system", "durable", {
+      type: "durable_run_created",
+      runId: run.runId,
+      workflowKey: run.workflowKey,
+      status: run.status,
+    });
   }
 
   private async runCronAgentTurn(input: {
@@ -8627,14 +8617,7 @@ export class GatewayService {
             preparedTurn.branchSelectionBaseTurnId,
             preparedTurn.turnId,
           ),
-        onDurableRunCommitted: async (run) => {
-          await this.publishRealtime("system", "durable", {
-            type: "durable_run_created",
-            runId: run.runId,
-            workflowKey: run.workflowKey,
-            status: run.status,
-          });
-        },
+        onDurableRunCommitted: async (run) => await this.publishDurableRunCreated(run),
         requestDurableRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
       },
       prepared,
@@ -12148,22 +12131,7 @@ export class GatewayService {
     this.inboundChannelEventService.close();
     this.chatTurnExecutionRegistry?.close("Gateway service is closing.");
     this.promptPackService?.close();
-    if (this.maintenanceScheduler) {
-      this.maintenanceScheduler.stop();
-      this.maintenanceScheduler = undefined;
-    }
-    if (this.chatTimerScheduler) {
-      this.chatTimerScheduler.stop();
-      this.chatTimerScheduler = undefined;
-    }
-    if (this.orchestrationWorktreeReapScheduler) {
-      this.orchestrationWorktreeReapScheduler.stop();
-      this.orchestrationWorktreeReapScheduler = undefined;
-    }
-    if (this.mobilePushDeliveryScheduler) {
-      this.mobilePushDeliveryScheduler.stop();
-      this.mobilePushDeliveryScheduler = undefined;
-    }
+    this.stopIntervalSchedulers();
     this.orchestrationWorktreeService.close();
     if (this.backgroundTasks.size > 0) {
       const tasks = [...this.backgroundTasks];
@@ -12178,6 +12146,17 @@ export class GatewayService {
     await this.storage.close();
   }
 
+  private stopIntervalSchedulers(): void {
+    this.maintenanceScheduler?.stop();
+    this.maintenanceScheduler = undefined;
+    this.chatTimerScheduler?.stop();
+    this.chatTimerScheduler = undefined;
+    this.orchestrationWorktreeReapScheduler?.stop();
+    this.orchestrationWorktreeReapScheduler = undefined;
+    this.mobilePushDeliveryScheduler?.stop();
+    this.mobilePushDeliveryScheduler = undefined;
+  }
+
   /**
    * Stop every non-HTTP producer/listener from admitting new work. Existing
    * reservations are left alone so a pause/force drain may settle them before
@@ -12190,22 +12169,7 @@ export class GatewayService {
     this.durableRunService.stopAdmission();
     this.approvalEffectsService.stopAdmission();
     this.inboundChannelEventService.close();
-    if (this.maintenanceScheduler) {
-      this.maintenanceScheduler.stop();
-      this.maintenanceScheduler = undefined;
-    }
-    if (this.chatTimerScheduler) {
-      this.chatTimerScheduler.stop();
-      this.chatTimerScheduler = undefined;
-    }
-    if (this.orchestrationWorktreeReapScheduler) {
-      this.orchestrationWorktreeReapScheduler.stop();
-      this.orchestrationWorktreeReapScheduler = undefined;
-    }
-    if (this.mobilePushDeliveryScheduler) {
-      this.mobilePushDeliveryScheduler.stop();
-      this.mobilePushDeliveryScheduler = undefined;
-    }
+    this.stopIntervalSchedulers();
     this.signalInboundRuntimeService.stop();
     await this.discordRuntimeService.close();
   }
@@ -12244,13 +12208,7 @@ export class GatewayService {
     }
     const workspaceRoot = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir);
     const projectPath = fsSync.realpathSync(path.resolve(workspaceRoot, project.workspacePath));
-    const sourceRepoRoot = fsSync.realpathSync(
-      execFileSync("git", ["rev-parse", "--show-toplevel"], {
-        cwd: projectPath,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim(),
-    );
+    const sourceRepoRoot = readRealGitTopLevel(projectPath);
     const sourceScope = path.relative(sourceRepoRoot, projectPath).replaceAll("\\", "/") || ".";
     const workbench = await this.storage.chatSessionWorkbench.get(parentSessionId);
     const worktreePath =
@@ -12294,13 +12252,7 @@ export class GatewayService {
     const workspaceRoot = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir);
     const projectPath = fsSync.realpathSync(path.resolve(workspaceRoot, project.workspacePath));
     try {
-      return fsSync.realpathSync(
-        execFileSync("git", ["rev-parse", "--show-toplevel"], {
-          cwd: projectPath,
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
-        }).trim(),
-      );
+      return readRealGitTopLevel(projectPath);
     } catch {
       return projectPath;
     }
@@ -13150,6 +13102,26 @@ function dedupeStrings(values: readonly string[]): string[] {
     out.push(trimmed);
   }
   return out;
+}
+
+function changePlanApprovalLinkage(origin: ChangePlanRecord["origin"], actionType: string) {
+  return {
+    workspaceId: origin.workspaceId,
+    ...(origin.sessionId ? { sessionId: origin.sessionId } : {}),
+    ...(origin.turnId ? { turnId: origin.turnId } : {}),
+    ...(origin.actorId ? { operatorId: origin.actorId } : {}),
+    actionType,
+  };
+}
+
+/** Resolves the real path of the Git repository containing `cwd`; throws when `cwd` is not inside one. */
+function readRealGitTopLevel(cwd: string): string {
+  const topLevel = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return fsSync.realpathSync(topLevel.trim());
 }
 
 function readRecordString(record: Record<string, unknown>, key: string): string | undefined {

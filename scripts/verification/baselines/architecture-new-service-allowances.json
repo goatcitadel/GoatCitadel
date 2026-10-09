@@ -1788,6 +1788,14 @@
       "maxHostCallbacks": 0,
       "reason": "Independently reviewed inherited Settings setup owner introduced in 26cedae10ab242ed71a45f0da8f8ba22d2bd8d94, absent from the pinned baseline inventory. Composes canonical settings, runtime, catalog, selection and Change Plan projections plus explicitly requested normal scoped Chat diagnostics. Preserves manual tool posture and stale-route checks; no new provider execution authority. Original baseline, inventory and caps remain unchanged.",
       "evidence": "docs/MISSION_CONTROL_COCKPIT_ARCHITECTURE_OWNER_REVIEW.md and docs/LLAMA_CPP_SETUP.md record origin and responsibility. Setup unit tests cover completed-plan projection, hidden scoped Chat with web/memory/delegation off, completion failure, changed-settings staleness and missing-route errors. Part of 142 passing focused tests with 4 existing skips on 2026-09-30; raw dependencies11/callbacks0. No host model was started or called."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/chat-optional-user-input.ts",
+      "maxDependencyMemberAccesses": 4,
+      "maxHostCallbacks": 0,
+      "reason": "Operator-approved scope exception (2026-10-08) for C0 gate reconciliation of the optional Chat clarification owner added in 588d9787b, absent from the pinned baseline inventory. The existing-owner regressions from f9bf998e5, 588d9787b, 2e349bbdd and 9acbd936b are fixed by consolidation in the same change. Binds an optional clarification prompt to the exact admitted operator durable Chat turn, then registers or projects it through the session-mutation admission repository. Four reads: the run lookup and exact admission check in the shared binder, plus one admission call each to register and project. No original baseline-owner limit changes.",
+      "evidence": "Measured 4 dependency accesses and 0 host callbacks through an explicitly typed AsyncStorage parameter (no alias blind spot); it was the only regression left in the 2026-10-08 architecture-metrics run. Focused suites pass: optional-input, async clarification, route-runtime, durable-execution and failed-partial recovery, GatewayService close/deferred-init/delegation facades (408 tests); capability-system 109/109 alone; all 47 agent-runner files (548 tests); durable general post-commit integration 17/17 with a raised timeout. Gateway typecheck passes."
     }
   ]
 }

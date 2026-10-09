@@ -2997,16 +2997,17 @@ async function validateCommittedDurableChatTurnRecoveryTrace(
   observedRun?: DurableRunRecord,
   options: { allowFailedPartialWithoutOutput?: boolean } = {},
 ): Promise<DurableChatRecoveryTraceValidation> {
+  const storage = host.storage;
   let heartbeatIdentity: ExactSystemHeartbeatExecutionIdentity | undefined;
   let durableRun: DurableRunRecord;
   try {
-    durableRun = observedRun ?? (await host.storage.durableRuns.getRun(expectedRunId));
+    durableRun = observedRun ?? (await storage.durableRuns.getRun(expectedRunId));
     heartbeatIdentity = readExactSystemHeartbeatExecutionIdentity(durableRun, payload as DurableChatTurnPayload);
   } catch {
     return { outcome: "invalid", reason: "Durable Chat recovery has malformed execution identity evidence." };
   }
   const trace = await readDurableChatTurnTrace(host, payload.turnId);
-  const userMessage = observedUserMessage ?? (await host.storage.chatMessages.get(payload.userMessageId));
+  const userMessage = observedUserMessage ?? (await storage.chatMessages.get(payload.userMessageId));
   if (heartbeatIdentity) {
     if (userMessage) {
       return { outcome: "invalid", reason: "System heartbeat recovery cannot contain a persisted input message." };
@@ -3042,7 +3043,7 @@ async function validateCommittedDurableChatTurnRecoveryTrace(
     };
   }
   const assistantMessage = trace.assistantMessageId
-    ? await host.storage.chatMessages.get(trace.assistantMessageId)
+    ? await storage.chatMessages.get(trace.assistantMessageId)
     : undefined;
   if (heartbeatIdentity) {
     let heartbeatDecision: ExactSystemHeartbeatExecutionDecision | undefined;
@@ -3091,7 +3092,7 @@ async function validateCommittedDurableChatTurnRecoveryTrace(
       return { outcome: "not_resting", trace };
     }
     if (trace.status === "waiting_for_approval") {
-      const toolRuns = await host.storage.chatToolRuns.listByTurn(payload.turnId);
+      const toolRuns = await storage.chatToolRuns.listByTurn(payload.turnId);
       if (!hasDurableChatWaitingEvidence(trace, toolRuns)) {
         return {
           outcome: "invalid",
@@ -3129,10 +3130,10 @@ async function validateCommittedDurableChatTurnRecoveryTrace(
     }
   }
   if (isDurableChatWaitingStatus(trace.status)) {
-    const toolRuns = await host.storage.chatToolRuns.listByTurn(payload.turnId);
+    const toolRuns = await storage.chatToolRuns.listByTurn(payload.turnId);
     const hasEvidence =
       trace.status === "waiting_for_tool" && trace.routing?.confirmedDelegation
-        ? await hasConfirmedDelegationWaitingEvidence(host.storage, durableRun, trace)
+        ? await hasConfirmedDelegationWaitingEvidence(storage, durableRun, trace)
         : hasDurableChatWaitingEvidence(trace, toolRuns);
     if (!hasEvidence) {
       return {
@@ -3149,14 +3150,15 @@ async function isCheckpointAnchoredFailedPartialWithoutOutput(
   payload: DurableChatTurnExecutionPayload,
   run: DurableRunRecord,
 ): Promise<boolean> {
+  const storage = host.storage;
   if (payload.version !== "chat.turn.execute.v2" || run.status !== "failed") return false;
-  const checkpoint = await host.storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_failed");
+  const checkpoint = await storage.durableRuns.getLatestCheckpointByKind(run.runId, "run_failed");
   if (
     !checkpoint ||
     checkpoint.runId !== run.runId ||
     checkpoint.checkpointKind !== "run_failed" ||
     hasChatTurnTerminalOutputEvidence(run.metadata, checkpoint.state) ||
-    (await host.storage.chatMessages.get(payload.assistantMessageId))
+    (await storage.chatMessages.get(payload.assistantMessageId))
   ) {
     return false;
   }

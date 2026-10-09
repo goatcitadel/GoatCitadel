@@ -3738,7 +3738,8 @@ export class CapabilitySystemService {
       });
     }
 
-    for (const candidate of await this.options.storage.candidateSkillVersions.list(200)) {
+    const storage = this.options.storage;
+    for (const candidate of await storage.candidateSkillVersions.list(200)) {
       // The last observation for the candidate's workspace, refreshed by every workspace-scoped build (each
       // Chat turn). Operator reads are unscoped, so the warning carries the check time instead of implying
       // the label is current.
@@ -3759,7 +3760,7 @@ export class CapabilitySystemService {
       });
     }
 
-    for (const proposal of await this.options.storage.capabilityProposals.list(200)) {
+    for (const proposal of await storage.capabilityProposals.list(200)) {
       entries.push({
         capabilityId: `proposal:${proposal.proposalId}`,
         kind: "proposal",
