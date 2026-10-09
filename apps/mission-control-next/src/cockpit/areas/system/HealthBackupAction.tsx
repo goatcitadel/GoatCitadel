@@ -30,7 +30,7 @@ export function HealthBackupAction({ onRefresh, readAvailable = true }: { onRefr
     await commitBackup(review, () => generation === lifetime.current && readable.current);
     if (generation !== lifetime.current) return;
     setOpen(false); setReview(undefined);
-    try { await onRefresh?.(); } catch { /* Owner read error is shown by its query; creation receipt remains intact. */ }
+    try { await onRefresh?.(); } catch { /* Non-fatal: the owner read error is shown by its query; the creation receipt remains intact. */ }
   }
   const sameAccess = attempt.accessRevision === accessRevision;
   const receipt = sameAccess ? attempt.receipt : undefined;

@@ -102,7 +102,7 @@ export class InboxReadStatusService {
           return { readStatus: { scope: "operator", scopeId: key }, acknowledged: valid, skipped };
       }
     } catch {
-      /* No acknowledgement is reported without a committed receipt. */
+      /* Intentionally reports no acknowledgement without a committed receipt; the updates stay unread. */
     }
     return {
       readStatus: { scope: "unavailable", scopeId: key },

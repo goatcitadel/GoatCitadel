@@ -26,7 +26,7 @@ export function ChatLegacyInputNotice({ workspaceId, sessionId, draft, onRestore
   const [notice, setNotice] = useState<{ scope: object; text: string } | null>(null);
   const key = `goatcitadel.chat.draft.${workspaceId}.${sessionId ?? "new"}`;
   let retained = false;
-  try { retained = Boolean(caller && workspaceId && window.localStorage.getItem(key)); } catch { /* Storage unavailable. */ }
+  try { retained = Boolean(caller && workspaceId && window.localStorage.getItem(key)); } catch { /* Storage unavailable: intentionally treated as no retained draft. */ }
   const begin = () => {
     if (!current() || !caller || !workspaceId || disabled) return;
     try {
