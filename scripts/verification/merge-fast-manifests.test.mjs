@@ -8,6 +8,7 @@ import { describe, it } from "node:test";
 import {
   FAST_LANE_COMMANDS,
   FAST_LANE_STAGES,
+  fastLaneStageCommandIds,
   resolveFastLaneSelection,
   selectFastLaneStages,
 } from "./lib/scenarios/fast-lane.mjs";
@@ -31,12 +32,9 @@ describe("fast lane command selection", () => {
   it("keeps only the selected commands and drops emptied stages", () => {
     const selection = resolveFastLaneSelection("fast.test.storage.shard1,fast.docs");
     const stages = selectFastLaneStages(FAST_LANE_STAGES, selection);
-    assert.deepEqual(
-      stages.flatMap((stage) => stage.commands),
-      ["fast.test.storage.shard1", "fast.docs"],
-    );
+    assert.deepEqual(stages.flatMap(fastLaneStageCommandIds), ["fast.test.storage.shard1", "fast.docs"]);
     for (const stage of stages) {
-      assert.ok(stage.commands.length > 0);
+      assert.ok(fastLaneStageCommandIds(stage).length > 0);
     }
   });
 
@@ -46,7 +44,7 @@ describe("fast lane command selection", () => {
     const scheduled = [
       ...selectFastLaneStages(FAST_LANE_STAGES, resolveFastLaneSelection(shards.join(","))),
       ...selectFastLaneStages(FAST_LANE_STAGES, resolveFastLaneSelection(rest.join(","))),
-    ].flatMap((stage) => stage.commands);
+    ].flatMap(fastLaneStageCommandIds);
     assert.deepEqual([...scheduled].sort(), [...allCommandIds].sort());
   });
 });

@@ -110,6 +110,7 @@ import { createRemoteWorkerMeshNodeAdmissionSchema } from "./sqlite/remote-worke
 import { upgradeGovernedRemediationRecipeBinding } from "./sqlite/governed-remediation-recipe-binding.js";
 import { createMobilePushSchema } from "./sqlite/mobile-push-schema.js";
 import { createMobileApprovalKeySchema } from "./sqlite/mobile-approval-key-schema.js";
+import { BoundedStatementCache } from "./sqlite-statement-cache.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const LEGACY_REMOTE_APPROVAL_BEARER_PATTERN = /grat_[A-Za-z0-9_-]{43}/;
@@ -165,16 +166,46 @@ class SqliteStatementAdapter implements DbStatement {
   }
 }
 
+// Repositories call `prepare` for every query, and compiling SQL was the largest
+// single self-time cost in storage proofs. Compiled statements are reused by SQL
+// text. A reused `SELECT *` keeps its original column list after an ALTER, so
+// the whole cache is dropped whenever the schema cookie changes, whichever
+// connection changed it. The bound keeps dynamically built SQL from growing the
+// cache without limit.
+export const SQLITE_STATEMENT_CACHE_LIMIT = 512;
+
 class SqliteDatabaseClient implements DatabaseClient {
   public readonly dialect = "sqlite" as const;
   private transactionDepth = 0;
   private savepointCounter = 0;
   private activeCompatibilityTransactionId?: string;
+  private readonly statementCache: BoundedStatementCache<SqliteStatement>;
+  private schemaVersionStatement?: SqliteStatement;
+  private cachedSchemaVersion?: number;
 
-  public constructor(private readonly db: DatabaseSync) {}
+  public constructor(private readonly db: DatabaseSync) {
+    this.statementCache = new BoundedStatementCache(SQLITE_STATEMENT_CACHE_LIMIT, (sql) => this.db.prepare(sql));
+  }
 
   public prepare(sql: string): DbStatement {
-    return new SqliteStatementAdapter(this.db.prepare(sql));
+    // A fresh adapter per call: callers (and test fixtures) may wrap the returned
+    // object's methods, which must never leak into later `prepare` calls.
+    return new SqliteStatementAdapter(this.compiledStatement(sql));
+  }
+
+  private currentSchemaVersion(): number {
+    this.schemaVersionStatement ??= this.db.prepare("PRAGMA schema_version");
+    const row = this.schemaVersionStatement.get() as { schema_version?: unknown } | undefined;
+    return Number(row?.schema_version);
+  }
+
+  private compiledStatement(sql: string): SqliteStatement {
+    const schemaVersion = this.currentSchemaVersion();
+    if (schemaVersion !== this.cachedSchemaVersion) {
+      this.statementCache.clear();
+      this.cachedSchemaVersion = schemaVersion;
+    }
+    return this.statementCache.get(sql);
   }
 
   public exec(sql: string): void {
@@ -182,6 +213,9 @@ class SqliteDatabaseClient implements DatabaseClient {
   }
 
   public close(): void {
+    this.statementCache.clear();
+    this.schemaVersionStatement = undefined;
+    this.cachedSchemaVersion = undefined;
     if (typeof this.db.close === "function") {
       this.db.close();
     }

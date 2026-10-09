@@ -133,7 +133,13 @@ import {
   runCodeModeHostileSandboxLane as runCodeModeHostileSandboxLaneImpl,
   runCodeModeSandboxRequiredLane as runCodeModeSandboxRequiredLaneImpl,
 } from "./scenarios/code-mode-sandbox-lanes.mjs";
-export { A2A_FULL_LANE_COMMANDS, FAST_LANE_COMMANDS, runA2AFullLane, runFastLane } from "./scenarios/fast-lane.mjs";
+export {
+  A2A_FULL_LANE_COMMANDS,
+  FAST_LANE_COMMANDS,
+  resolveChangedFastLaneRun,
+  runA2AFullLane,
+  runFastLane,
+} from "./scenarios/fast-lane.mjs";
 
 const PROVIDER_SCENARIOS = ["simple", "stream", "structured", "tools"];
 const UNSUPPORTED_PROVIDER_SCENARIOS = {

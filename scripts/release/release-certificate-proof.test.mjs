@@ -219,8 +219,11 @@ test("every release-proof matrix lane produces verification-context artifacts", 
 });
 
 test("repository hygiene discovers every tracked script test", () => {
+  // scripts/script-test-partition.test.mjs proves the two suites cover every
+  // scripts/**/*.test.mjs file exactly once; these scripts must run them.
   const packageJson = JSON.parse(fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
-  assert.match(packageJson.scripts["verify:repo:hygiene"], /scripts\/\*\*\/\*\.test\.mjs/);
+  assert.match(packageJson.scripts["verify:repo:hygiene"], /scripts\/run-script-tests\.mjs --suite=hygiene/);
+  assert.match(packageJson.scripts["verify:remote-worker:windows"], /scripts\/run-script-tests\.mjs --suite=native-windows/);
 });
 
 test("eslint audits verification, packaging, and release modules", () => {
