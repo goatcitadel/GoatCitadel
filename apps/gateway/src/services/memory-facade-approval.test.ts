@@ -115,7 +115,12 @@ function createHarness() {
 }
 
 
-it.each(["Use the local store for project decisions", "  First line\nSecond line\n", "Decision: use the local store. password=private-content-value"])("projects exact redacted content through canonical approval evidence: %s", async content => {
+// Labels keep the secret-shaped case out of the printed test title (artifact redaction scans reporter output).
+it.each([
+  ["single sentence", "Use the local store for project decisions"],
+  ["multi-line", "  First line\nSecond line\n"],
+  ["secret-shaped content", "Decision: use the local store. password=private-content-value"],
+])("projects exact redacted content through canonical approval evidence: %s", async (_label, content) => {
   const harness = createHarness();
   let persisted: ApprovalRequest | undefined;
   const createApproval = vi.fn(async (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitPort) => {
