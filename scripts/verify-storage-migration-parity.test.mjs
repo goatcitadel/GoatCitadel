@@ -1010,10 +1010,11 @@ test("current registries and checked-in manifest cover every migration exactly",
   // manifest so an accidental registry-plus-manifest edit cannot self-certify.
   assert.equal(sqlite.migrations.length, 253);
   assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 253]);
-  assert.equal(postgres.migrations.length, 199);
-  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 199]);
+  assert.equal(postgres.migrations.length, 200);
+  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 200]);
   assert.equal(sqlite.migrations.at(-1)?.name, "purge_credential_route_idempotency_payload_hashes");
-  assert.equal(postgres.migrations.at(-1)?.name, "purge_credential_route_idempotency_payload_hashes");
+  assert.equal(postgres.migrations.at(-1)?.name, "channel_guided_setup_schema_shape_convergence");
+  assert.equal(postgres.migrations.find(record => record.version === 199)?.name, "purge_credential_route_idempotency_payload_hashes");
   assert.equal(sqlite.migrations.find(record => record.version === 251)?.name, "delegation_step_instruction_snapshots");
   assert.equal(postgres.migrations.find(record => record.version === 197)?.name, "delegation_step_instruction_snapshots");
   assert.equal(sqlite.migrations.find(record => record.version === 252)?.name, "channel_guided_setup_evidence_and_oauth_attempts");
@@ -1037,7 +1038,7 @@ test("current registries and checked-in manifest cover every migration exactly",
   assert.equal(postgres.migrations.find((record) => record.version === 2)?.sqlPayloadSha256, undefined);
   assert.deepEqual(
     postgres.migrations.filter((record) => !record.sqlPayloadSha256).map((record) => record.version),
-    [2, 119, 120, 121, 122, 134, 135, 136, 137, 138, 140, 141, 145, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 198],
+    [2, 119, 120, 121, 122, 134, 135, 136, 137, 138, 140, 141, 145, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 198, 200],
   );
   assert.equal(postgres.migrations.find((record) => record.version === 63)?.name, "citadel_tables_backfill");
   assert.equal(
