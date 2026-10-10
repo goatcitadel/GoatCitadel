@@ -3,6 +3,7 @@ import { WorkerAssignmentLeaseOwner } from "./worker-assignment-lease-owner.js";
 import { createInMemoryWorkerDurableState, type WorkerDurableStatePort } from "./worker-durable-state.js";
 import { WorkerCredentialVault } from "./worker-credential-vault.js";
 import type { LeaseBinding, RouteContext, pollOffers } from "./connected-worker-routes.js";
+import { WorkerProtectedRouteError } from "./worker-protected-route-client.js";
 
 const context = {} as RouteContext;
 const binding: LeaseBinding = {
@@ -42,18 +43,74 @@ async function retain(state: WorkerDurableStatePort) {
 }
 
 describe("worker lease intent custody", () => {
+  it("refreshes an exact parent heartbeat fence through protected renewal before reconnecting", async () => {
+    const state = createInMemoryWorkerDurableState();
+    const vault = await retain(state);
+    const sync = vi.fn(async (_context: RouteContext, lease: LeaseBinding) => {
+      if (lease.leaseRevision === 1)
+        throw new WorkerProtectedRouteError("stale parent fence", 403, { error: "REMOTE_WORKER_ASSIGNMENT_REJECTED" });
+      return response("synchronized", lease);
+    });
+    const renew = vi.fn(async (_context: RouteContext, lease: LeaseBinding) =>
+      response("renewed", { ...lease, leaseRevision: lease.leaseRevision + 1 }),
+    );
+    const poll = vi.fn();
+    const owner = new WorkerAssignmentLeaseOwner(context, state, vault, "registry", { sync, renew, poll });
+    const observed = {};
+    expect(await owner.resumeOrClaim(observed)).toMatchObject({ leaseRevision: 2 });
+    expect(observed).toMatchObject({ reconnectSync: "synchronized", leaseSyncRefreshes: 1 });
+    expect(renew).toHaveBeenCalledTimes(1);
+    expect(poll).not.toHaveBeenCalled();
+    expect(vault.getLease(binding.assignmentId).leaseRevision).toBe(2);
+  });
+
+  it.each(["renewal denied", "persistent sync rejection", "other rejection"])(
+    "fails closed after %s on reconnect",
+    async (mode) => {
+      const state = createInMemoryWorkerDurableState();
+      const vault = await retain(state);
+      const sync = vi.fn(async () => {
+        throw new WorkerProtectedRouteError("rejected", mode === "other rejection" ? 401 : 403, {
+          error: "REMOTE_WORKER_ASSIGNMENT_REJECTED",
+        });
+      });
+      const renew = vi.fn(async (_context: RouteContext, lease: LeaseBinding) => {
+        if (mode === "renewal denied")
+          throw new WorkerProtectedRouteError("renewal denied", 403, { error: "REMOTE_WORKER_ASSIGNMENT_REJECTED" });
+        return response("renewed", { ...lease, leaseRevision: lease.leaseRevision + 1 });
+      });
+      const poll = vi.fn();
+      const owner = new WorkerAssignmentLeaseOwner(context, state, vault, "registry", { sync, renew, poll });
+      await expect(owner.resumeOrClaim({})).rejects.toBeInstanceOf(WorkerProtectedRouteError);
+      expect(renew).toHaveBeenCalledTimes(mode === "other rejection" ? 0 : mode === "renewal denied" ? 1 : 2);
+      expect(sync).toHaveBeenCalledTimes(mode === "persistent sync rejection" ? 3 : 1);
+      expect(poll).not.toHaveBeenCalled();
+      expect(await state.read("connected-run")).toBeDefined();
+    },
+  );
+
   it("keeps an approval-waiting assignment and secret across restarts without granting execution", async () => {
     const state = createInMemoryWorkerDurableState();
     const vault = await retain(state);
-    const waiting = { ...response("waiting_approval"), body: { ...response("waiting_approval").body,
-      waiting: { approvalId: "approval-one", runtimeAuthoritySha256: "a".repeat(64) } } };
+    const waiting = {
+      ...response("waiting_approval"),
+      body: {
+        ...response("waiting_approval").body,
+        waiting: { approvalId: "approval-one", runtimeAuthoritySha256: "a".repeat(64) },
+      },
+    };
     const sync = vi.fn(async (_context: RouteContext, _lease: LeaseBinding, _key: string) => waiting);
     const poll = vi.fn();
     const renew = vi.fn();
     for (let restart = 0; restart < 2; restart++) {
       const observed = {};
-      const owner = new WorkerAssignmentLeaseOwner(context, state, await WorkerCredentialVault.open(state),
-        "registry", { sync, poll, renew });
+      const owner = new WorkerAssignmentLeaseOwner(
+        context,
+        state,
+        await WorkerCredentialVault.open(state),
+        "registry",
+        { sync, poll, renew },
+      );
       expect(await owner.resumeOrClaim(observed)).toBeUndefined();
       expect(observed).toMatchObject({ reconnectSync: "waiting_approval", awaiting: "approval_resolution" });
       expect(owner.remainingLeaseMs()).toBe(0);
@@ -69,14 +126,25 @@ describe("worker lease intent custody", () => {
   it.each(["missing", "wrong-assignment", "invalid-proof"])("rejects %s approval wait evidence", async (failure) => {
     const state = createInMemoryWorkerDurableState();
     const vault = await retain(state);
-    const receipt = response("waiting_approval", failure === "wrong-assignment" ?
-      { ...binding, assignmentId: "another" } : binding);
+    const receipt = response(
+      "waiting_approval",
+      failure === "wrong-assignment" ? { ...binding, assignmentId: "another" } : binding,
+    );
     const owner = new WorkerAssignmentLeaseOwner(context, state, vault, "registry", {
-      sync: async () => ({ ...receipt, body: { ...receipt.body,
-        ...(failure === "missing" ? {} : { waiting: {
-          approvalId: "approval-one", runtimeAuthoritySha256: failure === "invalid-proof" ? "bad" : "a".repeat(64),
-        } }),
-      } }),
+      sync: async () => ({
+        ...receipt,
+        body: {
+          ...receipt.body,
+          ...(failure === "missing"
+            ? {}
+            : {
+                waiting: {
+                  approvalId: "approval-one",
+                  runtimeAuthoritySha256: failure === "invalid-proof" ? "bad" : "a".repeat(64),
+                },
+              }),
+        },
+      }),
     });
     await expect(owner.resumeOrClaim({})).rejects.toThrow();
     expect(await state.read("connected-run")).toBeDefined();
@@ -88,53 +156,84 @@ describe("worker lease intent custody", () => {
     await retain(state);
     const poll = vi.fn();
     const renew = vi.fn();
-    const sync = vi.fn(async () => ({ ...response("approval_resume_pending"), body: {
-      ...response("approval_resume_pending").body,
-      resume: { approvalId: "approval-one", runtimeAuthoritySha256: "a".repeat(64), resumeSha256: "b".repeat(64) },
-    } }));
+    const sync = vi.fn(async () => ({
+      ...response("approval_resume_pending"),
+      body: {
+        ...response("approval_resume_pending").body,
+        resume: { approvalId: "approval-one", runtimeAuthoritySha256: "a".repeat(64), resumeSha256: "b".repeat(64) },
+      },
+    }));
     for (let restart = 0; restart < 2; restart++) {
-      const owner = new WorkerAssignmentLeaseOwner(context, state, await WorkerCredentialVault.open(state),
-        "registry", { sync, poll, renew });
+      const owner = new WorkerAssignmentLeaseOwner(
+        context,
+        state,
+        await WorkerCredentialVault.open(state),
+        "registry",
+        { sync, poll, renew },
+      );
       expect(await owner.resumeOrClaim({})).toBeUndefined();
       expect(owner.remainingLeaseMs()).toBe(0);
     }
     expect(poll).not.toHaveBeenCalled();
     expect(renew).not.toHaveBeenCalled();
-    expect((await WorkerCredentialVault.open(state)).getLease(binding.assignmentId).rawLeaseToken).toBe(binding.leaseToken);
+    expect((await WorkerCredentialVault.open(state)).getLease(binding.assignmentId).rawLeaseToken).toBe(
+      binding.leaseToken,
+    );
   });
 
-  it.each(["approval", "parent"] as const)("rotates %s resumed authority and recovers a lost renewal response with the same secret", async (kind) => {
-    const state = createInMemoryWorkerDurableState();
-    const vault = await retain(state);
-    const sync = vi.fn(async (_context, lease) => {
-      const disposition = lease.leaseRevision === 1 ? (kind === "approval" ? "approval_resume_ready" : "parent_recovery_ready") : "synchronized";
-      return { ...response(disposition, lease, 7), body: { ...response(disposition, lease, 7).body,
-        resume: { approvalId: "approval-one", runtimeAuthoritySha256: "a".repeat(64), resumeSha256: "b".repeat(64) },
-        recovery: { bindingSha256: "c".repeat(64) },
-      } };
-    });
-    const renew = vi.fn(async (_context, lease, input) => {
-      const intent = JSON.parse((await state.read("assignment-renewal-pending"))!);
-      expect(intent.lease).toEqual(lease);
-      expect(intent.nextLeaseToken).toBe(input.nextLeaseToken);
-      if (renew.mock.calls.length === 1) throw new Error("resume renewal response lost");
-      return response("replayed_without_lease_secret", { ...binding, leaseRevision: 2 }, 7);
-    });
-    const first = new WorkerAssignmentLeaseOwner(context, state, vault, "registry", { sync, renew });
-    await expect(first.resumeOrClaim({})).rejects.toThrow("response lost");
-    expect(first.remainingLeaseMs()).toBe(0);
-    expect(vault.getLease(binding.assignmentId).leaseRevision).toBe(1);
-    const restarted = new WorkerAssignmentLeaseOwner(context, state, await WorkerCredentialVault.open(state),
-      "registry", { sync, renew });
-    const lease = await restarted.resumeOrClaim({});
-    expect(lease?.leaseRevision).toBe(2);
-    expect(lease?.leaseToken).toBe(renew.mock.calls[0]![2].nextLeaseToken);
-    expect(lease?.leaseToken).not.toBe(binding.leaseToken);
-    expect(renew.mock.calls[1]).toEqual(renew.mock.calls[0]);
-    expect(sync.mock.calls[1]![1]).toEqual(lease);
-    expect(await state.read("assignment-renewal-pending")).toBeUndefined();
-    expect(restarted.workerSentThrough()).toBe(7);
-  });
+  it.each(["approval", "parent"] as const)(
+    "rotates %s resumed authority and recovers a lost renewal response with the same secret",
+    async (kind) => {
+      const state = createInMemoryWorkerDurableState();
+      const vault = await retain(state);
+      const sync = vi.fn(async (_context, lease) => {
+        const disposition =
+          lease.leaseRevision === 1
+            ? kind === "approval"
+              ? "approval_resume_ready"
+              : "parent_recovery_ready"
+            : "synchronized";
+        return {
+          ...response(disposition, lease, 7),
+          body: {
+            ...response(disposition, lease, 7).body,
+            resume: {
+              approvalId: "approval-one",
+              runtimeAuthoritySha256: "a".repeat(64),
+              resumeSha256: "b".repeat(64),
+            },
+            recovery: { bindingSha256: "c".repeat(64) },
+          },
+        };
+      });
+      const renew = vi.fn(async (_context, lease, input) => {
+        const intent = JSON.parse((await state.read("assignment-renewal-pending"))!);
+        expect(intent.lease).toEqual(lease);
+        expect(intent.nextLeaseToken).toBe(input.nextLeaseToken);
+        if (renew.mock.calls.length === 1) throw new Error("resume renewal response lost");
+        return response("replayed_without_lease_secret", { ...binding, leaseRevision: 2 }, 7);
+      });
+      const first = new WorkerAssignmentLeaseOwner(context, state, vault, "registry", { sync, renew });
+      await expect(first.resumeOrClaim({})).rejects.toThrow("response lost");
+      expect(first.remainingLeaseMs()).toBe(0);
+      expect(vault.getLease(binding.assignmentId).leaseRevision).toBe(1);
+      const restarted = new WorkerAssignmentLeaseOwner(
+        context,
+        state,
+        await WorkerCredentialVault.open(state),
+        "registry",
+        { sync, renew },
+      );
+      const lease = await restarted.resumeOrClaim({});
+      expect(lease?.leaseRevision).toBe(2);
+      expect(lease?.leaseToken).toBe(renew.mock.calls[0]![2].nextLeaseToken);
+      expect(lease?.leaseToken).not.toBe(binding.leaseToken);
+      expect(renew.mock.calls[1]).toEqual(renew.mock.calls[0]);
+      expect(sync.mock.calls[1]![1]).toEqual(lease);
+      expect(await state.read("assignment-renewal-pending")).toBeUndefined();
+      expect(restarted.workerSentThrough()).toBe(7);
+    },
+  );
 
   it("waits for parent recovery across restart without polling for another assignment or renewing", async () => {
     const state = createInMemoryWorkerDurableState();
@@ -143,56 +242,97 @@ describe("worker lease intent custody", () => {
     const renew = vi.fn();
     for (let restart = 0; restart < 2; restart++) {
       const observed = {};
-      const owner = new WorkerAssignmentLeaseOwner(context, state, await WorkerCredentialVault.open(state), "registry", {
-        poll, renew, sync: async () => ({ ...response("parent_recovery_pending"), body: {
-          ...response("parent_recovery_pending").body, recovery: { bindingSha256: "a".repeat(64) },
-        } }),
-      });
+      const owner = new WorkerAssignmentLeaseOwner(
+        context,
+        state,
+        await WorkerCredentialVault.open(state),
+        "registry",
+        {
+          poll,
+          renew,
+          sync: async () => ({
+            ...response("parent_recovery_pending"),
+            body: {
+              ...response("parent_recovery_pending").body,
+              recovery: { bindingSha256: "a".repeat(64) },
+            },
+          }),
+        },
+      );
       expect(await owner.resumeOrClaim(observed)).toBeUndefined();
       expect(observed).toMatchObject({ reconnectSync: "parent_recovery_pending", awaiting: "parent_recovery" });
       expect(owner.remainingLeaseMs()).toBe(0);
     }
     expect(poll).not.toHaveBeenCalled();
     expect(renew).not.toHaveBeenCalled();
-    expect((await WorkerCredentialVault.open(state)).getLease(binding.assignmentId).rawLeaseToken).toBe(binding.leaseToken);
+    expect((await WorkerCredentialVault.open(state)).getLease(binding.assignmentId).rawLeaseToken).toBe(
+      binding.leaseToken,
+    );
   });
 
-  it.each(["missing", "wrong-assignment", "invalid-proof", "invalid-resume"])("does not renew %s continuation evidence", async (failure) => {
-    const state = createInMemoryWorkerDurableState();
-    const vault = await retain(state);
-    const receipt = response("approval_resume_ready", failure === "wrong-assignment" ?
-      { ...binding, assignmentId: "another" } : binding);
-    const renew = vi.fn();
-    const owner = new WorkerAssignmentLeaseOwner(context, state, vault, "registry", {
-      renew,
-      sync: async () => ({ ...receipt, body: { ...receipt.body,
-        ...(failure === "missing" ? {} : { resume: { approvalId: "approval-one",
-          runtimeAuthoritySha256: failure === "invalid-proof" ? "bad" : "a".repeat(64),
-          resumeSha256: failure === "invalid-resume" ? "bad" : "b".repeat(64) } }),
-      } }),
-    });
-    await expect(owner.resumeOrClaim({})).rejects.toThrow();
-    expect(renew).not.toHaveBeenCalled();
-    expect(await state.read("connected-run")).toBeDefined();
-    expect(vault.getLease(binding.assignmentId).leaseRevision).toBe(1);
-  });
+  it.each(["missing", "wrong-assignment", "invalid-proof", "invalid-resume"])(
+    "does not renew %s continuation evidence",
+    async (failure) => {
+      const state = createInMemoryWorkerDurableState();
+      const vault = await retain(state);
+      const receipt = response(
+        "approval_resume_ready",
+        failure === "wrong-assignment" ? { ...binding, assignmentId: "another" } : binding,
+      );
+      const renew = vi.fn();
+      const owner = new WorkerAssignmentLeaseOwner(context, state, vault, "registry", {
+        renew,
+        sync: async () => ({
+          ...receipt,
+          body: {
+            ...receipt.body,
+            ...(failure === "missing"
+              ? {}
+              : {
+                  resume: {
+                    approvalId: "approval-one",
+                    runtimeAuthoritySha256: failure === "invalid-proof" ? "bad" : "a".repeat(64),
+                    resumeSha256: failure === "invalid-resume" ? "bad" : "b".repeat(64),
+                  },
+                }),
+          },
+        }),
+      });
+      await expect(owner.resumeOrClaim({})).rejects.toThrow();
+      expect(renew).not.toHaveBeenCalled();
+      expect(await state.read("connected-run")).toBeDefined();
+      expect(vault.getLease(binding.assignmentId).leaseRevision).toBe(1);
+    },
+  );
 
-  it.each(["missing", "wrong-assignment", "invalid-binding"])("does not renew %s parent recovery evidence", async (failure) => {
-    const state = createInMemoryWorkerDurableState();
-    const vault = await retain(state);
-    const receipt = response("parent_recovery_ready", failure === "wrong-assignment" ?
-      { ...binding, assignmentId: "another" } : binding);
-    const renew = vi.fn();
-    const owner = new WorkerAssignmentLeaseOwner(context, state, vault, "registry", {
-      renew, sync: async () => ({ ...receipt, body: { ...receipt.body,
-        ...(failure === "missing" ? {} : { recovery: { bindingSha256: failure === "invalid-binding" ? "bad" : "a".repeat(64) } }),
-      } }),
-    });
-    await expect(owner.resumeOrClaim({})).rejects.toThrow();
-    expect(renew).not.toHaveBeenCalled();
-    expect(await state.read("connected-run")).toBeDefined();
-    expect(vault.getLease(binding.assignmentId).leaseRevision).toBe(1);
-  });
+  it.each(["missing", "wrong-assignment", "invalid-binding"])(
+    "does not renew %s parent recovery evidence",
+    async (failure) => {
+      const state = createInMemoryWorkerDurableState();
+      const vault = await retain(state);
+      const receipt = response(
+        "parent_recovery_ready",
+        failure === "wrong-assignment" ? { ...binding, assignmentId: "another" } : binding,
+      );
+      const renew = vi.fn();
+      const owner = new WorkerAssignmentLeaseOwner(context, state, vault, "registry", {
+        renew,
+        sync: async () => ({
+          ...receipt,
+          body: {
+            ...receipt.body,
+            ...(failure === "missing"
+              ? {}
+              : { recovery: { bindingSha256: failure === "invalid-binding" ? "bad" : "a".repeat(64) } }),
+          },
+        }),
+      });
+      await expect(owner.resumeOrClaim({})).rejects.toThrow();
+      expect(renew).not.toHaveBeenCalled();
+      expect(await state.read("connected-run")).toBeDefined();
+      expect(vault.getLease(binding.assignmentId).leaseRevision).toBe(1);
+    },
+  );
 
   it("persists a claim secret before sending and replays identical authority after a lost response", async () => {
     const state = createInMemoryWorkerDurableState();

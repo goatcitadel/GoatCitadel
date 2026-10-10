@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { normalizeRemoteWorkerNativeContinuation, type RemoteWorkerNativeContinuation } from "@goatcitadel/contracts";
 import { ApprovalRepository } from "./approval-repo.js";
+import { PendingApprovalActionRepository } from "./pending-approval-action-repo.js";
 import { RemoteWorkerRuntimeResultRepository } from "./remote-worker-runtime-result-repo.js";
 import type { RemoteWorkerNativeChatContext } from "@goatcitadel/contracts";
 import { RemoteWorkerChatPlacementRepository } from "./remote-worker-chat-placement-repo.js";
@@ -15,7 +16,10 @@ import {
   readChatResumeLeaseHandoff,
   type RecordRemoteWorkerChatResumeWakeInput,
 } from "./remote-worker-chat-resume-ledger.js";
-export type { RecordRemoteWorkerChatResumeWakeInput, RemoteWorkerChatResumeRecord } from "./remote-worker-chat-resume-ledger.js";
+export type {
+  RecordRemoteWorkerChatResumeWakeInput,
+  RemoteWorkerChatResumeRecord,
+} from "./remote-worker-chat-resume-ledger.js";
 import {
   ConflictError,
   NotFoundError,
@@ -1097,6 +1101,16 @@ export class RemoteWorkerAssignmentRepository {
         parentDispatchAuthority: RemoteWorkerAssignmentDispatchAuthority;
         durableRunPayloadSha256: string;
       };
+      /** Gateway-only continuation captured under exact lease admission for
+       * one approved intent. Never accepted from a worker request. */
+      continuingApprovedTool?: {
+        intentId: string;
+        intentSha256: string;
+        leaseRevision: number;
+        parentDispatchAuthority: RemoteWorkerAssignmentDispatchAuthority;
+        durableRunPayloadSha256: string;
+        resumeMaterialSha256: string;
+      };
       /** Server-owned snapshot taken after the commit request's exact lease check.
        * Never accepted from a worker request or reused for another publication. */
       continuingArtifact?: {
@@ -1115,7 +1129,18 @@ export class RemoteWorkerAssignmentRepository {
     const assignmentId = identifier(input.assignmentId, "assignmentId");
     const assignmentGeneration = positiveInteger(input.assignmentGeneration, "assignmentGeneration");
     const fence = normalizeProtectedCommitFence(protectedAuthority);
-    if (input.continuingToolResult && (input.continuingArtifact || input.continuingInference || input.leaseTokenSha256 !== undefined))
+    if (
+      input.continuingApprovedTool &&
+      (input.continuingToolResult ||
+        input.continuingArtifact ||
+        input.continuingInference ||
+        input.leaseTokenSha256 !== undefined)
+    )
+      throw conflict("remote worker approved tool continuation authority");
+    if (
+      input.continuingToolResult &&
+      (input.continuingArtifact || input.continuingInference || input.leaseTokenSha256 !== undefined)
+    )
       throw conflict("remote worker tool result continuation authority");
     if (input.continuingArtifact && (input.continuingInference || input.leaseTokenSha256 !== undefined))
       throw conflict("remote worker artifact continuation authority");
@@ -1208,6 +1233,8 @@ export class RemoteWorkerAssignmentRepository {
           throw conflict("remote worker continuing artifact ownership");
       } else if (input.continuingToolResult) {
         this.assertContinuingToolResultRead(assignment, generation, lease, input.continuingToolResult);
+      } else if (input.continuingApprovedTool) {
+        this.assertContinuingApprovedTool(assignment, generation, lease, input.continuingApprovedTool);
       } else {
         this.assertLeaseDispatchAuthorityLive(generation, lease);
       }
@@ -3191,22 +3218,41 @@ export class RemoteWorkerAssignmentRepository {
     const durableRunVersion = asPositiveInteger(run.version);
     const durableRunPayloadSha256 = sha256Bytes(run.payload_json);
     const generation = this.findCurrentGenerationRow(assignment.registryWorkspaceId, assignment.assignmentId);
-    const resume = generation ? new RemoteWorkerChatResumeLedger(this.db).readLatest(assignment.registryWorkspaceId,
-      assignment.assignmentId, asPositiveInteger(generation.assignment_generation)) : undefined;
+    const resume = generation
+      ? new RemoteWorkerChatResumeLedger(this.db).readLatest(
+          assignment.registryWorkspaceId,
+          assignment.assignmentId,
+          asPositiveInteger(generation.assignment_generation),
+        )
+      : undefined;
     let nativeContinuation: RemoteWorkerNativeContinuation | undefined;
     if (resume?.material.schemaVersion === "goatcitadel.remote-worker-native-runtime-resume.v1") {
       const approval = new ApprovalRepository(this.db).get(resume.material.approvalId);
-      if (sha256(approval) !== resume.material.approvalSha256 || approval.kind !== "remote_worker.native_runtime" ||
-          sha256(approval.payload.nativeRuntime) !== resume.material.nativeRuntimeBindingSha256)
+      if (
+        sha256(approval) !== resume.material.approvalSha256 ||
+        approval.kind !== "remote_worker.native_runtime" ||
+        sha256(approval.payload.nativeRuntime) !== resume.material.nativeRuntimeBindingSha256
+      )
         throw conflict("remote worker native continuation decision");
-      nativeContinuation = normalizeRemoteWorkerNativeContinuation({ schemaVersion: "goatcitadel.remote-worker-native-continuation.v1",
-        assignmentGeneration: resume.material.assignmentGeneration, resumeSha256: resume.materialSha256,
-        approvalId: approval.approvalId, approvalSha256: resume.material.approvalSha256,
-        nativeRuntimeBindingSha256: resume.material.nativeRuntimeBindingSha256, decision: approval.status });
+      nativeContinuation = normalizeRemoteWorkerNativeContinuation({
+        schemaVersion: "goatcitadel.remote-worker-native-continuation.v1",
+        assignmentGeneration: resume.material.assignmentGeneration,
+        resumeSha256: resume.materialSha256,
+        approvalId: approval.approvalId,
+        approvalSha256: resume.material.approvalSha256,
+        nativeRuntimeBindingSha256: resume.material.nativeRuntimeBindingSha256,
+        decision: approval.status,
+      });
     }
-    const nativeChatContext = nativeContinuation ? new RemoteWorkerRuntimeResultRepository(this.db).readChatContextForParent({
-      registryWorkspaceId: assignment.registryWorkspaceId, assignmentId: assignment.assignmentId,
-      assignmentGeneration: nativeContinuation.assignmentGeneration, durableRunId: run.run_id, continuation: nativeContinuation }) : null;
+    const nativeChatContext = nativeContinuation
+      ? new RemoteWorkerRuntimeResultRepository(this.db).readChatContextForParent({
+          registryWorkspaceId: assignment.registryWorkspaceId,
+          assignmentId: assignment.assignmentId,
+          assignmentGeneration: nativeContinuation.assignmentGeneration,
+          durableRunId: run.run_id,
+          continuation: nativeContinuation,
+        })
+      : null;
     const identityMaterial = Object.freeze({
       schemaVersion: REMOTE_WORKER_ASSIGNMENT_WORKLOAD_SCHEMA_VERSION,
       registryWorkspaceId: assignment.registryWorkspaceId,
@@ -3405,17 +3451,90 @@ export class RemoteWorkerAssignmentRepository {
     assignment: RemoteWorkerAssignmentRecord,
     generation: GenerationRow,
     lease: LeaseRow,
-    continuation: NonNullable<Parameters<RemoteWorkerAssignmentRepository["resolveActiveChatExecution"]>[0]["continuingToolResult"]>,
+    continuation: NonNullable<
+      Parameters<RemoteWorkerAssignmentRepository["resolveActiveChatExecution"]>[0]["continuingToolResult"]
+    >,
   ): void {
+    const { effects, scope, intentId } = this.assertContinuousToolOwnership(
+      assignment,
+      generation,
+      lease,
+      continuation,
+    );
+    // Verify the retained chain even for approval waits without terminal receipts.
+    const history = effects.readTransitionHistory(...scope, intentId);
+    const last = history.at(-1);
+    const settlement = effects.findSettlement(...scope, intentId);
+    if (!settlement && !(last?.record.transitionState === "approval_wait" && last.correlation.approvalRecordSha256))
+      throw conflict("remote worker continuing tool result unavailable");
+  }
+
+  private assertContinuingApprovedTool(
+    assignment: RemoteWorkerAssignmentRecord,
+    generation: GenerationRow,
+    lease: LeaseRow,
+    continuation: NonNullable<
+      Parameters<RemoteWorkerAssignmentRepository["resolveActiveChatExecution"]>[0]["continuingApprovedTool"]
+    >,
+  ): void {
+    const { intentId } = this.assertContinuousToolOwnership(assignment, generation, lease, continuation);
+    const resume = new RemoteWorkerChatResumeLedger(this.db).readLatest(
+      assignment.registryWorkspaceId,
+      assignment.assignmentId,
+      asPositiveInteger(generation.assignment_generation),
+    );
+    if (
+      !resume?.binding ||
+      resume.material.schemaVersion !== "goatcitadel.remote-worker-chat-resume.v1" ||
+      resume.materialSha256 !== digest(continuation.resumeMaterialSha256, "resumeMaterialSha256") ||
+      resume.material.intentId !== intentId ||
+      resume.material.intentSha256 !== continuation.intentSha256 ||
+      resume.material.payloadSha256 !==
+        sha256(
+          parseJsonRecord(
+            this.getDurableAuthorityRow(assignment.manifest.durableRunId, true).payload_json,
+            "Chat resume parent payload",
+          ),
+        ) ||
+      continuation.leaseRevision <= readChatResumeLeaseHandoff(resume).priorLeaseRevision
+    )
+      throw conflict("remote worker approved tool continuation handoff");
+    const approval = new ApprovalRepository(this.db).get(resume.material.approvalId);
+    const pending = new PendingApprovalActionRepository(this.db).find(resume.material.approvalId);
+    if (!pending) throw conflict("remote worker approved tool continuation pending action");
+    const original = { ...pending, resolutionStatus: "pending" };
+    delete original.resolvedAt;
+    delete original.result;
+    if (
+      approval.status !== "approved" ||
+      sha256(approval) !== resume.material.approvalSha256 ||
+      sha256(original) !== resume.material.pendingActionSha256
+    )
+      throw conflict("remote worker approved tool continuation approval");
+  }
+
+  private assertContinuousToolOwnership(
+    assignment: RemoteWorkerAssignmentRecord,
+    generation: GenerationRow,
+    lease: LeaseRow,
+    continuation: NonNullable<
+      Parameters<RemoteWorkerAssignmentRepository["resolveActiveChatExecution"]>[0]["continuingToolResult"]
+    >,
+  ) {
     const admitted = continuation.parentDispatchAuthority;
     assertRemoteWorkerAssignmentDispatchAuthority(admitted);
     const revision = positiveInteger(continuation.leaseRevision, "leaseRevision");
-    const historicalLease = this.getLeaseRow(assignment.registryWorkspaceId, assignment.assignmentId,
-      asPositiveInteger(generation.assignment_generation), revision);
+    const historicalLease = this.getLeaseRow(
+      assignment.registryWorkspaceId,
+      assignment.assignmentId,
+      asPositiveInteger(generation.assignment_generation),
+      revision,
+    );
     const current = this.buildCurrentGenerationDispatchAuthority(generation);
     const run = this.getDurableAuthorityRow(assignment.manifest.durableRunId, true);
     if (
-      sha256Bytes(historicalLease.parent_dispatch_authority_json) !== historicalLease.parent_dispatch_authority_sha256 ||
+      sha256Bytes(historicalLease.parent_dispatch_authority_json) !==
+        historicalLease.parent_dispatch_authority_sha256 ||
       historicalLease.parent_dispatch_authority_json !== canonicalJsonString(admitted) ||
       asPositiveInteger(lease.lease_revision) < revision ||
       current.durableRunId !== admitted.durableRunId ||
@@ -3425,20 +3544,23 @@ export class RemoteWorkerAssignmentRepository {
       current.durableRunLeaseExpiresAt < admitted.durableRunLeaseExpiresAt ||
       sha256Bytes(run.payload_json) !== digest(continuation.durableRunPayloadSha256, "durableRunPayloadSha256") ||
       !assignment.manifest.requiredCapabilityClasses.includes("governed_tool")
-    ) throw conflict("remote worker continuing tool result ownership");
+    )
+      throw conflict("remote worker continuing tool result ownership");
     const effects = new RemoteWorkerEffectRepository(this.db);
-    const scope = [assignment.registryWorkspaceId, assignment.assignmentId, asPositiveInteger(generation.assignment_generation)] as const;
+    const scope = [
+      assignment.registryWorkspaceId,
+      assignment.assignmentId,
+      asPositiveInteger(generation.assignment_generation),
+    ] as const;
     const intentId = identifier(continuation.intentId, "intentId");
     const intent = effects.listIntents(...scope).find((item) => item.intentId === intentId);
-    if (!intent || intent.intentSha256 !== digest(continuation.intentSha256, "intentSha256") ||
-      intent.identity.assignmentManifestSha256 !== assignment.manifestSha256)
+    if (
+      !intent ||
+      intent.intentSha256 !== digest(continuation.intentSha256, "intentSha256") ||
+      intent.identity.assignmentManifestSha256 !== assignment.manifestSha256
+    )
       throw conflict("remote worker continuing tool result intent");
-    // Verify the retained chain even for approval waits without terminal receipts.
-    const history = effects.readTransitionHistory(...scope, intentId);
-    const last = history.at(-1);
-    const settlement = effects.findSettlement(...scope, intentId);
-    if (!settlement && !(last?.record.transitionState === "approval_wait" && last.correlation.approvalRecordSha256))
-      throw conflict("remote worker continuing tool result unavailable");
+    return { effects, scope, intentId };
   }
 
   private assertLeaseDispatchAuthorityLive(generation: GenerationRow, lease: LeaseRow): void {

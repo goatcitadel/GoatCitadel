@@ -1433,7 +1433,9 @@ describe("SessionMutationAdmissionRepository SQLite", () => {
     const prompt = JSON.parse(trace!.pending_user_input_json) as Record<string, any>;
     assert.equal(prompt.promptId, fixture.resolution.promptId);
     assert.deepEqual(prompt.secureConfiguration.approvedAction, approvedAction);
-    assert.ok(Date.parse(prompt.expiresAt) <= Date.now());
+    // Recovery uses the database clock, whose precision can differ from the
+    // JavaScript clock on Windows. Bind expiry to the committed quarantine time.
+    assert.equal(prompt.expiresAt, quarantined.reservation.reclaimedAt);
     assert.equal(fixture.repo.findNextInterruptedDurableChatSecureConfiguration(), undefined);
     db.close();
   });

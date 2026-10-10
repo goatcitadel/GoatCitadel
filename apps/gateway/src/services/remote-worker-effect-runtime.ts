@@ -47,15 +47,21 @@ export interface RemoteWorkerEffectRuntimeDependencies extends RemoteWorkerChatA
   coordinator: Pick<ToolInvocationCoordinator, "invokeTool">;
   executeApprovedAction?(input: RemoteWorkerApprovedActionInput): Promise<ToolInvokeResult>;
   /** Gateway-only factory; the profile is reloaded and verified by this effect owner. */
-  createMcpRequesterTurnContext?(profile: ChatTurnCapabilityProfileRecord): McpRequesterScopedTurnContextHandle | undefined;
+  createMcpRequesterTurnContext?(
+    profile: ChatTurnCapabilityProfileRecord,
+  ): McpRequesterScopedTurnContextHandle | undefined;
   createMeshTurnContext?(profile: ChatTurnCapabilityProfileRecord): MeshChatTurnContextHandle;
   resolveMeshChatToolBinding?: MeshChatDispatchPort["resolveBinding"];
-  withToolModelBudget(input: RemoteWorkerToolModelBudgetInput, operation: () => Promise<ToolInvokeResult>): Promise<ToolInvokeResult>;
+  withToolModelBudget(
+    input: RemoteWorkerToolModelBudgetInput,
+    operation: () => Promise<ToolInvokeResult>,
+  ): Promise<ToolInvokeResult>;
 }
 export interface RemoteWorkerToolModelBudgetInput {
   fence: DispatchInput["fence"];
   intent: Awaited<ReturnType<EffectStorage["remoteWorkerEffects"]["readIntentForDispatch"]>>["intent"];
   checkExecution(): Promise<void>;
+  executionInput?: Parameters<AsyncStorage["remoteWorkerAssignments"]["resolveActiveChatExecution"]>[0];
 }
 /** Only the native effect owner creates this in-process continuation port. */
 export interface RemoteWorkerApprovedActionInput {
@@ -118,10 +124,12 @@ export class RemoteWorkerEffectRuntime {
     const protectedAuthority = input.fence.protectedAuthority;
     if (!protectedAuthority) throw new Error("Worker effects require protected native authority.");
     const retained = await storage.remoteWorkerEffects.readIntentForDispatch({ ...input.fence, ...input });
+    let executionInput: Parameters<AsyncStorage["remoteWorkerAssignments"]["resolveActiveChatExecution"]>[0] =
+      input.fence;
     const check = async () => {
       input.signal?.throwIfAborted();
       const execution = await storage.remoteWorkerAssignments.resolveActiveChatExecution(
-        input.fence,
+        executionInput,
         protectedAuthority,
       );
       const binding = await resolveRemoteWorkerChatProfile(this.dependencies, execution);
@@ -134,18 +142,25 @@ export class RemoteWorkerEffectRuntime {
         throw new Error("Worker effect requires a frozen runtime owner and effect classification.");
       // Scoped tools enter their existing Gateway owner with a context minted
       // from this verified profile; a worker-supplied selector is not authority.
-      if ((selected.meshPublication && (!this.dependencies.createMeshTurnContext || !this.dependencies.resolveMeshChatToolBinding)) ||
-        (isNativeMcpToolName(selected.canonicalName) && !selected.mcpRequesterResolution && !selected.mcpStaticBinding))
+      if (
+        (selected.meshPublication &&
+          (!this.dependencies.createMeshTurnContext || !this.dependencies.resolveMeshChatToolBinding)) ||
+        (isNativeMcpToolName(selected.canonicalName) && !selected.mcpRequesterResolution && !selected.mcpStaticBinding)
+      )
         throw new Error("Worker effect requires its canonical scoped runtime owner.");
       return { execution, ...binding, selected };
     };
     const binding = await check();
     const withModelBudget = (checkExecution: () => Promise<void>, operation: () => Promise<ToolInvokeResult>) =>
-      this.dependencies.withToolModelBudget({ fence: input.fence, intent: retained.intent, checkExecution }, operation);
+      this.dependencies.withToolModelBudget(
+        { fence: input.fence, intent: retained.intent, checkExecution, executionInput },
+        operation,
+      );
     const { profile, policy, selected } = binding;
-    const mcpRequesterTurnContext = selected.canonicalName === "mcp.invoke" || selected.mcpRequesterResolution || selected.mcpStaticBinding
-      ? this.dependencies.createMcpRequesterTurnContext?.(profile)
-      : undefined;
+    const mcpRequesterTurnContext =
+      selected.canonicalName === "mcp.invoke" || selected.mcpRequesterResolution || selected.mcpStaticBinding
+        ? this.dependencies.createMcpRequesterTurnContext?.(profile)
+        : undefined;
     const meshTurnContext = selected.meshPublication ? this.dependencies.createMeshTurnContext?.(profile) : undefined;
     const manifest = binding.execution.authority.assignment.manifest;
     const toolRunId = `remote-tool:${retained.intent.intentId}`;
@@ -163,22 +178,69 @@ export class RemoteWorkerEffectRuntime {
     };
     // Validate the brand and exact profile/actor/target before starting a Chat
     // tool run. Native arguments cannot mint or redirect requester authority.
-    await resolveNativeMcpChatToolBinding(storage, {
-      ...context,
-      args: retained.args,
-      agentId: "assistant",
-      citadelId: profile.identity.citadelId,
-      policyContext: policy,
-    }, mcpRequesterTurnContext);
-    if (selected.meshPublication && (!meshTurnContext || !await this.dependencies.resolveMeshChatToolBinding?.({
-      ...context, args: retained.args, agentId: "assistant", citadelId: profile.identity.citadelId,
-      policyContext: policy, permissionProfileId: policy.permissionProfileId,
-    }, meshTurnContext))) throw new Error("Worker mesh effect has no exact current frozen binding.");
+    await resolveNativeMcpChatToolBinding(
+      storage,
+      {
+        ...context,
+        args: retained.args,
+        agentId: "assistant",
+        citadelId: profile.identity.citadelId,
+        policyContext: policy,
+      },
+      mcpRequesterTurnContext,
+    );
+    if (
+      selected.meshPublication &&
+      (!meshTurnContext ||
+        !(await this.dependencies.resolveMeshChatToolBinding?.(
+          {
+            ...context,
+            args: retained.args,
+            agentId: "assistant",
+            citadelId: profile.identity.citadelId,
+            policyContext: policy,
+            permissionProfileId: policy.permissionProfileId,
+          },
+          meshTurnContext,
+        )))
+    )
+      throw new Error("Worker mesh effect has no exact current frozen binding.");
 
     const previous = await storage.runImmediateTransaction(async () => {
-      await check();
+      const admitted = await check();
       try {
-        return await storage.chatToolRuns.get(toolRunId);
+        const tool = await storage.chatToolRuns.get(toolRunId);
+        if (
+          tool.status === "approval_required" &&
+          tool.approvalId &&
+          (await storage.approvals.get(tool.approvalId)).status === "approved"
+        ) {
+          // Capture under the transaction's exact initial lease admission.
+          // Subsequent checks still bind this intent to its canonical approved
+          // handoff and validate current native, payload and parent authority.
+          const resume = await storage.remoteWorkerAssignments.resolveActiveChatApprovalResume(
+            input.fence,
+            protectedAuthority,
+          );
+          if (
+            resume?.material.schemaVersion === "goatcitadel.remote-worker-chat-resume.v1" &&
+            resume.material.intentId === retained.intent.intentId
+          )
+            executionInput = {
+              registryWorkspaceId: input.fence.registryWorkspaceId,
+              assignmentId: input.fence.assignmentId,
+              assignmentGeneration: input.fence.assignmentGeneration,
+              continuingApprovedTool: {
+                intentId: retained.intent.intentId,
+                intentSha256: retained.intent.intentSha256,
+                leaseRevision: admitted.execution.authority.lease.leaseRevision,
+                parentDispatchAuthority: admitted.execution.authority.lease.parentDispatchAuthority,
+                durableRunPayloadSha256: admitted.execution.workload.durableRunPayloadSha256,
+                resumeMaterialSha256: resume.materialSha256,
+              },
+            };
+        }
+        return tool;
       } catch (error) {
         if (!(error instanceof NotFoundError)) throw error;
       }
@@ -204,9 +266,16 @@ export class RemoteWorkerEffectRuntime {
         const approvedKey = `approved-external-runtime:${tool.approvalId}`;
         const approvedOwner = await storage.externalSideEffectRuns.findByIdempotency(
           `external_side_effect:approved_external_runtime:${tool.toolName}:unknown_connection:${tool.approvalId}`,
-          approvedKey, actorScope);
-        if (approvedOwner) return await this.outcome(tool, approvedOwner,
-          { ...context, idempotencyKey: approvedKey, sideEffectActionId: tool.approvalId }, retained.args);
+          approvedKey,
+          actorScope,
+        );
+        if (approvedOwner)
+          return await this.outcome(
+            tool,
+            approvedOwner,
+            { ...context, idempotencyKey: approvedKey, sideEffectActionId: tool.approvalId },
+            retained.args,
+          );
       }
       const owner = await storage.externalSideEffectRuns.findByIdempotency(routePath, idempotencyKey, actorScope);
       return await this.outcome(tool, owner, context, retained.args);
@@ -215,69 +284,129 @@ export class RemoteWorkerEffectRuntime {
       if (previous.status === "approval_required" && previous.approvalId && this.dependencies.executeApprovedAction) {
         const approval = await storage.approvals.get(previous.approvalId);
         if (approval.status === "approved") {
-          const resume = await storage.remoteWorkerAssignments.resolveActiveChatApprovalResume(input.fence, protectedAuthority);
-          if (resume?.material.approvalId === approval.approvalId && resume.material.intentId === retained.intent.intentId) {
+          const resume = await storage.remoteWorkerAssignments.resolveActiveChatApprovalResume(
+            executionInput,
+            protectedAuthority,
+          );
+          if (
+            executionInput.continuingApprovedTool &&
+            resume?.materialSha256 !== executionInput.continuingApprovedTool.resumeMaterialSha256
+          )
+            throw new Error("Worker approved action drifted from its canonical handoff.");
+          if (
+            resume?.material.approvalId === approval.approvalId &&
+            resume.material.intentId === retained.intent.intentId
+          ) {
             const checkApproved = async () => {
               await check();
-              const currentResume = await storage.remoteWorkerAssignments.resolveActiveChatApprovalResume(input.fence, protectedAuthority);
+              const currentResume = await storage.remoteWorkerAssignments.resolveActiveChatApprovalResume(
+                executionInput,
+                protectedAuthority,
+              );
               const currentApproval = await storage.approvals.get(approval.approvalId);
               const pendingAction = await storage.pendingApprovalActions.find(approval.approvalId);
               if (!pendingAction) throw new Error("Worker approved action has no pending request.");
               const original: PendingApprovalAction = { ...pendingAction, resolutionStatus: "pending" };
               delete original.resolvedAt;
               delete original.result;
-              if (currentResume?.materialSha256 !== resume.materialSha256 ||
-                currentApproval.status !== "approved" || digest(currentApproval) !== resume.material.approvalSha256 ||
-                digest(original) !== resume.material.pendingActionSha256)
+              if (
+                currentResume?.materialSha256 !== resume.materialSha256 ||
+                currentApproval.status !== "approved" ||
+                digest(currentApproval) !== resume.material.approvalSha256 ||
+                digest(original) !== resume.material.pendingActionSha256
+              )
                 throw new Error("Worker approved action drifted from its canonical handoff.");
               return pendingAction;
             };
             const pendingAction = await checkApproved();
-            const result = pendingAction.resolutionStatus === "pending"
-              ? await withModelBudget(async () => { await checkApproved(); }, () => this.dependencies.executeApprovedAction!({
-                  approvalId: approval.approvalId, pending: pendingAction, runtimeOwner: selected.runtimeOwner!,
-                  effectPotential: selected.effectPotential!.potential,
-                  ...(mcpRequesterTurnContext ? { mcpRequesterTurnContext } : {}),
-                  ...(meshTurnContext ? { meshTurnContext } : {}),
-                  checkExecution: async () => { await checkApproved(); }, signal: input.signal }))
-              : toolInvokeResultFromPendingAction(pendingAction);
+            const result =
+              pendingAction.resolutionStatus === "pending"
+                ? await withModelBudget(
+                    async () => {
+                      await checkApproved();
+                    },
+                    () =>
+                      this.dependencies.executeApprovedAction!({
+                        approvalId: approval.approvalId,
+                        pending: pendingAction,
+                        runtimeOwner: selected.runtimeOwner!,
+                        effectPotential: selected.effectPotential!.potential,
+                        ...(mcpRequesterTurnContext ? { mcpRequesterTurnContext } : {}),
+                        ...(meshTurnContext ? { meshTurnContext } : {}),
+                        checkExecution: async () => {
+                          await checkApproved();
+                        },
+                        signal: input.signal,
+                      }),
+                  )
+                : toolInvokeResultFromPendingAction(pendingAction);
             await storage.runImmediateTransaction(async () => {
               // Persist already-settled effect truth even if the worker lease
               // expires after dispatch; later execution still needs fresh authority.
               const settled = await storage.pendingApprovalActions.find(approval.approvalId);
               const approvedOwner = await storage.externalSideEffectRuns.findByIdempotency(
                 `external_side_effect:approved_external_runtime:${selected.canonicalName}:unknown_connection:${approval.approvalId}`,
-                `approved-external-runtime:${approval.approvalId}`, actorScope);
+                `approved-external-runtime:${approval.approvalId}`,
+                actorScope,
+              );
               if (!settled || settled.resolutionStatus === "pending" || !approvedOwner)
                 throw new Error("Worker approval execution has no canonical terminal owner.");
               const original: PendingApprovalAction = { ...settled, resolutionStatus: "pending" };
               delete original.resolvedAt;
               delete original.result;
-              const resultRecord = { outcome: result.outcome, policyReason: result.policyReason,
-                auditEventId: result.auditEventId, result: result.result };
-              if (digest(original) !== resume.material.pendingActionSha256 ||
+              const resultRecord = {
+                outcome: result.outcome,
+                policyReason: result.policyReason,
+                auditEventId: result.auditEventId,
+                result: result.result,
+              };
+              if (
+                digest(original) !== resume.material.pendingActionSha256 ||
                 settled.resolutionStatus !== (result.outcome === "executed" ? "executed" : "failed") ||
                 canonicalJsonString(settled.result) !== canonicalJsonString(resultRecord) ||
                 !["completed", "unknown_external_outcome", "failed_before_boundary"].includes(approvedOwner.status) ||
                 (approvedOwner.status === "completed" &&
-                  canonicalJsonString(approvedOwner.responsePayload) !== canonicalJsonString(resultRecord)))
+                  canonicalJsonString(approvedOwner.responsePayload) !== canonicalJsonString(resultRecord))
+              )
                 throw new Error("Worker approved result differs from its canonical terminal evidence.");
               const currentTool = await storage.chatToolRuns.get(toolRunId);
-              if (currentTool.approvalId !== approval.approvalId || currentTool.toolName !== selected.canonicalName ||
-                canonicalJsonString(currentTool.args) !== canonicalJsonString(retained.args))
+              if (
+                currentTool.approvalId !== approval.approvalId ||
+                currentTool.toolName !== selected.canonicalName ||
+                canonicalJsonString(currentTool.args) !== canonicalJsonString(retained.args)
+              )
                 throw new Error("Worker approved tool materialization changed its invocation.");
-              const successful = result.outcome === "executed" && !reportedFailure(result) && approvedOwner.status === "completed";
+              const successful =
+                result.outcome === "executed" && !reportedFailure(result) && approvedOwner.status === "completed";
               const crossed = Boolean(approvedOwner.externalCallStartedAt);
               const missingEffectReceipt = successful && !crossed && selected.effectPotential?.potential !== "none";
-              const uncertain = (crossed && !successful) || approvedOwner.status === "unknown_external_outcome" ||
-                result.result?.manualReconciliationRequired === true || missingEffectReceipt;
+              const uncertain =
+                (crossed && !successful) ||
+                approvedOwner.status === "unknown_external_outcome" ||
+                result.result?.manualReconciliationRequired === true ||
+                missingEffectReceipt;
               const kind = uncertain ? "uncertain" : crossed ? "concrete" : "none";
-              await storage.chatToolRuns.patch(toolRunId, { status: successful ? "executed" : "failed",
-                result: result.result ?? {}, finishedAt: approvedOwner.completedAt ?? new Date().toISOString(),
-                effectDisposition: uncertain ? "unknown" : crossed ? null : "none", effectOutcomeKind: kind,
-                effectEvidence: { version: TOOL_EFFECT_CLASSIFICATION_VERSION, outcomeKind: kind,
-                  reason: missingEffectReceipt ? "completed_without_canonical_effect_receipt" : uncertain ? "dispatch_may_have_occurred" : crossed ? "canonical_effect_receipt_linked" : successful ? "trusted_safe_read" : "pre_dispatch_blocked",
-                  refs: kind === "concrete" ? [{ owner: "external_side_effect", refId: approvedOwner.runId }] : [] } });
+              await storage.chatToolRuns.patch(toolRunId, {
+                status: successful ? "executed" : "failed",
+                result: result.result ?? {},
+                finishedAt: approvedOwner.completedAt ?? new Date().toISOString(),
+                effectDisposition: uncertain ? "unknown" : crossed ? null : "none",
+                effectOutcomeKind: kind,
+                effectEvidence: {
+                  version: TOOL_EFFECT_CLASSIFICATION_VERSION,
+                  outcomeKind: kind,
+                  reason: missingEffectReceipt
+                    ? "completed_without_canonical_effect_receipt"
+                    : uncertain
+                      ? "dispatch_may_have_occurred"
+                      : crossed
+                        ? "canonical_effect_receipt_linked"
+                        : successful
+                          ? "trusted_safe_read"
+                          : "pre_dispatch_blocked",
+                  refs: kind === "concrete" ? [{ owner: "external_side_effect", refId: approvedOwner.runId }] : [],
+                },
+              });
             });
           }
         }
@@ -323,44 +452,53 @@ export class RemoteWorkerEffectRuntime {
             });
           });
         };
-        const result = await withModelBudget(async () => { await check(); }, () => this.dependencies.coordinator.invokeTool(
-          {
-            ...context,
-            args: retained.args,
-            agentId: "assistant",
-            taskId: manifest.taskId,
-            citadelId: profile.identity.citadelId,
-            surface: "chat",
-            policyContext: policy,
-            signal: input.signal,
-            permissionProfileId: policy.permissionProfileId,
-            localOperatorOverrideId: policy.localOperatorOverrideId,
+        const result = await withModelBudget(
+          async () => {
+            await check();
           },
-          {
-            executionFence: async () => {
-              await check();
-            },
-            auxiliaryEffectFence: boundary,
-            ...(selected.effectPotential?.potential === "unknown" ? { beforeBuiltinExecute: boundary } : {}),
-            externalSideEffect: { markStarted: boundary, markNotRequired: () => {
-              if (!claim.externalCallStarted) claim.markExternalCallNotRequired();
-            } },
-            effectContext: context,
-            effectPotential: selected.effectPotential,
-            ...(mcpRequesterTurnContext ? { mcpRequesterTurnContext } : {}),
-            ...(meshTurnContext ? { meshTurnContext } : {}),
-            toolRuntimeOwner: selected.runtimeOwner,
-            ...(profile.catalog.runtimeInterpositionHash === undefined ||
-            profile.catalog.toolCallBeforeHookCount === undefined
-              ? {}
-              : {
-                  toolCallBeforeHookInterposition: {
-                    hash: profile.catalog.runtimeInterpositionHash,
-                    count: profile.catalog.toolCallBeforeHookCount,
+          () =>
+            this.dependencies.coordinator.invokeTool(
+              {
+                ...context,
+                args: retained.args,
+                agentId: "assistant",
+                taskId: manifest.taskId,
+                citadelId: profile.identity.citadelId,
+                surface: "chat",
+                policyContext: policy,
+                signal: input.signal,
+                permissionProfileId: policy.permissionProfileId,
+                localOperatorOverrideId: policy.localOperatorOverrideId,
+              },
+              {
+                executionFence: async () => {
+                  await check();
+                },
+                auxiliaryEffectFence: boundary,
+                ...(selected.effectPotential?.potential === "unknown" ? { beforeBuiltinExecute: boundary } : {}),
+                externalSideEffect: {
+                  markStarted: boundary,
+                  markNotRequired: () => {
+                    if (!claim.externalCallStarted) claim.markExternalCallNotRequired();
                   },
-                }),
-          },
-        ));
+                },
+                effectContext: context,
+                effectPotential: selected.effectPotential,
+                ...(mcpRequesterTurnContext ? { mcpRequesterTurnContext } : {}),
+                ...(meshTurnContext ? { meshTurnContext } : {}),
+                toolRuntimeOwner: selected.runtimeOwner,
+                ...(profile.catalog.runtimeInterpositionHash === undefined ||
+                profile.catalog.toolCallBeforeHookCount === undefined
+                  ? {}
+                  : {
+                      toolCallBeforeHookInterposition: {
+                        hash: profile.catalog.runtimeInterpositionHash,
+                        count: profile.catalog.toolCallBeforeHookCount,
+                      },
+                    }),
+              },
+            ),
+        );
         observedResult = result;
         if (!claim.externalCallStarted) claim.markExternalCallNotRequired();
         // A channel failure can be returned as a tool result. It cannot certify
@@ -518,7 +656,11 @@ export class RemoteWorkerEffectRuntime {
           }),
         };
       }
-      if (tool.status === "approval_required" && approval && (approval.status === "pending" || approval.status === "approved"))
+      if (
+        tool.status === "approval_required" &&
+        approval &&
+        (approval.status === "pending" || approval.status === "approved")
+      )
         return { kind: "waiting_approval", approvalRecordSha256: digest(approval) };
       return {
         kind: "blocked_before_dispatch",

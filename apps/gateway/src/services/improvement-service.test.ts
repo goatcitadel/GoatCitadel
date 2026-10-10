@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createLocalAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { ImprovementRef, RealtimeEvent } from "@goatcitadel/contracts";
 import {
@@ -28,6 +28,17 @@ interface Harness {
 }
 
 const harnesses: Harness[] = [];
+
+beforeAll(async () => {
+  // Pay the cold schema/template initialization cost in fixture setup, rather
+  // than charging the first signal test for every storage migration. Each test
+  // still gets its own fresh database and retains the normal assertion timeout.
+  const warmup = await createHarness();
+  warmup.service.stopScheduler();
+  warmup.storage.close();
+  fsSync.rmSync(warmup.rootDir, { recursive: true, force: true });
+  harnesses.splice(harnesses.indexOf(warmup), 1);
+}, 60_000);
 
 afterEach(() => {
   for (const harness of harnesses.splice(0)) {
@@ -357,8 +368,8 @@ async function createGovernedHarness(): Promise<GovernedHarness> {
 
   harness.callbacks = callbacks;
   harness.service = new ImprovementService(ctx, callbacks);
-  await harness.service.initialize();
   harnesses.push(harness);
+  await harness.service.initialize();
   return harness;
 }
 
@@ -884,7 +895,7 @@ async function createHarness(): Promise<Harness> {
   } as unknown as ImprovementServiceCallbacks;
 
   harness.service = new ImprovementService(ctx, callbacks);
-  await harness.service.initialize();
   harnesses.push(harness);
+  await harness.service.initialize();
   return harness;
 }

@@ -1,27 +1,41 @@
 import { sha256 } from "@noble/hashes/sha256";
-import { bytesToHex } from "@noble/hashes/utils";
+import { bytesToHex, hexToBytes as portableHexToBytes, toBytes } from "@noble/hashes/utils";
 
 const utf8 = new TextEncoder();
+// Resolve builtins only on supported Node runtimes. Static node imports would
+// break the browser bundle; browsers and older Node versions retain Noble.
+const nativeCrypto =
+  typeof process !== "undefined" && typeof process.getBuiltinModule === "function"
+    ? process.getBuiltinModule("crypto")
+    : undefined;
+const nativeBuffer =
+  typeof process !== "undefined" && typeof process.getBuiltinModule === "function"
+    ? process.getBuiltinModule("buffer").Buffer
+    : undefined;
 
 /**
  * Isomorphic SHA-256 hex digest of a UTF-8 string.
  *
- * `@goatcitadel/contracts` is imported by BOTH the Node runtime (gateway,
- * storage) and the Mission Control Next browser bundle, so its shared hashers
- * must not import `node:crypto` — doing so drags it into the vite production
- * build and fails rollup ("createHash is not exported by
- * __vite-browser-external"). `@noble/hashes` is a synchronous, audited,
- * dependency-free isomorphic implementation, and this digest is byte-identical
- * to `createHash("sha256").update(value, "utf8").digest("hex")` (asserted in
- * governed-mutations.test.ts), so every previously stored governance/settlement
- * fingerprint stays valid. `node:crypto` remains only in the genuinely
- * Node-only Vault primitives (`citadel-vault-node`).
+ * Node uses its native SHA-256 implementation; browsers use Noble. Both hash
+ * the same TextEncoder bytes, preserving stored governance fingerprints and
+ * UTF-8 replacement of malformed surrogate pairs.
  */
 export function sha256Hex(value: string): string {
-  return bytesToHex(sha256(utf8.encode(value)));
+  return sha256BytesHex(utf8.encode(value));
 }
 
 /** Isomorphic SHA-256 hex digest of exact caller-owned bytes. */
 export function sha256BytesHex(value: Uint8Array): string {
-  return bytesToHex(sha256(value));
+  const bytes = toBytes(value);
+  return nativeCrypto ? nativeCrypto.createHash("sha256").update(bytes).digest("hex") : bytesToHex(sha256(bytes));
+}
+
+/** Strict hex decoding with an exact-size, caller-owned byte array. */
+export function hexToBytes(value: string): Uint8Array {
+  // Buffer's decoder silently truncates malformed hex. Delegate invalid input
+  // to Noble to preserve its validation and errors in every runtime.
+  if (!nativeBuffer || typeof value !== "string" || value.length % 2 !== 0 || /[^0-9a-fA-F]/u.test(value)) {
+    return portableHexToBytes(value);
+  }
+  return new Uint8Array(nativeBuffer.from(value, "hex"));
 }

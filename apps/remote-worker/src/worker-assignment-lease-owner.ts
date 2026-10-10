@@ -13,6 +13,7 @@ import type { WorkerDurableStatePort } from "./worker-durable-state.js";
 import type { WorkerWireResponse } from "./worker-wire-client.js";
 import { WorkerSettlementGuard, type WorkerSettlementReceipt } from "./worker-settlement-guard.js";
 import { canonicalJsonString } from "@goatcitadel/contracts";
+import { WorkerProtectedRouteError } from "./worker-protected-route-client.js";
 
 const ACTIVE_KEY = "connected-run";
 const CLAIM_KEY = "assignment-claim-pending";
@@ -74,20 +75,48 @@ export class WorkerAssignmentLeaseOwner {
       const assignmentId = parseIntent(active).assignmentId;
       assertIdentifier(assignmentId);
       const retained = this.vault.getLease(assignmentId);
-      const lease: LeaseBinding = {
+      let lease: LeaseBinding = {
         registryWorkspaceId: this.registryWorkspaceId,
         assignmentId,
         assignmentGeneration: retained.assignmentGeneration,
         leaseRevision: retained.leaseRevision,
         leaseToken: retained.rawLeaseToken,
       };
-      const synced = await this.routes.sync(this.context, lease, `sync:${randomUUID()}`);
-      assertLeaseResponse(synced, lease, lease.leaseRevision,
-        ["synchronized", "waiting_approval", "approval_resume_pending", "approval_resume_ready",
-          "parent_recovery_pending", "parent_recovery_ready"]);
+      let synced: WorkerWireResponse;
+      for (let refresh = 0; ; refresh += 1) {
+        try {
+          synced = await this.routes.sync(this.context, lease, `sync:${randomUUID()}`);
+          break;
+        } catch (error) {
+          // A parent heartbeat may advance the exact dispatch fence while this
+          // process is stopped. Refresh through the canonical protected renewal
+          // owner before retrying this read; never retry execution or effects.
+          if (
+            refresh >= 2 ||
+            !(error instanceof WorkerProtectedRouteError) ||
+            error.status !== 403 ||
+            Object.keys(error.responseBody).length !== 1 ||
+            error.responseBody.error !== "REMOTE_WORKER_ASSIGNMENT_REJECTED"
+          )
+            throw error;
+          lease = await this.renew(lease, this.sentThrough, observed);
+          observed.leaseSyncRefreshes = Number(observed.leaseSyncRefreshes ?? 0) + 1;
+        }
+      }
+      assertLeaseResponse(synced, lease, lease.leaseRevision, [
+        "synchronized",
+        "waiting_approval",
+        "approval_resume_pending",
+        "approval_resume_ready",
+        "parent_recovery_pending",
+        "parent_recovery_ready",
+      ]);
       this.sentThrough = leaseWatermark(synced);
       observed.reconnectSync = synced.body.disposition;
-      if (synced.body.disposition === "parent_recovery_pending" || synced.body.disposition === "parent_recovery_ready") {
+      if (
+        synced.body.disposition === "parent_recovery_pending" ||
+        synced.body.disposition === "parent_recovery_ready"
+      ) {
         const recovery = record(synced.body.recovery);
         if (typeof recovery.bindingSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(recovery.bindingSha256))
           throw invalid("Gateway parent recovery has no retained binding authority.");
@@ -97,7 +126,10 @@ export class WorkerAssignmentLeaseOwner {
         observed.awaiting = "parent_recovery";
         return undefined;
       }
-      if (synced.body.disposition === "approval_resume_pending" || synced.body.disposition === "approval_resume_ready") {
+      if (
+        synced.body.disposition === "approval_resume_pending" ||
+        synced.body.disposition === "approval_resume_ready"
+      ) {
         const resume = record(synced.body.resume);
         assertIdentifier(resume.approvalId);
         for (const hash of [resume.runtimeAuthoritySha256, resume.resumeSha256])
@@ -112,7 +144,10 @@ export class WorkerAssignmentLeaseOwner {
       if (synced.body.disposition === "waiting_approval") {
         const waiting = record(synced.body.waiting);
         assertIdentifier(waiting.approvalId);
-        if (typeof waiting.runtimeAuthoritySha256 !== "string" || !/^[a-f0-9]{64}$/u.test(waiting.runtimeAuthoritySha256))
+        if (
+          typeof waiting.runtimeAuthoritySha256 !== "string" ||
+          !/^[a-f0-9]{64}$/u.test(waiting.runtimeAuthoritySha256)
+        )
           throw invalid("Gateway approval wait has no retained runtime authority.");
         this.renewalDeadline = 0;
         observed.awaiting = "approval_resolution";
