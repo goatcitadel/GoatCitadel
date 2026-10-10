@@ -22,6 +22,7 @@ import { INTEGRATION_CONNECTION_REVISION_POSTGRES_SQL } from "../integration-con
 /* eslint-disable max-lines -- Postgres migration ledger keeps every versioned migration in one append-only file so ordering, dependencies, and rollback context stay traceable. */
 import { buildPostgresRuntimeSchemaSql } from "./runtime-schema.js";
 import { POSTGRES_SCHEMA_CONVERGENCE_V196_SQL } from "./schema-convergence-v196.js";
+import { POSTGRES_SCHEMA_CONVERGENCE_V200_SQL } from "./schema-convergence-v200.js";
 import { GOVERNED_REMEDIATION_POSTGRES_SCHEMA_SQL } from "./governed-remediation-schema.js";
 import { GOVERNED_REMEDIATION_RECIPE_BINDING_POSTGRES_SQL } from "./governed-remediation-recipe-binding.js";
 import { REMOTE_WORKER_PROTECTED_ADMISSION_EVIDENCE_POSTGRES_SQL } from "./remote-worker-protected-admission-evidence.js";
@@ -15065,6 +15066,14 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         AND payload_hash <> 'ce1d02d6a6ff6eab5660c3fe4ac10944c7c34bc153672d6ab46120cd84ef3617';
     `,
     integritySha256: "fcfeb0ba7a7fdc3b238aa782ee6566d1b0875bcf80759929d7549f5917a84fdd",
+  },
+  {
+    // Upgraded installs got v198's additive table shape while fresh installs
+    // get the v2-rendered shape; converge both for the canonical shape gate.
+    version: 200,
+    name: "channel_guided_setup_schema_shape_convergence",
+    sql: POSTGRES_SCHEMA_CONVERGENCE_V200_SQL,
+    integritySha256: "d16c868ca1d7e8eb98a9b19c8eecbaf141a89816637834f9a2db368ab03c7c69",
   },
 ];
 
