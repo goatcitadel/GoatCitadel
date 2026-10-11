@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { buildTelegramTargetDirectory, resolveChannelTarget } from "../services/channel-target-directory.js";
 import { z } from "zod";
-import { ConflictError, ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, ValidationError, isGoatError } from "@goatcitadel/contracts";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { sendRouteError } from "./_error-handler.js";
 import { approveTelegramPairingCode, listTelegramPairingState, revokeTelegramPairingActor } from "../services/telegram-channel-pairing.js";
@@ -62,7 +62,8 @@ export function registerTelegramIntegrationRoutes(fastify: FastifyInstance): voi
         fetcher: (url, init) => fetch(url, init),
       });
       return reply.send({ items });
-    } catch {
+    } catch (error) {
+      if (isGoatError(error)) return sendRouteError(reply, error, request.log);
       return reply.code(502).send({ error: "Telegram target discovery could not complete. Check credentials, provider availability and the current delivery mode." });
     }
   });
@@ -98,7 +99,8 @@ export function registerTelegramIntegrationRoutes(fastify: FastifyInstance): voi
           directory,
           ...(query.data.query ? { resolution: resolveChannelTarget(directory, query.data.query) } : {}),
         });
-      } catch {
+      } catch (error) {
+        if (isGoatError(error)) return sendRouteError(reply, error, request.log);
         return reply.code(502).send({ error: "Telegram target discovery could not complete. Check credentials, provider availability and the current delivery mode." });
       }
     },

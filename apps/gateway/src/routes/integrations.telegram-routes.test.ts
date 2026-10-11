@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import { authorizeTelegramChannelActor } from "../services/telegram-channel-pairing.js";
 import { registerTelegramIntegrationRoutes } from "./integrations-telegram-routes.js";
 
@@ -119,6 +120,69 @@ describe("integrations Telegram route tails", () => {
 
     expect(response.statusCode).toBe(502);
     expect(response.json().error).toContain("could not complete");
+  });
+
+  it("maps typed ChannelSetup owner errors for connection-backed discovery and keeps provider failures at 502", async () => {
+    const connectionId = "11111111-1111-1111-1111-111111111111";
+    const connection = {
+      connectionId,
+      revision: "a".repeat(64),
+      key: "telegram",
+      kind: "channel",
+      config: { botToken: "telegram-token", targets: [{ label: "Pinned Room", chatId: "-100999" }] },
+    };
+    const staleConflict = () =>
+      new ConflictError({ code: "WRITE_CONFLICT", message: "The Telegram connection changed. Reload before discovering targets." });
+    const getIntegrationConnection = vi
+      .fn()
+      .mockRejectedValueOnce(new NotFoundError({ entity: "integration connection", id: connectionId }))
+      .mockResolvedValue(connection);
+    const discoverChannelSetupTelegramTargets = vi
+      .fn()
+      .mockRejectedValueOnce(staleConflict())
+      .mockRejectedValueOnce(new Error("getUpdates failed for https://api.telegram.org/bottelegram-token/getUpdates"))
+      .mockRejectedValueOnce(staleConflict());
+    createApp({ getIntegrationConnection, discoverChannelSetupTelegramTargets });
+
+    const missing = await app!.inject({
+      method: "POST",
+      url: "/api/v1/integrations/telegram/discover-targets",
+      payload: { connectionId },
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toMatchObject({ code: "ENTITY_NOT_FOUND" });
+
+    const stale = await app!.inject({
+      method: "POST",
+      url: "/api/v1/integrations/telegram/discover-targets",
+      payload: { connectionId },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ code: "WRITE_CONFLICT" });
+
+    const provider = await app!.inject({
+      method: "POST",
+      url: "/api/v1/integrations/telegram/discover-targets",
+      payload: { connectionId },
+    });
+    expect(provider.statusCode).toBe(502);
+    expect(provider.json().error).toContain("could not complete");
+    expect(provider.body).not.toContain("telegram-token");
+
+    const staleDirectory = await app!.inject({
+      method: "GET",
+      url: `/api/v1/channels/connections/${connectionId}/target-directory?refresh=true`,
+    });
+    expect(staleDirectory.statusCode).toBe(409);
+    expect(staleDirectory.json()).toMatchObject({ code: "WRITE_CONFLICT" });
+
+    getIntegrationConnection.mockRejectedValueOnce(new NotFoundError({ entity: "integration connection", id: connectionId }));
+    const missingDirectory = await app!.inject({
+      method: "GET",
+      url: `/api/v1/channels/connections/${connectionId}/target-directory`,
+    });
+    expect(missingDirectory.statusCode).toBe(404);
+    expect(missingDirectory.json()).toMatchObject({ code: "ENTITY_NOT_FOUND" });
   });
 
   it("validates and builds Telegram target directories with refresh and query resolution", async () => {
