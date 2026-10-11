@@ -44,7 +44,12 @@ export function resolveShellPreference(input: {
 export function buildShellSwitchUrl(href: string, shell: ShellPreference, sessionId?: string | null): string {
   const next = new URL(href);
   next.searchParams.delete("shellScope");
-  if (shell === "classic") next.pathname = classicFallbackPath(next.pathname);
+  if (shell === "classic") {
+    // The fallback may carry the query its Classic owner needs (for example `?view=browser-sessions`).
+    const fallback = new URL(classicFallbackPath(next.pathname), next.origin);
+    next.pathname = fallback.pathname;
+    fallback.searchParams.forEach((value, key) => next.searchParams.set(key, value));
+  }
   if (sessionId !== undefined) {
     if (sessionId) next.searchParams.set("sessionId", sessionId);
     else next.searchParams.delete("sessionId");
@@ -70,14 +75,38 @@ export async function switchShell(
   return openApplicationShell(shell, target, options);
 }
 
-/** Cockpit-only routes return to the nearest Classic surface during rollback. */
+/** The Classic owner of each ported System view; every other System view rolls back to the runtime page. */
+const classicSystemViews: Record<string, string> = {
+  activity: "/ops/activity",
+  quality: "/ops/quality",
+  diagnostics: "/ops/diagnostics",
+  improvement: "/ops/improvement",
+  spend: "/ops/costs",
+  dashboards: "/ops/boards",
+  "browser-sessions": "/ops/sessions?view=browser-sessions",
+};
+
+function decodedSegment(segment: string): string | null {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Cockpit-only routes return to the nearest Classic surface during rollback. The result is a path that may
+ * carry the query its Classic owner needs; `resolveCockpitCompatibility` maps each one back to the same
+ * Cockpit view (see the round-trip test).
+ */
 export function classicFallbackPath(pathname: string): string {
-  const [, segment, detail] = pathname.split("/");
+  const [, segment, detail, record] = pathname.split("/");
   if (segment === "inbox") return "/ops/approvals";
-  if (segment === "work") return "/ops/kanban";
-  if (segment === "system") {
-    if (detail && ["activity", "quality", "diagnostics"].includes(detail)) return `/ops/${detail}`;
-    return detail === "spend" ? "/ops/costs" : "/ops/runtime";
+  if (segment === "work") return detail === "schedules" ? "/ops/schedules" : "/ops/kanban";
+  if (segment === "system") return (detail && classicSystemViews[detail]) || "/ops/runtime";
+  if (segment === "chat" && detail === "projects") {
+    const projectId = record ? decodedSegment(record) : null;
+    return projectId ? `/projects?${new URLSearchParams({ projectId })}` : "/projects";
   }
   if (segment === "settings") {
     const cockpitOnlySettings: Record<string, string> = {

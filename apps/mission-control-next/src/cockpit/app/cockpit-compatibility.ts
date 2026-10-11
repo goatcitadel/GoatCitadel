@@ -48,11 +48,18 @@ const opsNative: Record<string, string> = {
   diagnostics: "/system/diagnostics",
   costs: "/system/spend",
   improvement: "/system/improvement",
+  // System › Health is the native owner of runtime and worker status; desktop "needs attention" toasts that
+  // open Classic notifications land in the Inbox.
+  runtime: "/system",
+  workers: "/system",
+  notifications: "/inbox",
   // Port4: saved boards and schedules are native end to end. Kanban stays Classic: agentic run evidence has no
   // native owner yet.
   boards: "/system/dashboards",
   schedules: "/work/schedules",
 };
+/** Legacy Cowork board and task inputs normalize to the Work board (`/cowork` itself normalizes to Chat). */
+const coworkWorkViews = new Set(["board", "tasks"]);
 
 /** Conversation publication follows route coverage, including root/alias entries, but never Projects. */
 export function isCockpitConversationLocation(input: string): boolean {
@@ -109,6 +116,7 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
     const route = parseAppRoute(url);
     return native(new URL(buildAppHref(route), url).pathname);
   }
+  if (area === "cowork" && parts.length === 2 && coworkWorkViews.has(section!)) return native("/work");
   if (area === "inbox" && parts.length === 1) {
     if (url.searchParams.has("view") && url.searchParams.get("view") !== "pending") {
       url.pathname = "/ops/approvals";
