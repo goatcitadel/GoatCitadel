@@ -2,8 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LoadedSkill, SkillLifecycleRecord, SkillStateRecord, ToolInvokeResult } from "@goatcitadel/contracts";
+import type { BundledSkillLockEntry } from "@goatcitadel/skills";
+import { resolveBundledSkillLockEntry } from "@goatcitadel/skills";
 import { CapabilitySystemService } from "./capability-system-service.js";
 import { SKILL_CONTENT_INTEGRITY_LIMITS, captureSkillContentIntegrity } from "./skill-content-integrity.js";
 
@@ -27,10 +30,12 @@ function createService(input: {
   featureEnabled?: boolean;
   storage?: Record<string, unknown>;
   createApproval?: ReturnType<typeof vi.fn>;
+  resolveBundledSkillLockEntry?: (skillId: string) => BundledSkillLockEntry | undefined;
 }) {
   const skillLifecycle = new Map<string, SkillLifecycleRecord>(
     (input.skillLifecycleRecords ?? []).map((record) => [record.skillId, record]),
   );
+  const audit = { append: vi.fn(async () => undefined) };
   const storage =
     input.storage ??
     ({
@@ -50,6 +55,7 @@ function createService(input: {
       capabilityProposals: {
         list: vi.fn(() => []),
       },
+      audit,
     } as never);
   const revisions = new Map<string, number>();
   (storage as Record<string, unknown>).skillAggregateRevisions ??= {
@@ -61,6 +67,7 @@ function createService(input: {
     },
   };
   const createApproval = input.createApproval ?? vi.fn();
+  const publishRealtime = vi.fn(async () => undefined);
 
   return {
     service: new CapabilitySystemService({
@@ -90,11 +97,16 @@ function createService(input: {
       ),
       createApproval,
       resolveApproval: vi.fn(),
-      publishRealtime: vi.fn(async () => undefined),
+      publishRealtime,
       readPolicySnapshot: async () => ({ mode: "test" }),
+      ...(input.resolveBundledSkillLockEntry
+        ? { resolveBundledSkillLockEntry: input.resolveBundledSkillLockEntry }
+        : {}),
     }),
     storage,
     createApproval,
+    publishRealtime,
+    audit,
     skillLifecycle,
   };
 }
@@ -228,6 +240,386 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
       expect(await restarted.service.listCatalog("callable")).toEqual([]);
     },
   );
+
+  describe("release-bound re-trust of shipped skill trees", () => {
+    function buildShippedSkill(source: "bundled" | "managed", skillDir: string): LoadedSkill {
+      return {
+        skillId: `${source}:release-skill`,
+        name: `${source} release skill`,
+        dir: skillDir,
+        instructionBody: "Release one.",
+        source,
+        declaredTools: [],
+        requires: [],
+        keywords: [],
+        mtime: "2026-07-13T00:00:00.000Z",
+      };
+    }
+
+    async function captureLockEntry(skillId: string, skillDir: string): Promise<BundledSkillLockEntry> {
+      const integrity = await captureSkillContentIntegrity(skillDir);
+      return {
+        skillId,
+        manifestVersion: integrity.manifestVersion,
+        treeSha256: integrity.treeSha256,
+        fileCount: integrity.fileCount,
+        totalBytes: integrity.totalBytes,
+      };
+    }
+
+    function trustedRowAt(skill: LoadedSkill, lock: BundledSkillLockEntry, trustLabel: string): SkillLifecycleRecord {
+      return {
+        skillId: skill.skillId,
+        category: skill.source === "bundled" ? "built_in" : "optional",
+        lifecycleState: "trusted",
+        trustLabel,
+        provenance: {
+          source: skill.source,
+          contentIntegrity: {
+            manifestVersion: lock.manifestVersion,
+            treeSha256: lock.treeSha256,
+            fileCount: lock.fileCount,
+            totalBytes: lock.totalBytes,
+            verified: true,
+          },
+        },
+        createdAt: "2026-07-13T00:00:00.000Z",
+        updatedAt: "2026-07-13T00:00:00.000Z",
+      };
+    }
+
+    it.each(["bundled", "managed"] as const)(
+      "re-trusts a release-shipped %s tree on the upgraded lineage and keeps tamper demotion",
+      async (source) => {
+        const rootDir = await createRoot();
+        const skillDir = path.join(rootDir, `${source}-release-skill`);
+        await fs.mkdir(skillDir, { recursive: true });
+        const skillPath = path.join(skillDir, "SKILL.md");
+        const skill = buildShippedSkill(source, skillDir);
+        const trustLabel = source === "bundled" ? "Built-in" : "Managed optional";
+
+        // Fresh install at release one binds the row to release-one bytes.
+        await fs.writeFile(skillPath, "Release one.\n");
+        const releaseOne = await captureLockEntry(skill.skillId, skillDir);
+        const first = createService({ rootDir, skills: [skill] });
+        expect((await first.service.listSkills())[0]).toMatchObject({ lifecycleState: "trusted", callable: true });
+        const persisted = [...first.skillLifecycle.values()];
+
+        // Release two ships new bytes and the compiled lock vouches for exactly that tree.
+        await fs.writeFile(skillPath, "Release two.\n");
+        const releaseTwo = await captureLockEntry(skill.skillId, skillDir);
+        const resolveLock = vi.fn((skillId: string) => (skillId === skill.skillId ? releaseTwo : undefined));
+
+        // Upgraded lineage: the stored row still carries release one.
+        const upgraded = createService({
+          rootDir,
+          skills: [skill],
+          skillLifecycleRecords: persisted,
+          resolveBundledSkillLockEntry: resolveLock,
+        });
+        expect((await upgraded.service.listSkills())[0]).toMatchObject({
+          lifecycleState: "trusted",
+          callable: true,
+          trustLabel,
+          reviewWarning: undefined,
+          lifecycle: {
+            createdAt: persisted[0]!.createdAt,
+            provenance: { source, contentIntegrity: { treeSha256: releaseTwo.treeSha256, verified: true } },
+          },
+        });
+        expect(await upgraded.service.listCatalog("callable")).toEqual([
+          expect.objectContaining({ capabilityId: `skill:${skill.skillId}`, callable: true }),
+        ]);
+        expect(upgraded.audit.append).toHaveBeenCalledTimes(1);
+        expect(upgraded.audit.append).toHaveBeenCalledWith(
+          "approvals",
+          expect.objectContaining({
+            event: "skill_lifecycle.release_retrusted",
+            skillId: skill.skillId,
+            source,
+            actorId: "system:bundled-skill-release-lock",
+            previousLifecycleState: "trusted",
+            lifecycleState: "trusted",
+            previousContentIntegrity: expect.objectContaining({ treeSha256: releaseOne.treeSha256 }),
+            contentIntegrity: expect.objectContaining({ treeSha256: releaseTwo.treeSha256 }),
+            lockEntry: expect.objectContaining({ treeSha256: releaseTwo.treeSha256 }),
+          }),
+          expect.objectContaining({ deliveryId: expect.stringContaining(releaseTwo.treeSha256) }),
+        );
+        // Write-ahead receipt, committed row, then the live signal: never announce uncommitted state.
+        const upsert = (upgraded.storage as { skillLifecycle: { upsert: ReturnType<typeof vi.fn> } }).skillLifecycle
+          .upsert;
+        expect(upgraded.audit.append.mock.invocationCallOrder[0]).toBeLessThan(upsert.mock.invocationCallOrder[0]!);
+        expect(upsert.mock.invocationCallOrder[0]).toBeLessThan(upgraded.publishRealtime.mock.invocationCallOrder[0]!);
+        expect(upgraded.publishRealtime).toHaveBeenCalledWith(
+          "skill_lifecycle_retrusted",
+          "capabilities",
+          expect.objectContaining({
+            skillId: skill.skillId,
+            previousTreeSha256: releaseOne.treeSha256,
+            treeSha256: releaseTwo.treeSha256,
+          }),
+        );
+
+        // Fresh lineage at release two stays trusted with no re-trust evidence.
+        const fresh = createService({ rootDir, skills: [skill], resolveBundledSkillLockEntry: resolveLock });
+        expect((await fresh.service.listSkills())[0]).toMatchObject({ lifecycleState: "trusted", callable: true });
+        expect(fresh.audit.append).not.toHaveBeenCalled();
+
+        // Unexpected on-disk drift away from the release lock still demotes the re-trusted row.
+        await fs.writeFile(skillPath, "Tampered two.\n");
+        expect((await upgraded.service.listSkills())[0]).toMatchObject({
+          lifecycleState: "candidate",
+          callable: false,
+          trustLabel: "Exact-byte review required",
+        });
+        expect(await upgraded.service.listCatalog("callable")).toEqual([]);
+        expect(upgraded.audit.append).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it.each(["bundled", "managed"] as const)(
+      "keeps the tamper demotion when the loaded %s tree matches neither the stored row nor the lock",
+      async (source) => {
+        const rootDir = await createRoot();
+        const skillDir = path.join(rootDir, `${source}-release-skill`);
+        await fs.mkdir(skillDir, { recursive: true });
+        const skillPath = path.join(skillDir, "SKILL.md");
+        const skill = buildShippedSkill(source, skillDir);
+        await fs.writeFile(skillPath, "Release one.\n");
+        const releaseOne = await captureLockEntry(skill.skillId, skillDir);
+        await fs.writeFile(skillPath, "Release two.\n");
+        const releaseTwo = await captureLockEntry(skill.skillId, skillDir);
+        await fs.writeFile(skillPath, "Unknown three.\n");
+
+        const harness = createService({
+          rootDir,
+          skills: [skill],
+          skillLifecycleRecords: [trustedRowAt(skill, releaseOne, "Built-in")],
+          resolveBundledSkillLockEntry: () => releaseTwo,
+        });
+        expect((await harness.service.listSkills())[0]).toMatchObject({
+          lifecycleState: "candidate",
+          callable: false,
+          trustLabel: "Exact-byte review required",
+        });
+        expect(harness.audit.append).not.toHaveBeenCalled();
+        expect(harness.publishRealtime).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["bundled", "managed"] as const)(
+      "recovers a %s row already demoted by exact-byte drift once the tree matches the release lock",
+      async (source) => {
+        const rootDir = await createRoot();
+        const skillDir = path.join(rootDir, `${source}-release-skill`);
+        await fs.mkdir(skillDir, { recursive: true });
+        const skill = buildShippedSkill(source, skillDir);
+        await fs.writeFile(path.join(skillDir, "SKILL.md"), "Release two.\n");
+        const releaseTwo = await captureLockEntry(skill.skillId, skillDir);
+        // The pre-fix demotion rewrote the row with the new hashes and the review label.
+        const demoted: SkillLifecycleRecord = {
+          ...trustedRowAt(skill, releaseTwo, "Exact-byte review required"),
+          lifecycleState: "candidate",
+          reviewWarning:
+            "Skill content changed after its trusted exact-byte lifecycle binding; review and reactivate this version before use.",
+        };
+
+        const harness = createService({
+          rootDir,
+          skills: [skill],
+          skillLifecycleRecords: [demoted],
+          resolveBundledSkillLockEntry: () => releaseTwo,
+        });
+        expect((await harness.service.listSkills())[0]).toMatchObject({
+          lifecycleState: "trusted",
+          callable: true,
+          trustLabel: source === "bundled" ? "Built-in" : "Managed optional",
+          reviewWarning: undefined,
+        });
+        expect(harness.audit.append).toHaveBeenCalledWith(
+          "approvals",
+          expect.objectContaining({ skillId: skill.skillId, previousLifecycleState: "candidate" }),
+          expect.anything(),
+        );
+      },
+    );
+
+    it.each(["bundled", "managed"] as const)(
+      "never re-trusts a revoked %s row, even across the drift demotion, when the tree matches the lock",
+      async (source) => {
+        const rootDir = await createRoot();
+        const skillDir = path.join(rootDir, `${source}-release-skill`);
+        await fs.mkdir(skillDir, { recursive: true });
+        const skillPath = path.join(skillDir, "SKILL.md");
+        const skill = buildShippedSkill(source, skillDir);
+        await fs.writeFile(skillPath, "Release one.\n");
+        const releaseOne = await captureLockEntry(skill.skillId, skillDir);
+        await fs.writeFile(skillPath, "Release two.\n");
+        const releaseTwo = await captureLockEntry(skill.skillId, skillDir);
+        // Revoked while bound to release one; release two then ships and the lock vouches for it.
+        const revoked: SkillLifecycleRecord = {
+          ...trustedRowAt(skill, releaseOne, "Revoked"),
+          lifecycleState: "revoked",
+          reviewWarning: "Revoked by operator.",
+        };
+
+        const harness = createService({
+          rootDir,
+          skills: [skill],
+          skillLifecycleRecords: [revoked],
+          resolveBundledSkillLockEntry: () => releaseTwo,
+        });
+        // Two passes: a drift demotion must not launder the revocation into a re-trustable candidate.
+        for (let pass = 0; pass < 2; pass += 1) {
+          expect((await harness.service.listSkills())[0]).toMatchObject({
+            lifecycleState: "revoked",
+            callable: false,
+            reviewWarning: "Revoked by operator.",
+          });
+          expect(await harness.service.listCatalog("callable")).toEqual([]);
+        }
+        expect(harness.skillLifecycle.get(skill.skillId)).toEqual(revoked);
+        expect(harness.audit.append).not.toHaveBeenCalled();
+        expect(harness.publishRealtime).not.toHaveBeenCalled();
+      },
+    );
+
+    it("re-trusts a legacy trusted bundled row without exact-byte provenance against the lock", async () => {
+      const rootDir = await createRoot();
+      const skillDir = path.join(rootDir, "bundled-release-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      const skill = buildShippedSkill("bundled", skillDir);
+      await fs.writeFile(path.join(skillDir, "SKILL.md"), "Release two.\n");
+      const releaseTwo = await captureLockEntry(skill.skillId, skillDir);
+      const legacy: SkillLifecycleRecord = {
+        ...trustedRowAt(skill, releaseTwo, "Built-in"),
+        provenance: { source: "bundled" },
+      };
+
+      const harness = createService({
+        rootDir,
+        skills: [skill],
+        skillLifecycleRecords: [legacy],
+        resolveBundledSkillLockEntry: () => releaseTwo,
+      });
+      expect((await harness.service.listSkills())[0]).toMatchObject({
+        lifecycleState: "trusted",
+        callable: true,
+        lifecycle: { provenance: { contentIntegrity: { treeSha256: releaseTwo.treeSha256, verified: true } } },
+      });
+      expect(harness.audit.append).toHaveBeenCalledWith(
+        "approvals",
+        expect.objectContaining({ skillId: skill.skillId, previousContentIntegrity: null }),
+        expect.anything(),
+      );
+    });
+
+    it("keeps the row non-callable with a visible reason when the re-trust receipt cannot be written", async () => {
+      const rootDir = await createRoot();
+      const skillDir = path.join(rootDir, "bundled-release-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      const skillPath = path.join(skillDir, "SKILL.md");
+      const skill = buildShippedSkill("bundled", skillDir);
+      await fs.writeFile(skillPath, "Release one.\n");
+      const releaseOne = await captureLockEntry(skill.skillId, skillDir);
+      await fs.writeFile(skillPath, "Release two.\n");
+      const releaseTwo = await captureLockEntry(skill.skillId, skillDir);
+
+      const harness = createService({
+        rootDir,
+        skills: [skill],
+        skillLifecycleRecords: [trustedRowAt(skill, releaseOne, "Built-in")],
+        resolveBundledSkillLockEntry: () => releaseTwo,
+      });
+      harness.audit.append.mockRejectedValueOnce(new Error("audit disk unavailable token=sk-live-abcdef"));
+
+      // The read still answers for every skill; this one stays fail-closed and says why.
+      const failedRead = (await harness.service.listSkills())[0]!;
+      expect(failedRead).toMatchObject({
+        lifecycleState: "candidate",
+        callable: false,
+        trustLabel: "Exact-byte review required",
+        reviewWarning: expect.stringContaining("re-trust audit receipt could not be written"),
+      });
+      expect(failedRead.reviewWarning).not.toContain("sk-live-abcdef");
+      expect(harness.skillLifecycle.get(skill.skillId)).toMatchObject({ lifecycleState: "candidate" });
+      expect(harness.publishRealtime).not.toHaveBeenCalled();
+
+      // Once the receipt can be written the next read completes the re-trust.
+      expect((await harness.service.listSkills())[0]).toMatchObject({ lifecycleState: "trusted", callable: true });
+      expect(harness.publishRealtime).toHaveBeenCalledTimes(1);
+    });
+
+    it("abandons the re-trust when the stored row changes while the receipt is being written", async () => {
+      const rootDir = await createRoot();
+      const skillDir = path.join(rootDir, "bundled-release-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      const skillPath = path.join(skillDir, "SKILL.md");
+      const skill = buildShippedSkill("bundled", skillDir);
+      await fs.writeFile(skillPath, "Release one.\n");
+      const releaseOne = await captureLockEntry(skill.skillId, skillDir);
+      await fs.writeFile(skillPath, "Release two.\n");
+      const releaseTwo = await captureLockEntry(skill.skillId, skillDir);
+      const stale = trustedRowAt(skill, releaseOne, "Built-in");
+
+      const harness = createService({
+        rootDir,
+        skills: [skill],
+        skillLifecycleRecords: [stale],
+        resolveBundledSkillLockEntry: () => releaseTwo,
+      });
+      const concurrentlyRevoked: SkillLifecycleRecord = {
+        ...stale,
+        lifecycleState: "revoked",
+        trustLabel: "Revoked",
+        updatedAt: "2026-07-14T00:00:00.000Z",
+      };
+      harness.audit.append.mockImplementationOnce(async () => {
+        harness.skillLifecycle.set(skill.skillId, concurrentlyRevoked);
+      });
+
+      expect((await harness.service.listSkills())[0]).toMatchObject({ lifecycleState: "revoked", callable: false });
+      expect(harness.skillLifecycle.get(skill.skillId)).toEqual(concurrentlyRevoked);
+      expect(harness.publishRealtime).not.toHaveBeenCalled();
+    });
+
+    it("re-trusts the shipped design-intelligence tree through the compiled lock on an upgraded install", async () => {
+      const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
+      const skillDir = path.join(repoRoot, "skills", "bundled", "design-intelligence");
+      const lockEntry = resolveBundledSkillLockEntry("bundled:design-intelligence");
+      expect(lockEntry).toBeDefined();
+      const skill: LoadedSkill = { ...buildShippedSkill("bundled", skillDir), skillId: "bundled:design-intelligence" };
+      // Row created by an earlier release (the pre-presentation.md tree had 9 files).
+      const staleRow = trustedRowAt(
+        skill,
+        {
+          skillId: skill.skillId,
+          manifestVersion: "goatcitadel.skill-tree.v1",
+          treeSha256: "c29670f1a6fdba47820556db51bb93abafb092ea5feebe3cda7429100d64eccf",
+          fileCount: 9,
+          totalBytes: 124237,
+        },
+        "Built-in",
+      );
+
+      const harness = createService({ rootDir: repoRoot, skills: [skill], skillLifecycleRecords: [staleRow] });
+      expect((await harness.service.listSkills())[0]).toMatchObject({
+        lifecycleState: "trusted",
+        callable: true,
+        trustLabel: "Built-in",
+        lifecycle: { provenance: { contentIntegrity: { treeSha256: lockEntry!.treeSha256, verified: true } } },
+      });
+      expect(await harness.service.listCatalog("callable")).toEqual([
+        expect.objectContaining({ capabilityId: "skill:bundled:design-intelligence", callable: true }),
+      ]);
+      expect(harness.audit.append).toHaveBeenCalledWith(
+        "approvals",
+        expect.objectContaining({ skillId: "bundled:design-intelligence", lockEntry: { ...lockEntry } }),
+        expect.anything(),
+      );
+    });
+  });
 
   it("ignores forged source.json activation evidence even when payload provenance is valid", async () => {
     const rootDir = await createRoot();

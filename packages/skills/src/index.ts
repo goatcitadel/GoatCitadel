@@ -8,3 +8,5 @@ export * from "./loader.js";
 export * from "./routing-hints.generated.js";
 export * from "./export-renderer.js";
 export * from "./design-quality.js";
+export * from "./bundled-skill-lock.generated.js";
+export * from "./bundled-skill-lock.js";
