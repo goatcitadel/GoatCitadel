@@ -12,6 +12,26 @@ export function formattedTime(iso: string | undefined): string {
     : "Time unavailable";
 }
 
+export function lastRunOutcomeLabel(status: CronJobRecordResponse["lastRunStatus"]): string {
+  if (status === "failed") return "Failed";
+  if (status === "skipped") return "Skipped (no work done)";
+  if (status === "ok") return "Succeeded";
+  return "Not reported";
+}
+
+/** Reads the Gateway-authored skip reason from the last run output; absent or malformed output yields undefined. */
+export function lastRunSkipReason(job: CronJobRecordResponse): string | undefined {
+  if (job.lastRunStatus !== "skipped" || !job.lastRunOutput) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(job.lastRunOutput);
+    const reason =
+      typeof parsed === "object" && parsed !== null ? (parsed as { skipReason?: unknown }).skipReason : undefined;
+    return typeof reason === "string" && reason.trim() ? reason : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function WorkScheduleListItem({ job, onReview }: { job: CronJobRecordResponse; onReview: () => void }) {
   return (
     <li className="rounded-lg border border-line bg-raised p-4">
@@ -30,8 +50,7 @@ export function WorkScheduleListItem({ job, onReview }: { job: CronJobRecordResp
         Next run: {job.enabled ? formattedTime(job.nextRunAt) : "Paused"}
       </p>
       <p className="mt-2 text-sm text-fg-secondary">
-        Last outcome:{" "}
-        {job.lastRunStatus === "failed" ? "Failed" : job.lastRunStatus === "ok" ? "Succeeded" : "Not reported"}
+        Last outcome: {lastRunOutcomeLabel(job.lastRunStatus)}
         {job.failureCount ? ` · ${job.failureCount} recorded failures` : ""}
         {job.backoffUntil ? ` · Backoff until ${formattedTime(job.backoffUntil)}` : ""}
       </p>
@@ -43,6 +62,7 @@ export function WorkScheduleListItem({ job, onReview }: { job: CronJobRecordResp
 }
 
 export function WorkScheduleRecordDetails({ selected }: { selected: CronJobRecordResponse }) {
+  const skipReason = lastRunSkipReason(selected);
   return (
     <>
       <dl className="grid gap-2 text-sm">
@@ -70,6 +90,12 @@ export function WorkScheduleRecordDetails({ selected }: { selected: CronJobRecor
       {selected.lastRunStatus === "failed" ? (
         <p role="alert" className="text-sm text-status-failed">
           Last scheduled run failed. {selected.lastRunOutput || "The Gateway did not report a failure reason."}
+        </p>
+      ) : null}
+      {selected.lastRunStatus === "skipped" ? (
+        <p className="text-sm text-status-waiting">
+          Last run was skipped and did no work.{" "}
+          {skipReason ? `Reason: ${humanizeToken(skipReason)}.` : "The Gateway did not report a skip reason."}
         </p>
       ) : null}
       <p className="text-sm text-fg-secondary">

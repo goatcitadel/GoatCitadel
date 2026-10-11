@@ -379,10 +379,16 @@ export async function runMemoryConsolidationSchedulerIfDue(
   return await runSystemCronBody(deps, job, options, async ({ runId }): Promise<CronSystemHandlerOutcome> => {
     const summary = await deps.runMemoryConsolidation();
     if (summary.status !== "completed") {
+      const reason = MEMORY_CONSOLIDATION_SKIP_REASON_BY_STATUS[summary.status];
+      // The kill switch is re-checked before every session, so it can stop a run
+      // after proposals were already durably created. That run did real work.
+      if (summary.sessionsSampled > 0) {
+        return { status: "completed", summary: { ...summary }, partial: { reason } };
+      }
       return {
         status: "skipped",
-        reason: MEMORY_CONSOLIDATION_SKIP_REASON_BY_STATUS[summary.status],
-        detail: { consolidationStatus: summary.status },
+        reason,
+        detail: { consolidationStatus: summary.status, consolidation: { ...summary } },
       };
     }
     await deps.storage.systemSettings.set(MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY, weekKey);

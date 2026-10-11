@@ -103,12 +103,24 @@ describe("runMemoryConsolidationSchedulerIfDue outcome", () => {
       await expect(runMemoryConsolidationSchedulerIfDue(deps, CRON_HANDLER_OPTIONS)).resolves.toEqual({
         status: "skipped",
         reason,
-        detail: { consolidationStatus: status },
+        detail: { consolidationStatus: status, consolidation: buildSummary(status) },
       });
       expect(systemSettingSet).not.toHaveBeenCalled();
       expect(cronJobUpsert).not.toHaveBeenCalled();
     },
   );
+
+  it("reports a kill switch that stops a run after sessions were processed as a partial completion", async () => {
+    const interrupted = { ...buildSummary("skipped_kill_switch"), sessionsSampled: 1, drafted: 2, proposed: 1 };
+    const { deps, systemSettingSet } = createDeps({ summary: interrupted });
+
+    await expect(runMemoryConsolidationSchedulerIfDue(deps, CRON_HANDLER_OPTIONS)).resolves.toEqual({
+      status: "completed",
+      summary: interrupted,
+      partial: { reason: "autonomy_kill_switch" },
+    });
+    expect(systemSettingSet).not.toHaveBeenCalled();
+  });
 
   it("reports a completed consolidation with its summary and leaves cron telemetry to CronAutomation", async () => {
     const { deps, runMemoryConsolidation, systemSettingSet, cronJobUpsert } = createDeps({});

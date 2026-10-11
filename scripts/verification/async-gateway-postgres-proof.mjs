@@ -232,7 +232,7 @@ export async function runAsyncGatewayPostgresProof(context, correlationId, optio
       tasks: RESEARCH_ARTIFACT_TASK_COUNT,
       checkpointTaskIndex: CHECKPOINT_TASK_INDEX,
       checkpointDurationMs: checkpointResult.durationMs,
-      presentationModuleBytes,
+      artifactsModuleBytes,
       providerDispatches: stub.dispatchPlanDispatches(),
       firecrawlRequests: firecrawlStub.requests(),
       eventLoop: metricEvaluation.metrics,

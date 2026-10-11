@@ -1101,6 +1101,7 @@ describe("CronAutomationService job behavior", () => {
     });
     const saved = cronJobs.get("memory-consolidation-weekly");
     expect(saved?.lastRunId).toBe(result.runId);
+    expect(saved?.lastRunStatus).toBe("skipped");
     expect(saved?.failureCount).toBe(0);
     expect(saved?.backoffUntil).toBeUndefined();
     expect(saved?.lastFailure).toBeUndefined();
@@ -1114,6 +1115,7 @@ describe("CronAutomationService job behavior", () => {
       expect.objectContaining({ result: "skipped", skipReason: "memory_consolidation_flags_disabled" }),
     ]);
     expect(await service.findCronRunById(result.runId)).toMatchObject({
+      status: "skipped",
       output: expect.stringContaining('"result":"skipped"'),
     });
   });
@@ -1136,8 +1138,37 @@ describe("CronAutomationService job behavior", () => {
     expect(completed).not.toHaveProperty("skipReason");
     expect(cronRuns.get(completed.runId)?.outcome).toEqual({ result: "ok", action: "memory_consolidation" });
     const output = JSON.parse(cronJobs.get("memory-consolidation-weekly")?.lastRunOutput ?? "{}");
-    expect(output).toMatchObject({ result: "ok", consolidation: { status: "completed", proposed: 3 } });
+    expect(output).toMatchObject({ result: "ok", handlerSummary: { status: "completed", proposed: 3 } });
     expect(output).not.toHaveProperty("skipReason");
+  });
+
+  it("records a kill-switch-interrupted consolidation as a partial run, not a skip or full success", async () => {
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const memoryConsolidation = vi.fn(async () => ({
+      status: "completed" as const,
+      summary: { status: "skipped_kill_switch", sessionsSampled: 1, proposed: 2 },
+      partial: { reason: "autonomy_kill_switch" },
+    }));
+    const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { memoryConsolidation } });
+    cronJobs.upsert(buildTaskJob({ jobId: "memory-consolidation-weekly", action: "memory_consolidation" }));
+
+    const result = await service.runCronJobNow("memory-consolidation-weekly");
+
+    expect(result).not.toHaveProperty("skipReason");
+    expect(cronRuns.get(result.runId)?.outcome).toEqual({
+      result: "partial",
+      action: "memory_consolidation",
+      partialReason: "autonomy_kill_switch",
+    });
+    const saved = cronJobs.get("memory-consolidation-weekly");
+    expect(saved?.lastRunStatus).toBe("ok");
+    expect(JSON.parse(saved?.lastRunOutput ?? "{}")).toMatchObject({
+      result: "partial",
+      partialReason: "autonomy_kill_switch",
+      handlerSummary: { sessionsSampled: 1, proposed: 2 },
+    });
   });
 
   it("treats a void memory consolidation handler as a completed run", async () => {
