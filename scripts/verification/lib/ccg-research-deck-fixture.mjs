@@ -17,7 +17,7 @@ export function buildCcgResearchDeckFixture(index) {
     title: "CCG Competitive Landscape 2026: Best Fits for Players and Retailers",
     subtitle: "North American physical-card comparison with global scale context · Research as of August 6, 2026",
     theme: "midnight teal",
-    design: { mode: "polished", skillId: "design-intelligence" },
+    design: { mode: "polished", skillId: "impeccable" },
     research: buildResearchMetadata(),
     sources: buildSources(retrievedAt),
     slides: buildSlides(),

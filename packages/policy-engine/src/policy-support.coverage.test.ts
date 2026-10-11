@@ -100,7 +100,7 @@ describe("approval bypass support", () => {
       turnId: "turn-1",
       runtimeSkillApplications: [
         {
-          skillId: "bundled:design-intelligence",
+          skillId: "bundled:impeccable",
           treeSha256: "1".repeat(64),
           instructionSha256: "2".repeat(64),
           modules: ["main", "layout"],

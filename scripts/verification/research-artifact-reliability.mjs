@@ -96,9 +96,9 @@ export async function main() {
 }
 
 export async function runThreeTaskReplay(context, correlationId) {
-  const presentationModulePath = path.join(repoRoot, "skills", "bundled", "design-intelligence", "presentation.md");
-  const presentationModuleBytes = (await fs.stat(presentationModulePath)).size;
-  assert.ok(presentationModuleBytes <= 8 * 1024, `presentation.md exceeds 8 KiB (${presentationModuleBytes} bytes)`);
+  const artifactsModulePath = path.join(repoRoot, "skills", "bundled", "impeccable", "reference", "artifacts.md");
+  const artifactsModuleBytes = (await fs.stat(artifactsModulePath)).size;
+  assert.ok(artifactsModuleBytes <= 8 * 1024, `artifacts.md exceeds 8 KiB (${artifactsModuleBytes} bytes)`);
 
   const dispatchPlan = [];
   const promptSemanticContracts = [];

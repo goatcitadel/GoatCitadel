@@ -100,7 +100,7 @@ export interface ArtifactDesignQualityFinding {
 
 export interface ArtifactDesignQualityReport {
   /** Compatibility design-quality namespace; runtimeInstructions is the authoritative application receipt. */
-  skillId: "design-intelligence";
+  skillId: "impeccable";
   register: ArtifactDesignQualityRegister;
   lifecycle: ArtifactDesignQualityLifecycle;
   status: ArtifactDesignQualityStatus;
@@ -559,7 +559,7 @@ function buildValidationChecks(
       id: "design-skill-applied",
       label: "Governed design instruction application",
       status: plainDesign ? "skipped" : "planned",
-      detail: "Non-plain artifacts should disclose whether governed design-intelligence instructions were injected.",
+      detail: "Non-plain artifacts should disclose whether governed impeccable design instructions were injected.",
     },
     {
       id: "visible-placeholder-copy",
@@ -735,7 +735,7 @@ function buildArtifactDesignQualityReport(
   const hasWarningFinding = findings.length > 0;
   const missingRuntimeInstructions = override.runtimeInstructions?.status !== "injected";
   return {
-    skillId: "design-intelligence",
+    skillId: "impeccable",
     register,
     lifecycle: override.lifecycle ?? (skipped ? "Maintain" : "Polish"),
     status:
@@ -783,7 +783,7 @@ function buildArtifactDesignQualityValidationResults(
     "design-skill-applied": {
       status: runtimeInstructionsInjected ? "passed" : "warning",
       detail: runtimeInstructionsInjected
-        ? `Injected governed GoatCitadel design-intelligence instructions (${designQuality.register}, ${designQuality.lifecycle}); no external design runtime was invoked.`
+        ? `Injected governed impeccable design instructions (${designQuality.register}, ${designQuality.lifecycle}); no external design runtime was invoked.`
         : "Renderer design defaults ran, but no governed runtime design-instruction receipt was attached.",
     },
     "visible-placeholder-copy": validationStatusForFinding(
