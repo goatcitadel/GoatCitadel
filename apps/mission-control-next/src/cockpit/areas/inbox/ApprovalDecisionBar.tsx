@@ -15,14 +15,19 @@ import { Dialog } from "../../ui/Dialog";
 import { canResolveInboxApproval, matchesInboxApprovalDecision } from "./inbox-approval-guard";
 import { buildApprovalRequestReviewEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { ApprovalReviewSummary } from "./ApprovalReviewSummary";
-import { approvalDecisionMessage } from "./approval-settlement";
+import { approvalDecisionMessage, approvalResolutionLine } from "./approval-settlement";
 import { nullWhenMissing } from "./inbox-record-read";
 import {
   beginInboxApprovalAttempt,
   releaseInboxApprovalCheck,
+  releaseUncertainInboxApprovalAttempt,
+  settleUncertainInboxApprovalAttempt,
   updateInboxApprovalAttempt,
   useInboxApprovalAttempt,
 } from "./inbox-approval-attempts";
+
+const CHANGED_RECORD = "This approval changed or is no longer in the current pending queue. Refresh it before deciding.";
+const STILL_PENDING = "The approval is still pending and unchanged. Decide again when ready.";
 
 interface ApprovalDecisionBarProps {
   specialistEvidence?: SpecialistEvidence;
@@ -31,7 +36,11 @@ interface ApprovalDecisionBarProps {
   approval: ApprovalRequest;
   workspaceId: string;
   focusAction?: "approve" | "deny";
-  /** The record is being checked again: keep the controls (and any open dialog) but disable them. */
+  /**
+   * The owner record is being re-read in the background. Decisions stay available: every decision re-reads
+   * the pending record before dispatch, so a background refetch is not a reason to swallow the click.
+   * Owners may keep passing it; it no longer disables the controls.
+   */
   checking?: boolean;
   onResolved: (message: string) => void;
   onInvalidated: (message?: string) => void;
@@ -57,7 +66,6 @@ function ApprovalDecisionReview({
   approval,
   workspaceId,
   focusAction,
-  checking = false,
   onResolved,
   onInvalidated,
   activeWorkspaceId,
@@ -68,6 +76,8 @@ function ApprovalDecisionReview({
   const pending = attempt?.phase === "checking" || attempt?.phase === "submitted";
   const [denyOpen, setDenyOpen] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [rechecking, setRechecking] = useState(false);
   const current = useRef(true);
   const approveRef = useRef<HTMLSpanElement>(null);
   const denyRef = useRef<HTMLButtonElement>(null);
@@ -98,10 +108,15 @@ function ApprovalDecisionReview({
     if (focusAction === "deny") denyRef.current?.focus();
   }, [focusAction, approval.approvalId]);
 
+  function invalidateOwnerReads() {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
+    void queryClient.invalidateQueries({ queryKey: ["approvals", "record", workspaceId, approval.approvalId] });
+    void queryClient.invalidateQueries({ queryKey: ["approval-settlement", workspaceId, approval.approvalId] });
+  }
+
   async function decide(decision: "approve" | "reject") {
     if (
       !current.current || !access.current() ||
-      checking ||
       (!hasPreview && decision !== "reject") ||
       scopeChanged ||
       !canResolveInboxApproval(item, approval, approval, workspaceId, Date.now(), specialistReady || decision === "reject")
@@ -110,6 +125,7 @@ function ApprovalDecisionReview({
     const token = beginInboxApprovalAttempt(workspaceId, approval.approvalId);
     if (!token) return;
     setError("");
+    setNotice("");
     let mutationAttempted = false;
     let resolvedMessage: string | undefined;
     try {
@@ -119,7 +135,7 @@ function ApprovalDecisionReview({
       if (!current.current || !access.current()) return;
       const record = latest ?? undefined;
       if (!canResolveInboxApproval(item, approval, record, workspaceId, Date.now(), specialistReady || decision === "reject")) {
-        setError("This approval changed or is no longer in the current pending queue. Refresh it before deciding.");
+        setError(CHANGED_RECORD);
         onInvalidated();
         return;
       }
@@ -153,7 +169,7 @@ function ApprovalDecisionReview({
           approval.approvalId,
           token,
           "uncertain",
-          "Decision outcome is uncertain. Open Approvals to inspect the current record before taking another action.",
+          "Decision outcome is uncertain. Check again to read the current record before taking another action.",
         );
         if (current.current) setDenyOpen(false);
       } else if (current.current) {
@@ -167,9 +183,44 @@ function ApprovalDecisionReview({
         setDenyOpen(false);
         onResolved(resolvedMessage);
       }
-      void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
-      void queryClient.invalidateQueries({ queryKey: ["approvals", "record", workspaceId, approval.approvalId] });
-      void queryClient.invalidateQueries({ queryKey: ["approval-settlement", workspaceId, approval.approvalId] });
+      invalidateOwnerReads();
+    }
+  }
+
+  /**
+   * After an uncertain outcome, read the owner record again. Still pending means the earlier dispatch did not
+   * settle it, so the lock is released (an unchanged record can be decided again; a changed one goes back to
+   * review). A settled record keeps the lock and shows the Gateway's recorded outcome. Nothing is dispatched.
+   */
+  async function checkAgain() {
+    if (!current.current || !access.current() || attempt?.phase !== "uncertain" || rechecking) return;
+    setRechecking(true);
+    setError("");
+    setNotice("");
+    try {
+      const latest = await nullWhenMissing(fetchApproval(approval.approvalId, { workspaceId }));
+      if (!current.current || !access.current()) return;
+      if (latest?.status === "pending") {
+        releaseUncertainInboxApprovalAttempt(workspaceId, approval.approvalId);
+        if (canResolveInboxApproval(item, approval, latest, workspaceId, Date.now(), true)) {
+          setNotice(STILL_PENDING);
+        } else {
+          setError(CHANGED_RECORD);
+          onInvalidated();
+        }
+        return;
+      }
+      if (latest) {
+        settleUncertainInboxApprovalAttempt(workspaceId, approval.approvalId, approvalDecisionMessage(latest));
+        invalidateOwnerReads();
+        return;
+      }
+      setError(CHANGED_RECORD);
+      onInvalidated();
+    } catch (cause) {
+      if (current.current) setError(`Could not check the current approval. ${describeApiError(cause).summary}`);
+    } finally {
+      if (current.current) setRechecking(false);
     }
   }
 
@@ -179,13 +230,16 @@ function ApprovalDecisionReview({
         The selected workspace changed. Open this item again in the current Inbox.
       </p>
     );
-  if (approval.status !== "pending")
+  if (approval.status !== "pending") {
+    const resolution = approvalResolutionLine(approval);
     return (
       <section aria-label="Recorded approval decision" className="space-y-2">
         <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} />
         <p role="status">{approvalDecisionMessage(approval)}</p>
+        {resolution ? <p className="text-fg-secondary">{resolution}</p> : null}
       </section>
     );
+  }
   if (approval.mcpElicitation)
     return (
       <>
@@ -218,7 +272,7 @@ function ApprovalDecisionReview({
             }}
             reviewedApproval={approval}
             specialistReview={specialistReady && specialistEvidence ? <SpecialistApprovalReview approval={approval} evidence={specialistEvidence} /> : undefined}
-            pending={Boolean(attempt) || checking || (specializedReview && !specialistReady)}
+            pending={Boolean(attempt) || (specializedReview && !specialistReady)}
             onApprove={() => void decide("approve")}
           />
         </span>
@@ -227,7 +281,7 @@ function ApprovalDecisionReview({
           type="button"
           size="sm"
           variant="danger"
-          disabled={Boolean(attempt) || checking}
+          disabled={Boolean(attempt)}
           onClick={() => setDenyOpen(true)}
         >
           Deny
@@ -236,6 +290,16 @@ function ApprovalDecisionReview({
       {attempt ? (
         <p role={attempt.phase === "uncertain" ? "alert" : "status"} className="text-fg-muted">
           {attempt.message}
+        </p>
+      ) : null}
+      {attempt?.phase === "uncertain" ? (
+        <Button type="button" size="sm" disabled={rechecking} onClick={() => void checkAgain()}>
+          Check again
+        </Button>
+      ) : null}
+      {notice ? (
+        <p role="status" className="text-fg-muted">
+          {notice}
         </p>
       ) : null}
       {error ? (
@@ -263,7 +327,7 @@ function ApprovalDecisionReview({
         description="The pending action will not be authorized by this decision."
       >
         <div className="flex gap-2">
-          <Button variant="danger" disabled={Boolean(attempt) || checking} onClick={() => void decide("reject")}>
+          <Button variant="danger" disabled={Boolean(attempt)} onClick={() => void decide("reject")}>
             Confirm deny
           </Button>
           <Button disabled={pending} onClick={() => setDenyOpen(false)}>
