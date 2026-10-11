@@ -17,13 +17,9 @@ import { ChatTextComposer } from "./ChatTextComposer";
 import { ChatInspector } from "./ChatInspector";
 import { chatSelectionHref } from "./chat-selection-evidence";
 import { readCockpitHistory } from "../../app/cockpit-history";
-import { resolveCockpitCompatibility } from "../../app/cockpit-compatibility";
 import { ThreadList } from "./ThreadList";
 import { useInspector } from "../../app/inspector";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
-import { buildClassicOwnerUrl } from "../../../app/classic-owner-url";
-import { useShellHandoff } from "../../../app/use-shell-handoff";
-import { ShellSwitchFeedback } from "../../app/use-cockpit-shell-switch";
 import { ChatOwnerNavigationBoundary } from "./ChatOwnerNavigationBoundary";
 import { useChatOwnerNavigation } from "./use-chat-owner-navigation";
 import { ThreadedBtwSideChatPanel } from "../../../features/threaded-surface/ThreadedBtwSideChatPanel";
@@ -59,10 +55,8 @@ export function ChatArea({
   const { navigate, search } = useCockpitRoute();
 
   const conversationNavigation = useChatOwnerNavigation(activeWorkspaceId ?? "default", activeCitadelId);
-  const handoff = useShellHandoff([activeCitadelId, activeWorkspaceId]);
   return (
     <div className="cockpit-chat-host flex min-h-0 min-w-0 flex-1 flex-col">
-      <ShellSwitchFeedback owner={handoff} />
       <MissionThreadedControllerHost
         workspaceId={activeWorkspaceId ?? "default"}
         surface="chat"
@@ -86,11 +80,8 @@ export function ChatArea({
         onOpenLocalAiSettings={() => navigate("/settings/models?shell=cockpit#local-ai")}
         onOpenLibraryArtifacts={() => navigate("/library/artifacts?shell=cockpit")}
         onOpenLibraryImports={() => navigate("/library/knowledge?shell=cockpit#external-sources")}
-        onOpenOpsRuntime={() => {
-          const target = resolveCockpitCompatibility("/ops/runtime");
-          if (target.kind === "native") navigate(target.href);
-          else if (target.kind === "classic") handoff.request("classic", { href: buildClassicOwnerUrl(target.href) });
-        }}
+        // System › Health owns runtime status natively, so Chat no longer needs a Classic handoff here.
+        onOpenOpsRuntime={() => navigate("/system?shell=cockpit")}
         renderSurface={(input: MissionThreadedRenderSurfaceInput) => (
           <ChatOwnerNavigationBoundary input={input} owner={conversationNavigation}>
             {(reviewedInput) => (
