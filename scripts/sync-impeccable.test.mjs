@@ -132,6 +132,15 @@ const REFERENCES = {
     "",
     "Write the answer to `.impeccable/config.json` as buildPath.",
     "",
+    "## Step 5: Record workflow defaults",
+    "",
+    "Then configure live mode when useful. Otherwise follow [live.md](live.md)'s first-time setup.",
+    "",
+    "## Step 6: Wrap up or resume",
+    "",
+    "- Empty or early project: use `/impeccable shape <surface>` when the user wants a brief.",
+    "- Web project ready for visual iteration: `/impeccable live` when configured.",
+    "",
   ].join("\n"),
   polish: [
     "# Polish",
@@ -142,11 +151,15 @@ const REFERENCES = {
     '{{scripts_path}}/impeccable critique-storage latest "<resolved target>" --json',
     "```",
     "",
+    "Exit 0 returns JSON with the latest snapshot's `body` and an exact `snapshot_file` identity. Retain `snapshot_file` until the end of the pass.",
+    "",
     "Follow the quality guidance supplied by `impeccable context` and hooks, then run any other relevant QA commands. Context requests a manual scan only when no automatic detector is active; never add another detector pass. Fix real defects first.",
     "",
   ].join("\n"),
   audit: [
     "# Audit",
+    "",
+    "Run the bundled detector and verify each finding in context. Look for repeated shortcuts.",
     "",
     "- **Suggested command**: Which command to use (prefer: {{available_commands}})",
     "",
@@ -160,6 +173,10 @@ const REFERENCES = {
   typeset: [
     "# Typeset",
     "",
+    "- **Native:** follow [ios.md](ios.md) or [android.md](android.md), including platform scaling.",
+    "",
+    "## Apply",
+    "",
     "Run the detector scoped to type:",
     "",
     "```bash",
@@ -167,6 +184,16 @@ const REFERENCES = {
     "```",
     "",
     "Then fix.",
+    "",
+    "## Live-mode signature params",
+    "",
+    "Every variant declares a coarse `scale` parameter.",
+    "",
+    "```json",
+    '{"id":"scale","kind":"range"}',
+    "```",
+    "",
+    "Follow [live.md](live.md)'s parameter contract.",
     "",
   ].join("\n"),
   harden: "# Harden\r\n\r\nTrailing spaces here.   \r\nAnd here.\t\r\n",
@@ -210,6 +237,8 @@ function oversizeDocument() {
     "## Step 6: Verify",
     "",
     filler("Verify"),
+    "",
+    'Tell the user: "Re-run `/impeccable document` once you have some code. That pass will extract real tokens and generate the sidecar."',
     "",
   ].join("\n");
 }
@@ -449,6 +478,38 @@ test("drops the document sidecar section and splits oversize references by H2 wi
   assert.ok(!part2.includes("Regenerate the sidecar"));
   assert.ok(part2.includes("### Step 5: Report"));
   assert.ok(part2.includes("Tell the user what was written."));
+});
+
+test("drops live-mode sections, native lines, unavailable-command bullets, launcher artifact prose, and converts slash commands", () => {
+  const outDir = makeOut();
+  runSync(makeUpstream(), outDir);
+  const typeset = read(outDir, "reference/typeset.md");
+  assert.ok(!typeset.includes("Live-mode"));
+  assert.ok(!typeset.includes("live.md"));
+  assert.ok(!typeset.includes("Native:"));
+  assert.ok(!typeset.includes("ios.md"));
+  assert.ok(typeset.includes("## Apply"));
+  const init = read(outDir, "reference/init.md");
+  assert.ok(!init.includes("Step 5: Record workflow defaults"));
+  assert.ok(!init.includes("configure live mode"));
+  assert.ok(init.includes("## Step 6: Wrap up or resume"));
+  assert.ok(init.includes("use `@skill impeccable shape <surface>` when the user wants a brief."));
+  assert.ok(!init.includes("impeccable live"));
+  const polish = read(outDir, "reference/polish.md");
+  assert.ok(!polish.includes("snapshot_file"));
+  assert.ok(!polish.includes("Exit 0 returns JSON"));
+  const audit = read(outDir, "reference/audit.md");
+  assert.ok(
+    audit.includes(
+      "Review any design advisories the runtime attached and verify each finding in context. Look for repeated shortcuts.",
+    ),
+  );
+  assert.ok(!audit.includes("bundled detector"));
+  const part3 = read(outDir, "reference/document/03-step-6-verify.md");
+  assert.ok(
+    part3.includes('Re-run `@skill impeccable document` once you have some code. That pass will extract real tokens."'),
+  );
+  assert.ok(!part3.includes("generate the sidecar"));
 });
 
 test("normalizes line endings and trailing whitespace", () => {

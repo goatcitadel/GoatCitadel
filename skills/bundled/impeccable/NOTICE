@@ -1,0 +1,23 @@
+NOTICE
+
+This directory vendors prose from impeccable (https://github.com/pbakaus/impeccable), copyright its contributors, licensed under the Apache License, Version 2.0 (see the LICENSE file in this directory). Vendored at commit c63b8dd7dd5a5f3c32eaabe1af76d0694f863ed2.
+
+The vendored files were modified for the GoatCitadel runtime: the launcher, hooks, live mode, doctor, pin shortcuts, and native-platform references were removed, upstream placeholders were resolved, oversize references were split by section, and the SKILL.md Setup section now reads the workspace design context. UPSTREAM.md lists every file, hash, exclusion, and transform.
+
+The following files are GoatCitadel-authored and are not part of impeccable:
+
+- reference/artifacts.md
+
+Upstream's own third-party notice follows; it covers upstream files that are not vendored here.
+
+# Third-Party Notices
+
+This project includes content derived from third-party work, used under the terms of its original license.
+
+## Platform Design Skills
+
+The `skill/reference/ios.md` and `skill/reference/android.md` platform reference files are distilled from ehmo's `platform-design-skills` (Apple Human Interface Guidelines and Material Design 3 rules), rewritten in Impeccable's voice.
+
+**Original work:** https://github.com/ehmo/platform-design-skills
+**Original license:** MIT
+**Author:** ehmo

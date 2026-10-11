@@ -124,7 +124,16 @@ const GOATCITADEL_SETUP = [
 
 /** Lines that invoke the upstream launcher or its working directory; dropped wherever they survive the targeted rewrites. */
 const LAUNCHER_LINE =
-  /\{\{scripts_path\}\}|\bimpeccable (?:detect|context|pin|hooks|doctor|critique-storage|concept-seed|surface-brief|build-phase|component-review|comp-spec|live-server)\b|\bnpx impeccable\b|~\/\.impeccable|\.impeccable\//u;
+  /\{\{scripts_path\}\}|\bimpeccable (?:detect|context|pin|hooks|doctor|critique-storage|concept-seed|surface-brief|build-phase|component-review|comp-spec|live-server)\b|\bnpx impeccable\b|~\/\.impeccable|\.impeccable\/|\bsnapshot_file\b/u;
+
+/** Lines that invoke a command this vendored build does not carry. */
+const UNAVAILABLE_COMMAND_LINE = /`(?:\/|@skill )?impeccable (?:live|generate|critique|craft)\b/u;
+
+/** Lines that route to the excluded native-platform references. */
+const NATIVE_REFERENCE_LINE = /\b(?:ios|android)\.md\b|\b(?:audit|adapt)\.native\.md\b/u;
+
+/** Sections, at any heading level, that only make sense in upstream's live browser mode. */
+const LIVE_MODE_SECTION = /^#{2,6} .*\blive[- ]mode\b/iu;
 
 const FORBIDDEN_PATTERNS = Object.freeze([
   { label: "{{", re: /\{\{[^}\n]*\}?\}?/giu },
@@ -176,10 +185,23 @@ const REFERENCE_REPLACEMENTS = {
       replace: "Follow the quality guidance in the project design context, then run any other relevant QA commands.",
     },
   ],
+  audit: [
+    {
+      find: "Run the bundled detector and verify each finding in context.",
+      replace: "Review any design advisories the runtime attached and verify each finding in context.",
+    },
+  ],
+  document: [
+    {
+      find: "That pass will extract real tokens and generate the sidecar.",
+      replace: "That pass will extract real tokens.",
+    },
+  ],
 };
 
 const REFERENCE_SECTION_DROPS = {
   document: [/^### Step 4b: Write \.impeccable\/design\.json sidecar/u],
+  init: [/^## Step 5: Record workflow defaults/u],
 };
 
 const SKILL_PARAGRAPH_DROPS = ["**Never repair drift", "- **Workflow or command-selection question:**"];
@@ -192,10 +214,11 @@ export const TRANSFORMS_APPLIED = Object.freeze([
   "SKILL.md Commands table: craft, critique, live, and generate rows removed; native-platform suffixes removed; an availability note added.",
   "Pin, Hooks, Doctor, drift-repair, and post-init launcher paragraphs removed.",
   "Mode references: the concept-seed clause becomes plain prose.",
-  "init.md: the PRODUCT.md path sentence points at the workspace context; polish.md: the launcher context sentence is rewritten.",
+  "init.md: the PRODUCT.md path sentence points at the workspace context and the live-mode workflow-defaults step is removed; polish.md: the launcher context sentence is rewritten; audit.md: the bundled-detector sentence points at runtime design advisories; document.md: the sidecar mention in the seed-mode wrap-up is removed.",
   "document.md: the .impeccable/design.json sidecar section is removed.",
-  "Fenced code blocks that only invoke the launcher are removed together with a lead-in line ending in a colon; any other line invoking the launcher or an .impeccable/ path is removed.",
-  "Placeholders: {{command_prefix}} becomes `@skill impeccable`, {{ask_instruction}} becomes the user_input.request phrasing, {{available_commands}} becomes the vendored command list.",
+  "Sections about live mode are removed at any heading level.",
+  "Fenced code blocks that only invoke the launcher are removed together with a lead-in line ending in a colon; any other line invoking the launcher, a launcher artifact such as snapshot_file, an .impeccable/ path, a native-platform reference, or an unavailable command (live, generate, critique, craft) is removed.",
+  "Placeholders: {{command_prefix}} becomes `@skill impeccable`, upstream `/impeccable <command>` syntax becomes `@skill impeccable <command>`, {{ask_instruction}} becomes the user_input.request phrasing, {{available_commands}} becomes the vendored command list.",
   "Links to references that are not vendored become plain text marked as not vendored.",
   "Line endings normalized to LF, trailing whitespace trimmed, runs of blank lines collapsed, single trailing newline.",
   "References over 20 KiB are split by H2 heading into reference/<name>/NN-<slug>.md with reference/<name>.md as the index.",
@@ -344,8 +367,32 @@ function dropLauncherLines(text) {
       out.push(line);
       continue;
     }
-    if (!inFence && LAUNCHER_LINE.test(line)) continue;
+    if (
+      !inFence &&
+      (LAUNCHER_LINE.test(line) || UNAVAILABLE_COMMAND_LINE.test(line) || NATIVE_REFERENCE_LINE.test(line))
+    ) {
+      continue;
+    }
     out.push(line);
+  }
+  return out.join("\n");
+}
+
+/** Drop every section whose heading matches `pattern`, at any level, fence-aware. Nothing is required to match. */
+function dropSectionsMatching(text, pattern) {
+  const lines = text.split("\n");
+  const out = [];
+  let inFence = false;
+  let droppingLevel = 0;
+  for (const line of lines) {
+    if (isFence(line)) inFence = !inFence;
+    const level = inFence ? 0 : headingLevel(line);
+    if (droppingLevel > 0 && level > 0 && level <= droppingLevel) droppingLevel = 0;
+    if (droppingLevel === 0 && level > 0 && pattern.test(line)) {
+      droppingLevel = level;
+      continue;
+    }
+    if (droppingLevel === 0) out.push(line);
   }
   return out.join("\n");
 }
@@ -359,7 +406,8 @@ function resolvePlaceholders(text) {
     .split("{{ask_instruction}}")
     .join(ASK_INSTRUCTION)
     .split("{{available_commands}}")
-    .join(COMMAND_REFERENCES.join(", "));
+    .join(COMMAND_REFERENCES.join(", "))
+    .replace(/\/impeccable (?=[a-z-])/gu, "@skill impeccable ");
 }
 
 function rewriteLinks(text) {
@@ -418,7 +466,8 @@ function modificationNotice(sha) {
 // ---------------------------------------------------------------------------
 
 function finishProse(text) {
-  let out = dropLauncherFences(text);
+  let out = dropSectionsMatching(text, LIVE_MODE_SECTION);
+  out = dropLauncherFences(out);
   out = dropLauncherLines(out);
   out = resolvePlaceholders(out);
   out = rewriteLinks(out);
