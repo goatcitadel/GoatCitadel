@@ -189,17 +189,7 @@ export function buildChatComposerPaletteSources(input: BuildSourcesInput): Compo
       load: () =>
         input.installedSkills
           .filter((skill) => skill.state === "enabled" && skill.callable === true)
-          .map((skill) => ({
-            key: `skill-${skill.skillId}`,
-            command: `$${skill.skillId}`,
-            description: skill.name,
-            applyValue: `$${skill.skillId}`,
-            source: "skills",
-            sourceLabel: "Callable skill",
-            availabilityLabel: skill.trustLabel ?? "Callable",
-            action: { type: "insert_command", value: `$${skill.skillId}` },
-            keywords: [skill.name, ...(skill.tags ?? []), ...skill.keywords],
-          })),
+          .flatMap((skill) => [skillMentionItem(skill), ...skillCommandItems(skill)]),
     },
     {
       id: "projects",
@@ -433,6 +423,41 @@ export function useChatComposerPaletteController(
   }, [input.active, input.enabled, input.mode, input.query, input.sessionKey, input.workspaceId, registry]);
 
   return state;
+}
+
+function skillMentionItem(skill: SkillListItem): ComposerPaletteItem {
+  return {
+    key: `skill-${skill.skillId}`,
+    command: `$${skill.skillId}`,
+    description: skill.name,
+    applyValue: `$${skill.skillId}`,
+    source: "skills",
+    sourceLabel: "Callable skill",
+    availabilityLabel: skill.trustLabel ?? "Callable",
+    action: { type: "insert_command", value: `$${skill.skillId}` },
+    keywords: [skill.name, ...(skill.tags ?? []), ...skill.keywords],
+  };
+}
+
+/**
+ * A skill's routed commands are offered as explicit `@skill <name> <command>` mentions: the gateway
+ * resolves the mention through the callable catalog and routes the matching skill module.
+ */
+function skillCommandItems(skill: SkillListItem): ComposerPaletteItem[] {
+  return (skill.routingHints?.commands ?? []).map((command) => {
+    const mention = `@skill ${skill.name} ${command.name} `;
+    return {
+      key: `skill-${skill.skillId}-command-${command.name}`,
+      command: `/${skill.name} ${command.name}`,
+      description: command.summary,
+      applyValue: mention,
+      source: "skills",
+      sourceLabel: "Skill command",
+      availabilityLabel: skill.trustLabel ?? "Callable",
+      action: { type: "insert_command", value: mention },
+      keywords: [skill.name, command.name, `${skill.name} ${command.name}`],
+    };
+  });
 }
 
 function describeProviderAvailability(provider: ChatModelProviderOption): string {
