@@ -3435,7 +3435,7 @@ describe("LlmService", () => {
     expect(payloadBody?.text).toEqual({ verbosity: "low" });
   });
 
-  it("uses the Codex Responses Lite envelope for GPT-5.6 subscription tools", async () => {
+  it.each(["gpt-5.6-sol", "gpt-6.1-sol"])("uses the Codex Responses Lite envelope for %s subscription tools", async (model) => {
     const secretStore = createTrackedSecretStore({
       "provider:openai-codex:oauth": JSON.stringify({
         accessToken: "codex-access-token",
@@ -3471,7 +3471,7 @@ describe("LlmService", () => {
     try {
       const completion = await service.chatCompletions({
         providerId: "openai-codex",
-        model: "openai-codex/gpt-5.6-sol",
+        model: `openai-codex/${model}`,
         service_tier: "fast",
         messages: [
           { role: "developer", content: "Use the supplied tool." },
@@ -3502,7 +3502,7 @@ describe("LlmService", () => {
       const streamChunks: Array<Record<string, unknown>> = [];
       for await (const chunk of service.chatCompletionsStream({
         providerId: "openai-codex",
-        model: "openai-codex/gpt-5.6-sol",
+        model: `openai-codex/${model}`,
         service_tier: "fast",
         messages: [
           { role: "developer", content: "Use the supplied tool." },
@@ -3545,7 +3545,7 @@ describe("LlmService", () => {
     expect(payloadBody?.instructions).toBeUndefined();
     expect(payloadBody?.tools).toBeUndefined();
     expect(payloadBody).toMatchObject({
-      model: "gpt-5.6-sol",
+      model,
       service_tier: "priority",
       tool_choice: "auto",
       parallel_tool_calls: false,
@@ -3570,7 +3570,7 @@ describe("LlmService", () => {
     });
   });
 
-  it("allows bounded Codex Responses Lite streams with more than 2048 reasoning events", async () => {
+  it.each(["gpt-5.6-sol", "gpt-6.1-sol"])("allows bounded Codex Responses Lite streams with more than 2048 reasoning events", async (model) => {
     const secretStore = createTrackedSecretStore({
       "provider:openai-codex:oauth": JSON.stringify({
         accessToken: "codex-access-token",
@@ -3604,7 +3604,7 @@ describe("LlmService", () => {
       const chunks: Array<Record<string, unknown>> = [];
       for await (const chunk of service.chatCompletionsStream({
         providerId: "openai-codex",
-        model: "openai-codex/gpt-5.6-sol",
+        model: `openai-codex/${model}`,
         messages: [{ role: "user", content: "Research a complex topic." }],
       })) {
         chunks.push(chunk);
@@ -3618,7 +3618,7 @@ describe("LlmService", () => {
     }
   });
 
-  it("collects bounded Codex Responses Lite streams with more than 2048 reasoning events", async () => {
+  it.each(["gpt-5.6-sol", "gpt-6.1-sol"])("collects bounded Codex Responses Lite streams with more than 2048 reasoning events", async (model) => {
     const secretStore = createTrackedSecretStore({
       "provider:openai-codex:oauth": JSON.stringify({
         accessToken: "codex-access-token",
@@ -3651,7 +3651,7 @@ describe("LlmService", () => {
     try {
       const completion = await service.chatCompletions({
         providerId: "openai-codex",
-        model: "openai-codex/gpt-5.6-sol",
+        model: `openai-codex/${model}`,
         messages: [{ role: "user", content: "Research a complex topic." }],
       });
 

@@ -5151,7 +5151,7 @@ function usesOpenAICodexResponsesLite(
 ): boolean {
   return (
     isOpenAICodexResponsesProvider(provider) &&
-    /^gpt-(?:5\.6-(?:sol|terra|luna)|6-(?:astra|sol|luna))$/iu.test(model.trim())
+    /^gpt-(?:5\.6-(?:sol|terra|luna)|6-(?:astra|sol|luna)|6\.1-sol)$/iu.test(model.trim())
   );
 }
 
