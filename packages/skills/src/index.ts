@@ -6,6 +6,7 @@ export * from "./activation.js";
 export * from "./selection-ranking.js";
 export * from "./loader.js";
 export * from "./routing-hints.generated.js";
+export * from "./skill-module-routes.js";
 export * from "./export-renderer.js";
 export * from "./design-quality.js";
 export * from "./bundled-skill-lock.generated.js";

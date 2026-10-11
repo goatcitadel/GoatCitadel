@@ -40,6 +40,13 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
     totalBytes: 22840,
   },
   {
+    skillId: "bundled:impeccable",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "3ffe5fd47f563220f2950b3932a0cf2c06b986ca1791847b190894faee0d145a",
+    fileCount: 30,
+    totalBytes: 195723,
+  },
+  {
     skillId: "bundled:mcp-vetter",
     manifestVersion: "goatcitadel.skill-tree.v1",
     treeSha256: "679fb12a228d031ae86fec90236045d525ec3fb46e32c274223b578e74015c94",

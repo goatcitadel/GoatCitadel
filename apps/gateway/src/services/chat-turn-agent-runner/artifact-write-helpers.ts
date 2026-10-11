@@ -107,7 +107,7 @@ export function buildSyntheticPresentationCreateArgs(
     slides: brief.sections,
     design: {
       mode: "polished",
-      skillId: "design-intelligence",
+      skillId: "impeccable",
     },
   };
 }
@@ -313,7 +313,7 @@ function inferDocumentDesignRequest(format: string): Record<string, unknown> {
   }
   return {
     mode: "polished",
-    skillId: "design-intelligence",
+    skillId: "impeccable",
   };
 }
 

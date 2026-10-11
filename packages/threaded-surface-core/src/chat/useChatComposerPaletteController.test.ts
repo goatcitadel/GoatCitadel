@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { applyComposerSuggestion } from "./useChatComposerInteractions";
 import { buildChatComposerPaletteSources } from "./useChatComposerPaletteController";
 
 describe("chat composer palette sources", () => {
@@ -60,4 +61,72 @@ describe("chat composer palette sources", () => {
     expect(files.map((item) => item.key)).toEqual(["file-docs/brief.md"]);
     expect(loadFiles).toHaveBeenCalledWith(".", 250, { workspaceId: "workspace-1" });
   });
+
+  it("offers a callable skill's routed commands as explicit @skill mentions", async () => {
+    const skills = await loadSkillItems(impeccableSkill({ callable: true }));
+
+    expect(skills.map((item) => item.key)).toEqual([
+      "skill-bundled:impeccable",
+      "skill-bundled:impeccable-command-polish",
+    ]);
+    expect(skills[1]).toMatchObject({
+      command: "/impeccable polish",
+      description: "Final quality pass before shipping",
+      applyValue: "$bundled:impeccable polish",
+      source: "skills",
+      action: { type: "insert_command", value: "$bundled:impeccable polish" },
+    });
+  });
+
+  it("inserts a command item without discarding the operator's draft", async () => {
+    const skills = await loadSkillItems(impeccableSkill({ callable: true }));
+    const action = skills[1]!.action;
+    const value = action.type === "insert_command" ? action.value : "";
+
+    expect(applyComposerSuggestion("Polish this hero $imp", value)).toBe(
+      "Polish this hero $bundled:impeccable polish ",
+    );
+  });
+
+  it("offers no command items for a skill that is not callable", async () => {
+    const skills = await loadSkillItems(impeccableSkill({ callable: false }));
+
+    expect(skills).toEqual([]);
+  });
 });
+
+function impeccableSkill(input: { callable: boolean }) {
+  return {
+    skillId: "bundled:impeccable",
+    name: "impeccable",
+    state: "enabled",
+    callable: input.callable,
+    tags: [],
+    keywords: [],
+    routingHints: {
+      phrases: [],
+      keywords: [],
+      surfaces: ["chat"],
+      whenToUse: [],
+      whenNotToUse: [],
+      commands: [{ name: "polish", summary: "Final quality pass before shipping" }],
+    },
+  };
+}
+
+async function loadSkillItems(skill: ReturnType<typeof impeccableSkill>) {
+  const sources = buildChatComposerPaletteSources({
+    commandCatalog: [],
+    inlineCommandSuggestions: [],
+    providerOptions: [],
+    agents: [],
+    installedSkills: [skill] as never,
+    projects: [],
+    knowledgeAttachments: [],
+    externalSourcesAvailable: false,
+    typedRunVariablesEnabled: false,
+  });
+  return sources
+    .find((source) => source.id === "skills")!
+    .load({ sessionKey: "session-1", workspaceId: "workspace-1" });
+}

@@ -97,9 +97,9 @@ export async function runAsyncGatewayPostgresProof(context, correlationId, optio
     };
   }
 
-  const presentationModulePath = path.join(repoRoot, "skills", "bundled", "design-intelligence", "presentation.md");
-  const presentationModuleBytes = (await fs.stat(presentationModulePath)).size;
-  assert.ok(presentationModuleBytes <= 8 * 1024, `presentation.md exceeds 8 KiB (${presentationModuleBytes} bytes)`);
+  const artifactsModulePath = path.join(repoRoot, "skills", "bundled", "impeccable", "reference", "artifacts.md");
+  const artifactsModuleBytes = (await fs.stat(artifactsModulePath)).size;
+  assert.ok(artifactsModuleBytes <= 8 * 1024, `artifacts.md exceeds 8 KiB (${artifactsModuleBytes} bytes)`);
 
   const metricsPath = path.join(context.artifactRoot, "perf", "async-gateway-event-loop.json");
   const violationsPath = path.join(context.artifactRoot, "diagnostics", "async-gateway-atomics-wait.json");
@@ -232,7 +232,7 @@ export async function runAsyncGatewayPostgresProof(context, correlationId, optio
       tasks: RESEARCH_ARTIFACT_TASK_COUNT,
       checkpointTaskIndex: CHECKPOINT_TASK_INDEX,
       checkpointDurationMs: checkpointResult.durationMs,
-      presentationModuleBytes,
+      artifactsModuleBytes,
       providerDispatches: stub.dispatchPlanDispatches(),
       firecrawlRequests: firecrawlStub.requests(),
       eventLoop: metricEvaluation.metrics,

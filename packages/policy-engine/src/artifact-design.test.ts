@@ -93,7 +93,7 @@ describe("artifact design brief selection", () => {
           status: "injected",
           skills: [
             {
-              skillId: "bundled:design-intelligence",
+              skillId: "bundled:impeccable",
               treeSha256: "1".repeat(64),
               instructionSha256: "2".repeat(64),
               modules: ["main", "enforcement", "layout", "taste", "assets", "audit"],
@@ -110,7 +110,7 @@ describe("artifact design brief selection", () => {
     expect(report.validation.find((check) => check.id === "design-skill-applied")?.status).toBe("passed");
     expect(report.validation.find((check) => check.id === "artifact-audit")?.status).toBe("passed");
     expect(report.designQuality).toMatchObject({
-      skillId: "design-intelligence",
+      skillId: "impeccable",
       register: "brand/marketing",
       lifecycle: "Polish",
       status: "applied",
@@ -124,7 +124,7 @@ describe("artifact design brief selection", () => {
       kind: "presentation",
       format: "pptx",
       title: "Quarterly Pitch",
-      design: { skillId: "design-intelligence" },
+      design: { skillId: "impeccable" },
     });
     const report = buildArtifactDesignReport(plan, { localPath: "deck.pptx" });
 
@@ -169,7 +169,7 @@ describe("artifact design brief selection", () => {
     const report = buildArtifactDesignReport(plan, { localPath: "out.csv" });
 
     expect(report.designQuality).toMatchObject({
-      skillId: "design-intelligence",
+      skillId: "impeccable",
       register: "data/plain",
       status: "skipped",
       retryAttempted: false,

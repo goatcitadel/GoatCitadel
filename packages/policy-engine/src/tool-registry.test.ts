@@ -201,7 +201,7 @@ describe("tool registry", () => {
         },
         design: {
           properties: {
-            skillId: { enum: ["design-intelligence"] },
+            skillId: { enum: ["impeccable"] },
           },
         },
       },
@@ -227,7 +227,7 @@ describe("tool registry", () => {
       properties: {
         design: {
           properties: {
-            skillId: { enum: ["design-intelligence"] },
+            skillId: { enum: ["impeccable"] },
           },
         },
       },

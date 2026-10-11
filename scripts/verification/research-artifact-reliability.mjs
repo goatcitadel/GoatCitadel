@@ -96,9 +96,9 @@ export async function main() {
 }
 
 export async function runThreeTaskReplay(context, correlationId) {
-  const presentationModulePath = path.join(repoRoot, "skills", "bundled", "design-intelligence", "presentation.md");
-  const presentationModuleBytes = (await fs.stat(presentationModulePath)).size;
-  assert.ok(presentationModuleBytes <= 8 * 1024, `presentation.md exceeds 8 KiB (${presentationModuleBytes} bytes)`);
+  const artifactsModulePath = path.join(repoRoot, "skills", "bundled", "impeccable", "reference", "artifacts.md");
+  const artifactsModuleBytes = (await fs.stat(artifactsModulePath)).size;
+  assert.ok(artifactsModuleBytes <= 8 * 1024, `artifacts.md exceeds 8 KiB (${artifactsModuleBytes} bytes)`);
 
   const dispatchPlan = [];
   const promptSemanticContracts = [];
@@ -230,7 +230,7 @@ export async function runThreeTaskReplay(context, correlationId) {
       schemaVersion: 1,
       prompt: PROMPT,
       taskCount: TASK_COUNT,
-      presentationModuleBytes,
+      artifactsModuleBytes,
       providerDispatches: stub.dispatchPlanDispatches(),
       imageGenerationDispatches: stub.imageGenerationDispatches(),
       firecrawlRequests: firecrawlStub.requests(),
@@ -255,7 +255,7 @@ export async function runThreeTaskReplay(context, correlationId) {
         firecrawlRequests: firecrawlStub.requests().length,
         firecrawlGapRequests: firecrawlGapRequests.length,
         promptSemanticContractsPassed: promptSemanticContracts.filter((report) => report.passed).length,
-        presentationModuleBytes,
+        artifactsModuleBytes,
         maximumFirstProviderInputTokens: Math.max(...results.map((result) => result.firstProviderInputTokens)),
         maximumPromptContextEstimatedTokens: Math.max(...results.map((result) => result.promptContextEstimatedTokens)),
         capabilityMode: "live_catalog",

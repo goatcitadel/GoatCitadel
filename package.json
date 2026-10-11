@@ -65,7 +65,7 @@
     "verify:repo:hygiene": "node scripts/run-with-worktree-output-lock.mjs --label=verify:repo:hygiene:build -- pnpm exec tsc -b apps/gateway/tsconfig.json apps/remote-worker/tsconfig.json packages/policy-engine/tsconfig.json && node scripts/run-script-tests.mjs --suite=hygiene && node scripts/verify-repo-hygiene.mjs && node scripts/verify-supply-chain-posture.mjs",
     "verify:supply-chain": "node --test scripts/verify-supply-chain-posture.test.mjs && node scripts/verify-supply-chain-posture.mjs",
     "verify:design:quality": "pnpm tsx scripts/verify-design-quality.ts",
-    "verify:skills:catalog": "node scripts/check-skill-catalog.mjs && pnpm tsx scripts/bundled-skill-lock.ts --check",
+    "verify:skills:catalog": "node --test scripts/sync-impeccable.test.mjs && node scripts/check-skill-catalog.mjs && pnpm tsx scripts/bundled-skill-lock.ts --check",
     "verify:workflows": "node scripts/verify-workflows.mjs",
     "verify:bundled-postgres:restart": "node scripts/verify-bundled-postgres-restart.mjs",
     "verify:security:evals": "node scripts/verification/run.mjs security-evals",

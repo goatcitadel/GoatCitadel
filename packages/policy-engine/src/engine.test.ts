@@ -4502,7 +4502,10 @@ describe("ToolPolicyEngine outside-root read access", () => {
       hostClock.mockRestore();
       await asyncStorage.close();
     }
-  }, 20_000);
+    // Nearly all wall time is the real in-memory Storage construction (full
+    // migration chain); the mocked-clock invoke itself is sub-second. Slow or
+    // contended Windows hosts need more than the 20 s used by lighter siblings.
+  }, 60_000);
 
   it("rejects outside-root approval bypasses after the pending action is resolved", async () => {
     vi.useFakeTimers();
@@ -4843,7 +4846,7 @@ describe("ToolPolicyEngine outside-root read access", () => {
       turnId: "turn-approved-presentation",
       runtimeSkillApplications: [
         {
-          skillId: "bundled:design-intelligence",
+          skillId: "bundled:impeccable",
           treeSha256: "a".repeat(64),
           instructionSha256: "b".repeat(64),
           modules: ["main", "enforcement", "layout", "taste", "assets", "audit"],
