@@ -24,6 +24,8 @@ export interface SkillRoutingHints {
 export interface LoadedSkill {
   skillId: string;
   name: string;
+  /** SKILL.md frontmatter description; the catalog's operator-facing summary when present. */
+  description?: string;
   source: "bundled" | "managed" | "workspace" | "extra";
   dir: string;
   tags?: string[];

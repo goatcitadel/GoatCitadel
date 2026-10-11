@@ -183,6 +183,7 @@ Broken body`,
     expect(service.list()).toBe(loaded);
     expect(loaded.find((skill) => skill.name === "Direct")).toMatchObject({
       skillId: "workspace:Direct",
+      description: "Direct source skill",
       tags: ["direct"],
       declaredTools: ["fs.read"],
       requires: ["Child"],

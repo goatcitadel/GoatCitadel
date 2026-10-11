@@ -72,6 +72,69 @@ describe("CapabilitySystemService", () => {
       expect.objectContaining({ toolName: "user_input.request", callable: true }),
     ]);
   });
+  it("summarizes a skill from its frontmatter description, falling back to its first prose line", async () => {
+    const skillDir = await fs.mkdtemp(path.join(os.tmpdir(), "goat-skill-described-"));
+    tempRoots.push(skillDir);
+    const harness = await createHarness({
+      loadedSkills: [
+        {
+          skillId: "bundled:described",
+          name: "described",
+          description: "  Design or review an agentic skill without confusing it with runtime infrastructure.  ",
+          source: "bundled",
+          dir: skillDir,
+          declaredTools: [],
+          requires: [],
+          keywords: [],
+          instructionBody: "# Described\n\nBody prose that the description outranks.",
+          mtime: "2026-10-10T00:00:00.000Z",
+        },
+        {
+          skillId: "bundled:agentic-skill-architect",
+          name: "agentic-skill-architect",
+          description: "   ",
+          source: "bundled",
+          dir: skillDir,
+          declaredTools: [],
+          requires: [],
+          keywords: [],
+          instructionBody: [
+            "# Agentic Skill Architect",
+            "",
+            "Use this skill when someone wants to design, audit, or share an agentic skill",
+            "and the real question is where the boundary sits.",
+            "",
+            "- what should be inside the skill itself",
+            "",
+            "## What This Skill Does",
+          ].join("\n"),
+          mtime: "2026-10-10T00:00:00.000Z",
+        },
+        {
+          skillId: "bundled:heading-only",
+          name: "heading-only",
+          source: "bundled",
+          dir: skillDir,
+          declaredTools: [],
+          requires: [],
+          keywords: [],
+          instructionBody: "# Heading only\n",
+          mtime: "2026-10-10T00:00:00.000Z",
+        },
+      ],
+    });
+    const catalog = await harness.service.listCatalog("inspectable");
+    expect(catalog.find((entry) => entry.skillId === "bundled:described")?.summary).toBe(
+      "Design or review an agentic skill without confusing it with runtime infrastructure.",
+    );
+    // A blank or absent description falls back to the body's first prose line, never its heading.
+    expect(catalog.find((entry) => entry.skillId === "bundled:agentic-skill-architect")?.summary).toBe(
+      "Use this skill when someone wants to design, audit, or share an agentic skill",
+    );
+    // A body with nothing but its heading keeps the heading, which the shared presenter reports as missing.
+    expect(catalog.find((entry) => entry.skillId === "bundled:heading-only")?.summary).toBe("# Heading only");
+  });
+
   it("projects only a bounded hexadecimal commitSha from an imported skill source manifest", async () => {
     const validDir = await fs.mkdtemp(path.join(os.tmpdir(), "goat-skill-provenance-valid-"));
     const invalidDir = await fs.mkdtemp(path.join(os.tmpdir(), "goat-skill-provenance-invalid-"));
