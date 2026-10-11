@@ -26,3 +26,4 @@ export * from "./worker-cell-egress-proxy.js";
 export * from "./sandbox/shell-risk-gate.js";
 export * from "./sandbox/argument-risk-gate.js";
 export * from "./policy-axes.js";
+export { validateResearchPresentationArgs } from "./presentation-model.js";

@@ -214,6 +214,7 @@ import {
 } from "./chat-tool-loop.js";
 import {
   listReadOnlyBuiltinToolNames,
+  validateResearchPresentationArgs,
   RUNTIME_CONFIGURE_TOOL_NAME,
   SUBAGENT_FANOUT_TOOL_NAME,
   SUBMIT_WORK_RESULT_TOOL_NAME,
@@ -8741,7 +8742,12 @@ export class ChatTurnAgentRunner {
         historyMessages: input.historyMessages,
       });
       const findings = [...quality.findings, ...researchGrounding.report.findings];
-      if (!quality.passed || !researchGrounding.report.passed) {
+      try {
+        validateResearchPresentationArgs(args);
+      } catch (error) {
+        findings.push(error instanceof Error ? error.message : "Invalid research presentation arguments.");
+      }
+      if (!quality.passed || !researchGrounding.report.passed || findings.length > 0) {
         const gateName = researchGrounding.report.required
           ? "research presentation content/evidence gate"
           : "presentation content quality gate";

@@ -7,6 +7,7 @@ import {
   preparePresentationSlides,
   stablePresentationSourceId,
   validateResearchPresentation,
+  validateResearchPresentationArgs,
   type PresentationSlide,
 } from "./presentation-model.js";
 
@@ -305,6 +306,14 @@ describe("presentation rich-content model", () => {
     );
 
     expect(() => validateResearchPresentation(research, sources.sources, cited)).not.toThrow();
+    expect(() => validateResearchPresentationArgs({
+      title: "Budget travel", research, sources: sources.sources, slides: cited,
+    })).not.toThrow();
+    expect(() => validateResearchPresentationArgs({
+      title: "Budget travel", research, sources: sources.sources,
+      slides: [{ title: "Finding", bullets: ["Uncited"] }],
+    })).toThrow(/structured citations/u);
+    expect(() => validateResearchPresentationArgs({ slides: [{ title: "Plain", bullets: ["Uncited"] }] })).not.toThrow();
     expect(() =>
       validateResearchPresentation(research, sources.sources, [{ title: "Finding", bullets: ["Uncited"] }]),
     ).toThrow(/structured citations/u);

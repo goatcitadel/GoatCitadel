@@ -421,6 +421,20 @@ export function validateTrustedPresentationNotes(slides: readonly PresentationSl
   });
 }
 
+/** Validate model arguments with the same normalized citation model used at execution. */
+export function validateResearchPresentationArgs(args: Record<string, unknown>): void {
+  const research = normalizePresentationResearch(args.research);
+  if (!research) return;
+  const sources = normalizePresentationSources(args.sources);
+  const slides = normalizePresentationSlides(
+    args.slides,
+    typeof args.title === "string" ? args.title : "",
+    typeof args.body === "string" ? args.body : undefined,
+    sources.aliases,
+  );
+  validateResearchPresentation(research, sources.sources, slides);
+}
+
 export function validateResearchPresentation(
   research: PresentationResearch | undefined,
   sources: readonly PresentationSource[],
