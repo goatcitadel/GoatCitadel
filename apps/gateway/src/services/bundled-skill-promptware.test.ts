@@ -16,6 +16,9 @@ const bundledRoot = path.join(repoRoot, "skills", "bundled");
 const impeccableRoot = path.join(bundledRoot, "impeccable");
 const ARTIFACTS_MODULE_MAX_BYTES = 8 * 1024;
 
+// Deliberately duplicated from FORBIDDEN_PATTERNS in scripts/sync-impeccable.mjs: the sync script
+// cannot be imported from gateway tests, and this copy must fail even if a vendored file is edited
+// by hand after a sync. Keep the two lists aligned.
 const LAUNCHER_PATTERNS: ReadonlyArray<{ label: string; re: RegExp }> = [
   { label: "unresolved {{placeholder}}", re: /\{\{/u },
   { label: "npx impeccable", re: /npx impeccable/iu },
@@ -23,6 +26,10 @@ const LAUNCHER_PATTERNS: ReadonlyArray<{ label: string; re: RegExp }> = [
   { label: "~/.impeccable", re: /~\/\.impeccable/u },
   { label: ".impeccable/ path", re: /\.impeccable\//u },
   { label: "grok", re: /grok/iu },
+  { label: "xai", re: /\bxai\b/iu },
+  { label: "x.ai", re: /\bx\.ai\b/iu },
+  { label: "design.json sidecar", re: /\bsidecar\b/iu },
+  { label: "unavailable command", re: /@skill impeccable (?:live|generate|critique|craft)\b/iu },
 ];
 
 function listMarkdownFiles(dir: string): string[] {

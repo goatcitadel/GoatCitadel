@@ -8,9 +8,9 @@ Use the workspace PRODUCT.md design context when the runtime attaches one, other
 - **PRODUCT.md exists:** ask what product knowledge is stale or missing; do not reopen confirmed fields without a reason.
 - **Legacy PRODUCT.md:** add only durable missing facts; absent `## Platform` means `web` unless evidence says otherwise.
 - **Only DESIGN.md exists:** leave it untouched and create PRODUCT.md.
-- **Redesign/rebrand request:** preserve confirmed product truth unless the user changes it. Visual replacement happens later in new-work, not here.
+- **Redesign/rebrand request:** preserve confirmed product truth unless the user changes it. Visual replacement happens later, not here.
 
-Never silently overwrite an existing file or offer DESIGN.md during init. If another request invoked init, finish PRODUCT.md and resume it. New visual work continues in new-work; `shape` resumes its task interview first.
+Never silently overwrite an existing file or offer DESIGN.md during init. If another request invoked init, finish PRODUCT.md and resume it. New visual work continues after init; `shape` resumes its task interview first.
 
 ## Step 2: Explore the project
 
@@ -101,7 +101,7 @@ Copy the `impeccable:product-schema` comment verbatim, including when you update
 
 ### Completion gate
 
-Before loading new-work or resuming shape/build, verify that PRODUCT.md exists at the resolved path and contains the confirmed product record. If the file is absent, init is incomplete. Do not substitute interview notes, a planning packet, or later design prose for the file.
+Before any visual-world work or resuming shape/build, verify that PRODUCT.md exists at the resolved path and contains the confirmed product record. If the file is absent, init is incomplete. Do not substitute interview notes, a planning packet, or later design prose for the file.
 
 ## Step 6: Wrap up or resume
 
@@ -109,6 +109,6 @@ Summarize captured and deliberately undecided facts. Do not offer DESIGN.md mere
 
 Recommend the next action from the actual project state:
 
-- Empty or early project: ask naturally for the surface to be built, or use `@skill impeccable shape <surface>` when the user wants a confirmed brief without implementation. New-work will establish a visual world only when the requested work needs one.
+- Empty or early project: ask naturally for the surface to be built, or use `@skill impeccable shape <surface>` when the user wants a confirmed brief without implementation. Establish a visual world only when the requested work needs one.
 - Existing coherent interface without DESIGN.md: `@skill impeccable document` if the user wants the incumbent system recorded independently of a new build.
 - Existing surface needing work: name the most relevant scoped command.

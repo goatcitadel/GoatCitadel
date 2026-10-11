@@ -111,7 +111,7 @@ export const SKILL_TAGS = Object.freeze(["design", "frontend", "ui", "ux"]);
 const ASK_INSTRUCTION = "Ask the operator with the user_input.request tool and wait for the answer.";
 const NOT_VENDORED = "(not vendored in this GoatCitadel build)";
 const UNAVAILABLE_COMMANDS_LINE =
-  "Not available in this vendored build: `craft`, `critique`, `live`, `generate`, pin shortcuts, hooks, doctor, and the native-platform references. Use `audit` and `polish` for review passes.";
+  "Not available in this vendored build: `craft`, `critique`, `live`, `generate`, pin shortcuts, hooks, doctor, and the native-platform references. Use `audit` and `polish` for review passes. `new-work` (the visual-world workshop) is not vendored either: when a step routes through it, choose and commit the visual world with the operator through user_input.request and record it in DESIGN.md.";
 
 const GOATCITADEL_SETUP = [
   "## Setup",
@@ -144,7 +144,22 @@ const FORBIDDEN_PATTERNS = Object.freeze([
   { label: "grok", re: /grok/giu },
   { label: "xai", re: /\bxai\b/giu },
   { label: "x.ai", re: /\bx\.ai\b/giu },
+  // The .impeccable/design.json sidecar was removed; any surviving mention would send the model to recreate it.
+  { label: "sidecar", re: /\bsidecar\b/giu },
+  // Commands this build does not carry must not survive as invocations after placeholder resolution.
+  { label: "unavailable command", re: /@skill impeccable (?:live|generate|critique|craft)\b/giu },
 ]);
+
+/** Whole paragraphs (single lines) dropped from a reference by prefix, when a rewrite would leave nothing useful. */
+const REFERENCE_PARAGRAPH_DROPS = {
+  document: ["**What changed from schemaVersion 1.**"],
+};
+
+/** Upstream description claims that this build cannot honour (live browser mode, the critique command). */
+const DESCRIPTION_REPLACEMENTS = [
+  { find: ", live browser iteration on UI elements,", replace: "," },
+  { find: "shape, critique, audit,", replace: "shape, audit," },
+];
 
 /** Exact-anchor rewrites per file. Every entry is required; a missing anchor means upstream drifted and the transform must be revisited. */
 const SKILL_REPLACEMENTS = [
@@ -163,6 +178,14 @@ const SKILL_REPLACEMENTS = [
     find: "- `teach` aliases `init`. `craft` is a deprecated alias for ordinary new-work and adds nothing. `shape` owns task discovery, then enters new-work only for visual-world and surface-concept decisions.",
     replace: "- `teach` aliases `init`. `shape` owns task discovery and surface-concept decisions.",
   },
+  {
+    find: "choose a replacement world in new-work and replace DESIGN.md",
+    replace: "choose a replacement world with the operator and replace DESIGN.md",
+  },
+  {
+    find: "new-work decides whether to preserve, expand, or replace the incumbent world",
+    replace: "the evidence decides whether to preserve, expand, or replace the incumbent world",
+  },
 ];
 
 const MODE_CLAUSE =
@@ -178,7 +201,35 @@ const REFERENCE_REPLACEMENTS = {
       replace:
         "Use the workspace PRODUCT.md design context when the runtime attaches one, otherwise the project's PRODUCT.md.",
     },
+    {
+      find: "Visual replacement happens later in new-work, not here.",
+      replace: "Visual replacement happens later, not here.",
+    },
+    {
+      find: "New visual work continues in new-work; `shape` resumes its task interview first.",
+      replace: "New visual work continues after init; `shape` resumes its task interview first.",
+    },
+    {
+      find: "Before loading new-work or resuming shape/build, verify",
+      replace: "Before any visual-world work or resuming shape/build, verify",
+    },
+    {
+      find: "New-work will establish a visual world only when the requested work needs one.",
+      replace: "Establish a visual world only when the requested work needs one.",
+    },
   ],
+  shape: [
+    {
+      find: "New-work owns visual-world and concept choices.",
+      replace: "Visual-world and concept choices are made with the operator.",
+    },
+    {
+      find: "follow [new-work.md](new-work.md) through visual authority, any world workshop, and concept choice.",
+      replace:
+        "resolve visual authority, any world choice, and concept choice with the operator (the new-work workshop is not vendored in this GoatCitadel build).",
+    },
+  ],
+  bolder: [{ find: "(see new-work.md)", replace: "(the new-work workshop is not vendored in this GoatCitadel build)" }],
   polish: [
     {
       find: "Follow the quality guidance supplied by `impeccable context` and hooks, then run any other relevant QA commands. Context requests a manual scan only when no automatic detector is active; never add another detector pass.",
@@ -196,6 +247,50 @@ const REFERENCE_REPLACEMENTS = {
       find: "That pass will extract real tokens and generate the sidecar.",
       replace: "That pass will extract real tokens.",
     },
+    {
+      find: "Carry them in the sidecar (Step 4b).",
+      replace: "Carry them in DESIGN.md prose under the relevant section.",
+    },
+    {
+      find: "carry the full snippet in the sidecar instead.",
+      replace: "carry the full snippet in DESIGN.md prose instead.",
+    },
+    {
+      find: "Anything else belongs in the sidecar's `extensions`.",
+      replace: "Anything else belongs in DESIGN.md prose under the relevant section.",
+    },
+    {
+      find: "- New-work found a coherent incumbent visual system but no `DESIGN.md`.",
+      replace: "- A new-surface request found a coherent incumbent visual system but no `DESIGN.md`.",
+    },
+    {
+      find: "then reuse new-work's visual-world workshop and write its directional DESIGN.md seed",
+      replace: "then choose the visual world with the operator and write a directional DESIGN.md seed",
+    },
+    {
+      find: "`/impeccable document --seed` requests new-work's world workshop, but it does not authorize replacing coherent code: when an incumbent system exists, offer scan mode or route an explicit identity-replacement request through new-work.",
+      replace:
+        "`/impeccable document --seed` requests the visual-world choice, but it does not authorize replacing coherent code: when an incumbent system exists, offer scan mode or treat an explicit identity-replacement request as a redesign chosen with the operator.",
+    },
+    {
+      find: "### Step 1: Route through new-work's workshop",
+      replace: "### Step 1: Resolve the visual world with the operator",
+    },
+    {
+      find: "If PRODUCT.md exists, load [new-work.md](new-work.md) and resolve visual authority.",
+      replace:
+        "If PRODUCT.md exists, resolve visual authority inline: the new-work workshop is not vendored in this GoatCitadel build, so choose the visual world with the operator through user_input.request and record the choice in DESIGN.md.",
+    },
+    {
+      find: "Run new-work's **Create or replace the visual world** flow, then **Commit the world**, so the visual world and its first expression are chosen together.",
+      replace:
+        "Choose the visual world and its first expression together with the operator, then commit them in DESIGN.md.",
+    },
+    {
+      find: "If new-work already completed the workshop in this session, use its chosen direction directly. Do not ask again.",
+      replace: "If the visual world was already chosen in this session, use that direction directly. Do not ask again.",
+    },
+    { find: "or new-work's exploration established them", replace: "or the operator's choice established them" },
   ],
 };
 
@@ -207,7 +302,9 @@ const REFERENCE_SECTION_DROPS = {
 const SKILL_PARAGRAPH_DROPS = ["**Never repair drift", "- **Workflow or command-selection question:**"];
 
 export const TRANSFORMS_APPLIED = Object.freeze([
-  "SKILL.md frontmatter keeps name and description; argument-hint, user-invocable, allowed-tools, and license are dropped; metadata (version, tags, keywords) is added.",
+  "SKILL.md frontmatter keeps name and description; argument-hint, user-invocable, allowed-tools, and license are dropped; metadata (version, tags, keywords) is added; the description no longer claims live browser iteration or the critique command.",
+  "new-work (the upstream visual-world workshop) is not vendored: SKILL.md, init.md, document.md, shape.md, and bolder.md sentences that routed through it now ask the operator (user_input.request) to choose and commit the visual world in DESIGN.md; remaining links to it are marked as not vendored.",
+  "document.md: sentences that pointed at the removed design.json sidecar now point at DESIGN.md prose and the schemaVersion paragraph is removed; any other surviving sidecar mention fails the guard so a re-sync must add a rewrite rather than ship it.",
   "An Apache License 2.0 section 4(b) modification notice follows the SKILL.md frontmatter.",
   "The SKILL.md Setup section is replaced: no launcher runs; context comes from the workspace PRODUCT.md and DESIGN.md.",
   "SKILL.md routing: inline no-argument rule, workflow-questions bullet removed, launcher context clauses rewritten, deprecated craft alias removed.",
@@ -442,7 +539,13 @@ function splitFrontmatter(text) {
 }
 
 function rewriteFrontmatter(frontmatterLines) {
-  const kept = frontmatterLines.filter((line) => /^(?:name|description):/u.test(line));
+  const kept = frontmatterLines
+    .filter((line) => /^(?:name|description):/u.test(line))
+    .map((line) =>
+      line.startsWith("description:")
+        ? applyReplacements(line, DESCRIPTION_REPLACEMENTS, "SKILL.md description")
+        : line,
+    );
   if (!kept.some((line) => line.startsWith("name:")) || !kept.some((line) => line.startsWith("description:"))) {
     throw new SyncError("SKILL.src.md frontmatter must carry name and description");
   }
@@ -466,10 +569,12 @@ function modificationNotice(sha) {
 // ---------------------------------------------------------------------------
 
 function finishProse(text) {
-  let out = dropSectionsMatching(text, LIVE_MODE_SECTION);
+  // Placeholders resolve first so `{{command_prefix}}impeccable live` is visible to the
+  // unavailable-command drop as `@skill impeccable live`.
+  let out = resolvePlaceholders(text);
+  out = dropSectionsMatching(out, LIVE_MODE_SECTION);
   out = dropLauncherFences(out);
   out = dropLauncherLines(out);
-  out = resolvePlaceholders(out);
   out = rewriteLinks(out);
   return normalizeWhitespace(out);
 }
@@ -498,6 +603,8 @@ export function transformReference(name, text) {
   if (replacements) content = applyReplacements(content, replacements, `reference/${name}.md`);
   const sectionDrops = REFERENCE_SECTION_DROPS[name];
   if (sectionDrops) content = dropSections(content, sectionDrops, `reference/${name}.md`);
+  const paragraphDrops = REFERENCE_PARAGRAPH_DROPS[name];
+  if (paragraphDrops) content = dropParagraphsStartingWith(content, paragraphDrops);
   return finishProse(content);
 }
 
@@ -574,13 +681,14 @@ export function scanForbiddenStrings(text) {
 // Provenance documents
 // ---------------------------------------------------------------------------
 
-function buildNotice(sha, upstreamNotice, localFiles) {
+function buildNotice(sha, upstreamNotice, localFiles, splitCount) {
+  const splitClause = splitCount > 0 ? " oversize references were split by section," : "";
   const lines = [
     "NOTICE",
     "",
     `This directory vendors prose from impeccable (${UPSTREAM_REPOSITORY}), copyright its contributors, licensed under the Apache License, Version 2.0 (see the LICENSE file in this directory). Vendored at commit ${sha}.`,
     "",
-    "The vendored files were modified for the GoatCitadel runtime: the launcher, hooks, live mode, doctor, pin shortcuts, and native-platform references were removed, upstream placeholders were resolved, oversize references were split by section, and the SKILL.md Setup section now reads the workspace design context. UPSTREAM.md lists every file, hash, exclusion, and transform.",
+    `The vendored files were modified for the GoatCitadel runtime: the launcher, hooks, live mode, doctor, pin shortcuts, and native-platform references were removed, upstream placeholders were resolved,${splitClause} and the SKILL.md Setup section now reads the workspace design context. UPSTREAM.md lists every file, hash, exclusion, and transform.`,
     "",
   ];
   if (localFiles.length > 0) {
@@ -610,7 +718,7 @@ function buildUpstreamDoc({ sha, rows, excludedReferences, localFiles }) {
     "",
     "## Vendored files",
     "",
-    "| Vendored path | Upstream path | Upstream sha256 | Vendored sha256 | Notes |",
+    "| Vendored path | Upstream path | Upstream sha256 (LF-normalized) | Vendored sha256 | Notes |",
     "| --- | --- | --- | --- | --- |",
     ...rows.map(
       (row) => `| ${row.vendored} | ${row.upstream} | ${row.upstreamSha} | ${row.vendoredSha} | ${row.notes} |`,
@@ -667,6 +775,30 @@ export function defaultOutDir() {
 }
 
 /**
+ * Stale-file removal deletes everything under the output directory that the sync does not own, so
+ * the directory must be absent, empty, hold only GoatCitadel-authored local files, or already be an
+ * impeccable skill directory (its SKILL.md or UPSTREAM.md says so). Anything else is refused by name.
+ */
+function assertImpeccableOutDir(out) {
+  if (!fs.existsSync(out)) return;
+  const existing = listFilesRecursive(out);
+  const foreign = existing.filter((file) => !LOCAL_FILES.includes(file));
+  if (foreign.length === 0) return;
+  const skillPath = path.join(out, "SKILL.md");
+  const upstreamPath = path.join(out, "UPSTREAM.md");
+  const isImpeccableSkill = fs.existsSync(skillPath) && /^name: impeccable$/mu.test(fs.readFileSync(skillPath, "utf8"));
+  const isImpeccableProvenance =
+    fs.existsSync(upstreamPath) &&
+    fs.readFileSync(upstreamPath, "utf8").startsWith("# Upstream provenance: impeccable");
+  if (isImpeccableSkill || isImpeccableProvenance) return;
+  throw new SyncError(
+    `refusing to vendor into ${out}: it is not empty and holds no impeccable SKILL.md or UPSTREAM.md (found ${foreign
+      .slice(0, 10)
+      .join(", ")}${foreign.length > 10 ? ", ..." : ""})`,
+  );
+}
+
+/**
  * Vendor impeccable from a local checkout. Computes every output in memory, runs
  * the forbidden-string guard, and only then writes, so a failed guard leaves the
  * output directory untouched.
@@ -678,16 +810,20 @@ export function syncImpeccable({ sourceDir, sha, outDir = defaultOutDir() }) {
     if (!fs.existsSync(path.join(source, required))) throw new SyncError(`upstream file missing: ${required}`);
   }
   const out = path.resolve(outDir);
+  assertImpeccableOutDir(out);
   const localFiles = LOCAL_FILES.filter((file) => fs.existsSync(path.join(out, file)));
 
   const outputs = new Map();
   const rows = [];
+  let splitCount = 0;
   const record = (vendored, upstream, upstreamBytes, content, notes) => {
     outputs.set(vendored, content);
     rows.push({
       vendored,
       upstream,
-      upstreamSha: sha256(upstreamBytes),
+      // Hash the LF form of the upstream bytes so the recorded value does not depend on the
+      // checkout's core.autocrlf setting and can be reproduced on any machine.
+      upstreamSha: sha256(Buffer.from(normalizeNewlines(upstreamBytes.toString("utf8")), "utf8")),
       vendoredSha: sha256(Buffer.from(content, "utf8")),
       notes,
     });
@@ -714,6 +850,7 @@ export function syncImpeccable({ sourceDir, sha, outDir = defaultOutDir() }) {
       record(`reference/${name}.md`, upstreamPath, bytes, transformed, "transformed");
       continue;
     }
+    splitCount += 1;
     record(`reference/${name}.md`, upstreamPath, bytes, split.index, `transformed; split index (${split.count} parts)`);
     for (const part of split.parts) {
       record(part.relative, upstreamPath, bytes, part.content, `transformed; part ${part.ordinal} of ${split.count}`);
@@ -722,7 +859,7 @@ export function syncImpeccable({ sourceDir, sha, outDir = defaultOutDir() }) {
 
   const noticePath = path.join(source, "NOTICE.md");
   const upstreamNotice = fs.existsSync(noticePath) ? normalizeNewlines(fs.readFileSync(noticePath, "utf8")) : "";
-  outputs.set("NOTICE", buildNotice(sha, upstreamNotice, localFiles));
+  outputs.set("NOTICE", buildNotice(sha, upstreamNotice, localFiles, splitCount));
 
   const findings = [];
   for (const [relative, content] of outputs) {

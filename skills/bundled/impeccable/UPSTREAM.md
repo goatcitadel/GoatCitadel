@@ -7,35 +7,35 @@
 
 ## Vendored files
 
-| Vendored path | Upstream path | Upstream sha256 | Vendored sha256 | Notes |
+| Vendored path | Upstream path | Upstream sha256 (LF-normalized) | Vendored sha256 | Notes |
 | --- | --- | --- | --- | --- |
-| SKILL.md | skill/SKILL.src.md | fd79b9d78a647925006d062d57a4a2f0a09d93db118a9127d21167fb1aceda94 | 33913143027c959bdd8b4476e448090c99445a0c3d6587f54c926f2a86406b32 | transformed |
-| LICENSE | LICENSE | fc0673369dae07c045c46869d3d4c9113678c77fcc7d3b4e3a39ac074cfa68b6 | 02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812 | copied |
-| reference/craft-floor.md | skill/reference/craft-floor.md | 61d7cd1f33c2f701226cc40da9a0535d126c2f96850a6a855a866f90e9c457f3 | db4dfe2f0b316a94026b89e8cb3c9026042e661ca156dfae747a733e1ab500ed | transformed |
-| reference/mode-persuade.md | skill/reference/mode-persuade.md | 7f843ba1ba8314450d7de08c724c5c6b0c361554bf9b0d8e3be29ee78c1f918a | 7370702a7f1dcf503cb8ec352d920178259c6b6086e8af5359189e0218818143 | transformed |
-| reference/mode-operate.md | skill/reference/mode-operate.md | 7cc131b41dae694a4b554c940445117318f0c6fb19f905cf1f8cbafc08a3f430 | 2d4929fd231498de39eb916ddb085d20bbf457ecad232ffc141ae064e16f9a8d | transformed |
-| reference/mode-read.md | skill/reference/mode-read.md | 20da46dd620da4433736173b130de306ceeb124dac83fccf664a12e236ee0b8d | 3d2cdabab23429238bb2798524eb09948a7900ba095f421a9e51fffb943ff15d | transformed |
-| reference/operate.md | skill/reference/operate.md | 032bee97203c5a6036aefcae0294c9c3e32f56c356f0631f0d75a7aeab231e2a | e5bf4980c547e60b091f82f38d0eec4cc3ab85610b4b15ec8f1d86584f9eb404 | transformed |
-| reference/shape.md | skill/reference/shape.md | 51960b514f8437baf12484dd5be824e0c2d0ee8802e29e7f511e431493a6c417 | 7c36c5370197fa1d99a6a25b77d413cb18aa772e0a39ad4ac18ad8a5696b61f2 | transformed |
-| reference/init.md | skill/reference/init.md | 5dbb3b8a8e5bc4b5160252e3c1a3e25c6a8edfeb80a910e80d657bc5b29dadf9 | 7749dac10be1d74a044858692e4f44a1a0e70133147662fb29b28b5d9d91ca90 | transformed |
-| reference/document.md | skill/reference/document.md | 847c787fba80c9c64afbb842f5e1777ac7f3f8923fb5f4c44dc81b18990e768e | c37e30a68c978c6faaa355c3e1e4b9c92fc74c0c7747c77c773a28f5b9933738 | transformed |
-| reference/extract.md | skill/reference/extract.md | e364a37da495039d9c4f9770c7886c415ed98249ef88c7037026dd2d755addc8 | e6396675e16a05972e8999bbe49891a7ebc06e4bb004b17bd282bd89bfeb8bda | transformed |
-| reference/audit.md | skill/reference/audit.md | 9d47294fd6ba7bd03c8b430f35d24d00c98e781c8cdba0d4af7a278502ac7d8d | 07b0408f1975c873174fc9ac8878a4ea57cf25f9424b0d09ca9169631d60e16a | transformed |
-| reference/polish.md | skill/reference/polish.md | 40afe65d3efe399937a799d1ebfac81f6aa215a11587ff9e82c1cac099750636 | bca5507ae00574b1d12c010af4695538089a595e79ae942a3062b97cd7ffb4f0 | transformed |
-| reference/bolder.md | skill/reference/bolder.md | 05cd72b3c227ac824fea66a7420d0ebd117b87c20edf8652f2588932f35d6e40 | 0de0c27873349cf899f68c78a4b921ffb40790756bcd30ca76c4beb1a00bcf15 | transformed |
-| reference/quieter.md | skill/reference/quieter.md | 5b857f69f810272d2c859aea4a6155b2e5956c5c2ff0aa63918155b6e4de18a3 | 4fcdfcc6d6ca52b282211f7a33d17dd2ed21ce9583164417a8d1b160be64e2d1 | transformed |
-| reference/distill.md | skill/reference/distill.md | e4e5d687888f32400a8997aeb04dde1b5aa930a305e6f9e34d3406f2d9209595 | cfc16403553b7af1232eae9f96f32c172e62f134a987d44d8dc15b5f31f9fced | transformed |
-| reference/harden.md | skill/reference/harden.md | e5674302309c8ad1a207cbdc8c1a66503ab83fc9d4a532d01cbc81a380adceee | ce2aeda37a500e3db2495b616e582595898d9a29aacd3eddbe1efca01d2810ee | transformed |
-| reference/onboard.md | skill/reference/onboard.md | 3281dfcf569540471f63dd972155eecb0df43fd7631493a43f817b9ab04ef737 | c2d141fe962160d8a9c653fd7759c0b13737feed599924f5c167a28a1b3a4d51 | transformed |
-| reference/animate.md | skill/reference/animate.md | d32c9462da7127628050bd9fb6a209501f0ea0e0d0a543101b36536826931b7d | 011aad2e312dc0109a85f2e3d5b77f3dd7e14ff0ff8d8a824d4ba9b5658dc5e3 | transformed |
-| reference/colorize.md | skill/reference/colorize.md | 63ba14fd2af6b79768fdb0bd5ba9b23b97f625bfcee181f4fc1e7aacafd13f0a | 19c5beb179f2024be11e56c1248c7e8bd62a98cc6ceee0a132c470befbadf9f4 | transformed |
-| reference/typeset.md | skill/reference/typeset.md | 768c7f47e44dbfbc3eabc62f2a81c6154cf19d39994a688dc014b389dfe516d6 | 0d375f1ca3f2044bd49b86851d0aa1f5c91ad4abd5a38a9e95a33fec5c466da8 | transformed |
-| reference/layout.md | skill/reference/layout.md | 2f427707a043ed181c6af058ce01df6f01c2a2be9ce71e0c52ac2bb8fbbdf9e3 | 0999e55d337121baaff9d074254e3c7f81e5d50169bdab31591487b7b14408af | transformed |
-| reference/delight.md | skill/reference/delight.md | 66cbb36a41c97abf4975447de4d6770e07858f39e4877842ee88ffcd5fc7ab91 | 26f5c75b486928bdaf90dcecc2fdae520c9988c53bccea485a17fa551815208e | transformed |
-| reference/overdrive.md | skill/reference/overdrive.md | bfe147f69eb28d07f330cc9b3a365e01a7d9ae2ba07e6dafc1066761df6f6248 | 80b9333fa3404093b7beb18e7b842ebc224ff4c8eebd38d2b5ac1f6e860ae633 | transformed |
-| reference/clarify.md | skill/reference/clarify.md | 140ac553fb8c61fd53aeb372b165fd47c4e3a96a98e14db407f740e9fcffbe3f | 346f0e4a90089d253a0d5fef51d1b3f5b5071610700da4c49eeb6f7835028033 | transformed |
-| reference/adapt.md | skill/reference/adapt.md | f0934fcb985b005b455ef530be7cfcf2b0dca4febc9cb63a42398edcf2c1d5c0 | fb10aed8c4fec6bf8c31a234d50133896d08987e3953b7706a0f393c072b2cde | transformed |
-| reference/optimize.md | skill/reference/optimize.md | f91c49ed8f1e53aef590073d2221b6688713e7cb0ce431040cda3d520d3c6229 | a807f826d10cff5d3d5b192329b45972b1ba4f9454845ac7481927c77bdce2e8 | transformed |
+| SKILL.md | skill/SKILL.src.md | 78573ef57390d37ece0366e2746b1dda6a20e2a74352a0abc2e6d05518e87d47 | a0a9bd202630fb9794eb2eccc40ff47b4e623520350b0fdfde8c4ebd68827c8c | transformed |
+| LICENSE | LICENSE | 02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812 | 02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812 | copied |
+| reference/craft-floor.md | skill/reference/craft-floor.md | db4dfe2f0b316a94026b89e8cb3c9026042e661ca156dfae747a733e1ab500ed | db4dfe2f0b316a94026b89e8cb3c9026042e661ca156dfae747a733e1ab500ed | transformed |
+| reference/mode-persuade.md | skill/reference/mode-persuade.md | b3f8b39cbf89392b62c07298361fb2a7e8e0b4ef13bbb38bac974ccd8fd835fd | 7370702a7f1dcf503cb8ec352d920178259c6b6086e8af5359189e0218818143 | transformed |
+| reference/mode-operate.md | skill/reference/mode-operate.md | 7a52dd7a94ee75f6ae89542c86a1b6e1d306812b16e0d9dbf12d4acad44d148b | 2d4929fd231498de39eb916ddb085d20bbf457ecad232ffc141ae064e16f9a8d | transformed |
+| reference/mode-read.md | skill/reference/mode-read.md | a569989e6a3d6453b4c45e9474e162a15cc54e11732ac6baa7990a6e7cccc0b5 | 3d2cdabab23429238bb2798524eb09948a7900ba095f421a9e51fffb943ff15d | transformed |
+| reference/operate.md | skill/reference/operate.md | e5bf4980c547e60b091f82f38d0eec4cc3ab85610b4b15ec8f1d86584f9eb404 | e5bf4980c547e60b091f82f38d0eec4cc3ab85610b4b15ec8f1d86584f9eb404 | transformed |
+| reference/shape.md | skill/reference/shape.md | a55f016c046cb6a27c55bd7f346375aeb506a755c4fbca19a5f92dbd42309c23 | 0a42c81110e13c5ea81304b06ab51849d864717d100a4a56b3d8cf50ebdd0828 | transformed |
+| reference/init.md | skill/reference/init.md | 72a41672b391085738ded0ab3cf8235866dab15fc931f9e2b43c914c3ece915f | 3d163965c18faad40e3d3a79fbd73e7bb5284d63ccf9eecf796239c69f292a2e | transformed |
+| reference/document.md | skill/reference/document.md | aca6d5ea0770131b8f97a3feb68e1bd3cc536b1ef2e7d05bb0c2c1c9c96c68d3 | df7aaf57b4e31c2d55f140bddaf70430698fe9b56afffb63fcf62af8dddff661 | transformed |
+| reference/extract.md | skill/reference/extract.md | da8a999c4b16fee5ddd2f532a74ffab50ef26085311eeb6461689acb8e22c5ea | e6396675e16a05972e8999bbe49891a7ebc06e4bb004b17bd282bd89bfeb8bda | transformed |
+| reference/audit.md | skill/reference/audit.md | d2aa90f30ba7a0082d242ab69a2a9d46298abb5f36b43308fe7e3c36fa9a9056 | 07b0408f1975c873174fc9ac8878a4ea57cf25f9424b0d09ca9169631d60e16a | transformed |
+| reference/polish.md | skill/reference/polish.md | c504e12ea076fd1a57b8c9ece79fbb532c54226b2b6298c5c62fa889ae1dd34d | bca5507ae00574b1d12c010af4695538089a595e79ae942a3062b97cd7ffb4f0 | transformed |
+| reference/bolder.md | skill/reference/bolder.md | a4e4d986f74ef5f3c8218dfcfd5b04fe103b47182cf1e16aeb979e5703d5cd87 | d5f4e2ac2b4572a01f3b8496ae866edc8957e8da1766cc7710f1a76c57a41ef4 | transformed |
+| reference/quieter.md | skill/reference/quieter.md | daf4438c4cdfba62d8e663567f6a23cc3f6471ba5dea67994aa6b312e8f7d721 | 4fcdfcc6d6ca52b282211f7a33d17dd2ed21ce9583164417a8d1b160be64e2d1 | transformed |
+| reference/distill.md | skill/reference/distill.md | 048e5a7671024592cba6cd4ede70b6c535db0c1be84d6837638e40f51fb3fad7 | cfc16403553b7af1232eae9f96f32c172e62f134a987d44d8dc15b5f31f9fced | transformed |
+| reference/harden.md | skill/reference/harden.md | 6674a6fc1eb681f2ad266dc0a3a71cec29dc4dcd3a1ff91195d2302582fa7c58 | ce2aeda37a500e3db2495b616e582595898d9a29aacd3eddbe1efca01d2810ee | transformed |
+| reference/onboard.md | skill/reference/onboard.md | 0d871444769f48a86db68b8b480bb6bfa61bef42d3784e65c248d7e5a555a085 | c2d141fe962160d8a9c653fd7759c0b13737feed599924f5c167a28a1b3a4d51 | transformed |
+| reference/animate.md | skill/reference/animate.md | 59f38d50c799aa47ecd7288c69dce0245d8c3e3e2368b29499d583996b5030b3 | 011aad2e312dc0109a85f2e3d5b77f3dd7e14ff0ff8d8a824d4ba9b5658dc5e3 | transformed |
+| reference/colorize.md | skill/reference/colorize.md | dcc0c3ebb76bd22c543f45d73c283e3890e5b8a44eb5053ca2f7fdd425635c32 | 19c5beb179f2024be11e56c1248c7e8bd62a98cc6ceee0a132c470befbadf9f4 | transformed |
+| reference/typeset.md | skill/reference/typeset.md | bf0259f5b8363d09591885ca6b27ac97bbdf754c130fb2799b949d783a97186b | 0d375f1ca3f2044bd49b86851d0aa1f5c91ad4abd5a38a9e95a33fec5c466da8 | transformed |
+| reference/layout.md | skill/reference/layout.md | 14ba132b6168bf0a7498f8c3fbbb41b73ff704da5dc3688fd842807446e54a05 | 0999e55d337121baaff9d074254e3c7f81e5d50169bdab31591487b7b14408af | transformed |
+| reference/delight.md | skill/reference/delight.md | 8f157ae861c578d54b2710ea200a6ba2253bd36ab68b6b4c4b880875bd0a415b | 26f5c75b486928bdaf90dcecc2fdae520c9988c53bccea485a17fa551815208e | transformed |
+| reference/overdrive.md | skill/reference/overdrive.md | 0b6612c02d6fb7f737b9110f019c3e5548656f0ea7526353d062d3b107d61300 | 80b9333fa3404093b7beb18e7b842ebc224ff4c8eebd38d2b5ac1f6e860ae633 | transformed |
+| reference/clarify.md | skill/reference/clarify.md | 4738e125835bd6c166aec2622977c9bc59bada52aaeb186585ed38b3900860b5 | 346f0e4a90089d253a0d5fef51d1b3f5b5071610700da4c49eeb6f7835028033 | transformed |
+| reference/adapt.md | skill/reference/adapt.md | fe0f1e0a642575737711ad93f22482b8469c021ffd587f94910893683cb8f316 | fb10aed8c4fec6bf8c31a234d50133896d08987e3953b7706a0f393c072b2cde | transformed |
+| reference/optimize.md | skill/reference/optimize.md | 197aa00aba42c85edf4cea25c4b79f4e12f2425454f6cd307f3d1fddfbd11ffd | a807f826d10cff5d3d5b192329b45972b1ba4f9454845ac7481927c77bdce2e8 | transformed |
 
 ## Excluded upstream files
 
@@ -60,7 +60,9 @@
 
 ## Transforms applied
 
-- SKILL.md frontmatter keeps name and description; argument-hint, user-invocable, allowed-tools, and license are dropped; metadata (version, tags, keywords) is added.
+- SKILL.md frontmatter keeps name and description; argument-hint, user-invocable, allowed-tools, and license are dropped; metadata (version, tags, keywords) is added; the description no longer claims live browser iteration or the critique command.
+- new-work (the upstream visual-world workshop) is not vendored: SKILL.md, init.md, document.md, shape.md, and bolder.md sentences that routed through it now ask the operator (user_input.request) to choose and commit the visual world in DESIGN.md; remaining links to it are marked as not vendored.
+- document.md: sentences that pointed at the removed design.json sidecar now point at DESIGN.md prose and the schemaVersion paragraph is removed; any other surviving sidecar mention fails the guard so a re-sync must add a rewrite rather than ship it.
 - An Apache License 2.0 section 4(b) modification notice follows the SKILL.md frontmatter.
 - The SKILL.md Setup section is replaced: no launcher runs; context comes from the workspace PRODUCT.md and DESIGN.md.
 - SKILL.md routing: inline no-argument rule, workflow-questions bullet removed, launcher context clauses rewritten, deprecated craft alias removed.

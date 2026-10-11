@@ -44,7 +44,7 @@ Rules that matter:
 
 - **Token refs** use `{path.to.token}` (e.g. `{colors.primary}`, `{rounded.md}`). Components may reference primitives; primitives may not reference each other.
 - **Colors accept any valid CSS color string.** Hex is the recommended default for portability, but preserve an incumbent `rgb()`, `hsl()`, `oklch()`, wide-gamut, or mixed-color value when it is the project's normative source. Never split the source of truth without explicit reason.
-- **Component sub-tokens** are limited to 8 props: `backgroundColor`, `textColor`, `typography`, `rounded`, `padding`, `size`, `height`, `width`. Shadows, motion, focus rings, backdrop-filter: none of those fit. Carry them in the sidecar (Step 4b).
+- **Component sub-tokens** are limited to 8 props: `backgroundColor`, `textColor`, `typography`, `rounded`, `padding`, `size`, `height`, `width`. Shadows, motion, focus rings, backdrop-filter: none of those fit. Carry them in DESIGN.md prose under the relevant section.
 - **Scale keys are open-ended.** Use whatever names the project already uses (`oxblood-deep`, `surface-container-low`). Don't rename to Material defaults.
 - **Variants are naming convention, not schema.** `button-primary` / `button-primary-hover` / `button-primary-active` as sibling keys.
 
@@ -63,7 +63,7 @@ Omit irrelevant sections rather than filling them with invented rules. Put respo
 
 ## When to run
 
-- New-work found a coherent incumbent visual system but no `DESIGN.md`.
+- A new-surface request found a coherent incumbent visual system but no `DESIGN.md`.
 - The first implementation of a new world is complete and its provisional decisions need to be carbonized.
 - An existing `DESIGN.md` is stale (the design has drifted).
 - Before a large redesign, to capture the current state as a reference.
@@ -73,9 +73,9 @@ If a `DESIGN.md` already exists, **do not silently overwrite it**. Show the user
 ## Two paths
 
 - **Scan mode** (default): the project has design tokens, components, or rendered output. Extract, then confirm descriptive language. Use when there's code to analyze.
-- **Seed mode**: the project is pre-implementation. Ensure PRODUCT.md exists, then reuse new-work's visual-world workshop and write its directional DESIGN.md seed. Re-run in scan mode once there's code.
+- **Seed mode**: the project is pre-implementation. Ensure PRODUCT.md exists, then choose the visual world with the operator and write a directional DESIGN.md seed. Re-run in scan mode once there's code.
 
-Decide by scanning first (Scan mode Step 1). If the scan finds no tokens, no component files, and no rendered site, offer seed mode; don't silently switch. `@skill impeccable document --seed` requests new-work's world workshop, but it does not authorize replacing coherent code: when an incumbent system exists, offer scan mode or route an explicit identity-replacement request through new-work.
+Decide by scanning first (Scan mode Step 1). If the scan finds no tokens, no component files, and no rendered site, offer seed mode; don't silently switch. `@skill impeccable document --seed` requests the visual-world choice, but it does not authorize replacing coherent code: when an incumbent system exists, offer scan mode or treat an explicit identity-replacement request as a redesign chosen with the operator.
 
 ## Scan mode (approach C: auto-extract, then confirm descriptive language)
 
@@ -109,7 +109,7 @@ From the auto-extracted tokens, draft the YAML frontmatter now (you'll write it 
 - **Colors**: one entry per extracted color. Key = descriptive slug (`oxblood-deep`, `editorial-magenta`, not `blue-800`). Value = whichever format the project treats as canonical (OKLCH or hex; see the frontmatter rules above). Don't split the source of truth: one format in the frontmatter, don't redefine the same token in prose with a different value.
 - **Typography**: one entry per role (`display`, `headline`, `title`, `body`, `label`). Typography is an object; include only the props that are real for the project (`fontFamily`, `fontSize`, `fontWeight`, `lineHeight`, `letterSpacing`, `fontFeature`, `fontVariation`).
 - **Rounded / Spacing**: whatever scale steps the project actually uses, keyed by whatever scale name the project uses (`sm` / `md` / `lg`, or `surface-sm`, or numeric steps).
-- **Components**: one entry per variant (`button-primary`, `button-primary-hover`, `button-ghost`). Reference primitives via `{colors.X}`, `{rounded.Y}`. If a variant needs a property Stitch's 8-prop set doesn't cover (shadow, focus ring, backdrop-filter), carry the full snippet in the sidecar instead.
+- **Components**: one entry per variant (`button-primary`, `button-primary-hover`, `button-ghost`). Reference primitives via `{colors.X}`, `{rounded.Y}`. If a variant needs a property Stitch's 8-prop set doesn't cover (shadow, focus ring, backdrop-filter), carry the full snippet in DESIGN.md prose instead.
 
 Skip anything the project doesn't have. Empty scale keys or fabricated tokens pollute the spec.
 
@@ -259,13 +259,13 @@ Your own write is the freshest source; subsequent commands in this session don't
 
 For projects with no visual system to extract yet. Produces a user-chosen visual-world scaffold, not a fabricated token spec.
 
-### Step 1: Route through new-work's workshop
+### Step 1: Resolve the visual world with the operator
 
 PRODUCT.md is the prerequisite. If it is missing, load [init.md](init.md) and complete its product interview first. Do not create a visual identity without durable product context.
 
-If PRODUCT.md exists, load new-work.md (not vendored in this GoatCitadel build) and resolve visual authority. Seed mode requires a concrete first surface: use the target the user named, or ask what they want to make first. Run new-work's **Create or replace the visual world** flow, then **Commit the world**, so the visual world and its first expression are chosen together. Stop after the directional DESIGN.md seed and surface brief; do not implement. A structured simulated user counts as the user and must get the same choice.
+If PRODUCT.md exists, resolve visual authority inline: the new-work workshop is not vendored in this GoatCitadel build, so choose the visual world with the operator through user_input.request and record the choice in DESIGN.md. Seed mode requires a concrete first surface: use the target the user named, or ask what they want to make first. Choose the visual world and its first expression together with the operator, then commit them in DESIGN.md. Stop after the directional DESIGN.md seed and surface brief; do not implement. A structured simulated user counts as the user and must get the same choice.
 
-If new-work already completed the workshop in this session, use its chosen direction directly. Do not ask again.
+If the visual world was already chosen in this session, use that direction directly. Do not ask again.
 
 ### Step 2: Write seed DESIGN.md
 
@@ -280,7 +280,7 @@ Lead the file with:
 Per-section guidance in seed mode:
 
 - **Overview**: the chosen design thesis, layout behavior, material character, imagery stance, motion grammar, and reusable signature. Keep the selected first-surface expression in its surface brief; do not promote its composition into the global world.
-- **Colors**: the selected palette strategy and roles. Include values only when the user, an existing asset, or new-work's exploration established them; otherwise mark them `[to be resolved during implementation]`.
+- **Colors**: the selected palette strategy and roles. Include values only when the user, an existing asset, or the operator's choice established them; otherwise mark them `[to be resolved during implementation]`.
 - **Typography**: the selected type character and role relationship. Include font names only when established; otherwise mark the pairing `[to be resolved during implementation]`.
 - **Layout**: the selected spatial grammar and responsive behavior, without pretending exact measurements are settled.
 - **Elevation & Depth**: the selected material and depth behavior, stated as an invariant rather than inferred from a generic preset.
@@ -319,4 +319,4 @@ Your own write is the freshest source; no reload needed.
 - Don't replace canonical sections with near-synonyms. Put layout and responsive behavior in `Layout`; put motion with the affected world or component.
 - Don't rename sections even slightly. "Colors" not "Color Palette & Roles". "Typography" not "Typography Rules". Tooling parsing depends on exact headers.
 - Don't duplicate token values between frontmatter and prose. If a color is in `colors.primary` as hex, the prose can name it and describe its role but should not reassert a different hex. The frontmatter is normative.
-- Don't invent frontmatter token groups outside Stitch's schema (no `motion:`, `breakpoints:`, `shadows:` at the top level). Stitch's Zod schema only accepts `colors`, `typography`, `rounded`, `spacing`, `components`. Anything else belongs in the sidecar's `extensions`.
+- Don't invent frontmatter token groups outside Stitch's schema (no `motion:`, `breakpoints:`, `shadows:` at the top level). Stitch's Zod schema only accepts `colors`, `typography`, `rounded`, `spacing`, `components`. Anything else belongs in DESIGN.md prose under the relevant section.

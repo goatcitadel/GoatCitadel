@@ -50,7 +50,7 @@ const COMMAND_LIST =
 const SKILL_SRC = [
   "---",
   "name: impeccable",
-  'description: "Use when the user wants to design, redesign, or polish a frontend interface."',
+  'description: "Use when the user wants to design, redesign, shape, critique, audit, polish, clarify, distill, harden, optimize, adapt, animate, colorize, extract, or otherwise improve a frontend interface. Also use for bland designs that need to become bolder or more delightful, loud designs that should become quieter, live browser iteration on UI elements, or ambitious visual effects that should feel technically extraordinary. Not for backend-only or non-UI tasks."',
   'argument-hint: "[{{command_hint}}] [target]"',
   "user-invocable: true",
   "allowed-tools:",
@@ -72,6 +72,8 @@ const SKILL_SRC = [
   "## How to design",
   "",
   "- **The brief wins.** Honor pinned aesthetics. <!-- rule:skill-brief-wins -->",
+  "- **Refinement preserves; redesign replaces.** Redesign treats the old look as evidence and anti-reference; choose a replacement world in new-work and replace DESIGN.md. <!-- rule:skill-world-change-semantics -->",
+  "- **Visual authority is evidence, not a filename.** Missing DESIGN.md alone does not make a project greenfield; new-work decides whether to preserve, expand, or replace the incumbent world. <!-- rule:skill-new-work-gate -->",
   "",
   "## Modes",
   "",
@@ -126,6 +128,12 @@ const REFERENCES = {
     "",
     "Use the PRODUCT.md path resolved by `impeccable context`. Update it instead of creating a competing authority.",
     "",
+    "- **Redesign/rebrand request:** preserve confirmed product truth unless the user changes it. Visual replacement happens later in new-work, not here.",
+    "",
+    "Never silently overwrite an existing file or offer DESIGN.md during init. If another request invoked init, finish PRODUCT.md and resume it. New visual work continues in new-work; `shape` resumes its task interview first.",
+    "",
+    "Before loading new-work or resuming shape/build, verify that PRODUCT.md exists at the resolved path and contains the confirmed product record.",
+    "",
     "{{ask_instruction}} Ask only about material gaps.",
     "",
     "When the platform you just recorded is `ios`, load [ios.md](ios.md) before any design work. On a project that had no PRODUCT.md, `impeccable context` could not know the platform.",
@@ -138,8 +146,9 @@ const REFERENCES = {
     "",
     "## Step 6: Wrap up or resume",
     "",
-    "- Empty or early project: use `/impeccable shape <surface>` when the user wants a brief.",
+    "- Empty or early project: use `/impeccable shape <surface>` when the user wants a brief. New-work will establish a visual world only when the requested work needs one.",
     "- Web project ready for visual iteration: `/impeccable live` when configured.",
+    "- Iterate in the browser with `{{command_prefix}}impeccable live` once the dev server runs.",
     "",
   ].join("\n"),
   polish: [
@@ -169,7 +178,15 @@ const REFERENCES = {
     "",
   ].join("\n"),
   bolder:
-    "# Bolder\n\nIf unclear, do not guess. {{ask_instruction}}\n\nWhen it holds, hand off to `{{command_prefix}}impeccable polish` for the final pass.\n",
+    '# Bolder\n\nAn open direction round owns the word first: "bolder" said while a direction decision is on the table is the Bolder hand register steer, a fresh deal of foreign forms (see new-work.md), not this command. This command refines a surface whose world already shipped.\n\nIf unclear, do not guess. {{ask_instruction}}\n\nWhen it holds, hand off to `{{command_prefix}}impeccable polish` for the final pass.\n',
+  shape: [
+    "# Shape",
+    "",
+    "Never ask for CSS values or canned aesthetic lanes. New-work owns visual-world and concept choices.",
+    "",
+    "For new surfaces, brand expansion, or replacement, follow [new-work.md](new-work.md) through visual authority, any world workshop, and concept choice. Reuse discovery, then return before its contract, persistence, or implementation.",
+    "",
+  ].join("\n"),
   typeset: [
     "# Typeset",
     "",
@@ -206,13 +223,25 @@ const EXCLUDED_FIXTURE = {
 };
 
 function oversizeDocument() {
-  const filler = (label) => `${label} paragraph. `.repeat(600);
+  return documentFixture({ oversize: true });
+}
+
+function documentFixture({ oversize }) {
+  const filler = (label) => (oversize ? `${label} paragraph. `.repeat(600) : `${label} paragraph.`);
   return [
     "# Document",
     "",
     "Intro paragraph before any heading.",
     "",
     "## Step 1: Scan tokens",
+    "",
+    "- New-work found a coherent incumbent visual system but no `DESIGN.md`.",
+    "- **Seed mode**: the project is pre-implementation. Ensure PRODUCT.md exists, then reuse new-work's visual-world workshop and write its directional DESIGN.md seed. Re-run in scan mode once there's code.",
+    "",
+    "Decide by scanning first (Scan mode Step 1). `/impeccable document --seed` requests new-work's world workshop, but it does not authorize replacing coherent code: when an incumbent system exists, offer scan mode or route an explicit identity-replacement request through new-work.",
+    "",
+    "- **Component sub-tokens** are limited to 8 props. Shadows, motion, focus rings, backdrop-filter: none of those fit. Carry them in the sidecar (Step 4b).",
+    "- **Components**: one entry per variant. If a variant needs a property Stitch's 8-prop set doesn't cover (shadow, focus ring, backdrop-filter), carry the full snippet in the sidecar instead.",
     "",
     filler("Scan"),
     "",
@@ -221,6 +250,10 @@ function oversizeDocument() {
     "```",
     "",
     "## Step 4: Write DESIGN.md",
+    "",
+    "**What changed from schemaVersion 1.** The old sidecar carried token primitive arrays. Those values now live in the frontmatter.",
+    "",
+    "- Don't invent frontmatter token groups outside Stitch's schema. Anything else belongs in the sidecar's `extensions`.",
     "",
     filler("Write"),
     "",
@@ -237,6 +270,14 @@ function oversizeDocument() {
     "## Step 6: Verify",
     "",
     filler("Verify"),
+    "",
+    "### Step 1: Route through new-work's workshop",
+    "",
+    "If PRODUCT.md exists, load [new-work.md](new-work.md) and resolve visual authority. Seed mode requires a concrete first surface: use the target the user named, or ask what they want to make first. Run new-work's **Create or replace the visual world** flow, then **Commit the world**, so the visual world and its first expression are chosen together. Stop after the directional DESIGN.md seed.",
+    "",
+    "If new-work already completed the workshop in this session, use its chosen direction directly. Do not ask again.",
+    "",
+    "- **Colors**: the selected palette strategy and roles. Include values only when the user, an existing asset, or new-work's exploration established them; otherwise mark them `[to be resolved during implementation]`.",
     "",
     'Tell the user: "Re-run `/impeccable document` once you have some code. That pass will extract real tokens and generate the sidecar."',
     "",
@@ -512,6 +553,114 @@ test("drops live-mode sections, native lines, unavailable-command bullets, launc
   assert.ok(!part3.includes("generate the sidecar"));
 });
 
+test("rewrites sidecar and new-work routing into operator-facing instructions and drops the live-browser claim", () => {
+  const outDir = makeOut();
+  runSync(makeUpstream(), outDir);
+  const skill = read(outDir, "SKILL.md");
+  const description = skill.split("\n").find((line) => line.startsWith("description: "));
+  assert.ok(!description.includes("live browser"));
+  assert.ok(!description.includes("critique,"));
+  assert.ok(description.includes("design, redesign, shape, audit, polish,"));
+  assert.ok(skill.includes("choose a replacement world with the operator and replace DESIGN.md"));
+  assert.ok(skill.includes("the evidence decides whether to preserve, expand, or replace the incumbent world"));
+  assert.ok(skill.includes("`new-work` (the visual-world workshop) is not vendored either"));
+  assert.ok(skill.includes("user_input.request"));
+  const part1 = read(outDir, "reference/document/01-step-1-scan-tokens.md");
+  assert.ok(part1.includes("- A new-surface request found a coherent incumbent visual system but no `DESIGN.md`."));
+  assert.ok(part1.includes("then choose the visual world with the operator and write a directional DESIGN.md seed"));
+  assert.ok(
+    part1.includes(
+      "`@skill impeccable document --seed` requests the visual-world choice, but it does not authorize replacing coherent code: when an incumbent system exists, offer scan mode or treat an explicit identity-replacement request as a redesign chosen with the operator.",
+    ),
+  );
+  assert.ok(part1.includes("Carry them in DESIGN.md prose under the relevant section."));
+  assert.ok(part1.includes("carry the full snippet in DESIGN.md prose instead."));
+  const part2 = read(outDir, "reference/document/02-step-4-write-design-md.md");
+  assert.ok(!part2.includes("What changed from schemaVersion 1"));
+  assert.ok(part2.includes("Anything else belongs in DESIGN.md prose under the relevant section."));
+  const part3 = read(outDir, "reference/document/03-step-6-verify.md");
+  assert.ok(part3.includes("### Step 1: Resolve the visual world with the operator"));
+  assert.ok(
+    part3.includes(
+      "If PRODUCT.md exists, resolve visual authority inline: the new-work workshop is not vendored in this GoatCitadel build, so choose the visual world with the operator through user_input.request and record the choice in DESIGN.md.",
+    ),
+  );
+  assert.ok(
+    part3.includes(
+      "Choose the visual world and its first expression together with the operator, then commit them in DESIGN.md.",
+    ),
+  );
+  assert.ok(
+    part3.includes(
+      "If the visual world was already chosen in this session, use that direction directly. Do not ask again.",
+    ),
+  );
+  assert.ok(part3.includes("or the operator's choice established them"));
+  for (const part of [part1, part2, part3]) assert.ok(!part.includes("sidecar"));
+  const init = read(outDir, "reference/init.md");
+  assert.ok(init.includes("Visual replacement happens later, not here."));
+  assert.ok(init.includes("New visual work continues after init; `shape` resumes its task interview first."));
+  assert.ok(init.includes("Before any visual-world work or resuming shape/build, verify that PRODUCT.md exists"));
+  assert.ok(init.includes("Establish a visual world only when the requested work needs one."));
+  assert.ok(
+    !init.includes("impeccable live"),
+    "unavailable commands behind the command_prefix placeholder are dropped too",
+  );
+  const shape = read(outDir, "reference/shape.md");
+  assert.ok(shape.includes("Visual-world and concept choices are made with the operator."));
+  assert.ok(
+    shape.includes(
+      "resolve visual authority, any world choice, and concept choice with the operator (the new-work workshop is not vendored in this GoatCitadel build).",
+    ),
+  );
+  assert.ok(
+    read(outDir, "reference/bolder.md").includes("(the new-work workshop is not vendored in this GoatCitadel build)"),
+  );
+});
+
+test("refuses to vendor into a directory that is not an impeccable skill directory", () => {
+  const outDir = makeOut();
+  fs.writeFileSync(path.join(outDir, "SKILL.md"), "---\nname: other-skill\ndescription: x\n---\n\nBody.\n");
+  fs.mkdirSync(path.join(outDir, "reference"), { recursive: true });
+  fs.writeFileSync(path.join(outDir, "reference", "theirs.md"), "# Theirs\n");
+  assert.throws(() => runSync(makeUpstream(), outDir), /refusing to vendor into .*SKILL\.md/u);
+  assert.ok(fs.existsSync(path.join(outDir, "reference", "theirs.md")), "nothing was deleted");
+  assert.equal(read(outDir, "SKILL.md"), "---\nname: other-skill\ndescription: x\n---\n\nBody.\n");
+});
+
+test("guards leftover sidecar and unavailable-command mentions", () => {
+  assert.throws(
+    () => runSync(makeUpstream({ references: { harden: "# Harden\n\nKeep it in the sidecar.\n" } }), makeOut()),
+    /reference\/harden\.md:3: sidecar/u,
+  );
+  // Prose lines invoking an unavailable command are dropped; one inside a code fence survives the
+  // drop and must still be refused.
+  assert.throws(
+    () =>
+      runSync(makeUpstream({ references: { harden: "# Harden\n\n```\n@skill impeccable live\n```\n" } }), makeOut()),
+    /reference\/harden\.md:4: @skill impeccable live/u,
+  );
+});
+
+test("records LF-normalized upstream hashes and only claims a split when one happened", () => {
+  const outDir = makeOut();
+  runSync(makeUpstream(), outDir);
+  const upstreamDoc = read(outDir, "UPSTREAM.md");
+  assert.ok(
+    upstreamDoc.includes(
+      "| Vendored path | Upstream path | Upstream sha256 (LF-normalized) | Vendored sha256 | Notes |",
+    ),
+  );
+  const hardenUpstreamLf = sha256(Buffer.from("# Harden\n\nTrailing spaces here.   \nAnd here.\t\n", "utf8"));
+  assert.ok(upstreamDoc.includes(`| reference/harden.md | skill/reference/harden.md | ${hardenUpstreamLf} |`));
+  assert.ok(read(outDir, "NOTICE").includes("oversize references were split by section"));
+  const smallOut = makeOut();
+  runSync(makeUpstream({ references: { document: documentFixture({ oversize: false }) } }), smallOut);
+  assert.ok(fs.existsSync(path.join(smallOut, "reference", "document.md")));
+  assert.ok(!fs.existsSync(path.join(smallOut, "reference", "document")), "no split directory for a small reference");
+  assert.ok(!read(smallOut, "NOTICE").includes("were split"));
+});
+
 test("normalizes line endings and trailing whitespace", () => {
   const outDir = makeOut();
   runSync(makeUpstream(), outDir);
@@ -531,8 +680,8 @@ test("fails the forbidden-string guard naming the file and line", () => {
       return true;
     },
   );
-  const grokUpstream = makeUpstream({ references: { shape: "# Shape\n\nAlso works in Grok Build.\n" } });
-  assert.throws(() => runSync(grokUpstream, makeOut()), /reference\/shape\.md:3/u);
+  const grokUpstream = makeUpstream({ references: { extract: "# Extract\n\nAlso works in Grok Build.\n" } });
+  assert.throws(() => runSync(grokUpstream, makeOut()), /reference\/extract\.md:3/u);
 });
 
 test("writes UPSTREAM.md with the commit, per-file hashes, exclusions, transforms, and local files", () => {
@@ -558,13 +707,15 @@ test("writes UPSTREAM.md with the commit, per-file hashes, exclusions, transform
   assert.ok(notice.includes("reference/artifacts.md"));
 });
 
-test("preserves local files, removes stale vendored files, and is idempotent", () => {
+test("preserves local files, removes stale vendored files on re-sync, and is idempotent", () => {
   const outDir = makeOut();
   fs.mkdirSync(path.join(outDir, "reference"), { recursive: true });
   const local = "# Artifacts\n\nGoatCitadel-authored.\n";
   fs.writeFileSync(path.join(outDir, "reference", "artifacts.md"), local);
-  fs.writeFileSync(path.join(outDir, "reference", "stale.md"), "# Stale\n");
   const upstream = makeUpstream();
+  runSync(upstream, outDir);
+  // A file left behind by an earlier vendoring (or a renamed reference) is stale on the next sync.
+  fs.writeFileSync(path.join(outDir, "reference", "stale.md"), "# Stale\n");
   runSync(upstream, outDir);
   assert.equal(read(outDir, "reference/artifacts.md"), local);
   assert.ok(!fs.existsSync(path.join(outDir, "reference", "stale.md")));

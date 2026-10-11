@@ -32,11 +32,11 @@ Run only for material unresolved decisions:
 - What must remain untouched? What would make the result feel wrong even if it looked polished?
 - Which platform, framework, performance, accessibility, localization, or delivery constraints are binding?
 
-Never ask for CSS values or canned aesthetic lanes. New-work owns visual-world and concept choices.
+Never ask for CSS values or canned aesthetic lanes. Visual-world and concept choices are made with the operator.
 
 ## Phase 2: Resolve the design direction
 
-For new surfaces, brand expansion, or replacement, follow new-work.md (not vendored in this GoatCitadel build) through visual authority, any world workshop, and concept choice. Reuse discovery, then return before its contract, persistence, or implementation. Inside an established world, use its concept process only when composition or interaction remains materially open.
+For new surfaces, brand expansion, or replacement, resolve visual authority, any world choice, and concept choice with the operator (the new-work workshop is not vendored in this GoatCitadel build). Reuse discovery, then return before its contract, persistence, or implementation. Inside an established world, use its concept process only when composition or interaction remains materially open.
 
 ## Phase 3: Write the brief
 
