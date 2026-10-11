@@ -1880,6 +1880,13 @@ export class ToolPolicyEngine {
       taskId: request.taskId,
     };
 
+    if (request.toolName === "tool_artifact.read") {
+      preview.target = `Stored tool artifact ${String(request.args.artifactId)}; character offset ${String(request.args.offset ?? 0)}; up to ${String(request.args.maxChars ?? 8000)} characters`;
+      preview.offset = request.args.offset ?? 0;
+      preview.maxChars = request.args.maxChars ?? 8000;
+      return preview;
+    }
+
     const pathValue = request.args.path ?? request.args.to ?? request.args.from;
     if (pathValue) {
       preview.path = String(pathValue);

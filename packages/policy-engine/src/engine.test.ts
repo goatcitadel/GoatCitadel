@@ -194,6 +194,24 @@ describe("stored tool artifact reads", () => {
     expect(result.outcome).toBe("blocked");
     expect(result.policyReason).toContain("Stored tool artifact reads are unavailable");
   });
+
+  it.each([
+    { args: request.args, offset: 0, maxChars: 8000 },
+    { args: { ...request.args, offset: 5000, maxChars: 9000 }, offset: 5000, maxChars: 9000 },
+  ])("includes the exact artifact and page bounds in an approval preview", async ({ args, offset, maxChars }) => {
+    const storage = createStorageStub();
+    const readToolArtifact = vi.fn(async () => ({ content: "saved research" }));
+    const engine = new ToolPolicyEngine({
+      ...policyConfig, tools: { ...policyConfig.tools, approvalMode: "approve_all" },
+    }, storage, undefined, { readToolArtifact });
+    expect((await engine.invoke({ ...request, args })).outcome).toBe("approval_required");
+    expect(storage.approvals.createWithTtlDuration).toHaveBeenCalledWith(expect.objectContaining({
+      preview: expect.objectContaining({
+        target: `Stored tool artifact ${request.args.artifactId}; character offset ${offset}; up to ${maxChars} characters`, offset, maxChars,
+      }),
+    }), expect.any(Number));
+    expect(readToolArtifact).not.toHaveBeenCalled();
+  });
 });
 
 describe("ToolPolicyEngine permission profile upper bound", () => {
