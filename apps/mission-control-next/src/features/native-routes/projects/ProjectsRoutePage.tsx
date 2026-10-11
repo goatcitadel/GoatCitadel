@@ -52,6 +52,7 @@ import {
   type ProjectIntakeMode,
   type ProjectIntakeModeId,
 } from "./ProjectsRoutePage.helpers";
+import { useProjectAccess } from "./use-project-access";
 import { PROJECT_FILTER_VIEWS, useProjectPinController, type ProjectFilterView } from "./use-project-pin-archive";
 import { useProjectRevisionConflict } from "./use-project-revision-conflict";
 import { hasSessionDraft, useSessionDraft } from "../library/session-drafts";
@@ -123,7 +124,9 @@ function ProjectsWorkspace({
     onProjectsRefreshed: replaceProjects,
   });
 
-  const pinController = useProjectPinController(activeWorkspaceId);
+  // Same owner scope as Cockpit's Chat projects, so a pin made in either shell is the same pin.
+  const access = useProjectAccess(JSON.stringify([activeCitadelId, activeWorkspaceId]));
+  const pinController = useProjectPinController(activeWorkspaceId, access.presentationScope);
 
   const handleFocusCreateProject = () => leave.request(() => setEditor("create"));
   useEffect(() => { if (editor === "create") createProjectNameRef.current?.focus(); }, [editor]);

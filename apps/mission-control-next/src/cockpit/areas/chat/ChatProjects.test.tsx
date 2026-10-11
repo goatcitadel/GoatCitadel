@@ -36,6 +36,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
   createChatSession: api.createSession,
 }));
 vi.mock("./ProjectRecents", () => ({ ProjectRecents: () => <p>Recent project history</p> }));
+const workspaceNames = vi.hoisted(() => ({ byId: { "workspace-a": "Alpha workspace" } as Record<string, string | undefined> }));
+vi.mock("../../data/use-workspace-name", () => ({
+  useWorkspaceName: (_citadelId: string | undefined, workspaceId: string | undefined) => workspaceNames.byId[workspaceId ?? ""],
+}));
 vi.mock("../../ui/ClassicOwnerLink", () => ({
   ClassicOwnerLink: ({ href, label }: { href: string; label: string }) => <a href={href}>{label}</a>,
 }));
@@ -295,4 +299,14 @@ it("opens the exact conversation for the existing reviewed assignment owner", as
   expect(new URLSearchParams(window.location.search).get("sessionId")).toBe("conversation-a");
   expect(new URLSearchParams(window.location.search).get("assignProjectId")).toBe("project-a");
   expect(window.location.pathname).toBe("/chat");
+});
+
+it("names the workspace in the Projects intro and keeps its id only as a technical title", async () => {
+  workspaceNames.byId = { "workspace-a": "Alpha workspace" };
+  await render();
+  const intro = () => document.querySelector<HTMLElement>('p[title="workspace-a"]');
+  expect(intro()?.textContent).toBe("Organize Chat context for Alpha workspace.");
+  workspaceNames.byId = {};
+  await render();
+  expect(intro()?.textContent).toBe("Organize Chat context for workspace workspace-a.");
 });

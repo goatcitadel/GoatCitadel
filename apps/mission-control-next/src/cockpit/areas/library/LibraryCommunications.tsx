@@ -3,6 +3,8 @@ import type { CalendarAccountRecord, CommunicationsDashboardResponse, MailAccoun
 import { fetchCommunicationsDashboard } from "@goatcitadel/mission-control-shared/api/personal-ops";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { useWorkspaceName } from "../../data/use-workspace-name";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { StatusBadge } from "../../ui/StatusBadge";
@@ -42,6 +44,8 @@ function scopeDashboard(data: CommunicationsDashboardResponse, workspaceId: stri
 
 export function LibraryCommunications({ workspaceId }: { workspaceId: string }) {
   const access = useLibraryOperation(JSON.stringify(["communications", workspaceId]));
+  const { activeCitadelId } = useUiPreferences();
+  const workspaceName = useWorkspaceName(activeCitadelId, workspaceId);
   const query = useQuery({
     queryKey: ["library", "communications", workspaceId, access.identity],
     queryFn: () => fetchCommunicationsDashboard(workspaceId),
@@ -54,8 +58,9 @@ export function LibraryCommunications({ workspaceId }: { workspaceId: string }) 
       <header className="grid min-w-0 gap-2">
         <h1 className="font-display text-xl font-semibold">Mail</h1>
         <p className="text-sm text-fg-secondary">
-          Inbox, agenda and contacts read through governed integrations for workspace {workspaceId}. Sending is
-          approval-gated and this screen never delivers mail.
+          Inbox, agenda and contacts read through governed integrations for{" "}
+          <span title={workspaceId}>{workspaceName ?? `workspace ${workspaceId}`}</span>. Sending is approval-gated and
+          this screen never delivers mail.
         </p>
         <div className="flex flex-wrap gap-2">
           <Button disabled={query.isFetching} onClick={() => void refresh()}>

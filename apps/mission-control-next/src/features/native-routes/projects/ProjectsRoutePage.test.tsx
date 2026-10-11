@@ -18,8 +18,22 @@ import {
   updateChatProject,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { deriveProjectHome, ProjectsRoutePage } from "./ProjectsRoutePage";
 import { __resetSessionDraftsForTests } from "../library/session-drafts";
+
+const pinController = vi.hoisted(() => ({ calls: [] as unknown[][] }));
+vi.mock("./use-project-pin-archive", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./use-project-pin-archive")>();
+  return {
+    ...original,
+    useProjectPinController: (...args: Parameters<typeof original.useProjectPinController>) => {
+      pinController.calls.push(args);
+      return original.useProjectPinController(...args);
+    },
+  };
+});
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   archiveChatProject: vi.fn(),
@@ -753,5 +767,16 @@ describe("ProjectsRoutePage", () => {
     });
 
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("scopes project pins to the same owner presentation scope Cockpit Chat projects use", async () => {
+    pinController.calls.length = 0;
+    await renderPage();
+    const presentationScope = JSON.stringify([
+      getGatewayApiBaseUrl(),
+      getGatewayCallerScope(),
+      JSON.stringify(["company", "default"]),
+    ]);
+    expect(pinController.calls[0]).toEqual(["default", presentationScope]);
   });
 });
