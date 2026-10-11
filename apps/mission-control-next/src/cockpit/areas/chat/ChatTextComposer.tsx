@@ -6,7 +6,7 @@ import { Button } from "../../ui/Button";
 import { ChatComposerControls } from "./ChatComposerControls";
 import { ChatComposerPalette } from "./ChatComposerPalette";
 import { ChatRunVariables } from "./ChatRunVariables";
-import { composerSendBlock, type ComposerSendBlock } from "./composer-send-block";
+import { committedCommandDraft, composerSendBlock, type ComposerSendBlock } from "./composer-send-block";
 import { isImeEnter } from "./ime";
 import { useProjectSwitchReview } from "../../../features/threaded-surface/useProjectSwitchReview";
 import { useChatSelectionReview } from "./use-chat-owner-navigation";
@@ -188,7 +188,8 @@ export function ChatTextComposer({
     if (event.key === "Enter") {
       if (isImeEnter(event) || (event.shiftKey && !event.ctrlKey && !event.metaKey)) return;
       event.preventDefault();
-      if (props.commandSuggestions.length && !localReady) {
+      // A committed command (`/help`, `/help args`) sends; only a partial token applies the highlighted suggestion.
+      if (props.commandSuggestions.length && !localReady && !committedCommandDraft(props.draft, props.commandSuggestions)) {
         const selected = props.commandSuggestions[props.commandIndex];
         if (selected) {
           if (props.composerPalette?.enabled) selectPaletteItem(selected);

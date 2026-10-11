@@ -11,16 +11,13 @@ import {
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { ChatConversationFilters } from "./ChatConversationFilters";
-import { ChatEmptyState, ChatHeaderSubtitle, ChatSetupBanner } from "./ChatAreaChrome";
-import { ChatMobileConversationSelect } from "./ChatMobileConversationSelect";
+import { ChatEmptyState, ChatSessionHeader, ChatSetupBanner } from "./ChatAreaChrome";
 import { ChatTranscript } from "./ChatTranscript";
 import { ChatTextComposer } from "./ChatTextComposer";
-import { ChatSessionOverflow, ChatSessionTitle } from "./ChatSessionControls";
 import { ChatInspector } from "./ChatInspector";
 import { chatSelectionHref } from "./chat-selection-evidence";
 import { readCockpitHistory } from "../../app/cockpit-history";
 import { resolveCockpitCompatibility } from "../../app/cockpit-compatibility";
-import { SelectedThreadActivity } from "./SelectedThreadActivity";
 import { ThreadList } from "./ThreadList";
 import { useInspector } from "../../app/inspector";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
@@ -250,65 +247,30 @@ export function ChatAreaView({
         </Dialog>
       ) : null}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex min-h-12 items-center justify-between gap-2 border-b border-line-subtle px-3">
-          <div className="min-w-0 flex-1">
-            <ChatSessionTitle
-              key={selectedSessionId}
-              title={active?.sessionTitle ?? "Chat"}
-              dock={input.contextDockProps}
-            />
-            <ChatHeaderSubtitle
-              active={active}
-              projectName={session?.projectName}
-              loading={input.sessionRail.loading}
-            />
-          </div>
-          <Button size="sm" onClick={() => navigate("/chat/projects")}>Projects</Button>
-          <ChatMobileConversationSelect rail={input.sessionRail} onOpenFilters={() => setFiltersOpen(true)} />
-          <SelectedThreadActivity session={session} />
-          <Button
-            size="sm"
-            className="md:hidden max-sm:h-11 max-sm:px-4"
-            aria-label="New conversation"
-            disabled={input.sessionRail.creatingSession || input.sessionRail.loading}
-            onClick={() => void input.sessionRail.onCreateSession()}
-          >
-            New
-          </Button>
-          {active ? (
-            <Button size="sm" className="hidden md:inline-flex" onClick={() => openInspector()}>
-              Inspect
-            </Button>
-          ) : null}
-          {codePanel ? (
-            <Button
-              size="sm"
-              className="whitespace-nowrap max-sm:h-11 max-sm:px-3"
-              aria-expanded={buildOpen}
-              aria-label={buildOpen ? "Back to conversation" : "Build editor"}
-              onClick={() => {
-                if (!buildOpen) {
-                  const turnId = buildEditorTurnId(active);
-                  if (turnId) active?.onSelectTurn(turnId);
+        <ChatSessionHeader
+          input={input}
+          active={active}
+          session={session}
+          selectedSessionId={selectedSessionId}
+          buildEditor={
+            codePanel
+              ? {
+                  open: buildOpen,
+                  onToggle: () => {
+                    if (!buildOpen) {
+                      const turnId = buildEditorTurnId(active);
+                      if (turnId) active?.onSelectTurn(turnId);
+                    }
+                    setBuildOpen((open) => !open);
+                  },
                 }
-                setBuildOpen((open) => !open);
-              }}
-            >
-              <span className="max-sm:hidden">{buildOpen ? "Back to conversation" : "Build editor"}</span>
-              <span aria-hidden="true" className="sm:hidden">
-                {buildOpen ? "Back" : "Build"}
-              </span>
-            </Button>
-          ) : null}
-          {active ? (
-            <ChatSessionOverflow
-              key={selectedSessionId}
-              dock={input.contextDockProps}
-              onFork={latestTurnId ? () => active.onStartNewThreadFromTurn(latestTurnId) : undefined}
-              onInspect={() => openInspector()}
-            />
-          ) : null}
-        </header>
+              : null
+          }
+          onOpenProjects={() => navigate("/chat/projects")}
+          onOpenFilters={() => setFiltersOpen(true)}
+          onInspect={() => openInspector()}
+          onFork={active && latestTurnId ? () => active.onStartNewThreadFromTurn(latestTurnId) : undefined}
+        />
         {active ? <ProjectAssignmentReview active={active} /> : null}
         {onboarding.data && !onboarding.isError && !onboarding.data.completed && !buildOpen ? (
           <ChatSetupBanner onReturnToSetup={() => navigate("/settings/first-run")} />

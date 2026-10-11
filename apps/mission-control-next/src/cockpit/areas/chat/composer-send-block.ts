@@ -38,6 +38,21 @@ export type ComposerSendBlock =
 
 export const ROUTE_CHECKING_MESSAGE = "Checking the chat route. Send will wait for the Gateway check.";
 
+/**
+ * A slash command is committed once its first token (`/word`, followed by whitespace or the end of the
+ * draft) exactly equals a listed suggestion's apply value. The palette trigger keeps a complete command's
+ * suggestion open, so without this rule Enter would re-apply the same command forever instead of sending.
+ * Context (`@`) and skill (`$`) tokens are never committed this way; applying them clears their trigger.
+ */
+export function committedCommandDraft(
+  draft: string,
+  suggestions: readonly Pick<SendBlockProps["commandSuggestions"][number], "applyValue">[],
+): boolean {
+  const token = /^\s*(\/\S+)(?=\s|$)/u.exec(draft)?.[1];
+  if (!token) return false;
+  return suggestions.some((suggestion) => suggestion.applyValue.trim() === token);
+}
+
 export function composerSendBlock(props: SendBlockProps): ComposerSendBlock | null {
   if (props.historicalReadOnly)
     return {
@@ -55,7 +70,11 @@ export function composerSendBlock(props: SendBlockProps): ComposerSendBlock | nu
   if (props.composerPalette?.globalOpen) return { kind: "blocked", message: "Choose a palette item before sending." };
   if (props.routeBoundaryAckRequired && !props.routeBoundaryAcknowledged)
     return { kind: "blocked", message: "Acknowledge the route fallback before sending." };
-  if (props.commandSuggestions.length && /^\s*[/@$]/.test(props.draft))
+  if (
+    props.commandSuggestions.length &&
+    /^\s*[/@$]/.test(props.draft) &&
+    !committedCommandDraft(props.draft, props.commandSuggestions)
+  )
     return { kind: "blocked", message: "Choose a suggestion before sending." };
   if (!props.canSend && (props.draft.trim() || props.pendingAttachments.length)) {
     if (props.profileDependentAdmissionBlockReason)
