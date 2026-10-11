@@ -73,7 +73,7 @@ function CockpitShellContent({
   const [collapseOverride, setCollapseOverride] = useState<boolean | null>(null);
   const sidebarCollapsed = collapseOverride ?? tablet;
 
-  const documentTitle = cockpitDocumentTitle(areaLabel, area === "chat" || area === "gallery" ? undefined : rest[0]);
+  const documentTitle = cockpitDocumentTitle(areaLabel, area === "chat" || area === "gallery" ? undefined : rest[0], area);
   useEffect(() => {
     const previous = document.title;
     document.title = documentTitle;

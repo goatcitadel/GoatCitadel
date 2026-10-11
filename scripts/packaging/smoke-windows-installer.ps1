@@ -334,7 +334,7 @@ try {
   $webViewTarget = $null
   $desktopStartup = $null
   $expectedWebViewPath = "/settings/onboarding"
-  $expectedWebViewTitle = "GoatCitadel Get started"
+  $expectedWebViewTitle = "GoatCitadel Settings · Get started"
   # Each cold launcher endpoint has a three-minute bound. Allow both plus page
   # navigation, while rejecting native failures immediately. Debug-port flags are
   # intentionally ignored by elevated WebView2 hosts on hosted Windows runners.
