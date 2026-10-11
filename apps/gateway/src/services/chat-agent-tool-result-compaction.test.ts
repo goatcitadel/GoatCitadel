@@ -212,6 +212,11 @@ describe("chat-agent-tool-result-compaction", () => {
       resultCount: 2,
       artifactId: "artifact-1",
       artifactPath: "artifacts/tool-output.json",
+      artifactRead: {
+        toolName: "tool_artifact.read",
+        args: { artifactId: "artifact-1" },
+        note: "Internal storage reference, not a workspace file. Read by artifactId; do not use fs.read on artifactPath.",
+      },
       byteLength: 12001,
       originalByteLength: 12001,
       contentType: "application/json",

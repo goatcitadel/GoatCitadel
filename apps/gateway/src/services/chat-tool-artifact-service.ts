@@ -6,6 +6,43 @@ import { redactSecretText, redactStructuredSecrets, ValidationError } from "@goa
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
+import { z } from "zod";
+
+const toolArtifactReadSchema = z.object({
+  artifactId: z.string().uuid(),
+  offset: z.number().int().min(0).default(0),
+  maxChars: z.number().int().min(1).max(12000).default(8000),
+}).strict();
+
+export async function readChatToolArtifactForTool(
+  deps: ChatToolArtifactHost,
+  request: { sessionId: string; args: Record<string, unknown> },
+): Promise<Record<string, unknown>> {
+  const args = toolArtifactReadSchema.parse(request.args);
+  const session = await deps.requireChatSession(request.sessionId);
+  if (!session.workspaceId?.trim()) {
+    throw new ValidationError({ message: "Current chat session has no owning workspace." });
+  }
+  const loaded = await getChatToolArtifactContent(deps, args.artifactId, {
+    workspaceId: session.workspaceId,
+    sessionId: request.sessionId,
+  });
+  if (args.offset > loaded.content.length) {
+    throw new ValidationError({ message: "Artifact offset exceeds the stored content length." });
+  }
+  const content = loaded.content.slice(args.offset, args.offset + args.maxChars);
+  const nextOffset = args.offset + content.length;
+  return {
+    artifactId: loaded.artifact.artifactId,
+    sourceToolName: loaded.artifact.toolName,
+    contentType: loaded.artifact.contentType,
+    content,
+    offset: args.offset,
+    totalChars: loaded.content.length,
+    truncated: nextOffset < loaded.content.length,
+    ...(nextOffset < loaded.content.length ? { nextOffset } : {}),
+  };
+}
 
 export interface ChatToolArtifactHost {
   readonly config: GatewayRuntimeConfig;
@@ -72,7 +109,7 @@ export async function persistChatToolArtifact(
 export async function getChatToolArtifactContent(
   deps: ChatToolArtifactHost,
   artifactId: string,
-  options: { workspaceId: string },
+  options: { workspaceId: string; sessionId?: string },
 ): Promise<{
   artifact: {
     artifactId: string;
@@ -98,6 +135,9 @@ export async function getChatToolArtifactContent(
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "workspaceId" });
   }
   const artifact = await deps.storage.chatToolArtifacts.get(artifactId);
+  if (options.sessionId && artifact.sessionId !== options.sessionId) {
+    throw new ValidationError({ message: "Artifact does not belong to the current chat session." });
+  }
   const session = await deps.requireChatSession(artifact.sessionId);
   if (session.workspaceId !== workspaceId) {
     throw new ValidationError({ message: "Artifact does not belong to the requested workspace." });
@@ -112,7 +152,12 @@ export async function getChatToolArtifactContent(
   if (absolutePath !== artifactRoot && !absolutePath.startsWith(normalizedRoot)) {
     throw new ValidationError({ message: "Artifact path escapes the configured data directory." });
   }
-  const content = await fs.readFile(absolutePath, "utf8");
+  const [realRoot, realPath] = await Promise.all([fs.realpath(artifactRoot), fs.realpath(absolutePath)]);
+  const realRelativePath = path.relative(realRoot, realPath);
+  if (realRelativePath.startsWith(`..${path.sep}`) || realRelativePath === ".." || path.isAbsolute(realRelativePath)) {
+    throw new ValidationError({ message: "Artifact path escapes the configured data directory." });
+  }
+  const content = await fs.readFile(realPath, "utf8");
   const projectedContent = projectToolArtifactContent(content, artifact.contentType);
   const projectedArtifact = {
     ...artifact,

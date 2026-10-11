@@ -113,6 +113,8 @@ export function setShellOutputRetentionBytesForTesting(
 }
 
 export interface ToolExecutorRuntimeHooks {
+  /** Gateway-owned, session-scoped reads of persisted tool output. */
+  readToolArtifact?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
   /**
    * Acquire a request-scoped runtime lease only when the resolved embedding
    * transport is the configured local llama.cpp service.
@@ -323,6 +325,12 @@ export async function executeTool(
     );
   }
   switch (request.toolName) {
+    case "tool_artifact.read": {
+      if (!runtimeHooks.readToolArtifact) {
+        throw new Error("Stored tool artifact reads are unavailable in this runtime.");
+      }
+      return finalizeToolResult(await runtimeHooks.readToolArtifact(request));
+    }
     case CHANGE_REQUEST_TOOL_NAME: {
       if (!runtimeHooks.requestChangePlan) {
         throw new Error("Change Plan requests are unavailable in this runtime.");

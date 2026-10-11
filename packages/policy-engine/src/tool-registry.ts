@@ -87,6 +87,27 @@ const ARTIFACT_DESTINATION_ARG_SCHEMA = {
 
 const BUILTIN_TOOLS: ToolDefinition[] = [
   {
+    name: "tool_artifact.read",
+    category: "research",
+    riskLevel: "safe",
+    requiresApproval: false,
+    readOnly: true,
+    description: "Read a bounded page of saved tool output by artifact ID from the current chat session. Internal artifact paths are not workspace files; use this tool instead of fs.read.",
+    pack: "core",
+    recommendedContexts: ["chat", "cowork", "code"],
+    preferredForIntents: ["research", "web_lookup", "artifact_output"],
+    argSchema: {
+      type: "object",
+      properties: {
+        artifactId: { type: "string", format: "uuid" },
+        offset: { type: "integer", minimum: 0 },
+        maxChars: { type: "integer", minimum: 1, maximum: 12000 },
+      },
+      required: ["artifactId"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: CHANGE_REQUEST_TOOL_NAME,
     category: "ops",
     riskLevel: "safe",

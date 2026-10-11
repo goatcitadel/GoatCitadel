@@ -1363,6 +1363,7 @@ export class GatewayService {
       // audit fire first in `engine.invoke`.
       subagentFanout: (request) => this.subagentFanout.execute(request),
       getChatSessionStatus: (sessionId) => this.chatSessionStatusService.getModelProjection(sessionId),
+      readToolArtifact: (request) => chatToolArtifactService.readChatToolArtifactForTool(this, request),
       assertOptionalUserInputAvailable: async () => {
         if (!(await this.isFeatureEnabled("chatAsyncClarificationV1Enabled")))
           throw new Error("Optional clarification is disabled.");

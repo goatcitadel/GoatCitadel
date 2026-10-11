@@ -550,6 +550,11 @@ export function compactToolResultForTurn(
     ...(artifact.compactMode === "structured" ? buildCompactToolResultMetadata(result) : result),
     artifactId: artifact.artifactId,
     artifactPath: artifact.storageRelPath,
+    artifactRead: {
+      toolName: "tool_artifact.read",
+      args: { artifactId: artifact.artifactId },
+      note: "Internal storage reference, not a workspace file. Read by artifactId; do not use fs.read on artifactPath.",
+    },
     byteLength: artifact.byteLength,
     originalByteLength: artifact.byteLength,
     contentType: artifact.contentType ?? result.contentType,

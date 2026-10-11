@@ -161,6 +161,41 @@ const EXAMPLE_HOST = host("example", "com");
 const API_EXAMPLE_HOST = host("api", "example", "com");
 const BLOCKED_EXAMPLE_HOST = host("blocked", "example");
 
+describe("stored tool artifact reads", () => {
+  const request: ToolInvokeRequest = {
+    toolName: "tool_artifact.read",
+    args: { artifactId: "0c5081e8-73f9-4803-8778-61ecf9cbd5a8" },
+    agentId: "agent",
+    sessionId: "session",
+  };
+
+  it("dispatches through the Gateway hook after policy authorization", async () => {
+    const readToolArtifact = vi.fn(async () => ({ content: "saved research", truncated: false }));
+    const engine = new ToolPolicyEngine(policyConfig, createStorageStub(), undefined, { readToolArtifact });
+    const result = await engine.invoke(request);
+    expect(result.outcome).toBe("executed");
+    expect(result.result).toMatchObject({ content: "saved research" });
+    expect(readToolArtifact).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "session", args: request.args }));
+  });
+
+  it.each([
+    { tools: { ...policyConfig.tools, deny: ["tool_artifact.read"] }, outcome: "blocked" },
+    { tools: { ...policyConfig.tools, approvalMode: "approve_all" as const }, outcome: "approval_required" },
+  ])("does not read stored output when policy returns $outcome", async ({ tools, outcome }) => {
+    const readToolArtifact = vi.fn(async () => ({ content: "saved research" }));
+    const engine = new ToolPolicyEngine({ ...policyConfig, tools }, createStorageStub(), undefined, { readToolArtifact });
+    expect((await engine.invoke(request)).outcome).toBe(outcome);
+    expect(readToolArtifact).not.toHaveBeenCalled();
+  });
+
+  it("fails explicitly when the runtime does not provide an artifact reader", async () => {
+    const engine = new ToolPolicyEngine(policyConfig, createStorageStub());
+    const result = await engine.invoke(request);
+    expect(result.outcome).toBe("blocked");
+    expect(result.policyReason).toContain("Stored tool artifact reads are unavailable");
+  });
+});
+
 describe("ToolPolicyEngine permission profile upper bound", () => {
   it("inspects policy without materializing a redundant access decision", async () => {
     const storage = createStorageStub();

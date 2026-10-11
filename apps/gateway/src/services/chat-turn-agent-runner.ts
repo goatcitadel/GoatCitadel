@@ -8122,6 +8122,9 @@ export class ChatTurnAgentRunner {
     normalizationProfile?: ChatNormalizationProfile;
     priorToolRuns?: readonly ChatToolRunRecord[];
   }): Promise<Record<string, unknown> | undefined> {
+    // The reader already bounds its page. Virtualizing it again would replace
+    // the requested evidence with another artifact reference indefinitely.
+    if (input.toolName === "tool_artifact.read") return input.result;
     if (!input.result || !this.deps.persistToolArtifact) {
       return input.result
         ? compactToolResultForExecutionProfile(input.toolName, input.result, input.normalizationProfile)
@@ -8511,6 +8514,21 @@ export class ChatTurnAgentRunner {
         }
       | undefined;
     let effectiveToolName = input.toolName;
+    if (input.toolName === "fs.read" && !input.evalIntegrityTurn && typeof args.path === "string") {
+      const requestedPath = args.path.replaceAll("\\", "/").replace(/^\.\//u, "");
+      const artifactRun = /^tool-artifacts\//u.test(requestedPath)
+        ? input.priorToolRuns?.find((run) =>
+            run.status === "executed" &&
+            typeof run.result?.artifactId === "string" &&
+            typeof run.result?.artifactPath === "string" &&
+            run.result.artifactPath.replaceAll("\\", "/") === requestedPath)
+        : undefined;
+      if (artifactRun) {
+        // Re-enter normal capability/policy/approval evaluation for the reader;
+        // this is never a filesystem-jail exception or an approval bypass.
+        return { toolName: "tool_artifact.read", args: { artifactId: artifactRun.result!.artifactId } };
+      }
+    }
     if (input.webMode === "off" && isWebToolName(input.toolName)) {
       return {
         toolName: effectiveToolName,
@@ -9344,6 +9362,7 @@ function buildEssentialToolSet(input: {
   }
   if (input.sustainedCoding) {
     return [
+      "tool_artifact.read",
       "fs.list",
       "fs.stat",
       "code.search_files",
@@ -9359,6 +9378,9 @@ function buildEssentialToolSet(input: {
     ];
   }
   const tools = new Set<string>(["time.now"]);
+  if (input.webLookupIntent || input.presentationArtifactIntent || input.documentArtifactIntent || input.localFileIntent) {
+    tools.add("tool_artifact.read");
+  }
   if (input.subagentFanoutEligible) {
     // R3-8: an eligible turn must reliably see the spawn tool — intent scoring
     // cannot anticipate when the model will want to fan out, so exposure is

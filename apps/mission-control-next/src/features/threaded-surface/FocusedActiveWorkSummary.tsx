@@ -113,6 +113,17 @@ export function deriveFocusedActiveWorkState({
   const failed = turn.trace.status === "failed" || Boolean(turn.trace.failure && !turn.assistantMessage);
 
   if (failed) {
+    const artifactFailure = failedTool?.toolName === "tool_artifact.read" || /tool-artifacts[\\/]/i.test(rawFailure);
+    if (artifactFailure) {
+      return {
+        kind: "failure",
+        title: "I couldn’t read the saved tool output",
+        detail: "Open Activity to inspect the artifact read failure before retrying.",
+        turnId: turn.turnId,
+        canRetry: canRetryTurn(turn),
+        canStop: false,
+      };
+    }
     if (isFolderFailure) {
       return {
         kind: "folder_failure",

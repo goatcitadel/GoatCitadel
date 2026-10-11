@@ -6,6 +6,7 @@ import { ValidationError } from "@goatcitadel/contracts";
 import {
   getChatToolArtifactContent,
   persistChatToolArtifact,
+  readChatToolArtifactForTool,
   type ChatToolArtifactHost,
 } from "./chat-tool-artifact-service.js";
 
@@ -57,6 +58,67 @@ describe("chat tool artifact service", () => {
     await persistChatToolArtifact(host, input("text/plain"));
 
     await expect(fs.readFile(path.join(rootDir, "data", first.storageRelPath), "utf8")).resolves.toBe("preexisting");
+  });
+
+  it("reads bounded pages from the data directory without resolving a workspace path", async () => {
+    const host = fakeHost(rootDir);
+    const content = "research evidence ".repeat(1500);
+    const artifact = await persistChatToolArtifact(host, { ...input("text/plain"), content });
+    const request = { sessionId: "session-1", args: { artifactId: artifact.artifactId, maxChars: 12000 } };
+    const first = await readChatToolArtifactForTool(host, request);
+    expect(first).toMatchObject({ content: content.slice(0, 12000), truncated: true, nextOffset: 12000 });
+    const second = await readChatToolArtifactForTool(host, { ...request, args: { ...request.args, offset: 12000 } });
+    expect(second.content).toBe(content.slice(12000, 24000));
+    expect(host.storage.chatToolArtifacts.get).toHaveBeenCalledWith(artifact.artifactId);
+    await expect(fs.stat(path.join(rootDir, "workspace", artifact.storageRelPath))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects another session's artifact even inside the same workspace", async () => {
+    const host = fakeHost(rootDir);
+    const artifact = await persistChatToolArtifact(host, input("text/plain"));
+    await expect(readChatToolArtifactForTool(host, {
+      sessionId: "session-2", args: { artifactId: artifact.artifactId },
+    })).rejects.toThrow("Artifact does not belong to the current chat session.");
+  });
+
+  it("fails closed when the current session has no workspace", async () => {
+    const host = fakeHost(rootDir);
+    const artifact = await persistChatToolArtifact(host, input("text/plain"));
+    host.requireChatSession.mockReturnValueOnce({ sessionId: "session-1" } as never);
+    await expect(readChatToolArtifactForTool(host, {
+      sessionId: "session-1", args: { artifactId: artifact.artifactId },
+    })).rejects.toThrow("Current chat session has no owning workspace.");
+    expect(host.storage.chatToolArtifacts.get).not.toHaveBeenCalled();
+  });
+
+  it("rejects an artifact directory junction that escapes the data root", async () => {
+    const host = fakeHost(rootDir);
+    await persistChatToolArtifact(host, input("text/plain"));
+    const outside = path.join(rootDir, "outside");
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(outside, "secret.txt"), "outside data root");
+    await fs.symlink(outside, path.join(rootDir, "data", "redirect"), "junction");
+    host.storage.chatToolArtifacts.get.mockReturnValueOnce(record({ storageRelPath: "redirect/secret.txt" }));
+    await expect(getChatToolArtifactContent(host, "artifact-1", { workspaceId: "workspace-1" }))
+      .rejects.toThrow("Artifact path escapes the configured data directory.");
+  });
+
+  it("rejects caller-supplied scope, paths, and unbounded or invalid paging arguments", async () => {
+    const host = fakeHost(rootDir);
+    const artifact = await persistChatToolArtifact(host, input("text/plain"));
+    for (const args of [
+      { artifactId: artifact.artifactId, workspaceId: "workspace-2" },
+      { artifactId: artifact.artifactId, path: "../secret.txt" },
+      { artifactId: artifact.artifactId, maxChars: 12001 },
+      { artifactId: artifact.artifactId, offset: -1 },
+      { artifactId: "../secret.txt" },
+    ]) {
+      await expect(readChatToolArtifactForTool(host, { sessionId: "session-1", args })).rejects.toThrow();
+    }
+    expect(host.storage.chatToolArtifacts.get).not.toHaveBeenCalled();
+    await expect(readChatToolArtifactForTool(host, {
+      sessionId: "session-1", args: { artifactId: artifact.artifactId, offset: 1000 },
+    })).rejects.toThrow("Artifact offset exceeds the stored content length.");
   });
 
   it("does not expose an artifact record when the canonical write fence rejects after file persistence", async () => {

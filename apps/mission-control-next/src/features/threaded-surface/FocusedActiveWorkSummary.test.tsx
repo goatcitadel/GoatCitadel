@@ -132,6 +132,26 @@ describe("FocusedActiveWorkSummary", () => {
     expect(JSON.stringify(state)).not.toContain("F:\\\\code");
   });
 
+  it("does not blame the project folder for a missing stored tool artifact", () => {
+    const turn = failedFolderTurn();
+    turn.trace.failure!.message = "ENOENT: no such file or directory, open 'C:\\personal-ai\\workspace\\tool-artifacts\\10\\output.json'";
+    const state = deriveFocusedActiveWorkState({ turn, streamStatus: "idle" });
+    expect(state).toMatchObject({ kind: "failure", title: "I couldn’t read the saved tool output" });
+    expect(state?.detail).not.toContain("project folder");
+  });
+
+  it("keeps a scoped artifact-reader failure out of folder recovery", () => {
+    const turn = failedFolderTurn();
+    turn.toolRuns.push({
+      toolRunId: "read-artifact", turnId: turn.turnId, sessionId: "session-1",
+      toolName: "tool_artifact.read", status: "failed", args: {},
+      error: "Stored tool output could not be read.", startedAt: "2026-10-11T12:00:00.000Z",
+    });
+    expect(deriveFocusedActiveWorkState({ turn, streamStatus: "idle" })).toMatchObject({
+      kind: "failure", title: "I couldn’t read the saved tool output",
+    });
+  });
+
   it("keeps an approval actionable without exposing diagnostics", () => {
     const state = deriveFocusedActiveWorkState({
       turn: failedFolderTurn(),
