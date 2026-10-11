@@ -235,6 +235,33 @@ describe("CommandPalette", () => {
     expect(dialogLabel).not.toBe(inputLabel);
   });
 
+  it("hides command groups with no match instead of stacking empty headings above a record hit", () => {
+    controls.search.groups = [
+      {
+        id: "library",
+        label: "Library capabilities",
+        coverage: "Bounded window.",
+        items: [{ id: "c1", label: "Schedules capability", description: "Capability", target: { href: "/library/capabilities" } }],
+      },
+    ];
+    act(() => root.render(<CommandPalette open onOpenChange={() => undefined} />));
+    const input = document.querySelector<HTMLInputElement>("[cmdk-input]")!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "sched");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const headings = [...document.querySelectorAll("[cmdk-group-heading]")].map((node) => node.textContent);
+    expect(headings).toEqual(["Library capabilities"]);
+    expect(document.body.textContent).not.toContain("Go to Chat");
+    expect(document.body.textContent).toContain("Schedules capability");
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "theme");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect([...document.querySelectorAll("[cmdk-group-heading]")].map((node) => node.textContent)).toContain("Preferences");
+    expect([...document.querySelectorAll("[cmdk-group-heading]")].map((node) => node.textContent)).not.toContain("Commands");
+  });
+
   it("offers all areas and the classic view", () => {
     act(() => {
       root.render(<CommandPalette open onOpenChange={() => undefined} />);
