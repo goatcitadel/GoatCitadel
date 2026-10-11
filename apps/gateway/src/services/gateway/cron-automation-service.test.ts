@@ -1068,6 +1068,55 @@ describe("CronAutomationService job behavior", () => {
     });
   });
 
+  it.each([
+    ["improvement", "improvement"],
+    ["backup", "backup"],
+    ["memory_flush", "memoryFlush"],
+    ["memory_consolidation", "memoryConsolidation"],
+    ["cost_report", "costReport"],
+    ["update_review", "updateReview"],
+    ["curator", "curator"],
+  ] as const)("records a skipped %s system handler as skipped, not as success", async (action, handlerName) => {
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const handler = vi.fn(async () => ({ status: "skipped" as const, reason: "job_disabled" }));
+    const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { [handlerName]: handler } });
+    cronJobs.upsert(buildTaskJob({ jobId: `${action.replaceAll("_", "-")}-job`, action }));
+
+    const result = await service.runCronJobNow(`${action.replaceAll("_", "-")}-job`);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: "ok", skipReason: "job_disabled" });
+    expect(cronRuns.get(result.runId)?.outcome).toEqual({ result: "skipped", action, skipReason: "job_disabled" });
+    const saved = cronJobs.get(`${action.replaceAll("_", "-")}-job`);
+    expect(saved?.lastRunStatus).toBe("skipped");
+    expect(saved?.failureCount).toBe(0);
+    expect(JSON.parse(saved?.lastRunOutput ?? "{}")).toMatchObject({ result: "skipped", skipReason: "job_disabled" });
+  });
+
+  it("records a completed system handler summary in the run output", async () => {
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const backup = vi.fn(async () => ({
+      status: "completed" as const,
+      summary: { type: "private_beta_daily_backup", backupId: "backup-1", bytes: 42 },
+    }));
+    const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { backup } });
+    cronJobs.upsert(buildTaskJob({ jobId: "backup-job", action: "backup" }));
+
+    const result = await service.runCronJobNow("backup-job");
+
+    expect(cronRuns.get(result.runId)?.outcome).toEqual({ result: "ok", action: "backup" });
+    const saved = cronJobs.get("backup-job");
+    expect(saved?.lastRunStatus).toBe("ok");
+    expect(JSON.parse(saved?.lastRunOutput ?? "{}")).toMatchObject({
+      result: "ok",
+      handlerSummary: { backupId: "backup-1", bytes: 42 },
+    });
+  });
+
   it("records a flag-gated memory consolidation skip truthfully without entering failure backoff", async () => {
     const db = new FakeDb();
     const cronJobs = new FakeCronJobs();
