@@ -1026,12 +1026,15 @@ describe("LlmService canonical transport accounting", () => {
       ) as typeof fetch,
     );
 
+    // Codex images run through a Responses coordinator, so `response.model` names that request,
+    // not the image tool. The result keeps the pinned image model (it becomes visual provenance);
+    // the provider-reported drift stays on the billed usage record.
     await expect(
       success.service.generateImage(
         { providerId: "openai-codex", model: "gpt-image-2", prompt: "Codex image" },
         attribution("codex-image-success"),
       ),
-    ).resolves.toMatchObject({ model: "gpt-image-2-2026-07-01" });
+    ).resolves.toMatchObject({ model: "gpt-image-2" });
     expect(onlyUsageRecord(success.storage)).toMatchObject({
       effectiveModelId: "gpt-image-2-2026-07-01",
       costUsd: 0.04,
