@@ -13,6 +13,8 @@ export interface CronRunNowResponse {
   childDurableStatus?: string;
   childTurnId?: string;
   profilePosture?: string;
+  /** Present when the run settled but its handler reported it did no work. */
+  skipReason?: string;
 }
 
 export async function fetchCronJobs(options?: { signal?: AbortSignal }): Promise<CronJobsResponse> {

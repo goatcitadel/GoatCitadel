@@ -961,7 +961,9 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
             geography: "Global public research context",
             physicalDigitalBoundary: "Humor research across physical and digital publication formats",
             inclusionCriteria: ["Publicly retrievable research or explanatory sources"],
-            exclusions: [],
+            // validateResearchPresentation requires every scope field, exclusions included; an
+            // empty list is rejected by the pre-dispatch citation gate as incomplete metadata.
+            exclusions: ["Unattributed joke compilations without a retrievable source"],
             methodology: ["Synthesize only claims retained in canonical search evidence"],
             limitations: ["Humor remains subjective and the available evidence is bounded"],
             competitors: ["Incongruity", "Misdirection", "Timing"],

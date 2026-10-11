@@ -462,7 +462,7 @@ import {
   InboundChannelTurnTerminalError,
   type InboundChannelDeterministicIdentity,
 } from "./inbound-channel-event-service.js";
-import { CronAutomationService } from "./gateway/cron-automation-service.js";
+import { CronAutomationService, type CronSystemHandlerOutcome } from "./gateway/cron-automation-service.js";
 import {
   runCostReportSchedulerIfDue,
   runMemoryConsolidationSchedulerIfDue,
@@ -898,10 +898,6 @@ const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
 ] as const;
 const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
 
-export const PRIVATE_BETA_BACKUP_SCHEDULE_LABEL = "30 2 * * * America/Los_Angeles";
-export const MEMORY_FLUSH_DAILY_SCHEDULE_LABEL = "0 3 * * * America/Los_Angeles";
-export const COST_REPORT_HOURLY_SCHEDULE_LABEL = "0 * * * * America/Los_Angeles";
-export const UPDATE_REVIEW_DAILY_SCHEDULE_LABEL = "15 4 * * * America/Los_Angeles";
 /**
  * P2-S1 background-review counter gate. A successful, eligible root turn bumps
  * this counter; the self-improvement review runs (and resets it) once it reaches
@@ -1843,7 +1839,7 @@ export class GatewayService {
           await this.runMemoryFlushSchedulerIfDue({ force: true, recordCronState: false });
         },
         memoryConsolidation: async () => {
-          await this.runMemoryConsolidationSchedulerIfDue({ force: true, recordCronState: false });
+          return await this.runMemoryConsolidationSchedulerIfDue({ force: true, recordCronState: false });
         },
         costReport: async () => {
           await this.runCostReportSchedulerIfDue({ force: true, recordCronState: false });
@@ -5636,8 +5632,10 @@ export class GatewayService {
     await runPrivateBetaBackupSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
-  private async runMemoryConsolidationSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runMemoryConsolidationSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runMemoryConsolidationSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runMemoryConsolidationSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
   private async runMemoryFlushSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {

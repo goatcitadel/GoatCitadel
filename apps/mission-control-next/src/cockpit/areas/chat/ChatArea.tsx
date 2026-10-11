@@ -210,6 +210,12 @@ export function ChatAreaView({
     if (buildSession.current !== selectedSessionId) setBuildOpen(false);
     buildSession.current = selectedSessionId;
   }, [selectedSessionId]);
+  // The host loads workbench state only on request, so the build editor asks while it is open.
+  const onWorkbenchOpenChange = input.onWorkbenchOpenChange;
+  useEffect(() => {
+    onWorkbenchOpenChange?.(buildOpen);
+  }, [onWorkbenchOpenChange, buildOpen]);
+  useEffect(() => () => onWorkbenchOpenChange?.(false), [onWorkbenchOpenChange]);
   useEffect(() => () => onVisibleSessionChange?.(undefined), [onVisibleSessionChange]);
   useEffect(() => {
     if (active && selectedSessionId)

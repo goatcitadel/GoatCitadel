@@ -56,6 +56,29 @@ function summarizeResult(result: Record<string, unknown>): string | undefined {
   return readString(result.textSnippet, result.bodySnippet, result.contentText, result.message);
 }
 
+/**
+ * Governed design-instruction posture of an artifact result. Reads the compacted receipt
+ * (`designQuality.runtimeInstructionsStatus`) or the full design report so the summary stays
+ * truthful whether or not the tool output was virtualized.
+ */
+function describeDesignInstructionPosture(result: Record<string, unknown>): string | undefined {
+  const compact = isRecord(result.designQuality) ? result.designQuality : undefined;
+  const report = isRecord(result.designReport) ? result.designReport : undefined;
+  const quality = isRecord(report?.designQuality) ? report.designQuality : undefined;
+  const runtimeInstructions = isRecord(quality?.runtimeInstructions) ? quality.runtimeInstructions : undefined;
+  const status = readString(compact?.status, quality?.status);
+  const instructionStatus = readString(compact?.runtimeInstructionsStatus, runtimeInstructions?.status);
+  if (!status || status === "skipped" || instructionStatus !== "not_injected") {
+    return undefined;
+  }
+  return "Governed design-intelligence instructions were not injected; renderer defaults were used.";
+}
+
+function joinSummaryParts(...parts: Array<string | undefined>): string | undefined {
+  const present = parts.filter((part): part is string => Boolean(part));
+  return present.length > 0 ? present.join(" ") : undefined;
+}
+
 export function getChatToolRunDiagnostics(run: ChatToolRunRecord): {
   url?: string;
   finalUrl?: string;
@@ -83,7 +106,7 @@ export function getChatToolRunDiagnostics(run: ChatToolRunRecord): {
     engineTier: readString(result?.engineTier),
     engineLabel: readString(result?.engineLabel),
     browserFailureClass,
-    summary: result ? summarizeResult(result) : undefined,
+    summary: result ? joinSummaryParts(summarizeResult(result), describeDesignInstructionPosture(result)) : undefined,
     storedAsArtifact: result?.storedAsArtifact === true,
     outputVirtualized: result?.virtualized === true,
     artifactId: readString(result?.artifactId),

@@ -185,7 +185,7 @@ describe("loadCronJobsFromConfig — repair + tolerance", () => {
 
   it("keeps timezone-aware schedules while dropping their legacy nextRunAt telemetry", async () => {
     const rootDir = tempRoot("cron-tz-");
-    // Mirrors PRIVATE_BETA_BACKUP_SCHEDULE_LABEL shape.
+    // Mirrors the shape of a pre-fix, Pacific-zoned private beta backup schedule.
     const job = {
       jobId: "private-beta-backup",
       name: "Private Beta Backup",

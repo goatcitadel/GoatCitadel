@@ -230,7 +230,7 @@ export async function runThreeTaskReplay(context, correlationId) {
       schemaVersion: 1,
       prompt: PROMPT,
       taskCount: TASK_COUNT,
-      presentationModuleBytes,
+      artifactsModuleBytes,
       providerDispatches: stub.dispatchPlanDispatches(),
       imageGenerationDispatches: stub.imageGenerationDispatches(),
       firecrawlRequests: firecrawlStub.requests(),
@@ -255,7 +255,7 @@ export async function runThreeTaskReplay(context, correlationId) {
         firecrawlRequests: firecrawlStub.requests().length,
         firecrawlGapRequests: firecrawlGapRequests.length,
         promptSemanticContractsPassed: promptSemanticContracts.filter((report) => report.passed).length,
-        presentationModuleBytes,
+        artifactsModuleBytes,
         maximumFirstProviderInputTokens: Math.max(...results.map((result) => result.firstProviderInputTokens)),
         maximumPromptContextEstimatedTokens: Math.max(...results.map((result) => result.promptContextEstimatedTokens)),
         capabilityMode: "live_catalog",
@@ -458,10 +458,13 @@ export async function sendResearchTurnThroughPackagedChat({ stack, sessionId, sc
       waitUntil: "domcontentloaded",
       timeout: 120_000,
     });
-    const composer = page.getByLabel("Message composer", { exact: true });
+    // Cockpit is the default shell (no `?shell=` override, empty browser storage). Its composer is a
+    // combobox labelled "Message"; the Classic "Message composer" / `.mc-next-composer-primary`
+    // selectors never mount here.
+    const composer = page.getByRole("combobox", { name: "Message", exact: true });
     await composer.waitFor({ state: "visible", timeout: 120_000 });
     await composer.fill(PROMPT);
-    await page.locator(".mc-next-composer-primary", { hasText: "Send" }).click();
+    await page.getByRole("button", { name: "Send", exact: true }).click();
     const downloadLink = page.getByRole("link", { name: "Download the PowerPoint" }).last();
     const deadline = Date.now() + TURN_TIMEOUT_MS;
     while (!(await downloadLink.isVisible().catch(() => false))) {

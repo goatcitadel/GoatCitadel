@@ -3,11 +3,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createWriteStream, existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { pipeline } from "node:stream/promises";
 import { chromium } from "playwright";
 import { Storage } from "@goatcitadel/storage";
 import { resolveUiTarget } from "../../../scripts/lib/ui-target.mjs";
+import { buildTestbenchEnvOmit } from "../../../scripts/testbench-runtime.mjs";
+import { collectVerificationSecretEnvKeys } from "../../../scripts/verification/lib/scenarios/usability-coverage.mjs";
+import {
+  cockpitVisualDataSettled,
+  cockpitVisualShellReady,
+} from "../../../scripts/verification/lib/scenarios/cockpit-visual-readiness.mjs";
 import { resolvePublicScreenshotTargets } from "./mission-control-screenshot-targets.mjs";
 import { publishStagedGallery } from "./screenshot-gallery-publisher.mjs";
 
@@ -25,17 +31,38 @@ const DEFAULT_SCREENSHOT_SETTLE_MS = 1800;
 
 async function main() {
   await prepareRuntimeRoot();
+  const envOmit = await buildSandboxEnvOmit();
 
-  const gateway = await startProcess("gateway", [pnpmCommand(), "--dir", repoRoot, "dev:gateway"], {
-    GOATCITADEL_ROOT_DIR: runtimeRoot,
-    GATEWAY_HOST: "127.0.0.1",
-    GATEWAY_PORT: String(gatewayPort),
-    GOATCITADEL_AUTH_MODE: "none",
-    GOATCITADEL_ALLOWED_ORIGINS: `${uiUrl},http://localhost:${uiPort}`,
-    GOATCITADEL_DATABASE_DRIVER: "sqlite",
-    GOATCITADEL_BUNDLED_POSTGRES_ENABLED: "false",
-    GOATCITADEL_BUNDLED_POSTGRES_AUTOSTART: "false",
-  });
+  const gateway = await startProcess(
+    "gateway",
+    [pnpmCommand(), "--dir", repoRoot, "dev:gateway"],
+    {
+      NODE_ENV: "development",
+      // Keep schedule and timestamp copy independent of the capturing machine.
+      TZ: "UTC",
+      GOATCITADEL_ROOT_DIR: runtimeRoot,
+      GOATCITADEL_HOME: path.join(runtimeRoot, "home"),
+      GOATCITADEL_BACKUP_DIR: path.join(runtimeRoot, "backups"),
+      // Points at a file that does not exist, so no operator .env is read or written.
+      GOATCITADEL_LOCAL_ENV_FILE: path.join(runtimeRoot, ".env"),
+      // The OS keychain is shared host state; the sandbox must never read or write operator credentials.
+      GOATCITADEL_DISABLE_SECRET_STORE: "true",
+      GATEWAY_HOST: "127.0.0.1",
+      GATEWAY_PORT: String(gatewayPort),
+      GOATCITADEL_AUTH_MODE: "none",
+      GOATCITADEL_ALLOWED_ORIGINS: `${uiUrl},http://localhost:${uiPort}`,
+      GOATCITADEL_DATABASE_DRIVER: "sqlite",
+      GOATCITADEL_BUNDLED_POSTGRES_ENABLED: "false",
+      GOATCITADEL_BUNDLED_POSTGRES_AUTOSTART: "false",
+      GOATCITADEL_LLAMACPP_AUTOSTART: "false",
+      GOATCITADEL_LLAMACPP_ENABLED: "false",
+      GOATCITADEL_NPU_AUTOSTART: "false",
+      GOATCITADEL_NPU_ENABLED: "false",
+      GOATCITADEL_RATE_LIMIT_ENABLED: "false",
+      GOATCITADEL_FEATURE_MEMORY_LIFECYCLE_ADMIN_V1_ENABLED: "true",
+    },
+    envOmit,
+  );
   const ui = await startProcess(
     "ui",
     [
@@ -52,8 +79,10 @@ async function main() {
       String(uiPort),
     ],
     {
+      NODE_ENV: "development",
       VITE_GATEWAY_URL: gatewayUrl,
     },
+    envOmit,
   );
 
   try {
@@ -73,75 +102,80 @@ async function main() {
   }
 }
 
+/*
+ * The public gallery must never show operator state, so the runtime is built from
+ * shipped defaults only: the tracked example config and the git-tracked skills.
+ * Local `config/*.json`, `.env`, workspace guidance, and untracked skills are never read.
+ */
 async function prepareRuntimeRoot() {
   await fs.rm(tmpDir, { recursive: true, force: true });
   await fs.mkdir(tmpDir, { recursive: true });
   await fs.mkdir(stagedOutputDir, { recursive: true });
   await fs.mkdir(path.join(runtimeRoot, "data"), { recursive: true });
-  await fs.cp(path.join(repoRoot, "config"), path.join(runtimeRoot, "config"), { recursive: true });
-  await materializeCopiedConfigExamples();
-  if (existsSync(path.join(repoRoot, "skills"))) {
-    await fs.cp(path.join(repoRoot, "skills"), path.join(runtimeRoot, "skills"), { recursive: true });
-  }
-  if (existsSync(path.join(repoRoot, "workspaces", "default"))) {
-    await fs.cp(path.join(repoRoot, "workspaces", "default"), path.join(runtimeRoot, "workspaces", "default"), {
-      recursive: true,
-    });
-  }
-  await forceScreenshotRuntimeAuthModeNone();
+  await fs.mkdir(path.join(runtimeRoot, "home"), { recursive: true });
+  await fs.mkdir(path.join(runtimeRoot, "backups"), { recursive: true });
+  await writeShippedDefaultConfig();
+  await copyTrackedSkills();
 }
 
-async function materializeCopiedConfigExamples() {
+async function writeShippedDefaultConfig() {
   const configDir = path.join(runtimeRoot, "config");
-  const managedConfigs = [
-    "assistant.config.json",
-    "tool-policy.json",
-    "budgets.json",
-    "llm-providers.json",
-    "cron-jobs.json",
-    "goatcitadel.json",
-    "private-beta.profile.json",
-  ];
+  await fs.mkdir(configDir, { recursive: true });
+  const config = JSON.parse(await fs.readFile(path.join(repoRoot, "config", "goatcitadel.example.json"), "utf8"));
+  delete config.generation;
+  config.cronJobs = { jobs: [] };
+  config.assistant ??= {};
+  config.assistant.auth = { ...config.assistant.auth, mode: "none", allowLoopbackBypass: true };
+  await writeJson(path.join(configDir, "goatcitadel.json"), config);
+  for (const [filename, section] of Object.entries({
+    "assistant.config.json": "assistant",
+    "tool-policy.json": "toolPolicy",
+    "budgets.json": "budgets",
+    "llm-providers.json": "llm",
+    "cron-jobs.json": "cronJobs",
+  })) {
+    await writeJson(path.join(configDir, filename), config[section]);
+  }
+  await fs.copyFile(
+    path.join(repoRoot, "config", "llm-model-metadata.json"),
+    path.join(configDir, "llm-model-metadata.json"),
+  );
+}
 
-  for (const filename of managedConfigs) {
-    const actualPath = path.join(configDir, filename);
-    if (existsSync(actualPath)) {
+async function copyTrackedSkills() {
+  const listed = spawnSync("git", ["-C", repoRoot, "ls-files", "-z", "--", "skills"], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (listed.error || listed.status !== 0) {
+    throw new Error(`Cannot list tracked skills with git: ${listed.error?.message ?? listed.stderr?.trim()}`);
+  }
+  for (const relativeFile of listed.stdout.split("\0").filter(Boolean)) {
+    const source = path.join(repoRoot, relativeFile);
+    if (!existsSync(source)) {
       continue;
     }
-    const examplePath = path.join(configDir, filename.replace(/\.json$/u, ".example.json"));
-    if (!existsSync(examplePath)) {
-      continue;
-    }
-    await fs.copyFile(examplePath, actualPath);
+    const target = path.join(runtimeRoot, relativeFile);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.copyFile(source, target);
   }
 }
 
-async function forceScreenshotRuntimeAuthModeNone() {
-  await patchJson(path.join(runtimeRoot, "config", "assistant.config.json"), (config) => {
-    config.assistant ??= {};
-    config.assistant.auth ??= {};
-    config.assistant.auth.mode = "none";
-    config.assistant.auth.allowLoopbackBypass = true;
-    return config;
-  });
-
-  await patchJson(path.join(runtimeRoot, "config", "goatcitadel.json"), (config) => {
-    config.assistant ??= {};
-    config.assistant.auth ??= {};
-    config.assistant.auth.mode = "none";
-    config.assistant.auth.allowLoopbackBypass = true;
-    return config;
-  });
+async function writeJson(filePath, value) {
+  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-async function patchJson(filePath, mutate) {
-  const raw = await fs.readFile(filePath, "utf8");
-  const next = mutate(JSON.parse(raw));
-  await fs.writeFile(filePath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+/** Strips every GoatCitadel setting and secret the operator shell exports before the sandbox starts. */
+async function buildSandboxEnvOmit() {
+  return buildTestbenchEnvOmit(await collectVerificationSecretEnvKeys(path.join(repoRoot, "config")));
 }
 
-async function startProcess(name, commandArgs, extraEnv) {
+async function startProcess(name, commandArgs, extraEnv, omitEnv = []) {
   const [cmd, ...args] = commandArgs;
+  const inheritedEnv = { ...process.env };
+  for (const key of omitEnv) {
+    delete inheritedEnv[key];
+  }
   const stdoutPath = path.join(tmpDir, `${name}.stdout.log`);
   const stderrPath = path.join(tmpDir, `${name}.stderr.log`);
   const stdout = createWriteStream(stdoutPath, { flags: "w" });
@@ -149,7 +183,7 @@ async function startProcess(name, commandArgs, extraEnv) {
   const child = spawn(cmd, args, {
     cwd: repoRoot,
     env: {
-      ...process.env,
+      ...inheritedEnv,
       ...extraEnv,
     },
     shell: process.platform === "win32",
@@ -230,106 +264,34 @@ async function waitForHttp(url, label) {
   throw new Error(`${label} did not become ready in time: ${url}`);
 }
 
+const ONBOARDING_RECONCILIATION_ATTEMPTS = 40;
+const ONBOARDING_RECONCILIATION_RETRY_MS = 1500;
+
+/*
+ * Every record below is fictional demo content for the public gallery. The Gateway's own
+ * `/api/v1/demo/bootstrap` provides the demo workspace, project, tasks, and a durable-backed
+ * approval checkpoint; the transcript is written directly so no model is ever called.
+ */
 async function seedDemoData() {
-  const workspaceSlug = `release-demo-${randomUUID().slice(0, 6)}`;
-  const onboarding = await postJson("/api/v1/onboarding/bootstrap", {
-    budgetMode: "balanced",
-    networkAllowlist: ["api.z.ai", "discord.com", "slack.com", "api.github.com"],
-    llm: {
-      activeProviderId: "glm",
-      activeModel: "glm-5",
-      upsertProvider: {
-        providerId: "glm",
-        label: "GLM 5 Demo",
-        baseUrl: "https://api.z.ai/api/paas/v4",
-        defaultModel: "glm-5",
-        apiKeyEnv: "GLM_API_KEY",
-      },
-    },
-    markComplete: true,
-    completedBy: "release-demo",
-  });
+  await bootstrapOnboarding();
+  const demo = await postJson("/api/v1/demo/bootstrap", {});
+  const workspaceId = demo.workspace.workspaceId;
+  const projectId = demo.project.projectId;
 
-  const workspace = await postJson("/api/v1/workspaces", {
-    name: "Release Demo",
-    description: "Sanitized workspace used for README and gallery screenshots.",
-    slug: workspaceSlug,
-  });
+  const session = await createDemoSession(workspaceId, projectId, "Lumen Notes 2.0 launch plan");
+  await seedChatTranscript(session.sessionId, PRIMARY_TRANSCRIPT);
+  for (const thread of SECONDARY_THREADS) {
+    const secondary = await createDemoSession(workspaceId, thread.project ? projectId : undefined, thread.title);
+    await seedChatTranscript(secondary.sessionId, thread.turns, thread.minutesAgo);
+  }
 
-  const project = await postJson("/api/v1/chat/projects", {
-    workspaceId: workspace.workspaceId,
-    name: "Release readiness",
-    description: "Public-share project container for the sanitized Mission Control gallery.",
-    workspacePath: "workspace/demo/release-readiness",
-    color: "#22d3ee",
-  });
-
-  await putJson(`/api/v1/workspaces/${encodeURIComponent(workspace.workspaceId)}/guidance/goatcitadel`, {
-    content: [
-      "# Release Demo Guidance",
-      "",
-      "- Favor concise operator updates.",
-      "- Keep outputs practical and auditable.",
-      "- Avoid hidden side effects.",
-    ].join("\n"),
-  });
-
-  const session = await postJson("/api/v1/chat/sessions", {
-    workspaceId: workspace.workspaceId,
-    projectId: project.projectId,
-    title: "1.0 release prep",
-    mode: "chat",
-  });
-
-  const coworkSession = await postJson("/api/v1/chat/sessions", {
-    workspaceId: workspace.workspaceId,
-    projectId: project.projectId,
-    title: "Launch supervision plan",
-    mode: "cowork",
-  });
-
-  const codeSession = await postJson("/api/v1/chat/sessions", {
-    workspaceId: workspace.workspaceId,
-    projectId: project.projectId,
-    title: "Installer proof checklist",
-    mode: "code",
-  });
-
-  await seedChatMessages(session.sessionId, "chat");
-  await seedChatMessages(coworkSession.sessionId, "cowork");
-  await seedChatMessages(codeSession.sessionId, "code");
-
-  await postJson("/api/v1/tasks", {
-    workspaceId: workspace.workspaceId,
-    title: "Validate installer-first release flow",
-    description: "Clone path second, installer path first, and record any friction.",
-    priority: "high",
-    status: "review",
-  }).then(async (task) => {
-    await postJson(
-      `/api/v1/tasks/${encodeURIComponent(task.taskId)}/activities?workspaceId=${encodeURIComponent(workspace.workspaceId)}`,
-      {
-        workspaceId: workspace.workspaceId,
-        activityType: "comment",
-        message: "Checklist trimmed to the highest-signal release flows.",
-        agentId: "operator",
-      },
-    );
-    await postJson(
-      `/api/v1/tasks/${encodeURIComponent(task.taskId)}/deliverables?workspaceId=${encodeURIComponent(workspace.workspaceId)}`,
-      {
-        workspaceId: workspace.workspaceId,
-        deliverableType: "artifact",
-        title: "Readiness checklist",
-        path: "workspace/demo/release-checklist.md",
-        description: "Public-share gate review notes.",
-      },
-    );
-  });
+  for (const task of DEMO_TASKS) {
+    await postJson("/api/v1/tasks", { workspaceId, ...task });
+  }
 
   await postJson("/api/v1/cron/jobs", {
-    jobId: `release_readiness_digest_${workspaceSlug}`,
-    name: "1.0 readiness digest",
+    jobId: `launch_metrics_digest_${workspaceId.slice(-6)}`,
+    name: "Launch metrics digest",
     schedule: "0 6 * * * UTC",
     enabled: true,
   });
@@ -356,184 +318,258 @@ async function seedDemoData() {
     costTier: "free",
   });
 
-  await postJson("/api/v1/approvals", {
-    kind: "tool.invoke",
-    riskLevel: "danger",
-    payload: {
-      toolName: "browser.navigate",
-      target: "https://discord.com/developers/applications",
-    },
-    preview: {
-      summary: "Open Discord developer portal to continue setup.",
-    },
-  });
-
   await postJson("/api/v1/agents", {
-    roleId: "release-shepherd",
-    name: "Release Shepherd",
-    title: "Beta Launch Coordinator",
-    summary: "Tracks readiness, docs drift, and announcement blockers.",
+    roleId: "launch-shepherd",
+    name: "Launch Shepherd",
+    title: "Launch Coordinator",
+    summary: "Tracks launch readiness, docs drift, and announcement blockers.",
     specialties: ["release review", "docs", "handoffs"],
     defaultTools: ["fs.read", "fs.list", "browser.search"],
     aliases: ["shepherd"],
   });
 
   await postJson("/api/v1/knowledge/memory/write", {
-    namespace: "release",
-    title: "1.0 launch rule",
-    content: "Manual testing starts only after install docs, installers, and validation gates are green.",
-    tags: ["release", "policy"],
+    namespace: "launch",
+    title: "Launch rule",
+    content: "Nothing is sent to customers until the announcement copy has an explicit operator approval.",
+    tags: ["launch", "policy"],
     source: "release-demo",
-    metadata: { workspaceId: workspace.workspaceId, fixture: "public-screenshot" },
+    metadata: { workspaceId, fixture: "public-screenshot" },
     sessionId: session.sessionId,
-  });
-
-  await postJson("/api/v1/knowledge/memory/write", {
-    namespace: "integrations",
-    title: "Discord rollout order",
-    content:
-      "Discord is the first external channel for 1.0 launch validation, with Slack second after sandbox validation.",
-    tags: ["channels", "discord"],
-    source: "release-demo",
-    metadata: { workspaceId: workspace.workspaceId, fixture: "public-screenshot" },
-    sessionId: session.sessionId,
-  });
-
-  await postJson("/api/v1/memory/context/compose", {
-    scope: "chat",
-    prompt: "Summarize the 1.0 launch posture and install priorities.",
-    sessionId: session.sessionId,
-    workspace: workspace.workspaceId,
-    maxContextTokens: 1200,
   });
 
   await postJson("/api/v1/files/upload", {
-    relativePath: "workspace/demo/release-checklist.md",
+    relativePath: "workspace/demo/launch-checklist.md",
     content: [
-      "# 1.0 Release Checklist",
+      "# Launch Checklist",
       "",
-      "- Installer-first README",
-      "- Manual clone path verified",
-      "- Screenshots regenerated from demo data",
-    ].join("\n"),
-  });
-
-  await postJson("/api/v1/files/upload", {
-    relativePath: "workspace/demo/discord-setup-notes.md",
-    content: [
-      "# Discord Setup Notes",
-      "",
-      "1. Create the application.",
-      "2. Add the bot user.",
-      "3. Copy the token into DISCORD_BOT_TOKEN.",
+      "- Beta feedback triaged",
+      "- Release notes reviewed",
+      "- Pricing page merged",
     ].join("\n"),
   });
 
   await postJson("/api/v1/prompt-packs/import", {
-    name: "1.0 Sanity Pack",
+    name: "Launch Sanity Pack",
     sourceLabel: "public-share-demo",
     content: [
-      "[TEST-01] Install flow clarity",
-      "Explain the fastest safe Windows install path in four steps.",
+      "[TEST-01] Launch plan clarity",
+      "Break a product launch into workstreams and name every step that needs operator sign-off.",
       "",
-      "[TEST-02] Channel safety posture",
-      "Recommend the best first external channel for beta and explain why.",
+      "[TEST-02] Safe outreach",
+      "Draft an announcement outline without sending anything.",
     ].join("\n"),
   });
 
   return {
-    onboarding,
-    workspaceId: workspace.workspaceId,
-    projectId: project.projectId,
+    workspaceId,
+    projectId,
     sessionId: session.sessionId,
-    coworkSessionId: coworkSession.sessionId,
-    codeSessionId: codeSession.sessionId,
   };
 }
 
-async function seedChatMessages(sessionId, mode) {
+/** Completes onboarding with a keyless demo provider once the fresh config generation has reconciled. */
+async function bootstrapOnboarding() {
+  for (let attempt = 1; attempt <= ONBOARDING_RECONCILIATION_ATTEMPTS; attempt += 1) {
+    const state = await requestJsonAllowingConflict("/api/v1/onboarding/state");
+    const expectedRevision = state?.settings?.revision;
+    if (state && Number.isInteger(expectedRevision) && expectedRevision > 0) {
+      const result = await requestJsonAllowingConflict("/api/v1/onboarding/bootstrap", {
+        method: "POST",
+        body: {
+          expectedRevision,
+          budgetMode: "balanced",
+          llm: {
+            activeProviderId: "glm",
+            activeModel: "glm-5",
+            upsertProvider: {
+              providerId: "glm",
+              label: "GLM 5 Demo",
+              baseUrl: "https://api.z.ai/api/paas/v4",
+              defaultModel: "glm-5",
+              apiKeyEnv: "GLM_API_KEY",
+            },
+          },
+          markComplete: true,
+          completedBy: "release-demo",
+        },
+      });
+      if (result) {
+        return result;
+      }
+    }
+    await delay(ONBOARDING_RECONCILIATION_RETRY_MS);
+  }
+  throw new Error("Onboarding bootstrap did not settle; the config generation never finished reconciling.");
+}
+
+async function createDemoSession(workspaceId, projectId, title) {
+  return postJson("/api/v1/chat/sessions", {
+    workspaceId,
+    ...(projectId ? { projectId } : {}),
+    title,
+    mode: "chat",
+  });
+}
+
+const PRIMARY_TRANSCRIPT = [
+  {
+    user: "We're launching Lumen Notes 2.0 in three weeks. Break the launch into workstreams and tell me what needs my sign-off.",
+    assistant: [
+      "Here's the launch split into four workstreams. Anything that writes outside this workspace or contacts people waits for your approval.",
+      "",
+      "| Workstream | Owner | Needs your sign-off |",
+      "| --- | --- | --- |",
+      "| Release notes and docs | Writer | Final copy before publishing |",
+      "| Beta feedback triage | Researcher | None, read-only |",
+      "| Pricing page update | Coder | Merge to `main` |",
+      "| Announcement email | Personal Assistant | Sending to the customer list |",
+      "",
+      "**Suggested order:** triage beta feedback first. It feeds the release notes and may change the pricing copy.",
+      "",
+      "I added a planning task to the Work board and left one checkpoint in your Inbox.",
+    ].join("\n"),
+    actorId: "goatherder",
+  },
+  {
+    user: "Draft the announcement email outline, but don't send anything.",
+    assistant: [
+      "Outline only. Nothing will be sent.",
+      "",
+      "1. **Subject:** Lumen Notes 2.0: offline sync and shared notebooks",
+      "2. **Hook:** one sentence on the most-requested feature, offline sync",
+      "3. **What's new:** three bullets, each tied to a beta quote",
+      "4. **Upgrade path:** existing notes migrate automatically",
+      "5. **Call to action:** try a shared notebook",
+      "",
+      "When you're ready, I'll prepare it as a mail draft. Sending needs one explicit approval.",
+    ].join("\n"),
+    actorId: "goatherder",
+  },
+];
+
+const SECONDARY_THREADS = [
+  {
+    title: "Summarize beta feedback",
+    project: true,
+    minutesAgo: 95,
+    turns: [
+      {
+        user: "Group the beta feedback by theme.",
+        assistant: "Offline sync leads with 41% of comments, followed by sharing and search speed.",
+        actorId: "researcher",
+      },
+    ],
+  },
+  {
+    title: "Fix flaky offline-sync test",
+    project: true,
+    minutesAgo: 180,
+    turns: [
+      {
+        user: "Why does the offline-sync test fail on CI only?",
+        assistant: "The test waits on wall-clock time. A fake timer makes it deterministic.",
+        actorId: "coder",
+      },
+    ],
+  },
+  {
+    title: "Weekly metrics digest",
+    project: false,
+    minutesAgo: 1440,
+    turns: [
+      {
+        user: "Summarize this week's signups and churn.",
+        assistant: "Signups rose 12% week over week; churn held flat at 2.1%.",
+        actorId: "goatherder",
+      },
+    ],
+  },
+];
+
+const DEMO_TASKS = [
+  {
+    title: "Update pricing page copy",
+    description: "Reflect the new shared-notebook tier.",
+    priority: "high",
+    status: "in_progress",
+  },
+  {
+    title: "Publish release notes",
+    description: "Waiting on final copy review.",
+    priority: "normal",
+    status: "review",
+  },
+  {
+    title: "Fix flaky offline-sync test",
+    description: "Replace the wall-clock wait with fake timers.",
+    priority: "normal",
+    status: "blocked",
+  },
+];
+
+async function seedChatTranscript(sessionId, turns, minutesAgo = 12) {
   const storage = new Storage({
     dbPath: path.join(runtimeRoot, "data", "index.db"),
     transcriptsDir: path.join(runtimeRoot, "data", "transcripts"),
     auditDir: path.join(runtimeRoot, "data", "audit"),
   });
   try {
-    const copy = {
-      chat: {
-        user: "Give me a tight 1.0 readiness summary before I share the repo.",
-        assistant: [
-          "Installer path is primary, manual clone is secondary, and the current release gate is green.",
-          "Next move is a clean laptop install from GitHub plus Discord sandbox validation.",
-        ].join(" "),
-        actorId: "goatherder",
-      },
-      cowork: {
-        user: "Plan the public launch review and keep approval checkpoints visible.",
-        assistant: [
-          "I split the review into install proof, provider setup, surface walkthrough, and external-channel validation.",
-          "Three approvals are waiting so risky setup steps stay operator-owned.",
-        ].join(" "),
-        actorId: "release-shepherd",
-      },
-      code: {
-        user: "Review the installer proof checklist and tell me what code path owns it.",
-        assistant: [
-          "The launcher and desktop packaging proof start in scripts/packaging and bin/goatcitadel.mjs.",
-          "The next safe code action is a targeted verify:desktop run after any installer-touching patch.",
-        ].join(" "),
-        actorId: "coder",
-      },
-    }[mode] ?? {
-      user: "Summarize the current workspace state.",
-      assistant: "The release demo workspace is ready for review.",
-      actorId: "goatherder",
-    };
-    const baseTime = Date.now() - 10 * 60 * 1000;
-    const userMessageId = randomUUID();
-    const assistantMessageId = randomUUID();
-    const turnId = randomUUID();
-    const userTimestamp = new Date(baseTime).toISOString();
-    const assistantTimestamp = new Date(baseTime + 45_000).toISOString();
-    storage.chatMessages.upsertMany([
-      {
-        messageId: userMessageId,
+    let parentTurnId;
+    let timestamp = Date.now() - minutesAgo * 60 * 1000;
+    for (const turn of turns) {
+      const userMessageId = randomUUID();
+      const assistantMessageId = randomUUID();
+      const turnId = randomUUID();
+      const userTimestamp = new Date(timestamp).toISOString();
+      const assistantTimestamp = new Date(timestamp + 40_000).toISOString();
+      timestamp += 3 * 60 * 1000;
+      storage.chatMessages.upsertMany([
+        {
+          messageId: userMessageId,
+          sessionId,
+          role: "user",
+          actorType: "user",
+          actorId: "operator",
+          sourceAuthority: "operator",
+          content: turn.user,
+          timestamp: userTimestamp,
+        },
+        {
+          messageId: assistantMessageId,
+          sessionId,
+          role: "assistant",
+          actorType: "agent",
+          actorId: turn.actorId,
+          sourceAuthority: "agent_proposed",
+          content: turn.assistant,
+          timestamp: assistantTimestamp,
+          tokenInput: 412,
+          tokenOutput: 188,
+          costUsd: 0.0042,
+        },
+      ]);
+      storage.chatTurnTraces.create({
+        turnId,
         sessionId,
-        role: "user",
-        actorType: "user",
-        actorId: "operator",
-        content: copy.user,
-        timestamp: userTimestamp,
-      },
-      {
-        messageId: assistantMessageId,
-        sessionId,
-        role: "assistant",
-        actorType: "agent",
-        actorId: copy.actorId,
-        content: copy.assistant,
-        timestamp: assistantTimestamp,
-        tokenInput: 412,
-        tokenOutput: 188,
-        costUsd: 0.0042,
-      },
-    ]);
-    storage.chatTurnTraces.create({
-      turnId,
-      sessionId,
-      userMessageId,
-      assistantMessageId,
-      status: "completed",
-      // Cowork/Code are retained session compatibility values; current turns
-      // are rendered and governed through the canonical Chat surface.
-      mode: "chat",
-      model: "public-screenshot-seed",
-      webMode: "auto",
-      memoryMode: "auto",
-      thinkingLevel: "standard",
-      startedAt: userTimestamp,
-      finishedAt: assistantTimestamp,
-    });
-    storage.chatSessionBranchState.setActiveLeaf(sessionId, turnId);
+        userMessageId,
+        assistantMessageId,
+        ...(parentTurnId ? { parentTurnId, branchKind: "append" } : {}),
+        status: "completed",
+        mode: "chat",
+        // Marks the seeded transcript honestly: no model produced these answers.
+        model: "public-screenshot-seed",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "standard",
+        startedAt: userTimestamp,
+        finishedAt: assistantTimestamp,
+      });
+      parentTurnId = turnId;
+    }
+    if (parentTurnId) {
+      storage.chatSessionBranchState.setActiveLeaf(sessionId, parentTurnId);
+    }
   } finally {
     storage.close();
   }
@@ -544,66 +580,77 @@ async function captureScreenshots(activeWorkspaceId, screenshotTargets) {
     headless: true,
   });
   try {
-    const context = await browser.newContext({
-      viewport: {
-        width: 1440,
-        height: 1024,
-      },
-      colorScheme: "dark",
-      deviceScaleFactor: 1,
-    });
-    await context.addInitScript(
-      ({ workspaceId }) => {
-        window.localStorage.setItem("goatcitadel.ui.workspace_id.v1", workspaceId);
-        window.localStorage.setItem("goatcitadel.ui.mode.v1", "simple");
-        window.localStorage.setItem("goatcitadel.ui.technical_details.v1", "false");
-        window.localStorage.setItem("goatcitadel.notifications.toasts.v1", "false");
-        window.localStorage.setItem("goatcitadel.notifications.sound_mode.v1", "off");
-      },
-      { workspaceId: activeWorkspaceId },
-    );
-
-    const page = await context.newPage();
-    for (const target of screenshotTargets) {
-      const targetUrl = new URL(target.href, uiUrl).toString();
-      await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(target.settleMs);
-      if (target.readySelector) {
-        await page.waitForSelector(target.readySelector, {
-          state: "visible",
-          timeout: 20_000,
-        });
-        await page.waitForTimeout(750);
-      }
-      if (target.readyText) {
-        await page.waitForFunction(
-          (text) => document.body?.innerText.toLowerCase().includes(text.toLowerCase()),
-          target.readyText,
-          { timeout: 20_000 },
-        );
-      }
-      if (typeof target.scrollY === "number") {
-        await page.evaluate((scrollY) => window.scrollTo(0, scrollY), target.scrollY);
-        await page.waitForTimeout(500);
-      } else {
-        await page.evaluate(() => window.scrollTo(0, 0));
-      }
-      await page.addStyleTag({
-        content: ".notification-stack { display: none !important; }",
+    for (const theme of new Set(screenshotTargets.map((target) => target.theme))) {
+      const context = await browser.newContext({
+        viewport: {
+          width: 1440,
+          height: 900,
+        },
+        colorScheme: theme,
+        deviceScaleFactor: 1,
+        locale: "en-US",
+        timezoneId: "UTC",
       });
-      if (target.screenshotSelector) {
-        await page.locator(target.screenshotSelector).screenshot({
-          path: path.join(stagedOutputDir, target.file),
-        });
-      } else {
-        await page.screenshot({
-          path: path.join(stagedOutputDir, target.file),
-        });
+      await context.addInitScript(
+        ({ workspaceId, uiTheme }) => {
+          window.localStorage.setItem("goatcitadel.ui.workspace_id.v1", workspaceId);
+          window.localStorage.setItem("goatcitadel.ui.theme.v1", uiTheme);
+          window.localStorage.setItem("goatcitadel.ui.mode.v1", "simple");
+          window.localStorage.setItem("goatcitadel.ui.technical_details.v1", "false");
+          window.localStorage.setItem("goatcitadel.notifications.toasts.v1", "false");
+          window.localStorage.setItem("goatcitadel.notifications.sound_mode.v1", "off");
+        },
+        { workspaceId: activeWorkspaceId, uiTheme: theme },
+      );
+
+      const page = await context.newPage();
+      // A fresh profile applies the saved workspace only from its second navigation.
+      await page.goto(new URL("/chat?shell=cockpit", uiUrl).toString(), { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(DEFAULT_SCREENSHOT_SETTLE_MS);
+      for (const target of screenshotTargets.filter((candidate) => candidate.theme === theme)) {
+        await captureTarget(page, target);
       }
+      await context.close();
     }
-    await context.close();
   } finally {
     await browser.close();
+  }
+}
+
+async function captureTarget(page, target) {
+  const targetUrl = new URL(target.href, uiUrl);
+  await page.goto(targetUrl.toString(), { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(
+    cockpitVisualShellReady,
+    { pathname: targetUrl.pathname, theme: target.theme, fullscreen: target.fullscreen === true },
+    { timeout: 60_000 },
+  );
+  if (target.readySelector) {
+    await page.locator(target.readySelector).first().waitFor({ state: "visible", timeout: 20_000 });
+  }
+  if (target.readyText) {
+    await page.waitForFunction(
+      (text) => document.body?.innerText.toLowerCase().includes(text.toLowerCase()),
+      target.readyText,
+      { timeout: 20_000 },
+    );
+  }
+  await page.waitForFunction(cockpitVisualDataSettled, undefined, { timeout: 20_000 });
+  await page.waitForTimeout(target.settleMs);
+  if (typeof target.scrollY === "number") {
+    await page.evaluate((scrollY) => window.scrollTo(0, scrollY), target.scrollY);
+    await page.waitForTimeout(500);
+  } else {
+    await page.evaluate(() => window.scrollTo(0, 0));
+  }
+  await page.addStyleTag({
+    content: ".notification-stack { display: none !important; }",
+  });
+  const outputPath = path.join(stagedOutputDir, target.file);
+  if (target.screenshotSelector) {
+    await page.locator(target.screenshotSelector).screenshot({ path: outputPath });
+  } else {
+    await page.screenshot({ path: outputPath });
   }
 }
 
@@ -687,7 +734,7 @@ async function writeGalleryIndex(screenshotTargets) {
   <body>
     <main class="wrap">
       <h1>GoatCitadel ${escapeHtml(uiTarget.displayName)} Screenshots</h1>
-      <p>Regenerated from a sanitized 1.0 demo runtime. Folder: <code>docs/screenshots/${escapeHtml(uiTarget.screenshotDirName)}</code></p>
+      <p>Cockpit layout, regenerated from a sanitized demo runtime built from shipped defaults. All records are fictional demo content. Folder: <code>docs/screenshots/${escapeHtml(uiTarget.screenshotDirName)}</code></p>
       <div class="grid">
 ${cards}
       </div>
@@ -718,11 +765,20 @@ async function postJson(route, body) {
   });
 }
 
-async function putJson(route, body) {
-  return requestJson(route, {
-    method: "PUT",
-    body,
-  });
+/** Returns null on a config-generation reconciliation conflict so the caller can retry. */
+async function requestJsonAllowingConflict(route, init = {}) {
+  try {
+    return await requestJson(route, init);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.startsWith(`Request failed 409 ${route}:`) &&
+      error.message.includes("STATE_CONFLICT")
+    ) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 async function requestJson(route, init = {}) {
