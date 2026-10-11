@@ -132,7 +132,7 @@ it("rejects stale connection reviews before credentials, live checks, and finali
     expect(response.statusCode).toBe(409);
     expect(response.json().details.reason).toBe("CHANNEL_CONNECTION_REVIEW_REQUIRED");
   }
-  // The legacy route never activates directly: without change management it refuses before any owner work.
+  // Without change management the route activates through the owner, which refuses the stale review first.
   const finalize = await f.app.inject({
     method: "POST",
     url: `${f.url}/finalize`,
@@ -140,7 +140,7 @@ it("rejects stale connection reviews before credentials, live checks, and finali
     payload: { expectedRevision: f.draft.revision },
   });
   expect(finalize.statusCode).toBe(409);
-  expect(finalize.json().code).toBe("CHANNEL_ACTIVATION_REVIEW_UNAVAILABLE");
+  expect(finalize.json().details.reason).toBe("CHANNEL_CONNECTION_REVIEW_REQUIRED");
   // The finalize owner the Change Plan adapter calls still refuses the stale review.
   await expect(setup.finalizeChannelSetupDraft(f.host, f.draft.draftId, f.draft.revision)).rejects.toMatchObject({
     details: { reason: "CHANNEL_CONNECTION_REVIEW_REQUIRED" },

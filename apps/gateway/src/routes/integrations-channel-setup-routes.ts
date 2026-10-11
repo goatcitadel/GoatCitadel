@@ -5,6 +5,7 @@ import { ConflictError, SemanticValidationError, type ChannelSetupDraft } from "
 import {
   projectChannelSetupDraftForPublicResponse,
   projectChannelSetupDraftsForPublicResponse,
+  projectChannelSetupFinalizeResultForPublicResponse,
   projectChannelSetupTestResultForPublicResponse,
   projectChannelSetupValidationResultForPublicResponse,
 } from "../services/channel-setup-public-projection.js";
@@ -272,7 +273,15 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
           finalized: false,
         });
       }
-      return reply.code(409).send({ error: "Channel activation requires Change Plan review in Chat. Enable change management, then create and review the channel plan.", code: "CHANNEL_ACTIVATION_REVIEW_UNAVAILABLE" });
+      // Change management is off (the default install posture): the guided
+      // wizard activates through the ChannelSetup owner directly, which keeps
+      // its own revision guard and commits idempotency at the canonical write.
+      const finalized = await fastify.services.channelSetup.finalizeChannelSetupDraft(
+        params.data.draftId,
+        body.data.expectedRevision,
+        async () => { await markMutationCommitted(request); },
+      );
+      return reply.send(projectChannelSetupFinalizeResultForPublicResponse(finalized));
     } catch (error) {
       await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
