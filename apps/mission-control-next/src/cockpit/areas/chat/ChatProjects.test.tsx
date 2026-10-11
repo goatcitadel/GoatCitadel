@@ -290,7 +290,17 @@ it("opens the exact conversation for the existing reviewed assignment owner", as
   });
   window.history.replaceState(null, "", "/chat/projects/project-a");
   await render();
-  const select = host.querySelector<HTMLSelectElement>('[aria-label="Conversation to assign"]')!;
+  // The assignable conversations arrive from the sessions read; under load the 15 ms settle is not enough, and
+  // selecting a value the <select> does not list yet leaves the assignment empty and the review button disabled.
+  const option = await vi.waitFor(
+    () => {
+      const node = host.querySelector<HTMLOptionElement>('[aria-label="Conversation to assign"] option[value="conversation-a"]');
+      expect(node, "assignable conversation option").not.toBeNull();
+      return node!;
+    },
+    { timeout: 5000 },
+  );
+  const select = option.closest("select")!;
   await act(async () => {
     select.value = "conversation-a";
     select.dispatchEvent(new Event("change", { bubbles: true }));
