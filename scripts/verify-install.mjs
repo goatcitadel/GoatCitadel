@@ -267,9 +267,7 @@ async function main() {
             await page.waitForURL((url) => url.pathname === "/chat", { timeout: 30_000 });
             const complete = await requestJson(stack.gatewayUrl, "/api/v1/onboarding/state");
             if (!complete.ok || complete.body?.completed !== true) throw new Error("Cockpit did not complete the reviewed first-run setup before Chat.");
-            await page.getByRole("complementary", { name: "Conversations" }).getByRole("button", { name: "New", exact: true }).click();
-            const composer = page.getByRole("textbox", { name: "Message" });
-            await composer.waitFor({ timeout: 30_000 });
+            const composer = await openCockpitComposer(page);
             await composer.fill("Give me a short first answer.");
             await page.getByRole("button", { name: "Send", exact: true }).click();
             await page.getByText("Verification stub reply.", { exact: true }).waitFor({ timeout: 60_000 });
@@ -426,6 +424,34 @@ export function assertVerifiedFirstAnswer({ before, completed, after, verified, 
   assert.equal(turn?.trace?.routing?.primaryProviderId, verified.providerId);
   assert.equal(turn?.assistantMessage?.content, "Verification stub reply.");
   assert.ok(Number.isInteger(providerDispatches) && providerDispatches > 0, "No actual loopback model dispatch was recorded.");
+}
+
+/**
+ * Cockpit mounts the Message composer (a combobox, as in every cockpit proof) only once a
+ * conversation is selected; a fresh install lands on "Choose a conversation". When the composer is
+ * not up within the probe window, start a conversation from the empty state (or the rail's New
+ * button) and then wait for the composer.
+ */
+export async function openCockpitComposer(page, { timeoutMs = 30_000, probeMs = 5_000 } = {}) {
+  const composer = page.getByRole("combobox", { name: "Message", exact: true });
+  try {
+    await composer.waitFor({ timeout: probeMs });
+    return composer;
+  } catch {
+    // No conversation is selected yet; start one below.
+  }
+  const starters = [
+    page.getByRole("button", { name: "New conversation", exact: true }),
+    page.getByRole("complementary", { name: "Conversations" }).getByRole("button", { name: "New", exact: true }),
+  ];
+  for (const starter of starters) {
+    if (await starter.isVisible().catch(() => false)) {
+      await starter.click();
+      break;
+    }
+  }
+  await composer.waitFor({ timeout: timeoutMs });
+  return composer;
 }
 
 export function resolveOnboardingRevision(response) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertVerifiedFirstAnswer, fetchTextWithRetry, resolveOnboardingRevision } from "./verify-install.mjs";
+import { assertVerifiedFirstAnswer, fetchTextWithRetry, openCockpitComposer, resolveOnboardingRevision } from "./verify-install.mjs";
 
 test("install smoke sends the current onboarding revision", () => {
   assert.equal(resolveOnboardingRevision({ ok: true, status: 200, body: { settings: { revision: 7 } } }), 7);
@@ -38,6 +38,45 @@ function firstAnswer() {
     turn: { turnId: "t", trace: { sessionId: "s", status: "completed", model: "model", routing: { primaryProviderId: "stub" } },
       assistantMessage: { content: "Verification stub reply." } }, providerDispatches: 1 };
 }
+/** A page whose Cockpit composer (combobox "Message") mounts only after one of the given buttons starts a conversation. */
+function cockpitPage({ composerMounted = false, buttons = ["New conversation"] } = {}) {
+  const state = { composerMounted, clicks: [] };
+  const locator = (role, name, within) => ({
+    async waitFor({ timeout } = {}) {
+      if (role === "combobox" && name === "Message" && state.composerMounted) return;
+      throw new Error(`Timeout ${timeout}ms waiting for ${role} ${name}${within ? ` in ${within}` : ""}`);
+    },
+    async isVisible() {
+      return role === "button" && buttons.includes(within ? `${within}/${name}` : name);
+    },
+    async click() {
+      state.clicks.push(within ? `${within}/${name}` : name);
+      state.composerMounted = true;
+    },
+    getByRole: (childRole, { name: childName }) => locator(childRole, childName, `${role}:${name}`),
+  });
+  return { state, page: { getByRole: (role, { name }) => locator(role, name) } };
+}
+test("install UI smoke uses the mounted Cockpit composer without starting a conversation", async () => {
+  const { state, page } = cockpitPage({ composerMounted: true });
+  await openCockpitComposer(page, { probeMs: 1 });
+  assert.deepEqual(state.clicks, []);
+});
+test("install UI smoke starts a conversation from the empty state before waiting for the composer", async () => {
+  const { state, page } = cockpitPage();
+  await openCockpitComposer(page, { probeMs: 1 });
+  assert.deepEqual(state.clicks, ["New conversation"]);
+});
+test("install UI smoke falls back to the conversation rail's New button", async () => {
+  const { state, page } = cockpitPage({ buttons: ["complementary:Conversations/New"] });
+  await openCockpitComposer(page, { probeMs: 1 });
+  assert.deepEqual(state.clicks, ["complementary:Conversations/New"]);
+});
+test("install UI smoke reports a missing composer instead of hanging", async () => {
+  const { page } = cockpitPage({ buttons: [] });
+  await assert.rejects(() => openCockpitComposer(page, { probeMs: 1, timeoutMs: 1 }), /combobox Message/u);
+});
+
 test("first answer requires exact canonical turn, actual provider dispatch and preserved settings", () => {
   assert.doesNotThrow(() => assertVerifiedFirstAnswer(firstAnswer()));
   for (const alter of [value => { value.providerDispatches = 0; }, value => { value.turn.trace.status = "failed"; },
