@@ -898,10 +898,6 @@ const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
 ] as const;
 const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
 
-export const PRIVATE_BETA_BACKUP_SCHEDULE_LABEL = "30 2 * * * America/Los_Angeles";
-export const MEMORY_FLUSH_DAILY_SCHEDULE_LABEL = "0 3 * * * America/Los_Angeles";
-export const COST_REPORT_HOURLY_SCHEDULE_LABEL = "0 * * * * America/Los_Angeles";
-export const UPDATE_REVIEW_DAILY_SCHEDULE_LABEL = "15 4 * * * America/Los_Angeles";
 /**
  * P2-S1 background-review counter gate. A successful, eligible root turn bumps
  * this counter; the self-improvement review runs (and resets it) once it reaches

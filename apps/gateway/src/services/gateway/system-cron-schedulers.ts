@@ -9,6 +9,7 @@ import type { MemoryConsolidationRunSummary } from "../memory-consolidation-serv
 import type { MemoryLifecycleService } from "../memory-lifecycle-service.js";
 import { getZonedDateParts, toDayKeyForTimezone, toHourKeyForTimezone } from "../scheduler-timing.js";
 import { toWeekKeyForTimezone } from "../improvement-replay.js";
+import { systemCronTimeZoneForSchedule } from "../cron-job-schedule-labels.js";
 import { createDailyUpdateReview, renderUpdateReviewMarkdown } from "./update-review.js";
 import {
   COST_REPORT_HOURLY_JOB_ID,
@@ -34,11 +35,6 @@ import {
 
 const log = logger.child("system-cron-schedulers");
 
-const PRIVATE_BETA_BACKUP_TIME_ZONE = "America/Los_Angeles";
-const MEMORY_FLUSH_DAILY_TIME_ZONE = "America/Los_Angeles";
-const COST_REPORT_HOURLY_TIME_ZONE = "America/Los_Angeles";
-const UPDATE_REVIEW_DAILY_TIME_ZONE = "America/Los_Angeles";
-const MEMORY_CONSOLIDATION_TIME_ZONE = "America/Los_Angeles";
 const PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY = "private_beta_backup_last_day_key_v1";
 const MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY = "memory_flush_daily_last_day_key_v1";
 const MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY = "memory_consolidation_weekly_last_week_key_v1";
@@ -279,18 +275,19 @@ export async function runPrivateBetaBackupSchedulerIfDue(
   if (!options.force && isCronJobBackedOff(job, now)) {
     return;
   }
+  const timeZone = systemCronTimeZoneForSchedule(job.schedule);
   if (
     !options.force &&
     !isCronJobDueNow(job, now, {
       defaultHour: 2,
       defaultMinute: 30,
       defaultWeekday: undefined,
-      defaultTimeZone: PRIVATE_BETA_BACKUP_TIME_ZONE,
+      defaultTimeZone: timeZone,
     })
   ) {
     return;
   }
-  const dayKey = toDayKeyForTimezone(now, PRIVATE_BETA_BACKUP_TIME_ZONE);
+  const dayKey = toDayKeyForTimezone(now, timeZone);
   const lastDayKey = (await deps.storage.systemSettings.get<string>(PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY))?.value;
   if (!options.force && dayKey === lastDayKey) {
     return;
@@ -345,14 +342,15 @@ export async function runMemoryConsolidationSchedulerIfDue(
   if (!options.force && isCronJobBackedOff(job, now)) {
     return;
   }
+  const timeZone = systemCronTimeZoneForSchedule(job.schedule);
   if (!options.force) {
-    // Weekly: Sundays in the 2 AM hour in the configured timezone.
-    const parts = getZonedDateParts(now, MEMORY_CONSOLIDATION_TIME_ZONE);
+    // Weekly: Sundays in the 2 AM hour in the job's schedule timezone.
+    const parts = getZonedDateParts(now, timeZone);
     if (parts.weekday !== 0 || parts.hour !== 2) {
       return;
     }
   }
-  const weekKey = toWeekKeyForTimezone(now, MEMORY_CONSOLIDATION_TIME_ZONE);
+  const weekKey = toWeekKeyForTimezone(now, timeZone);
   const lastWeekKey = (await deps.storage.systemSettings.get<string>(MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY))?.value;
   if (!options.force && lastWeekKey === weekKey) {
     return;
@@ -388,18 +386,19 @@ export async function runMemoryFlushSchedulerIfDue(
   if (!options.force && isCronJobBackedOff(job, now)) {
     return;
   }
+  const timeZone = systemCronTimeZoneForSchedule(job.schedule);
   if (
     !options.force &&
     !isCronJobDueNow(job, now, {
       defaultHour: 3,
       defaultMinute: 0,
       defaultWeekday: undefined,
-      defaultTimeZone: MEMORY_FLUSH_DAILY_TIME_ZONE,
+      defaultTimeZone: timeZone,
     })
   ) {
     return;
   }
-  const dayKey = toDayKeyForTimezone(now, MEMORY_FLUSH_DAILY_TIME_ZONE);
+  const dayKey = toDayKeyForTimezone(now, timeZone);
   const lastDayKey = (await deps.storage.systemSettings.get<string>(MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY))?.value;
   if (!options.force && dayKey === lastDayKey) {
     return;
@@ -533,18 +532,19 @@ export async function runCostReportSchedulerIfDue(
   if (!options.force && isCronJobBackedOff(job, now)) {
     return;
   }
+  const timeZone = systemCronTimeZoneForSchedule(job.schedule);
   if (
     !options.force &&
     !isCronJobDueNow(job, now, {
       defaultHour: 0,
       defaultMinute: 0,
       defaultWeekday: undefined,
-      defaultTimeZone: COST_REPORT_HOURLY_TIME_ZONE,
+      defaultTimeZone: timeZone,
     })
   ) {
     return;
   }
-  const hourKey = toHourKeyForTimezone(now, COST_REPORT_HOURLY_TIME_ZONE);
+  const hourKey = toHourKeyForTimezone(now, timeZone);
   const lastHourKey = (await deps.storage.systemSettings.get<string>(COST_REPORT_HOURLY_DEDUP_SETTING_KEY))?.value;
   if (!options.force && hourKey === lastHourKey) {
     return;
@@ -652,18 +652,19 @@ export async function runUpdateReviewSchedulerIfDue(
   if (!options.force && isCronJobBackedOff(job, now)) {
     return;
   }
+  const timeZone = systemCronTimeZoneForSchedule(job.schedule);
   if (
     !options.force &&
     !isCronJobDueNow(job, now, {
       defaultHour: 4,
       defaultMinute: 15,
       defaultWeekday: undefined,
-      defaultTimeZone: UPDATE_REVIEW_DAILY_TIME_ZONE,
+      defaultTimeZone: timeZone,
     })
   ) {
     return;
   }
-  const dayKey = toDayKeyForTimezone(now, UPDATE_REVIEW_DAILY_TIME_ZONE);
+  const dayKey = toDayKeyForTimezone(now, timeZone);
   const lastDayKey = (await deps.storage.systemSettings.get<string>(UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY))?.value;
   if (!options.force && dayKey === lastDayKey) {
     return;
