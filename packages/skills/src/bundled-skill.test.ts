@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseSkillMarkdown, resolveSkillNameViolation } from "./frontmatter.js";
 import { SkillsService } from "./loader.js";
+import { enumerateSkillRoutes } from "./skill-module-routes.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../../..");
@@ -196,5 +197,23 @@ describe("impeccable bundled skill", () => {
       text: "Fix the TypeScript error in the gateway route and add a regression test.",
     });
     expect(unrelated.selected.map((skill) => skill.name)).not.toContain("impeccable");
+  });
+
+  // The gateway throws (never truncates) when a routed module or route exceeds its ceiling, so an
+  // oversize module after a re-sync would fail every design turn; this pins the shipped tree.
+  it("keeps every routed module within the gateway byte ceilings on the shipped tree", async () => {
+    const impeccableDir = path.join(bundledDir, "impeccable");
+
+    for (const route of enumerateSkillRoutes({ skillId: "bundled:impeccable", skillName: "impeccable" })) {
+      let total = 0;
+      for (const module of route.modules) {
+        const size = (await fs.stat(path.join(impeccableDir, module.relativePath))).size;
+        expect(size, `${route.routeId} ${module.relativePath}`).toBeLessThanOrEqual(
+          module.maxBytes ?? Number.POSITIVE_INFINITY,
+        );
+        total += size;
+      }
+      expect(total, route.routeId).toBeLessThanOrEqual(route.budgetBytes);
+    }
   });
 });

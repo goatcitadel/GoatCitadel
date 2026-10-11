@@ -4843,7 +4843,7 @@ describe("ToolPolicyEngine outside-root read access", () => {
       turnId: "turn-approved-presentation",
       runtimeSkillApplications: [
         {
-          skillId: "bundled:design-intelligence",
+          skillId: "bundled:impeccable",
           treeSha256: "a".repeat(64),
           instructionSha256: "b".repeat(64),
           modules: ["main", "enforcement", "layout", "taste", "assets", "audit"],

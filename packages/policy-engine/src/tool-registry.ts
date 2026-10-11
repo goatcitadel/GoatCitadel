@@ -55,7 +55,7 @@ const ARTIFACT_DESIGN_ARG_SCHEMA = {
     audience: { type: "string" },
     skillId: {
       type: "string",
-      enum: ["design-intelligence"],
+      enum: ["impeccable"],
       description: "Use GoatCitadel Design Quality V1 for non-plain artifact output.",
     },
     brand: {
@@ -92,7 +92,8 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     riskLevel: "safe",
     requiresApproval: false,
     readOnly: true,
-    description: "Read a bounded page of saved tool output by artifact ID from the current chat session. Internal artifact paths are not workspace files; use this tool instead of fs.read.",
+    description:
+      "Read a bounded page of saved tool output by artifact ID from the current chat session. Internal artifact paths are not workspace files; use this tool instead of fs.read.",
     pack: "core",
     recommendedContexts: ["chat", "cowork", "code"],
     preferredForIntents: ["research", "web_lookup", "artifact_output"],
@@ -1883,7 +1884,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       "Use when the user asks for a real document file such as DOCX, PDF, HTML, Markdown, text, JSON, or CSV.",
       "Do not satisfy a requested document artifact with text-only prose when this tool is available.",
       "Use design.mode minimal or plain for raw data, logs, JSON, CSV, code, or explicitly plain outputs.",
-      "For non-plain DOCX, PDF, HTML, reports, briefs, and handouts, set design.skillId to design-intelligence so Design Quality V1 is reflected in the artifact design report.",
+      "For non-plain DOCX, PDF, HTML, reports, briefs, and handouts, set design.skillId to impeccable so Design Quality V1 is reflected in the artifact design report.",
       "Keep renderer provenance in the design report rather than visible document body copy unless the user explicitly asks for an evidence appendix.",
     ],
   },
@@ -2121,7 +2122,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       'When the user wants the deck saved or exported as a PDF ("deck style, saved as a PDF"), use this tool with format "pdf" and a .pdf path instead of documents.create, so the PDF keeps the slide design. PDF decks use standard Latin fonts; use pptx for non-Latin-script content.',
       "Do not satisfy a requested PowerPoint by returning markdown-only slide text unless this tool is unavailable or blocked.",
       "Use design.mode polished or design.preset when the user asks for a visually appealing deck.",
-      "Set design.skillId to design-intelligence for non-plain decks so Design Quality V1 checks asset specificity, layout integrity, and placeholder/provenance cleanup.",
+      "Set design.skillId to impeccable for non-plain decks so Design Quality V1 checks asset specificity, layout integrity, and placeholder/provenance cleanup.",
       "Prefer provider-generated visuals with provenance when available; otherwise the design report must disclose local-renderer fallback visuals.",
       "For research decks, provide canonical sources, complete research metadata, rich cited bullets, and semantic matrix/chart slides; source appendix slides are generated automatically.",
       "presentations.create does not accept model-authored presenter notes. Trusted direct-render callers may supply human-authored notes; renderer, model, prompt, layout, and provenance diagnostics belong only in the returned design report and render manifest.",

@@ -8518,11 +8518,13 @@ export class ChatTurnAgentRunner {
     if (input.toolName === "fs.read" && !input.evalIntegrityTurn && typeof args.path === "string") {
       const requestedPath = args.path.replaceAll("\\", "/").replace(/^\.\//u, "");
       const artifactRun = /^tool-artifacts\//u.test(requestedPath)
-        ? input.priorToolRuns?.find((run) =>
-            run.status === "executed" &&
-            typeof run.result?.artifactId === "string" &&
-            typeof run.result?.artifactPath === "string" &&
-            run.result.artifactPath.replaceAll("\\", "/") === requestedPath)
+        ? input.priorToolRuns?.find(
+            (run) =>
+              run.status === "executed" &&
+              typeof run.result?.artifactId === "string" &&
+              typeof run.result?.artifactPath === "string" &&
+              run.result.artifactPath.replaceAll("\\", "/") === requestedPath,
+          )
         : undefined;
       if (artifactRun) {
         // Re-enter normal capability/policy/approval evaluation for the reader;
@@ -9384,7 +9386,12 @@ function buildEssentialToolSet(input: {
     ];
   }
   const tools = new Set<string>(["time.now"]);
-  if (input.webLookupIntent || input.presentationArtifactIntent || input.documentArtifactIntent || input.localFileIntent) {
+  if (
+    input.webLookupIntent ||
+    input.presentationArtifactIntent ||
+    input.documentArtifactIntent ||
+    input.localFileIntent
+  ) {
     tools.add("tool_artifact.read");
   }
   if (input.subagentFanoutEligible) {
@@ -9456,7 +9463,7 @@ function buildToolAccessProbeArgs(toolName: string, safeWriteFallbackDir?: strin
       path: buildSafeWritePath("tool-access-probe.pptx", safeWriteFallbackDir),
       title: "Tool access probe",
       slides: [{ title: "Probe", bullets: ["Verifies the tool can write inside the workspace jail."] }],
-      design: { mode: "polished", skillId: "design-intelligence" },
+      design: { mode: "polished", skillId: "impeccable" },
     };
   }
   if (toolName === "documents.create") {
@@ -9465,7 +9472,7 @@ function buildToolAccessProbeArgs(toolName: string, safeWriteFallbackDir?: strin
       format: "docx",
       title: "Tool access probe",
       body: "Verifies the tool can write inside the workspace jail.",
-      design: { mode: "polished", skillId: "design-intelligence" },
+      design: { mode: "polished", skillId: "impeccable" },
     };
   }
   if (toolName === "artifacts.create") {
@@ -9519,8 +9526,7 @@ function attachArtifactDesignSkillArgs(toolName: string, args: Record<string, un
   args.design = {
     ...rawDesign,
     mode: existingMode ?? "polished",
-    skillId:
-      typeof rawDesign.skillId === "string" && rawDesign.skillId.trim() ? rawDesign.skillId : "design-intelligence",
+    skillId: typeof rawDesign.skillId === "string" && rawDesign.skillId.trim() ? rawDesign.skillId : "impeccable",
   };
 }
 

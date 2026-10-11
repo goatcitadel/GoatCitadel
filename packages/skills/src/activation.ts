@@ -11,7 +11,7 @@ export function resolveSkillActivation(input: SkillResolveInput, allSkills: Load
   for (const skill of allSkills) {
     const skillReasons: string[] = [];
 
-    if (explicit.has(skill.name.toLowerCase())) {
+    if (explicit.has(skill.name.toLowerCase()) || explicit.has(skill.skillId.toLowerCase())) {
       skillReasons.push("explicit");
     }
 
@@ -60,7 +60,16 @@ function extractExplicitSkills(text: string): string[] {
   const names = new Set<string>();
   const lower = text.toLowerCase();
 
-  for (const token of lower.matchAll(/@skill\s+([a-z0-9_-]+)/g)) {
+  for (const token of lower.matchAll(/@skill\s+([a-z0-9:_-]+)/g)) {
+    if (token[1]) {
+      names.add(token[1]);
+    }
+  }
+
+  // The composer's skill palette inserts `$<skillId>` (for example `$bundled:impeccable`) at a token
+  // start. The `source:` segment is required and the `$` must open a token, so shell or template
+  // variables in pasted code (`$research`, `price$qa`) are not read as operator mentions.
+  for (const token of lower.matchAll(/(?:^|\s)\$([a-z][a-z0-9_-]*:[a-z0-9:_-]+)/g)) {
     if (token[1]) {
       names.add(token[1]);
     }
