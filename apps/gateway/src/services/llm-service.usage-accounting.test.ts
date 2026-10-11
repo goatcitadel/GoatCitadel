@@ -126,66 +126,133 @@ function failNextSettlement(storage: Storage) {
 }
 
 describe("worker tool model dispatch lifetime", () => {
-  it.each(["budget_denied", "tool_returned", "execution_revoked", "tool_returned_during_authority", "tool_returned_during_budget"] as const)("blocks HTTP when %s", async (scenario) => {
-    const { service, storage } = createHarness(openAiResponsesConfig());
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    let executionActive = true;
-    let releaseCheck!: () => void, enteredCheck!: () => void, executionChecks = 0;
-    const released = new Promise<void>(resolve => { releaseCheck = resolve; });
-    const entered = new Promise<void>(resolve => { enteredCheck = resolve; });
-    const checkExecution = async () => {
-      if (!executionActive) throw new Error("Execution revoked.");
-      if (++executionChecks > 1 && scenario === "tool_returned_during_authority") { enteredCheck(); await released; }
-    };
-    const reconcile = vi.fn(async () => {});
-    const authorize = vi.fn(async (input: { usageEventId: string }) => {
-      expect(storage.modelUsageEvents.findByEventId(input.usageEventId)?.transportStatus).toBe("intent");
-      if (scenario === "tool_returned_during_authority") return;
-      if (scenario === "tool_returned_during_budget") { enteredCheck(); await released; return; }
-      throw new Error("Operator budget exhausted.");
-    });
-    const runtime = new RemoteWorkerToolModelBudgetRuntime({ llm: service,
-      storage: { remoteWorkerAssignments: { resolveActiveChatExecution: async () => ({
-        authority: { assignment: { manifest: { workspaceId: "unused", executionWorkspaceId: "workspace-usage-test",
-          sessionId: "session-usage-test", turnId: "turn-usage-test", durableRunId: "worker-run", taskId: "worker-task" } },
-          generation: { workerId: "worker-a" } }, workload: { contextSnapshotSha256: "a".repeat(64) },
-      }) }, remoteWorkerBudgets: { authorizeToolAttempt: authorize, reconcileToolAttempts: reconcile } } as unknown as
-        ConstructorParameters<typeof RemoteWorkerToolModelBudgetRuntime>[0]["storage"],
-    });
-    const input = { fence: { registryWorkspaceId: "default", assignmentId: "worker-assignment", assignmentGeneration: 1,
-      leaseTokenSha256: "b".repeat(64), protectedAuthority: {} }, intent: { intentId: "tool-intent", effectSelector: "fs.read",
-      canonicalArgsSha256: "c".repeat(64), workerIdempotencyKey: "tool-intent-key" }, checkExecution,
-    } as unknown as RemoteWorkerToolModelBudgetInput;
-    const request = { model: "gpt-5.4", max_tokens: 16, messages: [{ role: "user" as const, content: "Helper request" }] };
-    if (scenario === "budget_denied") {
-      await expect(runtime.run(input, () => service.chatCompletions(request))).rejects.toThrow("Operator budget exhausted.");
-      expect(authorize).toHaveBeenCalledOnce();
-    } else if (scenario === "tool_returned") {
-      const stream = await runtime.run(input, async () => service.chatCompletionsStream(request));
-      await expect(stream.next()).rejects.toThrow("Worker tool execution has ended.");
-      expect(authorize).not.toHaveBeenCalled();
-    } else if (scenario === "tool_returned_during_authority" || scenario === "tool_returned_during_budget") {
-      let failure!: Promise<unknown>;
-      await runtime.run(input, async () => {
-        failure = service.chatCompletions(request).then(() => undefined, error => error);
-        await entered;
+  it.each([
+    "budget_denied",
+    "tool_returned",
+    "execution_revoked",
+    "tool_returned_during_authority",
+    "tool_returned_during_budget",
+  ] as const)(
+    "blocks HTTP when %s",
+    async (scenario) => {
+      const { service, storage } = createHarness(openAiResponsesConfig());
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      let executionActive = true;
+      let releaseCheck!: () => void,
+        enteredCheck!: () => void,
+        executionChecks = 0;
+      const released = new Promise<void>((resolve) => {
+        releaseCheck = resolve;
       });
-      releaseCheck();
-      await expect(failure).resolves.toMatchObject({ message: "Worker tool execution has ended." });
-      expect(authorize).toHaveBeenCalledTimes(scenario === "tool_returned_during_budget" ? 1 : 0);
-    } else {
-      await expect(runtime.run(input, async () => {
-        executionActive = false;
-        return service.chatCompletions(request);
-      })).rejects.toThrow("Execution revoked.");
-      expect(authorize).not.toHaveBeenCalled();
-    }
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(reconcile).toHaveBeenCalledTimes(2);
-    expect(onlyUsageRecord(storage)).toMatchObject({ parentOperationId: "worker-tool:tool-intent", workerId: "worker-a",
-      transportStatus: "dispatch_unknown", terminalOutcome: "failed_before_usage", dispatchReconciliation: "confirmed_not_dispatched" });
-  }, 60_000); // Includes fresh on-disk schema initialization for each case.
+      const entered = new Promise<void>((resolve) => {
+        enteredCheck = resolve;
+      });
+      const checkExecution = async () => {
+        if (!executionActive) throw new Error("Execution revoked.");
+        if (++executionChecks > 1 && scenario === "tool_returned_during_authority") {
+          enteredCheck();
+          await released;
+        }
+      };
+      const reconcile = vi.fn(async () => {});
+      const authorize = vi.fn(async (input: { usageEventId: string }) => {
+        expect(storage.modelUsageEvents.findByEventId(input.usageEventId)?.transportStatus).toBe("intent");
+        if (scenario === "tool_returned_during_authority") return;
+        if (scenario === "tool_returned_during_budget") {
+          enteredCheck();
+          await released;
+          return;
+        }
+        throw new Error("Operator budget exhausted.");
+      });
+      const runtime = new RemoteWorkerToolModelBudgetRuntime({
+        llm: service,
+        storage: {
+          remoteWorkerAssignments: {
+            resolveActiveChatExecution: async () => ({
+              authority: {
+                assignment: {
+                  manifest: {
+                    workspaceId: "unused",
+                    executionWorkspaceId: "workspace-usage-test",
+                    sessionId: "session-usage-test",
+                    turnId: "turn-usage-test",
+                    durableRunId: "worker-run",
+                    taskId: "worker-task",
+                  },
+                },
+                generation: { workerId: "worker-a" },
+              },
+              workload: { contextSnapshotSha256: "a".repeat(64) },
+            }),
+          },
+          remoteWorkerBudgets: { authorizeToolAttempt: authorize, reconcileToolAttempts: reconcile },
+        } as unknown as ConstructorParameters<typeof RemoteWorkerToolModelBudgetRuntime>[0]["storage"],
+      });
+      const input = {
+        fence: {
+          registryWorkspaceId: "default",
+          assignmentId: "worker-assignment",
+          assignmentGeneration: 1,
+          leaseTokenSha256: "b".repeat(64),
+          protectedAuthority: {},
+        },
+        intent: {
+          intentId: "tool-intent",
+          effectSelector: "fs.read",
+          canonicalArgsSha256: "c".repeat(64),
+          workerIdempotencyKey: "tool-intent-key",
+        },
+        checkExecution,
+      } as unknown as RemoteWorkerToolModelBudgetInput;
+      const request = {
+        model: "gpt-5.4",
+        max_tokens: 16,
+        messages: [{ role: "user" as const, content: "Helper request" }],
+      };
+      if (scenario === "budget_denied") {
+        await expect(runtime.run(input, () => service.chatCompletions(request))).rejects.toThrow(
+          "Operator budget exhausted.",
+        );
+        expect(authorize).toHaveBeenCalledOnce();
+      } else if (scenario === "tool_returned") {
+        const stream = await runtime.run(input, async () => service.chatCompletionsStream(request));
+        await expect(stream.next()).rejects.toThrow("Worker tool execution has ended.");
+        expect(authorize).not.toHaveBeenCalled();
+      } else if (scenario === "tool_returned_during_authority" || scenario === "tool_returned_during_budget") {
+        let failure!: Promise<unknown>;
+        await runtime.run(input, async () => {
+          failure = service.chatCompletions(request).then(
+            () => undefined,
+            (error) => error,
+          );
+          await entered;
+        });
+        releaseCheck();
+        await expect(failure).resolves.toMatchObject({ message: "Worker tool execution has ended." });
+        expect(authorize).toHaveBeenCalledTimes(scenario === "tool_returned_during_budget" ? 1 : 0);
+      } else {
+        await expect(
+          runtime.run(input, async () => {
+            executionActive = false;
+            return service.chatCompletions(request);
+          }),
+        ).rejects.toThrow("Execution revoked.");
+        expect(authorize).not.toHaveBeenCalled();
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(reconcile).toHaveBeenCalledTimes(2);
+      expect(onlyUsageRecord(storage)).toMatchObject({
+        parentOperationId: "worker-tool:tool-intent",
+        workerId: "worker-a",
+        transportStatus: "dispatch_unknown",
+        terminalOutcome: "failed_before_usage",
+        dispatchReconciliation: "confirmed_not_dispatched",
+      });
+    },
+    60_000,
+  ); // Includes fresh on-disk schema initialization for each case.
 });
 
 async function consume(stream: AsyncGenerator<Record<string, unknown>>): Promise<void> {
@@ -197,40 +264,81 @@ async function consume(stream: AsyncGenerator<Record<string, unknown>>): Promise
 describe("LlmService canonical transport accounting", () => {
   it.each([false, true])("persists governed tool lineage before transport (stream=%s)", async (stream) => {
     const { service, storage } = createHarness(openAiChatConfig());
-    const lineage = { workspaceId: "workspace-tool", sessionId: "session-tool", turnId: "turn-tool",
-      durableRunId: "run-tool", taskId: "task-tool", workerId: "worker-tool", parentOperationId: "effect-tool",
-      contextIntentHash: "a".repeat(64) };
-    const completion = { id: "reply", model: "gpt-4.1", choices: [{ index: 0, finish_reason: "stop",
-      ...(stream ? { delta: { content: "done" } } : { message: { role: "assistant", content: "done" } }) }],
-      usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 } };
-    const fetch = vi.fn(async () => new Response(stream ? `data: ${JSON.stringify(completion)}\n\ndata: [DONE]\n\n` : JSON.stringify(completion),
-      { headers: { "content-type": stream ? "text/event-stream" : "application/json" } }));
+    const lineage = {
+      workspaceId: "workspace-tool",
+      sessionId: "session-tool",
+      turnId: "turn-tool",
+      durableRunId: "run-tool",
+      taskId: "task-tool",
+      workerId: "worker-tool",
+      parentOperationId: "effect-tool",
+      contextIntentHash: "a".repeat(64),
+    };
+    const completion = {
+      id: "reply",
+      model: "gpt-4.1",
+      choices: [
+        {
+          index: 0,
+          finish_reason: "stop",
+          ...(stream ? { delta: { content: "done" } } : { message: { role: "assistant", content: "done" } }),
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+    };
+    const fetch = vi.fn(
+      async () =>
+        new Response(stream ? `data: ${JSON.stringify(completion)}\n\ndata: [DONE]\n\n` : JSON.stringify(completion), {
+          headers: { "content-type": stream ? "text/event-stream" : "application/json" },
+        }),
+    );
     vi.stubGlobal("fetch", fetch);
     const guard = vi.fn(async (attempt) => {
-      expect(storage.modelUsageEvents.findByEventId(attempt.usageEventId)).toMatchObject({ ...lineage,
-        operationId: "tool-utility", transportStatus: "intent" });
+      expect(storage.modelUsageEvents.findByEventId(attempt.usageEventId)).toMatchObject({
+        ...lineage,
+        operationId: "tool-utility",
+        transportStatus: "intent",
+      });
       expect(attempt.attribution).toMatchObject(lineage);
     });
-    const request = { providerId: "openai", model: "gpt-4.1", max_tokens: 128,
-      messages: [{ role: "user" as const, content: "Read the task context." }] };
+    const request = {
+      providerId: "openai",
+      model: "gpt-4.1",
+      max_tokens: 128,
+      messages: [{ role: "user" as const, content: "Read the task context." }],
+    };
     await service.runWithDispatchAuthority(lineage, guard, async () => {
-      if (stream) await consume(service.chatCompletionsStream(request, { operationId: "tool-utility", callKind: "utility" }));
+      if (stream)
+        await consume(service.chatCompletionsStream(request, { operationId: "tool-utility", callKind: "utility" }));
       else await service.chatCompletions(request, { operationId: "tool-utility", callKind: "utility" });
     });
     expect(fetch).toHaveBeenCalledOnce();
     expect(guard).toHaveBeenCalledOnce();
     const events = storage.modelUsageEvents.list({ workspaceId: lineage.workspaceId }).items;
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ ...lineage, terminalOutcome: "succeeded", operationId: "tool-utility", callKind: "utility" });
+    expect(events[0]).toMatchObject({
+      ...lineage,
+      terminalOutcome: "succeeded",
+      operationId: "tool-utility",
+      callKind: "utility",
+    });
   });
 
   it("rejects a tool model request that tries to charge another execution before creating an intent", async () => {
     const { service, storage } = createHarness(openAiChatConfig());
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);
-    await expect(service.runWithDispatchAuthority({ workerId: "owner" }, async () => {}, () =>
-      service.chatCompletions({ model: "gpt-4.1", messages: [{ role: "user", content: "hello" }] },
-        { operationId: "foreign", workerId: "other" }))).rejects.toThrow("governed execution lineage");
+    await expect(
+      service.runWithDispatchAuthority(
+        { workerId: "owner" },
+        async () => {},
+        () =>
+          service.chatCompletions(
+            { model: "gpt-4.1", messages: [{ role: "user", content: "hello" }] },
+            { operationId: "foreign", workerId: "other" },
+          ),
+      ),
+    ).rejects.toThrow("governed execution lineage");
     expect(fetch).not.toHaveBeenCalled();
     expect(storage.modelUsageEvents.list().items).toEqual([]);
   });
@@ -314,41 +422,83 @@ describe("LlmService canonical transport accounting", () => {
 
   it("guards every call in a multi-call workflow and records denial before HTTP dispatch", async () => {
     const { service, storage } = createHarness(openAiChatConfig());
-    const fetch = vi.fn(async () => new Response(JSON.stringify({
-      model: "gpt-4.1", choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
-      usage: { prompt_tokens: 4, completion_tokens: 1 },
-    }), { headers: { "content-type": "application/json" } }));
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            model: "gpt-4.1",
+            choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 4, completion_tokens: 1 },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
     vi.stubGlobal("fetch", fetch);
-    const request = { providerId: "openai", model: "gpt-4.1", messages: [{ role: "user" as const, content: "hello" }], max_tokens: 128 };
+    const request = {
+      providerId: "openai",
+      model: "gpt-4.1",
+      messages: [{ role: "user" as const, content: "hello" }],
+      max_tokens: 128,
+    };
     const seen: string[] = [];
-    await expect(service.runWithDispatchGuard(async (attempt) => {
-      seen.push(attempt.attribution.operationId!);
-      if (seen.length > 2) throw new Error("combined request cap reached");
-    }, async () => {
-      await service.chatCompletions(request, { ...attribution("utility"), callKind: "memory_distillation" });
-      await service.chatCompletions(request, attribution("answer"));
-      await service.chatCompletions(request, attribution("tool-followup"));
-    })).rejects.toThrow("combined request cap reached");
+    await expect(
+      service.runWithDispatchGuard(
+        async (attempt) => {
+          seen.push(attempt.attribution.operationId!);
+          if (seen.length > 2) throw new Error("combined request cap reached");
+        },
+        async () => {
+          await service.chatCompletions(request, { ...attribution("utility"), callKind: "memory_distillation" });
+          await service.chatCompletions(request, attribution("answer"));
+          await service.chatCompletions(request, attribution("tool-followup"));
+        },
+      ),
+    ).rejects.toThrow("combined request cap reached");
     expect(seen).toEqual(["utility", "answer", "tool-followup"]);
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(storage.modelUsageEvents.list({ workspaceId: "workspace-usage-test" }).items).toHaveLength(3);
-    expect(storage.modelUsageEvents.listOperationAttemptsForUpdate("tool-followup", "tool-followup:generation-1")).toEqual([
-      expect.objectContaining({ dispatchReconciliation: "confirmed_not_dispatched", terminalOutcome: "failed_before_usage" }),
+    expect(
+      storage.modelUsageEvents.listOperationAttemptsForUpdate("tool-followup", "tool-followup:generation-1"),
+    ).toEqual([
+      expect.objectContaining({
+        dispatchReconciliation: "confirmed_not_dispatched",
+        terminalOutcome: "failed_before_usage",
+      }),
     ]);
   });
 
   it("rechecks lazy provider streams after the creating scope ends without leaking authority", async () => {
     const { service, storage } = createHarness(openAiChatConfig());
-    const fetch = vi.fn(async () => new Response([
-      'data: {"model":"gpt-4.1","choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":1}}',
-      '', 'data: [DONE]', '', '',
-    ].join("\n"), { headers: { "content-type": "text/event-stream" } }));
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          [
+            'data: {"model":"gpt-4.1","choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":1}}',
+            "",
+            "data: [DONE]",
+            "",
+            "",
+          ].join("\n"),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    );
     vi.stubGlobal("fetch", fetch);
-    const request = { providerId: "openai", model: "gpt-4.1", messages: [{ role: "user" as const, content: "hello" }], max_tokens: 128 };
+    const request = {
+      providerId: "openai",
+      model: "gpt-4.1",
+      messages: [{ role: "user" as const, content: "hello" }],
+      max_tokens: 128,
+    };
     let revoked = false;
-    const parent = vi.fn(async () => { if (revoked) throw new Error("revoked before stream consumption"); });
+    const parent = vi.fn(async () => {
+      if (revoked) throw new Error("revoked before stream consumption");
+    });
     const stream = await service.runWithDispatchGuard(parent, async () =>
-      service.streamWithDispatchGuard(async () => {}, () => service.chatCompletionsStream(request, attribution("deferred"))));
+      service.streamWithDispatchGuard(
+        async () => {},
+        () => service.chatCompletionsStream(request, attribution("deferred")),
+      ),
+    );
     revoked = true;
     await expect(stream.next()).rejects.toThrow("revoked before stream consumption");
     expect(fetch).not.toHaveBeenCalled();
@@ -876,12 +1026,14 @@ describe("LlmService canonical transport accounting", () => {
       ) as typeof fetch,
     );
 
+    // The Responses stream reports the coordinator's model, so the image result
+    // keeps the requested image model while usage records the effective drift.
     await expect(
       success.service.generateImage(
         { providerId: "openai-codex", model: "gpt-image-2", prompt: "Codex image" },
         attribution("codex-image-success"),
       ),
-    ).resolves.toMatchObject({ model: "gpt-image-2-2026-07-01" });
+    ).resolves.toMatchObject({ model: "gpt-image-2" });
     expect(onlyUsageRecord(success.storage)).toMatchObject({
       effectiveModelId: "gpt-image-2-2026-07-01",
       costUsd: 0.04,
