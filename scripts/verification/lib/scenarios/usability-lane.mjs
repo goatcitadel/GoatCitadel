@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { NEXT_RELEASE_SURFACE_MANIFEST } from "../release-surface-manifest.mjs";
 import { requestJson, startVerificationStack, stopVerificationStack } from "../runtime.mjs";
 import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 import { formatArtifactIssue, validateRequiredScenarioArtifacts } from "../scenario-artifact-evidence.mjs";
@@ -35,8 +34,9 @@ import {
 const FOUNDATION_PROMPT = "Reply with exactly: CHAT_OK";
 const FOUNDATION_REPLY = "CHAT_OK";
 const FOUNDATION_OPERATOR_TOKEN = "verification-usability-operator-token";
-const COMPLETED_ASSISTANT_CONTENT_SELECTOR =
-  ".mc-next-thread-bubble.assistant:not(.streaming) .mc-assistant-markdown-assistant";
+// Fresh profiles open the default Cockpit shell; each transcript turn is one article.
+const COCKPIT_TURN_SELECTOR = 'article[aria-label="Conversation messages"]';
+const COMPLETED_ASSISTANT_CONTENT_SELECTOR = `${COCKPIT_TURN_SELECTOR} .mc-assistant-markdown-assistant`;
 const GATEWAY_CHAT_FAULT_DEFECT_ID = "GC-USAB-002";
 const GATEWAY_CHAT_FAULT_STEP_IDS = Object.freeze([
   "pre-output-server-error-retry",
@@ -715,28 +715,33 @@ async function runChatBrowserLeg(context, input) {
     await page.goto(input.deps.buildVerificationUiUrl(input.stack.uiUrl, `/chat?${query}`), {
       waitUntil: "domcontentloaded",
     });
-    const route = NEXT_RELEASE_SURFACE_MANIFEST.find((candidate) => candidate.slug === "chat");
-    await input.deps.waitForVerificationRouteReady(page, route, "@goatcitadel/mission-control-next");
+    await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 60_000 });
     await input.deps.setBrowserCorrelation(page, input.correlationId, input.sessionId);
-    await page.getByLabel("Message composer").waitFor({ timeout: 60_000 });
+    const composer = page.getByRole("combobox", { name: "Message", exact: true });
+    await composer.waitFor({ timeout: 60_000 });
     if (input.sendPrompt) {
-      await page.getByLabel("Message composer").fill(FOUNDATION_PROMPT);
+      await composer.fill(FOUNDATION_PROMPT);
       if (input.sendMethod === "keyboard-enter") {
-        await page.getByLabel("Message composer").press("Enter");
+        await composer.press("Enter");
       } else {
-        await page.locator(".mc-next-composer-primary", { hasText: "Send" }).click();
+        await page.getByRole("button", { name: "Send", exact: true }).click();
       }
     }
     await page.waitForFunction(
-      ({ reply, expectedCount, selector }) =>
+      ({ reply, expectedCount, selector, turnSelector }) =>
         Array.from(document.querySelectorAll(selector)).filter((node) => {
-          const bubble = node.closest(".mc-next-thread-bubble.assistant");
-          return bubble?.getAttribute("aria-busy") === "false" && node.textContent?.trim() === reply;
+          // A streaming Cockpit turn carries a "Responding" badge until the stream settles.
+          const turn = node.closest(turnSelector);
+          const streaming = Array.from(turn?.querySelectorAll("*") ?? []).some(
+            (element) => element.childElementCount === 0 && element.textContent?.trim() === "Responding",
+          );
+          return turn && !streaming && node.textContent?.trim() === reply;
         }).length >= expectedCount,
       {
         reply: FOUNDATION_REPLY,
         expectedCount: input.expectedReplyCount,
         selector: COMPLETED_ASSISTANT_CONTENT_SELECTOR,
+        turnSelector: COCKPIT_TURN_SELECTOR,
       },
       { timeout: 120_000 },
     );
@@ -755,7 +760,7 @@ async function runChatBrowserLeg(context, input) {
     assertCompletedChatTurns(thread.body, input.expectedReplyCount, FOUNDATION_REPLY);
     // Completed transcript text alone does not prove that the streaming UI has
     // released the composer for the next task. Capture the settled control.
-    await page.locator(".mc-next-composer-primary", { hasText: /^Send$/u }).waitFor({
+    await page.getByRole("button", { name: "Send", exact: true }).waitFor({
       state: "visible", timeout: 30_000,
     });
     const activeWorkspaceId = await page.evaluate(() => window.localStorage.getItem("goatcitadel.ui.workspace_id.v1"));

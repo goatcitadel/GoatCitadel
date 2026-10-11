@@ -64,7 +64,8 @@ export async function runWorkbenchFileRevisionScenario(context, deps) {
         const browserContext = await browser.newContext({ viewport: { width: 1440, height: 1080 }, colorScheme: "dark" });
         await installMissionControlNextBrowserState(browserContext, workspaceId);
         page = await browserContext.newPage(); browserLog = attachBrowserLogging(page); logCursor = browserLog.mark();
-        await page.goto(buildVerificationUiUrl(stack.uiUrl, `/chat?sessionId=${encodeURIComponent(sessionId)}`), { waitUntil: "domcontentloaded" });
+        // Classic's Activity build editor loads workbench state; Cockpit's Build editor does not yet, so pin Classic.
+        await page.goto(buildVerificationUiUrl(stack.uiUrl, `/chat?shell=classic&shellScope=visit&sessionId=${encodeURIComponent(sessionId)}`), { waitUntil: "domcontentloaded" });
         await page.getByLabel("Message composer").waitFor({ timeout: 60_000 });
         await page.getByRole("button", { name: "Activity", exact: true }).click();
         await page.getByRole("button", { name: "Open build editor", exact: true }).click();

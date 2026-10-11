@@ -193,6 +193,9 @@ export async function runExternalSourcesBrowserFlow({
       viewport: combo.viewport,
       colorScheme: combo.colorScheme,
     });
+    // This flow proves the Classic Library, Chat attachment strip, approval queue and Journey owners;
+    // Cockpit is the default shell, so pin the supported saved Classic preference for every page.
+    await browserContext.addInitScript(() => window.localStorage.setItem("goatcitadel.ui.shell.v1", "classic"));
     const page = await browserContext.newPage();
     const browserLog = attachBrowserLogging(page);
     const logCursor = browserLog.mark();
