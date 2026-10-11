@@ -205,6 +205,32 @@ describe("workspace and guidance routes", () => {
     expect(restoreResponse.json()).toMatchObject({ lifecycleStatus: "active" });
   });
 
+  it("accepts workspace-only design and product guidance and rejects them globally", async () => {
+    const service = await registerWorkspaceService();
+
+    const workspaceDesign = await app!.inject({
+      method: "PUT",
+      url: "/api/v1/workspaces/default/guidance/design",
+      payload: { content: "# Design" },
+    });
+    const workspaceProduct = await app!.inject({
+      method: "PUT",
+      url: "/api/v1/workspaces/default/guidance/product",
+      payload: { content: "# Product" },
+    });
+    const globalDesign = await app!.inject({
+      method: "PUT",
+      url: "/api/v1/guidance/global/design",
+      payload: { content: "# Design" },
+    });
+
+    expect(workspaceDesign.statusCode).toBe(200);
+    expect(workspaceProduct.statusCode).toBe(200);
+    expect(globalDesign.statusCode).toBe(400);
+    expect(service.updateWorkspaceGuidance).toHaveBeenCalledWith("default", "design", "# Design");
+    expect(service.updateWorkspaceGuidance).toHaveBeenCalledWith("default", "product", "# Product");
+  });
+
   it("lists and updates global and workspace guidance documents", async () => {
     const service = await registerWorkspaceService();
 

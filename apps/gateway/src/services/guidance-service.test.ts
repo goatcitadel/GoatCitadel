@@ -101,6 +101,34 @@ describe("GuidanceService", () => {
     expect(guidance.truncated).toBe(true);
   });
 
+  it("treats PRODUCT.md and DESIGN.md as workspace-only guidance with no global fallback", async () => {
+    await fs.mkdir(path.join(rootDir, "workspaces", "workspace-one"), { recursive: true });
+    await fs.writeFile(path.join(rootDir, "workspaces", "workspace-one", "DESIGN.md"), "# Design\n", "utf8");
+    await fs.writeFile(path.join(rootDir, "DESIGN.md"), "# repo design\n", "utf8");
+    const service = new GuidanceService(fakeContext(rootDir));
+
+    const workspace = await service.listWorkspaceGuidance("workspace-one");
+    expect(workspace.workspace).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ docType: "design", fileName: "DESIGN.md", exists: true, content: "# Design\n" }),
+        expect.objectContaining({ docType: "product", fileName: "PRODUCT.md", exists: false }),
+      ]),
+    );
+    const globalTypes = (await service.listGlobalGuidance()).map((doc) => doc.docType);
+    expect(globalTypes).not.toContain("design");
+    expect(globalTypes).not.toContain("product");
+    expect(workspace.global.map((doc) => doc.docType)).not.toContain("design");
+
+    await expect(service.updateGlobalGuidance("design", "# nope")).rejects.toThrow(/workspace-only/);
+    await expect(service.updateWorkspaceGuidance("workspace-one", "product", "# Product")).resolves.toEqual(
+      expect.objectContaining({ docType: "product", scope: "workspace", content: "# Product\n" }),
+    );
+
+    const runtime = await service.resolveRuntimeGuidance("workspace-one");
+    expect(runtime.workspaceFilesUsed).not.toContain("DESIGN.md");
+    expect(runtime.systemInstruction ?? "").not.toContain("# Design");
+  });
+
   it("honors the guidance injection kill switch", async () => {
     process.env.GOATCITADEL_DISABLE_GUIDANCE_INJECTION = " YeS ";
     const service = new GuidanceService(fakeContext(rootDir));

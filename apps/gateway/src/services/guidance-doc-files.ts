@@ -7,4 +7,6 @@ export const GUIDANCE_DOC_FILE_MAP: Record<GuidanceDocType, string> = {
   contributing: "CONTRIBUTING.md",
   security: "SECURITY.md",
   vision: "VISION.md",
+  product: "PRODUCT.md",
+  design: "DESIGN.md",
 };
