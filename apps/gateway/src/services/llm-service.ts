@@ -1680,10 +1680,10 @@ export class LlmService {
 
     const target = this.buildRequestTarget(resolved, "responses", `${resolved.provider.baseUrl}/responses`);
     target.headers.Accept = "text/event-stream";
+    const coordinatorModel = this.resolveRequestModel(resolved.provider);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 180000);
     const data: ImageGenerationResponse["data"] = [];
     const eventIds: string[] = [];
-    let effectiveModel = model;
     const content: Array<Record<string, unknown>> = [
       { type: "input_text", text: request.prompt.trim() },
       ...referenceImages.map((image) => ({
@@ -1704,7 +1704,7 @@ export class LlmService {
           attribution,
           transportAttemptIndex: index,
           target,
-          payload: buildOpenAICodexImagePayload(request, model, content),
+          payload: buildOpenAICodexImagePayload(request, model, content, coordinatorModel),
           timeoutMs,
         });
       } catch (error) {
@@ -1719,9 +1719,10 @@ export class LlmService {
         if (!dispatched.response.ok) {
           throw new Error(await buildHttpError("OpenAI Codex image generation", dispatched.response));
         }
-        const adapted = await adaptOpenAICodexImageResponse(dispatched.response, model, timeoutMs);
+        const adapted = await adaptOpenAICodexImageResponse(dispatched.response, model, timeoutMs,
+          usesOpenAICodexResponsesLite(resolved.provider, coordinatorModel)
+            ? MAX_OPENAI_CODEX_RESPONSES_LITE_SSE_EVENTS : MAX_CODEX_IMAGE_SSE_EVENTS);
         data.push(...adapted.data);
-        effectiveModel = adapted.model ?? effectiveModel;
         observeProviderPayloadUsage(dispatched.usage, adapted.usage, adapted.model, {
           providerId: resolved.provider.providerId,
           model,
@@ -1741,7 +1742,7 @@ export class LlmService {
 
     return {
       providerId: resolved.provider.providerId,
-      model: effectiveModel,
+      model,
       operation,
       data: data.slice(0, 4),
       ...(eventIds.length > 0 ? { modelUsageEventIds: eventIds } : {}),
@@ -5726,7 +5727,6 @@ function decodeImageAssetToBlob(input: { bytesBase64: string; mimeType?: string 
   });
 }
 
-const OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-5.4";
 const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant.";
 const OPENAI_CODEX_IMAGE_RESPONSE_LABEL = "OpenAI Codex image generation";
 const MAX_CODEX_IMAGE_SSE_BYTES = 64 * 1024 * 1024;
@@ -5739,6 +5739,7 @@ function buildOpenAICodexImagePayload(
   request: ImageGenerationRequest,
   model: string,
   content: Array<Record<string, unknown>>,
+  coordinatorModel: string,
 ): Record<string, unknown> {
   const imageTool: Record<string, unknown> = {
     type: "image_generation",
@@ -5750,7 +5751,7 @@ function buildOpenAICodexImagePayload(
   if (request.background) imageTool.background = request.background;
 
   return {
-    model: OPENAI_CODEX_IMAGE_RESPONSES_MODEL,
+    model: coordinatorModel,
     input: [
       {
         role: "user",
@@ -5775,6 +5776,7 @@ async function adaptOpenAICodexImageResponse(
   response: Response,
   model: string,
   timeoutMs: number,
+  maxEvents = MAX_CODEX_IMAGE_SSE_EVENTS,
 ): Promise<{ data: ImageGenerationResponse["data"]; usage?: Record<string, unknown>; model?: string }> {
   const body = await readBoundedResponseText(response, {
     maxBytes: MAX_CODEX_IMAGE_SSE_BYTES,
@@ -5788,7 +5790,7 @@ async function adaptOpenAICodexImageResponse(
       OPENAI_CODEX_IMAGE_RESPONSE_LABEL,
     );
   }
-  const events = parseOpenAICodexImageEvents(body);
+  const events = parseOpenAICodexImageEvents(body, maxEvents);
   const failure = events.find((event) => event.type === "response.failed" || event.type === "error");
   if (failure) {
     const failureResponse = isRecord(failure.response) ? failure.response : failure;
@@ -5855,7 +5857,7 @@ async function adaptOpenAICodexImageResponse(
   }
 }
 
-function parseOpenAICodexImageEvents(body: string): Array<Record<string, unknown>> {
+function parseOpenAICodexImageEvents(body: string, maxEvents = MAX_CODEX_IMAGE_SSE_EVENTS): Array<Record<string, unknown>> {
   const events: Array<Record<string, unknown>> = [];
   for (const line of body.split(/\r?\n/)) {
     if (!line.startsWith("data: ")) {
@@ -5877,7 +5879,7 @@ function parseOpenAICodexImageEvents(body: string): Array<Record<string, unknown
         OPENAI_CODEX_IMAGE_RESPONSE_LABEL,
       );
     }
-    if (events.length > MAX_CODEX_IMAGE_SSE_EVENTS) {
+    if (events.length > maxEvents) {
       throw new BoundedResponseReadError(
         "body_event_limit",
         "OpenAI Codex image generation response exceeded event limit.",

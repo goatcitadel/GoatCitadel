@@ -4091,7 +4091,7 @@ describe("LlmService", () => {
     });
   });
 
-  it("posts OpenAI Codex image requests through Responses with OAuth bearer auth", async () => {
+  it.each(["gpt-5.5", "gpt-6.1-sol"])("posts Codex images through the configured %s coordinator", async (coordinatorModel) => {
     const secretStore = createTrackedSecretStore({
       "provider:openai-codex:oauth": JSON.stringify({
         accessToken: "codex-access-token",
@@ -4100,7 +4100,7 @@ describe("LlmService", () => {
         updatedAt: Date.now(),
       }),
     });
-    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const service = new LlmService({ ...createCodexConfig(), activeModel: coordinatorModel }, process.env, { secretStore });
     const originalFetch = globalThis.fetch;
     let requestedUrl = "";
     let authorizationHeader = "";
@@ -4113,6 +4113,7 @@ describe("LlmService", () => {
       payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       return new Response(
         [
+          ...(coordinatorModel === "gpt-6.1-sol" ? Array.from({ length: 513 }, () => 'data: {"type":"response.reasoning_summary_text.delta","delta":"r"}') : []),
           'data: {"type":"response.output_item.done","item":{"type":"image_generation_call","result":"aW1hZ2UtYnl0ZXM=","revised_prompt":"Rendered prompt"}}',
           'data: {"type":"response.completed","response":{"model":"gpt-image-2","output":[],"usage":{"input_tokens":0,"output_tokens":0,"cost_usd":0}}}',
           "data: [DONE]",
@@ -4151,24 +4152,24 @@ describe("LlmService", () => {
       globalThis.fetch = originalFetch;
     }
 
-    const tools = payloadBody?.tools as Array<Record<string, unknown>>;
     const input = payloadBody?.input as Array<Record<string, unknown>>;
+    const tools = (payloadBody?.tools ?? input.find((item) => item.type === "additional_tools")?.tools) as Array<Record<string, unknown>>;
 
     expect(requestedUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
     expect(authorizationHeader).toBe("Bearer codex-access-token");
     expect(payloadBody).toMatchObject({
-      model: "gpt-5.4",
-      instructions: "You are an image generation assistant.",
+      model: coordinatorModel,
       stream: true,
       store: false,
       tool_choice: { type: "image_generation" },
     });
+    expect(payloadBody?.instructions).toBe("You are an image generation assistant.");
     expect(tools[0]).toMatchObject({
       type: "image_generation",
       model: "gpt-image-2",
       size: "1024x1024",
     });
-    expect(input[0]?.content).toEqual(
+    expect(input.find((item) => item.role === "user")?.content).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: "input_text", text: "Generate a neon operations console" }),
         expect.objectContaining({ type: "input_image", image_url: "data:image/png;base64,cmVmZXJlbmNl" }),

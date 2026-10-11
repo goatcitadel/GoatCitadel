@@ -19,6 +19,7 @@ export interface PdfDeckTheme {
   accent3: PdfColor;
   border: PdfColor;
   onAccent: PdfColor;
+  citation?: PdfColor;
 }
 
 export const PDF_TABLE_FONT_SIZE = 14;
@@ -72,7 +73,7 @@ export function drawPdfTable(
     );
     drawTableRow(page, row, widths, box.x, cursor, padding, size, "regular", {
       text: theme.text,
-      citation: theme.accent2,
+      citation: theme.citation ?? theme.text,
     });
     cursor += height;
   }
@@ -83,6 +84,37 @@ export function drawPdfTable(
     page.line(columnX, box.y, columnX, cursor, theme.border, 0.5);
   }
   return truncated;
+}
+
+/** Data cards retain column labels, every cell and its citation links. */
+export function drawPdfTableCards(page: PdfPage, table: PresentationTable, sources: readonly PresentationSource[], theme: PdfDeckTheme, box: PdfTextBox): boolean {
+  const count = table.rows.length;
+  if (count === 0) return drawPdfTable(page, table, sources, theme, box);
+  const gap = 12;
+  const height = (box.h - gap * (count - 1)) / count;
+  const columns = Math.max(table.headers.length, ...table.rows.map((row) => row.length), 1);
+  if (height < 85 || columns > 3) return drawPdfTable(page, table, sources, theme, box);
+  const width = box.w / columns;
+  if (table.rows.some((row) => row.some((cell, column) =>
+    layoutRuns(tableCellRuns(table.headers[column] ?? { text: "" }, sources), "bold", 14, width - 36).length * 17
+      + layoutRuns(tableCellRuns(cell, sources), "regular", 18, width - 36).length * 22 + 22 > height,
+  ))) return drawPdfTable(page, table, sources, theme, box);
+  table.rows.forEach((row, rowIndex) => {
+    const y = box.y + rowIndex * (height + gap);
+    page.rect(box.x, y, box.w, height, theme.surface, { color: theme.border, width: 0.75 });
+    page.rect(box.x, y, 5, height, theme.accent);
+    for (let column = 0; column < columns; column += 1) {
+      const x = box.x + column * width + 18;
+      const header = tableCellRuns(table.headers[column] ?? { text: "" }, sources);
+      const cell = tableCellRuns(row[column] ?? { text: "" }, sources);
+      const colors = { text: theme.text, citation: theme.citation ?? theme.text };
+      const labels = layoutRuns(header, "bold", 14, width - 36);
+      const values = layoutRuns(cell, "regular", 18, width - 36);
+      labels.forEach((line, i) => drawRunLine(page, line, x, y + 20 + i * 17, "bold", 14, colors));
+      values.forEach((line, i) => drawRunLine(page, line, x, y + 30 + labels.length * 17 + i * 22, "regular", 18, colors));
+    }
+  });
+  return false;
 }
 
 function drawTableRow(

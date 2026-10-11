@@ -28,6 +28,7 @@ export function richPresentationVisualsEnabled(): boolean {
 export async function prepareApprovedPresentationVisuals(input: {
   request: ToolInvokeRequest;
   generateImage: GenerateImage;
+  slides?: readonly unknown[];
 }): Promise<PreparedPresentationVisuals> {
   if (!richPresentationVisualsEnabled() || input.request.toolName !== "presentations.create") {
     return { plan: [], assets: [], warnings: [], providerCalls: 0 };
@@ -36,7 +37,7 @@ export async function prepareApprovedPresentationVisuals(input: {
   if (designMode === "plain" || designMode === "minimal") {
     return { plan: [], assets: [], warnings: [], providerCalls: 0 };
   }
-  const planWithPrompts = buildPresentationVisualPlan(input.request.args);
+  const planWithPrompts = buildPresentationVisualPlan(input.request.args, input.slides);
   const assets: PreparedPresentationVisual[] = [];
   const warnings: string[] = [];
   let providerCalls = 0;
@@ -53,7 +54,9 @@ export async function prepareApprovedPresentationVisuals(input: {
             n: 1,
             outputFormat: "png",
             responseFormat: "b64_json",
-            timeoutMs: 60_000,
+            size: "1536x1024",
+            quality: "medium",
+            timeoutMs: 180_000,
           },
           createUtilityModelUsageAttribution({
             operationId: `presentation-visual:${input.request.turnId ?? input.request.runId ?? input.request.sessionId}:${current.item.slideIndex}:${current.item.promptSha256.slice(0, 12)}`,
@@ -113,9 +116,10 @@ export async function prepareApprovedPresentationVisuals(input: {
 
 function buildPresentationVisualPlan(
   args: Record<string, unknown>,
+  preparedSlides?: readonly unknown[],
 ): Array<{ item: PresentationVisualPlanItem; prompt: string }> {
   const title = text(args.title) ?? "Presentation";
-  const rawSlides = Array.isArray(args.slides) ? args.slides : [];
+  const rawSlides = preparedSlides ?? (Array.isArray(args.slides) ? args.slides : []);
   const slides = rawSlides
     .map((value, index) => {
       const slide = record(value);
@@ -123,9 +127,10 @@ function buildPresentationVisualPlan(
         index,
         title: text(slide.title) ?? `Section ${index + 1}`,
         bullets: Array.isArray(slide.bullets)
-          ? slide.bullets.map(text).filter((value): value is string => Boolean(value))
+          ? slide.bullets.map((bullet) => text(bullet) ?? text(record(bullet).text)).filter((value): value is string => Boolean(value))
           : [],
         visualBrief: text(slide.visualBrief),
+        dataOnly: Boolean(slide.table || slide.chart || slide.archetype === "sources" || slide.generatedSourceAppendix),
       };
     })
     .slice(0, 40);
@@ -146,7 +151,8 @@ function buildPresentationVisualPlan(
   return plans.slice(0, MAX_GENERATED_VISUALS).map((plan) => {
     const sourceSlide = plan.kind === "section" ? slides[plan.slideIndex - 1] : undefined;
     const prompt = [
-      `Create a polished, editorial PowerPoint ${plan.kind} visual for "${plan.slideTitle}" in the deck "${title}".`,
+      `Create a polished, editorial presentation ${plan.kind} visual for "${plan.slideTitle}" in the deck "${title}".`,
+      text(args.theme) ? `Deck visual system: ${text(args.theme)}.` : undefined,
       plan.visualBrief ? `Visual direction: ${plan.visualBrief}.` : undefined,
       sourceSlide?.bullets.length ? `Concepts to represent: ${sourceSlide.bullets.slice(0, 5).join("; ")}.` : undefined,
       "Use a specific subject-appropriate composition, strong focal hierarchy, generous negative space, and presentation-safe landscape framing.",
@@ -164,22 +170,19 @@ function buildPresentationVisualPlan(
   });
 }
 
-function chooseSectionSlideIndexes(slides: Array<{ index: number; visualBrief?: string }>): number[] {
-  const count = Math.min(3, slides.length);
-  if (count === 0) return [];
-  const selected: number[] = [];
-  for (const slide of slides) {
-    if (slide.visualBrief && selected.length < count) selected.push(slide.index);
+function chooseSectionSlideIndexes(slides: Array<{ index: number; visualBrief?: string; dataOnly?: boolean }>): number[] {
+  const candidates = slides.filter((slide) => !slide.dataOnly);
+  const directed = candidates.filter((slide) => slide.visualBrief);
+  if (directed.length >= 3) {
+    return [0, Math.round((directed.length - 1) / 2), directed.length - 1].map((index) => directed[index]!.index);
   }
-  for (let slot = 0; selected.length < count && slot < count; slot += 1) {
-    const candidate =
-      count === 1 ? Math.floor((slides.length - 1) / 2) : Math.round((slot * (slides.length - 1)) / (count - 1));
-    if (!selected.includes(candidate)) selected.push(candidate);
+  const selected = directed.map((slide) => slide.index);
+  const spread = candidates.length <= 3 ? candidates : [candidates[0]!, candidates[Math.round((candidates.length - 1) / 2)]!, candidates[candidates.length - 1]!];
+  for (const slide of [...spread, ...candidates]) {
+    if (selected.length >= 3) break;
+    if (!selected.includes(slide.index)) selected.push(slide.index);
   }
-  for (let index = 0; selected.length < count && index < slides.length; index += 1) {
-    if (!selected.includes(index)) selected.push(index);
-  }
-  return selected.slice(0, count).sort((left, right) => left - right);
+  return selected.sort((left, right) => left - right);
 }
 
 function hasInlineVisualAsset(value: unknown): boolean {

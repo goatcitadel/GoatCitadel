@@ -1,4 +1,5 @@
 import type { ToolInvokeRequest } from "@goatcitadel/contracts";
+import type { PresentationSlide } from "./presentation-model.js";
 import type { PresentationVisualAsset } from "./presentation-pptx.js";
 
 export interface PresentationVisualPlanItem {
@@ -23,4 +24,4 @@ export interface PreparedPresentationVisuals {
   providerCalls: number;
 }
 
-export type PreparePresentationVisuals = (request: ToolInvokeRequest) => Promise<PreparedPresentationVisuals>;
+export type PreparePresentationVisuals = (request: ToolInvokeRequest, slides?: readonly PresentationSlide[]) => Promise<PreparedPresentationVisuals>;

@@ -217,7 +217,7 @@ async function presentationsCreate(
   const visualAsset = normalizePresentationVisualAsset(args.visualAsset);
   const preVisualDeckQuality = analyzePresentationDeckQuality(design, deckSlides);
   assertPresentationLayoutQualityBeforeVisuals(preVisualDeckQuality, design.mode, Boolean(research));
-  const preparedVisuals = await preparePresentationVisuals(runtime);
+  const preparedVisuals = await preparePresentationVisuals(runtime, slides);
   const mappedVisualSlideIndexes = new Set(preparedVisuals.assets.map((item) => item.slideIndex));
   const deckQuality = analyzePresentationDeckQuality(design, deckSlides, mappedVisualSlideIndexes);
   const rendererInput: PresentationPdfInput = {
@@ -595,11 +595,11 @@ function presentationAssetSpecificityFindings(
 async function preparePresentationVisuals(input: {
   request?: ToolInvokeRequest;
   preparePresentationVisuals?: PreparePresentationVisuals;
-}): Promise<PreparedPresentationVisuals> {
+}, slides: readonly PresentationSlide[]): Promise<PreparedPresentationVisuals> {
   if (!input.request || !input.preparePresentationVisuals) {
     return { plan: [], assets: [], warnings: [], providerCalls: 0 };
   }
-  return input.preparePresentationVisuals(input.request);
+  return input.preparePresentationVisuals(input.request, slides);
 }
 
 function documentAssetSpecificityFindings(

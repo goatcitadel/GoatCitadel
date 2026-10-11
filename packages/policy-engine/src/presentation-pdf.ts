@@ -12,7 +12,7 @@ import {
   truncateWinAnsi,
   type PdfImageXObject,
 } from "./pdf-writer.js";
-import { drawPdfChart, drawPdfTable, type PdfDeckTheme } from "./presentation-pdf-blocks.js";
+import { drawPdfChart, drawPdfTable, drawPdfTableCards, type PdfDeckTheme } from "./presentation-pdf-blocks.js";
 import {
   bulletRuns,
   drawBulletList,
@@ -88,6 +88,23 @@ export async function createPresentationPdf(input: PresentationPdfInput): Promis
   const fonts = writer.addStandardFonts();
   const images = await embedVisuals(writer, input, theme, warnings);
   const layout = resolvePresentationDeckLayoutPlan(input.design, deckSlides, new Set(images.keys()));
+  // PDF geometry is distinct from PPTX template names. Keep every approved
+  // visual visible and vary adjacent prose pages without changing data semantics.
+  let tableOrdinal = 0;
+  for (let index = 1; index < layout.length; index += 1) {
+    const decision = layout[index]!;
+    const slide = deckSlides[index]!;
+    if (slide.table) {
+      decision.renderer = tableOrdinal++ % 2 === 0 ? "table" : "table-continuation";
+    } else if (images.has(index) && !slide.table && !slide.chart && slide.archetype !== "sources") {
+      decision.renderer = "image-text";
+    } else if (decision.renderer === layout[index - 1]?.renderer && !slide.table && !slide.chart) {
+      if (decision.renderer === "two-column" || decision.renderer === "comparison") decision.renderer = "stacked-list";
+      else if (decision.renderer === "closing" || decision.renderer === "section") decision.renderer = "section-continuation";
+      else if (decision.renderer === "image-text" || decision.renderer === "stacked-list") decision.renderer = "two-column";
+      else if (decision.renderer === "sources") decision.renderer = "sources-continuation";
+    }
+  }
   const pageIds = deckSlides.map((slide, index) => {
     const page = new PdfPage(PAGE_W, PAGE_H);
     const context: SlideContext = {
@@ -150,10 +167,19 @@ function assertLatinRenderable(slides: readonly PresentationSlide[], warnings: s
 
 function resolveTheme(design: ArtifactDesignPlan): PdfDeckTheme {
   const accent = pdfColor(design.tokens.accent);
+  const surface = pdfColor(design.tokens.surface);
+  const text = pdfColor(design.tokens.text);
+  const accent2 = pdfColor(design.tokens.accent2);
+  const contrast = (ink: ReturnType<typeof pdfColor>) => {
+    const a = pdfColorLuminance(ink); const b = pdfColorLuminance(surface);
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  };
+  const citation = contrast(accent2) >= 4.5 ? accent2 : contrast(accent) >= 4.5 ? accent : text;
   return {
     background: pdfColor(design.tokens.background),
-    surface: pdfColor(design.tokens.surface),
-    text: pdfColor(design.tokens.text),
+    surface,
+    text,
+    citation,
     muted: pdfColor(design.tokens.mutedText),
     accent,
     accent2: pdfColor(design.tokens.accent2),
@@ -212,20 +238,24 @@ function drawSlide(context: SlideContext, renderer: PresentationDeckRenderer): v
     case "hero":
       return drawCover(context);
     case "section":
-    case "section-continuation":
     case "closing":
       return drawSection(context, renderer === "closing");
+    case "section-continuation":
+      return drawStacked(context);
     case "sources":
     case "sources-continuation":
-      return drawSources(context);
+      return drawSources(context, renderer === "sources-continuation");
     case "table":
     case "table-continuation":
     case "chart":
     case "chart-continuation":
-      return drawDataSlide(context);
+      return drawDataSlide(context, renderer === "table-continuation");
     case "two-column":
-    case "comparison":
       return drawColumns(context);
+    case "comparison":
+      return drawRows(context, true);
+    case "stacked-list":
+      return drawRows(context, false);
     case "stat-callout":
       return drawCallout(context);
     default:
@@ -294,14 +324,39 @@ function drawStacked(context: SlideContext): void {
   drawContentTitle(context);
   const { page, theme, image } = context;
   const cardWidth = image ? 508 : 836;
-  const card = { x: MARGIN_X, y: BODY_TOP, w: cardWidth, h: BODY_BOTTOM - BODY_TOP };
+  const imageLeft = Boolean(image && context.index % 2 === 0);
+  const imageWidth = 836 - cardWidth - 18;
+  const card = { x: MARGIN_X + (imageLeft ? imageWidth + 18 : 0), y: BODY_TOP, w: cardWidth, h: BODY_BOTTOM - BODY_TOP };
   page.rect(card.x, card.y, card.w, card.h, theme.surface, { color: theme.border, width: 0.75 });
   drawBullets(
     context,
     context.slide.bullets.map((bullet) => bulletRuns(bullet, context.sources)),
     inset(card, 22),
   );
-  if (image) drawImage(context, { x: MARGIN_X + cardWidth + 18, y: BODY_TOP, w: 836 - cardWidth - 18, h: card.h });
+  if (image) drawImage(context, { x: imageLeft ? MARGIN_X : MARGIN_X + cardWidth + 18, y: BODY_TOP, w: imageWidth, h: card.h });
+}
+
+/** Full-width editorial rows preserve all claims while avoiding repeated split cards. */
+function drawRows(context: SlideContext, comparison: boolean): void {
+  drawContentTitle(context);
+  const { page, theme, slide } = context;
+  const count = slide.bullets.length;
+  if (count === 0) return;
+  const gap = 8;
+  const height = (BODY_BOTTOM - BODY_TOP - gap * (count - 1)) / count;
+  // Extremely dense direct-render input retains the bounded text-fit fallback.
+  if (height < 42) { drawStacked(context); return; }
+  slide.bullets.forEach((bullet, index) => {
+    const box = { x: MARGIN_X, y: BODY_TOP + index * (height + gap), w: 836, h: height };
+    const accent = index % 2 === 0 ? theme.accent : theme.accent2;
+    page.rect(box.x, box.y, box.w, box.h, theme.surface, { color: theme.border, width: 0.75 });
+    const labelWidth = comparison ? 72 : 10;
+    page.rect(box.x, box.y, labelWidth, box.h, comparison ? mixPdfColors(theme.surface, accent, 0.16) : accent);
+    if (comparison) page.text(box.x + 18, box.y + Math.min(35, box.h / 2 + 7), String(index + 1).padStart(2, "0"), { font: "bold", size: 20, color: theme.citation ?? theme.text });
+    drawBullets(context, [bulletRuns(bullet, context.sources)], {
+      x: box.x + labelWidth + 18, y: box.y + 10, w: box.w - labelWidth - 36, h: box.h - 20,
+    });
+  });
 }
 
 function drawColumns(context: SlideContext): void {
@@ -375,10 +430,14 @@ function drawSection(context: SlideContext, closing: boolean): void {
   if (image) drawImage(context, { x: 600, y: BODY_TOP, w: 291, h: BODY_BOTTOM - BODY_TOP });
 }
 
-function drawSources(context: SlideContext): void {
+function drawSources(context: SlideContext, continuation = false): void {
   drawContentTitle(context);
   const { page, theme, slide } = context;
-  const card = { x: MARGIN_X, y: BODY_TOP, w: 836, h: BODY_BOTTOM - BODY_TOP };
+  if (continuation) {
+    page.rect(MARGIN_X, BODY_TOP, 150, BODY_BOTTOM - BODY_TOP, theme.accent);
+    page.text(MARGIN_X + 20, BODY_TOP + 42, "REFERENCES", { font: "bold", size: 16, color: theme.onAccent });
+  }
+  const card = { x: MARGIN_X + (continuation ? 168 : 0), y: BODY_TOP, w: continuation ? 668 : 836, h: BODY_BOTTOM - BODY_TOP };
   page.rect(card.x, card.y, card.w, card.h, theme.surface, { color: theme.border, width: 0.75 });
   const truncated = drawBulletList(
     page,
@@ -387,15 +446,15 @@ function drawSources(context: SlideContext): void {
     {
       maxSize: 14,
       minSize: SOURCE_MIN_SIZE,
-      colors: { text: theme.text, citation: theme.accent2 },
-      marker: theme.accent2,
+      colors: { text: theme.text, citation: theme.citation ?? theme.text },
+      marker: theme.citation ?? theme.text,
       linkEntries: true,
     },
   );
   if (truncated) context.warnings.push(`Slide ${context.index + 1} source list was shortened to fit the page.`);
 }
 
-function drawDataSlide(context: SlideContext): void {
+function drawDataSlide(context: SlideContext, cards = false): void {
   const { page, theme, slide } = context;
   if (!slide.table && !slide.chart) {
     // A matrix/chart archetype without data keeps its full bullet list.
@@ -416,7 +475,7 @@ function drawDataSlide(context: SlideContext): void {
   }
   const box = { x: MARGIN_X, y: top, w: 836, h: BODY_BOTTOM - top };
   if (slide.table) {
-    if (drawPdfTable(page, slide.table, context.sources, theme, box)) {
+    if ((cards ? drawPdfTableCards : drawPdfTable)(page, slide.table, context.sources, theme, box)) {
       context.warnings.push(`Slide ${context.index + 1} table rows were cut to fit the page.`);
     }
     return;
@@ -437,7 +496,7 @@ function drawBullets(
   const truncated = drawBulletList(page, entries, box, {
     maxSize: options.plain ? BODY_MIN_SIZE : 22,
     minSize: BODY_MIN_SIZE,
-    colors: { text: options.muted ? theme.muted : theme.text, citation: theme.accent2 },
+    colors: { text: options.muted ? theme.muted : theme.text, citation: theme.citation ?? theme.text },
     marker: options.plain || options.muted ? undefined : theme.accent,
   });
   if (truncated) context.warnings.push(`Slide ${context.index + 1} text was shortened to fit the page.`);

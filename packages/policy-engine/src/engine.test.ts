@@ -4863,7 +4863,9 @@ describe("ToolPolicyEngine outside-root read access", () => {
         runtimeSkillApplications: request.runtimeSkillApplications,
         writePathRepair: request.writePathRepair,
         presentationGrounding: request.presentationGrounding,
+        args: request.args,
       }),
+      expect.arrayContaining([expect.objectContaining({ title: "Grounded Findings" })]),
     );
     expect(JSON.stringify(executed)).not.toContain("iVBORw0KGgo");
     expect(duplicateReplay).toBeUndefined();

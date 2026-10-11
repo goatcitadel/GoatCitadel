@@ -1371,9 +1371,10 @@ export class GatewayService {
       requestNotification: async (request, input) => await this.requestNotificationFromTool(request.sessionId, input),
       proposeDocumentPatch: async (request, input) => await this.proposeDocumentPatchFromTool(request, input),
       submitWorkResult: (request) => this.delegatedWorkResultService.execute(request),
-      preparePresentationVisuals: (request) =>
+      preparePresentationVisuals: (request, slides) =>
         prepareApprovedPresentationVisuals({
           request,
+          slides,
           generateImage: (imageRequest, attribution) => this.llmService.generateImage(imageRequest, attribution),
         }),
     });

@@ -10,6 +10,24 @@ afterEach(() => {
 });
 
 describe("approved presentation visual execution", () => {
+  it("plans against final pages, preserves rich bullet concepts, and skips data and source pages", async () => {
+    const generateImage = vi.fn(async () => ({ model: "gpt-image-2", operation: "generate" as const, data: [{ b64Json: "bytes" }] }));
+    const result = await prepareApprovedPresentationVisuals({
+      request: presentationRequest(), generateImage,
+      slides: [
+        { title: "Comparison", table: { rows: [] }, bullets: [] },
+        { title: "Hoi An", bullets: [{ text: "Lanterns beside the river.", claimKind: "fact" }], visualBrief: "River landscape" },
+        { title: "Krakow", bullets: ["Historic streets"], visualBrief: "City illustration" },
+        { title: "Albania", bullets: ["Coastal landscape"], visualBrief: "Coast illustration" },
+        { title: "Sources", archetype: "sources", generatedSourceAppendix: true, bullets: [] },
+      ],
+    });
+    expect(result.assets.map((item) => item.slideIndex)).toEqual([0, 2, 3, 4]);
+    expect(result.plan.map((item) => item.slideTitle)).toEqual([presentationRequest().args.title, "Hoi An", "Krakow", "Albania"]);
+    expect(generateImage.mock.calls[1]?.[0].prompt).toContain("Lanterns beside the river.");
+    expect(generateImage.mock.calls[0]?.[0]).toMatchObject({ size: "1536x1024", timeoutMs: 180000 });
+  });
+
   it("maps a cover and three section visuals with two-call concurrency and complete attribution", async () => {
     let active = 0;
     let peak = 0;
