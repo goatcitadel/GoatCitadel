@@ -633,38 +633,53 @@ export class CapabilitySystemService {
       );
     } catch (error) {
       const reason = redactSecretText(error instanceof Error ? error.message : String(error)).value.slice(0, 160);
-      return await this.options.storage.skillLifecycle.upsert({
+      const demoted = await this.commitSkillLifecycleIfUnchanged(existing, {
         ...projected,
         lifecycleState: "candidate",
         trustLabel: EXACT_BYTE_REVIEW_TRUST_LABEL,
         reviewWarning: `Release lock matched this skill tree but the re-trust audit receipt could not be written (${reason}); the skill stays non-callable until the receipt succeeds.`,
       });
+      return demoted.record;
     }
-    // Compare-and-swap inside one immediate transaction: the re-read and the upsert cannot be
-    // interleaved with another lifecycle writer, so a row revoked or otherwise changed since the
-    // eligibility check is never overwritten by the stale trusted projection.
-    const committed = await this.options.storage.runImmediateTransaction(async () => {
-      const latest = await this.options.storage.skillLifecycle.find(skill.skillId);
-      if (!latest || latest.lifecycleState !== existing.lifecycleState || latest.updatedAt !== existing.updatedAt) {
-        return { changed: true as const, record: latest ?? existing };
-      }
-      return { changed: false as const, record: await this.options.storage.skillLifecycle.upsert(projected) };
-    });
+    const committed = await this.commitSkillLifecycleIfUnchanged(existing, projected);
     if (committed.changed) {
       // Another writer owns the newer row; its truth wins and the next read re-evaluates from it.
       return committed.record;
     }
     const stored = committed.record;
-    await this.options.publishRealtime("skill_lifecycle_retrusted", "capabilities", {
-      skillId: skill.skillId,
-      source: skill.source,
-      previousLifecycleState: existing.lifecycleState,
-      lifecycleState: stored.lifecycleState,
-      previousTreeSha256: previous?.treeSha256,
-      treeSha256: current.treeSha256,
-      lockVersion: BUNDLED_SKILL_LOCK_VERSION,
-    });
+    try {
+      await this.options.publishRealtime("skill_lifecycle_retrusted", "capabilities", {
+        skillId: skill.skillId,
+        source: skill.source,
+        previousLifecycleState: existing.lifecycleState,
+        lifecycleState: stored.lifecycleState,
+        previousTreeSha256: previous?.treeSha256,
+        treeSha256: current.treeSha256,
+        lockVersion: BUNDLED_SKILL_LOCK_VERSION,
+      });
+    } catch (realtimeError) {
+      void realtimeError;
+      // The lifecycle row and its audit receipt are canonical; realtime is an advisory projection.
+    }
     return stored;
+  }
+
+  /**
+   * Compare-and-swap for a skill lifecycle row inside one immediate transaction: the re-read and
+   * the upsert cannot be interleaved with another lifecycle writer, so a row revoked or otherwise
+   * changed since `existing` was read is never overwritten by a stale projection.
+   */
+  private async commitSkillLifecycleIfUnchanged(
+    existing: SkillLifecycleRecord,
+    record: SkillLifecycleRecord,
+  ): Promise<{ changed: boolean; record: SkillLifecycleRecord }> {
+    return await this.options.storage.runImmediateTransaction(async () => {
+      const latest = await this.options.storage.skillLifecycle.find(existing.skillId);
+      if (!latest || latest.lifecycleState !== existing.lifecycleState || latest.updatedAt !== existing.updatedAt) {
+        return { changed: true, record: latest ?? existing };
+      }
+      return { changed: false, record: await this.options.storage.skillLifecycle.upsert(record) };
+    });
   }
 
   public async listCatalog(

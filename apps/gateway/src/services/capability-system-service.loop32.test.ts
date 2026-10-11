@@ -600,6 +600,70 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
       expect(harness.publishRealtime).not.toHaveBeenCalled();
     });
 
+    it("never lets the receipt-failure fallback overwrite a row revoked while the receipt was being written", async () => {
+      const rootDir = await createRoot();
+      const skillDir = path.join(rootDir, "bundled-release-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      const skillPath = path.join(skillDir, "SKILL.md");
+      const skill = buildShippedSkill("bundled", skillDir);
+      await fs.writeFile(skillPath, "Release one.\n");
+      const releaseOne = await captureLockEntry(skill.skillId, skillDir);
+      await fs.writeFile(skillPath, "Release two.\n");
+      const releaseTwo = await captureLockEntry(skill.skillId, skillDir);
+      const stale = trustedRowAt(skill, releaseOne, "Built-in");
+
+      const harness = createService({
+        rootDir,
+        skills: [skill],
+        skillLifecycleRecords: [stale],
+        resolveBundledSkillLockEntry: () => releaseTwo,
+      });
+      const concurrentlyRevoked: SkillLifecycleRecord = {
+        ...stale,
+        lifecycleState: "revoked",
+        trustLabel: "Revoked",
+        updatedAt: "2026-07-14T00:00:00.000Z",
+      };
+      harness.audit.append.mockImplementationOnce(async () => {
+        harness.skillLifecycle.set(skill.skillId, concurrentlyRevoked);
+        throw new Error("audit disk unavailable");
+      });
+
+      expect((await harness.service.listSkills())[0]).toMatchObject({ lifecycleState: "revoked", callable: false });
+      expect(harness.skillLifecycle.get(skill.skillId)).toEqual(concurrentlyRevoked);
+      expect(harness.publishRealtime).not.toHaveBeenCalled();
+    });
+
+    it("keeps the committed re-trust and the catalog read when the realtime publication fails", async () => {
+      const rootDir = await createRoot();
+      const skillDir = path.join(rootDir, "bundled-release-skill");
+      await fs.mkdir(skillDir, { recursive: true });
+      const skillPath = path.join(skillDir, "SKILL.md");
+      const skill = buildShippedSkill("bundled", skillDir);
+      await fs.writeFile(skillPath, "Release one.\n");
+      const releaseOne = await captureLockEntry(skill.skillId, skillDir);
+      await fs.writeFile(skillPath, "Release two.\n");
+      const releaseTwo = await captureLockEntry(skill.skillId, skillDir);
+
+      const harness = createService({
+        rootDir,
+        skills: [skill],
+        skillLifecycleRecords: [trustedRowAt(skill, releaseOne, "Built-in")],
+        resolveBundledSkillLockEntry: () => releaseTwo,
+      });
+      harness.publishRealtime.mockRejectedValueOnce(new Error("realtime retention unavailable"));
+
+      expect((await harness.service.listSkills())[0]).toMatchObject({ lifecycleState: "trusted", callable: true });
+      expect(harness.skillLifecycle.get(skill.skillId)).toMatchObject({
+        lifecycleState: "trusted",
+        provenance: { contentIntegrity: { treeSha256: releaseTwo.treeSha256 } },
+      });
+      expect(harness.audit.append).toHaveBeenCalledTimes(1);
+      expect(await harness.service.listCatalog("callable")).toEqual([
+        expect.objectContaining({ capabilityId: `skill:${skill.skillId}`, callable: true }),
+      ]);
+    });
+
     it("re-trusts the shipped design-intelligence tree through the compiled lock on an upgraded install", async () => {
       const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
       const skillDir = path.join(repoRoot, "skills", "bundled", "design-intelligence");
