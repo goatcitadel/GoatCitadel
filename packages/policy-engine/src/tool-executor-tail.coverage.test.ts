@@ -336,7 +336,7 @@ describe("tool executor tail coverage", () => {
     expect(designReport.validation?.find((check) => check.id === "content-density")?.status).toBe("passed");
     expect(designReport.validation?.find((check) => check.id === "design-skill-applied")?.status).toBe("warning");
     expect(designReport.designQuality).toMatchObject({
-      skillId: "design-intelligence",
+      skillId: "impeccable",
       status: "warning",
       retryAttempted: false,
     });
@@ -382,7 +382,7 @@ describe("tool executor tail coverage", () => {
     });
     invokeRequest.runtimeSkillApplications = [
       {
-        skillId: "bundled:design-intelligence",
+        skillId: "bundled:impeccable",
         treeSha256: "a".repeat(64),
         instructionSha256: "b".repeat(64),
         modules: ["main", "enforcement", "layout", "taste", "assets", "audit"],
@@ -431,7 +431,7 @@ describe("tool executor tail coverage", () => {
         designQuality: {
           runtimeInstructions: {
             status: "injected",
-            skills: [expect.objectContaining({ skillId: "bundled:design-intelligence" })],
+            skills: [expect.objectContaining({ skillId: "bundled:impeccable" })],
           },
           contentGrounding: { status: "passed" },
           visualLayout: { status: "passed" },

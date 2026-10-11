@@ -10,6 +10,7 @@ import {
   type SkillActivationDecision,
   type SkillLifecycleRecord,
 } from "@goatcitadel/contracts";
+import { resolveSkillModules, type SkillArtifactIntent, type SkillModuleRef } from "@goatcitadel/skills";
 import { captureSkillContentIntegritySync } from "./skill-content-integrity.js";
 import {
   PROMPTWARE_SCANNER_VERSION,
@@ -17,11 +18,6 @@ import {
   type PromptwareRuleId,
 } from "./assembled-prompt-injection-guard.js";
 
-const DESIGN_SKILL_ID = "bundled:design-intelligence";
-const DESIGN_SKILL_NAME = "design-intelligence";
-const PRESENTATION_MODULE = { name: "presentation", relativePath: "presentation.md" } as const;
-const PRESENTATION_MODULE_MAX_BYTES = 8 * 1024;
-const PRESENTATION_INTENT = /\b(?:powerpoint|presentation|slide\s*deck|slides?|pptx|presentations\.create)\b/iu;
 const PROMPTWARE_CLEAN_CACHE_MAX = 256;
 const promptwareCleanCache = new Map<string, true>();
 
@@ -55,6 +51,8 @@ interface BuildReceiptInput {
   decision: SkillActivationDecision;
   trustedSkills: ChatTurnCapabilityTrustedSkill[];
   lifecycleRows: SkillLifecycleRecord[];
+  /** Gateway-detected deck/document intent; selects the artifacts route for design skills. */
+  artifactIntent?: SkillArtifactIntent;
 }
 
 export function governedSkillInstructionInjectionEnabled(): boolean {
@@ -73,13 +71,20 @@ export function buildGovernedActivatedSkillReceipts(input: BuildReceiptInput): C
         throw new Error(`Activated skill ${skill.skillId} is not present in the frozen trusted-skill catalog.`);
       }
       const lifecycle = lifecycleBySkill.get(skill.skillId);
+      const resolution = resolveSkillModules({
+        skillId: skill.skillId,
+        skillName: skill.name,
+        text: input.content,
+        artifactIntent: input.artifactIntent,
+      });
       return buildReceipt({
         source: skill,
         trusted,
         lifecycle,
         reasons: input.decision.reasons[skill.name] ?? [],
         confidence: skill.confidence,
-        presentationIntent: PRESENTATION_INTENT.test(input.content),
+        modulePaths: resolution.modules,
+        budgetBytes: resolution.budgetBytes,
       }).receipt;
     })
     .sort((left, right) => left.capabilityId.localeCompare(right.capabilityId));
@@ -163,8 +168,10 @@ function buildReceipt(input: {
   lifecycle: SkillLifecycleRecord | undefined;
   reasons: string[];
   confidence: number;
-  presentationIntent?: boolean;
-  modulePaths?: Array<{ name: string; relativePath: string }>;
+  /** Modules to load: the route table's resolution at freeze time, or the frozen receipt's modules at render time. */
+  modulePaths: SkillModuleRef[];
+  /** Total byte ceiling across modules; enforced at freeze time only (a frozen receipt is already bounded). */
+  budgetBytes?: number;
 }): { receipt: ChatTurnCapabilityActivatedSkill; instruction: string } {
   const integrity = input.lifecycle?.provenance?.contentIntegrity;
   const currentIntegrity = input.lifecycle ? captureSkillContentIntegritySync(input.source.dir) : undefined;
@@ -181,13 +188,8 @@ function buildReceipt(input: {
   ) {
     throw new Error(`Activated skill ${input.source.skillId} failed exact-byte lifecycle verification.`);
   }
-  const modulePaths =
-    input.modulePaths ??
-    (isPresentationDesignSkill(input.source, input.presentationIntent)
-      ? [PRESENTATION_MODULE]
-      : [{ name: "main", relativePath: "SKILL.md" }]);
   const manifestByPath = new Map(currentIntegrity.files.map((file) => [normalizeRelativePath(file.path), file]));
-  const modules = modulePaths.map((module) => {
+  const modules = input.modulePaths.map((module) => {
     const relativePath = normalizeRelativePath(module.relativePath);
     const manifestFile = manifestByPath.get(relativePath);
     if (!manifestFile) {
@@ -201,13 +203,9 @@ function buildReceipt(input: {
       throw new Error(`Activated skill ${input.source.skillId} module escaped its skill root.`);
     }
     const bytes = fs.readFileSync(fullPath);
-    if (
-      relativePath === PRESENTATION_MODULE.relativePath &&
-      isDesignSkill(input.source) &&
-      bytes.byteLength > PRESENTATION_MODULE_MAX_BYTES
-    ) {
+    if (module.maxBytes !== undefined && bytes.byteLength > module.maxBytes) {
       throw new Error(
-        `Activated skill ${input.source.skillId} presentation module exceeds the ${PRESENTATION_MODULE_MAX_BYTES}-byte limit.`,
+        `Activated skill ${input.source.skillId} ${module.name} module exceeds the ${module.maxBytes}-byte limit.`,
       );
     }
     const sha256 = createHash("sha256").update(bytes).digest("hex");
@@ -219,6 +217,12 @@ function buildReceipt(input: {
       content: bytes.toString("utf8").trim(),
     };
   });
+  const totalBytes = modules.reduce((sum, module) => sum + module.receipt.bytes, 0);
+  if (input.budgetBytes !== undefined && totalBytes > input.budgetBytes) {
+    throw new Error(
+      `Activated skill ${input.source.skillId} resolved modules total ${totalBytes} bytes and exceed the ${input.budgetBytes}-byte budget.`,
+    );
+  }
   const instruction = modules
     .map((module) => `## Runtime skill module: ${input.trusted.skillId}/${module.receipt.name}\n\n${module.content}`)
     .join("\n\n");
@@ -235,21 +239,6 @@ function buildReceipt(input: {
     },
     instruction,
   };
-}
-
-function isPresentationDesignSkill(
-  source: ActivatedSkillSource & { name?: string },
-  presentationIntent?: boolean,
-): boolean {
-  return Boolean(presentationIntent) && isDesignSkill(source);
-}
-
-function isDesignSkill(source: ActivatedSkillSource & { name?: string }): boolean {
-  return (
-    source.skillId === DESIGN_SKILL_ID ||
-    source.skillId.endsWith(`:${DESIGN_SKILL_NAME}`) ||
-    source.name === DESIGN_SKILL_NAME
-  );
 }
 
 function normalizeRelativePath(value: string): string {

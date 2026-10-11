@@ -92,6 +92,12 @@ function extractExplicitTokens(input: SkillResolveInput): string[] {
   for (const match of input.text.matchAll(/@skill\s+([a-z0-9:_-]+)/giu)) {
     if (match[1]) tokens.add(match[1]);
   }
+  // `$<skillId>` is what the composer's skill palette inserts; it resolves through the same alias index.
+  // The `source:` segment is required and the `$` must open a token, so shell or template variables in
+  // pasted code (`$research`, `price$qa`) cannot act as explicit mentions that bypass first-use gates.
+  for (const match of input.text.matchAll(/(?:^|\s)\$([a-z][a-z0-9_-]*:[a-z0-9:_-]+)/giu)) {
+    if (match[1]) tokens.add(match[1]);
+  }
   for (const match of input.text.matchAll(/\buse\s+([a-z0-9:_-]+)\b/giu)) {
     if (match[1]) tokens.add(match[1]);
   }

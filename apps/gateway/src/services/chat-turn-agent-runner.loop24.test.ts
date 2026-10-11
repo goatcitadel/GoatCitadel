@@ -265,7 +265,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(presentationProbe?.args?.path).toBe("./workspace/goatcitadel_out/tool-access-probe.pptx");
     expect(presentationProbe?.args?.design).toMatchObject({
       mode: "polished",
-      skillId: "design-intelligence",
+      skillId: "impeccable",
     });
     expect(extractRequestToolNames(capturedRequest)).toContain("presentations_create");
     expect(createChatCompletion).toHaveBeenCalledTimes(2);
@@ -1204,7 +1204,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
           slides: expect.arrayContaining([expect.objectContaining({ title: "Health Benefits" })]),
           design: expect.objectContaining({
             mode: "polished",
-            skillId: "design-intelligence",
+            skillId: "impeccable",
           }),
         }),
       }),
@@ -1894,7 +1894,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
         args: expect.objectContaining({
           design: expect.objectContaining({
             mode: "polished",
-            skillId: "design-intelligence",
+            skillId: "impeccable",
           }),
         }),
       }),
@@ -1954,7 +1954,7 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     expect(documentProbe?.args?.path).toBe("./workspace/goatcitadel_out/tool-access-probe.docx");
     expect(documentProbe?.args?.design).toMatchObject({
       mode: "polished",
-      skillId: "design-intelligence",
+      skillId: "impeccable",
     });
     expect(extractRequestToolNames(capturedRequest)).toContain("documents_create");
     expect(createChatCompletion).toHaveBeenCalledTimes(2);
@@ -2259,7 +2259,7 @@ function walkingPresentationArgs(): Record<string, unknown> {
   return {
     path: "./workspace/goatcitadel_out/daily-walking.pptx",
     title: "Daily Walking",
-    design: { mode: "polished", skillId: "design-intelligence" },
+    design: { mode: "polished", skillId: "impeccable" },
     slides: [
       {
         title: "Health Benefits",

@@ -630,6 +630,7 @@ import {
   buildGovernedActivatedSkillReceipts,
   renderGovernedActivatedSkillInstructions,
 } from "./governed-skill-instruction-service.js";
+import { detectDocumentArtifactIntent, detectPresentationArtifactIntent } from "./chat-artifact-intent.js";
 import { prepareApprovedPresentationVisuals } from "./presentation-visual-executor.js";
 import { normalizeAgentInputFromSend } from "./chat-agent-input-normalization.js";
 import * as chatTurnTraceHydration from "./chat-turn-trace-hydration.js";
@@ -7306,6 +7307,12 @@ export class GatewayService {
             decision: await this.resolveSkillActivationForRuntime({ text: content }, false, input.workspaceId),
             trustedSkills,
             lifecycleRows: await this.storage.skillLifecycle.list(),
+            // Same detectors that decide whether presentations.create / documents.create are exposed,
+            // so the design skill's artifacts route and the tool surface agree on the turn's intent.
+            artifactIntent: {
+              presentation: detectPresentationArtifactIntent(content),
+              document: detectDocumentArtifactIntent(content),
+            },
           }),
       },
       {
