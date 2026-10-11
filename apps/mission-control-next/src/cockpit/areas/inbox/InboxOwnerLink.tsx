@@ -5,22 +5,24 @@ import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 
 export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem; workspaceId: string }) {
   const { navigate } = useCockpitRoute();
-  const area =
-    item.kind === "approval"
-      ? "Approvals"
-      : item.source.sessionId
-        ? "Chat"
-        : item.kind === "memory_proposal" ||
-            item.kind === "document_proposal" ||
-            item.kind === "capability_proposal" ||
-            item.kind === "improvement_proposal"
-          ? "Library"
-          : "Ops";
   const className = "inline-flex min-h-9 items-center gap-1 text-sm font-medium text-accent hover:underline";
   // The projection supplies relative owner destinations; it does not grant actions.
   if (!item.href.startsWith("/") || item.href.startsWith("//")) return null;
   const destination = new URL(item.href, "http://cockpit.invalid");
   if (destination.origin !== "http://cockpit.invalid") return null;
+  const area =
+    destination.pathname === "/work" || destination.pathname.startsWith("/work/")
+      ? "Work"
+      : item.kind === "approval"
+        ? "Approvals"
+        : item.source.sessionId
+          ? "Chat"
+          : item.kind === "memory_proposal" ||
+              item.kind === "document_proposal" ||
+              item.kind === "capability_proposal" ||
+              item.kind === "improvement_proposal"
+            ? "Library"
+            : "Ops";
   if (item.kind === "approval" && item.source.approvalId && destination.pathname === "/ops/approvals" && !destination.searchParams.has("view")) {
     destination.pathname = "/inbox";
     destination.searchParams.set("approvalId", item.source.approvalId);

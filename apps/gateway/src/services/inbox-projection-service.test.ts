@@ -147,6 +147,33 @@ describe("Gateway inbox projection", () => {
     expect(onSourceError).toHaveBeenCalledWith("backup_trust", expect.any(Error));
   });
 
+  it("titles approvals with a humanised kind or tool name instead of the raw identifier", async () => {
+    const deps = dependencies();
+    const base = {
+      status: "pending",
+      riskLevel: "caution",
+      payload: {},
+      preview: {},
+      linkage: { workspaceId: "workspace-a" },
+      createdAt: "2026-09-28T12:00:00.000Z",
+    };
+    vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
+      items: [
+        { ...base, approvalId: "memory", kind: "memory.write" },
+        { ...base, approvalId: "demo", kind: "demo.first_run" },
+        { ...base, approvalId: "tool", kind: "tool.invoke", linkage: { ...base.linkage, toolName: "web_fetch-page" } },
+        { ...base, approvalId: "code", kind: "code_mode.run" },
+      ],
+    } as never);
+    const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
+    expect(Object.fromEntries(projection.items.map((item) => [item.id, item.title]))).toEqual({
+      "approval:memory": "Review memory write",
+      "approval:demo": "Review demo first run",
+      "approval:tool": "Review web fetch page",
+      "approval:code": "Review code mode run",
+    });
+  });
+
   it("keeps canonical ownership, risk, and workspace scope while omitting approval payloads", async () => {
     const deps = dependencies();
     vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
@@ -553,7 +580,8 @@ describe("Gateway inbox projection", () => {
       kind: "task_deliverable",
       group: "updates",
       source: { workspaceId: "workspace-a", taskId: "task-a", deliverableId: "delivery-a" },
-      href: "/ops/kanban?shell=classic&taskId=task-a",
+      // Cockpit owns the task board natively; the projection no longer hands updates to Classic Kanban.
+      href: "/work/kanban?taskId=task-a",
     });
     expect(projection.coverage.find((entry) => entry.source === "background_updates")?.state).toBe("partial");
     expect(projection.counts.updates).toEqual({ known: 1, complete: false });
