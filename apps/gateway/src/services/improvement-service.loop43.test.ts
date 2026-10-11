@@ -26,6 +26,7 @@ const harnesses: Harness[] = [];
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   for (const harness of harnesses.splice(0)) {
     harness.service.stopScheduler();
     harness.storage.close();
@@ -89,6 +90,26 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
 
     expect(await harness.service.listDecisionReplayRuns(5)).toEqual([]);
     expect(harness.published).toEqual([]);
+  });
+
+  it("seeds the weekly job in the host timezone and opens its Sunday 02:00 window there", async () => {
+    // Spy before faking timers: fake timers swap Intl.DateTimeFormat for a wrapper around the native one.
+    const actualResolvedOptions = Intl.DateTimeFormat.prototype.resolvedOptions;
+    vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockImplementation(function (this: Intl.DateTimeFormat) {
+      return { ...actualResolvedOptions.call(this), timeZone: "UTC" };
+    });
+    vi.useFakeTimers({ now: new Date("2026-05-17T02:30:00.000Z") }); // Sunday in UTC, Saturday in Pacific time
+    const harness = await createHarness();
+    await harness.service.ensureWeeklyImprovementCronJob();
+    const created = harness.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
+    expect(created?.schedule).toBe("0 2 * * 0 UTC");
+    harness.storage.cronJobs.upsert({ ...created!, enabled: true }, new Date().toISOString());
+
+    await harness.service.runWeeklyImprovementSchedulerIfDue();
+
+    const runs = await harness.service.listDecisionReplayRuns(5);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ triggerMode: "scheduled", status: "completed" });
   });
 
   it("runs a forced weekly replay audit, persists the report, and advances the cron watermark", async () => {
