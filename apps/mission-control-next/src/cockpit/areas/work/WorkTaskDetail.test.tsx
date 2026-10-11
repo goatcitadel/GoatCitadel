@@ -137,6 +137,34 @@ describe("Work task detail", () => {
     await vi.waitFor(() => expect(container.textContent).toContain("Gateway recorded blocked"));
   });
 
+  it("keeps the edit form enabled and the typed draft intact during a background refetch", async () => {
+    vi.mocked(fetchTask).mockResolvedValue(task());
+    await render();
+    await vi.waitFor(() => expect(container.textContent).toContain("Scoped task"));
+    const fieldset = container.querySelector("fieldset");
+    if (!fieldset) throw new Error("Missing edit fieldset");
+    await vi.waitFor(() => expect(fieldset.disabled).toBe(false));
+    const title = container.querySelector<HTMLInputElement>('section[aria-label="Task details editor"] input');
+    if (!title) throw new Error("Missing title input");
+    await act(async () => {
+      title.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(title, "Scoped task, edited");
+      title.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(title.value).toBe("Scoped task, edited");
+    // The 30 s poll and realtime invalidations re-read the task while the operator is typing.
+    vi.mocked(fetchTask).mockImplementation(() => new Promise(() => {}));
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ["tasks", "work-task"] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(client.getQueryState(["tasks", "work-task", "workspace-a", "task-a"])?.fetchStatus).toBe("fetching");
+    expect(fieldset.disabled).toBe(false);
+    expect(title.disabled).toBe(false);
+    expect(title.value).toBe("Scoped task, edited");
+    expect(document.activeElement).toBe(title);
+  });
+
   it("keeps status mutation unavailable when a runtime execution owns the task", async () => {
     vi.mocked(fetchTask).mockResolvedValue(task({ agenticContext: { runId: "run-a" } }));
     await render();

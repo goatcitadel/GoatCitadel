@@ -1,4 +1,6 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -32,6 +34,25 @@ afterEach(() => {
   client.clear();
   container.remove();
   vi.clearAllMocks();
+});
+
+describe("Work view tabs", () => {
+  it("keeps every view label on one sideways-scrolling row", async () => {
+    vi.mocked(fetchTasks).mockResolvedValue({ items: [] });
+    await act(async () => root.render(<QueryClientProvider client={client}><WorkArea /></QueryClientProvider>));
+    const nav = container.querySelector<HTMLElement>('nav[aria-label="Work views"]');
+    if (!nav) throw new Error("Missing Work views nav");
+    // `cockpit-area-tabs` (cockpit.css) keeps labels on one line and scrolls the strip sideways at phone width.
+    expect(nav.classList.contains("cockpit-area-tabs")).toBe(true);
+    expect(nav.classList.contains("overflow-x-auto")).toBe(true);
+    const stylesheet = readFileSync(path.resolve(__dirname, "../../styles/cockpit.css"), "utf8");
+    expect(stylesheet).toMatch(/\.cockpit-area-tabs\s*\{[^}]*white-space:\s*nowrap/);
+    expect(stylesheet).toMatch(/\.cockpit-area-tabs\s*\{[^}]*overflow-x:\s*auto/);
+    expect([...nav.querySelectorAll("a")].map((link) => link.textContent)).toEqual([
+      "Board", "History", "Schedules", "Task actions", "Archived tasks", "Automation Designer",
+    ]);
+    expect(nav.querySelector('a[aria-current="page"]')?.textContent).toBe("Board");
+  });
 });
 
 describe("Work task board", () => {
@@ -107,7 +128,7 @@ describe("Work task board", () => {
     await act(async () => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.trim() === "Refresh")!.click());
     // React Query batches observer notifications on a timer; let the fetching state reach the board.
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-    expect(container.querySelector('[aria-label="Needs attention"]')?.textContent).toContain("tasks (checking)");
+    expect(container.querySelector('[aria-label="Needs attention"]')?.textContent).toContain("1 task (checking)");
     const selectTasks = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.trim() === "Select tasks")!;
     expect(selectTasks.disabled).toBe(false);
     await act(async () => selectTasks.click());
