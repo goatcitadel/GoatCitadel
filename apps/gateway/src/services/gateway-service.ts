@@ -629,7 +629,9 @@ import {
 import {
   buildGovernedActivatedSkillReceipts,
   renderGovernedActivatedSkillInstructions,
+  type SkillContextDocReader,
 } from "./governed-skill-instruction-service.js";
+import { createWorkspaceSkillContextDocReader } from "./workspace-skill-context-docs.js";
 import { detectDocumentArtifactIntent, detectPresentationArtifactIntent } from "./chat-artifact-intent.js";
 import { prepareApprovedPresentationVisuals } from "./presentation-visual-executor.js";
 import { normalizeAgentInputFromSend } from "./chat-agent-input-normalization.js";
@@ -7313,6 +7315,7 @@ export class GatewayService {
               presentation: detectPresentationArtifactIntent(content),
               document: detectDocumentArtifactIntent(content),
             },
+            contextDocs: this.createWorkspaceSkillContextDocReader(input.workspaceId),
           }),
       },
       {
@@ -7418,7 +7421,16 @@ export class GatewayService {
       profile,
       loadedSkills,
       lifecycleRows: await this.storage.skillLifecycle.list(),
+      contextDocs: this.createWorkspaceSkillContextDocReader(profile.identity.workspaceId),
     });
+  }
+
+  /** Workspace PRODUCT.md / DESIGN.md reader for governed skill routes that declare context docs (never global). */
+  private createWorkspaceSkillContextDocReader(workspaceId: string): SkillContextDocReader {
+    return createWorkspaceSkillContextDocReader(
+      { config: this.config, normalizeWorkspaceId: (value) => this.normalizeWorkspaceId(value) },
+      workspaceId,
+    );
   }
 
   public resolveChatTurnEffectiveRoute(sessionId: string, request: ChatSendMessageRequest) {

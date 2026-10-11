@@ -139,6 +139,19 @@ export interface ChatTurnCapabilityActivatedSkillModule {
 }
 
 /**
+ * A workspace guidance document (PRODUCT.md or DESIGN.md) appended to a skill's instructions.
+ * Only hashes persist; the turn re-reads the file at render time and fails closed on drift.
+ */
+export interface ChatTurnCapabilityActivatedSkillContextDocument {
+  docType: "product" | "design";
+  scope: "workspace";
+  /** Hash and size of the full stored document, not of the possibly truncated injected text. */
+  sha256: string;
+  bytes: number;
+  truncated: boolean;
+}
+
+/**
  * Immutable receipt for runtime skill instructions admitted into one turn.
  * The instruction bytes remain in the prompt only; the profile retains the
  * exact hashes needed to reproduce and fail-closed revalidate that prompt.
@@ -152,6 +165,8 @@ export interface ChatTurnCapabilityActivatedSkill {
   instructionSha256: string;
   instructionBytes: number;
   modules: ChatTurnCapabilityActivatedSkillModule[];
+  /** Omitted when the turn injected no workspace context, so earlier frozen profiles stay canonical-JSON-equal. */
+  contextDocuments?: ChatTurnCapabilityActivatedSkillContextDocument[];
 }
 
 export interface ChatTurnCapabilityRouteTarget {

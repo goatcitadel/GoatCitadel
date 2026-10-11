@@ -5,13 +5,20 @@ import {
   canonicalJsonString,
   PolicyViolationError,
   type ChatTurnCapabilityActivatedSkill,
+  type ChatTurnCapabilityActivatedSkillContextDocument,
   type ChatTurnCapabilityProfileRecord,
   type ChatTurnCapabilityTrustedSkill,
   type SkillActivationDecision,
   type SkillLifecycleRecord,
 } from "@goatcitadel/contracts";
-import { resolveSkillModules, type SkillArtifactIntent, type SkillModuleRef } from "@goatcitadel/skills";
+import {
+  resolveSkillModules,
+  type SkillArtifactIntent,
+  type SkillContextDocType,
+  type SkillModuleRef,
+} from "@goatcitadel/skills";
 import { captureSkillContentIntegritySync } from "./skill-content-integrity.js";
+import { GUIDANCE_DOC_FILE_MAP } from "./guidance-doc-files.js";
 import {
   PROMPTWARE_SCANNER_VERSION,
   scanPromptwareContent,
@@ -20,6 +27,8 @@ import {
 
 const PROMPTWARE_CLEAN_CACHE_MAX = 256;
 const promptwareCleanCache = new Map<string, true>();
+/** Per-document ceiling for injected workspace context; the receipt hashes the full stored document. */
+export const SKILL_CONTEXT_DOC_MAX_BYTES = 6144;
 
 export class SkillSecurityBlockedError extends PolicyViolationError {
   public readonly failureClass = "skill_security_blocked" as const;
@@ -41,6 +50,32 @@ export class SkillSecurityBlockedError extends PolicyViolationError {
   }
 }
 
+/** Promptware in a workspace PRODUCT.md / DESIGN.md: the operator's own document, not a skill, is at fault. */
+export class GuidanceSecurityBlockedError extends PolicyViolationError {
+  public readonly failureClass = "guidance_security_blocked" as const;
+  public readonly recoveryAction = "review_workspace_guidance" as const;
+
+  public constructor(input: { docType: SkillContextDocType; ruleIds: PromptwareRuleId[]; evidenceHashes: string[] }) {
+    const fileName = GUIDANCE_DOC_FILE_MAP[input.docType];
+    super({
+      message: `Workspace ${fileName} blocked the turn before provider execution; review it in Settings › Workspaces.`,
+      details: {
+        failureClass: "guidance_security_blocked",
+        recoveryAction: "review_workspace_guidance",
+        docType: input.docType,
+        fileName,
+        scope: "workspace",
+        scannerVersion: PROMPTWARE_SCANNER_VERSION,
+        ruleIds: [...new Set(input.ruleIds)].sort(),
+        evidenceHashes: [...new Set(input.evidenceHashes)].sort(),
+      },
+    });
+  }
+}
+
+/** Reads one workspace context doc; a missing file is `{ exists: false, content: "" }`. */
+export type SkillContextDocReader = (docType: SkillContextDocType) => { exists: boolean; content: string };
+
 interface ActivatedSkillSource {
   skillId: string;
   dir: string;
@@ -53,6 +88,15 @@ interface BuildReceiptInput {
   lifecycleRows: SkillLifecycleRecord[];
   /** Gateway-detected deck/document intent; selects the artifacts route for design skills. */
   artifactIntent?: SkillArtifactIntent;
+  /** Workspace PRODUCT.md / DESIGN.md reader; routes that declare context docs read through it. */
+  contextDocs?: SkillContextDocReader;
+}
+
+interface ContextDocsInput {
+  docTypes: SkillContextDocType[];
+  read: SkillContextDocReader;
+  /** At render time: the frozen receipt's documents; any change fails closed. */
+  frozen?: ChatTurnCapabilityActivatedSkillContextDocument[];
 }
 
 export function governedSkillInstructionInjectionEnabled(): boolean {
@@ -77,6 +121,7 @@ export function buildGovernedActivatedSkillReceipts(input: BuildReceiptInput): C
         text: input.content,
         artifactIntent: input.artifactIntent,
       });
+      const read = input.contextDocs;
       return buildReceipt({
         source: skill,
         trusted,
@@ -85,6 +130,7 @@ export function buildGovernedActivatedSkillReceipts(input: BuildReceiptInput): C
         confidence: skill.confidence,
         modulePaths: resolution.modules,
         budgetBytes: resolution.budgetBytes,
+        contextDocs: resolution.contextDocs && read ? { docTypes: resolution.contextDocs, read } : undefined,
       }).receipt;
     })
     .sort((left, right) => left.capabilityId.localeCompare(right.capabilityId));
@@ -94,6 +140,7 @@ export function renderGovernedActivatedSkillInstructions(input: {
   profile: ChatTurnCapabilityProfileRecord;
   loadedSkills: ActivatedSkillSource[];
   lifecycleRows: SkillLifecycleRecord[];
+  contextDocs?: SkillContextDocReader;
 }): string | undefined {
   const receipts = input.profile.selection.activatedSkills ?? [];
   if (receipts.length === 0 || !governedSkillInstructionInjectionEnabled()) return undefined;
@@ -115,6 +162,7 @@ export function renderGovernedActivatedSkillInstructions(input: {
       reasons: expected.reasons,
       confidence: expected.confidence,
       modulePaths: expected.modules.map((module) => ({ name: module.name, relativePath: module.relativePath })),
+      contextDocs: resolveFrozenContextDocs(expected, input.contextDocs),
     });
     if (canonicalJsonString(rebuilt.receipt) !== canonicalJsonString(expected)) {
       throw new Error(`Activated skill ${expected.skillId} instruction receipt drifted after profile freeze.`);
@@ -133,6 +181,22 @@ export function renderGovernedActivatedSkillInstructions(input: {
     createHash("sha256").update(instructionBundle, "utf8").digest("hex"),
   );
   return instructionBundle;
+}
+
+/** A frozen receipt without context docs never reads the workspace; one with them cannot render without a reader. */
+function resolveFrozenContextDocs(
+  expected: ChatTurnCapabilityActivatedSkill,
+  read: SkillContextDocReader | undefined,
+): ContextDocsInput | undefined {
+  const frozen = expected.contextDocuments ?? [];
+  if (frozen.length === 0) return undefined;
+  if (!read) {
+    const files = frozen.map((doc) => GUIDANCE_DOC_FILE_MAP[doc.docType]).join(", ");
+    throw new Error(
+      `Workspace ${files} context for activated skill ${expected.skillId} cannot be re-verified without a workspace reader.`,
+    );
+  }
+  return { docTypes: frozen.map((doc) => doc.docType), read, frozen };
 }
 
 function assertRuntimeSkillPromptwareSafe(skillIds: string[], instruction: string, instructionSha256: string): void {
@@ -162,6 +226,21 @@ function assertRuntimeSkillPromptwareSafe(skillIds: string[], instruction: strin
   }
 }
 
+function assertWorkspaceGuidancePromptwareSafe(docType: SkillContextDocType, content: string): void {
+  const findings = scanPromptwareContent({
+    source: "memory_context",
+    sourcePath: `workspace-guidance:${docType}`,
+    content,
+  });
+  if (findings.length > 0) {
+    throw new GuidanceSecurityBlockedError({
+      docType,
+      ruleIds: findings.map((finding) => finding.ruleId),
+      evidenceHashes: findings.map((finding) => finding.evidenceHash),
+    });
+  }
+}
+
 function buildReceipt(input: {
   source: ActivatedSkillSource & { name?: string };
   trusted: ChatTurnCapabilityTrustedSkill;
@@ -172,6 +251,8 @@ function buildReceipt(input: {
   modulePaths: SkillModuleRef[];
   /** Total byte ceiling across modules; enforced at freeze time only (a frozen receipt is already bounded). */
   budgetBytes?: number;
+  /** Workspace context docs to read and append; the frozen list at render time. */
+  contextDocs?: ContextDocsInput;
 }): { receipt: ChatTurnCapabilityActivatedSkill; instruction: string } {
   const integrity = input.lifecycle?.provenance?.contentIntegrity;
   const currentIntegrity = input.lifecycle ? captureSkillContentIntegritySync(input.source.dir) : undefined;
@@ -223,9 +304,13 @@ function buildReceipt(input: {
       `Activated skill ${input.source.skillId} resolved modules total ${totalBytes} bytes and exceed the ${input.budgetBytes}-byte budget.`,
     );
   }
-  const instruction = modules
-    .map((module) => `## Runtime skill module: ${input.trusted.skillId}/${module.receipt.name}\n\n${module.content}`)
-    .join("\n\n");
+  const contextDocuments = input.contextDocs ? readContextDocuments(input.contextDocs) : [];
+  const instruction = [
+    ...modules.map(
+      (module) => `## Runtime skill module: ${input.trusted.skillId}/${module.receipt.name}\n\n${module.content}`,
+    ),
+    ...contextDocuments.map((doc) => doc.section),
+  ].join("\n\n");
   return {
     receipt: {
       capabilityId: input.trusted.capabilityId,
@@ -236,9 +321,52 @@ function buildReceipt(input: {
       instructionSha256: createHash("sha256").update(instruction, "utf8").digest("hex"),
       instructionBytes: Buffer.byteLength(instruction, "utf8"),
       modules: modules.map((module) => module.receipt),
+      ...(contextDocuments.length > 0 ? { contextDocuments: contextDocuments.map((doc) => doc.receipt) } : {}),
     },
     instruction,
   };
+}
+
+/**
+ * Reads the declared workspace docs. Hash and size describe the full stored document; the injected
+ * text is cut at the ceiling on a UTF-8 character boundary. A frozen document that changed, shrank
+ * to blank, or vanished fails closed with the file named, before the generic receipt comparison.
+ */
+function readContextDocuments(
+  input: ContextDocsInput,
+): Array<{ receipt: ChatTurnCapabilityActivatedSkillContextDocument; section: string }> {
+  return input.docTypes.flatMap((docType) => {
+    const fileName = GUIDANCE_DOC_FILE_MAP[docType];
+    const frozen = input.frozen?.find((doc) => doc.docType === docType);
+    const doc = input.read(docType);
+    const changedError = () =>
+      new Error(`Workspace ${fileName} changed after this turn's profile froze; send the message again.`);
+    if (!doc.exists || doc.content.trim().length === 0) {
+      if (frozen) throw changedError();
+      return [];
+    }
+    const sha256 = createHash("sha256").update(doc.content, "utf8").digest("hex");
+    const bytes = Buffer.byteLength(doc.content, "utf8");
+    if (frozen && (frozen.sha256 !== sha256 || frozen.bytes !== bytes)) throw changedError();
+    assertWorkspaceGuidancePromptwareSafe(docType, doc.content);
+    const cut = truncateUtf8(doc.content, SKILL_CONTEXT_DOC_MAX_BYTES);
+    const marker = cut.truncated ? `\n\n[truncated to ${SKILL_CONTEXT_DOC_MAX_BYTES} bytes]` : "";
+    return [
+      {
+        receipt: { docType, scope: "workspace" as const, sha256, bytes, truncated: cut.truncated },
+        section: `## Project design context: ${fileName} (workspace)\n\n${cut.text.trim()}${marker}`,
+      },
+    ];
+  });
+}
+
+function truncateUtf8(content: string, maxBytes: number): { text: string; truncated: boolean } {
+  const buffer = Buffer.from(content, "utf8");
+  if (buffer.byteLength <= maxBytes) return { text: content, truncated: false };
+  let cut = maxBytes;
+  // Back off to the start of the character that straddles the cut: continuation bytes are 10xxxxxx.
+  while (cut > 0 && (buffer[cut]! & 0xc0) === 0x80) cut -= 1;
+  return { text: buffer.subarray(0, cut).toString("utf8"), truncated: true };
 }
 
 function normalizeRelativePath(value: string): string {
