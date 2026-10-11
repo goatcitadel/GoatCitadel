@@ -79,8 +79,14 @@ describe("ops saved board routes", () => {
     app = undefined;
   });
 
-  async function buildApp(service: OpsSavedBoardRouteService): Promise<FastifyInstance> {
+  async function buildApp(
+    service: OpsSavedBoardRouteService,
+    mode: "token" | "none" = "token",
+  ): Promise<FastifyInstance> {
     const next = Fastify();
+    // The route gate consults the gateway's own auth mode (hasOperatorControlPlaneAccess)
+    // before it admits a source "none" principal; token mode keeps every rejection case.
+    next.decorate("gatewayConfig", { assistant: { auth: { mode } } } as never);
     next.decorateRequest("authActorId", "anonymous");
     next.decorateRequest("authActorSource", "none");
     next.addHook("onRequest", async (request) => {
@@ -182,6 +188,72 @@ describe("ops saved board routes", () => {
     });
     expect(malformedJson.statusCode).toBe(403);
     expect(malformedJson.headers["cache-control"]).toBe("no-store");
+    for (const method of Object.values(service)) expect(method).not.toHaveBeenCalled();
+  });
+
+  it("accepts auth:none reads and mutations when the gateway auth mode is none", async () => {
+    const service = createService();
+    const next = await buildApp(service, "none");
+    const authNoneHeaders = { "x-test-auth-source": "none", "x-test-auth-actor": "auth:none" };
+
+    const list = await next.inject({
+      method: "GET",
+      url: "/api/v1/ops/boards?workspaceId=workspace-1",
+      headers: authNoneHeaders,
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.headers["x-goatcitadel-execution-authority"]).toBe("none");
+    expect(service.list).toHaveBeenCalledWith("workspace-1", false);
+
+    const created = await next.inject({
+      method: "POST",
+      url: "/api/v1/ops/boards",
+      headers: authNoneHeaders,
+      payload: validCreate,
+    });
+    expect(created.statusCode).toBe(201);
+    expect(service.create).toHaveBeenCalledWith(validCreate, "auth:none");
+
+    const updated = await next.inject({
+      method: "PATCH",
+      url: "/api/v1/ops/boards/board-1",
+      headers: authNoneHeaders,
+      payload: { workspaceId: "workspace-1", name: "New", expectedRevision: 1 },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(service.update).toHaveBeenCalledWith("board-1", expect.objectContaining({ name: "New" }), "auth:none");
+
+    // auth:none is the only source "none" principal the gateway mints in that mode;
+    // anonymous, companion (mapped to "none" here), and device principals stay out.
+    for (const headers of [
+      { "x-test-auth-source": "none", "x-test-auth-actor": "anonymous" },
+      { "x-test-auth-source": "companion", "x-test-auth-actor": "companion:1" },
+      { "x-test-auth-source": "device", "x-test-auth-actor": "device:1" },
+    ]) {
+      const rejected = await next.inject({
+        method: "GET",
+        url: "/api/v1/ops/boards?workspaceId=workspace-1",
+        headers,
+      });
+      expect(rejected.statusCode).toBe(403);
+    }
+    expect(service.list).toHaveBeenCalledTimes(1);
+  });
+
+  it("still rejects auth:none when the mode is token", async () => {
+    const service = createService();
+    const next = await buildApp(service, "token");
+    for (const request of [
+      { method: "GET" as const, url: "/api/v1/ops/boards?workspaceId=workspace-1" },
+      { method: "POST" as const, url: "/api/v1/ops/boards", payload: validCreate },
+    ]) {
+      const response = await next.inject({
+        ...request,
+        headers: { "x-test-auth-source": "none", "x-test-auth-actor": "auth:none" },
+      });
+      expect(response.statusCode).toBe(403);
+      expect(response.headers["cache-control"]).toBe("no-store");
+    }
     for (const method of Object.values(service)) expect(method).not.toHaveBeenCalled();
   });
 

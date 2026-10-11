@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
   OPS_SAVED_BOARD_LIMITS,
@@ -11,8 +11,12 @@ import {
   type OpsSavedBoardStatusInput,
   type OpsSavedBoardUpdateInput,
 } from "@goatcitadel/contracts";
+import { hasOperatorControlPlaneAccess } from "../plugins/auth.js";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
+
+/** The only operator identity the auth plugin mints when the gateway's own auth mode is "none". */
+const AUTH_NONE_ACTOR_ID = "auth:none";
 
 const canonicalIdentifier = (maxCharacters: number) =>
   z
@@ -100,13 +104,13 @@ export const opsSavedBoardRoutes: FastifyPluginAsync<OpsSavedBoardRoutesOptions>
   const operatorRead = withRouteAccess(fastify, "operator", {
     onRequest: async (request, reply) => {
       markReadResponse(reply);
-      if (!resolveAuthenticatedOperator(request, reply)) return reply;
+      if (!resolveAuthenticatedOperator(fastify, request, reply)) return reply;
     },
   });
   const operatorMutation = withRouteAccess(fastify, "operator", {
     onRequest: async (request, reply) => {
       markNoStore(reply);
-      if (!resolveAuthenticatedOperator(request, reply)) return reply;
+      if (!resolveAuthenticatedOperator(fastify, request, reply)) return reply;
     },
   });
 
@@ -139,7 +143,7 @@ export const opsSavedBoardRoutes: FastifyPluginAsync<OpsSavedBoardRoutesOptions>
   fastify.post("/api/v1/ops/boards", operatorMutation, async (request, reply) => {
     const body = parseCreateBody(request.body);
     if (!body) return reply.code(400).send({ error: "Invalid ops saved board create request." });
-    const actorId = resolveAuthenticatedOperator(request, reply);
+    const actorId = resolveAuthenticatedOperator(fastify, request, reply);
     if (!actorId) return reply;
     try {
       const record = await options.service.create(body, actorId);
@@ -159,7 +163,7 @@ export const opsSavedBoardRoutes: FastifyPluginAsync<OpsSavedBoardRoutesOptions>
     if (!params.success || !body) {
       return reply.code(400).send({ error: "Invalid ops saved board update request." });
     }
-    const actorId = resolveAuthenticatedOperator(request, reply);
+    const actorId = resolveAuthenticatedOperator(fastify, request, reply);
     if (!actorId) return reply;
     try {
       return reply.send(await options.service.update(params.data.boardId, body, actorId));
@@ -178,7 +182,7 @@ export const opsSavedBoardRoutes: FastifyPluginAsync<OpsSavedBoardRoutesOptions>
       if (!params.success || !body) {
         return reply.code(400).send({ error: `Invalid ops saved board ${operation} request.` });
       }
-      const actorId = resolveAuthenticatedOperator(request, reply);
+      const actorId = resolveAuthenticatedOperator(fastify, request, reply);
       if (!actorId) return reply;
       try {
         return reply.send(await options.service[operation](params.data.boardId, body, actorId));
@@ -219,18 +223,34 @@ function parseStatusBody(value: unknown): OpsSavedBoardStatusInput | undefined {
   }
 }
 
-function resolveAuthenticatedOperator(request: FastifyRequest, reply: FastifyReply): string | undefined {
-  if (!request.authActorSource || !["token", "basic", "loopback"].includes(request.authActorSource)) {
+function resolveAuthenticatedOperator(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): string | undefined {
+  const source = request.authActorSource;
+  if (!source || !hasOperatorControlPlaneAccess(fastify, source)) {
     void reply.code(403).send({ error: "An authenticated operator route is required." });
     return undefined;
   }
   const actorId = request.authActorId;
+  if (source === "none") {
+    // hasOperatorControlPlaneAccess admits source "none" only when the gateway's own
+    // auth mode is none (the shipped default). That mode mints exactly one operator
+    // identity, the literal auth:none; any other source "none" principal (anonymous,
+    // approval-create/resolve) is not an operator and stays out.
+    if (actorId !== AUTH_NONE_ACTOR_ID) {
+      void reply.code(403).send({ error: "An authenticated operator route is required." });
+      return undefined;
+    }
+    return AUTH_NONE_ACTOR_ID;
+  }
   if (
     typeof actorId !== "string" ||
     actorId !== actorId.normalize("NFKC").trim() ||
     [...actorId].length < 1 ||
     actorId === "anonymous" ||
-    actorId === "auth:none" ||
+    actorId === AUTH_NONE_ACTOR_ID ||
     [...actorId].length > OPS_SAVED_BOARD_LIMITS.identifierCharacters ||
     /\p{Cc}/u.test(actorId)
   ) {

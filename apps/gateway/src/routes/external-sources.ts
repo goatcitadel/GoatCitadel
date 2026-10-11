@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
   EXTERNAL_SOURCE_LIMITS,
@@ -14,6 +14,7 @@ import {
   normalizeExternalSourceScanInput,
   normalizeExternalSourceUpdateInput,
 } from "@goatcitadel/contracts";
+import { hasOperatorControlPlaneAccess } from "../plugins/auth.js";
 import type { ExternalSourceRoutePort } from "../services/external-source-route-service.js";
 import { ExternalSourceAttachmentServiceError } from "../services/external-source-attachment-service.js";
 import { ExternalSourceImportServiceError } from "../services/external-source-import-service.js";
@@ -158,7 +159,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
   });
 
   fastify.post("/api/v1/library/external-sources", operatorMutation, async (request, reply) => {
-    const actor = resolveSpecificOperator(request, reply);
+    const actor = resolveSpecificOperator(fastify, request, reply);
     if (!actor) return reply;
     const parsed = createBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid external source registration request." });
@@ -184,7 +185,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
   });
 
   fastify.get("/api/v1/library/external-sources", operatorRead, async (request, reply) => {
-    const actor = resolveSpecificOperator(request, reply);
+    const actor = resolveSpecificOperator(fastify, request, reply);
     if (!actor) return reply;
     const query = workspaceQuerySchema.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: "Invalid external source list query." });
@@ -196,7 +197,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
   });
 
   fastify.get("/api/v1/library/external-sources/:sourceId", operatorRead, async (request, reply) => {
-    const actor = resolveSpecificOperator(request, reply);
+    const actor = resolveSpecificOperator(fastify, request, reply);
     if (!actor) return reply;
     const params = sourceParamsSchema.safeParse(request.params);
     const query = workspaceQuerySchema.safeParse(request.query);
@@ -211,7 +212,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
   });
 
   fastify.patch("/api/v1/library/external-sources/:sourceId", operatorMutation, async (request, reply) => {
-    const actor = resolveSpecificOperator(request, reply);
+    const actor = resolveSpecificOperator(fastify, request, reply);
     if (!actor) return reply;
     const params = sourceParamsSchema.safeParse(request.params);
     const parsed = updateBodySchema.safeParse(request.body);
@@ -232,7 +233,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
   });
 
   fastify.post("/api/v1/library/external-sources/:sourceId/scans", operatorMutation, async (request, reply) => {
-    const actor = resolveSpecificOperator(request, reply);
+    const actor = resolveSpecificOperator(fastify, request, reply);
     if (!actor) return reply;
     const params = sourceParamsSchema.safeParse(request.params);
     const parsed = scanBodySchema.safeParse(request.body);
@@ -256,7 +257,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
   });
 
   fastify.get("/api/v1/library/external-sources/:sourceId/items", operatorRead, async (request, reply) => {
-    const actor = resolveSpecificOperator(request, reply);
+    const actor = resolveSpecificOperator(fastify, request, reply);
     if (!actor) return reply;
     const params = sourceParamsSchema.safeParse(request.params);
     const parsed = catalogQuerySchema.safeParse(request.query);
@@ -286,7 +287,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
   });
 
   fastify.post("/api/v1/library/external-source-import-plans", operatorMutation, async (request, reply) => {
-    const actor = resolveSpecificOperator(request, reply);
+    const actor = resolveSpecificOperator(fastify, request, reply);
     if (!actor) return reply;
     const parsed = importPlanBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid external source import plan request." });
@@ -309,7 +310,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
   });
 
   fastify.post("/api/v1/library/external-source-imports", operatorMutation, async (request, reply) => {
-    const actor = resolveSpecificOperator(request, reply);
+    const actor = resolveSpecificOperator(fastify, request, reply);
     if (!actor) return reply;
     const parsed = importApplyBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid external source import request." });
@@ -335,7 +336,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
   });
 
   fastify.get("/api/v1/library/external-source-imports/:importId", operatorRead, async (request, reply) => {
-    const actor = resolveSpecificOperator(request, reply);
+    const actor = resolveSpecificOperator(fastify, request, reply);
     if (!actor) return reply;
     const params = importParamsSchema.safeParse(request.params);
     const query = workspaceQuerySchema.safeParse(request.query);
@@ -357,7 +358,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
   // ---------------------------------------------------------------------------
 
   fastify.get("/api/v1/chat/sessions/:sessionId/external-source-attachments", operatorRead, async (request, reply) => {
-    const actor = resolveSpecificOperator(request, reply);
+    const actor = resolveSpecificOperator(fastify, request, reply);
     if (!actor) return reply;
     const params = sessionParamsSchema.safeParse(request.params);
     const query = attachmentListQuerySchema.safeParse(request.query);
@@ -385,7 +386,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
     "/api/v1/chat/sessions/:sessionId/external-source-attachment-candidates",
     operatorRead,
     async (request, reply) => {
-      const actor = resolveSpecificOperator(request, reply);
+      const actor = resolveSpecificOperator(fastify, request, reply);
       if (!actor) return reply;
       const params = sessionParamsSchema.safeParse(request.params);
       const query = attachmentListQuerySchema.safeParse(request.query);
@@ -414,7 +415,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
     "/api/v1/chat/sessions/:sessionId/external-source-attachments",
     operatorMutation,
     async (request, reply) => {
-      const actor = resolveSpecificOperator(request, reply);
+      const actor = resolveSpecificOperator(fastify, request, reply);
       if (!actor) return reply;
       const params = sessionParamsSchema.safeParse(request.params);
       const parsed = attachBodySchema.safeParse(request.body);
@@ -443,7 +444,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
     "/api/v1/chat/sessions/:sessionId/external-source-attachments/:attachmentId",
     operatorMutation,
     async (request, reply) => {
-      const actor = resolveSpecificOperator(request, reply);
+      const actor = resolveSpecificOperator(fastify, request, reply);
       if (!actor) return reply;
       const params = sessionAttachmentParamsSchema.safeParse(request.params);
       const parsed = detachBodySchema.safeParse(request.body);
@@ -476,7 +477,7 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
     "/api/v1/library/external-source-imports/:importId/knowledge-snapshot-requests",
     operatorMutation,
     async (request, reply) => {
-      const actor = resolveSpecificOperator(request, reply);
+      const actor = resolveSpecificOperator(fastify, request, reply);
       if (!actor) return reply;
       const params = importParamsSchema.safeParse(request.params);
       const parsed = knowledgeSnapshotRequestBodySchema.safeParse(request.body);
@@ -502,18 +503,42 @@ export const externalSourceRoutes: FastifyPluginAsync<ExternalSourceRoutesOption
   );
 };
 
-function resolveSpecificOperator(request: FastifyRequest, reply: FastifyReply): ExternalSourceRequestActor | undefined {
+/** The only operator identity the auth plugin mints when the gateway's own auth mode is "none". */
+const AUTH_NONE_ACTOR_ID = "auth:none";
+
+function isExternalSourceActorSource(
+  source: FastifyRequest["authActorSource"],
+): source is ExternalSourceRequestActor["source"] {
+  return source === "token" || source === "basic" || source === "loopback" || source === "none";
+}
+
+function resolveSpecificOperator(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): ExternalSourceRequestActor | undefined {
   const source = request.authActorSource;
   const actorId = request.authActorId;
-  if (source !== "token" && source !== "basic" && source !== "loopback") {
+  if (!hasOperatorControlPlaneAccess(fastify, source) || !isExternalSourceActorSource(source)) {
     void reply.code(403).send({ error: "A specific authenticated operator route is required." });
     return undefined;
+  }
+  if (source === "none") {
+    // hasOperatorControlPlaneAccess admits source "none" only when the gateway's own
+    // auth mode is none (the shipped default). That mode mints exactly one operator
+    // identity, the literal auth:none; any other source "none" principal (anonymous,
+    // approval-create/resolve) is not an operator and stays out.
+    if (actorId !== AUTH_NONE_ACTOR_ID) {
+      void reply.code(403).send({ error: "A specific authenticated operator route is required." });
+      return undefined;
+    }
+    return { actorId: AUTH_NONE_ACTOR_ID, source };
   }
   if (
     typeof actorId !== "string" ||
     actorId !== actorId.normalize("NFKC").trim() ||
     actorId === "anonymous" ||
-    actorId === "auth:none" ||
+    actorId === AUTH_NONE_ACTOR_ID ||
     actorId.length < 1 ||
     actorId.length > 256 ||
     hasAsciiControlCharacter(actorId)

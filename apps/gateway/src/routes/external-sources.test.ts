@@ -139,6 +139,79 @@ describe("HX-407 external source routes", () => {
     expect(service.listSessionAttachments).not.toHaveBeenCalled();
   });
 
+  it("accepts auth:none reads and mutations when the gateway auth mode is none", async () => {
+    const service = createService();
+    const next = await buildApp(service, "none");
+    const authNoneHeaders = { "x-test-auth-source": "none", "x-test-auth-actor": "auth:none" };
+    const tokenlessActor = { actorId: "auth:none", source: "none" };
+
+    const list = await next.inject({
+      method: "GET",
+      url: "/api/v1/library/external-sources?workspaceId=workspace-1",
+      headers: authNoneHeaders,
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.headers["x-goatcitadel-execution-authority"]).toBe("none");
+    expect(service.list).toHaveBeenCalledWith("workspace-1", tokenlessActor);
+
+    const attachments = await next.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/session-1/external-source-attachments?workspaceId=workspace-1",
+      headers: authNoneHeaders,
+    });
+    expect(attachments.statusCode).toBe(200);
+    expect(service.listSessionAttachments).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "workspace-1", sessionId: "session-1" }),
+      tokenlessActor,
+    );
+
+    const created = await next.inject({
+      method: "POST",
+      url: "/api/v1/library/external-sources",
+      headers: authNoneHeaders,
+      payload: validCreate(),
+    });
+    expect(created.statusCode).toBe(201);
+    expect(service.create).toHaveBeenCalledWith(expect.anything(), tokenlessActor, expect.any(AbortSignal));
+
+    // auth:none is the only source "none" principal the gateway mints in that mode;
+    // anonymous, companion, and device principals stay out.
+    for (const headers of [
+      { "x-test-auth-source": "none", "x-test-auth-actor": "anonymous" },
+      { "x-test-auth-source": "companion", "x-test-auth-actor": "companion:1" },
+      { "x-test-auth-source": "device", "x-test-auth-actor": "device:1" },
+    ]) {
+      const rejected = await next.inject({
+        method: "GET",
+        url: "/api/v1/library/external-sources?workspaceId=workspace-1",
+        headers,
+      });
+      expect(rejected.statusCode).toBe(403);
+    }
+    expect(service.list).toHaveBeenCalledTimes(1);
+  });
+
+  it("still rejects auth:none when the mode is token", async () => {
+    const service = createService();
+    const next = await buildApp(service, "token");
+    for (const request of [
+      { method: "GET" as const, url: "/api/v1/library/external-sources?workspaceId=workspace-1" },
+      {
+        method: "GET" as const,
+        url: "/api/v1/chat/sessions/session-1/external-source-attachments?workspaceId=workspace-1",
+      },
+      { method: "POST" as const, url: "/api/v1/library/external-sources", payload: validCreate() },
+    ]) {
+      const response = await next.inject({
+        ...request,
+        headers: { "x-test-auth-source": "none", "x-test-auth-actor": "auth:none" },
+      });
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual({ error: "A specific authenticated operator route is required." });
+    }
+    for (const method of Object.values(service)) expect(method).not.toHaveBeenCalled();
+  });
+
   it("derives immutable ownership from the request and rejects body actor smuggling", async () => {
     const service = createService();
     const next = await buildApp(service);
@@ -551,8 +624,14 @@ describe("HX-407 external source routes", () => {
     }
   });
 
-  async function buildApp(service: ExternalSourceRoutePort): Promise<FastifyInstance> {
+  async function buildApp(
+    service: ExternalSourceRoutePort,
+    mode: "token" | "none" = "token",
+  ): Promise<FastifyInstance> {
     const next = Fastify();
+    // The route gate consults the gateway's own auth mode (hasOperatorControlPlaneAccess)
+    // before it admits a source "none" principal; token mode keeps every rejection case.
+    next.decorate("gatewayConfig", { assistant: { auth: { mode } } } as never);
     next.decorateRequest("authActorId", "anonymous");
     next.decorateRequest("authActorSource", "none");
     // Mirror the full Gateway's async public-error projection boundary. Without

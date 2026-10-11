@@ -12,6 +12,7 @@ import {
 import { sealExternalSourceImportIntent } from "@goatcitadel/storage";
 import { ExternalSourceImportService } from "./external-source-import-service.js";
 import { ExternalSourcePlanStagingStoreError } from "./external-source-plan-staging-store.js";
+import type { ExternalSourceRequestActor } from "./external-source-service.js";
 
 const NOW = Date.parse("2026-07-14T08:00:00.000Z");
 const ACTOR = { actorId: "operator-1", source: "token" as const };
@@ -77,6 +78,28 @@ describe("ExternalSourceImportService", () => {
     expect(replay).toEqual({ ...applied, applyDisposition: "replayed" });
     expect(harness.reader.readFiles).toHaveBeenCalledTimes(1);
     expect(harness.imports.settleWithJourney).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts the tokenless auth-none operator when it owns the source", async () => {
+    const tokenless = { actorId: "auth:none", source: "none" as const };
+    const harness = createHarness({ actor: tokenless });
+    const planInput = {
+      workspaceId: harness.source.workspaceId,
+      sourceId: harness.source.sourceId,
+      scanId: harness.scan.scanId,
+      selectedItemIds: [harness.catalog.itemId],
+      expectedRevision: harness.source.revision,
+    };
+    const planResponse = await harness.service.createPlan(planInput, tokenless, signal());
+    expect(planResponse.plan.sourceId).toBe(harness.source.sourceId);
+    expect(harness.imports.createPlanWithJourney.mock.calls[0]![1]).toMatchObject({ actorId: "auth:none" });
+
+    // Ownership stays exact: a credentialed operator cannot plan against the tokenless operator's source,
+    // and source "none" admits only the auth:none identity.
+    await expect(harness.service.createPlan(planInput, ACTOR, signal())).rejects.toMatchObject({ code: "not_found" });
+    await expect(
+      harness.service.createPlan(planInput, { actorId: "operator-1", source: "none" }, signal()),
+    ).rejects.toMatchObject({ code: "not_found" });
   });
 
   it("gives duplicate identical dry runs distinct immutable plans and Journey identities", async () => {
@@ -332,8 +355,8 @@ describe("ExternalSourceImportService", () => {
   });
 });
 
-function createHarness() {
-  const source = sourceRecord();
+function createHarness(options: { actor?: ExternalSourceRequestActor } = {}) {
+  const source = sourceRecord(options.actor ?? ACTOR);
   const scan = {
     workspaceId: source.workspaceId,
     sourceId: source.sourceId,
@@ -523,16 +546,16 @@ function recoveryIntent(
   });
 }
 
-function sourceRecord(): ExternalSourceRecord {
+function sourceRecord(actor: ExternalSourceRequestActor = ACTOR): ExternalSourceRecord {
   return {
     schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
     sourceId: "source-1",
     workspaceId: "workspace-1",
     kind: "codex_memory",
     label: "Synthetic memory",
-    ownerActorId: ACTOR.actorId,
-    authActorId: ACTOR.actorId,
-    authActorSource: ACTOR.source,
+    ownerActorId: actor.actorId,
+    authActorId: actor.actorId,
+    authActorSource: actor.source,
     canonicalRootPath: "F:\\synthetic\\codex-memory",
     rootIdentitySha256: "1".repeat(64),
     pathBridgeSnapshotId: "snapshot-1",
