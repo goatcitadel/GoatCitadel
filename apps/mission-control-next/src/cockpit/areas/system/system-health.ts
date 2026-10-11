@@ -1,7 +1,7 @@
 import type { DesktopUpdateStatus } from "@goatcitadel/contracts";
 import type { BackupTrustState } from "./backup-trust";
 import type { HealthCheck } from "./health-overview";
-import { backupHealthCheck, deriveHealthChecks } from "./health-overview";
+import { backupHealthCheck, CLASSIC_RUNTIME_INSPECT_PATH, deriveHealthChecks } from "./health-overview";
 import { retainedHealthObservations, staleHealthSources, type SystemHealthSources } from "./system-health-sources";
 
 function unknown(id: HealthCheck["id"], title: string, detail: string, inspectPath: string): HealthCheck {
@@ -52,22 +52,22 @@ function deriveCurrentSystemHealthChecks(
     sources.summary.state === "current"
       ? deriveHealthChecks(sources.summary.value, backupTrust)
       : [
-          unknown("gateway", "Gateway", "The health summary could not be read.", "/ops/runtime"),
+          unknown("gateway", "Gateway", "The health summary could not be read.", CLASSIC_RUNTIME_INSPECT_PATH),
           unknown(
             "database",
             "Database",
             "Database health could not be checked without the Gateway summary.",
-            "/ops/runtime",
+            CLASSIC_RUNTIME_INSPECT_PATH,
           ),
           unknown(
             "service",
             "Runtime service",
             "Service status could not be checked without the Gateway summary.",
-            "/ops/runtime",
+            CLASSIC_RUNTIME_INSPECT_PATH,
           ),
           backupTrust && backupTrust !== "unknown"
             ? backupHealthCheck(backupTrust, false)
-            : unknown("backups", "Backups", "Backup verification status could not be checked.", "/ops/runtime"),
+            : unknown("backups", "Backups", "Backup verification status could not be checked.", CLASSIC_RUNTIME_INSPECT_PATH),
         ];
 
   const models = (() => {
@@ -177,7 +177,7 @@ function deriveCurrentSystemHealthChecks(
         "remote_workers",
         "Remote workers",
         "The scoped worker registry could not be read.",
-        "/ops/runtime",
+        CLASSIC_RUNTIME_INSPECT_PATH,
       );
     const registry = sources.workers.value;
     const quarantined = registry.items.filter((item) => item.posture.value === "quarantined").length;
@@ -185,17 +185,17 @@ function deriveCurrentSystemHealthChecks(
       return {
         id: "remote_workers",
         title: "Remote workers",
-        inspectPath: "/ops/runtime",
+        inspectPath: CLASSIC_RUNTIME_INSPECT_PATH,
         detail: `${quarantined} ${quarantined === 1 ? "worker is" : "workers are"} quarantined. Connection health is not supplied by this registry.`,
         status: { label: "Needs review", tone: "waiting" },
       } satisfies HealthCheck;
     if (!registry.items.length)
-      return notSetUp("remote_workers", "Remote workers", "No worker is registered in this workspace.", "/ops/runtime");
+      return notSetUp("remote_workers", "Remote workers", "No worker is registered in this workspace.", CLASSIC_RUNTIME_INSPECT_PATH);
     return unknown(
       "remote_workers",
       "Remote workers",
       `${registry.items.length}${registry.nextCursor ? "+" : ""} worker records are visible. Connection health is not supplied by this registry.`,
-      "/ops/runtime",
+      CLASSIC_RUNTIME_INSPECT_PATH,
     );
   })();
 

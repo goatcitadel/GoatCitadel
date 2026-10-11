@@ -219,6 +219,74 @@ describe("Inbox approval decisions", () => {
     expect(button("Review approval").disabled).toBe(true);
     expect(button("Deny").disabled).toBe(true);
     expect(container.textContent).toContain("Decision outcome is uncertain");
+    expect(button("Check again").disabled).toBe(false);
+  });
+
+  describe("checking again after an uncertain outcome", () => {
+    async function reachUncertain() {
+      api.resolveApproval.mockRejectedValue(new Error("Connection lost"));
+      const callbacks = renderActions(approval);
+      await approve();
+      expect(container.textContent).toContain("Decision outcome is uncertain");
+      api.fetchApproval.mockReset();
+      return callbacks;
+    }
+
+    it("releases the lock when the owner record is still pending and unchanged", async () => {
+      const { onResolved, onInvalidated } = await reachUncertain();
+      api.fetchApproval.mockResolvedValue(approval);
+      await act(async () => button("Check again").click());
+      expect(api.fetchApproval).toHaveBeenCalledExactlyOnceWith("approval-a", { workspaceId: "default" });
+      expect(container.textContent).not.toContain("Decision outcome is uncertain");
+      expect(container.textContent).toContain("still pending and unchanged");
+      expect(button("Review approval").disabled).toBe(false);
+      expect(button("Deny").disabled).toBe(false);
+      expect(onResolved).not.toHaveBeenCalled();
+      expect(onInvalidated).not.toHaveBeenCalled();
+      // The released lock allows a fresh, fully guarded decision.
+      api.resolveApproval.mockResolvedValue({ approval: { ...approval, status: "approved" }, effects: [] });
+      await approve();
+      expect(api.resolveApproval).toHaveBeenCalledTimes(2);
+      expect(onResolved).toHaveBeenCalledWith(expect.stringContaining("Decision recorded: approved"));
+    });
+
+    it("shows the settled outcome and keeps the lock when the owner record was decided", async () => {
+      const { onResolved, onInvalidated } = await reachUncertain();
+      api.fetchApproval.mockResolvedValue({ ...approval, status: "approved" });
+      await act(async () => button("Check again").click());
+      expect(container.textContent).toContain("Decision recorded: approved");
+      expect(container.textContent).not.toContain("Decision outcome is uncertain");
+      expect(button("Review approval").disabled).toBe(true);
+      expect(button("Deny").disabled).toBe(true);
+      expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Check again")).toBe(false);
+      expect(onResolved).not.toHaveBeenCalled();
+      expect(onInvalidated).not.toHaveBeenCalled();
+      expect(api.resolveApproval).toHaveBeenCalledOnce();
+    });
+
+    it("releases the lock and hands a changed pending record back for review", async () => {
+      const { onInvalidated } = await reachUncertain();
+      api.fetchApproval.mockResolvedValue({ ...approval, preview: { targets: ["other.txt"] } });
+      await act(async () => button("Check again").click());
+      expect(onInvalidated).toHaveBeenCalledOnce();
+      expect(container.textContent).not.toContain("Decision outcome is uncertain");
+      expect(button("Review approval").disabled).toBe(false);
+    });
+
+    it("keeps the lock when the owner read fails or the record is gone", async () => {
+      const { onInvalidated } = await reachUncertain();
+      api.fetchApproval.mockRejectedValue(new Error("Connection lost"));
+      await act(async () => button("Check again").click());
+      expect(container.textContent).toContain("Could not check the current approval");
+      expect(container.textContent).toContain("Decision outcome is uncertain");
+      expect(button("Review approval").disabled).toBe(true);
+      expect(button("Check again").disabled).toBe(false);
+      api.fetchApproval.mockResolvedValue(undefined);
+      await act(async () => button("Check again").click());
+      expect(onInvalidated).toHaveBeenCalledOnce();
+      expect(button("Review approval").disabled).toBe(true);
+      expect(api.resolveApproval).toHaveBeenCalledOnce();
+    });
   });
 
   it("allows another check when the owner read fails before a mutation", async () => {
@@ -461,12 +529,26 @@ it.each(["approved", "rejected"] as const)("closes both kinds of dialog when ext
   expect(api.resolveApproval).not.toHaveBeenCalled();
 });
 
-it("locks the shared Library and Chat owner during checking and after canonical settlement", () => {
-  const renderShared = (record: ApprovalRequest, checking: boolean) => act(() => root.render(<QueryClientProvider client={client}><ApprovalDecisionBar approval={record} workspaceId="default" checking={checking} onResolved={vi.fn()} onInvalidated={vi.fn()} /></QueryClientProvider>));
+it("keeps the shared Library and Chat owner decidable while its record is re-read, and locks it after canonical settlement", async () => {
+  const onResolved = vi.fn();
+  const renderShared = (record: ApprovalRequest, checking: boolean) => act(() => root.render(<QueryClientProvider client={client}><ApprovalDecisionBar approval={record} workspaceId="default" checking={checking} onResolved={onResolved} onInvalidated={vi.fn()} /></QueryClientProvider>));
   renderShared(approval, true);
-  expect(button("Review approval").disabled).toBe(true);
-  expect(button("Deny").disabled).toBe(true);
+  // A background re-read is not a reason to swallow the click: the decision re-reads the owner record itself.
+  expect(button("Review approval").disabled).toBe(false);
+  expect(button("Deny").disabled).toBe(false);
+  await approve();
+  expect(api.fetchApproval).toHaveBeenCalledExactlyOnceWith("approval-a", { workspaceId: "default" });
+  expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve");
+  expect(onResolved).toHaveBeenCalledWith(expect.stringContaining("Decision recorded: approved"));
   renderShared({ ...approval, status: "approved" }, false);
   expect(container.querySelector("button")).toBeNull();
   expect(container.textContent).toContain("Decision recorded: approved");
+});
+
+it("explains an expiry sweep on a settled record instead of presenting it as an operator rejection", () => {
+  act(() => root.render(<QueryClientProvider client={client}><ApprovalDecisionBar approval={{ ...approval, status: "rejected", resolvedBy: "system:approval-expiry", resolutionNote: "Approval approval-a expired before operator resolution." }} workspaceId="default" onResolved={vi.fn()} onInvalidated={vi.fn()} /></QueryClientProvider>));
+  expect(container.textContent).toContain("Expired before an operator decision; recorded as rejected.");
+  expect(container.textContent).toContain("Expired without an operator decision. Approval approval-a expired before operator resolution.");
+  expect(container.textContent).not.toContain("Decision recorded: rejected");
+  expect(container.querySelector("button")).toBeNull();
 });

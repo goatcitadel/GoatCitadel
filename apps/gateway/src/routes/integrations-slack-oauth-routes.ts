@@ -1,8 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { ChannelOAuthActor } from "../services/channel-oauth-staging-service.js";
-import type { ChannelOAuthAttempt } from "@goatcitadel/contracts";
-import { buildSlackOAuthStart, redactSlackOAuthConnection } from "../services/slack-oauth-service.js";
+import type { ChannelOAuthAttempt, IntegrationConnection } from "@goatcitadel/contracts";
+import { buildSlackOAuthStart, redactSlackOAuthConnection, summarizeSlackOAuthInstall } from "../services/slack-oauth-service.js";
 import { slackOAuthDisconnectSchema } from "./integrations-shared.js";
 import { sendRouteError } from "./_error-handler.js";
 import { markMutationCommitted, markMutationCommittedFromError, commitMutationIdempotencyAlongsideCanonicalWrite } from "../plugins/idempotency.js";
@@ -39,7 +39,13 @@ export function registerSlackOAuthIntegrationRoutes(fastify: FastifyInstance): v
     const query = request.query as Record<string, unknown>;
     if (!query || Object.keys(query).length === 0) {
       const { configured, mode, scopes, missing } = buildSlackOAuthStart(readSlackOAuthConfig());
-      return reply.send({ configured, mode, scopes, missing, connections: [] });
+      try {
+        const allConnections: IntegrationConnection[] = await fastify.services.integrations.listIntegrationConnections("channel", 300);
+        const connections = allConnections
+          .filter((connection) => connection.catalogId === "channel.slack" && connection.config.authMode === "oauth")
+          .map((connection) => ({ connection: redactSlackOAuthConnection(connection), install: summarizeSlackOAuthInstall(connection) }));
+        return reply.send({ configured, mode, scopes, missing, connections });
+      } catch (error) { return sendRouteError(reply, error, request.log); }
     }
     const parsed = statusSchema.safeParse(query);
     if (!parsed.success) return reply.code(400).send({ error: "An exact workspace and OAuth attempt are required." });

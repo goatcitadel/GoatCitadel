@@ -18,6 +18,13 @@ describe("work column status", () => {
     expect(workColumnStatus(query({ data: {}, isError: true }), 2, "runs")).toBe("2 runs (stale)");
   });
 
+  it("uses the singular noun for exactly one record", () => {
+    expect(workColumnStatus(query({ data: {} }), 1, "tasks")).toBe("1 task");
+    expect(workColumnStatus(query({ data: {}, isFetching: true }), 1, "runs")).toBe("1 run (checking)");
+    expect(workColumnStatus(query({ data: {} }), 0, "runs")).toBe("0 runs");
+    expect(workColumnStatus(query({ data: {} }), 2, "tasks")).toBe("2 tasks");
+  });
+
   it("says loading before the first answer and unavailable when there is none", () => {
     expect(workColumnStatus(query({ isPending: true, isFetching: true }), undefined, "tasks")).toBe("Tasks loading");
     expect(workColumnStatus(query({ isPending: true, isError: true }), undefined, "runs")).toBe("Runs unavailable");

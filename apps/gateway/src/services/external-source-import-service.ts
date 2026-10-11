@@ -690,10 +690,21 @@ function normalizeImportFailure(
   return new ExternalSourceImportServiceError(fallback);
 }
 
+const AUTH_NONE_ACTOR_ID = "auth:none";
+
+/**
+ * Credentialed operator sources, plus exactly the tokenless `auth:none` / `none`
+ * pair the routes admit when the gateway's own auth mode is none.
+ */
+function isAdmittedActorSource(actor: ExternalSourceRequestActor): boolean {
+  if (actor.source === "none") return actor.actorId === AUTH_NONE_ACTOR_ID;
+  return ["token", "basic", "loopback"].includes(actor.source);
+}
+
 function assertActor(actor: ExternalSourceRequestActor): void {
   if (
     !actor ||
-    !["token", "basic", "loopback"].includes(actor.source) ||
+    !isAdmittedActorSource(actor) ||
     typeof actor.actorId !== "string" ||
     actor.actorId.length < 1 ||
     actor.actorId.length > 256 ||

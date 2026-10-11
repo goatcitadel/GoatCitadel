@@ -120,7 +120,8 @@ export interface ExternalSourceKnowledgeSnapshotMaterializationResult {
 
 export interface ExternalSessionAttachmentEligibility {
   actorId: string;
-  authActorSource: "token" | "basic" | "loopback";
+  /** `none` is admitted only for the tokenless `auth:none` operator (gateway auth mode none). */
+  authActorSource: "token" | "basic" | "loopback" | "none";
 }
 
 interface ExternalSessionAttachmentRow {
@@ -417,7 +418,7 @@ export class ExternalSessionAttachmentRepository {
     eligibility: ExternalSessionAttachmentEligibility,
   ): void {
     assertIdentifier(eligibility.actorId, "actorId");
-    if (!(["token", "basic", "loopback"] as const).includes(eligibility.authActorSource)) {
+    if (!isAdmittedActorBinding(eligibility.actorId, eligibility.authActorSource)) {
       throw new TypeError("External attachment actor source is invalid.");
     }
     if (input.attachedByActorId !== eligibility.actorId) {
@@ -1313,6 +1314,17 @@ function assertAttachmentIdentity(
       message: `External attachment ${current.attachmentId} immutable identity changed during detach.`,
     });
   }
+}
+
+const AUTH_NONE_ACTOR_ID = "auth:none";
+
+/**
+ * Credentialed operator sources, plus exactly the tokenless `auth:none` / `none`
+ * pair the Gateway mints when its own auth mode is none.
+ */
+function isAdmittedActorBinding(actorId: string, authActorSource: string): boolean {
+  if (authActorSource === "none") return actorId === AUTH_NONE_ACTOR_ID;
+  return authActorSource === "token" || authActorSource === "basic" || authActorSource === "loopback";
 }
 
 function attachmentEligibilityConflict(attachmentId: string): ConflictError {

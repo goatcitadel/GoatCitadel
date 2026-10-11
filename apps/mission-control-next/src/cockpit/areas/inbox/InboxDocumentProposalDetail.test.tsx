@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { DocumentPatchProposalRecord, OperatorInboxItem, OperatorInboxResponse } from "@goatcitadel/contracts";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboxDocumentProposalDetail } from "./InboxDocumentProposalDetail";
@@ -257,6 +258,22 @@ describe("Inbox document proposal", () => {
     expect(api.applyDocumentPatchProposal).toHaveBeenCalledOnce();
     expect(container.textContent).toContain("Document decision outcome is uncertain");
     expect(container.textContent).not.toContain("Review apply");
+  });
+
+  it("keeps the decision available after the owner refuses it", async () => {
+    api.applyDocumentPatchProposal.mockRejectedValueOnce(
+      new ApiRequestError("API error 400", { kind: "http", method: "POST", path: "/x", status: 400, body: { message: "Base revision no longer matches." } }),
+    );
+    await renderDetail();
+    await act(async () => button("Review apply").click());
+    await act(async () => button("Confirm apply").click());
+    expect(container.textContent).toContain("Base revision no longer matches.");
+    expect(container.textContent).not.toContain("uncertain");
+    expect(button("Review apply").disabled).toBe(false);
+    await act(async () => button("Review apply").click());
+    await act(async () => button("Confirm apply").click());
+    expect(api.applyDocumentPatchProposal).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Gateway recorded this document proposal as applied");
   });
 });
 

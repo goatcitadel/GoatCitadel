@@ -6,6 +6,7 @@ import { Dialog } from "../../ui/Dialog";
 import { Callout } from "../../ui/Callout";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { SystemOwnerLink } from "./SystemOwnerLink";
+import { CLASSIC_RUNTIME_INSPECT_PATH } from "./health-overview";
 import { backupLocked, backupReviewCurrent, commitBackup, readBackupReview, useBackupAttempt, type BackupReview } from "./health-backup-action";
 
 export function HealthBackupAction({ onRefresh, readAvailable = true }: { onRefresh?: () => unknown | Promise<unknown>; readAvailable?: boolean }) {
@@ -46,7 +47,7 @@ export function HealthBackupAction({ onRefresh, readAvailable = true }: { onRefr
       <p>Creation does not prove offline restore or installed-host readiness. Hashes in the manifest are recorded values; verification is a separate Gateway operation.</p>
       <TechnicalDetails label="Backup manifest and recorded hashes"><pre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(receipt.manifest, null, 2)}</pre></TechnicalDetails>
     </section> : null}
-    {attempt.phase === "uncertain" ? <SystemOwnerLink href="/ops/runtime" scope="host-backups">Review backup records</SystemOwnerLink> : null}
+    {attempt.phase === "uncertain" ? <SystemOwnerLink href={CLASSIC_RUNTIME_INSPECT_PATH} scope="host-backups">Review backup records</SystemOwnerLink> : null}
     <Dialog open={open} onOpenChange={(value) => { if (!value) close(); }} title="Review backup creation" description="Create a host-wide backup through the Gateway's existing backup owner.">
       {reading ? <p role="status">Reading current operator access and backup records…</p> : error ? <Callout tone="error">{error}</Callout> : review ? <div className="grid gap-3 text-sm text-fg-secondary">
         <p>Includes the configured database, transcripts, audit logs and recursive config JSON on this Gateway host. Config may contain sensitive settings. All workspaces using this installation are affected.</p>

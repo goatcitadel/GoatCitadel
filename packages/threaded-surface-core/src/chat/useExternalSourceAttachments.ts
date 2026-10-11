@@ -1,6 +1,10 @@
 import { useScopedOperation } from "@goatcitadel/mission-control-shared/hooks/use-scoped-operation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import {
+  classifyOperationFailure,
+  UNCERTAIN_OPERATION_LOCK_NOTE,
+} from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import type {
   ChatRoutedContextRef,
   ExternalSessionAttachmentRecord,
@@ -82,6 +86,11 @@ export interface ExternalSourceAttachmentsState {
   attach: (seed: ExternalSourceAttachInputSeed) => Promise<boolean>;
   detach: (attachmentId: string) => Promise<boolean>;
   requestKnowledgeSnapshot: (attachmentId: string) => Promise<boolean>;
+  /**
+   * Operator-initiated only: clears a lost-response lock (`canMutate` false with an "uncertain"
+   * `error`) without claiming the original request settled. Returns whether a lock was cleared.
+   */
+  dismissUncertainOperation: () => boolean;
   captureOutboundExternalContextRefs: () => readonly ChatRoutedContextRef[];
   handleOutboundExternalContextSent: (item: { externalContextRefs?: readonly ChatRoutedContextRef[] }) => void;
 }
@@ -93,7 +102,7 @@ function describeAttachmentLabel(attachment: ExternalSessionAttachmentRecord): s
 export function useExternalSourceAttachments(input: UseExternalSourceAttachmentsInput): ExternalSourceAttachmentsState {
   const { workspaceId, sessionId, pushLocalNotice } = input;
   const attempt = useScopedOperation(JSON.stringify(["external-attachments", workspaceId, sessionId]));
-  const { current: currentAccess, identity: accessIdentity, locked: operationLocked, run: runOperation } = attempt;
+  const { current: currentAccess, identity: accessIdentity, locked: operationLocked, run: runOperation, dismissUncertain } = attempt;
   const hostSessionIncarnationId = input.sessionIncarnationId ?? null;
   const [loadedIdentity, setLoadedIdentity] = useState<string>();
   const liveScope = loadedIdentity === accessIdentity && currentAccess();
@@ -250,13 +259,22 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
         return true;
       } catch (mutationError) {
         if (!isCurrent()) return false;
-        if (isExternalSourceCapabilityAbsent(mutationError)) {
+        // The shared operation owner rethrows a user-facing error; classify the Gateway cause behind it.
+        const cause = mutationError instanceof Error && mutationError.cause !== undefined ? mutationError.cause : mutationError;
+        if (isExternalSourceCapabilityAbsent(cause)) {
           setSupported(false);
           setAttachments([]);
           setSelectedAttachmentIds([]);
           return false;
         }
-        setError("The source request outcome is uncertain. Further source changes are locked; refreshing does not settle the original request.");
+        if (classifyOperationFailure(cause) === "refused") {
+          // Gateway answered and recorded nothing: source changes stay available.
+          const summary = describeApiError(cause).summary;
+          setError(summary);
+          pushLocalNotice?.(`${failureNotice} ${summary}`, "warning");
+          return false;
+        }
+        setError(`The source request outcome is uncertain. ${UNCERTAIN_OPERATION_LOCK_NOTE}`);
         pushLocalNotice?.(failureNotice + " Outcome is uncertain; no automatic retry will run.", "warning");
         return false;
       } finally {
@@ -347,6 +365,12 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
     [attachments, canMutate, pushLocalNotice, runMutation, sessionId, sessionIncarnationId, workspaceId],
   );
 
+  const dismissUncertainOperation = useCallback((): boolean => {
+    const dismissed = dismissUncertain();
+    if (dismissed) setError(null);
+    return dismissed;
+  }, [dismissUncertain]);
+
   // Read via refs inside the capture callback so the queue can freeze the
   // CURRENT selection at enqueue time while the callback identity stays stable
   // for the orchestration hook (synced-ref pattern).
@@ -409,6 +433,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       attach,
       detach,
       requestKnowledgeSnapshot,
+      dismissUncertainOperation,
       captureOutboundExternalContextRefs,
       handleOutboundExternalContextSent,
     }),
@@ -430,6 +455,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       attach,
       detach,
       requestKnowledgeSnapshot,
+      dismissUncertainOperation,
       captureOutboundExternalContextRefs,
       handleOutboundExternalContextSent,
     ],

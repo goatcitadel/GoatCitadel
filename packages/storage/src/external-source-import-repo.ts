@@ -125,7 +125,8 @@ export interface ExternalSourceAttachmentCandidateBindingListInput {
   workspaceId: string;
   sessionId: string;
   actorId: string;
-  authActorSource: Extract<ExternalSourceAuthActorSource, "token" | "basic" | "loopback">;
+  /** `none` is admitted only for the tokenless `auth:none` operator (gateway auth mode none). */
+  authActorSource: Extract<ExternalSourceAuthActorSource, "token" | "basic" | "loopback" | "none">;
   limit?: number;
 }
 
@@ -507,11 +508,7 @@ export class ExternalSourceImportRepository {
     assertIdentifier(input.workspaceId, "workspaceId");
     assertIdentifier(input.sessionId, "sessionId");
     assertIdentifier(input.actorId, "actorId");
-    if (
-      input.authActorSource !== "token" &&
-      input.authActorSource !== "basic" &&
-      input.authActorSource !== "loopback"
-    ) {
+    if (!isAdmittedActorBinding(input.actorId, input.authActorSource)) {
       throw new TypeError("External source attachment candidate actor source is invalid.");
     }
     const limit = input.limit ?? 100;
@@ -1208,6 +1205,17 @@ function assertExactReplay(actual: unknown, expected: unknown, label: string): v
 
 function canonicalHash(value: unknown): string {
   return createHash("sha256").update(canonicalJsonString(value), "utf8").digest("hex");
+}
+
+const AUTH_NONE_ACTOR_ID = "auth:none";
+
+/**
+ * Credentialed operator sources, plus exactly the tokenless `auth:none` / `none`
+ * pair the Gateway mints when its own auth mode is none.
+ */
+function isAdmittedActorBinding(actorId: string, authActorSource: string): boolean {
+  if (authActorSource === "none") return actorId === AUTH_NONE_ACTOR_ID;
+  return authActorSource === "token" || authActorSource === "basic" || authActorSource === "loopback";
 }
 
 function assertIdentifier(value: string, field: string): void {

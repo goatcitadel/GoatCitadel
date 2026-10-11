@@ -41,17 +41,34 @@ describe("scoped staged Slack OAuth routes", () => {
       { actorId: "operator-a", workspaceId: "workspace-a" }, { workspaceId: "workspace-a", draftId, expectedRevision: 7 }, expect.any(Object));
     expect(s.channelSetup.recoverInterruptedChannelOAuthAttempts).toHaveBeenCalledOnce();
   });
-  it("polls only the exact initiated receipt and keeps readiness separate", async () => {
+  it("polls only the exact initiated receipt and lists redacted OAuth installs in readiness", async () => {
     const s = fixture();
+    const base = { kind: "channel", key: "slack", enabled: true, status: "connected", createdAt: "2026-05-02T00:00:00.000Z", updatedAt: "2026-05-02T00:00:00.000Z" };
+    s.integrations.listIntegrationConnections.mockResolvedValue([
+      { ...base, connectionId: "33333333-3333-4333-8333-333333333333", catalogId: "channel.slack", label: "Slack - Citadel",
+        config: { authMode: "oauth", botToken: "xoxb-secret", slackInstallId: "slack:T123", slackTeamId: "T123", slackTeamName: "Citadel", slackScopes: "chat:write channels:read" } },
+      { ...base, connectionId: "44444444-4444-4444-8444-444444444444", catalogId: "channel.slack", label: "Token Slack", config: { authMode: "bot_token", botToken: "xoxb-other" } },
+      { ...base, connectionId: "55555555-5555-4555-8555-555555555555", catalogId: "channel.discord", key: "discord", label: "Discord", config: { authMode: "oauth", botToken: "discord-secret" } },
+    ]);
     const response = await app.inject({ method: "GET", url: `/api/v1/integrations/slack/oauth/status?workspaceId=workspace-a&attemptId=${attemptId}` });
     expect(response.json()).toEqual(attempt);
     expect(s.channelSetup.getChannelOAuthAttempt).toHaveBeenCalledWith(
       { actorId: "operator-a", workspaceId: "workspace-a" }, { workspaceId: "workspace-a", attemptId });
     expect((await app.inject({ method: "GET", url: `/api/v1/integrations/slack/oauth/status?attemptId=${attemptId}` })).statusCode).toBe(400);
-    const readiness = await app.inject({ method: "GET", url: "/api/v1/integrations/slack/oauth/status" });
-    expect(readiness.json().connections).toEqual([]);
-    expect(readiness.json().state).toBeUndefined();
     expect(s.integrations.listIntegrationConnections).not.toHaveBeenCalled();
+    const readiness = await app.inject({ method: "GET", url: "/api/v1/integrations/slack/oauth/status" });
+    expect(readiness.statusCode).toBe(200);
+    expect(s.integrations.listIntegrationConnections).toHaveBeenCalledExactlyOnceWith("channel", 300);
+    expect(readiness.json().connections).toHaveLength(1);
+    expect(readiness.json().connections[0]).toMatchObject({
+      connection: { connectionId: "33333333-3333-4333-8333-333333333333", config: { authMode: "oauth", botToken: "[REDACTED]" } },
+      install: { installId: "slack:T123", teamId: "T123", teamName: "Citadel", scopes: ["chat:write", "channels:read"] },
+    });
+    expect(readiness.json()).toMatchObject({ scopes: expect.any(Array), missing: expect.any(Array) });
+    expect(readiness.json().state).toBeUndefined();
+    expect(readiness.body).not.toContain("xoxb-secret");
+    expect(readiness.body).not.toContain("xoxb-other");
+    expect(readiness.body).not.toContain("discord-secret");
   });
   it("callbacks stage success/denial receipts and never create or replace active connections", async () => {
     const s = fixture();

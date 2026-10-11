@@ -105,6 +105,18 @@ it.each([[["high"], "extended"], [["xhigh"], "deep"], [["low", "medium", "high"]
   await act(async () => { select.value = supportedValue; select.dispatchEvent(new Event("change", { bubbles: true })); });
   expect(input.onSetThinkingLevel).toHaveBeenCalledExactlyOnceWith(supportedValue);
 });
+it("offers every thinking level with a support note when the catalog lists no efforts", async () => {
+  const input = props({ currentThinkingLevel: "standard" });
+  await act(async () => root.render(<ChatComposerControls props={input} />));
+  await openOptions();
+  const select = effortSelect();
+  expect(select.disabled).toBe(false);
+  expect([...select.options].map((option) => option.value)).toEqual(["off", "minimal", "standard", "extended", "deep", "max", "ultra"]);
+  expect([...select.options].some((option) => option.disabled)).toBe(false);
+  expect(select.closest("label")?.textContent).toContain("support unverified");
+  await act(async () => { select.value = "deep"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(input.onSetThinkingLevel).toHaveBeenCalledExactlyOnceWith("deep");
+});
 it("only offers Off when none is advertised and preserves the saved value across a model switch", async () => {
   const input = props({ currentThinkingLevel: "extended" });
   await act(async () => root.render(<ChatComposerControls props={input} reasoningEfforts={["none", "high"]} />));

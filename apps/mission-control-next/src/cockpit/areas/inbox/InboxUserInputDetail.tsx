@@ -21,6 +21,7 @@ import {
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { classifyOperationFailure } from "./approval-operation-attempts";
 import { currentInboxUserInput, hasCurrentInboxUserInputItem } from "./inbox-user-input-guard";
 
 type Answer = ChatUserInputPromptAnswerRequest["response"];
@@ -140,7 +141,10 @@ export function InboxUserInputDetail({ item, workspaceId }: { item: OperatorInbo
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
     } catch (cause) {
       setReview(null);
-      if (mutationAttempted) {
+      if (mutationAttempted && classifyOperationFailure(cause) === "refused") {
+        // Gateway answered and recorded nothing: the answer form stays available.
+        setError(`Gateway did not accept the answer. ${describeApiError(cause).summary}`);
+      } else if (mutationAttempted) {
         setOutcomeUncertain(true);
         setError(
           `Answer outcome is uncertain. Inspect the current question in Chat before trying again. ${describeApiError(cause).summary}`,

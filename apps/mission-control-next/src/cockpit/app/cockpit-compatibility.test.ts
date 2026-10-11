@@ -32,15 +32,28 @@ describe("Cockpit compatibility coverage", () => {
     ["/ops/costs", "/system/spend"],
     ["/ops/sessions?view=browser-sessions&sessionId=s1#grants", "/system/browser-sessions?sessionId=s1#grants"],
     ["/ops/improvement?reportId=rep-1", "/system/improvement?reportId=rep-1"],
+    // System › Health owns runtime and workers natively; desktop "needs attention" toasts land on notifications.
+    ["/ops/runtime?runId=r", "/system?runId=r"],
+    ["/ops/workers?workspaceId=w", "/system?workspaceId=w"],
+    ["/ops/notifications?workspaceId=w#latest", "/inbox?workspaceId=w#latest"],
+    // Legacy Cowork board and task inputs normalize to the Work board.
+    ["/cowork/board", "/work"],
+    ["/cowork/tasks?workspaceId=w", "/work?workspaceId=w"],
   ])("maps %s", (input, href) => {
     expect(resolveCockpitCompatibility(input)).toMatchObject({ kind: "native", href });
   });
+  it.each(["/ops/runtime?shell=classic", "/ops/workers?shell=classic", "/ops/notifications?shell=classic", "/cowork/board?shell=classic"])(
+    "still honors explicit Classic for %s",
+    (href) => {
+      expect(resolveCockpitCompatibility(href)).toMatchObject({ kind: "classic" });
+    },
+  );
   it("preserves scope, arbitrary query, record IDs and fragment", () => {
     expect(
       resolveCockpitCompatibility("/ops/approvals?approvalId=a&workspaceId=w&citadelId=c&runId=r&extra=yes#review"),
     ).toMatchObject({ kind: "native", href: "/inbox?approvalId=a&workspaceId=w&citadelId=c&runId=r&extra=yes#review" });
   });
-  it.each(["/inbox?view=history", "/ops/runtime", "/library/knowledge?shell=classic", "/library/communications?shell=classic", "/ops/approvals?view=history", "/ops/sessions", "/ops/sessions?view=browser-sessions&shell=classic"])(
+  it.each(["/inbox?view=history", "/library/knowledge?shell=classic", "/library/communications?shell=classic", "/ops/approvals?view=history", "/ops/sessions", "/ops/sessions?view=browser-sessions&shell=classic"])(
     "offers Classic for %s",
     (href) => {
       expect(resolveCockpitCompatibility(href)).toMatchObject({ kind: "classic" });
@@ -54,6 +67,7 @@ describe("Cockpit compatibility coverage", () => {
     "/inbox/unknown",
     "/work/unknown",
     "/library/unknown",
+    "/cowork/unknown",
   ])("reports missing %s", (href) => {
     expect(resolveCockpitCompatibility(href)).toMatchObject({ kind: "missing" });
   });

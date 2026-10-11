@@ -1,4 +1,4 @@
-import type { SseTokenIssueResponse } from "@goatcitadel/contracts";
+import type { SseTokenIssueResponse, SseTokenlessResponse } from "@goatcitadel/contracts";
 
 import { request } from "./client-core.js";
 import { isApiRequestError } from "./http-internal";
@@ -10,6 +10,15 @@ export async function issueSseBridgeToken(scope: SseTokenIssueResponse["scope"])
     method: "POST",
     body: JSON.stringify({ scope }),
   });
+}
+
+/**
+ * Auth mode none on a current Gateway: `200 { scope, authMode: "none" }` with no
+ * token. Callers treat it exactly like `isSseBridgeNotNeededError` (the legacy
+ * 400): clear stale stored auth and open the stream without `sse_token`.
+ */
+export function isTokenlessSseBridgeResponse(issued: SseTokenIssueResponse): issued is SseTokenlessResponse {
+  return !("token" in issued) && issued.authMode === "none";
 }
 
 export function isSseBridgeNotNeededError(error: unknown): boolean {

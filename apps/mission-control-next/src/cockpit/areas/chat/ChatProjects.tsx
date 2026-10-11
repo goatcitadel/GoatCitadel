@@ -15,6 +15,7 @@ import { useSessionViewState } from "../../../hooks/use-session-view-state";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { useDraftLeave } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { useWorkspaceName } from "../../data/use-workspace-name";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
@@ -34,6 +35,7 @@ function ProjectsWorkspace({ workspaceId, citadelId }: { workspaceId: string; ci
   const route = useCockpitRoute(),
     leave = useDraftLeave();
   const access = useProjectAccess(JSON.stringify([citadelId, workspaceId]));
+  const workspaceName = useWorkspaceName(citadelId, workspaceId);
   const pins = useProjectPinController(workspaceId, access.presentationScope);
   const [query, setQuery] = useSessionViewState(`projects:${access.presentationScope}:query`, "");
   const [filter, setFilter] = useSessionViewState<ProjectFilterView>(
@@ -72,7 +74,9 @@ function ProjectsWorkspace({ workspaceId, citadelId }: { workspaceId: string; ci
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl">Projects</h1>
-          <p className="text-sm text-fg-secondary">Organize Chat context in workspace {workspaceId}.</p>
+          <p className="text-sm text-fg-secondary" title={workspaceId}>
+            Organize Chat context for {workspaceName ?? `workspace ${workspaceId}`}.
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button onClick={() => route.navigate("/chat")}>Conversations</Button>

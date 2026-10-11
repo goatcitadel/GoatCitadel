@@ -327,16 +327,27 @@ describe("cockpit text composer", () => {
     expect(props.onCancelEdit).toHaveBeenCalledOnce();
   });
 
-  it("selects a command suggestion without sending its text as a message", async () => {
-    const props = composerProps({
-      draft: "/status",
-      commandSuggestions: [{ key: "status", command: "/status", description: "Show status", applyValue: "/status" }],
-    });
-    await act(async () => root.render(<ChatTextComposer props={props} />));
+  it("applies an uncommitted command suggestion on Enter and sends a committed command", async () => {
+    const commandSuggestions = [{ key: "status", command: "/status", description: "Show status", applyValue: "/status" }];
+    const partial = composerProps({ draft: "/stat", commandSuggestions });
+    await act(async () => root.render(<ChatTextComposer props={partial} />));
+    expect(sendButton().disabled).toBe(true);
     const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
     await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
-    expect(props.onApplyDraftCommand).toHaveBeenCalledWith("/status");
-    expect(props.onSend).not.toHaveBeenCalled();
+    expect(partial.onApplyDraftCommand).toHaveBeenCalledWith("/status");
+    expect(partial.onSend).not.toHaveBeenCalled();
+
+    // The palette trigger keeps a complete slash command's suggestion listed; Enter must send, not re-apply.
+    const committed = composerProps({ draft: "/status", commandSuggestions });
+    await act(async () => root.render(<ChatTextComposer props={committed} />));
+    expect(sendButton().disabled).toBe(false);
+    await act(async () =>
+      (container.querySelector("textarea") as HTMLTextAreaElement).dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      ),
+    );
+    expect(committed.onSend).toHaveBeenCalledOnce();
+    expect(committed.onApplyDraftCommand).not.toHaveBeenCalled();
   });
 
   it("opens the schedule owner without a model turn for the exact provider-free command", async () => {

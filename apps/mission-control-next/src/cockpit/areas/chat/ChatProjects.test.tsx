@@ -36,6 +36,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
   createChatSession: api.createSession,
 }));
 vi.mock("./ProjectRecents", () => ({ ProjectRecents: () => <p>Recent project history</p> }));
+const workspaceNames = vi.hoisted(() => ({ byId: { "workspace-a": "Alpha workspace" } as Record<string, string | undefined> }));
+vi.mock("../../data/use-workspace-name", () => ({
+  useWorkspaceName: (_citadelId: string | undefined, workspaceId: string | undefined) => workspaceNames.byId[workspaceId ?? ""],
+}));
 vi.mock("../../ui/ClassicOwnerLink", () => ({
   ClassicOwnerLink: ({ href, label }: { href: string; label: string }) => <a href={href}>{label}</a>,
 }));
@@ -286,7 +290,17 @@ it("opens the exact conversation for the existing reviewed assignment owner", as
   });
   window.history.replaceState(null, "", "/chat/projects/project-a");
   await render();
-  const select = host.querySelector<HTMLSelectElement>('[aria-label="Conversation to assign"]')!;
+  // The assignable conversations arrive from the sessions read; under load the 15 ms settle is not enough, and
+  // selecting a value the <select> does not list yet leaves the assignment empty and the review button disabled.
+  const option = await vi.waitFor(
+    () => {
+      const node = host.querySelector<HTMLOptionElement>('[aria-label="Conversation to assign"] option[value="conversation-a"]');
+      expect(node, "assignable conversation option").not.toBeNull();
+      return node!;
+    },
+    { timeout: 5000 },
+  );
+  const select = option.closest("select")!;
   await act(async () => {
     select.value = "conversation-a";
     select.dispatchEvent(new Event("change", { bubbles: true }));
@@ -295,4 +309,14 @@ it("opens the exact conversation for the existing reviewed assignment owner", as
   expect(new URLSearchParams(window.location.search).get("sessionId")).toBe("conversation-a");
   expect(new URLSearchParams(window.location.search).get("assignProjectId")).toBe("project-a");
   expect(window.location.pathname).toBe("/chat");
+});
+
+it("names the workspace in the Projects intro and keeps its id only as a technical title", async () => {
+  workspaceNames.byId = { "workspace-a": "Alpha workspace" };
+  await render();
+  const intro = () => document.querySelector<HTMLElement>('p[title="workspace-a"]');
+  expect(intro()?.textContent).toBe("Organize Chat context for Alpha workspace.");
+  workspaceNames.byId = {};
+  await render();
+  expect(intro()?.textContent).toBe("Organize Chat context for workspace workspace-a.");
 });

@@ -3754,7 +3754,7 @@ export class CapabilitySystemService {
         kind: "skill",
         category: skill.capabilityCategory ?? "project_local",
         title: skill.name,
-        summary: summarizeInstructionBody(skill.instructionBody),
+        summary: skill.description?.trim() || summarizeInstructionBody(skill.instructionBody),
         callable: Boolean(skill.callable),
         lifecycleState: skill.lifecycleState,
         trustLabel: skill.trustLabel,
@@ -5189,12 +5189,17 @@ function mapSkillSource(
   }
 }
 
+/**
+ * The first prose line of a SKILL.md body. Headings only repeat the title, so a summary made of one
+ * presents as "no description" in the Library. A body with nothing else keeps its first line, which
+ * the shared presenter reports as missing rather than inventing a description.
+ */
 function summarizeInstructionBody(body: string): string {
-  const line = body
+  const lines = body
     .split(/\r?\n/u)
     .map((entry) => entry.trim())
-    .find(Boolean);
-  return line ?? "Skill instructions";
+    .filter(Boolean);
+  return lines.find((line) => !/^#{1,6}\s/u.test(line)) ?? lines[0] ?? "Skill instructions";
 }
 
 function countCatalogEntries(entries: CapabilityCatalogEntry[], kind: CapabilityCatalogEntry["kind"]): number {

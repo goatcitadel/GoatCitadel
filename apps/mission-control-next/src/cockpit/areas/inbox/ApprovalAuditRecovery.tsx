@@ -1,5 +1,5 @@
 import { readApprovalFollowOn } from "./approval-follow-on";
-import { useApprovalOperationAttempt, beginApprovalOperation, updateApprovalOperation, releaseApprovalOperationCheck, canReviewApprovalOperation } from "./approval-operation-attempts";
+import { useApprovalOperationAttempt, beginApprovalOperation, updateApprovalOperation, releaseApprovalOperationCheck, releaseRefusedApprovalOperation, canReviewApprovalOperation, classifyOperationFailure } from "./approval-operation-attempts";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { canonicalJsonString, type ApprovalRequest } from "@goatcitadel/contracts";
@@ -89,10 +89,13 @@ function AuditRecovery({ approval, workspaceId, checking }: { approval: Approval
 
       await audit.refetch();
     } catch (cause) {
-      if (sent) updateApprovalOperation(attemptKey, token, "uncertain", `Resume outcome is uncertain. Inspect current work before another request. ${describeApiError(cause).summary}`);
+      // Gateway answered and recorded nothing: no replay lock, the same checkpoint may be reviewed again.
+      const refused = sent && classifyOperationFailure(cause) === "refused";
+      if (refused) releaseRefusedApprovalOperation(attemptKey, token);
+      else if (sent) updateApprovalOperation(attemptKey, token, "uncertain", `Resume outcome is uncertain. Inspect current work before another request. ${describeApiError(cause).summary}`);
       if (access.current()) {
         setNotice(
-          `${sent ? "Resume outcome is uncertain. Inspect current work before another request. " : ""}${describeApiError(cause).summary}`,
+          `${refused ? "Gateway did not accept the resume request. " : sent ? "Resume outcome is uncertain. Inspect current work before another request. " : ""}${describeApiError(cause).summary}`,
         );
         setReview(undefined);
       }

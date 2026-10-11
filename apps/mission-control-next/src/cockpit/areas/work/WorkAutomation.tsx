@@ -12,6 +12,7 @@ import {
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { useWorkspaceName } from "../../data/use-workspace-name";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
 import {
   optionalDraftText,
@@ -44,6 +45,8 @@ export function WorkAutomation() {
   );
 }
 function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
+  const { activeCitadelId } = useUiPreferences();
+  const workspaceName = useWorkspaceName(activeCitadelId, workspaceId);
   const base = getGatewayApiBaseUrl();
   const editor = useSessionDraft(
     `ops:${workspaceId}:automation:designer`,
@@ -137,7 +140,8 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
     <section className="mx-auto grid max-w-5xl gap-4 p-4 sm:p-6">
       <h1 className="font-display text-xl font-semibold text-fg">Automation Designer</h1>
       <p className="text-sm text-fg-secondary">
-        Draft a reviewable recipe for workspace {workspaceId}. Preview and template export do not
+        Draft a reviewable recipe for <span title={workspaceId}>{workspaceName ?? `workspace ${workspaceId}`}</span>.
+        Preview and template export do not
         create a schedule, activate capabilities, import into an external service, or prove
         execution. Gateway governance still applies.
       </p>

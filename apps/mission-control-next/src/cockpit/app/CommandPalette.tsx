@@ -135,103 +135,112 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           ) : null}
           <div className="max-h-80 overflow-y-auto p-1">
             <Command.List aria-busy={search.loading}>
-              <Command.Group heading="Commands" hidden={!commandMatches} className="text-xs text-fg-muted">
-                {matches("New chat conversation") ? (
-                  <Command.Item
-                    value="new-chat"
-                    disabled={newChat.blocked || !activeWorkspaceId || !activeCitadelId}
-                    onSelect={() => {
-                      requestTransition(async (review) => {
-                        await newChat.create({
-                          isCurrent: review.isCurrent,
-                          onCreated: (sessionId) => {
-                            if (review.navigate(`/chat?${new URLSearchParams({ shell: "cockpit", sessionId })}`)) {
-                              onOpenChange(false);
-                            }
-                          },
+              {/* cmdk overrides a `hidden` prop on Group, so an empty group is left out instead of hidden. */}
+              {commandMatches ? (
+                <Command.Group heading="Commands" className="text-xs text-fg-muted">
+                  {matches("New chat conversation") ? (
+                    <Command.Item
+                      value="new-chat"
+                      disabled={newChat.blocked || !activeWorkspaceId || !activeCitadelId}
+                      onSelect={() => {
+                        requestTransition(async (review) => {
+                          await newChat.create({
+                            isCurrent: review.isCurrent,
+                            onCreated: (sessionId) => {
+                              if (review.navigate(`/chat?${new URLSearchParams({ shell: "cockpit", sessionId })}`)) {
+                                onOpenChange(false);
+                              }
+                            },
+                          });
                         });
-                      });
-                    }}
-                    className={PALETTE_ITEM_CLASS}
-                  >
-                    New chat
-                    <span className="block text-xs text-fg-secondary">
-                      Create one conversation in this workspace; nothing is sent.
-                    </span>
-                  </Command.Item>
-                ) : null}
-                {matches("Choose default model provider models switch") ? (
-                  <Command.Item
-                    value="choose-model"
-                    onSelect={() => run(() => navigate("/settings/models?shell=cockpit#providers"))}
-                    className={PALETTE_ITEM_CLASS}
-                  >
-                    Choose default model…
-                    <span className="block break-words text-xs text-fg-secondary">
-                      {currentConfig
-                        ? `Gateway default: ${currentConfig.activeProviderId} / ${currentConfig.activeModel}.${configAge ? ` ${configAge}` : ""}`
-                        : config.isError
-                          ? "Gateway default unavailable."
-                          : "Reading Gateway default…"}{" "}
-                      Opens reviewed Settings. Conversation overrides stay in Chat.
-                    </span>
-                  </Command.Item>
-                ) : null}
-              </Command.Group>
-              <Command.Group heading="Go to" hidden={!destinations.length} className="text-xs text-fg-muted">
-                {destinations.map((entry) => (
-                  <Command.Item
-                    key={entry.area}
-                    value={`go-${entry.area}`}
-                    onSelect={() => run(() => navigate(`${entry.path}?shell=cockpit`))}
-                    className={PALETTE_ITEM_CLASS}
-                  >
-                    Go to {entry.label}
-                  </Command.Item>
-                ))}
-              </Command.Group>
-              <Command.Group heading="Preferences" hidden={!preferenceMatches} className="text-xs text-fg-muted">
-                {matches("Switch theme light dark") ? (
-                  <Command.Item
-                    value="theme"
-                    onSelect={() => run(() => setTheme(theme === "dark" ? "light" : "dark"))}
-                    className={PALETTE_ITEM_CLASS}
-                  >
-                    Switch to {theme === "dark" ? "light" : "dark"} theme
-                  </Command.Item>
-                ) : null}
-                {matches("Switch density comfortable compact") ? (
-                  <Command.Item
-                    value="density"
-                    onSelect={() => run(() => setDensity(density === "compact" ? "comfortable" : "compact"))}
-                    className={PALETTE_ITEM_CLASS}
-                  >
-                    Switch to {density === "compact" ? "comfortable" : "compact"} density
-                  </Command.Item>
-                ) : null}
-                {matches("Switch to classic Mission Control") ? (
-                  <Command.Item
-                    value="classic"
-                    onSelect={() => run(shellSwitch.request)}
-                    className={PALETTE_ITEM_CLASS}
-                  >
-                    Switch to classic Mission Control
-                  </Command.Item>
-                ) : null}
-              </Command.Group>
-              <Command.Group heading="Settings" hidden={!settingsMatches.length} className="text-xs text-fg-muted">
-                {settingsMatches.map((entry) => (
-                  <Command.Item
-                    key={entry.section}
-                    value={`settings-${entry.section}`}
-                    onSelect={() => run(() => navigate(entry.href))}
-                    className={PALETTE_ITEM_CLASS}
-                  >
-                    Settings · {entry.label}
-                    {entry.releaseStatus === "experimental" ? " · Experimental" : ""}
-                  </Command.Item>
-                ))}
-              </Command.Group>
+                      }}
+                      className={PALETTE_ITEM_CLASS}
+                    >
+                      New chat
+                      <span className="block text-xs text-fg-secondary">
+                        Create one conversation in this workspace; nothing is sent.
+                      </span>
+                    </Command.Item>
+                  ) : null}
+                  {matches("Choose default model provider models switch") ? (
+                    <Command.Item
+                      value="choose-model"
+                      onSelect={() => run(() => navigate("/settings/models?shell=cockpit#providers"))}
+                      className={PALETTE_ITEM_CLASS}
+                    >
+                      Choose default model…
+                      <span className="block break-words text-xs text-fg-secondary">
+                        {currentConfig
+                          ? `Gateway default: ${currentConfig.activeProviderId} / ${currentConfig.activeModel}.${configAge ? ` ${configAge}` : ""}`
+                          : config.isError
+                            ? "Gateway default unavailable."
+                            : "Reading Gateway default…"}{" "}
+                        Opens reviewed Settings. Conversation overrides stay in Chat.
+                      </span>
+                    </Command.Item>
+                  ) : null}
+                </Command.Group>
+              ) : null}
+              {destinations.length ? (
+                <Command.Group heading="Go to" className="text-xs text-fg-muted">
+                  {destinations.map((entry) => (
+                    <Command.Item
+                      key={entry.area}
+                      value={`go-${entry.area}`}
+                      onSelect={() => run(() => navigate(`${entry.path}?shell=cockpit`))}
+                      className={PALETTE_ITEM_CLASS}
+                    >
+                      Go to {entry.label}
+                    </Command.Item>
+                  ))}
+                </Command.Group>
+              ) : null}
+              {preferenceMatches ? (
+                <Command.Group heading="Preferences" className="text-xs text-fg-muted">
+                  {matches("Switch theme light dark") ? (
+                    <Command.Item
+                      value="theme"
+                      onSelect={() => run(() => setTheme(theme === "dark" ? "light" : "dark"))}
+                      className={PALETTE_ITEM_CLASS}
+                    >
+                      Switch to {theme === "dark" ? "light" : "dark"} theme
+                    </Command.Item>
+                  ) : null}
+                  {matches("Switch density comfortable compact") ? (
+                    <Command.Item
+                      value="density"
+                      onSelect={() => run(() => setDensity(density === "compact" ? "comfortable" : "compact"))}
+                      className={PALETTE_ITEM_CLASS}
+                    >
+                      Switch to {density === "compact" ? "comfortable" : "compact"} density
+                    </Command.Item>
+                  ) : null}
+                  {matches("Switch to classic Mission Control") ? (
+                    <Command.Item
+                      value="classic"
+                      onSelect={() => run(shellSwitch.request)}
+                      className={PALETTE_ITEM_CLASS}
+                    >
+                      Switch to classic Mission Control
+                    </Command.Item>
+                  ) : null}
+                </Command.Group>
+              ) : null}
+              {settingsMatches.length ? (
+                <Command.Group heading="Settings" className="text-xs text-fg-muted">
+                  {settingsMatches.map((entry) => (
+                    <Command.Item
+                      key={entry.section}
+                      value={`settings-${entry.section}`}
+                      onSelect={() => run(() => navigate(entry.href))}
+                      className={PALETTE_ITEM_CLASS}
+                    >
+                      Settings · {entry.label}
+                      {entry.releaseStatus === "experimental" ? " · Experimental" : ""}
+                    </Command.Item>
+                  ))}
+                </Command.Group>
+              ) : null}
               <CommandPaletteResults groups={search.groups} onSelect={selectObject} />
             </Command.List>
             {noMatches ? <p role="status" className="px-3 py-2 text-sm text-fg-secondary">No matching commands or returned records. Try a destination such as Settings, approvals, health, or a different search term.</p> : null}

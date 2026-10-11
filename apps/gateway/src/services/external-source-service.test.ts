@@ -332,6 +332,37 @@ describe("HX-407 external source lifecycle service", () => {
     expect(harness.rootInspector.paths).toEqual([]);
   });
 
+  it("admits exactly the tokenless auth-none operator pair and keeps every other actor validation", async () => {
+    const tokenless: ExternalSourceRequestActor = { actorId: "auth:none", source: "none" };
+    const harness = createHarness();
+    harness.configs.records.push(sourceStub("source-tokenless", "active", tokenless));
+
+    await expect(harness.service.list("workspace-1", tokenless)).resolves.toMatchObject({
+      items: [{ sourceId: "source-tokenless" }],
+    });
+    await expect(harness.service.get("workspace-1", "source-tokenless", tokenless)).resolves.toMatchObject({
+      source: { ownerActorId: "auth:none", authActorId: "auth:none", authActorSource: "none" },
+    });
+    await expect(harness.service.list("workspace-1", ACTOR)).resolves.toMatchObject({ items: [] });
+    // The pair passes actor validation, so an empty create body fails on input parsing, not as not_found.
+    await expect(
+      harness.service.create({} as ExternalSourceCreateInput, tokenless, liveSignal()),
+    ).rejects.toSatisfy((error: unknown) => !(error instanceof ExternalSourceServiceError && error.code === "not_found"));
+
+    // Source "none" with any other id, and auth:none on a credentialed source, stay rejected before any work.
+    for (const actor of [
+      { actorId: "operator-1", source: "none" },
+      { actorId: "anonymous", source: "none" },
+      { actorId: "auth:none", source: "loopback" },
+    ] as ExternalSourceRequestActor[]) {
+      await expect(
+        harness.service.create({} as ExternalSourceCreateInput, actor, liveSignal()),
+      ).rejects.toMatchObject<Partial<ExternalSourceServiceError>>({ code: "not_found" });
+    }
+    expect(harness.pathVerifier.requests).toEqual([]);
+    expect(harness.rootInspector.paths).toEqual([]);
+  });
+
   it("blocks current allowed-root and Git-evidence drift before the reader can open the root", async () => {
     const source = sourceStub("source-git", "active", ACTOR);
     const snapshot = pathSnapshot();

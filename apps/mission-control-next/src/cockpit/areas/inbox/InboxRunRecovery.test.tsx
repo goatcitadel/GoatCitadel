@@ -174,6 +174,22 @@ describe("Inbox run recovery", () => {
     expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Retry run")).toBe(false);
   });
 
+  it("keeps retry available after the owner refuses it", async () => {
+    api.retryDurableRun.mockRejectedValueOnce(
+      new ApiRequestError("API error 409", { kind: "http", method: "POST", path: "/x", status: 409 }),
+    );
+    await renderRecovery();
+    await act(async () => button("Retry run").click());
+    await act(async () => button("Confirm retry run").click());
+    expect(container.textContent).toContain("This changed somewhere else");
+    expect(container.textContent).not.toContain("uncertain");
+    expect(button("Retry run").disabled).toBe(false);
+    await act(async () => button("Retry run").click());
+    await act(async () => button("Confirm retry run").click());
+    expect(api.retryDurableRun).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Inspect the current run to verify execution and effects");
+  });
+
   it("recovers only the exact unresolved dead letter", async () => {
     const deadItem: OperatorInboxItem = {
       ...item,

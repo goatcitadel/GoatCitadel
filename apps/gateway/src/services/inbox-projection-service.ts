@@ -31,6 +31,12 @@ const RECENT_UPDATE_DAYS = 14;
 const RECENT_UPDATE_LIMIT = 50;
 const BACKUP_TRUST_CACHE_MS = 5 * 60 * 1000;
 
+/** "memory.write" → "memory write", "demo.first_run" → "demo first run": readable words for a kind or tool name. */
+function approvalKindWords(value: string): string {
+  const words = value.split(/[._-]+/).filter(Boolean);
+  return words.length ? words.join(" ") : value;
+}
+
 function approvalTargetSummary(preview: unknown): string {
   const value = preview && typeof preview === "object" ? (preview as Record<string, unknown>).targets : undefined;
   const targets = Array.isArray(value) ? value.filter((target): target is string => typeof target === "string") : [];
@@ -177,7 +183,7 @@ export class InboxProjectionService {
             id: `approval:${approval.approvalId}`,
             kind: "approval",
             group: "needs_decision",
-            title: `Review ${label(approval.linkage?.toolName ?? approval.kind)}`,
+            title: `Review ${approvalKindWords(approval.linkage?.toolName ?? approval.kind)}`,
             summary: approvalTargetSummary(approval.preview),
             createdAt: approval.createdAt,
             expiresAt: approval.expiresAt,
@@ -491,7 +497,8 @@ export class InboxProjectionService {
             summary: `A ${deliverable.deliverableType} deliverable was recorded for ${bounded(deliverable.taskTitle || "a task")}. Open Kanban to inspect its current record.`,
             createdAt: deliverable.createdAt,
             source: { workspaceId, taskId: deliverable.taskId, deliverableId: deliverable.deliverableId },
-            href: `/ops/kanban?shell=classic&taskId=${encodeURIComponent(deliverable.taskId)}`,
+            // Cockpit owns the task board natively (`/work/kanban`); Classic is reachable through its own shell switch.
+            href: `/work/kanban?taskId=${encodeURIComponent(deliverable.taskId)}`,
           }),
         ),
         state: incomplete ? ("partial" as const) : ("limited" as const),

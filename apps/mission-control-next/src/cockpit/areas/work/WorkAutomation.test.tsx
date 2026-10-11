@@ -7,6 +7,8 @@ import { __resetSessionViewStateForTests } from "../../../hooks/use-session-view
 import { draftAutomationRecipe, exportActivepiecesWorkflowTemplate, exportN8nWorkflowTemplate } from "@goatcitadel/mission-control-shared/api/client";
 vi.mock("@goatcitadel/mission-control-shared/api/client", async importOriginal => ({ ...await importOriginal<object>(), draftAutomationRecipe: vi.fn(), exportActivepiecesWorkflowTemplate: vi.fn(), exportN8nWorkflowTemplate: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => ({ activeWorkspaceId: "default" }) }));
+const workspaceNames = vi.hoisted(() => ({ byId: { default: "Default workspace" } as Record<string, string | undefined> }));
+vi.mock("../../data/use-workspace-name", () => ({ useWorkspaceName: (_citadelId: string | undefined, workspaceId: string | undefined) => workspaceNames.byId[workspaceId ?? ""] }));
 const preview = { recipe: { name: "Recipe", goal: "Summarize", scheduleIntent: "annual" }, plan: { planId: "advisory" }, estimatedLimits: { maxRuntimeMinutes: 10, maxIterations: 3 }, proofChecklist: ["Review capabilities"], missingCapabilities: ["tool:unavailable"] };
 const template = (status = "ready") => ({ filename: "template.json", content: "export content", contentType: "application/json", contentSha256: "hash", evidence: { planId: "advisory", status: "advisory", actionNeeded: "Operator import" }, posture: { execution: "Operator only" }, validation: { status, nativeImportCompatibility: "unverified", checks: [] } });
 let renderer: ReactTestRenderer;
@@ -61,4 +63,12 @@ it("hides a kept preview once the draft changes", async () => {
   expect(JSON.stringify(renderer.toJSON())).toContain("tool:unavailable");
   await act(async () => renderer.root.findAllByType("textarea")[0]!.props.onChange({ target: { value: "Something else" } }));
   expect(JSON.stringify(renderer.toJSON())).not.toContain("tool:unavailable");
+});
+it("names the workspace in the designer intro and keeps its id as a technical title", async () => {
+  const scope = () => renderer.root.findByProps({ title: "default" });
+  expect(scope().children.join("")).toBe("Default workspace");
+  workspaceNames.byId = {};
+  await act(async () => { renderer.update(<WorkAutomation />); });
+  expect(scope().children.join("")).toBe("workspace default");
+  workspaceNames.byId = { default: "Default workspace" };
 });

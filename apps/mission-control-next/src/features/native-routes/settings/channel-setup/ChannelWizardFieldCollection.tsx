@@ -10,6 +10,13 @@ import { ChannelStructuredField } from "./ChannelStructuredField";
 
 export const channelInputClass =
   "mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-fg";
+
+/** Adopt stores the granted scopes comma-joined; older receipts kept the list. Both are the same receipt. */
+function savedSlackScopes(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string" && item.trim() !== "");
+  if (typeof value === "string") return value.split(",").map((item) => item.trim()).filter(Boolean);
+  return [];
+}
 export function ChannelWizardFields({
   draft,
   fields = [],
@@ -60,7 +67,7 @@ export function ChannelWizardFields({
                 {field.key === "slackInstallId" && typeof draft.draft.slackInstallId === "string" ? <dl className="space-y-1 text-xs">
                   <dt>Saved workspace</dt><dd className="break-all">{typeof draft.draft.slackTeamName === "string" ? draft.draft.slackTeamName : typeof draft.draft.slackTeamId === "string" ? draft.draft.slackTeamId : "Not recorded"}</dd>
                   <dt>Saved app and bot</dt><dd className="break-all">{typeof draft.draft.slackAppId === "string" ? draft.draft.slackAppId : "Not recorded"} · {typeof draft.draft.slackBotUserId === "string" ? draft.draft.slackBotUserId : "Not recorded"}</dd>
-                  <dt>Saved scopes</dt><dd className="break-words">{Array.isArray(draft.draft.slackScopes) ? draft.draft.slackScopes.filter((item) => typeof item === "string").join(", ") : "Not recorded"}</dd>
+                  <dt>Saved scopes</dt><dd className="break-words">{savedSlackScopes(draft.draft.slackScopes).join(", ") || "Not recorded"}</dd>
                 </dl> : null}
               </div>
             ) : field.type === "target-list" || field.type === "sender-list" ? (

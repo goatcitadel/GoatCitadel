@@ -25,6 +25,7 @@ import { describeChannelFeatureMetadata } from "./channel-diagnostics.js";
 import { resolveChannelConfigTarget, resolveDefaultNamedTarget } from "./channel-config.js";
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
+import { evaluateHostEgress } from "@goatcitadel/policy-engine";
 
 const GENERIC_ALLOWLIST_INBOUND_CHANNELS = new Set(["slack", "whatsapp", "line", "nextcloud-talk"]);
 
@@ -826,9 +827,22 @@ async function runDiscordConnectionLiveChecks(
   });
 }
 
+/**
+ * Egress posture for operator-driven diagnostics. It mirrors
+ * `GatewayService.fetchWithDiagnosticsTimeout`, which fetches through
+ * `fetchAllowlisted` with the operator allowlist followed by `"*"`: any public
+ * host is reachable, while loopback/private/metadata hosts need an explicit
+ * operator allowlist entry. Diagnostics additionally require HTTPS unless the
+ * destination is loopback. The sandbox allowlist itself (`isConnectionUrlAllowlisted`)
+ * keeps governing Code Mode egress and is intentionally not consulted here.
+ */
+export function isDiagnosticsDestinationAllowed(urlValue: string, operatorAllowlist: readonly string[]): boolean {
+  return connectionUrlHelpers.isConnectionUrlRemoteSafe(urlValue) && evaluateHostEgress(urlValue, [...operatorAllowlist, "*"]).allowed;
+}
+
 async function runGovernedWebhookLiveChecks(deps: IntegrationDiagnosticsPort, input: Parameters<typeof runWebhookDestinationLiveChecks>[0]): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
-  if (input.webhookUrl && !deps.isConnectionUrlAllowlisted(input.webhookUrl)) {
-    const step = { key: input.channelKey.replace(/-/g, "_") + "_sandbox_send", label: "Webhook destination", status: "fail" as const, disposition: "blocking" as const, message: "The webhook destination is outside the outbound network allowlist." };
+  if (input.webhookUrl && !isDiagnosticsDestinationAllowed(input.webhookUrl, deps.config.toolPolicy.sandbox.networkAllowlist)) {
+    const step = { key: input.channelKey.replace(/-/g, "_") + "_sandbox_send", label: "Webhook destination", status: "fail" as const, disposition: "blocking" as const, message: "The webhook destination must be a public HTTPS endpoint. Private, loopback, and reserved hosts stay blocked unless the operator allowlists them explicitly." };
     return { checks: [{ key: step.key, status: "fail", message: step.message }], probe: { kind: input.channelKey + "_webhook", checkedAt: new Date().toISOString(), steps: [step] } };
   }
   return runWebhookDestinationLiveChecks(input);

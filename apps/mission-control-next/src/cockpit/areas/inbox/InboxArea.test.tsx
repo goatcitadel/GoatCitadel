@@ -229,6 +229,28 @@ describe("viewed Updates presentation", () => {
     expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
   });
 
+  it("keeps Mark all shown updates read available during a background refetch", async () => {
+    const data = updateProjection();
+    inboxMock.result = { data, isLoading: false, isError: false, isFetching: true, refetch: vi.fn() };
+    await renderUpdates(new QueryClient());
+    const markAll = [...container.querySelectorAll("button")].find((entry) => entry.textContent === "Mark all shown updates read");
+    if (!markAll) throw new Error("Missing Mark all shown updates read button");
+    expect(markAll.disabled).toBe(false);
+    await act(async () => markAll.click());
+    expect(isInboxUpdateViewed(inboxMock.installation, "default", update)).toBe(true);
+    expect(container.textContent).toContain("0 unread · 1 read from shown updates");
+  });
+
+  it("opens a native Work owner link for a task deliverable without a Classic handoff", async () => {
+    updateProjection({ ...update, href: "/work/kanban?taskId=task-a" });
+    await renderUpdates(new QueryClient());
+    const link = container.querySelector<HTMLAnchorElement>("a[data-inbox-owner]");
+    if (!link) throw new Error("Missing owner link");
+    expect(link.getAttribute("href")).toBe("/work/kanban?taskId=task-a");
+    expect(link.textContent).toContain("Open in Work");
+    expect(link.textContent).not.toContain("classic");
+  });
+
   it("does not mark an automatically opened deep link", async () => {
     updateProjection();
     window.history.replaceState(null, "", `/inbox?workspaceId=default&item=${encodeURIComponent(update.id)}`);

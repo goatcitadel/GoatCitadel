@@ -95,7 +95,7 @@ test("unsigned trust mode permits omitted or unsigned identity without weakening
   assert.match(smokeScript, /embedded Mission Control target remained blank/);
   assert.match(smokeScript, /WebView navigated to/);
   assert.match(smokeScript, /\$expectedWebViewPath = "\/settings\/onboarding"/);
-  assert.match(smokeScript, /GoatCitadel Get started/);
+  assert.match(smokeScript, /\$expectedWebViewTitle = "GoatCitadel Settings · Get started"/);
   assert.match(smokeScript, /did not place Gateway and Mission Control logs under the isolated runtime home/);
   assert.match(
     smokeScript,
@@ -202,7 +202,7 @@ test(
     . $env:GOAT_STARTUP_SMOKE_HELPER
     $started = [DateTimeOffset]::UtcNow.AddSeconds(-1)
     $good = @{ schemaVersion=1; processId=123; phase='navigation-completed'; navigationSucceeded=$true;
-      recordedAt=[DateTimeOffset]::UtcNow.ToString('O'); url='http://127.0.0.1:5175/settings/onboarding'; title='GoatCitadel Get started' }
+      recordedAt=[DateTimeOffset]::UtcNow.ToString('O'); url='http://127.0.0.1:5175/settings/onboarding'; title='GoatCitadel Settings · Get started' }
     $accepted = Get-VerifiedDesktopNavigation -Snapshot ([pscustomobject]$good) -ExpectedProcessId 123 -StartedAfter $started
     if (-not $accepted -or $accepted.url -ne $good.url -or $accepted.title -ne $good.title) { throw 'Valid navigation rejected' }
     $changes = @(

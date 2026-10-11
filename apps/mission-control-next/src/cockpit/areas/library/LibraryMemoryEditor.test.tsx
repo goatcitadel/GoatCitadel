@@ -49,6 +49,16 @@ it("governs forget and reads bounded history separately from item content", asyn
   await render(); await click("Memory history"); await vi.waitFor(() => expect(container.textContent).toContain("operator"));
   await click("Review forget"); await click("Request memory approval"); expect(forgetMemoryItem).toHaveBeenCalledExactlyOnceWith("m-a"); expect(patchMemoryItem).not.toHaveBeenCalled();
 });
+it("keeps global memory read-only here because the Gateway only mutates exact workspace-owned items", async () => {
+  const { workspaceId: _owned, ...global } = item;
+  vi.mocked(fetchMemoryItems).mockResolvedValue({ items: [global as MemoryItemRecord], total: 1, snapshotAt: "now" });
+  await render();
+  expect(container.textContent).toContain("Global memory is read-only here.");
+  const button = (name: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent === name)!;
+  expect(button("Review memory changes").disabled).toBe(true);
+  expect(button("Review forget").disabled).toBe(true);
+  expect(button("Memory history").disabled).toBe(false);
+});
 it("keeps administration disabled when the feature flag is false", async () => {
   vi.mocked(fetchSettings).mockResolvedValue({ features: { memoryLifecycleAdminV1Enabled: false } } as Awaited<ReturnType<typeof fetchSettings>>);
   await render(); expect(container.textContent).toContain("Memory administration is disabled"); await click("Review forget"); expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(forgetMemoryItem).not.toHaveBeenCalled();

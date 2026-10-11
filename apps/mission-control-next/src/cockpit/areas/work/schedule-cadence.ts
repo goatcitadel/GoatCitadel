@@ -19,20 +19,41 @@ export function scheduleTimezoneSummary(value: string): string {
   if (hasZoneSuffix(value)) return "Timezone not recognized in this expression.";
   return `Runs in ${GATEWAY_DEFAULT_SCHEDULE_ZONE} (the Gateway default when the expression names no timezone).`;
 }
+/** Cron fields are whitespace-separated; extra spaces around or between them do not change the schedule. */
+function normalizedExpression(value: string): string {
+  return value.trim().split(/\s+/).join(" ");
+}
+/** The five cron fields without a recognized zone suffix; an unrecognized suffix stays part of the expression. */
+function cronFields(value: string): string {
+  const normalized = normalizedExpression(value);
+  return scheduleTimezone(value) ? normalized.split(" ").slice(0, 5).join(" ") : normalized;
+}
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
+const TIMED_EXPRESSION = /^(\d{1,2}) (\d{1,2}) \* \* (\*|1-5|[0-6])$/;
+function timedCadence(expression: string): { day: string; time: string } | null {
+  const timed = TIMED_EXPRESSION.exec(expression);
+  if (!timed || Number(timed[1]) >= 60 || Number(timed[2]) >= 24) return null;
+  return { day: timed[3]!, time: `${timed[2]!.padStart(2, "0")}:${timed[1]!.padStart(2, "0")}` };
+}
 export function scheduleCadence(value: string): string {
   const zone = effectiveScheduleZone(value);
+  const suffix = zone ? ` ${zone}` : "";
   // Strip only a recognized zone; an unrecognized suffix stays a custom expression rather than an unlabelled time.
-  const expression = scheduleTimezone(value) ? value.trim().split(/\s+/).slice(0, 5).join(" ") : value;
-  const timed = /^(\d{1,2}) (\d{1,2}) \* \* (\*|1-5)$/.exec(expression);
-  if (timed && Number(timed[1]) < 60 && Number(timed[2]) < 24) return `${timed[3] === "1-5" ? "Weekdays" : "Every day"} at ${timed[2]!.padStart(2, "0")}:${timed[1]!.padStart(2, "0")}${zone ? ` ${zone}` : ""}`;
-  return expression === "0 * * * *" ? `Every hour${zone ? ` ${zone}` : ""}` : `Custom schedule: ${value}`;
+  const expression = cronFields(value);
+  const timed = timedCadence(expression);
+  if (timed) {
+    const when = timed.day === "1-5" ? "Weekdays" : timed.day === "*" ? "Every day" : `Every week on ${WEEKDAY_NAMES[Number(timed.day)]}`;
+    return `${when} at ${timed.time}${suffix}`;
+  }
+  return expression === "0 * * * *" ? `Every hour${suffix}` : `Custom schedule: ${value}`;
 }
 
 export type ScheduleCadence = "daily" | "weekdays" | "hourly" | "custom";
 /** Guided presets are projections of the saved expression, never a separate schedule contract. */
 export function scheduleTiming(value: string): { cadence: ScheduleCadence; time: string | null; zone: string | null } {
   const zone = scheduleTimezone(value);
-  const expression = zone ? value.trim().split(/\s+/).slice(0, 5).join(" ") : value.trim();
+  const expression = cronFields(value);
+  // Guided presets have no weekly form: a single weekday stays a custom expression here.
   const timed = /^(\d{1,2}) (\d{1,2}) \* \* (\*|1-5)$/.exec(expression);
   if (timed && Number(timed[1]) < 60 && Number(timed[2]) < 24)
     return { cadence: timed[3] === "1-5" ? "weekdays" : "daily", time: `${timed[2]!.padStart(2, "0")}:${timed[1]!.padStart(2, "0")}`, zone };

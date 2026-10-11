@@ -34,6 +34,7 @@ import {
   ExternalSourceAttachmentServiceError,
   deriveExternalSessionAttachmentId,
 } from "./external-source-attachment-service.js";
+import type { ExternalSourceRequestActor } from "./external-source-service.js";
 
 const WORKSPACE_ID = "default";
 const SESSION_ID = "session-1";
@@ -75,7 +76,10 @@ interface Harness {
   attachInput: (overrides?: Record<string, unknown>) => Record<string, unknown>;
 }
 
-async function createHarness(options: { publishArtifacts?: boolean } = {}): Promise<Harness> {
+async function createHarness(
+  options: { publishArtifacts?: boolean; actor?: ExternalSourceRequestActor } = {},
+): Promise<Harness> {
+  const actor = options.actor ?? ACTOR;
   const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
   const asyncStorage = createSqliteAsyncStorage(storage);
   cleanups.push(() => storage.close());
@@ -121,9 +125,9 @@ async function createHarness(options: { publishArtifacts?: boolean } = {}): Prom
     workspaceId: WORKSPACE_ID,
     kind: "codex_sessions",
     label: "Synthetic source-1",
-    ownerActorId: ACTOR.actorId,
-    authActorId: ACTOR.actorId,
-    authActorSource: ACTOR.source,
+    ownerActorId: actor.actorId,
+    authActorId: actor.actorId,
+    authActorSource: actor.source,
     canonicalRootPath,
     rootIdentitySha256: digestText("root:source-1"),
     pathBridgeSnapshotId: snapshot.snapshotId,
@@ -257,7 +261,7 @@ async function createHarness(options: { publishArtifacts?: boolean } = {}): Prom
       planSha256: plan.planSha256,
       selectedItemSetSha256: plan.selectedItemSetSha256,
       adapterVersions: plan.adapterVersions,
-      requestedByActorId: ACTOR.actorId,
+      requestedByActorId: actor.actorId,
       admittedAt: "2026-07-14T08:04:00.000Z",
     }),
   );
@@ -544,6 +548,33 @@ describe("ExternalSourceAttachmentService", () => {
       count: number;
     };
     expect(Number(rows.count)).toBe(0);
+  });
+
+  it("serves the tokenless auth-none operator normally and keeps every other actor validation", async () => {
+    // Gateway auth mode none (the shipped default) mints exactly one operator identity.
+    const tokenless: ExternalSourceRequestActor = { actorId: "auth:none", source: "none" };
+    const harness = await createHarness({ actor: tokenless });
+    const session = { workspaceId: WORKSPACE_ID, sessionId: SESSION_ID };
+
+    const candidates = await harness.service.listCandidates(session, tokenless);
+    expect(candidates.items.map((item) => item.itemId)).toEqual(["item-1", "item-2"]);
+    const attached = await harness.service.attach(harness.attachInput(), tokenless, signal());
+    expect(attached).toMatchObject({
+      disposition: "created",
+      attachment: { status: "attached", attachedByActorId: "auth:none" },
+    });
+    const listed = await harness.service.list(session, tokenless);
+    expect(listed.items.map((item) => item.attachmentId)).toEqual([attached.attachment.attachmentId]);
+
+    // A credentialed operator never sees the tokenless operator's source.
+    const foreign = await harness.service.listCandidates(session, ACTOR);
+    expect(foreign.items).toEqual([]);
+    // Source "none" admits only auth:none; non-operator sources stay rejected before any session lookup.
+    await expectServiceError(harness.service.list(session, { actorId: "operator-1", source: "none" }), "not_found");
+    await expectServiceError(
+      harness.service.list(session, { actorId: "device:1", source: "device_grant" as never }),
+      "not_found",
+    );
   });
 
   it("denies a stale session incarnation on attach, detach, and knowledge requests", async () => {

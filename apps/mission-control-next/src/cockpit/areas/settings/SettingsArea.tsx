@@ -47,7 +47,9 @@ export function SettingsArea() {
   const { rest, navigate } = useCockpitRoute();
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
   const [query, setQuery] = useState("");
-  const hash = useSettingsSectionHash();
+  const locationHash = useSettingsSectionHash();
+  // The update badge and Ops › Health link `/settings/general#updates`; the card itself is `#application-updates`.
+  const hash = locationHash === "updates" ? "application-updates" : locationHash;
   const page =
     PAGES.find((item) => item.id === rest[0]) ??
     PAGES.find((item) => item.entries.some((entry) => entry.section === rest[0])) ??

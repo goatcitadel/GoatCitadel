@@ -3,6 +3,17 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { assertIntegrationDialogBounds } from "./cockpit-integration-connections-proof.mjs";
 
+/**
+ * Shell-level observer traffic Cockpit sends from every page: the notification-presence lease and
+ * the ephemeral event-bridge token. Neither writes first-run settings, so the "no owner write"
+ * guards ignore them (matching the shell-controls and observer-request proofs).
+ */
+const FIRST_RUN_OBSERVER_PATHS = new Set(["/api/v1/auth/sse-token", "/api/v1/notifications/presence"]);
+const MUTATING_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+export function isFirstRunOwnerWrite(method, pathname) {
+  return MUTATING_METHODS.has(method) && pathname.startsWith("/api/") && !FIRST_RUN_OBSERVER_PATHS.has(pathname);
+}
+
 export function assertFirstRunPreserved({ before, after, writes, forwarded }) {
   assert.equal(before.completed, false, "First-run negative proof must begin with an incomplete real owner.");
   assert.equal(after.completed, false, "The negative fixture changed the actual setup marker.");
@@ -43,7 +54,7 @@ export async function runCockpitFirstRunGuardProof({ context, stack, requestJson
           page.on("request", request => {
             if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigations++;
             const pathname = new URL(request.url()).pathname;
-            if (["POST", "PATCH", "PUT", "DELETE"].includes(request.method()) && pathname.startsWith("/api/"))
+            if (isFirstRunOwnerWrite(request.method(), pathname))
               writes.push({ method: request.method(), path: pathname, body: request.postDataJSON() });
           });
           await page.route("**/api/v1/onboarding/state", async route => {

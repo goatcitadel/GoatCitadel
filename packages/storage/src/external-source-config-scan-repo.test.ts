@@ -157,6 +157,37 @@ describe("HX-407 external source config and sealed catalog repositories", () => 
     );
   });
 
+  it("persists the tokenless auth-none operator binding and still rejects every other source value", () => {
+    const db = createStore();
+    const configs = new ExternalSourceConfigRepository(db);
+    const fixture = seedExternalSourceCatalog(db, {
+      sourceId: "tokenless-source",
+      scanId: "tokenless-scan",
+      itemCount: 0,
+    });
+    const { configSha256: _hash, ...draft } = fixture.config;
+    // Gateway auth mode none mints exactly one operator identity (auth:none / none).
+    const tokenless = sealExternalSourceRecord({
+      ...draft,
+      ownerActorId: "auth:none",
+      authActorId: "auth:none",
+      authActorSource: "none",
+    });
+
+    assert.deepEqual(configs.createForActiveWorkspace(tokenless, 1, 16), tokenless);
+    assert.deepEqual(configs.listByWorkspaceActor("default", "auth:none", "auth:none", "none", 100), [tokenless]);
+    assert.deepEqual(configs.listByWorkspaceActor("default", "auth:none", "auth:none", "token", 100), []);
+    // Source "none" admits only that pair; every other source value stays invalid.
+    assert.throws(
+      () => configs.listByWorkspaceActor("default", "operator-1", "operator-1", "none", 100),
+      /authActorSource is invalid/u,
+    );
+    assert.throws(
+      () => configs.listByWorkspaceActor("default", "auth:none", "auth:none", "device_grant", 100),
+      /authActorSource is invalid/u,
+    );
+  });
+
   it("uses PostgreSQL row locks for registration, config mutation, and the final scan seal rebind", () => {
     const preparedSql: string[] = [];
     const db: DatabaseClient = {

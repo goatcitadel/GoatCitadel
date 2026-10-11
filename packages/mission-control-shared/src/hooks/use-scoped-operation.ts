@@ -1,6 +1,7 @@
+import { useCallback } from "react";
 import { useProjectAccess } from "./use-current-access";
 import { describeApiError } from "../api/describe-api-error";
-import { beginApprovalOperation, resumeUncertainApprovalOperation, releaseApprovalOperationCheck, updateApprovalOperation, useApprovalOperationAttempt } from "../state/scoped-operation-attempts";
+import { beginApprovalOperation, classifyOperationFailure, dismissUncertainApprovalOperation, resumeUncertainApprovalOperation, releaseApprovalOperationCheck, releaseRefusedApprovalOperation, UNCERTAIN_OPERATION_LOCK_NOTE, updateApprovalOperation, useApprovalOperationAttempt } from "../state/scoped-operation-attempts";
 
 /** Session-local replay suppression, using the shared attempt and access owners.
  * A changed record revision is never evidence that an interrupted write settled.
@@ -28,12 +29,17 @@ export function useScopedOperation(scope: string) {
       updateApprovalOperation(key, token, "resolved", "The owner returned a receipt. Admission, approval and the final effect remain separate.");
       return access.current() ? receipt : undefined;
     } catch (cause) {
-      if (sent) updateApprovalOperation(key, token, "uncertain", "The request outcome is uncertain. Another write is locked across navigation and record changes; a plain refresh does not settle the original attempt.");
-      if (access.current()) throw new Error(`${describeApiError(cause).summary}${sent ? " The original attempt remains locked." : " No action was submitted."}`, { cause });
+      // A definitive refusal settles the attempt: the owner answered and recorded nothing.
+      const refused = sent && classifyOperationFailure(cause) === "refused";
+      if (refused) releaseRefusedApprovalOperation(key, token);
+      else if (sent) updateApprovalOperation(key, token, "uncertain", `The request outcome is uncertain. ${UNCERTAIN_OPERATION_LOCK_NOTE}`);
+      if (access.current()) throw new Error(`${describeApiError(cause).summary}${refused ? "" : sent ? " The original attempt remains locked." : " No action was submitted."}`, { cause });
     } finally {
       if (replay && !sent) updateApprovalOperation(key, token, "uncertain", "The original request remains uncertain. Exact replay did not dispatch.");
       releaseApprovalOperationCheck(key, token);
     }
   }
-  return { ...access, key, attempt, locked, run };
+  /** Operator-initiated: clears a lost-response lock without claiming the original write settled. */
+  const dismissUncertain = useCallback(() => dismissUncertainApprovalOperation(key), [key]);
+  return { ...access, key, attempt, locked, run, dismissUncertain };
 }

@@ -334,9 +334,10 @@ export function InboxArea() {
                     {readNotice ? <p role="status">{readNotice}</p> : null}
                     <Button
                       size="sm"
+                      // A background refetch (30 s poll, realtime invalidations) must not swallow the click:
+                      // receipts carry each shown update's version, so a changed update stays unread.
                       disabled={
                         reading ||
-                        inbox.isFetching ||
                         allItems.length === viewedCount ||
                         readScope === "unavailable" ||
                         (readScope === "browser_local" && !localReads.available)

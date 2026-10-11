@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OperatorInboxResponse } from "@goatcitadel/contracts";
 import type { HealthSummaryResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { backupTrustFromInbox } from "./backup-trust";
-import { deriveHealthChecks, summarizeHealthChecks } from "./health-overview";
+import { CLASSIC_RUNTIME_INSPECT_PATH, deriveHealthChecks, summarizeHealthChecks } from "./health-overview";
 
 const healthy: HealthSummaryResponse = {
   generatedAt: "2026-09-28T12:00:00Z",
@@ -77,6 +77,11 @@ describe("system health checks", () => {
   it("does not invent verification it has not read", () => {
     const pending = deriveHealthChecks(healthy, undefined).find((item) => item.id === "backups");
     expect(pending?.status).toEqual({ label: "Not verified yet", tone: "neutral" });
+  });
+
+  it("sends runtime inspection to Classic explicitly, because /ops/runtime itself lands on System › Health", () => {
+    expect(CLASSIC_RUNTIME_INSPECT_PATH).toContain("shell=classic");
+    for (const check of deriveHealthChecks(healthy, "verified")) expect(check.inspectPath).toBe(CLASSIC_RUNTIME_INSPECT_PATH);
   });
 
   it("reads backup verification from the Inbox projection", () => {

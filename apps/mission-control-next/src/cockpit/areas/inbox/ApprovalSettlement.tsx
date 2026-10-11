@@ -3,7 +3,7 @@ import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { readApprovalFollowOn } from "./approval-follow-on";
-import { approvalDecisionMessage } from "./approval-settlement";
+import { approvalDecisionMessage, approvalResolutionLine } from "./approval-settlement";
 import { Button } from "../../ui/Button";
 import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
@@ -27,9 +27,12 @@ export function ApprovalSettlement({ approval, workspaceId }: { approval: Approv
   });
   const state = query.data;
   const run = state?.run;
+  const settled = state?.replay.approval ?? approval;
+  const resolution = approvalResolutionLine(settled);
   return (
     <section aria-label="Decision and follow-on work" className="space-y-2 rounded border border-line p-3">
-      <p role="status">{approvalDecisionMessage(state?.replay.approval ?? approval, state?.replay.effects)}</p>
+      <p role="status">{approvalDecisionMessage(settled, state?.replay.effects)}</p>
+      {resolution ? <p className="text-fg-secondary">{resolution}</p> : null}
       {state ? (
         <details>
           <summary>Decision history and replay</summary>

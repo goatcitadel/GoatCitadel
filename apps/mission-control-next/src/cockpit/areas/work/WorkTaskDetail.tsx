@@ -101,7 +101,9 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
               <p className="mt-2 whitespace-pre-wrap break-words text-sm text-fg-secondary">{task.description}</p>
             </section>
           ) : null}
-          <fieldset disabled={taskQuery.isFetching || !taskQuery.isFetchedAfterMount || taskQuery.isPlaceholderData} className="grid gap-4">
+          {/* Only an unconfirmed record locks the form. The 30 s poll and realtime invalidations refetch while the
+              operator types; each Save re-checks the exact revision before mutating, so editing stays open. */}
+          <fieldset disabled={!taskQuery.isFetchedAfterMount || taskQuery.isPlaceholderData} className="grid gap-4">
           <TaskStatusControl
             key={`${workspaceId}:${task.taskId}`}
             task={task}

@@ -8,6 +8,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/skills";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { classifyOperationFailure } from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import type { CapabilityCatalogView } from "./capability-catalog";
 
 type CatalogSkill = CapabilityCatalogView["skillsById"][string];
@@ -160,6 +161,7 @@ export function useCapabilitySkillState({
     setError(undefined);
     let dispatched = false;
     let recorded = false;
+    let refused = false;
     try {
       const candidates = (await fetchSkills()).items.filter((entry) => entry.skillId === skillId);
       if (!current()) return;
@@ -204,7 +206,11 @@ export function useCapabilitySkillState({
           });
         return;
       }
-      if (dispatched) {
+      if (dispatched && classifyOperationFailure(cause) === "refused") {
+        // Gateway answered and recorded nothing: no replay lock, the same revision may be reviewed again.
+        refused = true;
+        if (current()) setError({ identity, message: `Gateway did not accept the request. ${describeApiError(cause).summary}` });
+      } else if (dispatched) {
         publish(attemptKey, {
           ...base,
           phase: "uncertain",
@@ -216,7 +222,7 @@ export function useCapabilitySkillState({
       }
       if (current()) setReview(null);
     } finally {
-      if (!dispatched) publish(attemptKey);
+      if (!dispatched || refused) publish(attemptKey);
     }
   }
 

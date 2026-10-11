@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CuratorReviewItem, OperatorInboxItem, OperatorInboxResponse } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { canDecideImprovementProposal, InboxImprovementProposalDetail } from "./InboxImprovementProposalDetail";
 import { queryKeys } from "../../data/query-keys";
 
@@ -225,6 +226,24 @@ describe("Inbox improvement proposal review", () => {
     expect(container.textContent).toContain("Decision outcome is uncertain");
     expect(container.textContent).not.toContain("Discard proposal");
     expect(api.rejectImprovementCandidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the decisions available after the owner refuses one", async () => {
+    await render();
+    api.rejectImprovementCandidate.mockRejectedValueOnce(
+      new ApiRequestError("API error 409", { kind: "http", method: "POST", path: "/x", status: 409 }),
+    );
+    await act(async () => button("Discard proposal").click());
+    await act(async () => button("Confirm discard").click());
+    await settle();
+    expect(container.textContent).toContain("This changed somewhere else");
+    expect(container.textContent).not.toContain("uncertain");
+    expect(button("Discard proposal").disabled).toBe(false);
+    await act(async () => button("Discard proposal").click());
+    await act(async () => button("Confirm discard").click());
+    await settle();
+    expect(api.rejectImprovementCandidate).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Gateway rejected the reviewed candidate");
   });
 
   it("keeps older Gateway records inspectable without offering unbound decisions", async () => {

@@ -123,6 +123,7 @@ async function loadSkillFromDir(
     return {
       skillId: `${source.source}:${parsed.frontmatter.name}`,
       name: parsed.frontmatter.name,
+      description: parsed.frontmatter.description,
       source: source.source,
       dir: skillDir,
       tags: parsed.frontmatter.metadata?.tags ?? [],

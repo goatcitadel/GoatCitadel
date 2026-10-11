@@ -29,11 +29,17 @@ vi.mock("./http-internal", () => ({
   isApiRequestError: apiMocks.isApiRequestError,
 }));
 
-vi.mock("./sse-bridge.js", () => ({
-  computeReconnectDelay: apiMocks.computeReconnectDelay,
-  isSseBridgeNotNeededError: apiMocks.isSseBridgeNotNeededError,
-  issueSseBridgeToken: apiMocks.issueSseBridgeToken,
-}));
+vi.mock("./sse-bridge.js", async () => {
+  const actual = await vi.importActual<typeof import("./sse-bridge.js")>("./sse-bridge.js");
+  return {
+    computeReconnectDelay: apiMocks.computeReconnectDelay,
+    isSseBridgeNotNeededError: apiMocks.isSseBridgeNotNeededError,
+    // The tokenless guard is pure; keep the real predicate so the auth-none
+    // contract path below exercises it rather than a canned boolean.
+    isTokenlessSseBridgeResponse: actual.isTokenlessSseBridgeResponse,
+    issueSseBridgeToken: apiMocks.issueSseBridgeToken,
+  };
+});
 
 import { connectDevDiagnosticsStream, fetchDevDiagnostics } from "./diagnostics";
 
@@ -154,6 +160,18 @@ describe("diagnostics API loop13 tails", () => {
     cleanup = connectDevDiagnosticsStream(() => undefined);
     await flushAsync();
     expect(new URL(FakeEventSource.instances.at(-1)!.url).searchParams.has("sse_token")).toBe(false);
+    cleanup();
+
+    // New gateways answer auth mode none with 200 { scope, authMode: "none" }
+    // instead of the legacy 400: same outcome, stored auth cleared, no token.
+    apiMocks.clearGatewayAuthState.mockClear();
+    apiMocks.issueSseBridgeToken.mockResolvedValueOnce({ scope: "dev:diagnostics:stream", authMode: "none" });
+    cleanup = connectDevDiagnosticsStream(() => undefined);
+    await flushAsync();
+    expect(apiMocks.clearGatewayAuthState).toHaveBeenCalledTimes(1);
+    const tokenlessUrl = new URL(FakeEventSource.instances.at(-1)!.url);
+    expect(tokenlessUrl.searchParams.has("sse_token")).toBe(false);
+    expect(tokenlessUrl.search).not.toContain("undefined");
     cleanup();
 
     apiMocks.readStoredGatewayAuthState.mockReturnValue({ mode: "none", username: "operator", password: "secret" });

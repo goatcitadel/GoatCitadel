@@ -233,6 +233,24 @@ describe("Inbox memory proposal review", () => {
     expect(api.promoteTraceMemoryCandidate).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the decisions available after the owner refuses one", async () => {
+    await render();
+    api.promoteTraceMemoryCandidate.mockRejectedValueOnce(
+      new ApiRequestError("API error 400", { kind: "http", method: "POST", path: "/x", status: 400, body: { message: "Insight is required." } }),
+    );
+    await act(async () => button("Promote to memory").click());
+    await act(async () => button("Confirm promotion").click());
+    await settle();
+    expect(container.textContent).toContain("Insight is required.");
+    expect(container.textContent).not.toContain("uncertain");
+    expect(button("Promote to memory").disabled).toBe(false);
+    await act(async () => button("Promote to memory").click());
+    await act(async () => button("Confirm promotion").click());
+    await settle();
+    expect(api.promoteTraceMemoryCandidate).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Gateway promoted the proposal");
+  });
+
   it("withholds actions for a foreign workspace owner record", async () => {
     api.fetchTraceMemoryCandidate.mockResolvedValue({ ...candidate, workspaceId: "workspace-b" });
     await render();

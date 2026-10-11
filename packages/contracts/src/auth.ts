@@ -27,11 +27,24 @@ export function normalizeCompanionPrincipalPurpose(value: unknown): CompanionPri
   return value === "session_control_client" ? "session_control_client" : DEFAULT_COMPANION_PRINCIPAL_PURPOSE;
 }
 
-export interface SseTokenIssueResponse {
+/** Bridge token minted in auth mode token/basic for EventSource URLs. */
+export interface SseTokenIssuedResponse {
   token: string;
   expiresAt: string;
   scope: "events:stream" | "dev:diagnostics:stream";
 }
+
+/**
+ * Auth mode none: the Gateway needs no bridge token, so `POST /api/v1/auth/sse-token`
+ * answers 200 with this shape and clients open the stream without `sse_token`.
+ * (Older Gateways represented the same state as a 400; clients keep that fallback.)
+ */
+export interface SseTokenlessResponse {
+  scope: "events:stream" | "dev:diagnostics:stream";
+  authMode: "none";
+}
+
+export type SseTokenIssueResponse = SseTokenIssuedResponse | SseTokenlessResponse;
 
 export type DeviceAccessRequestStatus = "pending" | "approved" | "rejected" | "expired";
 export type DeviceAccessRequestDeviceType = "mobile" | "desktop" | "tablet" | "browser" | "unknown";

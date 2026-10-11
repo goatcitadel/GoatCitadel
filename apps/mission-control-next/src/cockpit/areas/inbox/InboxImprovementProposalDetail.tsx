@@ -20,6 +20,7 @@ import {
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { classifyOperationFailure } from "./approval-operation-attempts";
 
 type Decision = "approve" | "reject";
 
@@ -165,7 +166,10 @@ export function InboxImprovementProposalDetail({
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
     } catch (cause) {
       setReviewing(null);
-      if (mutationAttempted) {
+      if (mutationAttempted && classifyOperationFailure(cause) === "refused") {
+        // Gateway answered and recorded nothing: the decisions stay available.
+        setError(`Gateway did not accept the decision. ${describeApiError(cause).summary}`);
+      } else if (mutationAttempted) {
         setUncertain(true);
         setError(
           `Decision outcome is uncertain. Inspect the current Curator record before trying again. ${describeApiError(cause).summary}`,

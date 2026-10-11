@@ -13,6 +13,7 @@ import { queryKeys } from "../../data/query-keys";
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { classifyOperationFailure } from "./approval-operation-attempts";
 import { canRequestRunRecovery, sameRunRecoveryEvidence, type RunRecoveryEvidence } from "./run-recovery-guard";
 import { nullWhenMissing } from "./inbox-record-read";
 
@@ -90,7 +91,10 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
       void queryClient.invalidateQueries({ queryKey: queryKeys.runTrace(result.runId) });
     } catch (cause) {
       setReviewed(null);
-      if (mutationAttempted) {
+      if (mutationAttempted && classifyOperationFailure(cause) === "refused") {
+        // Gateway answered and recorded nothing: recovery stays available.
+        setError(`Gateway did not accept the recovery request. ${describeApiError(cause).summary}`);
+      } else if (mutationAttempted) {
         setOutcomeUncertain(true);
         setError(
           `Recovery outcome is uncertain. Inspect the current run in Ops before taking another action. ${describeApiError(cause).summary}`,

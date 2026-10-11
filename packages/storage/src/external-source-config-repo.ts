@@ -327,7 +327,7 @@ export class ExternalSourceConfigRepository {
     assertIdentifier(workspaceId, "workspaceId");
     assertIdentifier(ownerActorId, "ownerActorId");
     assertIdentifier(authActorId, "authActorId");
-    if (!["token", "basic", "loopback"].includes(authActorSource)) {
+    if (!isAdmittedActorBinding(ownerActorId, authActorId, authActorSource)) {
       throw new TypeError("External source authActorSource is invalid.");
     }
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
@@ -509,6 +509,20 @@ function normalizeConfigWriteError(error: unknown, sourceId: string): Error {
 
 function canonicalHash(value: unknown): string {
   return createHash("sha256").update(canonicalJsonString(value), "utf8").digest("hex");
+}
+
+const AUTH_NONE_ACTOR_ID = "auth:none";
+
+/**
+ * Credentialed operator sources, plus exactly the tokenless `auth:none` / `none`
+ * pair the Gateway mints when its own auth mode is none. Source `none` with any
+ * other identity is not an operator binding.
+ */
+function isAdmittedActorBinding(ownerActorId: string, authActorId: string, authActorSource: string): boolean {
+  if (authActorSource === "none") {
+    return ownerActorId === AUTH_NONE_ACTOR_ID && authActorId === AUTH_NONE_ACTOR_ID;
+  }
+  return authActorSource === "token" || authActorSource === "basic" || authActorSource === "loopback";
 }
 
 function assertIdentifier(value: string, field: string): void {

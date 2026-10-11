@@ -4,6 +4,7 @@ import { SlidersHorizontal } from "lucide-react";
 import type { ChatCompletionReasoningEffort, ChatWebMode } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { GUIDED_THINKING_LEVELS } from "../../../features/native-routes/settings/sections/guided-model-setup-support";
 
 type Controls = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -36,6 +37,9 @@ type Controls = Pick<
   | "onAcknowledgeRouteBoundary"
 >;
 
+/** Every effort stays selectable while the catalog records no reasoning metadata; the Gateway still gates the send. */
+const ALL_THINKING_LEVELS: readonly Controls["currentThinkingLevel"][] = GUIDED_THINKING_LEVELS.map((option) => option.value);
+
 const WEB_MODES: readonly { value: ChatWebMode; label: string }[] = [
   { value: "auto", label: "Auto" },
   { value: "off", label: "Off" },
@@ -45,6 +49,7 @@ const WEB_MODES: readonly { value: ChatWebMode; label: string }[] = [
 
 export function ChatComposerControls({ props, reasoningEfforts }: { props: Controls; reasoningEfforts?: ChatCompletionReasoningEffort[] }) {
   const supported = reasoningEfforts?.length ? [...new Set<Controls["currentThinkingLevel"]>([...reasoningEfforts.map((effort) => ({ none: "off", low: "minimal", medium: "standard", high: "extended", xhigh: "deep", max: "max", ultra: "ultra" } as const)[effort])])] : null;
+  const thinkingLevels = supported ?? ALL_THINKING_LEVELS;
   const selectedProvider = props.providerOptions.find((provider) => provider.providerId === props.selectedProviderId);
   const disabled = props.historicalReadOnly || props.sending;
   const [optionsOpen, setOptionsOpen] = useState(false);
@@ -97,17 +102,18 @@ export function ChatComposerControls({ props, reasoningEfforts }: { props: Contr
         <select
           aria-label="Thinking effort"
           value={props.currentThinkingLevel}
-          disabled={disabled || !supported}
-          onChange={(event) => { const level = event.target.value as Controls["currentThinkingLevel"]; if (supported?.includes(level)) props.onSetThinkingLevel(level); }}
+          disabled={disabled}
+          onChange={(event) => { const level = event.target.value as Controls["currentThinkingLevel"]; if (thinkingLevels.includes(level)) props.onSetThinkingLevel(level); }}
           className="rounded-md border border-line bg-canvas px-1 py-1 text-fg max-sm:min-h-11"
         >
           {supported && !supported.includes(props.currentThinkingLevel) ? <option value={props.currentThinkingLevel} disabled>{humanizeToken(props.currentThinkingLevel)} · current, unsupported by this model</option> : null}
-          {(supported ?? [props.currentThinkingLevel]).map((level) => (
+          {thinkingLevels.map((level) => (
             <option key={level} value={level}>
-              {humanizeToken(level)}{!supported ? " · support unverified" : ""}
+              {humanizeToken(level)}
             </option>
           ))}
         </select>
+        {!supported ? <span className="text-fg-muted" title="The model catalog lists no reasoning efforts for this model.">· support unverified</span> : null}
       </label>
       <button
         type="button"

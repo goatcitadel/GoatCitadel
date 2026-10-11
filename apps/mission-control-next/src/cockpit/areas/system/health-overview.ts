@@ -2,6 +2,13 @@ import type { HealthSummaryResponse } from "@goatcitadel/mission-control-shared/
 import type { StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import type { BackupTrustState } from "./backup-trust";
 
+/**
+ * `/ops/runtime` itself now lands on System › Health, which is where these checks are shown. Detailed runtime
+ * controls and backup records still belong to Classic Ops › Runtime, so inspection names Classic explicitly
+ * instead of pointing the page back at itself.
+ */
+export const CLASSIC_RUNTIME_INSPECT_PATH = "/ops/runtime?shell=classic";
+
 export interface HealthCheck {
   id: "gateway" | "database" | "service" | "backups" | "models" | "channels" | "integrations" | "updates" | "remote_workers";
   title: string;
@@ -13,7 +20,7 @@ export interface HealthCheck {
 }
 
 export function backupHealthCheck(trust: BackupTrustState | undefined, hasRecord: boolean): HealthCheck {
-  const base = { id: "backups", title: "Backups", inspectPath: "/ops/runtime" } as const;
+  const base = { id: "backups", title: "Backups", inspectPath: CLASSIC_RUNTIME_INSPECT_PATH } as const;
   // Manifest existence and exact-record verification are independent observations.
   if (hasRecord && trust === "none") trust = "unknown";
   switch (trust) {
@@ -50,7 +57,7 @@ export function deriveHealthChecks(health: HealthSummaryResponse, backupTrust?: 
       title: "Gateway",
       detail: "The health summary is responding.",
       status: { label: "Responding", tone: "done" },
-      inspectPath: "/ops/runtime",
+      inspectPath: CLASSIC_RUNTIME_INSPECT_PATH,
     },
     {
       id: "database",
@@ -69,7 +76,7 @@ export function deriveHealthChecks(health: HealthSummaryResponse, backupTrust?: 
           : database.issues.length
             ? { label: "Needs review", tone: "waiting" }
             : { label: "Reachable", tone: "done" },
-      inspectPath: "/ops/runtime",
+      inspectPath: CLASSIC_RUNTIME_INSPECT_PATH,
     },
     {
       id: "service",
@@ -88,7 +95,7 @@ export function deriveHealthChecks(health: HealthSummaryResponse, backupTrust?: 
           : diagnosticIssues.length
             ? { label: "Needs review", tone: "waiting" }
             : { label: "Running", tone: "done" },
-      inspectPath: "/ops/runtime",
+      inspectPath: CLASSIC_RUNTIME_INSPECT_PATH,
     },
     backupHealthCheck(backupTrust, Boolean(health.backups.latest)),
   ];

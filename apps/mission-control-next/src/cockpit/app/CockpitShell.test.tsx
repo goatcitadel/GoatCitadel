@@ -607,11 +607,12 @@ describe("CockpitShell", () => {
   });
 });
 
-it.each(["/missing", "/system/missing", "/ops/runtime", "/library/knowledge"])("does not show Chat or Health for %s", async (path) => {
+// `/ops/runtime` now redirects natively to System › Health (cockpit-compatibility), so it no longer belongs here.
+it.each(["/missing", "/system/missing", "/ops/sessions", "/library/knowledge"])("does not show Chat or Health for %s", async (path) => {
   window.history.replaceState(null, "", path + "?workspaceId=w#record");
   await act(async () => root.render(<QueryClientProvider client={new QueryClient()}><CockpitShell /></QueryClientProvider>));
   expect(container.textContent).not.toContain("Chat content");
-  if (path === "/ops/runtime") {
+  if (path === "/ops/sessions") {
     expect(container.textContent).toContain("This view is available in Classic");
     const link = container.querySelector<HTMLAnchorElement>('a[href*="shell=classic"]');
     expect(link?.href).toContain("workspaceId=w");

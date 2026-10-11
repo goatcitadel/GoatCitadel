@@ -197,6 +197,23 @@ html[data-shell="cockpit"] .mc-dialog-content {
 }
 
 @layer components {
+  /* Section tab strips (Work views, and the Library/System strips once they carry this class): one row that
+     scrolls sideways at phone width instead of wrapping labels or clipping the last tab. */
+  .cockpit-area-tabs {
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: var(--cockpit-border) transparent;
+  }
+  .cockpit-area-tabs > * {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  /* The strip is a scroll container, which clips an outset focus ring below the tabs; draw it inside instead. */
+  html[data-shell="cockpit"] .cockpit-area-tabs > :focus-visible {
+    outline-offset: -2px !important;
+  }
   .cockpit-definition-grid {
     grid-template-columns: auto minmax(0, 1fr);
   }

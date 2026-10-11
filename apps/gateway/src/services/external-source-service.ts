@@ -72,7 +72,11 @@ export class ExternalSourceServiceError extends Error {
 
 export interface ExternalSourceRequestActor {
   actorId: string;
-  source: Extract<ExternalSourceAuthActorSource, "token" | "basic" | "loopback">;
+  /**
+   * `none` is the tokenless operator (`auth:none`) the routes admit only when the
+   * gateway's own auth mode is none; every other value is a credentialed operator.
+   */
+  source: Extract<ExternalSourceAuthActorSource, "token" | "basic" | "loopback" | "none">;
 }
 
 export interface ExternalSourceConfigRepositoryPort {
@@ -633,14 +637,27 @@ function isOwnedBy(source: ExternalSourceRecord, actor: ExternalSourceRequestAct
   );
 }
 
+const AUTH_NONE_ACTOR_ID = "auth:none";
+
+/**
+ * Credentialed operator sources, plus exactly the tokenless `auth:none` / `none`
+ * pair the routes admit when the gateway's own auth mode is none. `auth:none` on
+ * a credentialed source, or source `none` with any other id, is never an operator.
+ */
+function isAdmittedRequestActor(actor: ExternalSourceRequestActor): boolean {
+  if (actor.source === "none" || actor.actorId === AUTH_NONE_ACTOR_ID) {
+    return actor.source === "none" && actor.actorId === AUTH_NONE_ACTOR_ID;
+  }
+  return ["token", "basic", "loopback"].includes(actor.source);
+}
+
 function assertRequestActor(actor: ExternalSourceRequestActor): void {
   if (
     !actor ||
-    !["token", "basic", "loopback"].includes(actor.source) ||
+    !isAdmittedRequestActor(actor) ||
     typeof actor.actorId !== "string" ||
     actor.actorId !== actor.actorId.normalize("NFKC").trim() ||
     actor.actorId === "anonymous" ||
-    actor.actorId === "auth:none" ||
     actor.actorId.length < 1 ||
     actor.actorId.length > 256 ||
     containsAsciiControlCharacter(actor.actorId)

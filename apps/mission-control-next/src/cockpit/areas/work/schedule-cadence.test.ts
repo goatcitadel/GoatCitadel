@@ -23,6 +23,18 @@ it("projects guided timing from a saved expression and keeps an explicit timezon
   expect(scheduleTiming("0 25 * * *")).toEqual({ cadence: "custom", time: null, zone: null });
 });
 
+it("normalises whitespace before matching and words weekly cadences", () => {
+  expect(scheduleCadence("0  9 * * *")).toBe("Every day at 09:00 UTC");
+  expect(scheduleCadence(" 0 9 * * *\t")).toBe("Every day at 09:00 UTC");
+  expect(scheduleCadence("0  *  * * *")).toBe("Every hour UTC");
+  expect(scheduleTiming("0  9 * * *")).toEqual({ cadence: "daily", time: "09:00", zone: null });
+  expect(scheduleCadence("0 2 * * 0")).toBe("Every week on Sunday at 02:00 UTC");
+  expect(scheduleCadence("30 18 * * 5 Europe/Paris")).toBe("Every week on Friday at 18:30 Europe/Paris");
+  expect(scheduleCadence("0 2 * * 7")).toBe("Custom schedule: 0 2 * * 7");
+  // Guided presets have no weekly form, so the editor keeps a weekly expression as a custom expression.
+  expect(scheduleTiming("0 2 * * 0")).toEqual({ cadence: "custom", time: null, zone: null });
+});
+
 it("builds an expression from guided timing without dropping the timezone", () => {
   expect(buildScheduleExpression("weekdays", "07:30", null)).toBe("30 7 * * 1-5");
   expect(buildScheduleExpression("daily", "09:00", "Europe/Paris")).toBe("0 9 * * * Europe/Paris");

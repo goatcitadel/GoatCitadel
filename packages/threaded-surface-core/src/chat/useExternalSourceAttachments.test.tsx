@@ -454,6 +454,40 @@ it.each([401, 403])("explains authoritative access failure %s without automatic 
  renderer.unmount();
 });
 
+it("keeps source changes available after the Gateway refuses one and shows its summary", async () => {
+  apiMocks.fetchExternalSessionAttachments.mockResolvedValue(listResponse([attachment("a1")], "incarnation-1"));
+  apiMocks.detachExternalSourceAttachment
+    .mockRejectedValueOnce(new ApiRequestError("API error 409", { kind: "http", method: "DELETE", path: "/x", status: 409 }))
+    .mockResolvedValue({ disposition: "detached" });
+  const renderer = await renderHarness();
+  await act(async () => { expect(await latest!.detach("a1")).toBe(false); });
+  expect(latest!.canMutate).toBe(true);
+  expect(latest!.error).toContain("This changed somewhere else");
+  expect(latest!.error).not.toContain("uncertain");
+  expect(pushLocalNotice).toHaveBeenCalledWith(expect.stringContaining("This changed somewhere else"), "warning");
+  await act(async () => { expect(await latest!.detach("a1")).toBe(true); });
+  expect(apiMocks.detachExternalSourceAttachment).toHaveBeenCalledTimes(2);
+  expect(latest!.error).toBeNull();
+  act(() => renderer.unmount());
+});
+
+it("dismisses a lost-response lock only on explicit request", async () => {
+  apiMocks.fetchExternalSessionAttachments.mockResolvedValue(listResponse([attachment("a1")], "incarnation-1"));
+  apiMocks.detachExternalSourceAttachment.mockRejectedValueOnce(new Error("Lost response")).mockResolvedValue({ disposition: "detached" });
+  const renderer = await renderHarness();
+  await act(async () => { expect(await latest!.detach("a1")).toBe(false); });
+  expect(latest!.canMutate).toBe(false);
+  expect(latest!.error).toContain("uncertain");
+  expect(latest!.error).toContain("reloaded");
+  expect(latest!.error).not.toContain("refreshing does not settle");
+  await act(async () => { expect(latest!.dismissUncertainOperation()).toBe(true); });
+  expect(latest!.canMutate).toBe(true);
+  expect(latest!.error).toBeNull();
+  await act(async () => { expect(await latest!.detach("a1")).toBe(true); });
+  expect(apiMocks.detachExternalSourceAttachment).toHaveBeenCalledTimes(2);
+  act(() => renderer.unmount());
+});
+
 it("retains uncertain source attempts across remount and refreshed incarnation", async () => {
   apiMocks.fetchExternalSessionAttachments.mockResolvedValue(listResponse([attachment("a1")], "incarnation-1"));
   apiMocks.detachExternalSourceAttachment.mockRejectedValue(new Error("Lost response"));

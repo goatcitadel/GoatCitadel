@@ -379,6 +379,55 @@ describe("HX-407 external source import, attachment, and knowledge-link reposito
     );
   });
 
+  it("admits the tokenless auth-none pair for candidate scope and attach eligibility and rejects other sources", () => {
+    const db = createStore();
+    const { fixture, imports } = seedImport(db);
+    imports.settle(fixture.settlement, fixture.importItems);
+    const scope = { workspaceId: fixture.intent.workspaceId, sessionId: "session-1" };
+
+    // Gateway auth mode none mints exactly one operator identity (auth:none / none). It owns no
+    // source here, so the scope is empty rather than a TypeError; other source values stay invalid.
+    assert.deepEqual(
+      imports.listAttachmentCandidateBindings({ ...scope, actorId: "auth:none", authActorSource: "none" }),
+      [],
+    );
+    assert.throws(
+      () => imports.listAttachmentCandidateBindings({ ...scope, actorId: "operator-1", authActorSource: "none" }),
+      /candidate actor source is invalid/u,
+    );
+    assert.throws(
+      () =>
+        imports.listAttachmentCandidateBindings({
+          ...scope,
+          actorId: "auth:none",
+          authActorSource: "device_grant" as never,
+        }),
+      /candidate actor source is invalid/u,
+    );
+
+    // Eligibility: the pair reaches the ownership check (a conflict, since operator-1 owns the
+    // fixture); any other source "none" principal fails source validation first.
+    const attachments = new ExternalSessionAttachmentRepository(db);
+    assert.throws(
+      () =>
+        attachments.attachEligibleWithJourneyResolved(
+          fixture.attachment,
+          { actorId: "auth:none", authActorSource: "none" },
+          attachmentJourneyEvent(fixture.attachment),
+        ),
+      /source eligibility changed/u,
+    );
+    assert.throws(
+      () =>
+        attachments.attachEligibleWithJourneyResolved(
+          fixture.attachment,
+          { actorId: "operator-1", authActorSource: "none" },
+          attachmentJourneyEvent(fixture.attachment),
+        ),
+      /actor source is invalid/u,
+    );
+  });
+
   it("persists fail-closed manual reconciliation without artifact rows", () => {
     const db = createStore();
     const { fixture, imports } = seedImport(db);

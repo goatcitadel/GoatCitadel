@@ -21,6 +21,7 @@ import {
 import { useCachedInboxItem } from "../../data/use-operator-inbox";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { classifyOperationFailure } from "./approval-operation-attempts";
 import {
   canReviewInboxDocumentProposal,
   currentInboxDocumentProposal,
@@ -133,7 +134,10 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
     } catch (cause) {
       setReview(null);
-      if (mutationAttempted) {
+      if (mutationAttempted && classifyOperationFailure(cause) === "refused") {
+        // Gateway answered and recorded nothing: the decision stays available.
+        setError(`Gateway did not accept the document decision. ${describeApiError(cause).summary}`);
+      } else if (mutationAttempted) {
         setOutcomeUncertain(true);
         setError(
           `Document decision outcome is uncertain. Inspect the current proposal in its owner before trying again. ${describeApiError(cause).summary}`,

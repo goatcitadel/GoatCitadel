@@ -15,6 +15,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/personal-ops", () => ({
   createMailDraft: vi.fn(),
   sendMailDraft: vi.fn(),
 }));
+const workspaceNames = vi.hoisted(() => ({ byId: { one: "Primary workspace" } as Record<string, string | undefined> }));
+vi.mock("../../data/use-workspace-name", () => ({
+  useWorkspaceName: (_citadelId: string | undefined, workspaceId: string | undefined) => workspaceNames.byId[workspaceId ?? ""],
+}));
 
 const dashboard: CommunicationsDashboardResponse = {
   mailAccounts: [
@@ -182,4 +186,16 @@ it("shows a load failure with retry and keeps compose unavailable until the read
   await act(async () => refresh.click());
   await vi.waitFor(() => expect(container.textContent).toContain("Fixture inbox readiness"));
   expect(fetchCommunicationsDashboard).toHaveBeenCalledTimes(2);
+});
+
+it("names the workspace in the Mail intro and falls back to its id only while the name is unknown", async () => {
+  vi.mocked(fetchCommunicationsDashboard).mockResolvedValue(dashboard);
+  workspaceNames.byId = { one: "Primary workspace" };
+  await render();
+  const scope = () => container.querySelector<HTMLElement>('[title="one"]');
+  expect(scope()?.textContent).toBe("Primary workspace");
+  expect(container.querySelector("header p")?.textContent).toContain("for Primary workspace.");
+  workspaceNames.byId = {};
+  await render();
+  expect(scope()?.textContent).toBe("workspace one");
 });
