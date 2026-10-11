@@ -65,9 +65,8 @@ export async function runWorkbenchFileRevisionScenario(context, deps) {
         await installMissionControlNextBrowserState(browserContext, workspaceId);
         page = await browserContext.newPage(); browserLog = attachBrowserLogging(page); logCursor = browserLog.mark();
         await page.goto(buildVerificationUiUrl(stack.uiUrl, `/chat?sessionId=${encodeURIComponent(sessionId)}`), { waitUntil: "domcontentloaded" });
-        await page.getByLabel("Message composer").waitFor({ timeout: 60_000 });
-        await page.getByRole("button", { name: "Activity", exact: true }).click();
-        await page.getByRole("button", { name: "Open build editor", exact: true }).click();
+        await page.getByRole("combobox", { name: "Message", exact: true }).waitFor({ timeout: 60_000 });
+        await page.getByRole("button", { name: "Build editor", exact: true }).click();
         await page.getByRole("tab", { name: "Files", exact: true }).click();
         const editor = page.getByRole("tabpanel", { name: "Files", exact: true }).locator(".monaco-editor .view-lines");
         await editor.waitFor(); await editor.click({ position: { x: 40, y: 10 } });
