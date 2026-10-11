@@ -270,7 +270,12 @@ async function main() {
             const composer = await openCockpitComposer(page);
             await composer.fill("Give me a short first answer.");
             await page.getByRole("button", { name: "Send", exact: true }).click();
-            await page.getByText("Verification stub reply.", { exact: true }).waitFor({ timeout: 60_000 });
+            // Cockpit also previews the latest reply in the conversation rail; assert the transcript message itself.
+            await page
+              .getByLabel("Conversation messages")
+              .getByText("Verification stub reply.", { exact: true })
+              .first()
+              .waitFor({ timeout: 60_000 });
             let verified;
             for (let attempt = 0; attempt < 30; attempt += 1) {
               const state = await requestJson(stack.gatewayUrl, "/api/v1/onboarding/state");
