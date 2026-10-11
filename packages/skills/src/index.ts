@@ -7,5 +7,6 @@ export * from "./selection-ranking.js";
 export * from "./loader.js";
 export * from "./routing-hints.generated.js";
 export * from "./skill-module-routes.js";
+export * from "./design-brand.js";
 export * from "./export-renderer.js";
 export * from "./design-quality.js";
