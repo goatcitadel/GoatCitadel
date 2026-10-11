@@ -640,13 +640,21 @@ export class CapabilitySystemService {
         reviewWarning: `Release lock matched this skill tree but the re-trust audit receipt could not be written (${reason}); the skill stays non-callable until the receipt succeeds.`,
       });
     }
-    const latest = await this.options.storage.skillLifecycle.find(skill.skillId);
-    if (!latest || latest.lifecycleState !== existing.lifecycleState || latest.updatedAt !== existing.updatedAt) {
-      // Another writer changed the row while the receipt was being written; its truth wins and
-      // the next read re-evaluates from that row.
-      return latest ?? existing;
+    // Compare-and-swap inside one immediate transaction: the re-read and the upsert cannot be
+    // interleaved with another lifecycle writer, so a row revoked or otherwise changed since the
+    // eligibility check is never overwritten by the stale trusted projection.
+    const committed = await this.options.storage.runImmediateTransaction(async () => {
+      const latest = await this.options.storage.skillLifecycle.find(skill.skillId);
+      if (!latest || latest.lifecycleState !== existing.lifecycleState || latest.updatedAt !== existing.updatedAt) {
+        return { changed: true as const, record: latest ?? existing };
+      }
+      return { changed: false as const, record: await this.options.storage.skillLifecycle.upsert(projected) };
+    });
+    if (committed.changed) {
+      // Another writer owns the newer row; its truth wins and the next read re-evaluates from it.
+      return committed.record;
     }
-    const stored = await this.options.storage.skillLifecycle.upsert(projected);
+    const stored = committed.record;
     await this.options.publishRealtime("skill_lifecycle_retrusted", "capabilities", {
       skillId: skill.skillId,
       source: skill.source,

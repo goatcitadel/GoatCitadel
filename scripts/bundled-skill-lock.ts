@@ -28,6 +28,7 @@ async function collectBundledSkillLockEntries(): Promise<BundledSkillLockEntry[]
   const entries: BundledSkillLockEntry[] = [];
   const seen = new Set<string>();
   for (const skillDir of candidates) {
+    assertCanonicalSkillManifestCasing(skillDir, await fs.readdir(skillDir));
     const skillFile = path.join(skillDir, "SKILL.md");
     let raw: string;
     try {
@@ -57,6 +58,18 @@ async function collectBundledSkillLockEntries(): Promise<BundledSkillLockEntry[]
     });
   }
   return entries.sort((left, right) => (left.skillId < right.skillId ? -1 : left.skillId > right.skillId ? 1 : 0));
+}
+
+// The gateway loader and this generator both open `SKILL.md` by exact name. A manifest tracked
+// with another casing resolves on case-insensitive checkouts (Windows, macOS default) and silently
+// vanishes on Linux CI and Docker hosts, so the mismatch is an error here rather than a skip.
+function assertCanonicalSkillManifestCasing(skillDir: string, entries: readonly string[]): void {
+  const variants = entries.filter((entry) => entry.toLowerCase() === "skill.md" && entry !== "SKILL.md");
+  if (variants.length > 0) {
+    throw new Error(
+      `${path.relative(repoRoot, skillDir).replaceAll("\\", "/")} tracks ${variants.join(", ")}; rename it to SKILL.md so case-sensitive checkouts load it.`,
+    );
+  }
 }
 
 function renderGeneratedModule(entries: readonly BundledSkillLockEntry[]): string {

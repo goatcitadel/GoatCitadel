@@ -56,6 +56,7 @@ function createService(input: {
         list: vi.fn(() => []),
       },
       audit,
+      runImmediateTransaction: vi.fn(async <T>(callback: () => T | Promise<T>) => await callback()),
     } as never);
   const revisions = new Map<string, number>();
   (storage as Record<string, unknown>).skillAggregateRevisions ??= {
@@ -346,11 +347,26 @@ describe("CapabilitySystemService loop32 defaults and diagnostics", () => {
           }),
           expect.objectContaining({ deliveryId: expect.stringContaining(releaseTwo.treeSha256) }),
         );
-        // Write-ahead receipt, committed row, then the live signal: never announce uncommitted state.
-        const upsert = (upgraded.storage as { skillLifecycle: { upsert: ReturnType<typeof vi.fn> } }).skillLifecycle
-          .upsert;
-        expect(upgraded.audit.append.mock.invocationCallOrder[0]).toBeLessThan(upsert.mock.invocationCallOrder[0]!);
-        expect(upsert.mock.invocationCallOrder[0]).toBeLessThan(upgraded.publishRealtime.mock.invocationCallOrder[0]!);
+        // Write-ahead receipt, then re-read + commit inside one immediate transaction, then the
+        // live signal: never announce uncommitted state, never overwrite a concurrent writer.
+        const storage = upgraded.storage as {
+          skillLifecycle: { find: ReturnType<typeof vi.fn>; upsert: ReturnType<typeof vi.fn> };
+          runImmediateTransaction: ReturnType<typeof vi.fn>;
+        };
+        const upsert = storage.skillLifecycle.upsert;
+        const transaction = storage.runImmediateTransaction;
+        expect(transaction).toHaveBeenCalledTimes(1);
+        const transactionOrder = transaction.mock.invocationCallOrder[0]!;
+        const upsertOrder = upsert.mock.invocationCallOrder[0]!;
+        expect(upgraded.audit.append.mock.invocationCallOrder[0]).toBeLessThan(transactionOrder);
+        expect(transactionOrder).toBeLessThan(upsertOrder);
+        // The compare-and-swap re-read happens inside the transaction, right before the upsert.
+        expect(
+          storage.skillLifecycle.find.mock.invocationCallOrder.some(
+            (order) => order > transactionOrder && order < upsertOrder,
+          ),
+        ).toBe(true);
+        expect(upsertOrder).toBeLessThan(upgraded.publishRealtime.mock.invocationCallOrder[0]!);
         expect(upgraded.publishRealtime).toHaveBeenCalledWith(
           "skill_lifecycle_retrusted",
           "capabilities",
