@@ -32,7 +32,17 @@ function describeCitationSnippet(snippet: string | undefined): CitationExcerpt |
       raw: JSON.stringify(parsed, null, 2),
     };
   } catch {
-    return { text: snippet };
+    // The Gateway caps citation snippets, so a transcript excerpt is usually cut mid-JSON. Pull the role and the
+    // message text out of the prefix rather than showing the broken record as the card's content.
+    const role = /"role"\s*:\s*"([^"]*)"/u.exec(trimmed)?.[1];
+    const content = /"content"\s*:\s*"((?:[^"\\]|\\.)*)"?/u.exec(trimmed)?.[1] ?? /"text"\s*:\s*"((?:[^"\\]|\\.)*)"?/u.exec(trimmed)?.[1];
+    if (!role && !content) return { text: snippet };
+    const text = content ? content.replace(/\\"/gu, '"').replace(/\\n/gu, "\n") : "";
+    return {
+      role: role ? role.charAt(0).toUpperCase() + role.slice(1) : undefined,
+      text: text ? `${text}…` : "Message text cut off in the retained excerpt",
+      raw: snippet,
+    };
   }
 }
 
