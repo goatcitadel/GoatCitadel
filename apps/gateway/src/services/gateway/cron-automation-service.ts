@@ -141,7 +141,19 @@ export interface CronRunResult {
   childDurableStatus?: string;
   childTurnId?: string;
   profilePosture?: string;
+  /** Present when the handler ran but reported it did no work (e.g. a flag-gated system job). */
+  skipReason?: string;
 }
+
+/**
+ * What a system cron handler actually did. `void` counts as `completed` for
+ * handlers without a skip path. A `skipped` outcome settles the run cleanly
+ * (no failure backoff) but records `result: "skipped"` wherever the run is
+ * surfaced, so Ops never reports work that did not happen.
+ */
+export type CronSystemHandlerOutcome =
+  | { status: "completed"; summary?: Record<string, unknown> }
+  | { status: "skipped"; reason: string; detail?: Record<string, unknown> };
 
 export interface CronDueRunItem {
   jobId: string;
@@ -195,7 +207,7 @@ export interface CronAutomationServiceDeps {
     improvement: () => Promise<void>;
     backup: () => Promise<void>;
     memoryFlush: () => Promise<void>;
-    memoryConsolidation: () => Promise<void>;
+    memoryConsolidation: () => Promise<CronSystemHandlerOutcome | void>;
     costReport: () => Promise<void>;
     updateReview: () => Promise<void>;
     curator: () => Promise<void>;
@@ -470,10 +482,28 @@ export class CronAutomationService {
           const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
           runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
         } else if (job.action === "memory_consolidation") {
-          await this.deps.runHandlers.memoryConsolidation();
+          const outcome = await this.deps.runHandlers.memoryConsolidation();
           const finishedAt = new Date().toISOString();
-          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
-          runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
+          const outputSummary: Record<string, unknown> =
+            outcome?.status === "skipped"
+              ? {
+                  result: "skipped",
+                  action: job.action,
+                  skipReason: outcome.reason,
+                  ...(outcome.detail ? { skipDetail: outcome.detail } : {}),
+                  force,
+                  reason: options.reason,
+                }
+              : {
+                  ...runSummary,
+                  action: job.action,
+                  ...(outcome?.status === "completed" && outcome.summary ? { consolidation: outcome.summary } : {}),
+                  force,
+                  reason: options.reason,
+                };
+          // Written on both paths so a later completed run never inherits a stale skip output.
+          const saved = await this.recordCronRunSuccess(job, runId, finishedAt, JSON.stringify(outputSummary));
+          runSummary = { ...outputSummary, nextRunAt: saved.nextRunAt };
         } else if (job.action === "cost_report") {
           await this.deps.runHandlers.costReport();
           const finishedAt = new Date().toISOString();
@@ -550,9 +580,12 @@ export class CronAutomationService {
           });
         }
         const evidenceEnvelopeId = await this.finalizeCronRunEvidenceOnSuccess(normalizedJobId, runId, runSummary);
+        const skipReason = runSummary.result === "skipped" ? readString(runSummary.skipReason) : undefined;
         const terminal = await this.deps.storage.cronRuns.terminalize(token, {
           status: "completed",
-          outcome: { result: "ok", action: job.action },
+          outcome: skipReason
+            ? { result: "skipped", action: job.action, skipReason }
+            : { result: "ok", action: job.action },
           ...(evidenceEnvelopeId ? { evidenceEnvelopeId } : {}),
         });
         if (!terminal) throw new Error(`Canonical cron run ${runId} lost ownership before success settlement.`);
@@ -562,6 +595,7 @@ export class CronAutomationService {
           runId,
           status: "ok",
           ...(force ? { force: true } : {}),
+          ...(skipReason ? { skipReason } : {}),
           ...childRun,
         };
       } catch (error) {
@@ -941,13 +975,22 @@ export class CronAutomationService {
   }
 
   private async reconcileCompletedChannelDelivery(
-    current: CronRunRecord, child: DurableRunRecord, deliveryRun: DurableRunRecord,
+    current: CronRunRecord,
+    child: DurableRunRecord,
+    deliveryRun: DurableRunRecord,
   ): Promise<CronRunResult> {
-    return reconcileCompletedCronChannelDelivery(this.deps, {
-      settle: (run, status, details) => this.settleCanonicalAgentTurnCronRun(run, status, details),
-      project: (run) => this.toCanonicalCronRunResult(run),
-      childOutcome: () => buildCanonicalChildOutcome(current, child),
-    }, current, child, deliveryRun, toCronRunExecutionToken(current));
+    return reconcileCompletedCronChannelDelivery(
+      this.deps,
+      {
+        settle: (run, status, details) => this.settleCanonicalAgentTurnCronRun(run, status, details),
+        project: (run) => this.toCanonicalCronRunResult(run),
+        childOutcome: () => buildCanonicalChildOutcome(current, child),
+      },
+      current,
+      child,
+      deliveryRun,
+      toCronRunExecutionToken(current),
+    );
   }
 
   private async settleCanonicalAgentTurnCronRun(
@@ -1135,8 +1178,9 @@ export class CronAutomationService {
       if (job.activeRunId) {
         try {
           // Observe attached children even when paused, without new admission.
-          const current = await observeActiveCronAgentRun(this.deps, job.activeRunId,
-            (active) => this.processCanonicalAgentTurnCronRun(active));
+          const current = await observeActiveCronAgentRun(this.deps, job.activeRunId, (active) =>
+            this.processCanonicalAgentTurnCronRun(active),
+          );
           if (current && isCronRunTerminalStatus(current.status)) {
             summary.settledCount += 1;
             const failed = current.status !== "completed";
@@ -1445,13 +1489,19 @@ export class CronAutomationService {
     };
   }
 
-  private async recordCronRunSuccess(job: CronJobRecord, runId: string, finishedAt: string): Promise<CronJobRecord> {
+  private async recordCronRunSuccess(
+    job: CronJobRecord,
+    runId: string,
+    finishedAt: string,
+    lastRunOutput?: string,
+  ): Promise<CronJobRecord> {
     const saved = await this.deps.storage.cronJobs.mergeRuntimeTelemetry(
       job.jobId,
       {
         lastRunAt: finishedAt,
         lastRunId: runId,
         lastRunStatus: "ok",
+        ...(lastRunOutput !== undefined ? { lastRunOutput } : {}),
         lastRunEvidenceEnvelopeId: null,
         lastFailureAt: null,
         lastFailure: null,

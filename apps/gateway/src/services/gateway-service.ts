@@ -462,7 +462,7 @@ import {
   InboundChannelTurnTerminalError,
   type InboundChannelDeterministicIdentity,
 } from "./inbound-channel-event-service.js";
-import { CronAutomationService } from "./gateway/cron-automation-service.js";
+import { CronAutomationService, type CronSystemHandlerOutcome } from "./gateway/cron-automation-service.js";
 import {
   runCostReportSchedulerIfDue,
   runMemoryConsolidationSchedulerIfDue,
@@ -1843,7 +1843,7 @@ export class GatewayService {
           await this.runMemoryFlushSchedulerIfDue({ force: true, recordCronState: false });
         },
         memoryConsolidation: async () => {
-          await this.runMemoryConsolidationSchedulerIfDue({ force: true, recordCronState: false });
+          return await this.runMemoryConsolidationSchedulerIfDue({ force: true, recordCronState: false });
         },
         costReport: async () => {
           await this.runCostReportSchedulerIfDue({ force: true, recordCronState: false });
@@ -5636,8 +5636,10 @@ export class GatewayService {
     await runPrivateBetaBackupSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
-  private async runMemoryConsolidationSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runMemoryConsolidationSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runMemoryConsolidationSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runMemoryConsolidationSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
   private async runMemoryFlushSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
