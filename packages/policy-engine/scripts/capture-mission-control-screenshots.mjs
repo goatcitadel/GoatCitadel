@@ -45,6 +45,8 @@ async function main() {
       GOATCITADEL_BACKUP_DIR: path.join(runtimeRoot, "backups"),
       // Points at a file that does not exist, so no operator .env is read or written.
       GOATCITADEL_LOCAL_ENV_FILE: path.join(runtimeRoot, ".env"),
+      // The OS keychain is shared host state; the sandbox must never read or write operator credentials.
+      GOATCITADEL_DISABLE_SECRET_STORE: "true",
       GATEWAY_HOST: "127.0.0.1",
       GATEWAY_PORT: String(gatewayPort),
       GOATCITADEL_AUTH_MODE: "none",
