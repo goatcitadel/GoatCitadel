@@ -204,6 +204,57 @@ describe("integration diagnostics live-check routing", () => {
       }),
     ).toEqual({ checks: [] });
   });
+
+  it("lets public HTTPS webhook destinations through governed live checks without a sandbox allowlist entry", async () => {
+    const port = createPort();
+    port.isConnectionUrlAllowlisted = vi.fn(() => false);
+
+    const result = await runIntegrationConnectionLiveChecks(
+      port,
+      createConnection("google-chat", { webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=k&token=t" }),
+      { includeSandboxSend: true },
+    );
+
+    expect(webhookProbeMock).toHaveBeenCalledWith(expect.objectContaining({ channelKey: "google-chat" }));
+    expect(result.checks).toEqual([{ key: "webhook", status: "pass", message: "ok" }]);
+    expect(port.isConnectionUrlAllowlisted).not.toHaveBeenCalled();
+  });
+
+  it("refuses plain HTTP, private, and unlisted loopback webhook destinations before probing", async () => {
+    const port = createPort();
+    const destinations = [
+      "http://chat.googleapis.com/v1/spaces/AAA/messages",
+      "https://10.0.0.5/hook",
+      "http://127.0.0.1:9/hook",
+      "https://localhost/hook",
+      "https://169.254.169.254/latest/meta-data",
+    ];
+
+    for (const webhookUrl of destinations) {
+      const result = await runIntegrationConnectionLiveChecks(port, createConnection("teams", { webhookUrl }), {
+        includeSandboxSend: true,
+      });
+      expect(result.checks).toEqual([
+        expect.objectContaining({ key: "teams_sandbox_send", status: "fail", message: expect.stringContaining("public HTTPS") }),
+      ]);
+      expect(result.probe?.steps[0]).toMatchObject({ status: "fail", disposition: "blocking" });
+      expect(JSON.stringify(result)).not.toContain(webhookUrl);
+    }
+    expect(webhookProbeMock).not.toHaveBeenCalled();
+  });
+
+  it("allows an explicitly allowlisted loopback webhook destination", async () => {
+    const port = createPort();
+    port.config.toolPolicy.sandbox.networkAllowlist = ["127.0.0.1"];
+
+    await runIntegrationConnectionLiveChecks(
+      port,
+      createConnection("slack", { webhookUrl: "http://127.0.0.1:9/services/T/B/C" }),
+      { includeSandboxSend: true },
+    );
+
+    expect(webhookProbeMock).toHaveBeenCalledWith(expect.objectContaining({ channelKey: "slack" }));
+  });
 });
 
 function createPort(): IntegrationDiagnosticsPort {

@@ -48,6 +48,11 @@
     "readAccessMode": "approval_required",
     "networkAllowlist": [
       "discord.com",
+      "chat.googleapis.com",
+      "hooks.slack.com",
+      "api.telegram.org",
+      "*.logic.azure.com",
+      "*.environment.api.powerplatform.com",
       "chatgpt.com",
       "api.openai.com",
       "api.anthropic.com",

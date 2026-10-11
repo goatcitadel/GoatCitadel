@@ -551,7 +551,7 @@ describe("integration-diagnostics-service contract behavior", () => {
     const slackWebhookOnly = await runIntegrationConnectionLiveChecks(
       host,
       createIntegrationConnection("slack", "channel", {
-        webhookUrl: "https://hooks.slack.test/services/T/B/C",
+        webhookUrl: "https://10.0.0.5/services/T/B/C",
       }),
       { includeSandboxSend: false },
     );
@@ -559,7 +559,7 @@ describe("integration-diagnostics-service contract behavior", () => {
       expect.objectContaining({
         key: "slack_sandbox_send",
         status: "fail",
-        message: expect.stringContaining("outside the outbound network allowlist"),
+        message: expect.stringContaining("public HTTPS"),
       }),
     ]);
 

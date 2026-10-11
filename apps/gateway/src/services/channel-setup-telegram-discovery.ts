@@ -14,8 +14,10 @@ export async function discoverChannelSetupTelegramTargets(host: ChannelSetupHost
   const connection = draft ? await buildEphemeralChannelConnection(host, hydrateChannelSetupDraftSecrets(host, draft)) : await host.getIntegrationConnection((input as Extract<ChannelSetupDiscoveryInput, { source: "connection" }>).connectionId);
   if (connection.kind !== "channel" || connection.key !== "telegram") throw new ValidationError({ message: "Target discovery requires a Telegram channel." });
   if (input.source === "connection" && connection.revision !== input.expectedConnectionRevision) throw new ConflictError({ code: "WRITE_CONFLICT", message: "The Telegram connection changed. Reload before discovering targets." });
-  if (!host.fetchWithTimeout || !host.isConnectionUrlAllowlisted || !host.resolveConnectionSecret) throw new ValidationError({ message: "Governed Telegram target discovery is unavailable." });
-  if (!host.isConnectionUrlAllowlisted("https://api.telegram.org")) throw new ValidationError({ message: "Telegram API host is not in the outbound allowlist." });
+  // api.telegram.org is a public HTTPS host, so it is reachable under the
+  // diagnostics egress posture regardless of the sandbox network allowlist;
+  // `host.fetchWithTimeout` (the diagnostics fetch) still enforces that posture.
+  if (!host.fetchWithTimeout || !host.resolveConnectionSecret) throw new ValidationError({ message: "Governed Telegram target discovery is unavailable." });
   const token = host.resolveConnectionSecret(connection.config, "botToken", "botTokenEnv", connection.catalogId);
   if (!token) throw new ValidationError({ message: "Configure the Telegram bot token through secure input before discovering targets." });
   const call = async (method: string): Promise<Record<string, unknown>> => {
