@@ -66,8 +66,10 @@ function extractExplicitSkills(text: string): string[] {
     }
   }
 
-  // The composer's skill palette inserts `$<skillId>` (for example `$bundled:impeccable`).
-  for (const token of lower.matchAll(/\$([a-z][a-z0-9:_-]*)/g)) {
+  // The composer's skill palette inserts `$<skillId>` (for example `$bundled:impeccable`) at a token
+  // start. The `source:` segment is required and the `$` must open a token, so shell or template
+  // variables in pasted code (`$research`, `price$qa`) are not read as operator mentions.
+  for (const token of lower.matchAll(/(?:^|\s)\$([a-z][a-z0-9_-]*:[a-z0-9:_-]+)/g)) {
     if (token[1]) {
       names.add(token[1]);
     }

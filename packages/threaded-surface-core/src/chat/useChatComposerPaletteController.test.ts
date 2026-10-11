@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { applyComposerSuggestion } from "./useChatComposerInteractions";
 import { buildChatComposerPaletteSources } from "./useChatComposerPaletteController";
 
 describe("chat composer palette sources", () => {
@@ -71,10 +72,20 @@ describe("chat composer palette sources", () => {
     expect(skills[1]).toMatchObject({
       command: "/impeccable polish",
       description: "Final quality pass before shipping",
-      applyValue: "@skill impeccable polish ",
+      applyValue: "$bundled:impeccable polish",
       source: "skills",
-      action: { type: "insert_command", value: "@skill impeccable polish " },
+      action: { type: "insert_command", value: "$bundled:impeccable polish" },
     });
+  });
+
+  it("inserts a command item without discarding the operator's draft", async () => {
+    const skills = await loadSkillItems(impeccableSkill({ callable: true }));
+    const action = skills[1]!.action;
+    const value = action.type === "insert_command" ? action.value : "";
+
+    expect(applyComposerSuggestion("Polish this hero $imp", value)).toBe(
+      "Polish this hero $bundled:impeccable polish ",
+    );
   });
 
   it("offers no command items for a skill that is not callable", async () => {

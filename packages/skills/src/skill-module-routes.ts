@@ -116,40 +116,57 @@ export function extractExplicitSkillCommand(
 }
 
 function impeccableModule(name: string, relativePath: string): SkillModuleRef {
-  return { name, relativePath, maxBytes: IMPECCABLE_MODULE_MAX_BYTES };
+  return Object.freeze({ name, relativePath, maxBytes: IMPECCABLE_MODULE_MAX_BYTES });
+}
+
+const IMPECCABLE_MAIN = impeccableModule("main", "SKILL.md");
+const IMPECCABLE_CRAFT_FLOOR = impeccableModule("craft-floor", "reference/craft-floor.md");
+
+function impeccableRoute(routeId: string, modules: SkillModuleRef[], command?: string): SkillModuleResolution {
+  return command
+    ? { routeId, command, modules, budgetBytes: IMPECCABLE_BUDGET_BYTES }
+    : { routeId, modules, budgetBytes: IMPECCABLE_BUDGET_BYTES };
+}
+
+function impeccableCommandRoute(command: string): SkillModuleResolution {
+  const commandModule = impeccableModule(command, `reference/${command}.md`);
+  const modules = IMPECCABLE_CRAFT_COMMANDS.includes(command)
+    ? [IMPECCABLE_MAIN, IMPECCABLE_CRAFT_FLOOR, commandModule]
+    : [IMPECCABLE_MAIN, commandModule];
+  return impeccableRoute(`command:${command}`, modules, command);
+}
+
+function impeccableArtifactsRoute(): SkillModuleResolution {
+  return impeccableRoute("artifacts", [IMPECCABLE_MAIN, impeccableModule("artifacts", "reference/artifacts.md")]);
+}
+
+function impeccableDesignRoute(): SkillModuleResolution {
+  return impeccableRoute("design", [IMPECCABLE_MAIN, IMPECCABLE_CRAFT_FLOOR]);
 }
 
 function resolveImpeccableModules(input: ResolveSkillModulesInput): SkillModuleResolution {
-  const main = impeccableModule("main", "SKILL.md");
-  const craftFloor = impeccableModule("craft-floor", "reference/craft-floor.md");
   const command = extractExplicitSkillCommand(input.text, IMPECCABLE_SKILL_NAME, IMPECCABLE_COMMANDS);
-  if (command) {
-    const modules = IMPECCABLE_CRAFT_COMMANDS.includes(command)
-      ? [main, craftFloor, impeccableModule(command, `reference/${command}.md`)]
-      : [main, impeccableModule(command, `reference/${command}.md`)];
-    return { routeId: `command:${command}`, command, modules, budgetBytes: IMPECCABLE_BUDGET_BYTES };
-  }
-  if (input.artifactIntent?.presentation || input.artifactIntent?.document) {
-    return {
-      routeId: "artifacts",
-      modules: [main, impeccableModule("artifacts", "reference/artifacts.md")],
-      budgetBytes: IMPECCABLE_BUDGET_BYTES,
-    };
-  }
-  return { routeId: "design", modules: [main, craftFloor], budgetBytes: IMPECCABLE_BUDGET_BYTES };
+  if (command) return impeccableCommandRoute(command);
+  if (input.artifactIntent?.presentation || input.artifactIntent?.document) return impeccableArtifactsRoute();
+  return impeccableDesignRoute();
+}
+
+function mainRoute(): SkillModuleResolution {
+  return { routeId: "main", modules: [MAIN_MODULE], budgetBytes: DEFAULT_SKILL_BUDGET_BYTES };
+}
+
+function designIntelligencePresentationRoute(): SkillModuleResolution {
+  return {
+    routeId: "presentation",
+    modules: [
+      { name: "presentation", relativePath: "presentation.md", maxBytes: DESIGN_INTELLIGENCE_PRESENTATION_MAX_BYTES },
+    ],
+    budgetBytes: DEFAULT_SKILL_BUDGET_BYTES,
+  };
 }
 
 function resolveDesignIntelligenceModules(input: ResolveSkillModulesInput): SkillModuleResolution {
-  if (PRESENTATION_INTENT.test(input.text)) {
-    return {
-      routeId: "presentation",
-      modules: [
-        { name: "presentation", relativePath: "presentation.md", maxBytes: DESIGN_INTELLIGENCE_PRESENTATION_MAX_BYTES },
-      ],
-      budgetBytes: DEFAULT_SKILL_BUDGET_BYTES,
-    };
-  }
-  return { routeId: "main", modules: [MAIN_MODULE], budgetBytes: DEFAULT_SKILL_BUDGET_BYTES };
+  return PRESENTATION_INTENT.test(input.text) ? designIntelligencePresentationRoute() : mainRoute();
 }
 
 /** Resolve which skill modules a turn injects. Pure: no filesystem access. */
@@ -157,5 +174,20 @@ export function resolveSkillModules(input: ResolveSkillModulesInput): SkillModul
   const name = input.skillName.trim().toLowerCase();
   if (name === IMPECCABLE_SKILL_NAME) return resolveImpeccableModules(input);
   if (name === DESIGN_INTELLIGENCE_SKILL_NAME) return resolveDesignIntelligenceModules(input);
-  return { routeId: "main", modules: [MAIN_MODULE], budgetBytes: DEFAULT_SKILL_BUDGET_BYTES };
+  return mainRoute();
+}
+
+/**
+ * Every route `resolveSkillModules` can return for a skill, so a shipped tree can be checked against
+ * the byte ceilings the gateway enforces before any turn pays for an overrun. Pure: no filesystem access.
+ */
+export function enumerateSkillRoutes(
+  input: Pick<ResolveSkillModulesInput, "skillId" | "skillName">,
+): SkillModuleResolution[] {
+  const name = input.skillName.trim().toLowerCase();
+  if (name === IMPECCABLE_SKILL_NAME) {
+    return [impeccableDesignRoute(), impeccableArtifactsRoute(), ...IMPECCABLE_COMMANDS.map(impeccableCommandRoute)];
+  }
+  if (name === DESIGN_INTELLIGENCE_SKILL_NAME) return [mainRoute(), designIntelligencePresentationRoute()];
+  return [mainRoute()];
 }

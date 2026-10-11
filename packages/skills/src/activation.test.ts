@@ -107,4 +107,34 @@ describe("resolveSkillActivation", () => {
     expect(result.selected.map((item) => item.name)).toEqual(["impeccable"]);
     expect(result.reasons.impeccable).toEqual(["explicit"]);
   });
+
+  it("ignores a $ that is not a skill-id mention at a token start", () => {
+    const research = { ...skill("research"), skillId: "bundled:research" };
+
+    const shell = resolveSkillActivation({ text: "echo $research\n$research = 1; price$bundled:research" }, [research]);
+    expect(shell.selected).toEqual([]);
+  });
+
+  it("does not activate impeccable on bare generic words in ordinary engineering prompts", () => {
+    const impeccable = {
+      ...skill("impeccable"),
+      skillId: "bundled:impeccable",
+      routingHints: GENERATED_SKILL_ROUTING_HINTS.impeccable,
+    };
+
+    for (const text of [
+      "Fix the component's null check and add a coverage report.",
+      "The dashboard endpoint returns 500 after landing the PR.",
+      "Fix the Linux build; give me a brief summary of the log.",
+      "Open index.html and check the artifact path.",
+    ]) {
+      expect(resolveSkillActivation({ text }, [impeccable]).selected, text).toEqual([]);
+    }
+    for (const text of ["Build a dashboard ui for runtime health.", "Write a pdf report on the Q3 numbers."]) {
+      expect(
+        resolveSkillActivation({ text }, [impeccable]).selected.map((item) => item.name),
+        text,
+      ).toEqual(["impeccable"]);
+    }
+  });
 });

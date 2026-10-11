@@ -440,12 +440,14 @@ function skillMentionItem(skill: SkillListItem): ComposerPaletteItem {
 }
 
 /**
- * A skill's routed commands are offered as explicit `@skill <name> <command>` mentions: the gateway
- * resolves the mention through the callable catalog and routes the matching skill module.
+ * A skill's routed commands are offered as explicit `$<skillId> <command>` mentions: the `$` form is
+ * what `applyComposerSuggestion` splices into the draft in place of the typed `$` token (an `@skill`
+ * value would replace the whole draft), and the gateway resolves it through the callable catalog and
+ * routes the matching skill module.
  */
 function skillCommandItems(skill: SkillListItem): ComposerPaletteItem[] {
   return (skill.routingHints?.commands ?? []).map((command) => {
-    const mention = `@skill ${skill.name} ${command.name} `;
+    const mention = `$${skill.skillId} ${command.name}`;
     return {
       key: `skill-${skill.skillId}-command-${command.name}`,
       command: `/${skill.name} ${command.name}`,

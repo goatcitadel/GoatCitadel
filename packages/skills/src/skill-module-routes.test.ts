@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  enumerateSkillRoutes,
   extractExplicitSkillCommand,
   IMPECCABLE_BUDGET_BYTES,
   IMPECCABLE_COMMANDS,
@@ -120,5 +121,30 @@ describe("extractExplicitSkillCommand", () => {
     expect(
       extractExplicitSkillCommand("use impeccable because it is good", "impeccable", IMPECCABLE_COMMANDS),
     ).toBeUndefined();
+  });
+});
+
+describe("enumerateSkillRoutes", () => {
+  it("lists every impeccable route the gateway can resolve", () => {
+    const routes = enumerateSkillRoutes(impeccable);
+
+    expect(routes.map((route) => route.routeId)).toEqual([
+      "design",
+      "artifacts",
+      ...IMPECCABLE_COMMANDS.map((command) => `command:${command}`),
+    ]);
+    expect(routes.find((route) => route.routeId === "command:polish")?.modules.map((m) => m.relativePath)).toEqual([
+      "SKILL.md",
+      "reference/craft-floor.md",
+      "reference/polish.md",
+    ]);
+    expect(routes.every((route) => route.budgetBytes === IMPECCABLE_BUDGET_BYTES)).toBe(true);
+  });
+
+  it("lists the main and presentation routes for design-intelligence and only main otherwise", () => {
+    expect(enumerateSkillRoutes(designIntelligence).map((route) => route.routeId)).toEqual(["main", "presentation"]);
+    expect(
+      enumerateSkillRoutes({ skillId: "bundled:coding", skillName: "coding" }).map((route) => route.routeId),
+    ).toEqual(["main"]);
   });
 });
