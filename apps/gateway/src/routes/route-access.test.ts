@@ -145,6 +145,7 @@ describe("route access manifest", () => {
     app.post("/api/v1/surface/classify", async () => ({ ok: true }));
     app.post("/api/v1/integrations/connections/:connectionId/:channel/inbound", async () => ({ ok: true }));
     app.post("/api/v1/integrations/connections/:connectionId/telegram/webhook", async () => ({ ok: true }));
+    app.get("/api/v1/mutation-attempts/:idempotencyKey", async () => ({ ok: true }));
     app.get("/api/v1/unclassified/new-surface", async () => ({ ok: true }));
     await app.ready();
 
@@ -167,6 +168,7 @@ describe("route access manifest", () => {
       "/api/v1/trust/policy-snapshot",
       "/api/v1/code-mode/runs",
       "/api/v1/surface/classify",
+      "/api/v1/mutation-attempts/:idempotencyKey",
     ]) {
       expect(app.routeAccessManifest.find((entry) => entry.url === url)).toMatchObject({
         accessClass: "operator",
@@ -176,6 +178,18 @@ describe("route access manifest", () => {
     }
     expect(
       app.routeAccessManifest.find((entry) => entry.method === "GET" && entry.url === "/api/v1/tools/catalog"),
+    ).toMatchObject({
+      accessClass: "operator",
+      classificationSource: "policy",
+      tracked: true,
+    });
+    // The idempotency plugin registers the attempt read without a local access
+    // class (V-1); the policy table must classify it so the auth-matrix lane
+    // never sees it fall through to the unclassified "default" bucket.
+    expect(
+      app.routeAccessManifest.find(
+        (entry) => entry.method === "GET" && entry.url === "/api/v1/mutation-attempts/:idempotencyKey",
+      ),
     ).toMatchObject({
       accessClass: "operator",
       classificationSource: "policy",

@@ -132,6 +132,10 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/workspaces", accessClass: "operator" },
   { prefix: "/api/v1/hooks", accessClass: "operator" },
   { prefix: "/api/v1/durable", accessClass: "operator" },
+  // Caller-scoped mutation-attempt readback registered by the idempotency plugin
+  // (GET /api/v1/mutation-attempts/:idempotencyKey). It reads the caller's own
+  // durable claim, so it stays operator-gated like the mutations it settles.
+  { prefix: "/api/v1/mutation-attempts", accessClass: "operator" },
   { prefix: "/api/v1/connectors", accessClass: "operator" },
   { prefix: "/api/v1/settings", accessClass: "operator" },
   { prefix: "/api/v1/personalities", accessClass: "operator" },
