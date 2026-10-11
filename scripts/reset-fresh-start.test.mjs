@@ -122,6 +122,9 @@ test(
       assert.equal(fs.readFileSync(path.join(f.root, relative), "utf8"), value, relative);
     assert.equal(manifest.credentialsCleared, false);
     assert.equal(manifest.includeWorkspaceOutputs, true);
+    // -KeepCredentials leaves the shared PasswordVault alone, so the installed app is untouched.
+    assert.match(result.output, /installed-app data are preserved/u);
+    assert.doesNotMatch(result.output, /PasswordVault credentials were removed/u);
     assert.equal(fs.readFileSync(path.join(f.root, "runtime/dev-reset-id"), "utf8").trim(), manifest.browserResetId);
     const second = f.run();
     assert.equal(second.status, 0, second.output);
@@ -293,6 +296,9 @@ $vault | Add-Member -MemberType ScriptMethod -Name Remove -Value { param($entry)
       assert.equal(fs.readFileSync(path.join(dir, "data/index.db"), "utf8"), "test database\n");
     } else {
       assert.equal(fs.readFileSync(path.join(f.root, "runtime/dev-reset-id"), "utf8").trim(), manifest.browserResetId);
+      // The vault is shared with the installed app: the closing line must not claim its data survived intact.
+      assert.match(reset.output, /Installed-app files are preserved; shared PasswordVault credentials were removed/u);
+      assert.doesNotMatch(reset.output, /installed-app data are preserved/u);
     }
   });
 }

@@ -369,4 +369,11 @@ if ($ClearBrowserState) {
 if (-not $IncludeWorkspaceOutputs) {
   Write-Host "Generated Chat output was preserved. Add -IncludeWorkspaceOutputs to archive it too."
 }
-Write-Host "Git worktrees, workspace fixtures, skills, models outside the reset roots, and installed-app data are preserved."
+if ($CredentialStatus -eq "cleared") {
+  # The PasswordVault is shared with every GoatCitadel install for this Windows account, so the
+  # installed app lost its stored provider/channel credentials even though its files were untouched.
+  Write-Host "Git worktrees, workspace fixtures, skills, and models outside the reset roots are preserved."
+  Write-Host "Installed-app files are preserved; shared PasswordVault credentials were removed, so an installed GoatCitadel app must reconnect its providers and channels too. Use -KeepCredentials to retain them."
+} else {
+  Write-Host "Git worktrees, workspace fixtures, skills, models outside the reset roots, and installed-app data are preserved."
+}
