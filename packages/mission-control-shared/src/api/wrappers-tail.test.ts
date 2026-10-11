@@ -28,11 +28,15 @@ vi.mock("./client-core.js", () => ({
   readStoredGatewayAuthState: apiMocks.readStoredGatewayAuthState,
 }));
 
-vi.mock("./sse-bridge.js", () => ({
-  computeReconnectDelay: () => 1,
-  issueSseBridgeToken: apiMocks.issueSseBridgeToken,
-  isSseBridgeNotNeededError: apiMocks.isSseBridgeNotNeededError,
-}));
+vi.mock("./sse-bridge.js", async () => {
+  const actual = await vi.importActual<typeof import("./sse-bridge.js")>("./sse-bridge.js");
+  return {
+    computeReconnectDelay: () => 1,
+    issueSseBridgeToken: apiMocks.issueSseBridgeToken,
+    isSseBridgeNotNeededError: apiMocks.isSseBridgeNotNeededError,
+    isTokenlessSseBridgeResponse: actual.isTokenlessSseBridgeResponse,
+  };
+});
 
 vi.mock("./http-internal", () => ({
   isApiRequestError: apiMocks.isApiRequestError,
@@ -548,6 +552,16 @@ describe("shared API wrapper tail coverage", () => {
     expect(apiMocks.clearGatewayAuthState).toHaveBeenCalled();
     expect(instances.at(-1)?.url).not.toContain("sse_token=");
     disconnectWithoutBridge();
+
+    // Tokenless auth-none contract (200 { scope, authMode: "none" }) behaves like the legacy 400.
+    apiMocks.clearGatewayAuthState.mockClear();
+    apiMocks.issueSseBridgeToken.mockResolvedValueOnce({ scope: "dev:diagnostics:stream", authMode: "none" });
+    const disconnectTokenless = diagnostics.connectDevDiagnosticsStream(() => undefined);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(apiMocks.clearGatewayAuthState).toHaveBeenCalledTimes(1);
+    expect(instances.at(-1)?.url).not.toContain("sse_token=");
+    disconnectTokenless();
   });
 
   it("returns a no-op diagnostics disconnect when window is unavailable", () => {

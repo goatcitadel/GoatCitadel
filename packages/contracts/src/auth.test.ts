@@ -15,6 +15,8 @@ import {
   type DeviceAccessRequestStatus,
   type DeviceAccessRequestStatusResponse,
   type SseTokenIssueResponse,
+  type SseTokenIssuedResponse,
+  type SseTokenlessResponse,
 } from "./auth.js";
 import type {
   CompanionAuditEvent,
@@ -39,7 +41,8 @@ type ExactKeys<T, Keys extends PropertyKey> =
 const exactKeys = <_Result extends true>(): true => true;
 
 const AUTH_SHAPE_FREEZE: readonly true[] = [
-  exactKeys<ExactKeys<SseTokenIssueResponse, "token" | "expiresAt" | "scope">>(),
+  exactKeys<ExactKeys<SseTokenIssuedResponse, "token" | "expiresAt" | "scope">>(),
+  exactKeys<ExactKeys<SseTokenlessResponse, "scope" | "authMode">>(),
   exactKeys<ExactKeys<DeviceAccessRequestCreateInput, "deviceLabel" | "deviceType" | "platform">>(),
   exactKeys<
     ExactKeys<
@@ -194,7 +197,8 @@ const AUTH_TYPE_FREEZE: readonly true[] = [
   exactType<
     ExactType<
       SseTokenIssueResponse,
-      { token: string; expiresAt: string; scope: "events:stream" | "dev:diagnostics:stream" }
+      | { token: string; expiresAt: string; scope: "events:stream" | "dev:diagnostics:stream" }
+      | { scope: "events:stream" | "dev:diagnostics:stream"; authMode: "none" }
     >
   >(),
   exactType<

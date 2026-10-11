@@ -1,4 +1,4 @@
-import type { GatewayCurrentAccess } from "@goatcitadel/contracts";
+import type { GatewayCurrentAccess, SseTokenlessResponse } from "@goatcitadel/contracts";
 import { hasOperatorControlPlaneAccess } from "../plugins/auth.js";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
@@ -143,15 +143,18 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   fastify.post("/api/v1/auth/sse-token", operatorAuthRoute, async (request, reply) => {
-    const authMode = fastify.gatewayConfig.assistant.auth.mode;
-    if (authMode === "none") {
-      return reply.code(400).send({
-        error: "SSE token bridge is not needed when auth mode is none",
-      });
-    }
     const parsed = sseTokenIssueSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    if (fastify.gatewayConfig.assistant.auth.mode === "none") {
+      // Tokenless contract: no bridge token exists in auth mode none, so this is
+      // a normal 200 rather than an error. The launcher's desktop status poll
+      // (bin/goatcitadel.mjs) and the shared SSE clients read `authMode` and
+      // open the stream without `sse_token`; the former 400 only ever served as
+      // older-Gateway compatibility on the client side.
+      const tokenless: SseTokenlessResponse = { scope: parsed.data.scope, authMode: "none" };
+      return reply.send(tokenless);
     }
     const token = fastify.issueSseToken(parsed.data.scope, undefined, request.authActorId);
     return reply.send(token);

@@ -519,16 +519,34 @@ describe("auth routes", () => {
     expect(source).toMatch(/fastify\.get\("\/api\/v1\/auth\/device-requests\/:requestId\/status", publicAuthRoute/);
   });
 
-  it("returns the compatibility error for the SSE bridge in auth mode none", async () => {
+  it("issues the tokenless auth-none contract as 200", async () => {
     app = await buildApp("none");
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/auth/sse-token",
     });
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toMatchObject({
-      error: "SSE token bridge is not needed when auth mode is none",
+    expect(response.statusCode).toBe(200);
+    // Exact shape: no token/expiresAt leaks into the tokenless contract.
+    expect(response.json()).toEqual({ scope: "events:stream", authMode: "none" });
+
+    const diagnostics = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/sse-token",
+      payload: { scope: "dev:diagnostics:stream" },
     });
+    expect(diagnostics.statusCode).toBe(200);
+    expect(diagnostics.json()).toEqual({ scope: "dev:diagnostics:stream", authMode: "none" });
+  });
+
+  it("still rejects a malformed SSE token scope with 400 in auth mode none", async () => {
+    app = await buildApp("none");
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/sse-token",
+      payload: { scope: "not-a-scope" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: { fieldErrors: { scope: expect.any(Array) } } });
   });
 
   it("issues SSE token in token mode", async () => {

@@ -187,7 +187,12 @@ import type {
 } from "./types.js";
 import { recordClientDiagnostic } from "../state/dev-diagnostics-store";
 import { buildGatewayUrl, clearGatewayAuthState, readStoredGatewayAuthState, request } from "./client-core.js";
-import { computeReconnectDelay, isSseBridgeNotNeededError, issueSseBridgeToken } from "./sse-bridge.js";
+import {
+  computeReconnectDelay,
+  isSseBridgeNotNeededError,
+  isTokenlessSseBridgeResponse,
+  issueSseBridgeToken,
+} from "./sse-bridge.js";
 
 export type { GuidanceDocumentRecord };
 export type { ObsidianIntegrationConfig, ObsidianIntegrationStatus };
@@ -1203,7 +1208,13 @@ async function buildEventStreamUrl(): Promise<string> {
   ) {
     try {
       const issued = await issueSseBridgeToken("events:stream");
-      url.searchParams.set("sse_token", issued.token);
+      if (isTokenlessSseBridgeResponse(issued)) {
+        // Current Gateways answer auth mode none with 200 and no token; older
+        // ones threw the 400 handled below. Either way the stored auth is stale.
+        clearGatewayAuthState();
+      } else {
+        url.searchParams.set("sse_token", issued.token);
+      }
     } catch (error) {
       if (!isSseBridgeNotNeededError(error)) {
         throw error;

@@ -3,7 +3,12 @@ import type { DevDiagnosticsEvent, DevDiagnosticsLevel, DevDiagnosticsListRespon
 import { recordClientDiagnostic, setDevDiagnosticsGatewayReachable } from "../state/dev-diagnostics-store";
 import { buildGatewayUrl, clearGatewayAuthState, readStoredGatewayAuthState, request } from "./client-core.js";
 import { isApiRequestError } from "./http-internal";
-import { computeReconnectDelay, isSseBridgeNotNeededError, issueSseBridgeToken } from "./sse-bridge.js";
+import {
+  computeReconnectDelay,
+  isSseBridgeNotNeededError,
+  isTokenlessSseBridgeResponse,
+  issueSseBridgeToken,
+} from "./sse-bridge.js";
 
 export async function fetchDevDiagnostics(
   params: {
@@ -73,6 +78,12 @@ export function connectDevDiagnosticsStream(onEvent: (event: DevDiagnosticsEvent
     ) {
       try {
         const issued = await issueSseBridgeToken("dev:diagnostics:stream");
+        if (isTokenlessSseBridgeResponse(issued)) {
+          // Current Gateways answer auth mode none with 200 and no token; the
+          // legacy 400 below covers older ones. Same outcome: drop stale auth.
+          clearGatewayAuthState();
+          return url.toString();
+        }
         url.searchParams.set("sse_token", issued.token);
       } catch (error) {
         if (isSseBridgeNotNeededError(error)) {

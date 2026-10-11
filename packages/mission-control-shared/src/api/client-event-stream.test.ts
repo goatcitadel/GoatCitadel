@@ -292,6 +292,32 @@ describe("client event stream", () => {
     cleanup();
   });
 
+  it("treats the tokenless auth-none bridge reply like the legacy 400 and never appends sse_token", async () => {
+    window.sessionStorage.setItem(
+      "goatcitadel.gateway.auth",
+      JSON.stringify({ mode: "token", token: "token-1", tokenQueryParam: "access_token" }),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ success: true, data: { scope: "events:stream", authMode: "none" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    const cleanup = connectEventStream(() => undefined);
+    await waitForEventSourceCount(1);
+
+    expect(window.sessionStorage.getItem("goatcitadel.gateway.auth")).toBeNull();
+    const streamUrl = new URL(FakeEventSource.instances[0]!.url);
+    expect(streamUrl.searchParams.has("sse_token")).toBe(false);
+    expect(streamUrl.search).not.toContain("undefined");
+
+    cleanup();
+  });
+
   it("appends successful SSE bridge tokens for basic auth streams", async () => {
     window.sessionStorage.setItem(
       "goatcitadel.gateway.auth",
