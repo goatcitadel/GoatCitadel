@@ -100,8 +100,10 @@ export async function createPresentationPdf(input: PresentationPdfInput): Promis
       decision.renderer = "image-text";
     } else if (decision.renderer === layout[index - 1]?.renderer && !slide.table && !slide.chart) {
       if (decision.renderer === "two-column" || decision.renderer === "comparison") decision.renderer = "stacked-list";
-      else if (decision.renderer === "closing" || decision.renderer === "section") decision.renderer = "section-continuation";
-      else if (decision.renderer === "image-text" || decision.renderer === "stacked-list") decision.renderer = "two-column";
+      else if (decision.renderer === "closing" || decision.renderer === "section")
+        decision.renderer = "section-continuation";
+      else if (decision.renderer === "image-text" || decision.renderer === "stacked-list")
+        decision.renderer = "two-column";
       else if (decision.renderer === "sources") decision.renderer = "sources-continuation";
     }
   }
@@ -171,7 +173,8 @@ function resolveTheme(design: ArtifactDesignPlan): PdfDeckTheme {
   const text = pdfColor(design.tokens.text);
   const accent2 = pdfColor(design.tokens.accent2);
   const contrast = (ink: ReturnType<typeof pdfColor>) => {
-    const a = pdfColorLuminance(ink); const b = pdfColorLuminance(surface);
+    const a = pdfColorLuminance(ink);
+    const b = pdfColorLuminance(surface);
     return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
   };
   const citation = contrast(accent2) >= 4.5 ? accent2 : contrast(accent) >= 4.5 ? accent : text;
@@ -326,14 +329,20 @@ function drawStacked(context: SlideContext): void {
   const cardWidth = image ? 508 : 836;
   const imageLeft = Boolean(image && context.index % 2 === 0);
   const imageWidth = 836 - cardWidth - 18;
-  const card = { x: MARGIN_X + (imageLeft ? imageWidth + 18 : 0), y: BODY_TOP, w: cardWidth, h: BODY_BOTTOM - BODY_TOP };
+  const card = {
+    x: MARGIN_X + (imageLeft ? imageWidth + 18 : 0),
+    y: BODY_TOP,
+    w: cardWidth,
+    h: BODY_BOTTOM - BODY_TOP,
+  };
   page.rect(card.x, card.y, card.w, card.h, theme.surface, { color: theme.border, width: 0.75 });
   drawBullets(
     context,
     context.slide.bullets.map((bullet) => bulletRuns(bullet, context.sources)),
     inset(card, 22),
   );
-  if (image) drawImage(context, { x: imageLeft ? MARGIN_X : MARGIN_X + cardWidth + 18, y: BODY_TOP, w: imageWidth, h: card.h });
+  if (image)
+    drawImage(context, { x: imageLeft ? MARGIN_X : MARGIN_X + cardWidth + 18, y: BODY_TOP, w: imageWidth, h: card.h });
 }
 
 /** Full-width editorial rows preserve all claims while avoiding repeated split cards. */
@@ -345,16 +354,27 @@ function drawRows(context: SlideContext, comparison: boolean): void {
   const gap = 8;
   const height = (BODY_BOTTOM - BODY_TOP - gap * (count - 1)) / count;
   // Extremely dense direct-render input retains the bounded text-fit fallback.
-  if (height < 42) { drawStacked(context); return; }
+  if (height < 42) {
+    drawStacked(context);
+    return;
+  }
   slide.bullets.forEach((bullet, index) => {
     const box = { x: MARGIN_X, y: BODY_TOP + index * (height + gap), w: 836, h: height };
     const accent = index % 2 === 0 ? theme.accent : theme.accent2;
     page.rect(box.x, box.y, box.w, box.h, theme.surface, { color: theme.border, width: 0.75 });
     const labelWidth = comparison ? 72 : 10;
     page.rect(box.x, box.y, labelWidth, box.h, comparison ? mixPdfColors(theme.surface, accent, 0.16) : accent);
-    if (comparison) page.text(box.x + 18, box.y + Math.min(35, box.h / 2 + 7), String(index + 1).padStart(2, "0"), { font: "bold", size: 20, color: theme.citation ?? theme.text });
+    if (comparison)
+      page.text(box.x + 18, box.y + Math.min(35, box.h / 2 + 7), String(index + 1).padStart(2, "0"), {
+        font: "bold",
+        size: 20,
+        color: theme.citation ?? theme.text,
+      });
     drawBullets(context, [bulletRuns(bullet, context.sources)], {
-      x: box.x + labelWidth + 18, y: box.y + 10, w: box.w - labelWidth - 36, h: box.h - 20,
+      x: box.x + labelWidth + 18,
+      y: box.y + 10,
+      w: box.w - labelWidth - 36,
+      h: box.h - 20,
     });
   });
 }
@@ -437,7 +457,12 @@ function drawSources(context: SlideContext, continuation = false): void {
     page.rect(MARGIN_X, BODY_TOP, 150, BODY_BOTTOM - BODY_TOP, theme.accent);
     page.text(MARGIN_X + 20, BODY_TOP + 42, "REFERENCES", { font: "bold", size: 16, color: theme.onAccent });
   }
-  const card = { x: MARGIN_X + (continuation ? 168 : 0), y: BODY_TOP, w: continuation ? 668 : 836, h: BODY_BOTTOM - BODY_TOP };
+  const card = {
+    x: MARGIN_X + (continuation ? 168 : 0),
+    y: BODY_TOP,
+    w: continuation ? 668 : 836,
+    h: BODY_BOTTOM - BODY_TOP,
+  };
   page.rect(card.x, card.y, card.w, card.h, theme.surface, { color: theme.border, width: 0.75 });
   const truncated = drawBulletList(
     page,

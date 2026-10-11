@@ -1719,9 +1719,14 @@ export class LlmService {
         if (!dispatched.response.ok) {
           throw new Error(await buildHttpError("OpenAI Codex image generation", dispatched.response));
         }
-        const adapted = await adaptOpenAICodexImageResponse(dispatched.response, model, timeoutMs,
+        const adapted = await adaptOpenAICodexImageResponse(
+          dispatched.response,
+          model,
+          timeoutMs,
           usesOpenAICodexResponsesLite(resolved.provider, coordinatorModel)
-            ? MAX_OPENAI_CODEX_RESPONSES_LITE_SSE_EVENTS : MAX_CODEX_IMAGE_SSE_EVENTS);
+            ? MAX_OPENAI_CODEX_RESPONSES_LITE_SSE_EVENTS
+            : MAX_CODEX_IMAGE_SSE_EVENTS,
+        );
         data.push(...adapted.data);
         observeProviderPayloadUsage(dispatched.usage, adapted.usage, adapted.model, {
           providerId: resolved.provider.providerId,
@@ -5857,7 +5862,10 @@ async function adaptOpenAICodexImageResponse(
   }
 }
 
-function parseOpenAICodexImageEvents(body: string, maxEvents = MAX_CODEX_IMAGE_SSE_EVENTS): Array<Record<string, unknown>> {
+function parseOpenAICodexImageEvents(
+  body: string,
+  maxEvents = MAX_CODEX_IMAGE_SSE_EVENTS,
+): Array<Record<string, unknown>> {
   const events: Array<Record<string, unknown>> = [];
   for (const line of body.split(/\r?\n/)) {
     if (!line.startsWith("data: ")) {

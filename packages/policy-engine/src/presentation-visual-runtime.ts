@@ -24,4 +24,7 @@ export interface PreparedPresentationVisuals {
   providerCalls: number;
 }
 
-export type PreparePresentationVisuals = (request: ToolInvokeRequest, slides?: readonly PresentationSlide[]) => Promise<PreparedPresentationVisuals>;
+export type PreparePresentationVisuals = (
+  request: ToolInvokeRequest,
+  slides?: readonly PresentationSlide[],
+) => Promise<PreparedPresentationVisuals>;

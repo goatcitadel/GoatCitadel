@@ -127,7 +127,9 @@ function buildPresentationVisualPlan(
         index,
         title: text(slide.title) ?? `Section ${index + 1}`,
         bullets: Array.isArray(slide.bullets)
-          ? slide.bullets.map((bullet) => text(bullet) ?? text(record(bullet).text)).filter((value): value is string => Boolean(value))
+          ? slide.bullets
+              .map((bullet) => text(bullet) ?? text(record(bullet).text))
+              .filter((value): value is string => Boolean(value))
           : [],
         visualBrief: text(slide.visualBrief),
         dataOnly: Boolean(slide.table || slide.chart || slide.archetype === "sources" || slide.generatedSourceAppendix),
@@ -170,14 +172,19 @@ function buildPresentationVisualPlan(
   });
 }
 
-function chooseSectionSlideIndexes(slides: Array<{ index: number; visualBrief?: string; dataOnly?: boolean }>): number[] {
+function chooseSectionSlideIndexes(
+  slides: Array<{ index: number; visualBrief?: string; dataOnly?: boolean }>,
+): number[] {
   const candidates = slides.filter((slide) => !slide.dataOnly);
   const directed = candidates.filter((slide) => slide.visualBrief);
   if (directed.length >= 3) {
     return [0, Math.round((directed.length - 1) / 2), directed.length - 1].map((index) => directed[index]!.index);
   }
   const selected = directed.map((slide) => slide.index);
-  const spread = candidates.length <= 3 ? candidates : [candidates[0]!, candidates[Math.round((candidates.length - 1) / 2)]!, candidates[candidates.length - 1]!];
+  const spread =
+    candidates.length <= 3
+      ? candidates
+      : [candidates[0]!, candidates[Math.round((candidates.length - 1) / 2)]!, candidates[candidates.length - 1]!];
   for (const slide of [...spread, ...candidates]) {
     if (selected.length >= 3) break;
     if (!selected.includes(slide.index)) selected.push(slide.index);

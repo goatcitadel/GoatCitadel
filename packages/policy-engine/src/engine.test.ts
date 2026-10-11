@@ -175,7 +175,9 @@ describe("stored tool artifact reads", () => {
     const result = await engine.invoke(request);
     expect(result.outcome).toBe("executed");
     expect(result.result).toMatchObject({ content: "saved research" });
-    expect(readToolArtifact).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "session", args: request.args }));
+    expect(readToolArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "session", args: request.args }),
+    );
   });
 
   it.each([
@@ -183,7 +185,9 @@ describe("stored tool artifact reads", () => {
     { tools: { ...policyConfig.tools, approvalMode: "approve_all" as const }, outcome: "approval_required" },
   ])("does not read stored output when policy returns $outcome", async ({ tools, outcome }) => {
     const readToolArtifact = vi.fn(async () => ({ content: "saved research" }));
-    const engine = new ToolPolicyEngine({ ...policyConfig, tools }, createStorageStub(), undefined, { readToolArtifact });
+    const engine = new ToolPolicyEngine({ ...policyConfig, tools }, createStorageStub(), undefined, {
+      readToolArtifact,
+    });
     expect((await engine.invoke(request)).outcome).toBe(outcome);
     expect(readToolArtifact).not.toHaveBeenCalled();
   });
@@ -201,15 +205,26 @@ describe("stored tool artifact reads", () => {
   ])("includes the exact artifact and page bounds in an approval preview", async ({ args, offset, maxChars }) => {
     const storage = createStorageStub();
     const readToolArtifact = vi.fn(async () => ({ content: "saved research" }));
-    const engine = new ToolPolicyEngine({
-      ...policyConfig, tools: { ...policyConfig.tools, approvalMode: "approve_all" },
-    }, storage, undefined, { readToolArtifact });
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: { ...policyConfig.tools, approvalMode: "approve_all" },
+      },
+      storage,
+      undefined,
+      { readToolArtifact },
+    );
     expect((await engine.invoke({ ...request, args })).outcome).toBe("approval_required");
-    expect(storage.approvals.createWithTtlDuration).toHaveBeenCalledWith(expect.objectContaining({
-      preview: expect.objectContaining({
-        target: `Stored tool artifact ${request.args.artifactId}; character offset ${offset}; up to ${maxChars} characters`, offset, maxChars,
+    expect(storage.approvals.createWithTtlDuration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preview: expect.objectContaining({
+          target: `Stored tool artifact ${request.args.artifactId}; character offset ${offset}; up to ${maxChars} characters`,
+          offset,
+          maxChars,
+        }),
       }),
-    }), expect.any(Number));
+      expect.any(Number),
+    );
     expect(readToolArtifact).not.toHaveBeenCalled();
   });
 });
@@ -745,15 +760,39 @@ describe("ToolPolicyEngine citadel scope", () => {
 
   it("keeps Citadel deny-wins policy when replaying a stored approved action", async () => {
     const storage = createStorageStub();
-    Object.assign(storage.toolGrants, { listActive: vi.fn((scope: string, scopeRef: string) =>
-      scope === "citadel" && scopeRef === "c1" ? [{ grantId: "approved-citadel-deny",
-        toolPattern: "session.status", decision: "deny", scope: "citadel", scopeRef: "c1",
-        grantType: "persistent", createdBy: "test", createdAt: new Date().toISOString() }] : []) });
-    vi.mocked(storage.pendingApprovalActions.find).mockResolvedValue(createPendingApprovalAction({
-      approvalId: "apr-citadel-scope", expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      request: { toolName: "session.status", args: {}, agentId: "assistant", sessionId: "session",
-        turnId: "turn", toolRunId: "remote-tool:intent", citadelId: "c1" },
-    }));
+    Object.assign(storage.toolGrants, {
+      listActive: vi.fn((scope: string, scopeRef: string) =>
+        scope === "citadel" && scopeRef === "c1"
+          ? [
+              {
+                grantId: "approved-citadel-deny",
+                toolPattern: "session.status",
+                decision: "deny",
+                scope: "citadel",
+                scopeRef: "c1",
+                grantType: "persistent",
+                createdBy: "test",
+                createdAt: new Date().toISOString(),
+              },
+            ]
+          : [],
+      ),
+    });
+    vi.mocked(storage.pendingApprovalActions.find).mockResolvedValue(
+      createPendingApprovalAction({
+        approvalId: "apr-citadel-scope",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        request: {
+          toolName: "session.status",
+          args: {},
+          agentId: "assistant",
+          sessionId: "session",
+          turnId: "turn",
+          toolRunId: "remote-tool:intent",
+          citadelId: "c1",
+        },
+      }),
+    );
     const engine = new ToolPolicyEngine(policyConfig, storage);
     expect(await engine.executeApprovedAction("apr-citadel-scope")).toMatchObject({ outcome: "blocked" });
     expect(storage.toolGrants.listActive).toHaveBeenCalledWith("citadel", "c1");
@@ -5110,16 +5149,18 @@ describe("ToolPolicyEngine outside-root read access", () => {
 describe("ToolPolicyEngine scoped mutation gating", () => {
   it("keeps fs.patch approval-governed and lets an explicit denial win", async () => {
     const storage = createStorageStub();
-    vi.mocked(storage.toolGrants.list).mockResolvedValue([{
-      grantId: "allow-patch",
-      toolPattern: "fs.patch",
-      decision: "allow",
-      scope: "session",
-      scopeRef: "session-1",
-      grantType: "persistent",
-      createdBy: "test",
-      createdAt: new Date().toISOString(),
-    }]);
+    vi.mocked(storage.toolGrants.list).mockResolvedValue([
+      {
+        grantId: "allow-patch",
+        toolPattern: "fs.patch",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session-1",
+        grantType: "persistent",
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
     const request = {
       toolName: "fs.patch",
       args: { path: "./workspace/output.txt", expectedSha256: "a".repeat(64), oldText: "old", newText: "new" },
@@ -5128,16 +5169,18 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
     };
     const engine = new ToolPolicyEngine(policyConfig, storage);
     expect(await engine.evaluateAccess(request)).toMatchObject({ allowed: true, requiresApproval: true });
-    vi.mocked(storage.toolGrants.list).mockResolvedValue([{
-      grantId: "deny-patch",
-      toolPattern: "fs.patch",
-      decision: "deny",
-      scope: "session",
-      scopeRef: "session-1",
-      grantType: "persistent",
-      createdBy: "test",
-      createdAt: new Date().toISOString(),
-    }]);
+    vi.mocked(storage.toolGrants.list).mockResolvedValue([
+      {
+        grantId: "deny-patch",
+        toolPattern: "fs.patch",
+        decision: "deny",
+        scope: "session",
+        scopeRef: "session-1",
+        grantType: "persistent",
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
     expect(await engine.evaluateAccess(request)).toMatchObject({ allowed: false });
   });
 

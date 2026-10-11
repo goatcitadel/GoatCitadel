@@ -592,10 +592,13 @@ function presentationAssetSpecificityFindings(
   ];
 }
 
-async function preparePresentationVisuals(input: {
-  request?: ToolInvokeRequest;
-  preparePresentationVisuals?: PreparePresentationVisuals;
-}, slides: readonly PresentationSlide[]): Promise<PreparedPresentationVisuals> {
+async function preparePresentationVisuals(
+  input: {
+    request?: ToolInvokeRequest;
+    preparePresentationVisuals?: PreparePresentationVisuals;
+  },
+  slides: readonly PresentationSlide[],
+): Promise<PreparedPresentationVisuals> {
   if (!input.request || !input.preparePresentationVisuals) {
     return { plan: [], assets: [], warnings: [], providerCalls: 0 };
   }

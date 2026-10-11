@@ -87,7 +87,13 @@ export function drawPdfTable(
 }
 
 /** Data cards retain column labels, every cell and its citation links. */
-export function drawPdfTableCards(page: PdfPage, table: PresentationTable, sources: readonly PresentationSource[], theme: PdfDeckTheme, box: PdfTextBox): boolean {
+export function drawPdfTableCards(
+  page: PdfPage,
+  table: PresentationTable,
+  sources: readonly PresentationSource[],
+  theme: PdfDeckTheme,
+  box: PdfTextBox,
+): boolean {
   const count = table.rows.length;
   if (count === 0) return drawPdfTable(page, table, sources, theme, box);
   const gap = 12;
@@ -95,10 +101,19 @@ export function drawPdfTableCards(page: PdfPage, table: PresentationTable, sourc
   const columns = Math.max(table.headers.length, ...table.rows.map((row) => row.length), 1);
   if (height < 85 || columns > 3) return drawPdfTable(page, table, sources, theme, box);
   const width = box.w / columns;
-  if (table.rows.some((row) => row.some((cell, column) =>
-    layoutRuns(tableCellRuns(table.headers[column] ?? { text: "" }, sources), "bold", 14, width - 36).length * 17
-      + layoutRuns(tableCellRuns(cell, sources), "regular", 18, width - 36).length * 22 + 22 > height,
-  ))) return drawPdfTable(page, table, sources, theme, box);
+  if (
+    table.rows.some((row) =>
+      row.some(
+        (cell, column) =>
+          layoutRuns(tableCellRuns(table.headers[column] ?? { text: "" }, sources), "bold", 14, width - 36).length *
+            17 +
+            layoutRuns(tableCellRuns(cell, sources), "regular", 18, width - 36).length * 22 +
+            22 >
+          height,
+      ),
+    )
+  )
+    return drawPdfTable(page, table, sources, theme, box);
   table.rows.forEach((row, rowIndex) => {
     const y = box.y + rowIndex * (height + gap);
     page.rect(box.x, y, box.w, height, theme.surface, { color: theme.border, width: 0.75 });
@@ -111,7 +126,9 @@ export function drawPdfTableCards(page: PdfPage, table: PresentationTable, sourc
       const labels = layoutRuns(header, "bold", 14, width - 36);
       const values = layoutRuns(cell, "regular", 18, width - 36);
       labels.forEach((line, i) => drawRunLine(page, line, x, y + 20 + i * 17, "bold", 14, colors));
-      values.forEach((line, i) => drawRunLine(page, line, x, y + 30 + labels.length * 17 + i * 22, "regular", 18, colors));
+      values.forEach((line, i) =>
+        drawRunLine(page, line, x, y + 30 + labels.length * 17 + i * 22, "regular", 18, colors),
+      );
     }
   });
   return false;

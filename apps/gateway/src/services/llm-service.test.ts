@@ -3435,231 +3435,240 @@ describe("LlmService", () => {
     expect(payloadBody?.text).toEqual({ verbosity: "low" });
   });
 
-  it.each(["gpt-5.6-sol", "gpt-6.1-sol"])("uses the Codex Responses Lite envelope for %s subscription tools", async (model) => {
-    const secretStore = createTrackedSecretStore({
-      "provider:openai-codex:oauth": JSON.stringify({
-        accessToken: "codex-access-token",
-        refreshToken: "codex-refresh-token",
-        expiresAt: Date.now() + 10 * 60_000,
-        updatedAt: Date.now(),
-      }),
-    });
-    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
-    const originalFetch = globalThis.fetch;
-    let payloadBody: Record<string, unknown> | undefined;
-    let responsesLiteHeader: string | null = null;
-
-    globalThis.fetch = vi.fn(async (_input, init) => {
-      const headers = new Headers(init?.headers);
-      responsesLiteHeader = headers.get("x-openai-internal-codex-responses-lite");
-      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
-      return new Response(
-        [
-          'data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_status","name":"lookup_status","arguments":""}}',
-          "",
-          'data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_status","name":"lookup_status","arguments":"{}"}}',
-          "",
-          'data: {"type":"response.completed","response":{"id":"resp_codex_lite","model":"gpt-5.6-sol","output":[],"usage":{"input_tokens":8,"output_tokens":2,"total_tokens":10}}}',
-          "",
-          "data: [DONE]",
-          "",
-        ].join("\n"),
-        { status: 200, headers: { "content-type": "text/event-stream" } },
-      );
-    }) as unknown as typeof fetch;
-
-    try {
-      const completion = await service.chatCompletions({
-        providerId: "openai-codex",
-        model: `openai-codex/${model}`,
-        service_tier: "fast",
-        messages: [
-          { role: "developer", content: "Use the supplied tool." },
-          { role: "user", content: "Check status." },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "lookup_status",
-              description: "Look up runtime status.",
-              parameters: { type: "object", properties: {}, additionalProperties: false },
-            },
-          },
-        ],
-        tool_choice: "required",
-        parallel_tool_calls: true,
+  it.each(["gpt-5.6-sol", "gpt-6.1-sol"])(
+    "uses the Codex Responses Lite envelope for %s subscription tools",
+    async (model) => {
+      const secretStore = createTrackedSecretStore({
+        "provider:openai-codex:oauth": JSON.stringify({
+          accessToken: "codex-access-token",
+          refreshToken: "codex-refresh-token",
+          expiresAt: Date.now() + 10 * 60_000,
+          updatedAt: Date.now(),
+        }),
       });
+      const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+      const originalFetch = globalThis.fetch;
+      let payloadBody: Record<string, unknown> | undefined;
+      let responsesLiteHeader: string | null = null;
 
-      expect((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.tool_calls).toEqual([
-        {
-          id: "call_status",
-          type: "function",
-          function: { name: "lookup_status", arguments: "{}" },
-        },
-      ]);
+      globalThis.fetch = vi.fn(async (_input, init) => {
+        const headers = new Headers(init?.headers);
+        responsesLiteHeader = headers.get("x-openai-internal-codex-responses-lite");
+        payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+        return new Response(
+          [
+            'data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_status","name":"lookup_status","arguments":""}}',
+            "",
+            'data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_status","name":"lookup_status","arguments":"{}"}}',
+            "",
+            'data: {"type":"response.completed","response":{"id":"resp_codex_lite","model":"gpt-5.6-sol","output":[],"usage":{"input_tokens":8,"output_tokens":2,"total_tokens":10}}}',
+            "",
+            "data: [DONE]",
+            "",
+          ].join("\n"),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }) as unknown as typeof fetch;
 
-      const streamChunks: Array<Record<string, unknown>> = [];
-      for await (const chunk of service.chatCompletionsStream({
-        providerId: "openai-codex",
-        model: `openai-codex/${model}`,
-        service_tier: "fast",
-        messages: [
-          { role: "developer", content: "Use the supplied tool." },
-          { role: "user", content: "Check status." },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "lookup_status",
-              description: "Look up runtime status.",
-              parameters: { type: "object", properties: {}, additionalProperties: false },
+      try {
+        const completion = await service.chatCompletions({
+          providerId: "openai-codex",
+          model: `openai-codex/${model}`,
+          service_tier: "fast",
+          messages: [
+            { role: "developer", content: "Use the supplied tool." },
+            { role: "user", content: "Check status." },
+          ],
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "lookup_status",
+                description: "Look up runtime status.",
+                parameters: { type: "object", properties: {}, additionalProperties: false },
+              },
             },
+          ],
+          tool_choice: "required",
+          parallel_tool_calls: true,
+        });
+
+        expect((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.tool_calls).toEqual([
+          {
+            id: "call_status",
+            type: "function",
+            function: { name: "lookup_status", arguments: "{}" },
           },
-        ],
-      })) {
-        streamChunks.push(chunk);
-      }
-      expect(streamChunks).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            choices: [
-              expect.objectContaining({
-                delta: expect.objectContaining({
-                  tool_calls: [expect.objectContaining({ function: { name: "lookup_status", arguments: "{}" } })],
+        ]);
+
+        const streamChunks: Array<Record<string, unknown>> = [];
+        for await (const chunk of service.chatCompletionsStream({
+          providerId: "openai-codex",
+          model: `openai-codex/${model}`,
+          service_tier: "fast",
+          messages: [
+            { role: "developer", content: "Use the supplied tool." },
+            { role: "user", content: "Check status." },
+          ],
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "lookup_status",
+                description: "Look up runtime status.",
+                parameters: { type: "object", properties: {}, additionalProperties: false },
+              },
+            },
+          ],
+        })) {
+          streamChunks.push(chunk);
+        }
+        expect(streamChunks).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              choices: [
+                expect.objectContaining({
+                  delta: expect.objectContaining({
+                    tool_calls: [expect.objectContaining({ function: { name: "lookup_status", arguments: "{}" } })],
+                  }),
                 }),
-              }),
-            ],
-          }),
-          expect.objectContaining({
-            choices: [expect.objectContaining({ finish_reason: "tool_calls" })],
-          }),
-        ]),
-      );
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-
-    expect(responsesLiteHeader).toBe("true");
-    expect(payloadBody?.instructions).toBeUndefined();
-    expect(payloadBody?.tools).toBeUndefined();
-    expect(payloadBody).toMatchObject({
-      model,
-      service_tier: "priority",
-      tool_choice: "auto",
-      parallel_tool_calls: false,
-      reasoning: { context: "all_turns" },
-      input: [
-        {
-          type: "additional_tools",
-          role: "developer",
-          tools: [expect.objectContaining({ type: "function", name: "lookup_status" })],
-        },
-        {
-          type: "message",
-          role: "developer",
-          content: [{ type: "input_text", text: "Use the supplied tool." }],
-        },
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Check status." }],
-        },
-      ],
-    });
-  });
-
-  it.each(["gpt-5.6-sol", "gpt-6.1-sol"])("allows bounded Codex Responses Lite streams with more than 2048 reasoning events", async (model) => {
-    const secretStore = createTrackedSecretStore({
-      "provider:openai-codex:oauth": JSON.stringify({
-        accessToken: "codex-access-token",
-        refreshToken: "codex-refresh-token",
-        expiresAt: Date.now() + 10 * 60_000,
-        updatedAt: Date.now(),
-      }),
-    });
-    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
-    const originalFetch = globalThis.fetch;
-    const reasoningEvents = Array.from(
-      { length: 2_049 },
-      (_entry, index) =>
-        `data: {"type":"response.reasoning_summary_text.delta","sequence_number":${index},"delta":"r"}`,
-    );
-
-    globalThis.fetch = vi.fn(async () => {
-      return new Response(
-        [
-          ...reasoningEvents,
-          'data: {"type":"response.output_text.delta","delta":"ok","response_id":"resp_codex_long_reasoning"}',
-          'data: {"type":"response.completed","response":{"id":"resp_codex_long_reasoning","model":"gpt-5.6-sol","output":[],"usage":{"input_tokens":8,"output_tokens":2,"total_tokens":10}}}',
-          "data: [DONE]",
-          "",
-        ].join("\n\n"),
-        { status: 200, headers: { "content-type": "text/event-stream" } },
-      );
-    }) as unknown as typeof fetch;
-
-    try {
-      const chunks: Array<Record<string, unknown>> = [];
-      for await (const chunk of service.chatCompletionsStream({
-        providerId: "openai-codex",
-        model: `openai-codex/${model}`,
-        messages: [{ role: "user", content: "Research a complex topic." }],
-      })) {
-        chunks.push(chunk);
+              ],
+            }),
+            expect.objectContaining({
+              choices: [expect.objectContaining({ finish_reason: "tool_calls" })],
+            }),
+          ]),
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
       }
 
-      expect(chunks).toHaveLength(2);
-      expect(chunks[0]).toMatchObject({ choices: [{ delta: { content: "ok" } }] });
-      expect(chunks[1]).toMatchObject({ choices: [{ finish_reason: "stop" }] });
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
-  it.each(["gpt-5.6-sol", "gpt-6.1-sol"])("collects bounded Codex Responses Lite streams with more than 2048 reasoning events", async (model) => {
-    const secretStore = createTrackedSecretStore({
-      "provider:openai-codex:oauth": JSON.stringify({
-        accessToken: "codex-access-token",
-        refreshToken: "codex-refresh-token",
-        expiresAt: Date.now() + 10 * 60_000,
-        updatedAt: Date.now(),
-      }),
-    });
-    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
-    const originalFetch = globalThis.fetch;
-    const reasoningEvents = Array.from(
-      { length: 2_049 },
-      (_entry, index) =>
-        `data: {"type":"response.reasoning_summary_text.delta","sequence_number":${index},"delta":"r"}`,
-    );
-
-    globalThis.fetch = vi.fn(async () => {
-      return new Response(
-        [
-          ...reasoningEvents,
-          'data: {"type":"response.output_text.delta","delta":"ok","response_id":"resp_codex_long_reasoning"}',
-          'data: {"type":"response.completed","response":{"id":"resp_codex_long_reasoning","model":"gpt-5.6-sol","output":[],"usage":{"input_tokens":8,"output_tokens":2,"total_tokens":10}}}',
-          "data: [DONE]",
-          "",
-        ].join("\n\n"),
-        { status: 200, headers: { "content-type": "text/event-stream" } },
-      );
-    }) as unknown as typeof fetch;
-
-    try {
-      const completion = await service.chatCompletions({
-        providerId: "openai-codex",
-        model: `openai-codex/${model}`,
-        messages: [{ role: "user", content: "Research a complex topic." }],
+      expect(responsesLiteHeader).toBe("true");
+      expect(payloadBody?.instructions).toBeUndefined();
+      expect(payloadBody?.tools).toBeUndefined();
+      expect(payloadBody).toMatchObject({
+        model,
+        service_tier: "priority",
+        tool_choice: "auto",
+        parallel_tool_calls: false,
+        reasoning: { context: "all_turns" },
+        input: [
+          {
+            type: "additional_tools",
+            role: "developer",
+            tools: [expect.objectContaining({ type: "function", name: "lookup_status" })],
+          },
+          {
+            type: "message",
+            role: "developer",
+            content: [{ type: "input_text", text: "Use the supplied tool." }],
+          },
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Check status." }],
+          },
+        ],
       });
+    },
+  );
 
-      expect(completion.choices?.[0]?.message).toMatchObject({ content: "ok" });
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
+  it.each(["gpt-5.6-sol", "gpt-6.1-sol"])(
+    "allows bounded Codex Responses Lite streams with more than 2048 reasoning events",
+    async (model) => {
+      const secretStore = createTrackedSecretStore({
+        "provider:openai-codex:oauth": JSON.stringify({
+          accessToken: "codex-access-token",
+          refreshToken: "codex-refresh-token",
+          expiresAt: Date.now() + 10 * 60_000,
+          updatedAt: Date.now(),
+        }),
+      });
+      const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+      const originalFetch = globalThis.fetch;
+      const reasoningEvents = Array.from(
+        { length: 2_049 },
+        (_entry, index) =>
+          `data: {"type":"response.reasoning_summary_text.delta","sequence_number":${index},"delta":"r"}`,
+      );
+
+      globalThis.fetch = vi.fn(async () => {
+        return new Response(
+          [
+            ...reasoningEvents,
+            'data: {"type":"response.output_text.delta","delta":"ok","response_id":"resp_codex_long_reasoning"}',
+            'data: {"type":"response.completed","response":{"id":"resp_codex_long_reasoning","model":"gpt-5.6-sol","output":[],"usage":{"input_tokens":8,"output_tokens":2,"total_tokens":10}}}',
+            "data: [DONE]",
+            "",
+          ].join("\n\n"),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }) as unknown as typeof fetch;
+
+      try {
+        const chunks: Array<Record<string, unknown>> = [];
+        for await (const chunk of service.chatCompletionsStream({
+          providerId: "openai-codex",
+          model: `openai-codex/${model}`,
+          messages: [{ role: "user", content: "Research a complex topic." }],
+        })) {
+          chunks.push(chunk);
+        }
+
+        expect(chunks).toHaveLength(2);
+        expect(chunks[0]).toMatchObject({ choices: [{ delta: { content: "ok" } }] });
+        expect(chunks[1]).toMatchObject({ choices: [{ finish_reason: "stop" }] });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
+
+  it.each(["gpt-5.6-sol", "gpt-6.1-sol"])(
+    "collects bounded Codex Responses Lite streams with more than 2048 reasoning events",
+    async (model) => {
+      const secretStore = createTrackedSecretStore({
+        "provider:openai-codex:oauth": JSON.stringify({
+          accessToken: "codex-access-token",
+          refreshToken: "codex-refresh-token",
+          expiresAt: Date.now() + 10 * 60_000,
+          updatedAt: Date.now(),
+        }),
+      });
+      const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+      const originalFetch = globalThis.fetch;
+      const reasoningEvents = Array.from(
+        { length: 2_049 },
+        (_entry, index) =>
+          `data: {"type":"response.reasoning_summary_text.delta","sequence_number":${index},"delta":"r"}`,
+      );
+
+      globalThis.fetch = vi.fn(async () => {
+        return new Response(
+          [
+            ...reasoningEvents,
+            'data: {"type":"response.output_text.delta","delta":"ok","response_id":"resp_codex_long_reasoning"}',
+            'data: {"type":"response.completed","response":{"id":"resp_codex_long_reasoning","model":"gpt-5.6-sol","output":[],"usage":{"input_tokens":8,"output_tokens":2,"total_tokens":10}}}',
+            "data: [DONE]",
+            "",
+          ].join("\n\n"),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }) as unknown as typeof fetch;
+
+      try {
+        const completion = await service.chatCompletions({
+          providerId: "openai-codex",
+          model: `openai-codex/${model}`,
+          messages: [{ role: "user", content: "Research a complex topic." }],
+        });
+
+        expect(completion.choices?.[0]?.message).toMatchObject({ content: "ok" });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
 
   it("retains the default event limit for non-Lite Codex Responses streams", async () => {
     const secretStore = createTrackedSecretStore({
@@ -4091,91 +4100,100 @@ describe("LlmService", () => {
     });
   });
 
-  it.each(["gpt-5.5", "gpt-6.1-sol"])("posts Codex images through the configured %s coordinator", async (coordinatorModel) => {
-    const secretStore = createTrackedSecretStore({
-      "provider:openai-codex:oauth": JSON.stringify({
-        accessToken: "codex-access-token",
-        refreshToken: "codex-refresh-token",
-        expiresAt: Date.now() + 10 * 60_000,
-        updatedAt: Date.now(),
-      }),
-    });
-    const service = new LlmService({ ...createCodexConfig(), activeModel: coordinatorModel }, process.env, { secretStore });
-    const originalFetch = globalThis.fetch;
-    let requestedUrl = "";
-    let authorizationHeader = "";
-    let payloadBody: Record<string, unknown> | undefined;
-
-    globalThis.fetch = vi.fn(async (input, init) => {
-      requestedUrl = String(input);
-      const headers = new Headers(init?.headers);
-      authorizationHeader = headers.get("authorization") ?? "";
-      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
-      return new Response(
-        [
-          ...(coordinatorModel === "gpt-6.1-sol" ? Array.from({ length: 513 }, () => 'data: {"type":"response.reasoning_summary_text.delta","delta":"r"}') : []),
-          'data: {"type":"response.output_item.done","item":{"type":"image_generation_call","result":"aW1hZ2UtYnl0ZXM=","revised_prompt":"Rendered prompt"}}',
-          'data: {"type":"response.completed","response":{"model":"gpt-image-2","output":[],"usage":{"input_tokens":0,"output_tokens":0,"cost_usd":0}}}',
-          "data: [DONE]",
-          "",
-        ].join("\n\n"),
-        {
-          status: 200,
-          headers: { "content-type": "text/event-stream" },
-        },
-      );
-    }) as unknown as typeof fetch;
-
-    try {
-      const response = await service.generateImage({
-        providerId: "openai-codex",
-        prompt: "Generate a neon operations console",
-        size: "1024x1024",
-        responseFormat: "b64_json",
-        referenceImages: [
-          {
-            bytesBase64: "cmVmZXJlbmNl",
-            mimeType: "image/png",
-            fileName: "reference.png",
-          },
-        ],
+  it.each(["gpt-5.5", "gpt-6.1-sol"])(
+    "posts Codex images through the configured %s coordinator",
+    async (coordinatorModel) => {
+      const secretStore = createTrackedSecretStore({
+        "provider:openai-codex:oauth": JSON.stringify({
+          accessToken: "codex-access-token",
+          refreshToken: "codex-refresh-token",
+          expiresAt: Date.now() + 10 * 60_000,
+          updatedAt: Date.now(),
+        }),
       });
-      expect(response.operation).toBe("edit");
-      expect(response.model).toBe("gpt-image-2");
-      expect(response.data).toEqual([
-        {
-          b64Json: "aW1hZ2UtYnl0ZXM=",
-          revisedPrompt: "Rendered prompt",
-        },
-      ]);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+      const service = new LlmService({ ...createCodexConfig(), activeModel: coordinatorModel }, process.env, {
+        secretStore,
+      });
+      const originalFetch = globalThis.fetch;
+      let requestedUrl = "";
+      let authorizationHeader = "";
+      let payloadBody: Record<string, unknown> | undefined;
 
-    const input = payloadBody?.input as Array<Record<string, unknown>>;
-    const tools = (payloadBody?.tools ?? input.find((item) => item.type === "additional_tools")?.tools) as Array<Record<string, unknown>>;
+      globalThis.fetch = vi.fn(async (input, init) => {
+        requestedUrl = String(input);
+        const headers = new Headers(init?.headers);
+        authorizationHeader = headers.get("authorization") ?? "";
+        payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+        return new Response(
+          [
+            ...(coordinatorModel === "gpt-6.1-sol"
+              ? Array.from({ length: 513 }, () => 'data: {"type":"response.reasoning_summary_text.delta","delta":"r"}')
+              : []),
+            'data: {"type":"response.output_item.done","item":{"type":"image_generation_call","result":"aW1hZ2UtYnl0ZXM=","revised_prompt":"Rendered prompt"}}',
+            'data: {"type":"response.completed","response":{"model":"gpt-image-2","output":[],"usage":{"input_tokens":0,"output_tokens":0,"cost_usd":0}}}',
+            "data: [DONE]",
+            "",
+          ].join("\n\n"),
+          {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          },
+        );
+      }) as unknown as typeof fetch;
 
-    expect(requestedUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
-    expect(authorizationHeader).toBe("Bearer codex-access-token");
-    expect(payloadBody).toMatchObject({
-      model: coordinatorModel,
-      stream: true,
-      store: false,
-      tool_choice: { type: "image_generation" },
-    });
-    expect(payloadBody?.instructions).toBe("You are an image generation assistant.");
-    expect(tools[0]).toMatchObject({
-      type: "image_generation",
-      model: "gpt-image-2",
-      size: "1024x1024",
-    });
-    expect(input.find((item) => item.role === "user")?.content).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "input_text", text: "Generate a neon operations console" }),
-        expect.objectContaining({ type: "input_image", image_url: "data:image/png;base64,cmVmZXJlbmNl" }),
-      ]),
-    );
-  });
+      try {
+        const response = await service.generateImage({
+          providerId: "openai-codex",
+          prompt: "Generate a neon operations console",
+          size: "1024x1024",
+          responseFormat: "b64_json",
+          referenceImages: [
+            {
+              bytesBase64: "cmVmZXJlbmNl",
+              mimeType: "image/png",
+              fileName: "reference.png",
+            },
+          ],
+        });
+        expect(response.operation).toBe("edit");
+        expect(response.model).toBe("gpt-image-2");
+        expect(response.data).toEqual([
+          {
+            b64Json: "aW1hZ2UtYnl0ZXM=",
+            revisedPrompt: "Rendered prompt",
+          },
+        ]);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+
+      const input = payloadBody?.input as Array<Record<string, unknown>>;
+      const tools = (payloadBody?.tools ?? input.find((item) => item.type === "additional_tools")?.tools) as Array<
+        Record<string, unknown>
+      >;
+
+      expect(requestedUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
+      expect(authorizationHeader).toBe("Bearer codex-access-token");
+      expect(payloadBody).toMatchObject({
+        model: coordinatorModel,
+        stream: true,
+        store: false,
+        tool_choice: { type: "image_generation" },
+      });
+      expect(payloadBody?.instructions).toBe("You are an image generation assistant.");
+      expect(tools[0]).toMatchObject({
+        type: "image_generation",
+        model: "gpt-image-2",
+        size: "1024x1024",
+      });
+      expect(input.find((item) => item.role === "user")?.content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "input_text", text: "Generate a neon operations console" }),
+          expect.objectContaining({ type: "input_image", image_url: "data:image/png;base64,cmVmZXJlbmNl" }),
+        ]),
+      );
+    },
+  );
 
   it("rejects OpenAI Codex image responses whose content-length exceeds the bounded reader limit", async () => {
     const secretStore = createTrackedSecretStore({

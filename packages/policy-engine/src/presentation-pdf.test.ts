@@ -64,24 +64,45 @@ describe("pdf writer text primitives", () => {
 
 describe("createPresentationPdf", () => {
   it("keeps citation text readable when the decorative secondary accent is pale", async () => {
-    const slides: PresentationSlide[] = [{ title: "Budget", archetype: "comparison", bullets: [{ text: "Daily cost is an estimate.", sourceIds: ["official"] }] }];
+    const slides: PresentationSlide[] = [
+      {
+        title: "Budget",
+        archetype: "comparison",
+        bullets: [{ text: "Daily cost is an estimate.", sourceIds: ["official"] }],
+      },
+    ];
     const design = designFor("Travel", slides);
-    design.tokens.surface = "#ffffff"; design.tokens.accent2 = "#fff4d8"; design.tokens.accent = "#143e3b";
+    design.tokens.surface = "#ffffff";
+    design.tokens.accent2 = "#fff4d8";
+    design.tokens.accent = "#143e3b";
     const result = await createPresentationPdf({ title: "Travel", slides, sources: SOURCES, design });
-    const match = /BT[^\n]*?([\d.]+) ([\d.]+) ([\d.]+) rg[^\n]*\(\[S1\]\)/u.exec(contentStreams(result.buffer).join("\n"));
+    const match = /BT[^\n]*?([\d.]+) ([\d.]+) ([\d.]+) rg[^\n]*\(\[S1\]\)/u.exec(
+      contentStreams(result.buffer).join("\n"),
+    );
     expect(match).not.toBeNull();
-    const rgb = match!.slice(1, 4).map(Number).map((v) => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    const rgb = match!
+      .slice(1, 4)
+      .map(Number)
+      .map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
     const luminance = rgb[0]! * 0.2126 + rgb[1]! * 0.7152 + rgb[2]! * 0.0722;
     expect(1.05 / (luminance + 0.05)).toBeGreaterThanOrEqual(4.5);
   });
 
   it("varies data pages with cards while retaining every label, value and citation", async () => {
-    const table = { headers: [{ text: "Style" }, { text: "Budget" }], rows: [
-      [{ text: "Guesthouse" }, { text: "$40", sourceIds: ["official"] }],
-      [{ text: "Resort" }, { text: "$90", sourceIds: ["official"] }],
-    ] };
+    const table = {
+      headers: [{ text: "Style" }, { text: "Budget" }],
+      rows: [
+        [{ text: "Guesthouse" }, { text: "$40", sourceIds: ["official"] }],
+        [{ text: "Resort" }, { text: "$90", sourceIds: ["official"] }],
+      ],
+    };
     const slides: PresentationSlide[] = [0, 1].map((index) => ({ title: `Budget ${index}`, bullets: [], table }));
-    const result = await createPresentationPdf({ title: "Travel", slides, sources: SOURCES, design: designFor("Travel", slides) });
+    const result = await createPresentationPdf({
+      title: "Travel",
+      slides,
+      sources: SOURCES,
+      design: designFor("Travel", slides),
+    });
     expect(result.layoutNames).toEqual(["hero", "table", "table-continuation"]);
     const cards = contentStreams(result.buffer)[2]!;
     for (const text of ["Style", "Budget", "Guesthouse", "Resort", "$40", "$90"]) expect(cards).toContain(`(${text})`);
@@ -91,10 +112,16 @@ describe("createPresentationPdf", () => {
 
   it("renders adjacent comparison pages with distinct geometry and keeps every cited claim", async () => {
     const slides: PresentationSlide[] = [0, 1].map((index) => ({
-      title: `Destination ${index}`, archetype: "comparison",
+      title: `Destination ${index}`,
+      archetype: "comparison",
       bullets: [{ text: `Budget fact ${index}`, claimKind: "fact", sourceIds: ["official"] }, "Suggested itinerary"],
     }));
-    const result = await createPresentationPdf({ title: "Travel", slides, sources: SOURCES, design: designFor("Travel", slides) });
+    const result = await createPresentationPdf({
+      title: "Travel",
+      slides,
+      sources: SOURCES,
+      design: designFor("Travel", slides),
+    });
     expect(result.layoutNames).toEqual(["hero", "comparison", "stacked-list"]);
     const streams = contentStreams(result.buffer);
     expect(streams[1]).not.toBe(streams[2]);
@@ -103,10 +130,17 @@ describe("createPresentationPdf", () => {
   });
 
   it("draws approved section images even on semantic comparison pages", async () => {
-    const bytes = await sharp({ create: { width: 100, height: 80, channels: 3, background: "#24aabb" } }).png().toBuffer();
-    const slides: PresentationSlide[] = [{ title: "Hoi An", archetype: "comparison", bullets: ["Lanterns beside the river."] }];
+    const bytes = await sharp({ create: { width: 100, height: 80, channels: 3, background: "#24aabb" } })
+      .png()
+      .toBuffer();
+    const slides: PresentationSlide[] = [
+      { title: "Hoi An", archetype: "comparison", bullets: ["Lanterns beside the river."] },
+    ];
     const result = await createPresentationPdf({
-      title: "Travel", slides, sources: [], design: designFor("Travel", slides),
+      title: "Travel",
+      slides,
+      sources: [],
+      design: designFor("Travel", slides),
       visualAssets: [{ slideIndex: 1, asset: { bytesBase64: bytes.toString("base64"), mimeType: "image/png" } }],
     });
     expect(result.layoutNames).toEqual(["hero", "image-text"]);
