@@ -12,24 +12,40 @@ export function formattedTime(iso: string | undefined): string {
     : "Time unavailable";
 }
 
-export function lastRunOutcomeLabel(status: CronJobRecordResponse["lastRunStatus"]): string {
-  if (status === "failed") return "Failed";
-  if (status === "skipped") return "Skipped (no work done)";
-  if (status === "ok") return "Succeeded";
-  return "Not reported";
-}
-
-/** Reads the Gateway-authored skip reason from the last run output; absent or malformed output yields undefined. */
-export function lastRunSkipReason(job: CronJobRecordResponse): string | undefined {
-  if (job.lastRunStatus !== "skipped" || !job.lastRunOutput) return undefined;
+/** Parses the Gateway-authored last run output; absent or malformed output yields undefined. */
+function readLastRunOutput(job: CronJobRecordResponse): Record<string, unknown> | undefined {
+  if (!job.lastRunOutput) return undefined;
   try {
     const parsed: unknown = JSON.parse(job.lastRunOutput);
-    const reason =
-      typeof parsed === "object" && parsed !== null ? (parsed as { skipReason?: unknown }).skipReason : undefined;
-    return typeof reason === "string" && reason.trim() ? reason : undefined;
+    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : undefined;
   } catch {
     return undefined;
   }
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+export function lastRunOutcomeLabel(job: CronJobRecordResponse): string {
+  if (job.lastRunStatus === "failed") return "Failed";
+  if (job.lastRunStatus === "skipped") return "Skipped (no work done)";
+  if (job.lastRunStatus === "ok") {
+    return readLastRunOutput(job)?.result === "partial" ? "Partially completed" : "Succeeded";
+  }
+  return "Not reported";
+}
+
+export function lastRunSkipReason(job: CronJobRecordResponse): string | undefined {
+  if (job.lastRunStatus !== "skipped") return undefined;
+  return readNonEmptyString(readLastRunOutput(job)?.skipReason);
+}
+
+/** Present when a cleanly settled run stopped before finishing all of its work. */
+export function lastRunPartial(job: CronJobRecordResponse): { reason?: string } | undefined {
+  if (job.lastRunStatus !== "ok") return undefined;
+  const output = readLastRunOutput(job);
+  return output?.result === "partial" ? { reason: readNonEmptyString(output.partialReason) } : undefined;
 }
 
 export function WorkScheduleListItem({ job, onReview }: { job: CronJobRecordResponse; onReview: () => void }) {
@@ -50,7 +66,7 @@ export function WorkScheduleListItem({ job, onReview }: { job: CronJobRecordResp
         Next run: {job.enabled ? formattedTime(job.nextRunAt) : "Paused"}
       </p>
       <p className="mt-2 text-sm text-fg-secondary">
-        Last outcome: {lastRunOutcomeLabel(job.lastRunStatus)}
+        Last outcome: {lastRunOutcomeLabel(job)}
         {job.failureCount ? ` · ${job.failureCount} recorded failures` : ""}
         {job.backoffUntil ? ` · Backoff until ${formattedTime(job.backoffUntil)}` : ""}
       </p>
@@ -63,6 +79,7 @@ export function WorkScheduleListItem({ job, onReview }: { job: CronJobRecordResp
 
 export function WorkScheduleRecordDetails({ selected }: { selected: CronJobRecordResponse }) {
   const skipReason = lastRunSkipReason(selected);
+  const partial = lastRunPartial(selected);
   return (
     <>
       <dl className="grid gap-2 text-sm">
@@ -96,6 +113,12 @@ export function WorkScheduleRecordDetails({ selected }: { selected: CronJobRecor
         <p className="text-sm text-status-waiting">
           Last run was skipped and did no work.{" "}
           {skipReason ? `Reason: ${humanizeToken(skipReason)}.` : "The Gateway did not report a skip reason."}
+        </p>
+      ) : null}
+      {partial ? (
+        <p className="text-sm text-status-waiting">
+          Last run stopped before finishing all of its work; the work it did is kept.{" "}
+          {partial.reason ? `Reason: ${humanizeToken(partial.reason)}.` : "The Gateway did not report why it stopped."}
         </p>
       ) : null}
       <p className="text-sm text-fg-secondary">

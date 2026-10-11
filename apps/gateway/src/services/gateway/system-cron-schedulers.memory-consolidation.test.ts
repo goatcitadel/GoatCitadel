@@ -122,6 +122,27 @@ describe("runMemoryConsolidationSchedulerIfDue outcome", () => {
     expect(systemSettingSet).not.toHaveBeenCalled();
   });
 
+  it("reports a kill-switch stop as a skip when every sampled session failed", async () => {
+    const allFailed = { ...buildSummary("skipped_kill_switch"), sessionsSampled: 2, sessionsFailed: 2 };
+    const { deps } = createDeps({ summary: allFailed });
+
+    await expect(runMemoryConsolidationSchedulerIfDue(deps, CRON_HANDLER_OPTIONS)).resolves.toEqual({
+      status: "skipped",
+      reason: "autonomy_kill_switch",
+      detail: { consolidationStatus: "skipped_kill_switch", consolidation: allFailed },
+    });
+  });
+
+  it("keeps a partial completion when a sampled session drafted zero candidates", async () => {
+    const zeroDrafts = { ...buildSummary("skipped_kill_switch"), sessionsSampled: 1, sessionsFailed: 0 };
+    const { deps } = createDeps({ summary: zeroDrafts });
+
+    await expect(runMemoryConsolidationSchedulerIfDue(deps, CRON_HANDLER_OPTIONS)).resolves.toMatchObject({
+      status: "completed",
+      partial: { reason: "autonomy_kill_switch" },
+    });
+  });
+
   it("reports a completed consolidation with its summary and leaves cron telemetry to CronAutomation", async () => {
     const { deps, runMemoryConsolidation, systemSettingSet, cronJobUpsert } = createDeps({});
 

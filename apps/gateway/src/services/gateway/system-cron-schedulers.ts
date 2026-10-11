@@ -381,8 +381,9 @@ export async function runMemoryConsolidationSchedulerIfDue(
     if (summary.status !== "completed") {
       const reason = MEMORY_CONSOLIDATION_SKIP_REASON_BY_STATUS[summary.status];
       // The kill switch is re-checked before every session, so it can stop a run
-      // after proposals were already durably created. That run did real work.
-      if (summary.sessionsSampled > 0) {
+      // after proposals were already durably created. Only a session that drafted
+      // without failing counts as real work; an all-failed run is still a skip.
+      if (summary.sessionsSampled > summary.sessionsFailed) {
         return { status: "completed", summary: { ...summary }, partial: { reason } };
       }
       return {
