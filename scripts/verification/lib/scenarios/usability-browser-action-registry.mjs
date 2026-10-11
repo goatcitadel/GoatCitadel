@@ -388,8 +388,8 @@ const STEPS = [
   ]),
   externalStep("library-content", "route.library-knowledge.chat-attach-and-governed-copy", "library-knowledge", [
     "chat-attach-goes-live",
-    "select-attachment-for-turn",
-    "send-with-frozen-refs-clears-selection",
+    "next-turn-inclusion-unavailable",
+    "send-excludes-attached-sources",
     "request-knowledge-copy",
     "approve-in-approvals-inbox",
     "recovered-snapshot-visible-with-provenance",
