@@ -8,6 +8,7 @@ import type {
   OperatorInboxItem,
   OperatorInboxResponse,
 } from "@goatcitadel/contracts";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboxUserInputDetail } from "./InboxUserInputDetail";
@@ -271,6 +272,25 @@ describe("Inbox Chat question", () => {
     expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Review answer")).toBe(
       false,
     );
+  });
+
+  it("keeps the answer form available after the owner refuses an answer", async () => {
+    api.answerChatUserInputPrompt.mockRejectedValueOnce(
+      new ApiRequestError("API error 400", { kind: "http", method: "POST", path: "/x", status: 400, body: { message: "Choose one of the offered options." } }),
+    );
+    await renderDetail();
+    const radio = container.querySelector<HTMLInputElement>('input[type="radio"]');
+    if (!radio) throw new Error("Missing option");
+    await act(async () => radio.click());
+    await act(async () => button("Review answer").click());
+    await act(async () => button("Confirm answer").click());
+    expect(container.textContent).toContain("Choose one of the offered options.");
+    expect(container.textContent).not.toContain("uncertain");
+    expect(button("Review answer").disabled).toBe(false);
+    await act(async () => button("Review answer").click());
+    await act(async () => button("Confirm answer").click());
+    expect(api.answerChatUserInputPrompt).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Gateway accepted the answer");
   });
 
   it("keeps the answer form while the question is rechecked", async () => {

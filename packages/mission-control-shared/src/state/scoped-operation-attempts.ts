@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { isApiRequestError } from "../api/http-internal";
 
 type Attempt = {
   token: symbol;
@@ -47,6 +48,35 @@ export function releaseApprovalOperationCheck(key: string, token: symbol) {
   attempts.delete(key);
   emit();
 }
+/** The owner answered and refused: nothing was recorded, so the same revision may be reviewed again. */
+export function releaseRefusedApprovalOperation(key: string, token: symbol) {
+  const current = attempts.get(key);
+  if (current?.token !== token) return;
+  attempts.delete(key);
+  emit();
+}
+/** Operator-initiated only. Clears a lost-response lock without claiming the original write settled. */
+export function dismissUncertainApprovalOperation(key: string): boolean {
+  const current = attempts.get(key);
+  if (current?.phase !== "uncertain") return false;
+  attempts.delete(key);
+  emit();
+  return true;
+}
+
+export type OperationFailureClass = "refused" | "uncertain";
+const REFUSAL_STATUSES = new Set([400, 401, 403, 404, 409, 422]);
+/**
+ * A Gateway answer with a definitive 4xx refusal means the write was not recorded. Lost
+ * responses, aborts, timeouts, protocol failures and 5xx leave the outcome unknown.
+ */
+export function classifyOperationFailure(cause: unknown): OperationFailureClass {
+  return isApiRequestError(cause) && cause.kind === "http" && cause.status !== undefined && REFUSAL_STATUSES.has(cause.status)
+    ? "refused"
+    : "uncertain";
+}
+export const UNCERTAIN_OPERATION_LOCK_NOTE =
+  "Further writes to this record are locked until this notice is dismissed or the page is reloaded; a later read does not settle the original attempt.";
 export function __resetApprovalOperationAttemptsForTests() {
   attempts.clear();
   emit();

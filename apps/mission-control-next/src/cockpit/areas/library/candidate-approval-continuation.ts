@@ -4,6 +4,8 @@ import { canonicalJsonString, redactStructuredSecrets, type ApprovalReplaySnapsh
 import { fetchApprovalReplay } from "@goatcitadel/mission-control-shared/api/approvals";
 import { fetchChangePlan, respondToChangePlan } from "@goatcitadel/mission-control-shared/api/chat";
 import { fetchCapabilityCandidate } from "@goatcitadel/mission-control-shared/api/capabilities";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { classifyOperationFailure } from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 async function hash(value: unknown) { return [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJsonString(value))))].map(byte => byte.toString(16).padStart(2, "0")).join(""); }
@@ -61,7 +63,7 @@ export function useCandidateApprovalContinuation({ plan, reviewed, onSettled }: 
     const isCurrent = () => access.current() && lifecycle.current.mounted && lifecycle.current.snapshot === snapshot;
     const context = { workspaceId: plan.origin.workspaceId };
     publish(key, "Checking the current candidate plan and lifecycle approval…"); setNotice(undefined);
-    let dispatched = false;
+    let dispatched = false, refused = false;
     try {
       const fresh = await fetchChangePlan(plan.planId, context);
       if (!isCurrent()) return;
@@ -79,8 +81,14 @@ export function useCandidateApprovalContinuation({ plan, reviewed, onSettled }: 
       if (receipt.planId !== plan.planId || receipt.origin.workspaceId !== context.workspaceId || receipt.intentHash !== plan.intentHash || receipt.target.resourceId !== reviewed.candidateId || receipt.revision <= plan.revision) throw new Error("Candidate continuation receipt does not confirm this action.");
       publish(key, "Continuation recorded. Inspect canonical plan settlement and candidate availability.");
       if (isCurrent()) await onSettled();
-    } catch (cause) { const message = dispatched ? "Candidate continuation outcome is uncertain. This exact attempt is locked; refresh canonical state." : cause instanceof Error ? cause.message : "Candidate approval could not be checked."; if (dispatched) publish(key, message); if (isCurrent()) setNotice(message); }
-    finally { if (!dispatched) publish(key); }
+    } catch (cause) {
+      // Gateway answered and recorded nothing: no replay lock, the exact plan may be continued again.
+      refused = dispatched && classifyOperationFailure(cause) === "refused";
+      const message = refused ? `Gateway did not accept the continuation. ${describeApiError(cause).summary}` : dispatched ? "Candidate continuation outcome is uncertain. This exact attempt is locked; refresh canonical state." : cause instanceof Error ? cause.message : "Candidate approval could not be checked.";
+      if (dispatched && !refused) publish(key, message);
+      if (isCurrent()) setNotice(message);
+    }
+    finally { if (!dispatched || refused) publish(key); }
   }
   return { visible: Boolean(action(plan) || attempt), disabled: !action(plan) || Boolean(attempt), message: attempt ?? notice, continueApproved };
 }

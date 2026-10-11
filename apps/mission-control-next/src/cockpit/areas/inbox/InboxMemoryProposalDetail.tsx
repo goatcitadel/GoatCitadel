@@ -12,6 +12,7 @@ import { queryKeys } from "../../data/query-keys";
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordAnswered, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { classifyOperationFailure } from "./approval-operation-attempts";
 import { canResolveInboxMemoryProposal } from "./memory-proposal-guard";
 import { nullWhenMissing } from "./inbox-record-read";
 
@@ -113,7 +114,10 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
     } catch (cause) {
       setReview(null);
-      if (mutationAttempted) {
+      if (mutationAttempted && classifyOperationFailure(cause) === "refused") {
+        // Gateway answered and recorded nothing: the decisions stay available.
+        setError(`Gateway did not accept the decision. ${describeApiError(cause).summary}`);
+      } else if (mutationAttempted) {
         setOutcomeUncertain(true);
         setError(
           `Decision outcome is uncertain. Inspect the current proposal in Memory before taking another action. ${describeApiError(cause).summary}`,
