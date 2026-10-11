@@ -70,7 +70,7 @@ describe("channel setup route tails", () => {
     await expectStatus("POST", "/api/v1/channels/drafts/not-a-uuid/test", 400);
     await expectError("POST", `/api/v1/channels/drafts/${DRAFT_ID}/test`, 404, "test failed", { expectedRevision: 1 });
     await expectStatus("POST", "/api/v1/channels/drafts/not-a-uuid/finalize", 400);
-    await expectError("POST", `/api/v1/channels/drafts/${DRAFT_ID}/finalize`, 500, "Internal server error", {
+    await expectError("POST", `/api/v1/channels/drafts/${DRAFT_ID}/finalize`, 409, "Channel activation requires Change Plan review in Chat. Enable change management, then create and review the channel plan.", {
       expectedRevision: 1,
     });
     await expectStatus("POST", "/api/v1/channels/connections/not-a-uuid/repair-draft", 400);
@@ -175,14 +175,8 @@ describe("channel setup route tails", () => {
         requestCount: 17,
       });
     }
-    expect(finalized.statusCode).toBe(200);
-    expect(channelSetup.finalizeChannelSetupDraft).toHaveBeenCalledWith(DRAFT_ID, 1, expect.any(Function));
-    expect(finalized.json().connection.config).toMatchObject({
-      botToken: "[REDACTED]",
-      webhookUrl: "[REDACTED]",
-      botTokenEnv: "SLACK_BOT_TOKEN",
-      channelId: "C-OLD",
-    });
+    expect(finalized.statusCode).toBe(409);
+    expect(channelSetup.finalizeChannelSetupDraft).not.toHaveBeenCalled();
     for (const response of [validated, tested, retested]) {
       expect(response.body).not.toContain("probe-short");
       expect(response.body).not.toContain("validation-short");
@@ -249,49 +243,7 @@ describe("channel setup route tails", () => {
     expect(response.body).not.toContain("bot-short");
   });
 
-  it("finalizes directly when the change-management service is disabled", async () => {
-    const rawFinalizeResult = createSecretBearingFinalizeResult();
-    const finalizeChannelSetupDraft = vi.fn(async () => rawFinalizeResult);
-    const create = vi.fn();
-    app = buildApp({ finalizeChannelSetupDraft }, { isEnabled: vi.fn(async () => false), create });
-
-    const response = await app.inject({
-      method: "POST",
-      url: `/api/v1/channels/drafts/${DRAFT_ID}/finalize`,
-      payload: { expectedRevision: 1 },
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(finalizeChannelSetupDraft).toHaveBeenCalledWith(DRAFT_ID, 1, expect.any(Function));
-    expect(create).not.toHaveBeenCalled();
-    expect(response.json()).toMatchObject({
-      draftRevision: 1,
-      connection: { connectionId: CONNECTION_ID, config: { botToken: "[REDACTED]", webhookUrl: "[REDACTED]" } },
-    });
-    expect(response.body).not.toContain("bot-short");
-    expect(response.body).not.toContain("hook-short");
-  });
-
-  it("keeps the Change Plan revision guard when the change-management service is enabled", async () => {
-    const rawDraft = createSecretBearingDraft();
-    const finalizeChannelSetupDraft = vi.fn();
-    const create = vi.fn();
-    app = buildApp(
-      { listChannelSetupDrafts: vi.fn(async () => [rawDraft]), finalizeChannelSetupDraft },
-      { isEnabled: vi.fn(async () => true), create },
-    );
-
-    const response = await app.inject({
-      method: "POST",
-      url: `/api/v1/channels/drafts/${DRAFT_ID}/finalize`,
-      payload: { expectedRevision: rawDraft.revision + 1 },
-    });
-
-    expect(response.statusCode).toBe(409);
-    expect(response.json()).toMatchObject({ code: "WRITE_CONFLICT" });
-    expect(finalizeChannelSetupDraft).not.toHaveBeenCalled();
-    expect(create).not.toHaveBeenCalled();
-  });
+  it("cannot activate when the change-management service is disabled", async () => { const finalizeChannelSetupDraft = vi.fn(); app = buildApp({ finalizeChannelSetupDraft }, { isEnabled: vi.fn(async () => false) }); const response = await app.inject({ method: "POST", url: `/api/v1/channels/drafts/${DRAFT_ID}/finalize`, payload: { expectedRevision: 1 } }); expect(response.statusCode).toBe(409); expect(finalizeChannelSetupDraft).not.toHaveBeenCalled(); });
 
   async function expectStatus(
     method: "GET" | "POST" | "PATCH",
