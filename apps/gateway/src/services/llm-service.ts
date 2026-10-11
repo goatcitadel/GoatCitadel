@@ -1684,6 +1684,7 @@ export class LlmService {
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 180000);
     const data: ImageGenerationResponse["data"] = [];
     const eventIds: string[] = [];
+    let effectiveModel = model;
     const content: Array<Record<string, unknown>> = [
       { type: "input_text", text: request.prompt.trim() },
       ...referenceImages.map((image) => ({
@@ -1728,6 +1729,7 @@ export class LlmService {
             : MAX_CODEX_IMAGE_SSE_EVENTS,
         );
         data.push(...adapted.data);
+        effectiveModel = adapted.model ?? effectiveModel;
         observeProviderPayloadUsage(dispatched.usage, adapted.usage, adapted.model, {
           providerId: resolved.provider.providerId,
           model,
@@ -1747,7 +1749,7 @@ export class LlmService {
 
     return {
       providerId: resolved.provider.providerId,
-      model,
+      model: effectiveModel,
       operation,
       data: data.slice(0, 4),
       ...(eventIds.length > 0 ? { modelUsageEventIds: eventIds } : {}),
