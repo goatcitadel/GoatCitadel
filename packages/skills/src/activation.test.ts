@@ -58,23 +58,53 @@ describe("resolveSkillActivation", () => {
     expect(result.reasons.planner).toBeUndefined();
   });
 
-  it("activates design-intelligence for artifact, deck, and document terms in chat", () => {
-    const design = {
+  it("activates impeccable for artifact, deck, document, and UI design prompts but not backend work", () => {
+    const impeccable = {
+      ...skill("impeccable"),
+      skillId: "bundled:impeccable",
+      routingHints: GENERATED_SKILL_ROUTING_HINTS.impeccable,
+    };
+
+    const deck = resolveSkillActivation(
+      { text: "Create a real PowerPoint slide deck and a PDF brief with good document design." },
+      [impeccable],
+    );
+    expect(deck.selected.map((item) => item.name)).toEqual(["impeccable"]);
+    expect(deck.reasons.impeccable).toEqual(expect.arrayContaining(["routing_keyword", "routing_phrase"]));
+    expect(deck.selected[0]?.confidence).toBeGreaterThan(0.85);
+
+    const ui = resolveSkillActivation({ text: "Make the dashboard landing page look less generic." }, [impeccable]);
+    expect(ui.selected.map((item) => item.name)).toEqual(["impeccable"]);
+
+    const backend = resolveSkillActivation(
+      { text: "Fix the TypeScript error in the gateway route and add a regression test." },
+      [impeccable],
+    );
+    expect(backend.selected).toEqual([]);
+  });
+
+  it("no longer routes design prompts to design-intelligence by keyword", () => {
+    const retired = {
       ...skill("design-intelligence"),
+      skillId: "bundled:design-intelligence",
       routingHints: GENERATED_SKILL_ROUTING_HINTS["design-intelligence"],
     };
 
     const result = resolveSkillActivation(
-      {
-        text: "Create a real PowerPoint slide deck and a PDF brief with good document design.",
-      },
-      [design],
+      { text: "Create a real PowerPoint slide deck and a PDF brief with good document design." },
+      [retired],
     );
+    expect(result.selected).toEqual([]);
 
-    expect(result.selected.map((item) => item.name)).toEqual(["design-intelligence"]);
-    expect(result.reasons["design-intelligence"]).toEqual(
-      expect.arrayContaining(["routing_keyword", "routing_phrase"]),
-    );
-    expect(result.selected[0]?.confidence).toBeGreaterThan(0.85);
+    const explicit = resolveSkillActivation({ text: "@skill design-intelligence review this form" }, [retired]);
+    expect(explicit.selected.map((item) => item.name)).toEqual(["design-intelligence"]);
+  });
+
+  it("treats a $skillId mention as an explicit activation", () => {
+    const impeccable = { ...skill("impeccable"), skillId: "bundled:impeccable" };
+
+    const result = resolveSkillActivation({ text: "$bundled:impeccable polish this hero" }, [impeccable]);
+    expect(result.selected.map((item) => item.name)).toEqual(["impeccable"]);
+    expect(result.reasons.impeccable).toEqual(["explicit"]);
   });
 });

@@ -32,6 +32,13 @@ describe("resolveCallableSkillActivation", () => {
       ]);
     }
   });
+
+  it("treats a $skillId mention in the text as an explicit callable activation", () => {
+    const result = resolve({ text: "$extra:active help with this page" });
+
+    expect(result.selected.map((item) => item.skillId)).toEqual(["extra:active"]);
+    expect(result.reasons.active).toEqual(["explicit"]);
+  });
 });
 
 function resolve(request: { text: string; explicitSkills?: string[] }) {
