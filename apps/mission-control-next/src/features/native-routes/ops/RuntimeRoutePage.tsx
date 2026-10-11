@@ -304,11 +304,25 @@ export function RuntimeRoutePage({
         jobId,
         runId: receipt.run.runId,
         status: receipt.run.status,
+        ...(receipt.run.skipReason ? { skipReason: receipt.run.skipReason } : {}),
       });
-      setScheduleNotice({
-        tone: "success",
-        message: jobId + " request acknowledged as run " + receipt.run.runId + ".",
-      });
+      setScheduleNotice(
+        receipt.run.skipReason
+          ? {
+              tone: "info",
+              message:
+                jobId +
+                " run " +
+                receipt.run.runId +
+                " was skipped and did no work (" +
+                receipt.run.skipReason.replaceAll("_", " ") +
+                ").",
+            }
+          : {
+              tone: "success",
+              message: jobId + " request acknowledged as run " + receipt.run.runId + ".",
+            },
+      );
       await runtime.reload();
     },
     [data, runtime, scheduleOperations],

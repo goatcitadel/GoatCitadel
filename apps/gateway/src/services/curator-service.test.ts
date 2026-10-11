@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { CuratorRunReport, DurableRunRecord, SkillListItem } from "@goatcitadel/contracts";
 import { CuratorService } from "./curator-service.js";
+import { toWeekKeyForTimezone } from "./improvement-replay.js";
 
 function makeSkill(overrides: Partial<SkillListItem> = {}): SkillListItem {
   return {
@@ -548,7 +549,15 @@ describe("CuratorService cron scheduler", () => {
     };
   }
 
-  it("ensureCuratorWeeklyCronJob registers the cron with action=curator and Sunday 02:00 PT schedule", async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("ensureCuratorWeeklyCronJob registers the cron with action=curator and Sunday 02:00 host-zone schedule", async () => {
+    const actualResolvedOptions = Intl.DateTimeFormat.prototype.resolvedOptions;
+    vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockImplementation(function (this: Intl.DateTimeFormat) {
+      return { ...actualResolvedOptions.call(this), timeZone: "UTC" };
+    });
     const storageStub = makeStorageStub();
     const service = new CuratorService({
       listSkills: () => [],
@@ -575,7 +584,37 @@ describe("CuratorService cron scheduler", () => {
     expect(job?.name).toBe("Curator Weekly Report");
     expect(job?.description).toBe("Generate a proposal-only curator report over the skill registry.");
     expect(job?.enabled).toBe(true);
-    expect(job?.schedule).toBe("0 2 * * 0 America/Los_Angeles");
+    expect(job?.schedule).toBe("0 2 * * 0 UTC");
+  });
+
+  it("runCuratorWeeklyIfDue opens its Sunday 02:00 window in the zone the job's schedule names", async () => {
+    const storageStub = makeStorageStub();
+    storageStub.crons.set("curator_weekly", {
+      jobId: "curator_weekly",
+      name: "x",
+      action: "curator",
+      schedule: "0 2 * * 0 UTC",
+      enabled: true,
+    });
+    let runCalls = 0;
+    const service = new CuratorService({
+      listSkills: () => {
+        runCalls += 1;
+        return [];
+      },
+      archiveSkill: () => makeSkill(),
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-17T02:10:00Z"), // Sunday 02:10 UTC, still Saturday in Pacific time
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+      storage: storageStub as never,
+    });
+    await service.runCuratorWeeklyIfDue();
+    expect(runCalls).toBe(1);
+    expect(storageStub.settings.get("curator_weekly_last_week_key_v1")).toBe(
+      toWeekKeyForTimezone(new Date("2026-05-17T02:10:00Z"), "UTC"),
+    );
   });
 
   it("runCuratorWeeklyIfDue no-ops when cron job is missing or disabled", async () => {

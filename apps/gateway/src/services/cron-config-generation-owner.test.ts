@@ -11,6 +11,7 @@ import {
   type CompleteUnifiedConfigPayload,
 } from "./config-generation-service.js";
 import { CronConfigGenerationOwner, readCanonicalCronSpecs } from "./cron-config-generation-owner.js";
+import { computeNextCronRunAt } from "./gateway/cron-automation-service.js";
 
 const roots: string[] = [];
 const stores: Storage[] = [];
@@ -124,6 +125,43 @@ describe("CronConfigGenerationOwner", () => {
     expect(JSON.stringify(config.getActivePayload().cronJobs)).not.toMatch(/lastRun|nextRun|revision|updatedAt/);
     await expect(owner.updateSpec(job, beforeResourceRevision)).resolves.toMatchObject({ lastRunId: "run-1" });
     expect(config.getRevision()).toBe(beforeConfigRevision);
+  });
+
+  it("re-projects nextRunAt when reconcile re-zones a schedule, and keeps it when the schedule is unchanged", async () => {
+    const curator = spec({
+      jobId: "curator_weekly",
+      name: "Curator",
+      action: "curator",
+      schedule: "0 2 * * 0 America/Los_Angeles",
+    });
+    const backup = spec({
+      jobId: "private_beta_backup_daily",
+      name: "Backup",
+      action: "backup",
+      schedule: "30 2 * * * America/Los_Angeles",
+    });
+    const { root } = await createRoot([curator, backup]);
+    const storage = createStorage(root);
+    storage.cronJobs.createSpec(curator);
+    storage.cronJobs.createSpec(backup);
+    const pacificNextRunAt = "2026-07-19T09:00:00.000Z";
+    for (const jobId of [curator.jobId, backup.jobId]) {
+      storage.cronJobs.mergeRuntimeTelemetry(jobId, { lastRunId: "run-1", nextRunAt: pacificNextRunAt });
+    }
+    const owner = new CronConfigGenerationOwner(new ConfigGenerationService(root), createSqliteAsyncStorage(storage));
+
+    const unchanged = await owner.reconcileSpec({ ...curator, description: "same schedule" });
+    expect(unchanged).toMatchObject({ nextRunAt: pacificNextRunAt, lastRunId: "run-1" });
+
+    const rezonedCurator = await owner.reconcileSpec({ ...curator, schedule: "0 2 * * 0 UTC" });
+    expect(rezonedCurator.nextRunAt).toBe(computeNextCronRunAt("0 2 * * 0 UTC", new Date()));
+    expect(rezonedCurator.nextRunAt).not.toBe(pacificNextRunAt);
+    expect(rezonedCurator.lastRunId).toBe("run-1");
+
+    // Built-in actions without self-scheduling project no nextRunAt, matching startup reconciliation.
+    const rezonedBackup = await owner.reconcileSpec({ ...backup, schedule: "30 2 * * * UTC" });
+    expect(rezonedBackup.nextRunAt).toBeUndefined();
+    expect(rezonedBackup.lastRunId).toBe("run-1");
   });
 
   it("rolls Storage back exactly when owner apply fails and publishes the prior canonical state", async () => {

@@ -181,8 +181,16 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
           updateSpecs: (specs) => upsertCanonicalSpec(specs, desired),
         };
       }
+      // A changed schedule (e.g. a built-in re-zoned on startup) invalidates the
+      // persisted nextRunAt; re-project it as startup reconciliation does.
+      const scheduleChanged = current.schedule !== desired.schedule;
       return {
-        mutation: { kind: "update", spec: desired, expectedRevision: current.revision },
+        mutation: {
+          kind: "update",
+          spec: desired,
+          expectedRevision: current.revision,
+          ...(scheduleChanged ? { telemetry: { nextRunAt: projectNextRunAt(desired) } } : {}),
+        },
         updateSpecs: (specs) => upsertCanonicalSpec(specs, desired),
         noOpResult: cronJobSpecMatches(current, desired) ? current : undefined,
       };
@@ -350,11 +358,7 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
       const changed = !before || !cronJobSpecMatches(before, spec);
       let next = await this.storage.cronJobs.reconcileSpec(spec);
       if (changed) {
-        next = await this.storage.cronJobs.mergeRuntimeTelemetry(spec.jobId, {
-          nextRunAt: isSelfScheduledAction(spec.action)
-            ? (computeNextCronRunAt(spec.schedule, new Date(), spec.endAt) ?? null)
-            : null,
-        });
+        next = await this.storage.cronJobs.mergeRuntimeTelemetry(spec.jobId, { nextRunAt: projectNextRunAt(spec) });
       }
       saved.push(next);
     }
@@ -518,6 +522,12 @@ function toFullSpecPatch(spec: CronJobSpecInput): CronJobSpecPatch {
 
 function hasTelemetryFields(patch: CronJobRuntimeTelemetryPatch): boolean {
   return Object.keys(patch).length > 0;
+}
+
+function projectNextRunAt(spec: CronJobSpecInput): string | null {
+  return isSelfScheduledAction(spec.action)
+    ? (computeNextCronRunAt(spec.schedule, new Date(), spec.endAt) ?? null)
+    : null;
 }
 
 function isSelfScheduledAction(action: CronJobAction): boolean {
