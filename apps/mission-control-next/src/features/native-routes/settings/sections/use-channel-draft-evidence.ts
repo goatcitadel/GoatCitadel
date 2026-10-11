@@ -22,6 +22,9 @@ export function useChannelDraftEvidence(s: ChannelSetupState) {
     const input = JSON.stringify(s.channelDraft.value);
     const feedback = s.validationResult;
     const feedbackRevision = s.validationRevision;
+    // Only a proof this read restored earlier may be replaced or withdrawn by a later read. A fresh validate/test
+    // result came from the Gateway itself; the evidence read for its advanced revision carries no proof yet.
+    const restoredFeedback = feedback?.kind === "test" && feedback.restored === true;
     setRead((previous) => ({ scope, evidence: previous?.scope === scope ? previous.evidence : undefined, loading: true }));
     void fetchChannelSetupDraftEvidence(draft.draftId, draft.revision).then((value) => {
       if (!current || !s.isCurrentDraft() || latest.current.evidenceOperationEpoch.current !== operationEpoch) return;
@@ -43,13 +46,14 @@ export function useChannelDraftEvidence(s: ChannelSetupState) {
         now.channelDraft.isDirty || now.channelDraft.hasRemoteChanges || now.channelDraft.baseRevision !== draft.revision ||
         now.needsConnectionReview || now.mutation.pending || now.mutation.uncertain || now.busyAction ||
         now.validationResult !== feedback || now.validationRevision !== feedbackRevision) return;
+      if (!freshTest && !restoredFeedback) return;
       now.setValidationRevision(freshTest ? draft.revision : null);
       now.setValidationResult(freshTest ? { ...freshTest, kind: "test", restored: true } : null);
     }).catch(() => {
       if (!current || !s.isCurrentDraft() || latest.current.evidenceOperationEpoch.current !== operationEpoch) return;
       setRead({ scope, loading: false, error: "Saved check evidence could not be verified. Refresh channels before reusing a previous test." });
       const now = latest.current;
-      if (now.validationResult === feedback && now.validationRevision === feedbackRevision) {
+      if (restoredFeedback && now.validationResult === feedback && now.validationRevision === feedbackRevision) {
         now.setValidationResult(null);
         now.setValidationRevision(null);
       }

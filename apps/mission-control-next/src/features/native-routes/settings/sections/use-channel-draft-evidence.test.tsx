@@ -91,6 +91,21 @@ describe("exact saved draft evidence recovery", () => {
     expect((await activation(view, "cockpit")).props.disabled).toBe(true);
     expect(text(view.root.findByProps({ "aria-label": "Channel check history" }))).toContain("original-receipt");
   });
+  it("keeps a fresh validation result when the evidence refresh for its advanced revision carries no proof", async () => {
+    api.validateChannelSetupDraft.mockImplementation(async (draftId: string, revision: number) => {
+      draft={ ...draft, revision: revision+1 };
+      evidence={ ...evidence, draftRevision: draft.revision, currentTest: undefined };
+      return { draftId, draftRevision: draft.revision, status: "error", levels: ["structural"], issues: [{ key: "topic", fieldKey: "topic", level: "error", message: "Topic is not reachable." }], checkedAt };
+    });
+    const view=await render(); expect(owner.validationResult?.restored).toBe(true);
+    await act(async () => { await actions.handleValidate(); });
+    for(let i=0;i<6;i++) await act(async () => { await Promise.resolve(); });
+    expect(api.validateChannelSetupDraft).toHaveBeenCalledWith(draft.draftId, 7);
+    expect(owner.selectedDraft?.revision).toBe(8);
+    expect(owner.validationRevision).toBe(8);
+    expect(owner.validationResult).toEqual(expect.objectContaining({ kind: "validate", status: "error" }));
+    expect(text(view.root.findByProps({ "aria-label": "Channel check result" }))).toContain("Topic is not reachable.");
+  });
   it("preserves newer dirty input and displays history without restoring eligibility from a delayed read", async () => {
     const read=deferred<ChannelSetupDraftEvidence>(); operations.fetchChannelSetupDraftEvidence.mockReturnValue(read.promise);
     const view=await render(); await act(async () => { owner.setDraftValues({ topic: "unsaved-new-destination" }); });

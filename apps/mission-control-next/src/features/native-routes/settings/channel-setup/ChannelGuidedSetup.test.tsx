@@ -114,6 +114,18 @@ describe("structured field interaction", () => {
     expect(text(r.root)).not.toContain("forged-local-value");
     r.unmount();
   });
+  it("lists saved Slack scopes whether adopt recorded them as a list or a comma-joined string", async () => {
+    const definition = definitions.find((item) => item.catalog.catalogId === "channel.slack")!;
+    const field = definition.wizard.steps.flatMap((step) => step.fields ?? []).find((item) => item.key === "slackInstallId")!;
+    const receipt = { slackInstallId: "slack:TREAL:AREAL", slackTeamId: "TREAL", slackAppId: "AREAL", slackBotUserId: "BREAL" };
+    for (const slackScopes of [["chat:write", "channels:read"], "chat:write, channels:read,, "]) {
+      const draft = { ...makeDraft(definition), draft: { ...receipt, slackScopes } };
+      const r = await render(<ChannelWizardFields draft={draft} fields={[field]} values={{}} disabled={false} onChange={vi.fn()} />);
+      expect(text(r.root)).toContain("chat:write, channels:read");
+      expect(text(r.root)).not.toContain("Not recorded");
+      r.unmount();
+    }
+  });
   it("invalidates reviewed live tests when local advanced JSON changes in the Classic wizard", async () => {
     // The cockpit editor is typed-fields-only so credentials always travel through secure inputs.
     for (const Component of [ChannelSetupWizard]) {

@@ -38,7 +38,10 @@ export function IntegrationFormFields({
           .map((field) => {
             const id = `${prefix}-${field.key}`,
               current = value[field.key] ?? field.defaultValue;
-            const credential = field.type === "password" || (!field.secretRef && /token|password|secret|webhook/i.test(field.key));
+            // Only the Gateway schema marks a raw credential (`password`). Secret references (`*Env` variable
+            // names, masked URLs) and handle names (`*Handle`) are plain operator input, and a key that merely
+            // sounds secret must never lock a field: that made `automation.gmail` uneditable in Cockpit.
+            const credential = field.type === "password";
             const change = (next: unknown) => onChange({ ...value, [field.key]: next });
             return (
               <div

@@ -166,6 +166,13 @@ describe("Settings section tabs", () => {
   });
 });
 
+it.each(["#updates", "#application-updates"])("opens the General appearance owner for the update links' %s anchor", async (anchor) => {
+  await render(`/settings/general?shell=cockpit${anchor}`);
+  await vi.waitFor(() => expect(container.textContent).toContain("Appearance owner"));
+  expect(container.textContent).not.toContain("Settings destination unavailable");
+  expect(active()).toBe("Appearance");
+});
+
 it.each(["/settings/unknown?shell=cockpit", "/settings/general?shell=cockpit#unknown"]) ("does not silently substitute another panel for %s", async (href) => {
  await render(href);
  expect(container.textContent).toContain("Settings destination unavailable");
