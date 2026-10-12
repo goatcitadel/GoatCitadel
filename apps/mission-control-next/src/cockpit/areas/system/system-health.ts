@@ -71,6 +71,7 @@ function deriveCurrentSystemHealthChecks(
         ];
 
   const models = (() => {
+    if (sources.llama.state === "deferred" || sources.npu.state === "deferred") return null;
     if (sources.llama.state !== "current" || sources.npu.state !== "current")
       return unknown(
         "models",
@@ -135,6 +136,7 @@ function deriveCurrentSystemHealthChecks(
   })();
 
   const integrations = (() => {
+    if (sources.connections.state === "deferred") return null;
     if (sources.connections.state !== "current")
       return unknown(
         "integrations",
@@ -242,7 +244,7 @@ function deriveCurrentSystemHealthChecks(
   return [...base, models, channels, integrations, updateCheck, workers].filter((check) => check !== null);
 }
 
-/** True when the checks came from the digest, so channel and worker checks were left to System › Health. */
+/** Deferred sources are explicitly inspected on System › Health. */
 export function hasDeferredHealthChecks(sources: SystemHealthSources): boolean {
-  return sources.channels.state === "deferred" || sources.workers.state === "deferred";
+  return Object.values(sources).some((source) => source.state === "deferred");
 }

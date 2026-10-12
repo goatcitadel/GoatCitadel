@@ -32,18 +32,20 @@ import { COCKPIT_AREAS } from "./routes";
 import { useCockpitRoute } from "./use-cockpit-route";
 import { useCockpitPreload } from "./use-cockpit-preload";
 import { useHealthDigestStatus } from "./use-health-digest";
-import { HEALTH_TONE_BG, STREAM_STATUS } from "./stream-status";
+import { HEALTH_TONE_BG, presentCockpitStream } from "./stream-status";
 
 const AREA_ICONS = { chat: MessageSquare, inbox: Inbox, work: LayoutGrid, library: Library, system: Activity } as const;
 
 export function Sidebar({
   onOpenPalette,
   streamState,
+  replayRecovery = false,
   collapsed = false,
   onToggleCollapsed,
 }: {
   onOpenPalette: () => void;
   streamState: EventStreamConnectionState;
+  replayRecovery?: boolean;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
 }) {
@@ -57,14 +59,14 @@ export function Sidebar({
   });
   const workspaceId = activeWorkspaceId ?? "default";
   // NV-09: the four-read digest, not the full System › Health fan-out.
-  const healthStatus = useHealthDigestStatus(workspaceId, true);
+  const healthStatus = useHealthDigestStatus(workspaceId, true, true);
   const inbox = useOperatorInbox(workspaceId);
   const inboxCount = inboxCountLabel(
     !inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId) ? inbox.data : undefined,
   );
   const workspaceName =
     workspaces.data?.items.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? "Workspace";
-  const stream = STREAM_STATUS[streamState];
+  const stream = presentCockpitStream(streamState, replayRecovery);
 
   return (
     <aside
@@ -162,7 +164,7 @@ export function Sidebar({
           <span className={collapsed ? "sr-only" : ""}>{healthStatus.label}</span>
         </a>
       )}
-      <div className={`flex items-center gap-2 py-1.5 text-xs text-fg-muted ${collapsed ? "flex-col" : "px-2"}`}>
+      <div data-stream-state={streamState} aria-label={stream.ariaLabel} className={`flex items-center gap-2 py-1.5 text-xs text-fg-muted ${collapsed ? "flex-col" : "px-2"}`}>
         <span aria-hidden="true" className={`size-2 rounded-full ${stream.tone}`} />
         <span className={collapsed ? "sr-only" : "flex-1"}>{stream.label}</span>
         <Menu>

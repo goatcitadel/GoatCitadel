@@ -1,3 +1,4 @@
+import { describeRealtimeTruthUi } from "../../app/mission-control-shell-model";
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
 import type { StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 
@@ -17,3 +18,9 @@ export const HEALTH_TONE_BG: Readonly<Record<StatusTone, string>> = {
   failed: "bg-status-failed",
   neutral: "bg-status-neutral",
 };
+
+export function presentCockpitStream(state: EventStreamConnectionState, replayRecovery = false) {
+ const truth = describeRealtimeTruthUi(state, replayRecovery ? "replay-gap" : "authoritative");
+ const native = STREAM_STATUS[state];
+ return {...native, label: native.label + (state === "open" && replayRecovery ? " · Replay recovery" : ""), ariaLabel: "Live updates: " + truth.strip};
+}
