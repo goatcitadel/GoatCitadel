@@ -523,16 +523,17 @@ export class CronAutomationService {
           job.action !== "watchdog" &&
           !watchdogReviewRecorded
         ) {
+          const scheduled = !force && options.reason === "scheduled_due";
           await this.recordCronReviewItem({
             jobId: normalizedJobId,
             runId,
             severity: "low",
             status: "resolved",
             summary: {
-              trigger: force ? "force_run" : "manual_run",
+              trigger: force ? "force_run" : scheduled ? "scheduled_run" : "manual_run",
               ...runSummary,
             },
-            diff: { type: "manual_run", changed: false },
+            diff: { type: scheduled ? "scheduled_run" : "manual_run", changed: false },
           });
         }
         const evidenceEnvelopeId = await this.finalizeCronRunEvidenceOnSuccess(normalizedJobId, runId, runSummary);
