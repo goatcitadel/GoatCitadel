@@ -6,6 +6,8 @@ import type {
   OpsDesignQualitySeverity,
   OpsDesignQualitySnapshot,
 } from "@goatcitadel/contracts";
+// The calibrated anti-slop table lives with the design detector so Ops evidence and runtime advisories share it.
+import { ANTI_SLOP_PATTERNS } from "./design-detector/rules.js";
 
 const REQUIRED_SKILL_MODULES = [
   "SKILL.md",
@@ -59,37 +61,6 @@ const UI_SCAN_ROOTS = ["apps/mission-control-next/src", "packages/mission-contro
 const MISSION_CONTROL_RAW_COLOR_BUDGET = 92;
 
 const PLACEHOLDER_PATTERNS = [{ id: "unresolved-placeholder", re: /<PLACEHOLDER|TODO_PLACEHOLDER/iu }] as const;
-
-const ANTI_SLOP_PATTERNS = [
-  {
-    id: "default-indigo",
-    re: /#(?:6366f1|4f46e5|4338ca|3730a3|8b5cf6|7c3aed|a855f7)\b/iu,
-  },
-  {
-    id: "generic-trust-gradient",
-    re: /linear-gradient\([^)]*(?:purple|violet|indigo|#6366f1|#4f46e5|#8b5cf6|#7c3aed|#a855f7|#3b82f6|#06b6d4|cyan|pink)[^)]*\)/iu,
-  },
-  {
-    id: "emoji-as-ui-icon",
-    re: /[✨🚀🎯⚡🔥💡]/u,
-  },
-  {
-    id: "invented-metric",
-    re: /\b(?:10×\s+(?:faster|better|easier)|100×\s+(?:faster|better)|99\.\d+%\s+uptime|zero[- ]downtime|3×\s+more\s+(?:productive|efficient))\b/iu,
-  },
-  {
-    id: "lorem-copy",
-    re: /\blorem\s+ipsum\b/iu,
-  },
-  {
-    id: "feature-one-copy",
-    re: /\bfeature\s+(one|two|three|1|2|3)\b/iu,
-  },
-  {
-    id: "placeholder-copy",
-    re: /\bplaceholder\s+text\b/iu,
-  },
-] as const;
 
 const RAW_COLOR_LITERAL_PATTERNS = [
   { id: "raw-hex-color", re: /#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/u },

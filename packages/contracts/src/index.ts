@@ -228,3 +228,4 @@ export * from "./opencode.js";
 export * from "./channel-oauth.js";
 
 export * from "./channel-setup-operations.js";
+export * from "./design-advisory.js";
