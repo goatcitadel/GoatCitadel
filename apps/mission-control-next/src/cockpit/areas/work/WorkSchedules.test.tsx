@@ -14,6 +14,7 @@ import {
   startCronJob,
   fetchCronReviewQueue,
 } from "@goatcitadel/mission-control-shared/api/cron";
+import { fetchSettings } from "@goatcitadel/mission-control-shared/api/settings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkSchedules } from "./WorkSchedules";
 import { CockpitNavigationContext } from "../../app/cockpit-navigation-context";
@@ -38,6 +39,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/cron", () => ({
   startCronJob: vi.fn(),
   fetchCronReviewQueue: vi.fn(),
 }));
+vi.mock("@goatcitadel/mission-control-shared/api/settings", () => ({ fetchSettings: vi.fn() }));
 vi.mock("../../../features/native-routes/ops/schedule-id", () => ({
   createScheduleJobId: () => "new-schedule-id",
 }));
@@ -61,6 +63,9 @@ const ownerGone = (id: string) =>
     body: { error: `Cron job not found: ${id}` },
   });
 
+const settingsWith = (features: Record<string, boolean>) =>
+  ({ features }) as unknown as Awaited<ReturnType<typeof fetchSettings>>;
+
 let container: HTMLDivElement;
 let root: Root;
 let client: QueryClient;
@@ -76,6 +81,7 @@ beforeEach(() => {
   vi.mocked(fetchCronJobs).mockResolvedValue({ items: [job()] });
   vi.mocked(fetchCronJob).mockResolvedValue(job());
   vi.mocked(fetchCronReviewQueue).mockResolvedValue({ items: [] });
+  vi.mocked(fetchSettings).mockResolvedValue(settingsWith({ cronReviewQueueV1Enabled: true }));
 });
 
 afterEach(() => {
@@ -394,6 +400,45 @@ describe("scheduler review and run evidence", () => {
     vi.mocked(fetchCronReviewQueue).mockRejectedValue(new Error("Review queue unavailable"));
     await render();
     await vi.waitFor(() => expect(container.querySelector('[aria-label="Scheduler review"]')?.textContent).toContain("Review queue unavailable"));
+    expect(container.textContent).not.toContain("No scheduler review items");
+  });
+
+  it("does not request the review queue when the Gateway reports the feature flag off", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsWith({ cronReviewQueueV1Enabled: false }));
+    await render();
+    const region = await vi.waitFor(() => {
+      const found = container.querySelector<HTMLElement>('[aria-label="Scheduler review"]');
+      expect(found?.textContent).toContain("Scheduler review is switched off in runtime settings");
+      return found!;
+    });
+    expect(fetchCronReviewQueue).not.toHaveBeenCalled();
+    expect(region.textContent).not.toContain("No scheduler review items");
+    expect(region.querySelector("button")).toBeNull();
+  });
+
+  it("drops loaded review items once a settings refresh reports the flag off", async () => {
+    vi.mocked(fetchCronReviewQueue).mockResolvedValue({ items: [{ itemId: "r-1", jobId: "job-a", runId: "run-12345678", severity: "high", status: "open",
+      summary: { trigger: "scheduled", warning: "Child run failed" }, createdAt: "2026-10-07T09:00:00.000Z", updatedAt: "2026-10-07T09:05:00.000Z" }] });
+    await render();
+    await vi.waitFor(() => expect(container.querySelector('[aria-label="Scheduler review"]')?.textContent).toContain("Child run failed"));
+    vi.mocked(fetchSettings).mockResolvedValue(settingsWith({ cronReviewQueueV1Enabled: false }));
+    await act(async () => { await client.invalidateQueries({ queryKey: ["work", "schedules-settings"] }); });
+    const region = await vi.waitFor(() => {
+      const found = container.querySelector<HTMLElement>('[aria-label="Scheduler review"]');
+      expect(found?.textContent).toContain("Scheduler review is switched off in runtime settings");
+      return found!;
+    });
+    expect(region.textContent).not.toContain("Child run failed");
+    expect(region.textContent).not.toContain("No scheduler review items");
+    expect(fetchCronReviewQueue).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports unknown review availability, without requesting the queue, when settings cannot be read", async () => {
+    vi.mocked(fetchSettings).mockRejectedValue(new Error("Settings unreachable"));
+    await render();
+    await vi.waitFor(() => expect(container.querySelector('[aria-label="Scheduler review"]')?.textContent).toContain("Scheduler review availability is unknown"));
+    expect(container.querySelector('[aria-label="Scheduler review"]')?.textContent).toContain("Settings unreachable");
+    expect(fetchCronReviewQueue).not.toHaveBeenCalled();
     expect(container.textContent).not.toContain("No scheduler review items");
   });
 
