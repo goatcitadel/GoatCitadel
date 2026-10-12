@@ -49,9 +49,10 @@ describe("NodeSkillHubWindowsSecurity", () => {
 
 describe("PowerShellSkillHubWindowsSecurityProtocol", () => {
   it("rejects an invalid idle shutdown and disposes without a running worker", () => {
-    for (const idleShutdownMs of [-1, Number.NaN]) {
+    for (const idleShutdownMs of [-1, Number.NaN, Number.NEGATIVE_INFINITY, 2_147_483_648]) {
       expect(() => new PowerShellSkillHubWindowsSecurityProtocol({ idleShutdownMs })).toThrow(TypeError);
     }
+    expect(() => new PowerShellSkillHubWindowsSecurityProtocol({ idleShutdownMs: 2_147_483_647 })).not.toThrow();
     const protocol = new PowerShellSkillHubWindowsSecurityProtocol({ idleShutdownMs: Number.POSITIVE_INFINITY });
     expect(() => protocol.dispose()).not.toThrow();
   });

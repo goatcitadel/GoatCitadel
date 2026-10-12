@@ -6,6 +6,7 @@ const OWNER_SID = /^S-\d+(?:-\d+)+$/u;
 const MAX_PATH_BYTES = 32 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
 const IDLE_SHUTDOWN_MS = 100;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export type SkillHubWindowsAclKind = "directory" | "file";
 
@@ -112,8 +113,13 @@ export class PowerShellSkillHubWindowsSecurityProtocol implements SkillHubWindow
 
   public constructor(options: PowerShellSkillHubWindowsSecurityProtocolOptions = {}) {
     const idleShutdownMs = options.idleShutdownMs ?? IDLE_SHUTDOWN_MS;
-    if (Number.isNaN(idleShutdownMs) || idleShutdownMs < 0) {
-      throw new TypeError("Skill Hub Windows security idle shutdown must be a non-negative duration.");
+    // Node turns a finite timer delay above MAX_TIMER_DELAY_MS into 1ms, which
+    // would quietly restore per-request respawns; only Infinity means "never".
+    const validFinite = Number.isFinite(idleShutdownMs) && idleShutdownMs >= 0 && idleShutdownMs <= MAX_TIMER_DELAY_MS;
+    if (!validFinite && idleShutdownMs !== Number.POSITIVE_INFINITY) {
+      throw new TypeError(
+        "Skill Hub Windows security idle shutdown must be Infinity or a duration from 0 to 2147483647ms.",
+      );
     }
     this.idleShutdownMs = idleShutdownMs;
   }
