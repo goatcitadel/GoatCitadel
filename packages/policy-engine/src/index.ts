@@ -13,6 +13,7 @@ export * from "./presentation-visual-runtime.js";
 export * from "./tool-security.js";
 export * from "./browser-content-guard.js";
 export * from "./playwright-runtime.js";
+export * from "./html-render.js";
 export { describeBrowserSessionState, type BrowserExecutionContext } from "./browser-tools.js";
 export * from "./tool-patterns.js";
 export * from "./safe-env-name.js";
