@@ -19,6 +19,7 @@ import {
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { CronSpecMutationOwner } from "./cron-config-generation-owner.js";
+import type { CronSystemHandlerOutcome } from "./gateway/cron-automation-service.js";
 import { computeSkillImmunity, gradeSkillUsage } from "./curator-grader.js";
 import { planCuratorIdleSweep, type CuratorIdleSweepResult, type CuratorIdleSweepDeps } from "./curator-idle-sweep.js";
 import { getZonedDateParts, toWeekKeyForTimezone } from "./improvement-replay.js";
@@ -297,21 +298,23 @@ export class CuratorService {
     });
   }
 
-  public async runCuratorWeeklyIfDue(options: { force?: boolean; recordCronState?: boolean } = {}): Promise<void> {
-    if (!this.deps.storage) return;
+  public async runCuratorWeeklyIfDue(
+    options: { force?: boolean; recordCronState?: boolean } = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    if (!this.deps.storage) return { status: "skipped", reason: "storage_unavailable" };
     const job = await this.deps.storage.cronJobs.get(CURATOR_WEEKLY_JOB_ID);
-    if (!job?.enabled) return;
+    if (!job?.enabled) return { status: "skipped", reason: "job_disabled" };
     const now = this.deps.now();
     const timeZone = systemCronTimeZoneForSchedule(job.schedule);
     if (!options.force) {
       const parts = getZonedDateParts(now, timeZone);
       // Sunday=0, 02:00 hour gate (matches improvement_weekly cadence)
-      if (parts.weekday !== 0 || parts.hour !== 2) return;
+      if (parts.weekday !== 0 || parts.hour !== 2) return { status: "skipped", reason: "not_due" };
     }
     const weekKey = toWeekKeyForTimezone(now, timeZone);
     const lastWeekKey = (await this.deps.storage.systemSettings.get<string>(CURATOR_WEEKLY_DEDUP_SETTING_KEY))?.value;
-    if (!options.force && lastWeekKey === weekKey) return;
-    await this.runCurator({ sync: false, dryRun: true, triggerMode: "scheduled" });
+    if (!options.force && lastWeekKey === weekKey) return { status: "skipped", reason: "already_ran_this_week" };
+    const curatorRun = await this.runCurator({ sync: false, dryRun: true, triggerMode: "scheduled" });
     await this.deps.storage.systemSettings.set(CURATOR_WEEKLY_DEDUP_SETTING_KEY, weekKey);
     const finishedAt = this.deps.now().toISOString();
     if (options.recordCronState !== false) {
@@ -326,6 +329,20 @@ export class CuratorService {
         finishedAt,
       );
     }
+    return {
+      status: "completed",
+      summary: {
+        curatorRunId: curatorRun.runId,
+        dryRun: true,
+        ...(curatorRun.report
+          ? {
+              totalSkills: curatorRun.report.totalSkills,
+              proposalCount: curatorRun.report.proposalCount,
+              archivedCount: curatorRun.report.archivedCount,
+            }
+          : {}),
+      },
+    };
   }
 
   /**

@@ -206,13 +206,13 @@ export interface CronAutomationServiceDeps {
       job: CronJobRecord,
       context?: { contextFrom?: string; contextOutput?: string },
     ) => Promise<{ taskId?: string } | void>;
-    improvement: () => Promise<void>;
-    backup: () => Promise<void>;
-    memoryFlush: () => Promise<void>;
+    improvement: () => Promise<CronSystemHandlerOutcome | void>;
+    backup: () => Promise<CronSystemHandlerOutcome | void>;
+    memoryFlush: () => Promise<CronSystemHandlerOutcome | void>;
     memoryConsolidation: () => Promise<CronSystemHandlerOutcome | void>;
-    costReport: () => Promise<void>;
-    updateReview: () => Promise<void>;
-    curator: () => Promise<void>;
+    costReport: () => Promise<CronSystemHandlerOutcome | void>;
+    updateReview: () => Promise<CronSystemHandlerOutcome | void>;
+    curator: () => Promise<CronSystemHandlerOutcome | void>;
     watchdog: (job: CronJobRecord) => Promise<CronWatchdogRunResult>;
     noAgent: (input: {
       command: string;
@@ -468,23 +468,8 @@ export class CronAutomationService {
               watchdogReviewRecorded = true;
             }
           }
-        } else if (job.action === "improvement") {
-          await this.deps.runHandlers.improvement();
-          const finishedAt = new Date().toISOString();
-          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
-          runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
-        } else if (job.action === "backup") {
-          await this.deps.runHandlers.backup();
-          const finishedAt = new Date().toISOString();
-          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
-          runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
-        } else if (job.action === "memory_flush") {
-          await this.deps.runHandlers.memoryFlush();
-          const finishedAt = new Date().toISOString();
-          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
-          runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
-        } else if (job.action === "memory_consolidation") {
-          const outcome = await this.deps.runHandlers.memoryConsolidation();
+        } else if (isSystemHandlerAction(job.action)) {
+          const outcome = await this.deps.runHandlers[SYSTEM_HANDLER_BY_ACTION[job.action]]();
           const finishedAt = new Date().toISOString();
           const outputSummary = summarizeSystemHandlerOutcome(outcome, job.action, force, options.reason);
           // Written on every path so a later run never inherits a stale skip or partial output.
@@ -496,27 +481,6 @@ export class CronAutomationService {
             outcome?.status === "skipped" ? "skipped" : "ok",
           );
           runSummary = { ...outputSummary, nextRunAt: saved.nextRunAt };
-        } else if (job.action === "cost_report") {
-          await this.deps.runHandlers.costReport();
-          const finishedAt = new Date().toISOString();
-          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
-          runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
-        } else if (job.action === "update_review") {
-          await this.deps.runHandlers.updateReview();
-          const finishedAt = new Date().toISOString();
-          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
-          runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
-        } else if (job.action === "curator") {
-          await this.deps.runHandlers.curator();
-          const finishedAt = new Date().toISOString();
-          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
-          runSummary = {
-            ...runSummary,
-            action: job.action,
-            nextRunAt: saved.nextRunAt,
-            force,
-            reason: options.reason,
-          };
         } else if (job.action === "no_agent") {
           runSummary = await runNoAgentCronJob({
             job,
@@ -1783,6 +1747,21 @@ function hasAmbiguousExternalDeliveryOutcome(
     "manual reconciliation",
     "may have crossed",
   ].some((marker) => evidence.includes(marker));
+}
+
+/** Built-in maintenance actions whose handler reports a {@link CronSystemHandlerOutcome}. */
+const SYSTEM_HANDLER_BY_ACTION = {
+  improvement: "improvement",
+  backup: "backup",
+  memory_flush: "memoryFlush",
+  memory_consolidation: "memoryConsolidation",
+  cost_report: "costReport",
+  update_review: "updateReview",
+  curator: "curator",
+} as const satisfies Partial<Record<CronJobRecord["action"], keyof CronAutomationServiceDeps["runHandlers"]>>;
+
+function isSystemHandlerAction(action: CronJobRecord["action"]): action is keyof typeof SYSTEM_HANDLER_BY_ACTION {
+  return Object.hasOwn(SYSTEM_HANDLER_BY_ACTION, action);
 }
 
 /**

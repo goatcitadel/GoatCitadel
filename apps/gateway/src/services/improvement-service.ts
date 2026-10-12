@@ -88,6 +88,7 @@ import type {
   WeeklyImprovementSpecialistSuggestionRecord,
 } from "@goatcitadel/contracts";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
+import type { CronSystemHandlerOutcome } from "./gateway/cron-automation-service.js";
 import {
   AgenticImprovementBridgeService,
   type AgenticImprovementBridgeInput,
@@ -616,13 +617,13 @@ export class ImprovementService {
 
   async runWeeklyImprovementSchedulerIfDue(
     options: { force?: boolean; recordCronState?: boolean } = {},
-  ): Promise<void> {
+  ): Promise<CronSystemHandlerOutcome> {
     if (!options.force && !(await this.ctx.isFeatureEnabled("improvementModelEvaluationV1Enabled"))) {
-      return;
+      return { status: "skipped", reason: "improvement_model_evaluation_disabled" };
     }
     const job = await this.ctx.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
     if (!job?.enabled) {
-      return;
+      return { status: "skipped", reason: "job_disabled" };
     }
     const now = new Date();
     const timeZone = systemCronTimeZoneForSchedule(job.schedule);
@@ -630,16 +631,16 @@ export class ImprovementService {
       // Simple time-based check: only run on Sundays at 2 AM in the job's schedule timezone
       const parts = getZonedDateParts(now, timeZone);
       if (parts.weekday !== 0 || parts.hour !== 2) {
-        return;
+        return { status: "skipped", reason: "not_due" };
       }
     }
     const weekKey = toWeekKeyForTimezone(now, timeZone);
     const lastWeekKey = (await this.ctx.storage.systemSettings.get<string>(IMPROVEMENT_WEEKLY_DEDUP_SETTING_KEY))
       ?.value;
     if (!options.force && lastWeekKey === weekKey) {
-      return;
+      return { status: "skipped", reason: "already_ran_this_week" };
     }
-    await this.runDecisionReplayAudit({
+    const { run } = await this.runDecisionReplayAudit({
       triggerMode: options.force ? "manual" : "scheduled",
       sampleSize: IMPROVEMENT_WEEKLY_SAMPLE_SIZE,
     });
@@ -655,6 +656,17 @@ export class ImprovementService {
         finishedAt,
       );
     }
+    return {
+      status: "completed",
+      summary: {
+        replayRunId: run.runId,
+        replayStatus: run.status,
+        totalCandidates: run.totalCandidates,
+        totalScored: run.totalScored,
+        likelyWrongCount: run.likelyWrongCount,
+        ...(run.reportId ? { reportId: run.reportId } : {}),
+      },
+    };
   }
 
   async ensureWeeklyImprovementCronJob(): Promise<void> {

@@ -610,7 +610,10 @@ describe("CuratorService cron scheduler", () => {
       cycleDays: 7,
       storage: storageStub as never,
     });
-    await service.runCuratorWeeklyIfDue();
+    await expect(service.runCuratorWeeklyIfDue()).resolves.toMatchObject({
+      status: "completed",
+      summary: { dryRun: true, totalSkills: 0 },
+    });
     expect(runCalls).toBe(1);
     expect(storageStub.settings.get("curator_weekly_last_week_key_v1")).toBe(
       toWeekKeyForTimezone(new Date("2026-05-17T02:10:00Z"), "UTC"),
@@ -634,7 +637,7 @@ describe("CuratorService cron scheduler", () => {
       storage: storageStub as never,
     });
     // job not registered yet — should no-op
-    await service.runCuratorWeeklyIfDue();
+    await expect(service.runCuratorWeeklyIfDue()).resolves.toEqual({ status: "skipped", reason: "job_disabled" });
     expect(runCalls).toBe(0);
 
     // register but disabled — should no-op
@@ -645,7 +648,7 @@ describe("CuratorService cron scheduler", () => {
       schedule: "0 2 * * 0 America/Los_Angeles",
       enabled: false,
     });
-    await service.runCuratorWeeklyIfDue();
+    await expect(service.runCuratorWeeklyIfDue()).resolves.toEqual({ status: "skipped", reason: "job_disabled" });
     expect(runCalls).toBe(0);
   });
 

@@ -52,7 +52,10 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
       autoConfidence: 0.5,
       promptFeatureHash: "feature-hash-1",
     });
-    await harness.service.runWeeklyImprovementSchedulerIfDue();
+    await expect(harness.service.runWeeklyImprovementSchedulerIfDue()).resolves.toEqual({
+      status: "skipped",
+      reason: "improvement_model_evaluation_disabled",
+    });
 
     expect(await harness.service.listImprovementSignals(5, "workspace-1")).toHaveLength(1);
     expect(await harness.service.listDecisionReplayRuns(5)).toEqual([]);
@@ -62,7 +65,10 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
     vi.useFakeTimers({ now: new Date("2026-05-15T17:00:00.000Z") });
     const harness = await createHarness();
 
-    await harness.service.runWeeklyImprovementSchedulerIfDue({ force: true });
+    await expect(harness.service.runWeeklyImprovementSchedulerIfDue({ force: true })).resolves.toEqual({
+      status: "skipped",
+      reason: "job_disabled",
+    });
     expect(await harness.service.listDecisionReplayRuns(5)).toEqual([]);
 
     await harness.service.ensureWeeklyImprovementCronJob();
@@ -76,7 +82,10 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
       new Date().toISOString(),
     );
 
-    await harness.service.runWeeklyImprovementSchedulerIfDue({ force: true });
+    await expect(harness.service.runWeeklyImprovementSchedulerIfDue({ force: true })).resolves.toEqual({
+      status: "skipped",
+      reason: "job_disabled",
+    });
     expect(await harness.service.listDecisionReplayRuns(5)).toEqual([]);
 
     harness.storage.cronJobs.upsert(
@@ -86,7 +95,10 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
       },
       new Date().toISOString(),
     );
-    await harness.service.runWeeklyImprovementSchedulerIfDue();
+    await expect(harness.service.runWeeklyImprovementSchedulerIfDue()).resolves.toEqual({
+      status: "skipped",
+      reason: "not_due",
+    });
 
     expect(await harness.service.listDecisionReplayRuns(5)).toEqual([]);
     expect(harness.published).toEqual([]);
@@ -122,7 +134,10 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
     const created = harness.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID);
     harness.storage.cronJobs.upsert({ ...created!, enabled: true }, new Date().toISOString());
 
-    await harness.service.runWeeklyImprovementSchedulerIfDue({ force: true });
+    await expect(harness.service.runWeeklyImprovementSchedulerIfDue({ force: true })).resolves.toMatchObject({
+      status: "completed",
+      summary: { replayStatus: "completed", totalCandidates: 0, reportId: expect.any(String) },
+    });
 
     const [run] = await harness.service.listDecisionReplayRuns(5);
     expect(run).toMatchObject({
