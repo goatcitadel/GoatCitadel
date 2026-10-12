@@ -101,17 +101,36 @@ describe("design detector rules", () => {
 });
 
 describe("detectDesignAdvisories", () => {
-  it("reports each rule once, sorted by line, capped at eight findings and about one kilobyte", () => {
+  it("reports each rule once, sorted by line, capped at eight findings and one kilobyte", () => {
     const text = [...CASES.map((item) => item.positive), ...CASES.map((item) => item.positive)].join("\n");
     const advisories = detectDesignAdvisories(text);
 
-    expect(advisories).toHaveLength(8);
-    expect(new Set(advisories.map((advisory) => advisory.ruleId)).size).toBe(8);
+    // The byte cap (1 KiB) binds before the count cap: eight advisories with craft-floor pointers
+    // serialize past it, so a 17-rule hit file keeps the first six or seven by line.
+    expect(advisories.length).toBeGreaterThanOrEqual(6);
+    expect(advisories.length).toBeLessThanOrEqual(8);
+    expect(new Set(advisories.map((advisory) => advisory.ruleId)).size).toBe(advisories.length);
+    expect(detectDesignAdvisories(text, { maxBytes: 8192 })).toHaveLength(8);
     expect(advisories.map((advisory) => advisory.line)).toEqual(
       [...advisories.map((advisory) => advisory.line)].sort((a, b) => a - b),
     );
-    expect(Buffer.byteLength(JSON.stringify(advisories), "utf8")).toBeLessThanOrEqual(1280);
+    expect(Buffer.byteLength(JSON.stringify(advisories), "utf8")).toBeLessThanOrEqual(1024);
     expect(detectDesignAdvisories(text, { maxFindings: 3 })).toHaveLength(3);
+  });
+
+  it("flags zero-blur shadows offset on one axis as well as on both", () => {
+    for (const shadow of ["box-shadow: 0 4px 0 #000;", "box-shadow: 4px 0 0 #000;", "box-shadow: -3px 0 0px #000;"]) {
+      expect(
+        detectDesignAdvisories(shadow).map((advisory) => advisory.ruleId),
+        shadow,
+      ).toContain("hard-offset-shadow");
+    }
+    for (const shadow of ["box-shadow: 0 0 0 #000;", "box-shadow: 0 4px 12px #000;", "box-shadow: 4px 4px 2px #000;"]) {
+      expect(
+        detectDesignAdvisories(shadow).map((advisory) => advisory.ruleId),
+        shadow,
+      ).not.toContain("hard-offset-shadow");
+    }
   });
 
   it("never echoes the scanned text", () => {
