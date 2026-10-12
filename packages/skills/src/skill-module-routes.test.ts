@@ -104,6 +104,23 @@ describe("resolveSkillModules", () => {
   });
 });
 
+describe("bundled skill identity", () => {
+  it("routes by canonical skill id, so a non-bundled skill named like a bundled one gets only its main module", () => {
+    const ordinary = resolveSkillModules({ skillId: "bundled:coding", skillName: "coding", text: "Polish this page." });
+    for (const lookalike of [
+      { skillId: "workspace:impeccable", skillName: "impeccable" },
+      { skillId: "imported:design-intelligence", skillName: "design-intelligence" },
+    ]) {
+      const resolution = resolveSkillModules({ ...lookalike, text: "Create a slide deck and polish this page." });
+      expect(resolution).toEqual(ordinary);
+      expect(resolution.contextDocs).toBeUndefined();
+      expect(enumerateSkillRoutes(lookalike)).toEqual(
+        enumerateSkillRoutes({ skillId: "bundled:coding", skillName: "coding" }),
+      );
+    }
+  });
+});
+
 describe("extractExplicitSkillCommand", () => {
   it("returns the command word that follows an explicit mention, case-insensitively", () => {
     expect(extractExplicitSkillCommand("@skill Impeccable Polish the hero", "impeccable", IMPECCABLE_COMMANDS)).toBe(

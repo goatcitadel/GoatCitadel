@@ -29,7 +29,8 @@ export function SchedulerReviewQueue() {
   // when the fresh snapshot still reports it on, so a just-disabled flag never produces the 409.
   const refresh = async () => {
     const fresh = await settings.refetch();
-    if (fresh.data?.features.cronReviewQueueV1Enabled === true) await queue.refetch();
+    // A failed refetch keeps the cached data, so a stale `true` must not request the queue.
+    if (fresh.isSuccess && fresh.data?.features.cronReviewQueueV1Enabled === true) await queue.refetch();
   };
   return (
     <section aria-label="Scheduler review" className="grid min-w-0 gap-3 rounded-lg border border-line bg-raised p-4">

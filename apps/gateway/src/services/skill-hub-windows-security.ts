@@ -107,6 +107,8 @@ export class PowerShellSkillHubWindowsSecurityProtocol implements SkillHubWindow
   private child: ChildProcessWithoutNullStreams | undefined;
   private nextRequestId = 0;
   private readonly pending = new Map<string, PendingRequest>();
+  // Requests the caller cancelled while the worker may still answer them; their late responses are ignored.
+  private readonly abandoned = new Set<string>();
   private stdoutBuffer = "";
   private stderrBytes = 0;
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -147,7 +149,16 @@ export class PowerShellSkillHubWindowsSecurityProtocol implements SkillHubWindow
     const line = `${requestId}|${operation}|${kind}|${encodedPath}\n`;
 
     return new Promise<string>((resolve, reject) => {
-      const abortHandler = () => this.failWorker(new SkillHubWindowsSecurityError("cancelled"));
+      // Cancelling one request must not kill the shared worker or reject the others' requests.
+      const abortHandler = () => {
+        const pendingRequest = this.pending.get(requestId);
+        if (!pendingRequest) return;
+        this.pending.delete(requestId);
+        this.abandoned.add(requestId);
+        clearTimeout(pendingRequest.timeout);
+        pendingRequest.signal.removeEventListener("abort", pendingRequest.abortHandler);
+        pendingRequest.reject(new SkillHubWindowsSecurityError("cancelled"));
+      };
       const timeout = setTimeout(
         () => this.failWorker(new SkillHubWindowsSecurityError("command_failed")),
         REQUEST_TIMEOUT_MS,
@@ -222,6 +233,10 @@ export class PowerShellSkillHubWindowsSecurityProtocol implements SkillHubWindow
     }
     const pending = this.pending.get(match[1]);
     if (!pending) {
+      if (this.abandoned.delete(match[1])) {
+        this.scheduleIdleShutdown();
+        return;
+      }
       this.failWorker(new SkillHubWindowsSecurityError("invalid_response"));
       return;
     }
@@ -261,6 +276,7 @@ export class PowerShellSkillHubWindowsSecurityProtocol implements SkillHubWindow
     this.idleTimer = undefined;
     const child = this.child;
     this.child = undefined;
+    this.abandoned.clear();
     if (!child) return;
     child.stdin.destroy();
     child.kill();
