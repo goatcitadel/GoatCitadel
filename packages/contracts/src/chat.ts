@@ -621,8 +621,27 @@ export interface ChatAttachmentRecord {
   thumbnailRelPath?: string;
   ocrText?: string;
   transcriptText?: string;
-  analysisStatus?: "queued" | "running" | "pending" | "ready" | "failed" | "unsupported";
+  /** `skipped` marks evidence uploads (artifact renders) that deliberately bypass media analysis. */
+  analysisStatus?: "queued" | "running" | "pending" | "ready" | "failed" | "unsupported" | "skipped";
   createdAt: string;
+}
+
+/** One rendered viewport of an `html` generated artifact, stored as a chat attachment (PNG). */
+export interface ChatArtifactRenderRecord {
+  artifactId: string;
+  contentHash: string;
+  viewport: string;
+  attachmentId: string;
+  sha256: string;
+  width: number;
+  height: number;
+  createdAt: string;
+}
+
+export interface ChatArtifactRenderResponse {
+  artifactId: string;
+  contentHash: string;
+  renders: ChatArtifactRenderRecord[];
 }
 
 /**

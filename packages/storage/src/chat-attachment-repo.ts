@@ -18,7 +18,7 @@ interface ChatAttachmentRow {
   thumbnail_rel_path: string | null;
   ocr_text: string | null;
   transcript_text: string | null;
-  analysis_status: "queued" | "running" | "pending" | "ready" | "failed" | "unsupported" | null;
+  analysis_status: "queued" | "running" | "pending" | "ready" | "failed" | "unsupported" | "skipped" | null;
   created_at: string;
 }
 
@@ -38,7 +38,7 @@ export interface ChatAttachmentInsertInput {
   thumbnailRelPath?: string;
   ocrText?: string;
   transcriptText?: string;
-  analysisStatus?: "queued" | "running" | "pending" | "ready" | "failed" | "unsupported";
+  analysisStatus?: "queued" | "running" | "pending" | "ready" | "failed" | "unsupported" | "skipped";
 }
 
 export class ChatAttachmentRepository {
@@ -237,6 +237,7 @@ function isAnalysisStatus(value: unknown): value is NonNullable<ChatAttachmentRo
     value === "pending" ||
     value === "ready" ||
     value === "failed" ||
-    value === "unsupported"
+    value === "unsupported" ||
+    value === "skipped"
   );
 }

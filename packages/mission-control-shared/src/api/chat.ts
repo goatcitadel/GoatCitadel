@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- Chat API helpers intentionally centralize chat surface transport contracts and request wiring. */
 import type {
   ChatAttachmentPreviewResponse,
+  ChatArtifactRenderResponse,
   ChatAttachmentRecord,
   ChatCancelTurnResponse,
   ChatChangePlanRecord,
@@ -190,6 +191,8 @@ export interface ChatToolArtifactResponse {
 export interface ChatGeneratedArtifactsResponse {
   items: ChatGeneratedArtifactRecord[];
 }
+
+export type { ChatArtifactRenderRecord, ChatArtifactRenderResponse } from "@goatcitadel/contracts";
 
 export interface ChatGeneratedArtifactResponse {
   item: ChatGeneratedArtifactRecord;
@@ -852,6 +855,27 @@ export async function fetchChatGeneratedArtifact(
   }
   return request<ChatGeneratedArtifactResponse>(
     `/api/v1/chat/generated-artifacts/${encodeURIComponent(artifactId)}?${query.toString()}`,
+  );
+}
+
+/** Render an `html` generated artifact to offline PNG evidence (idempotent per content hash). */
+export async function renderChatGeneratedArtifact(
+  artifactId: string,
+  workspaceId: string,
+): Promise<ChatArtifactRenderResponse> {
+  return request<ChatArtifactRenderResponse>(
+    `/api/v1/chat/generated-artifacts/${encodeURIComponent(artifactId)}/renders`,
+    { method: "POST", body: JSON.stringify({ workspaceId }) },
+  );
+}
+
+export async function listChatArtifactRenders(
+  artifactId: string,
+  workspaceId: string,
+): Promise<ChatArtifactRenderResponse> {
+  const query = new URLSearchParams({ workspaceId });
+  return request<ChatArtifactRenderResponse>(
+    `/api/v1/chat/generated-artifacts/${encodeURIComponent(artifactId)}/renders?${query.toString()}`,
   );
 }
 

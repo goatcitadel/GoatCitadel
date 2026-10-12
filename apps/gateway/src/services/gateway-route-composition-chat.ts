@@ -7,6 +7,7 @@ import * as chatAttachmentService from "./chat-attachment-service.js";
 import * as chatCommandService from "./chat-command-service.js";
 import * as chatGeneratedArtifactService from "./chat-generated-artifact-service.js";
 import * as chatHistoryService from "./chat-history-service.js";
+import * as htmlArtifactRenderService from "./html-artifact-render-service.js";
 import * as chatMessageRouteRuntime from "./chat-message-route-runtime.js";
 import * as chatSessionService from "./chat-session-service.js";
 import { assertCallerPolicyScopeBound } from "./chat-policy-scope-service.js";
@@ -38,6 +39,7 @@ export function composeChatRouteDependencies(
   gateway: GatewayRouteCompositionPort,
 ): RouteDependencyDomain<
   | "agents"
+  | "chatArtifactRenders"
   | "chatAttachments"
   | "chatCompactionBreakerActions"
   | "chatDelegate"
@@ -150,6 +152,19 @@ export function composeChatRouteDependencies(
     readChatAttachmentContent: (attachmentId) =>
       chatAttachmentService.readChatAttachmentContent(chatAttachmentHost, attachmentId),
     uploadChatAttachment: (input) => chatAttachmentService.uploadChatAttachment(chatAttachmentHost, input),
+  };
+  const htmlArtifactRenderDependencies: htmlArtifactRenderService.HtmlArtifactRenderDependencies = {
+    config: gateway.config,
+    storage: gateway.storage,
+    getChatGeneratedArtifact: (artifactId, options) =>
+      chatGeneratedArtifactService.getChatGeneratedArtifact(ChatGeneratedArtifactDependencies, artifactId, options),
+    uploadChatAttachment: (input) => chatAttachmentService.uploadChatAttachment(chatAttachmentHost, input),
+  };
+  const chatArtifactRenders: GatewayRouteServiceDependencies["chatArtifactRenders"] = {
+    renderChatGeneratedArtifact: (artifactId, workspaceId) =>
+      htmlArtifactRenderService.renderChatGeneratedArtifact(htmlArtifactRenderDependencies, artifactId, workspaceId),
+    listChatArtifactRenders: (artifactId, workspaceId) =>
+      htmlArtifactRenderService.listChatArtifactRenders(htmlArtifactRenderDependencies, artifactId, workspaceId),
   };
   const chatSessions: GatewayRouteServiceDependencies["chatSessions"] = {
     archiveChatSession: (sessionId, expectedRevision) =>
@@ -615,6 +630,7 @@ export function composeChatRouteDependencies(
 
   return {
     agents,
+    chatArtifactRenders,
     chatAttachments,
     chatCompactionBreakerActions: gateway.chatCompactionBreakerActionService,
     chatDelegate,

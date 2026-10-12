@@ -362,4 +362,24 @@ describe("chat-attachment-service", () => {
       /server read limit/u,
     );
   });
+
+  it("stores render evidence uploads with analysis skipped and no media job", async () => {
+    const { host, rootDir, storage } = await createHost();
+    roots.push(rootDir);
+    storages.push(storage);
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16)]);
+
+    const uploaded = await uploadChatAttachment(host, {
+      sessionId: "sess-1",
+      fileName: "render-0123456789abcdef-desktop.png",
+      mimeType: "image/png",
+      bytesBase64: png.toString("base64"),
+      analysis: "skip",
+    });
+
+    expect(uploaded.analysisStatus).toBe("skipped");
+    expect(uploaded.mediaType).toBe("image");
+    expect(host.createMediaJob).not.toHaveBeenCalled();
+    expect((await getChatAttachment(host, uploaded.attachmentId)).analysisStatus).toBe("skipped");
+  });
 });
