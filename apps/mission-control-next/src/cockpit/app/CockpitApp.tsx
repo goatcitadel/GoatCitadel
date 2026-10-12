@@ -10,7 +10,9 @@ import {
 import { useGatewayAccess } from "../../app/use-gateway-access";
 import { createCockpitQueryClient } from "../data/query-client";
 import { useCockpitRealtime } from "../data/realtime";
+import { GeneratedArtifactActionsContext } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
 import { AreaErrorBoundary } from "../ui/AreaErrorBoundary";
+import { renderCockpitArtifactActions } from "../ui/ArtifactRenderActions";
 import { CockpitToaster } from "../ui/Toaster";
 import { CockpitAccessGate } from "./CockpitAccessGate";
 import { applyCockpitAppearance } from "./cockpit-appearance";
@@ -32,7 +34,10 @@ function GatedCockpit() {
     [workspaceId],
   );
   const visibleSessionId =
-    route.resolution.kind === "native" && route.area === "chat" && route.rest[0] !== "projects" && visibleSession?.workspaceId === workspaceId
+    route.resolution.kind === "native" &&
+    route.area === "chat" &&
+    route.rest[0] !== "projects" &&
+    visibleSession?.workspaceId === workspaceId
       ? visibleSession.sessionId
       : undefined;
   const ready = gatewayAccess.status === "ready";
@@ -85,7 +90,10 @@ export function CockpitApp() {
   return (
     <UiPreferencesProvider>
       <CockpitNavigationProvider>
-        <GatedCockpit />
+        {/* Cockpit-only render and critique controls under every shared artifact viewer. */}
+        <GeneratedArtifactActionsContext.Provider value={renderCockpitArtifactActions}>
+          <GatedCockpit />
+        </GeneratedArtifactActionsContext.Provider>
       </CockpitNavigationProvider>
     </UiPreferencesProvider>
   );
