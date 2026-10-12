@@ -1568,6 +1568,33 @@ describe("system maintenance cron jobs on the due sweep", () => {
     ]);
   });
 
+  it("tells system handlers whether a run was scheduled, manual, or forced", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-05-17T04:16:00.000Z");
+    vi.setSystemTime(now);
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const updateReview = vi.fn(async (_context?: unknown) => {});
+    const service = createService(db, vi.fn(), { cronJobs, handlers: { updateReview } });
+    cronJobs.upsert(
+      buildTaskJob({ jobId: UPDATE_REVIEW_DAILY_JOB_ID, action: "update_review", schedule: "15 4 * * * UTC" }),
+    );
+
+    try {
+      await service.runDueTaskCronJobs(now);
+      await service.runCronJobNow(UPDATE_REVIEW_DAILY_JOB_ID);
+      await service.runCronJobNow(UPDATE_REVIEW_DAILY_JOB_ID, { force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(updateReview.mock.calls.map(([context]) => context)).toEqual([
+      { trigger: "scheduled_run" },
+      { trigger: "manual_run" },
+      { trigger: "force_run" },
+    ]);
+  });
+
   it("leaves the seeded-disabled consolidation job unswept until an operator enables it", async () => {
     vi.useFakeTimers();
     const now = new Date("2026-05-17T02:31:00.000Z");

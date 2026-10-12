@@ -1845,8 +1845,12 @@ export class GatewayService {
         costReport: async () => {
           return await this.runCostReportSchedulerIfDue({ force: true, recordCronState: false });
         },
-        updateReview: async () => {
-          return await this.runUpdateReviewSchedulerIfDue({ force: true, recordCronState: false });
+        updateReview: async (context) => {
+          return await this.runUpdateReviewSchedulerIfDue({
+            force: true,
+            recordCronState: false,
+            reviewTrigger: context?.trigger,
+          });
         },
         curator: async () => {
           return await this.curatorService.runCuratorWeeklyIfDue({ force: true, recordCronState: false });

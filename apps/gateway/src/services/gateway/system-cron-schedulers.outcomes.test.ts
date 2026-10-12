@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { CronJobRecord } from "@goatcitadel/contracts";
 import {
@@ -13,6 +16,14 @@ import {
   runUpdateReviewSchedulerIfDue,
   type SystemCronSchedulerDeps,
 } from "./system-cron-schedulers.js";
+
+// The real update review shells out to `pnpm outdated` and `git ls-remote`.
+vi.mock("./update-review.js", () => ({
+  createDailyUpdateReview: vi.fn(async () => ({
+    summary: { outdatedDependencyCount: 0, changedSkillSourceCount: 0, warningCount: 0, checkedSkillCount: 0 },
+  })),
+  renderUpdateReviewMarkdown: vi.fn(() => "# Update review"),
+}));
 
 // CronAutomation owns cadence and telemetry; each scheduler must report what it actually did.
 const CRON_HANDLER_OPTIONS = { force: true, recordCronState: false } as const;
@@ -65,6 +76,35 @@ describe("system cron scheduler outcomes", () => {
       status: "skipped",
       reason: "backed_off",
     });
+  });
+
+  it.each([
+    [undefined, "manual_run"],
+    ["scheduled_run", "scheduled_run"],
+    ["force_run", "force_run"],
+  ] as const)("labels the update review item with the cron run trigger (%s)", async (reviewTrigger, expected) => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-update-review-"));
+    try {
+      const { deps } = createDeps({ jobId: UPDATE_REVIEW_DAILY_JOB_ID });
+      const recordCronReviewItem = vi.fn(async () => undefined);
+      Object.assign(deps, {
+        rootDir,
+        recordCronReviewItem,
+        isFeatureEnabled: vi.fn(async (flag: string) => flag === "cronReviewQueueV1Enabled"),
+      });
+
+      await runUpdateReviewSchedulerIfDue(deps, {
+        ...CRON_HANDLER_OPTIONS,
+        ...(reviewTrigger ? { reviewTrigger } : {}),
+      });
+
+      expect(recordCronReviewItem).toHaveBeenCalledTimes(1);
+      expect(recordCronReviewItem).toHaveBeenCalledWith(
+        expect.objectContaining({ summary: expect.objectContaining({ trigger: expected }) }),
+      );
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
   });
 
   it("reports a completed backup with its summary", async () => {

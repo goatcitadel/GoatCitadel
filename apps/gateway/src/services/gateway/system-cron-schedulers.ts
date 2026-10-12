@@ -21,6 +21,7 @@ import {
 import {
   computeCronBackoffUntil,
   computeNextCronRunAt,
+  type CronRunTrigger,
   type CronSystemHandlerOutcome,
   isCronJobBackedOff,
   normalizeCronFailureMessage,
@@ -48,7 +49,12 @@ const COST_REPORT_LOOKBACK_HOURS = 1;
 const COST_REPORT_OUTPUT_DIR = "artifacts/cost-reports";
 const UPDATE_REVIEW_OUTPUT_DIR = "artifacts/update-review";
 
-export type SystemCronSchedulerOptions = { force?: boolean; recordCronState?: boolean };
+export type SystemCronSchedulerOptions = {
+  force?: boolean;
+  recordCronState?: boolean;
+  /** CronAutomation's run trigger, so a forced handler run can still be labelled scheduled. */
+  reviewTrigger?: CronRunTrigger;
+};
 
 export type SystemCronFeatureFlag =
   | "cronEvidenceV1Enabled"
@@ -743,7 +749,7 @@ export async function runUpdateReviewSchedulerIfDue(
         severity: hasAlerts ? "medium" : "low",
         status: hasAlerts ? "open" : "resolved",
         summary: {
-          trigger: options.force ? "manual_run" : "scheduler",
+          trigger: options.reviewTrigger ?? (options.force ? "manual_run" : "scheduler"),
           outputPath: path.relative(deps.rootDir, outputPath).replaceAll("\\", "/"),
           outdatedDependencyCount: report.summary.outdatedDependencyCount,
           changedSkillSourceCount: report.summary.changedSkillSourceCount,
