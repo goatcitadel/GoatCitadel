@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
+import { observeProofWorkerCompletion, unwrapProofWorkerCompletion, waitForProofWorkerReady } from "./proof-worker-completion.js";
 import { Pool, type PoolClient } from "pg";
 import { PostgresDatabaseClient } from "./client.js";
 import {
@@ -631,11 +632,13 @@ test(
           tsxApiUrl: import.meta.resolve("tsx/esm/api"),
         },
       });
-      const workerACompletion = waitForDelegationStepPatchWorker(workerA);
+      const workerACompletion = observeProofWorkerCompletion(waitForDelegationStepPatchWorker(workerA));
+      await waitForProofWorkerReady(workerA);
 
       const waitDeadline = Date.now() + 10_000;
       let workerAOwnsStepLock = false;
       while (!workerAOwnsStepLock && Date.now() < waitDeadline) {
+        workerACompletion.throwIfFailed();
         const waitState = await scopedPool.query<{ waiting: boolean }>(
           `
             SELECT EXISTS (
@@ -654,6 +657,7 @@ test(
           await new Promise((resolve) => setTimeout(resolve, 25));
         }
       }
+      workerACompletion.throwIfFailed();
       assert.equal(workerAOwnsStepLock, true, "worker A should hold the step row lock before worker B patches");
 
       const releaseBarrier = barrierClient.query(
@@ -666,7 +670,7 @@ test(
       });
       const workerBWaitedMs = Date.now() - workerBStartedAt;
       await releaseBarrier;
-      const workerAUpdate = await workerACompletion;
+      const workerAUpdate = unwrapProofWorkerCompletion(await workerACompletion.completion);
 
       assert.ok(workerBWaitedMs >= 750, `worker B should wait for worker A's row lock (${workerBWaitedMs}ms)`);
       assert.equal(workerAUpdate.summary, "worker A committed summary");
@@ -1414,11 +1418,13 @@ test(
           tsxApiUrl: import.meta.resolve("tsx/esm/api"),
         },
       });
-      const workerACompletion = waitForTaskUpdateWorker(workerA);
+      const workerACompletion = observeProofWorkerCompletion(waitForTaskUpdateWorker(workerA));
+      await waitForProofWorkerReady(workerA);
 
       const waitDeadline = Date.now() + 10_000;
       let workerAOwnsTaskLock = false;
       while (!workerAOwnsTaskLock && Date.now() < waitDeadline) {
+        workerACompletion.throwIfFailed();
         const waitState = await scopedPool.query<{ waiting: boolean }>(
           `
             SELECT EXISTS (
@@ -1437,6 +1443,7 @@ test(
           await new Promise((resolve) => setTimeout(resolve, 25));
         }
       }
+      workerACompletion.throwIfFailed();
       assert.equal(workerAOwnsTaskLock, true, "worker A should hold the task row lock before worker B updates");
 
       const releaseBarrier = barrierClient.query(
@@ -1457,7 +1464,7 @@ test(
       );
       const workerBWaitedMs = Date.now() - workerBStartedAt;
       await releaseBarrier;
-      const workerAUpdate = await workerACompletion;
+      const workerAUpdate = unwrapProofWorkerCompletion(await workerACompletion.completion);
 
       assert.ok(workerBWaitedMs >= 750, `worker B should wait for worker A's row lock (${workerBWaitedMs}ms)`);
       assert.equal(workerAUpdate.description, "worker A committed description");
@@ -1574,11 +1581,13 @@ test(
           tsxApiUrl: import.meta.resolve("tsx/esm/api"),
         },
       });
-      const workerACompletion = waitForA2ABindingUpdateWorker(workerA);
+      const workerACompletion = observeProofWorkerCompletion(waitForA2ABindingUpdateWorker(workerA));
+      await waitForProofWorkerReady(workerA);
 
       const waitDeadline = Date.now() + 10_000;
       let workerAOwnsBindingLock = false;
       while (!workerAOwnsBindingLock && Date.now() < waitDeadline) {
+        workerACompletion.throwIfFailed();
         const waitState = await scopedPool.query<{ waiting: boolean }>(
           `
             SELECT EXISTS (
@@ -1597,6 +1606,7 @@ test(
           await new Promise((resolve) => setTimeout(resolve, 25));
         }
       }
+      workerACompletion.throwIfFailed();
       assert.equal(workerAOwnsBindingLock, true, "worker A should hold the binding row lock before worker B updates");
 
       const releaseBarrier = barrierClient.query(
@@ -1610,7 +1620,7 @@ test(
       );
       const workerBWaitedMs = Date.now() - workerBStartedAt;
       await releaseBarrier;
-      const workerAUpdate = await workerACompletion;
+      const workerAUpdate = unwrapProofWorkerCompletion(await workerACompletion.completion);
 
       assert.ok(workerBWaitedMs >= 750, `worker B should wait for worker A's row lock (${workerBWaitedMs}ms)`);
       assert.equal(workerAUpdate.state, "canceled");
@@ -6872,6 +6882,7 @@ const DELEGATION_STEP_PATCH_WORKER_SOURCE = String.raw`
       );
       db = new PostgresSyncDatabaseClient(workerData.connectionOptions);
       storage = new Storage({ db, transcriptsDir: ".", auditDir: "." });
+      parentPort.postMessage({ type: "ready" });
       const step = storage.chatDelegationSteps.patch(workerData.stepId, workerData.stepPatch);
       parentPort.postMessage({ type: "done", step });
     } catch (error) {
@@ -6998,6 +7009,7 @@ const TASK_UPDATE_WORKER_SOURCE = String.raw`
       );
       db = new PostgresSyncDatabaseClient(workerData.connectionOptions);
       storage = new Storage({ db, transcriptsDir: ".", auditDir: "." });
+      parentPort.postMessage({ type: "ready" });
       const task = storage.tasks.update(workerData.taskId, workerData.taskUpdate, workerData.now);
       parentPort.postMessage({ type: "done", task });
     } catch (error) {
@@ -7030,6 +7042,7 @@ const A2A_BINDING_UPDATE_WORKER_SOURCE = String.raw`
       );
       db = new PostgresSyncDatabaseClient(workerData.connectionOptions);
       storage = new Storage({ db, transcriptsDir: ".", auditDir: "." });
+      parentPort.postMessage({ type: "ready" });
       const binding = storage.a2aTaskBindings.update(
         workerData.a2aTaskId,
         workerData.bindingUpdate,
