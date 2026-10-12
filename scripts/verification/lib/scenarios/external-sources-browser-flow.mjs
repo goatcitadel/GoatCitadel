@@ -1,6 +1,6 @@
 // HX-407 C4b external-sources browser flow (closure packet
 // docs/review/HX_407_CLOSURE_PACKET_2026-07-14.md, C4 row-completion rows 2/3):
-// the complete Library→Chat selection/send/approval-recovery path driven in a
+// the complete Library→Chat attach/send/approval-recovery path driven in a
 // REAL browser against the REAL gateway + mission-control-next stack, executed
 // at desktop and mobile viewports in light and dark color schemes (viewport /
 // scheme parametrization — no pixel baselines; pixel VR stays CI-gated).
@@ -54,6 +54,7 @@ const STUB_MODEL = DETERMINISTIC_LLM_MODEL;
 const STUB_REPLY_TEXT = DETERMINISTIC_LLM_DEFAULT_REPLY;
 const STUB_KEY_ENV = DETERMINISTIC_LLM_KEY_ENV;
 const KNOWLEDGE_APPROVAL_KIND = "external_source.knowledge_snapshot";
+const SOURCE_STRIP_SELECTOR = 'section[aria-label="Read-only external source attachments"]';
 
 /** Closure-packet row 3: light/dark × desktop/mobile. */
 export const EXTERNAL_SOURCES_BROWSER_COMBOS = Object.freeze([
@@ -193,6 +194,9 @@ export async function runExternalSourcesBrowserFlow({
       viewport: combo.viewport,
       colorScheme: combo.colorScheme,
     });
+    // This flow proves the Classic Library, Chat attachment strip, approval queue and Journey owners;
+    // Cockpit is the default shell, so pin the supported saved Classic preference for every page.
+    await browserContext.addInitScript(() => window.localStorage.setItem("goatcitadel.ui.shell.v1", "classic"));
     const page = await browserContext.newPage();
     const browserLog = attachBrowserLogging(page);
     const logCursor = browserLog.mark();
@@ -387,51 +391,63 @@ export async function runExternalSourcesBrowserFlow({
           `/chat?sessionId=${encodeURIComponent(comboState.sessionId)}&theme=${combo.theme}`,
         );
         await page.getByLabel("Message composer").waitFor({ timeout: 60_000 });
-        const strip = page.locator('section[aria-label="Read-only external source attachments"]');
-        await strip.waitFor({ timeout: 60_000 });
+        const picker = await openSourcePicker(page);
         // C4b activation truth: the durable reload carried the incarnation, so
-        // no disabled-mutation hint may be present.
-        const stripText = await strip.innerText();
-        if (stripText.includes("stay disabled until")) {
-          throw new Error("external-source mutations are still disabled: the incarnation did not activate the strip");
+        // the picker may not show the "still preparing" mutation hint.
+        if ((await picker.innerText()).includes("Chat is still preparing this session")) {
+          throw new Error("external-source mutations are still disabled: the incarnation did not activate the picker");
         }
-        await strip.getByRole("button", { name: "Attach imported item" }).click();
-        await strip.getByLabel("Source id").fill(comboState.sourceId);
-        await strip.getByLabel("Import id").fill(comboState.importId);
-        await strip.getByLabel("Item id").fill(comboState.itemId);
-        await strip.getByRole("button", { name: "Attach read-only" }).click();
-        // The durable chip (its per-turn checkbox exists only once the C1
-        // attach landed and the reload rendered it) is the attach truth; the
-        // local notice only renders inside a non-empty thread timeline.
-        await strip
-          .getByRole("checkbox", { name: `Include external source ${comboState.itemId} in the next turn` })
-          .waitFor({ timeout: 60_000 });
-        await strip.getByText("Read-only", { exact: true }).first().waitFor();
-        // Content-free chip truth: the CONTENT digests render truncated only
+        await picker.getByText("Attach a verified import", { exact: true }).click();
+        // Earlier combos share this Gateway, so attach this combo's own verified import by its label.
+        await picker
+          .getByRole("list", { name: "Verified imports ready to attach" })
+          .getByRole("button", { name: `Attach verified import from ${comboState.sourceLabel} read-only`, exact: true })
+          .click();
+        // The durable chip (rendered from the Gateway's attachment list after
+        // the C1 attach landed) is the attach truth.
+        const chip = attachedChip(picker, comboState.sourceLabel);
+        await chip.waitFor({ timeout: 60_000 });
+        await chip.getByText("Source details and actions", { exact: true }).click();
+        const chipText = await chip.innerText();
+        for (const identity of [comboState.itemId, comboState.sourceId, comboState.importId]) {
+          if (!chipText.includes(identity)) {
+            throw new Error(`attached chip does not carry the exact attachment identity ${identity}`);
+          }
+        }
+        // Content-free picker truth: the CONTENT digests render truncated only
         // (the itemId is a server-derived identity that legitimately embeds
         // its own 64-hex digest), and no transcript bytes appear.
-        const chipText = await strip.innerText();
+        const pickerText = await picker.innerText();
         if (
-          chipText.includes(comboState.normalizedArtifactSha256) ||
-          (comboState.rawSha256 && chipText.includes(comboState.rawSha256))
+          pickerText.includes(comboState.normalizedArtifactSha256) ||
+          (comboState.rawSha256 && pickerText.includes(comboState.rawSha256))
         ) {
-          throw new Error("a full content digest leaked into the attachment strip");
+          throw new Error("a full content digest leaked into the source picker");
         }
-        if (chipText.includes(fx.SYNTHETIC_CODEX_VISIBLE_USER_TEXT)) {
-          throw new Error("transcript content leaked into the attachment strip");
+        if (pickerText.includes(fx.SYNTHETIC_CODEX_VISIBLE_USER_TEXT)) {
+          throw new Error("transcript content leaked into the source picker");
         }
       });
 
-      await step("select-attachment-for-turn", async () => {
-        const strip = page.locator('section[aria-label="Read-only external source attachments"]');
-        await strip
-          .getByRole("checkbox", { name: `Include external source ${comboState.itemId} in the next turn` })
-          .check();
-        await strip.getByText("1 selected for the next turn", { exact: false }).waitFor();
+      await step("next-turn-inclusion-unavailable", async () => {
+        // New Chat turns use live capabilities, so an attached source cannot be
+        // selected for the next turn; the picker must say so and keep it off.
+        const picker = sourcePicker(page);
+        const include = attachedChip(picker, comboState.sourceLabel).getByRole("checkbox", {
+          name: `Include ${comboState.sourceLabel} in the next turn`,
+          exact: true,
+        });
+        if (!(await include.isDisabled()) || (await include.isChecked())) {
+          throw new Error("an attached external source can still be selected for the next turn");
+        }
+        await picker.getByText("Including external sources in new Chat turns is temporarily unavailable", { exact: false }).waitFor();
+        await picker.getByText("No sources selected", { exact: true }).waitFor();
+        await picker.getByRole("button", { name: "Done reviewing sources", exact: true }).click();
+        await picker.waitFor({ state: "detached" });
       });
 
-      await step("send-with-frozen-refs-clears-selection", async () => {
-        await page.getByLabel("Message composer").fill("Please use the attached external source context.");
+      await step("send-excludes-attached-sources", async () => {
+        await page.getByLabel("Message composer").fill("Reply without any attached external source context.");
         await page.locator(".mc-next-composer-primary", { hasText: "Send" }).click();
         // The stub provider completes the real turn end-to-end. Scope the
         // reply wait to a thread turn so a stub-derived session TITLE can
@@ -448,19 +464,23 @@ export async function runExternalSourcesBrowserFlow({
           const firstLine = error instanceof Error ? error.message.split("\n")[0] : String(error);
           throw new Error(`${firstLine} — server turn state: ${diagnosis}`, { cause: error });
         }
-        // Selection clears ONLY after the successful send consumed the frozen refs.
-        const strip = page.locator('section[aria-label="Read-only external source attachments"]');
-        await strip.getByText("Select attachments to include in the next turn.", { exact: false }).waitFor({
-          timeout: 60_000,
-        });
+        // The attachment stays read-only evidence: no retained selection rode along with the send.
+        const stripText = await page.locator(SOURCE_STRIP_SELECTOR).innerText();
+        if (stripText.includes("retained source selection")) {
+          throw new Error("an external source selection was retained across the send");
+        }
       });
 
       await step("request-knowledge-copy", async () => {
-        const strip = page.locator('section[aria-label="Read-only external source attachments"]');
-        await strip.getByRole("button", { name: `Request a governed knowledge copy of ${comboState.itemId}` }).click();
+        const picker = await openSourcePicker(page);
+        const chip = attachedChip(picker, comboState.sourceLabel);
+        await chip.getByText("Source details and actions", { exact: true }).click();
+        await chip.getByRole("button", { name: "Request a governed knowledge copy of this source", exact: true }).click();
+        // The notice can land in a collapsed or live-region node behind the open picker; the
+        // approval reference is the request truth, and the next step resolves it in the inbox.
         const notice = page.getByText(/Knowledge copy requested\. Resolve approval /u).first();
-        await notice.waitFor({ timeout: 60_000 });
-        const noticeText = await notice.innerText();
+        await notice.waitFor({ state: "attached", timeout: 60_000 });
+        const noticeText = (await notice.textContent()) ?? "";
         const suffixMatch = noticeText.match(/Resolve approval ([0-9a-f-]{8}) /u);
         if (!suffixMatch) {
           throw new Error(`knowledge-request notice carried no approval reference: ${noticeText}`);
@@ -470,13 +490,10 @@ export async function runExternalSourcesBrowserFlow({
 
       await step("approve-in-approvals-inbox", async () => {
         await gotoRoute(page, activeStack.uiUrl, `/ops/approvals?theme=${combo.theme}`);
-        const pendingCard = page
-          .locator("article, li, section")
-          .filter({ has: page.getByText(KNOWLEDGE_APPROVAL_KIND, { exact: true }) })
-          .filter({ has: page.getByRole("button", { name: "Approve now" }) })
-          .first();
-        await pendingCard.waitFor({ timeout: 60_000 });
-        await pendingCard.getByRole("button", { name: "Approve now" }).click();
+        // Queue rows only summarize; the decision controls live in the selected approval's inspector.
+        await page.getByText(KNOWLEDGE_APPROVAL_KIND, { exact: true }).first().click({ timeout: 60_000 });
+        await page
+          .locator(".mc-next-approvals-inspector").getByRole("button", { name: "Approve now", exact: true }).click({ timeout: 60_000 });
         await page.getByText("Approve this request?", { exact: false }).waitFor();
         await page.getByRole("button", { name: "Approve", exact: true }).click();
         // The pending knowledge approval leaves the queue once resolved.
@@ -626,6 +643,29 @@ export async function retainExternalSourcesFailureEvidence(
  * thread turn's status + failure record is the diagnosis truth (the UI banner
  * is generic).
  */
+function sourcePicker(page) {
+  return page.getByRole("dialog", { name: "Attached sources", exact: true });
+}
+
+/** The Chat strip keeps attach, inspection and knowledge-copy actions inside its source picker dialog. */
+async function openSourcePicker(page) {
+  const strip = page.locator(SOURCE_STRIP_SELECTOR);
+  await strip.waitFor({ timeout: 60_000 });
+  await strip.getByRole("button", { name: "Choose sources", exact: true }).click();
+  const picker = sourcePicker(page);
+  await picker.waitFor({ timeout: 30_000 });
+  return picker;
+}
+
+function attachedChip(picker, sourceLabel) {
+  return picker
+    .getByRole("list", { name: "Attached read-only sources", exact: true })
+    .getByRole("listitem")
+    .filter({
+      has: picker.page().getByRole("checkbox", { name: `Include ${sourceLabel} in the next turn`, exact: true }),
+    });
+}
+
 async function describeLatestTurn(gatewayUrl, sessionId) {
   try {
     const thread = await requestJson(gatewayUrl, `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread`);

@@ -36,7 +36,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
   const trace = useQuery({
     queryKey: queryKeys.runTrace(runId),
     queryFn: () => fetchObserveRunTrace(runId),
-    refetchInterval: (query) => describeApiError(query.state.error).retryable === false ? false : 15_000,
+    refetchInterval: (query) => (describeApiError(query.state.error).retryable === false ? false : 15_000),
   });
   const data = trace.isError ? undefined : trace.data;
   const run = data?.run && durableRunWorkspaceId(data.run) === workspaceId ? data.run : undefined;
@@ -45,7 +45,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
   const pendingApproval = run && data ? data.approvals.items.some((item) => item.status === "pending") : false;
   const recordedCost = run && data?.providerUsage.state === "available" ? data.providerUsage.totals.costUsd : undefined;
   const costLabel =
-    typeof recordedCost === "number" && Number.isFinite(recordedCost) && recordedCost > 0
+    typeof recordedCost === "number" && Number.isFinite(recordedCost) && recordedCost >= 0
       ? `${formatCostUsd(recordedCost)}+`
       : "Unknown";
   const ownerScope = JSON.stringify([workspaceId, runId]);
@@ -71,7 +71,11 @@ export function WorkRunDetail({ runId }: { runId: string }) {
         <EmptyState
           title="Run evidence unavailable"
           description={describeApiError(trace.error).summary}
-          action={describeApiError(trace.error).retryable === false ? null : <Button onClick={() => void trace.refetch()}>Try again</Button>}
+          action={
+            describeApiError(trace.error).retryable === false ? null : (
+              <Button onClick={() => void trace.refetch()}>Try again</Button>
+            )
+          }
         />
       ) : null}
       {data?.run && !run ? (
@@ -80,7 +84,9 @@ export function WorkRunDetail({ runId }: { runId: string }) {
           description="This run has no matching workspace evidence. Choose its workspace or return to Work."
         />
       ) : null}
-      {!trace.isLoading && !trace.isError && data && !data.run ? <EmptyState title="Run not found" description="The Gateway returned no run record for this link." /> : null}
+      {!trace.isLoading && !trace.isError && data && !data.run ? (
+        <EmptyState title="Run not found" description="The Gateway returned no run record for this link." />
+      ) : null}
       {run && data ? (
         <>
           <header className="flex flex-wrap items-start justify-between gap-3">
@@ -114,7 +120,12 @@ export function WorkRunDetail({ runId }: { runId: string }) {
             to inspect host runtime status. Run controls and recorded errors are available here.
           </p>
           <WorkRunControls runId={runId} />
-          {run.lastError || run.recoverySummary ? <p role="alert" className="rounded-md border border-line p-3 text-sm text-status-failed">{run.lastError}{run.recoverySummary ? ` ${run.recoverySummary}` : ""}</p> : null}
+          {run.lastError || run.recoverySummary ? (
+            <p role="alert" className="rounded-md border border-line p-3 text-sm text-status-failed">
+              {run.lastError}
+              {run.recoverySummary ? ` ${run.recoverySummary}` : ""}
+            </p>
+          ) : null}
           <div className="grid gap-3 sm:grid-cols-3">
             <EvidenceCount
               title="Checkpoints"
@@ -148,8 +159,17 @@ export function WorkRunDetail({ runId }: { runId: string }) {
               </p>
             )}
           </section>
-          <details className="rounded-lg border border-line bg-raised p-4"><summary className="cursor-pointer font-medium text-accent">Plan, delegation and tool evidence</summary><div className="mt-3 grid gap-3"><RunEvidenceSections trace={data} /></div></details>
-          <TechnicalDetails label="Run lineage and signed receipt"><RunLineage trace={data} workspaceId={workspaceId} /><RunSignedReceipt key={runId} runId={runId} /></TechnicalDetails>
+          <details className="rounded-lg border border-line bg-raised p-4">
+            <summary className="cursor-pointer font-medium text-accent">Plan, delegation and tool evidence</summary>
+            <div className="mt-3 grid gap-3">
+              <RunEvidenceSections trace={data} />
+            </div>
+          </details>
+          <TechnicalDetails label="Run lineage">
+            <RunLineage trace={data} workspaceId={workspaceId} />
+          </TechnicalDetails>
+          {/* Review evidence, not a diagnostic: keep it reachable when technical details are hidden. */}
+          <RunSignedReceipt key={runId} runId={runId} />
           <section className="rounded-lg border border-line bg-raised p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="font-display text-lg font-semibold text-fg">Approvals</h2>
@@ -160,7 +180,14 @@ export function WorkRunDetail({ runId }: { runId: string }) {
                 label="Open approvals in the classic view"
               />
             </div>
-            {data.approvals.state !== "available" || data.approvals.missingIds?.length ? <p className="mt-2 text-sm text-fg-muted">Approval evidence is {humanizeToken(data.approvals.state).toLowerCase()}. {data.approvals.items.length ? "Known linked approvals remain available below; this list may be incomplete." : ""}</p> : null}
+            {data.approvals.state !== "available" || data.approvals.missingIds?.length ? (
+              <p className="mt-2 text-sm text-fg-muted">
+                Approval evidence is {humanizeToken(data.approvals.state).toLowerCase()}.{" "}
+                {data.approvals.items.length
+                  ? "Known linked approvals remain available below; this list may be incomplete."
+                  : ""}
+              </p>
+            ) : null}
             {data.approvals.state === "available" || data.approvals.items.length > 0 ? (
               data.approvals.items.length ? (
                 <ul className="mt-3 grid gap-2">
@@ -170,7 +197,12 @@ export function WorkRunDetail({ runId }: { runId: string }) {
                       className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line p-3 text-sm"
                     >
                       <span className="text-fg">{humanizeToken(approval.kind)}</span>
-                      <NativeOwnerLink scope={[workspaceId, runId, approval.approvalId]} href={`/inbox?approvalId=${encodeURIComponent(approval.approvalId)}`}>Review linked decision</NativeOwnerLink>
+                      <NativeOwnerLink
+                        scope={[workspaceId, runId, approval.approvalId]}
+                        href={`/inbox?approvalId=${encodeURIComponent(approval.approvalId)}`}
+                      >
+                        Review linked decision
+                      </NativeOwnerLink>
                       <span className="flex gap-2">
                         <StatusBadge status={presentRiskLevel(approval.riskLevel)} />
                         <StatusBadge status={presentApprovalStatus(approval.status)} />
@@ -186,11 +218,20 @@ export function WorkRunDetail({ runId }: { runId: string }) {
           <RunArtifacts trace={data} workspaceId={workspaceId} />
           <RunWorkspaceContext trace={data} workspaceId={workspaceId} />
           {data.errors.items.length ? (
-            <section aria-label="Recorded run errors" className="rounded-md border border-status-failed p-3 text-sm text-fg">
+            <section
+              aria-label="Recorded run errors"
+              className="rounded-md border border-status-failed p-3 text-sm text-fg"
+            >
               <h2 className="font-display text-lg font-semibold text-fg">Recorded run errors</h2>
               {data.errors.items.length} recorded {data.errors.items.length === 1 ? "error needs" : "errors need"}{" "}
               review.
-              <ul className="mt-3 space-y-2">{data.errors.items.map((error) => <li key={`${error.source}:${error.id}`} className="break-words"><strong>{humanizeToken(error.source)}:</strong> {error.message}</li>)}</ul>
+              <ul className="mt-3 space-y-2">
+                {data.errors.items.map((error) => (
+                  <li key={`${error.source}:${error.id}`} className="break-words">
+                    <strong>{humanizeToken(error.source)}:</strong> {error.message}
+                  </li>
+                ))}
+              </ul>
             </section>
           ) : null}
         </>

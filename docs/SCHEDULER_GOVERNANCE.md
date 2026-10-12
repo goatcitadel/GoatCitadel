@@ -1,6 +1,6 @@
 # Scheduler Governance
 
-Last updated: 2026-07-05
+Last updated: 2026-10-11
 
 GoatCitadel's cron scheduler is a first-class, governed automation surface: recurring
 agent turns run under a restricted permission profile, model-created schedules are
@@ -33,6 +33,18 @@ and `cron-agent-turn-support.ts`; they are not feature-flagged:
 - **Channel delivery.** `agent_turn` jobs may declare a `deliveryChannel`
   (`{ channelKey, target }`) so run output is delivered through the normal governed
   channel send path — the same policy gates as any other outbound send.
+
+## Built-in job timezone
+
+Built-in jobs (private beta backup, memory flush, memory consolidation, cost report,
+update review, curator, self-improvement replay) are seeded as a fixed cadence plus
+the gateway host's IANA timezone, as Node resolves it from `TZ` or the OS, falling
+back to `UTC` when the host reports none or an unusable one
+(`apps/gateway/src/services/cron-job-schedule-labels.ts`). The gateway re-pins these
+schedules on every start, so a schedule saved in another zone (including the former
+fixed `America/Los_Angeles`) is re-zoned to the host zone on the next start. Each
+job's due gate and dedup keys use the zone its persisted schedule names, so the gate
+matches the zone the Schedules route shows.
 
 ## Review queue (`cronReviewQueueV1Enabled`)
 

@@ -116,6 +116,19 @@ export function deriveCheckStatus({ exitCode, countKind, counts, requireAllExecu
       failureNote: `runner reported ${counts.passed} passed but this check requires all ${requiredPassed}`,
     };
   }
+  // A pass floor alone accepts a planned combo that never executed (e.g. 5 planned /
+  // 4 executed / 4 passed), so browser summaries must match requiredPassed exactly.
+  if (
+    requiredPassed !== undefined &&
+    counts.planned !== undefined &&
+    counts.executed !== undefined &&
+    (counts.planned !== requiredPassed || counts.executed !== requiredPassed || counts.passed !== requiredPassed)
+  ) {
+    return {
+      status: "failed",
+      failureNote: `browser-flow summary mismatch: planned ${counts.planned} / executed ${counts.executed} / passed ${counts.passed}; expected all ${requiredPassed}`,
+    };
+  }
   if (counts.steps !== undefined && counts.steps < 1) {
     return {
       status: "failed",
@@ -248,7 +261,7 @@ export function buildExternalSourcesLaneChecks() {
     {
       id: "external-sources.browser-flow",
       title:
-        "Real-browser closure flow: Library register→scan→plan→apply → Chat attach→select→send (frozen external refs) → knowledge approval → recovered snapshot with provenance, at desktop+mobile × light+dark (4 combos)",
+        "Real-browser closure flow: Library register→scan→plan→apply → Chat attach (picker) → next-turn inclusion unavailable → send without retained selection → knowledge approval → recovered snapshot with provenance, at desktop+mobile × light+dark (4 combos)",
       kind: "browser-flow",
       count: "browser-flow",
       requiredPassed: 4,
@@ -291,7 +304,7 @@ export function buildRowCompletionMatrix() {
     },
     {
       row: 2,
-      title: "Complete Library-to-Chat selection/send/approval-recovery browser path",
+      title: "Complete Library-to-Chat attach/send/approval-recovery browser path",
       checks: ["external-sources.integration", "external-sources.browser-flow"],
       suites: [
         "apps/gateway/src/external-sources-closure.integration.test.ts (API-level Library→Chat→send→approval→recovery closure incl. the HX-307 snapshot external entry)",
@@ -299,7 +312,7 @@ export function buildRowCompletionMatrix() {
       ],
       note:
         "C4c completed the C4b flow: the chat.messages contextRefs gate now admits the full C1 kind contract (identifiers only), and " +
-        "the browser flow executes register→scan→plan→apply→attach→select→send (frozen refs consumed, stub reply lands)→" +
+        "the browser flow executes register→scan→plan→apply→attach (picker)→next-turn inclusion unavailable→send (no retained selection, stub reply lands)→" +
         "knowledge-request→approve→recovered-snapshot provenance end to end.",
     },
     {

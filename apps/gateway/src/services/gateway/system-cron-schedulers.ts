@@ -9,6 +9,7 @@ import type { MemoryConsolidationRunSummary } from "../memory-consolidation-serv
 import type { MemoryLifecycleService } from "../memory-lifecycle-service.js";
 import { getZonedDateParts, toDayKeyForTimezone, toHourKeyForTimezone } from "../scheduler-timing.js";
 import { toWeekKeyForTimezone } from "../improvement-replay.js";
+import { systemCronTimeZoneForSchedule } from "../cron-job-schedule-labels.js";
 import { createDailyUpdateReview, renderUpdateReviewMarkdown } from "./update-review.js";
 import {
   COST_REPORT_HOURLY_JOB_ID,
@@ -20,6 +21,7 @@ import {
 import {
   computeCronBackoffUntil,
   computeNextCronRunAt,
+  type CronSystemHandlerOutcome,
   isCronJobBackedOff,
   normalizeCronFailureMessage,
 } from "./cron-automation-service.js";
@@ -34,11 +36,6 @@ import {
 
 const log = logger.child("system-cron-schedulers");
 
-const PRIVATE_BETA_BACKUP_TIME_ZONE = "America/Los_Angeles";
-const MEMORY_FLUSH_DAILY_TIME_ZONE = "America/Los_Angeles";
-const COST_REPORT_HOURLY_TIME_ZONE = "America/Los_Angeles";
-const UPDATE_REVIEW_DAILY_TIME_ZONE = "America/Los_Angeles";
-const MEMORY_CONSOLIDATION_TIME_ZONE = "America/Los_Angeles";
 const PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY = "private_beta_backup_last_day_key_v1";
 const MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY = "memory_flush_daily_last_day_key_v1";
 const MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY = "memory_consolidation_weekly_last_week_key_v1";
@@ -270,49 +267,51 @@ async function recordSystemCronRunEvidence(
 export async function runPrivateBetaBackupSchedulerIfDue(
   deps: SystemCronSchedulerDeps,
   options: SystemCronSchedulerOptions = {},
-): Promise<void> {
+): Promise<CronSystemHandlerOutcome> {
   const job = await deps.storage.cronJobs.get(PRIVATE_BETA_BACKUP_JOB_ID);
   if (!job?.enabled) {
-    return;
+    return { status: "skipped", reason: "job_disabled" };
   }
   const now = new Date();
   if (!options.force && isCronJobBackedOff(job, now)) {
-    return;
+    return { status: "skipped", reason: "backed_off" };
   }
+  const timeZone = systemCronTimeZoneForSchedule(job.schedule);
   if (
     !options.force &&
     !isCronJobDueNow(job, now, {
       defaultHour: 2,
       defaultMinute: 30,
       defaultWeekday: undefined,
-      defaultTimeZone: PRIVATE_BETA_BACKUP_TIME_ZONE,
+      defaultTimeZone: timeZone,
     })
   ) {
-    return;
+    return { status: "skipped", reason: "not_due" };
   }
-  const dayKey = toDayKeyForTimezone(now, PRIVATE_BETA_BACKUP_TIME_ZONE);
+  const dayKey = toDayKeyForTimezone(now, timeZone);
   const lastDayKey = (await deps.storage.systemSettings.get<string>(PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY))?.value;
   if (!options.force && dayKey === lastDayKey) {
-    return;
+    return { status: "skipped", reason: "already_ran_today" };
   }
 
-  await runSystemCronBody(deps, job, options, async ({ runId }) => {
+  return await runSystemCronBody(deps, job, options, async ({ runId }): Promise<CronSystemHandlerOutcome> => {
     const backupName = `private-beta-${dayKey.replaceAll("-", "")}`;
     const backup = await deps.createBackup({ name: backupName });
     await deps.pruneRetention({ dryRun: false });
     await deps.storage.systemSettings.set(PRIVATE_BETA_BACKUP_DEDUP_SETTING_KEY, dayKey);
 
     const finishedAt = new Date().toISOString();
+    const summary = {
+      type: "private_beta_daily_backup",
+      backupId: backup.backupId,
+      bytes: backup.bytes,
+    };
     if (shouldRecordSystemCronState(options)) {
       await recordSystemCronRunSuccess(deps, job, {
         runId,
         finishedAtIso: finishedAt,
         nextRunAt: computeSystemCronNextRunAt(job, finishedAt, 24 * 60 * 60 * 1000),
-        summary: {
-          type: "private_beta_daily_backup",
-          backupId: backup.backupId,
-          bytes: backup.bytes,
-        },
+        summary,
       });
     }
     await deps.publishRealtime("backup_created", "system", {
@@ -321,46 +320,77 @@ export async function runPrivateBetaBackupSchedulerIfDue(
       outputPath: backup.outputPath,
       bytes: backup.bytes,
     });
+    return { status: "completed", summary: { ...summary } };
   });
 }
 
+const MEMORY_CONSOLIDATION_SKIP_REASON_BY_STATUS: Record<
+  Exclude<MemoryConsolidationRunSummary["status"], "completed">,
+  string
+> = {
+  disabled: "memory_consolidation_flags_disabled",
+  skipped_kill_switch: "autonomy_kill_switch",
+};
+
+/**
+ * Returns what the run actually did so CronAutomation can record a truthful
+ * outcome: every early exit is a `skipped` descriptor with a stable reason,
+ * and only a consolidation that reports `completed` is a completed run.
+ */
 export async function runMemoryConsolidationSchedulerIfDue(
   deps: SystemCronSchedulerDeps,
   options: SystemCronSchedulerOptions = {},
-): Promise<void> {
+): Promise<CronSystemHandlerOutcome> {
   const job = await deps.storage.cronJobs.get(MEMORY_CONSOLIDATION_WEEKLY_JOB_ID);
   if (!job?.enabled) {
-    return;
+    return { status: "skipped", reason: "job_disabled" };
   }
   // Both gates are re-checked inside the service too; checking here avoids
   // bookkeeping writes for a run that would immediately no-op.
-  if (
-    !(await deps.isFeatureEnabled("memoryConsolidationV1Enabled")) ||
-    !(await deps.isFeatureEnabled("memoryLifecycleAdminV1Enabled")) ||
-    (await deps.isFeatureEnabled("autonomyV1Disabled"))
-  ) {
-    return;
+  const memoryConsolidationV1Enabled = await deps.isFeatureEnabled("memoryConsolidationV1Enabled");
+  const memoryLifecycleAdminV1Enabled = await deps.isFeatureEnabled("memoryLifecycleAdminV1Enabled");
+  if (!memoryConsolidationV1Enabled || !memoryLifecycleAdminV1Enabled) {
+    return {
+      status: "skipped",
+      reason: MEMORY_CONSOLIDATION_SKIP_REASON_BY_STATUS.disabled,
+      detail: { memoryConsolidationV1Enabled, memoryLifecycleAdminV1Enabled },
+    };
+  }
+  if (await deps.isFeatureEnabled("autonomyV1Disabled")) {
+    return { status: "skipped", reason: MEMORY_CONSOLIDATION_SKIP_REASON_BY_STATUS.skipped_kill_switch };
   }
   const now = new Date();
   if (!options.force && isCronJobBackedOff(job, now)) {
-    return;
+    return { status: "skipped", reason: "backed_off" };
   }
+  const timeZone = systemCronTimeZoneForSchedule(job.schedule);
   if (!options.force) {
-    // Weekly: Sundays in the 2 AM hour in the configured timezone.
-    const parts = getZonedDateParts(now, MEMORY_CONSOLIDATION_TIME_ZONE);
+    // Weekly: Sundays in the 2 AM hour in the job's schedule timezone.
+    const parts = getZonedDateParts(now, timeZone);
     if (parts.weekday !== 0 || parts.hour !== 2) {
-      return;
+      return { status: "skipped", reason: "not_due" };
     }
   }
-  const weekKey = toWeekKeyForTimezone(now, MEMORY_CONSOLIDATION_TIME_ZONE);
+  const weekKey = toWeekKeyForTimezone(now, timeZone);
   const lastWeekKey = (await deps.storage.systemSettings.get<string>(MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY))?.value;
   if (!options.force && lastWeekKey === weekKey) {
-    return;
+    return { status: "skipped", reason: "already_ran_this_week" };
   }
-  await runSystemCronBody(deps, job, options, async ({ runId }) => {
+  return await runSystemCronBody(deps, job, options, async ({ runId }): Promise<CronSystemHandlerOutcome> => {
     const summary = await deps.runMemoryConsolidation();
     if (summary.status !== "completed") {
-      return;
+      const reason = MEMORY_CONSOLIDATION_SKIP_REASON_BY_STATUS[summary.status];
+      // The kill switch is re-checked before every session, so it can stop a run
+      // after proposals were already durably created. Only a session that drafted
+      // without failing counts as real work; an all-failed run is still a skip.
+      if (summary.sessionsSampled > summary.sessionsFailed) {
+        return { status: "completed", summary: { ...summary }, partial: { reason } };
+      }
+      return {
+        status: "skipped",
+        reason,
+        detail: { consolidationStatus: summary.status, consolidation: { ...summary } },
+      };
     }
     await deps.storage.systemSettings.set(MEMORY_CONSOLIDATION_DEDUP_SETTING_KEY, weekKey);
     const finishedAt = new Date().toISOString();
@@ -373,39 +403,41 @@ export async function runMemoryConsolidationSchedulerIfDue(
         summary: { ...summary },
       });
     }
+    return { status: "completed", summary: { ...summary } };
   });
 }
 
 export async function runMemoryFlushSchedulerIfDue(
   deps: SystemCronSchedulerDeps,
   options: SystemCronSchedulerOptions = {},
-): Promise<void> {
+): Promise<CronSystemHandlerOutcome> {
   const job = await deps.storage.cronJobs.get(MEMORY_FLUSH_DAILY_JOB_ID);
   if (!job?.enabled) {
-    return;
+    return { status: "skipped", reason: "job_disabled" };
   }
   const now = new Date();
   if (!options.force && isCronJobBackedOff(job, now)) {
-    return;
+    return { status: "skipped", reason: "backed_off" };
   }
+  const timeZone = systemCronTimeZoneForSchedule(job.schedule);
   if (
     !options.force &&
     !isCronJobDueNow(job, now, {
       defaultHour: 3,
       defaultMinute: 0,
       defaultWeekday: undefined,
-      defaultTimeZone: MEMORY_FLUSH_DAILY_TIME_ZONE,
+      defaultTimeZone: timeZone,
     })
   ) {
-    return;
+    return { status: "skipped", reason: "not_due" };
   }
-  const dayKey = toDayKeyForTimezone(now, MEMORY_FLUSH_DAILY_TIME_ZONE);
+  const dayKey = toDayKeyForTimezone(now, timeZone);
   const lastDayKey = (await deps.storage.systemSettings.get<string>(MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY))?.value;
   if (!options.force && dayKey === lastDayKey) {
-    return;
+    return { status: "skipped", reason: "already_ran_today" };
   }
 
-  await runSystemCronBody(deps, job, options, async ({ runId }) => {
+  return await runSystemCronBody(deps, job, options, async ({ runId }): Promise<CronSystemHandlerOutcome> => {
     const nowIso = now.toISOString();
     const cutoffIso = new Date(now.getTime() - MEMORY_FLUSH_HISTORY_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const prunedExpiredContextPacks = await deps.storage.memoryContexts.pruneExpired(nowIso);
@@ -450,6 +482,7 @@ export async function runMemoryFlushSchedulerIfDue(
         ...new Set(expiredMemoryLedger.retainedPinnedItems.map((item) => item.namespace)),
       ],
     });
+    return { status: "completed", summary: { ...summary } };
   });
 }
 
@@ -524,33 +557,34 @@ export async function inspectExpiredMemoryItemsForFlush(
 export async function runCostReportSchedulerIfDue(
   deps: SystemCronSchedulerDeps,
   options: SystemCronSchedulerOptions = {},
-): Promise<void> {
+): Promise<CronSystemHandlerOutcome> {
   const job = await deps.storage.cronJobs.get(COST_REPORT_HOURLY_JOB_ID);
   if (!job?.enabled) {
-    return;
+    return { status: "skipped", reason: "job_disabled" };
   }
   const now = new Date();
   if (!options.force && isCronJobBackedOff(job, now)) {
-    return;
+    return { status: "skipped", reason: "backed_off" };
   }
+  const timeZone = systemCronTimeZoneForSchedule(job.schedule);
   if (
     !options.force &&
     !isCronJobDueNow(job, now, {
       defaultHour: 0,
       defaultMinute: 0,
       defaultWeekday: undefined,
-      defaultTimeZone: COST_REPORT_HOURLY_TIME_ZONE,
+      defaultTimeZone: timeZone,
     })
   ) {
-    return;
+    return { status: "skipped", reason: "not_due" };
   }
-  const hourKey = toHourKeyForTimezone(now, COST_REPORT_HOURLY_TIME_ZONE);
+  const hourKey = toHourKeyForTimezone(now, timeZone);
   const lastHourKey = (await deps.storage.systemSettings.get<string>(COST_REPORT_HOURLY_DEDUP_SETTING_KEY))?.value;
   if (!options.force && hourKey === lastHourKey) {
-    return;
+    return { status: "skipped", reason: "already_ran_this_hour" };
   }
 
-  await runSystemCronBody(deps, job, options, async ({ runId }) => {
+  return await runSystemCronBody(deps, job, options, async ({ runId }): Promise<CronSystemHandlerOutcome> => {
     const windowEndIso = now.toISOString();
     const windowStartIso = new Date(now.getTime() - COST_REPORT_LOOKBACK_HOURS * 60 * 60 * 1000).toISOString();
     const byDay = await deps.storage.costLedger.summary("day", windowStartIso, windowEndIso);
@@ -637,39 +671,41 @@ export async function runCostReportSchedulerIfDue(
       ...summary,
       jobId: COST_REPORT_HOURLY_JOB_ID,
     });
+    return { status: "completed", summary: { ...summary } };
   });
 }
 
 export async function runUpdateReviewSchedulerIfDue(
   deps: SystemCronSchedulerDeps,
   options: SystemCronSchedulerOptions = {},
-): Promise<void> {
+): Promise<CronSystemHandlerOutcome> {
   const job = await deps.storage.cronJobs.get(UPDATE_REVIEW_DAILY_JOB_ID);
   if (!job?.enabled) {
-    return;
+    return { status: "skipped", reason: "job_disabled" };
   }
   const now = new Date();
   if (!options.force && isCronJobBackedOff(job, now)) {
-    return;
+    return { status: "skipped", reason: "backed_off" };
   }
+  const timeZone = systemCronTimeZoneForSchedule(job.schedule);
   if (
     !options.force &&
     !isCronJobDueNow(job, now, {
       defaultHour: 4,
       defaultMinute: 15,
       defaultWeekday: undefined,
-      defaultTimeZone: UPDATE_REVIEW_DAILY_TIME_ZONE,
+      defaultTimeZone: timeZone,
     })
   ) {
-    return;
+    return { status: "skipped", reason: "not_due" };
   }
-  const dayKey = toDayKeyForTimezone(now, UPDATE_REVIEW_DAILY_TIME_ZONE);
+  const dayKey = toDayKeyForTimezone(now, timeZone);
   const lastDayKey = (await deps.storage.systemSettings.get<string>(UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY))?.value;
   if (!options.force && dayKey === lastDayKey) {
-    return;
+    return { status: "skipped", reason: "already_ran_today" };
   }
 
-  await runSystemCronBody(deps, job, options, async ({ runId }) => {
+  return await runSystemCronBody(deps, job, options, async ({ runId }): Promise<CronSystemHandlerOutcome> => {
     const report = await createDailyUpdateReview(deps.rootDir);
     const reportDir = path.join(deps.rootDir, UPDATE_REVIEW_OUTPUT_DIR);
     await fs.mkdir(reportDir, { recursive: true });
@@ -728,6 +764,7 @@ export async function runUpdateReviewSchedulerIfDue(
       ...summary,
       jobId: UPDATE_REVIEW_DAILY_JOB_ID,
     });
+    return { status: "completed", summary: { ...summary } };
   });
 }
 

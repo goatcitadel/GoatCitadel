@@ -173,6 +173,25 @@ test("the browser-flow parser reads the printed combo summary and its guard dema
     }).status,
     "failed",
   );
+  // A planned combo that never executed fails even when the pass floor is met.
+  const unexecuted = deriveCheckStatus({
+    exitCode: 0,
+    countKind: "browser-flow",
+    counts: { planned: 5, executed: 4, passed: 4, failed: 0, steps: 44 },
+    requiredPassed: 4,
+  });
+  assert.equal(unexecuted.status, "failed");
+  assert.ok(unexecuted.failureNote.includes("planned 5 / executed 4 / passed 4"), unexecuted.failureNote);
+  // A plan that drifted from the declared combo count fails until requiredPassed is updated.
+  assert.equal(
+    deriveCheckStatus({
+      exitCode: 0,
+      countKind: "browser-flow",
+      counts: { planned: 5, executed: 5, passed: 5, failed: 0, steps: 55 },
+      requiredPassed: 4,
+    }).status,
+    "failed",
+  );
   // Zero executed steps can never pass (the browser >0 honesty guard).
   const zeroSteps = deriveCheckStatus({
     exitCode: 0,

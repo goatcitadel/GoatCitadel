@@ -462,7 +462,7 @@ import {
   InboundChannelTurnTerminalError,
   type InboundChannelDeterministicIdentity,
 } from "./inbound-channel-event-service.js";
-import { CronAutomationService } from "./gateway/cron-automation-service.js";
+import { CronAutomationService, type CronSystemHandlerOutcome } from "./gateway/cron-automation-service.js";
 import {
   runCostReportSchedulerIfDue,
   runMemoryConsolidationSchedulerIfDue,
@@ -898,10 +898,6 @@ const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
 ] as const;
 const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
 
-export const PRIVATE_BETA_BACKUP_SCHEDULE_LABEL = "30 2 * * * America/Los_Angeles";
-export const MEMORY_FLUSH_DAILY_SCHEDULE_LABEL = "0 3 * * * America/Los_Angeles";
-export const COST_REPORT_HOURLY_SCHEDULE_LABEL = "0 * * * * America/Los_Angeles";
-export const UPDATE_REVIEW_DAILY_SCHEDULE_LABEL = "15 4 * * * America/Los_Angeles";
 /**
  * P2-S1 background-review counter gate. A successful, eligible root turn bumps
  * this counter; the self-improvement review runs (and resets it) once it reaches
@@ -1834,25 +1830,26 @@ export class GatewayService {
         },
         agentTurn: async (input) => await this.runCronAgentTurn(input),
         improvement: async () => {
-          await this.improvementService.runWeeklyImprovementSchedulerIfDue({ force: true, recordCronState: false });
+          const improvement = this.improvementService;
+          return await improvement.runWeeklyImprovementSchedulerIfDue({ force: true, recordCronState: false });
         },
         backup: async () => {
-          await this.runPrivateBetaBackupSchedulerIfDue({ force: true, recordCronState: false });
+          return await this.runPrivateBetaBackupSchedulerIfDue({ force: true, recordCronState: false });
         },
         memoryFlush: async () => {
-          await this.runMemoryFlushSchedulerIfDue({ force: true, recordCronState: false });
+          return await this.runMemoryFlushSchedulerIfDue({ force: true, recordCronState: false });
         },
         memoryConsolidation: async () => {
-          await this.runMemoryConsolidationSchedulerIfDue({ force: true, recordCronState: false });
+          return await this.runMemoryConsolidationSchedulerIfDue({ force: true, recordCronState: false });
         },
         costReport: async () => {
-          await this.runCostReportSchedulerIfDue({ force: true, recordCronState: false });
+          return await this.runCostReportSchedulerIfDue({ force: true, recordCronState: false });
         },
         updateReview: async () => {
-          await this.runUpdateReviewSchedulerIfDue({ force: true, recordCronState: false });
+          return await this.runUpdateReviewSchedulerIfDue({ force: true, recordCronState: false });
         },
         curator: async () => {
-          await this.curatorService.runCuratorWeeklyIfDue({ force: true, recordCronState: false });
+          return await this.curatorService.runCuratorWeeklyIfDue({ force: true, recordCronState: false });
         },
         watchdog: async (job) => await this.runCronWatchdog(job),
         noAgent: (input) => runNoAgentCommand(input),
@@ -5632,24 +5629,34 @@ export class GatewayService {
     };
   }
 
-  private async runPrivateBetaBackupSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runPrivateBetaBackupSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runPrivateBetaBackupSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runPrivateBetaBackupSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
-  private async runMemoryConsolidationSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runMemoryConsolidationSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runMemoryConsolidationSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runMemoryConsolidationSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
-  private async runMemoryFlushSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runMemoryFlushSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runMemoryFlushSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runMemoryFlushSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
-  private async runCostReportSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runCostReportSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runCostReportSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runCostReportSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
-  private async runUpdateReviewSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runUpdateReviewSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runUpdateReviewSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runUpdateReviewSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
   public async hasRunningTurn(sessionId: string): Promise<boolean> {

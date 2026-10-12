@@ -11,6 +11,7 @@ import {
   readRetryRepairThreshold,
 } from "./improvement-tune-reads.js";
 import { IMPROVEMENT_WEEKLY_JOB_ID } from "./gateway/cron-job-ids.js";
+import { systemCronScheduleLabel } from "./cron-job-schedule-labels.js";
 import type { ServiceContext } from "./service-context.js";
 
 interface Harness {
@@ -252,7 +253,7 @@ describe("ImprovementService runtime coverage", () => {
     // traces to the LLM judge.
     expect(harness.storage.cronJobs.get(IMPROVEMENT_WEEKLY_JOB_ID)).toMatchObject({
       enabled: false,
-      schedule: "0 2 * * 0 America/Los_Angeles",
+      schedule: systemCronScheduleLabel("0 2 * * 0"),
     });
 
     harness.storage.gatewaySql

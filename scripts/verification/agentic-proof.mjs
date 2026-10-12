@@ -208,7 +208,9 @@ const CHECK_GROUPS = Object.freeze({
           "src/routes/chat.routes.test.ts",
         ],
         {
-          timeoutMs: 180_000,
+          // Takes ~45-56s locally, but a loaded Windows host passed 180s mid-run with
+          // tests still progressing (2026-10-11). Budgets bound hangs, not loaded schedulers.
+          timeoutMs: 360_000,
           expectedStdout: [
             "chat workbench helpers",
             "runs commands in an existing workbench worktree and updates validation state",

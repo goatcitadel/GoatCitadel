@@ -223,7 +223,45 @@ export function buildCompactToolResultMetadata(result: Record<string, unknown>):
   if (packageAudit) {
     compacted.packageAudit = packageAudit;
   }
+  const designQuality = compactArtifactDesignQuality(result.designReport);
+  if (designQuality) {
+    compacted.designQuality = designQuality;
+  }
   return compacted;
+}
+
+/**
+ * Bounded design-quality receipt from an artifact design report. The full report is dropped by
+ * compaction, but whether governed design-intelligence instructions were actually injected must
+ * stay visible to operators and the model instead of disappearing with the oversized payload.
+ */
+function compactArtifactDesignQuality(value: unknown): Record<string, unknown> | undefined {
+  const report = toPlainRecord(value);
+  const quality = toPlainRecord(report?.designQuality);
+  // Any tool result can carry a `designReport`, so only the known enum values are copied; free
+  // text from an untrusted producer never lands in model-visible compacted metadata.
+  const status = readAllowedToken(quality?.status, DESIGN_QUALITY_STATUSES);
+  if (!quality || !status) {
+    return undefined;
+  }
+  const runtimeInstructions = toPlainRecord(quality.runtimeInstructions);
+  return compactDefinedRecord({
+    status,
+    register: readAllowedToken(quality.register, DESIGN_QUALITY_REGISTERS),
+    lifecycle: readAllowedToken(quality.lifecycle, DESIGN_QUALITY_LIFECYCLES),
+    runtimeInstructionsStatus: readAllowedToken(runtimeInstructions?.status, DESIGN_RUNTIME_INSTRUCTION_STATUSES),
+    runtimeSkillCount: Array.isArray(runtimeInstructions?.skills) ? runtimeInstructions.skills.length : undefined,
+    findingCount: Array.isArray(quality.findings) ? quality.findings.length : undefined,
+  });
+}
+
+const DESIGN_QUALITY_STATUSES = new Set(["applied", "skipped", "warning"]);
+const DESIGN_QUALITY_REGISTERS = new Set(["brand/marketing", "docs/evidence", "data/plain"]);
+const DESIGN_QUALITY_LIFECYCLES = new Set(["Start", "Iterate", "Polish", "Maintain"]);
+const DESIGN_RUNTIME_INSTRUCTION_STATUSES = new Set(["injected", "not_injected"]);
+
+function readAllowedToken(value: unknown, allowed: ReadonlySet<string>): string | undefined {
+  return typeof value === "string" && allowed.has(value) ? value : undefined;
 }
 
 function compactPresentationRenderManifest(value: unknown): Record<string, unknown> | undefined {

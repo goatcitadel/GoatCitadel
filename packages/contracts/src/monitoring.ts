@@ -200,7 +200,8 @@ export interface CronJobRecord {
   contextFrom?: string;
   lastRunOutput?: string;
   lastRunId?: string;
-  lastRunStatus?: "ok" | "failed";
+  /** `skipped`: the run settled cleanly but its handler reported it did no work. */
+  lastRunStatus?: "ok" | "failed" | "skipped";
   /** Signed evidence envelope recorded for the last run (cronEvidenceV1Enabled). */
   lastRunEvidenceEnvelopeId?: string;
   lastFailureAt?: string;

@@ -757,7 +757,7 @@ function validateResearchMetadata(
       continue;
     }
     const values = readStringArray(research[field]);
-    if (field !== "exclusions" && values.length === 0) {
+    if (values.length === 0) {
       findings.push(`Research metadata must include at least one \`${field}\` entry.`);
     }
     if (ccgBenchmark && values.length === 0) {

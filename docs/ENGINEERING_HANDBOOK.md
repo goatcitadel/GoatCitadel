@@ -469,6 +469,19 @@ Activation behavior:
 - Keyword matches against input text.
 - Dependency resolution with cycle and missing dependency blocking metadata.
 
+Bundled skill release lock:
+
+- `packages/skills/src/bundled-skill-lock.generated.ts` pins the exact-byte tree identity
+  (`treeSha256`, `fileCount`, `totalBytes`) of every skill under `skills/bundled`.
+- Regenerate it with `pnpm update:skills:lock` after editing a bundled skill; `pnpm verify:skills:catalog`
+  fails while the lock is stale.
+- At runtime the Gateway re-trusts a built-in skill lifecycle row only when the loaded tree equals its
+  lock entry and the stored row is not revoked (revoked rows are never rewritten by filesystem drift).
+  Any other hash change still demotes the skill to a non-callable candidate; each re-trust writes an
+  audit receipt (`skill_lifecycle.release_retrusted`) carrying the old and new hashes before the row
+  changes. The same path accepts `managed` rows, but the generated lock only covers `skills/bundled`,
+  so operator-installed managed skills keep the exact-byte demotion today.
+
 ## 8. Model Provider and OpenAI-Compatible Support
 
 `LlmService` supports providers exposing:

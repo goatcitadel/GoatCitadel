@@ -81,8 +81,6 @@ afterEach(() => {
   client.clear();
   container.remove();
 });
-// The settings query only starts fetching once the editor's observer subscribes after mount, so an idle client can
-// still precede the settings readback; wait for the editor to leave its settings check before acting.
 async function render() {
   await act(async () =>
     root.render(
@@ -92,16 +90,23 @@ async function render() {
     ),
   );
   await vi.waitFor(() => expect(container.querySelector("textarea")).toBeTruthy());
-  await vi.waitFor(() => {
-    expect(container.textContent).not.toContain("Checking memory administration settings");
-    expect(client.isFetching()).toBe(0);
-  });
+  // The settings query starts only once the editor mounts, so isFetching() can read 0 before it
+  // runs; wait until the administration state has settled before tests inspect or click.
+  await vi.waitFor(() => expect(container.textContent).not.toContain("Checking memory administration settings"));
+  await vi.waitFor(() => expect(client.isFetching()).toBe(0));
 }
-async function click(name: string) {
-  const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (node) => !node.closest('[aria-hidden="true"]') && (node.getAttribute("aria-label") ?? node.textContent) === name,
-  )!;
-  expect(button).toBeTruthy();
+// Wait until the control exists and is enabled. The editor disables its action buttons
+// while settings or the canonical item are fetching; clicking a disabled button is a no-op,
+// so a click that landed mid-fetch silently skipped opening the review dialog (CI flake).
+async function click(name: string, { expectDisabled = false }: { expectDisabled?: boolean } = {}) {
+  const button = await vi.waitFor(() => {
+    const found = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (node) => !node.closest('[aria-hidden="true"]') && (node.getAttribute("aria-label") ?? node.textContent) === name,
+    );
+    expect(found, `button "${name}"`).toBeTruthy();
+    expect(found!.disabled, `button "${name}" disabled state`).toBe(expectDisabled);
+    return found!;
+  });
   await act(async () => button.click());
 }
 it("treats a 202 memory request as pending, retains the draft and persists the receipt in its real portal", async () => {
@@ -184,7 +189,7 @@ it("keeps administration disabled when the feature flag is false", async () => {
   >);
   await render();
   expect(container.textContent).toContain("Memory administration is disabled");
-  await click("Review forget");
+  await click("Review forget", { expectDisabled: true });
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(forgetMemoryItem).not.toHaveBeenCalled();
 });
