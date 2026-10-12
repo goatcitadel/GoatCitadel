@@ -2,7 +2,8 @@ import type { ChatGeneratedArtifactRecord, DesignAdvisory } from "@goatcitadel/c
 import { DESIGN_DETECTOR_RULES_VERSION, detectDesignAdvisories } from "@goatcitadel/skills";
 
 /** Bounded memo of derived advisories keyed by rule-set version and content hash (artifacts are immutable per hash). */
-export const ARTIFACT_ADVISORY_CACHE_MAX = 256;
+// Sized above the largest default list (500 visible artifacts) so repeated polls stay cache hits.
+export const ARTIFACT_ADVISORY_CACHE_MAX = 1024;
 const cache = new Map<string, DesignAdvisory[]>();
 
 /**

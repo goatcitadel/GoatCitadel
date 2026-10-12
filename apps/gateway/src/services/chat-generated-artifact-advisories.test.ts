@@ -66,6 +66,15 @@ describe("withDesignAdvisories", () => {
     expect(detect.calls).toBe(1);
   });
 
+  it("reuses cached advisories across repeated polls of a default-size list", () => {
+    // The largest default list (500 visible artifacts) must fit, or every poll rescans everything.
+    const hashes = Array.from({ length: 500 }, (_, index) => `poll-${index}`);
+    for (const contentHash of hashes) withDesignAdvisories(artifact({ contentHash }));
+    expect(detect.calls).toBe(500);
+    for (const contentHash of hashes) withDesignAdvisories(artifact({ contentHash }));
+    expect(detect.calls).toBe(500);
+  });
+
   it("keeps the cache bounded", () => {
     for (let index = 0; index < ARTIFACT_ADVISORY_CACHE_MAX + 1; index += 1) {
       withDesignAdvisories(artifact({ contentHash: `bulk-${index}` }));
