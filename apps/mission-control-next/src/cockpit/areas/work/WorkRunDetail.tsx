@@ -45,7 +45,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
   const pendingApproval = run && data ? data.approvals.items.some((item) => item.status === "pending") : false;
   const recordedCost = run && data?.providerUsage.state === "available" ? data.providerUsage.totals.costUsd : undefined;
   const costLabel =
-    typeof recordedCost === "number" && Number.isFinite(recordedCost) && recordedCost > 0
+    typeof recordedCost === "number" && Number.isFinite(recordedCost) && recordedCost >= 0
       ? `${formatCostUsd(recordedCost)}+`
       : "Unknown";
   const ownerScope = JSON.stringify([workspaceId, runId]);

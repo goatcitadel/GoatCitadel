@@ -952,6 +952,33 @@ describe("CuratorService.executeDurableCuratorTickRun", () => {
     expect(reports[0]).toMatchObject({ triggerMode: "scheduled", dryRun: true, proposalCount: 1, archivedCount: 0 });
   });
 
+  it("records the payload's manual trigger mode instead of forcing scheduled", async () => {
+    const reports: CuratorRunReport[] = [];
+    const service = new CuratorService({
+      listSkills: () => [makeSkill({ name: "alpha", usageCount: 0 })],
+      archiveSkill: () => makeSkill({ name: "alpha", state: "disabled" }),
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-15T12:00:00Z"),
+      writeReport: async (report) => {
+        reports.push(report);
+        return "/tmp/dummy";
+      },
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    await service.executeDurableCuratorTickRun(
+      makeRun({
+        version: "curator.tick.v1",
+        runId: "curator-run-manual",
+        triggerMode: "manual",
+        cycleDays: 7,
+        requestedAt: "2026-05-15T12:00:00Z",
+      }),
+      undefined,
+    );
+    expect(reports[0]).toMatchObject({ triggerMode: "manual", dryRun: true });
+  });
+
   it("throws on invalid version", async () => {
     const service = new CuratorService({
       listSkills: () => [],

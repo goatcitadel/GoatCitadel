@@ -456,7 +456,7 @@ export class CuratorService {
     if (payload.triggerMode !== "scheduled" && payload.triggerMode !== "manual") {
       throw new Error("curator.tick: invalid payload triggerMode");
     }
-    await this.runCurator({ sync: false, dryRun: true, triggerMode: "scheduled" });
+    await this.runCurator({ sync: false, dryRun: true, triggerMode: payload.triggerMode });
   }
 }
 

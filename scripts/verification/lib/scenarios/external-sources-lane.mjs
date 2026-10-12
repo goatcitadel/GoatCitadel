@@ -116,6 +116,19 @@ export function deriveCheckStatus({ exitCode, countKind, counts, requireAllExecu
       failureNote: `runner reported ${counts.passed} passed but this check requires all ${requiredPassed}`,
     };
   }
+  // A pass floor alone accepts a planned combo that never executed (e.g. 5 planned /
+  // 4 executed / 4 passed), so browser summaries must match requiredPassed exactly.
+  if (
+    requiredPassed !== undefined &&
+    counts.planned !== undefined &&
+    counts.executed !== undefined &&
+    (counts.planned !== requiredPassed || counts.executed !== requiredPassed || counts.passed !== requiredPassed)
+  ) {
+    return {
+      status: "failed",
+      failureNote: `browser-flow summary mismatch: planned ${counts.planned} / executed ${counts.executed} / passed ${counts.passed}; expected all ${requiredPassed}`,
+    };
+  }
   if (counts.steps !== undefined && counts.steps < 1) {
     return {
       status: "failed",

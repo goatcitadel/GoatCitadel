@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import { WorkRunDetail } from "./WorkRunDetail";
+import { formatCostUsd } from "@goatcitadel/mission-control-shared/content/cost-summary";
 
 const api = vi.hoisted(() => ({ fetch: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/durable", () => ({ fetchObserveRunTrace: api.fetch }));
@@ -124,3 +125,29 @@ it.each(["workspace-a", "workspace-other"])(
     expect(container.querySelector('[aria-label="Recorded run errors"] a')).toBeNull();
   },
 );
+it("shows a recorded zero provider cost instead of Unknown", async () => {
+  document.body.appendChild(container);
+  root = createRoot(container);
+  api.fetch.mockResolvedValue({
+    run: {
+      runId: "run-a",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      payload: { workspaceId: "workspace-a" },
+    },
+    durable: { checkpoints: { state: "available", items: [] }, timeline: { state: "available", items: [] } },
+    toolCalls: { state: "available", items: [] },
+    providerUsage: { state: "available", items: [{ turnId: "turn-a" }], totals: { costUsd: 0 } },
+    approvals: { state: "available", items: [] },
+    errors: { state: "available", items: [] },
+  });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <WorkRunDetail runId="run-a" />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.textContent).toContain("Recorded cost"));
+  expect(container.textContent).toContain(`${formatCostUsd(0)}+`);
+});
