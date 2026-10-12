@@ -103,11 +103,14 @@ describe("shared-host production admission wiring", () => {
       "runMemoryFlushSchedulerIfDue({ force: true, recordCronState: false })",
       "runMemoryConsolidationSchedulerIfDue({ force: true, recordCronState: false })",
       "runCostReportSchedulerIfDue({ force: true, recordCronState: false })",
-      "runUpdateReviewSchedulerIfDue({ force: true, recordCronState: false })",
       "runCuratorWeeklyIfDue({ force: true, recordCronState: false })",
     ]) {
       expect(gatewaySource, `missing telemetry-neutral cron handler ${handlerCall}`).toContain(handlerCall);
     }
+    // Still forced and telemetry-neutral; it only forwards CronAutomation's trigger for its review item.
+    expect(gatewaySource).toMatch(
+      /runUpdateReviewSchedulerIfDue\(\{\s*force: true,\s*recordCronState: false,\s*reviewTrigger: context\?\.trigger,?\s*\}\)/u,
+    );
 
     const maintenanceStart = gatewaySource.indexOf("private async runMaintenanceSchedulerTick");
     const maintenanceEnd = gatewaySource.indexOf(

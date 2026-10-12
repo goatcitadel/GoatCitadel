@@ -227,6 +227,42 @@ describe("presentation research evidence", () => {
     expect(result.report).toMatchObject({ passed: true, materialClaimCount: 29, citedMaterialClaimCount: 29 });
   });
 
+  it("does not treat generic words or truncated acronyms as cross-competitor coverage", () => {
+    const args = buildStructuredCcgArgs();
+    const slides = args.slides as Array<Record<string, unknown>>;
+    slides[0] = {
+      ...slides[0],
+      bullets: [
+        ...((slides[0]?.bullets as Array<Record<string, unknown>>) ?? []),
+        {
+          text: "Best for retailers seeking marketplace-demand evidence across the compared games is a directional comparison, not total market share.",
+          claimKind: "analysis",
+          sourceIds: ["tcgplayer"],
+        },
+      ],
+    };
+    // Names every compared game except One Piece and Star Wars: Unlimited, which appear
+    // only as generic words ("piece", "unlimited") and a word starting with "sta".
+    const genericSnippet = [
+      ...CCG_SOURCES.slice(0, 9)
+        .filter(([id]) => id !== "one-piece" && id !== "swu")
+        .map(([, title]) => title),
+      "every piece of standard play is effectively unlimited",
+    ].join(", ");
+    const results = CCG_SOURCES.map((source) => ({
+      ...sourceResult(source),
+      ...(source[0] === "tcgplayer" ? { snippet: genericSnippet } : {}),
+    }));
+    const result = groundResearchPresentationArgs({
+      userContent: CCG_REQUEST,
+      priorToolRuns: ccgSearchRuns(results),
+      args,
+    });
+
+    expect(result.report.passed).toBe(false);
+    expect(result.report.findings.join(" ")).toMatch(/One Piece|Star Wars/u);
+  });
+
   it("does not let a model relabel a generic market source as official competitor coverage", () => {
     const args = buildStructuredCcgArgs();
     const sources = args.sources as Array<Record<string, unknown>>;

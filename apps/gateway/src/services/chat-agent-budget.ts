@@ -550,6 +550,8 @@ export function buildUserSafeFailureMessage(failure: ChatTurnFailureRecord): str
       return "The gateway restarted while this turn was running, so it never finished. Retry to run it again.";
     case "skill_security_blocked":
       return "An activated skill failed the runtime security scan before any model call. Disable or re-review the named skill, then retry.";
+    case "guidance_security_blocked":
+      return "A workspace PRODUCT.md or DESIGN.md failed the runtime security scan before any model call. Edit the named document under Settings › Workspaces › Design context, then send the message again.";
     default:
       return "This turn failed before completion. Retry once, or narrow the request so the next pass can finish cleanly.";
   }

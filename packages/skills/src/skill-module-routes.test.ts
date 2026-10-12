@@ -147,4 +147,18 @@ describe("enumerateSkillRoutes", () => {
       enumerateSkillRoutes({ skillId: "bundled:coding", skillName: "coding" }).map((route) => route.routeId),
     ).toEqual(["main"]);
   });
+
+  it("declares the workspace context docs on every impeccable route and on no other skill", () => {
+    expect(enumerateSkillRoutes(impeccable).every((route) => route.contextDocs?.join(",") === "product,design")).toBe(
+      true,
+    );
+    expect(resolveSkillModules({ ...impeccable, text: "Polish this page." }).contextDocs).toEqual([
+      "product",
+      "design",
+    ]);
+    expect(resolveSkillModules({ ...designIntelligence, text: "Polish this page." }).contextDocs).toBeUndefined();
+    expect(
+      resolveSkillModules({ skillId: "bundled:coding", skillName: "coding", text: "Fix the bug." }).contextDocs,
+    ).toBeUndefined();
+  });
 });

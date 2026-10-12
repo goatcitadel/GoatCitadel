@@ -137,12 +137,19 @@ vi.mock("@goatcitadel/mission-control-shared/api/cron", () => ({
   fetchCronJobs: runtimeApiMocks.fetchCronJobs,
   runCronJobNow: runtimeApiMocks.runCronJobNow,
   deleteCronJob: runtimeApiMocks.deleteCronJob,
-  pauseCronJob: vi.fn(), startCronJob: vi.fn(),
+  pauseCronJob: vi.fn(),
+  startCronJob: vi.fn(),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/review-readiness", () => ({
   fetchReviewReadiness: reviewReadinessApiMocks.fetchReviewReadiness,
   refreshRuntimeReleaseTrust: reviewReadinessApiMocks.refreshRuntimeReleaseTrust,
+}));
+
+// The improvement inbox panel reads the direct improvement owner, not the client barrel; keep it off the network.
+vi.mock("@goatcitadel/mission-control-shared/api/improvement", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/improvement")>()),
+  fetchCuratorReviewItems: vi.fn().mockResolvedValue({ generatedAt: "2026-04-22T00:00:00.000Z", items: [] }),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () => ({
@@ -620,7 +627,13 @@ function renderInspectedMarkup(element: ReactElement) {
 }
 
 const scheduleRecord = (patch: Partial<CronJobRecordResponse> = {}): CronJobRecordResponse => ({
-  jobId: "job-1", revision: 7, name: "Daily review", action: "task", schedule: "0 9 * * *", enabled: true, ...patch,
+  jobId: "job-1",
+  revision: 7,
+  name: "Daily review",
+  action: "task",
+  schedule: "0 9 * * *",
+  enabled: true,
+  ...patch,
 });
 const scheduleRecords = new Map<string, CronJobRecordResponse>();
 describe("RuntimeRoutePage", () => {
@@ -631,13 +644,23 @@ describe("RuntimeRoutePage", () => {
     runtimeApiMocks.fetchCronJobs.mockImplementation(async () => ({ items: [...scheduleRecords.values()] }));
     runtimeApiMocks.fetchCronJob.mockImplementation(async (id: string) => {
       const value = scheduleRecords.get(id);
-      if (!value) throw new ApiRequestError("Missing", { kind: "http", status: 404, method: "GET",
-        path: "/api/v1/cron/jobs/" + encodeURIComponent(id), body: { error: "Cron job not found: " + id } });
+      if (!value)
+        throw new ApiRequestError("Missing", {
+          kind: "http",
+          status: 404,
+          method: "GET",
+          path: "/api/v1/cron/jobs/" + encodeURIComponent(id),
+          body: { error: "Cron job not found: " + id },
+        });
       return value;
     });
-    runtimeApiMocks.createCronJob.mockImplementation(async (input: Parameters<typeof import("@goatcitadel/mission-control-shared/api/cron").createCronJob>[0]) => {
-      const saved = scheduleRecord({ ...input, revision: 1 }); scheduleRecords.set(saved.jobId, saved); return saved;
-    });
+    runtimeApiMocks.createCronJob.mockImplementation(
+      async (input: Parameters<typeof import("@goatcitadel/mission-control-shared/api/cron").createCronJob>[0]) => {
+        const saved = scheduleRecord({ ...input, revision: 1 });
+        scheduleRecords.set(saved.jobId, saved);
+        return saved;
+      },
+    );
   });
   afterEach(() => {
     act(() => {
@@ -1223,7 +1246,10 @@ describe("RuntimeRoutePage", () => {
       scheduleRecords.set("job-1", scheduleRecord({ lastRunId: "run-manual-1" }));
       return { jobId: "job-1", runId: "run-manual-1", status: "ok" };
     });
-    runtimeApiMocks.deleteCronJob.mockImplementation(async () => { scheduleRecords.delete("job-1"); return { deleted: true, jobId: "job-1" }; });
+    runtimeApiMocks.deleteCronJob.mockImplementation(async () => {
+      scheduleRecords.delete("job-1");
+      return { deleted: true, jobId: "job-1" };
+    });
     let renderer: ReactTestRenderer | null = null;
 
     await act(async () => {

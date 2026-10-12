@@ -629,7 +629,10 @@ import {
 import {
   buildGovernedActivatedSkillReceipts,
   renderGovernedActivatedSkillInstructions,
+  type SkillContextDocReader,
 } from "./governed-skill-instruction-service.js";
+import { createWorkspaceSkillContextDocReader } from "./workspace-skill-context-docs.js";
+import { resolveWorkspaceDesignBrand } from "./workspace-design-brand.js";
 import { detectDocumentArtifactIntent, detectPresentationArtifactIntent } from "./chat-artifact-intent.js";
 import { prepareApprovedPresentationVisuals } from "./presentation-visual-executor.js";
 import { normalizeAgentInputFromSend } from "./chat-agent-input-normalization.js";
@@ -1699,6 +1702,11 @@ export class GatewayService {
       createChatCompletionStream: async (request, attribution) =>
         await this.createChatCompletionStream(request, attribution),
       generateImage: (request, attribution) => this.llmService.generateImage(request, attribution),
+      // Workspace DESIGN.md brand for deck/document tools, only when the frozen profile injected it.
+      resolveWorkspaceDesignBrand: ({ workspaceId, capabilityProfile }) =>
+        workspaceId
+          ? resolveWorkspaceDesignBrand(capabilityProfile, this.createWorkspaceSkillContextDocReader(workspaceId))
+          : undefined,
       invokeTool: async (request, options) => await this.invokeTool(request, options),
       invokeToolWithEffectTruth: async (request, options) => await this.invokeTool(request, options),
       persistToolArtifact: (input) => chatToolArtifactService.persistChatToolArtifact(this, input),
@@ -1845,8 +1853,12 @@ export class GatewayService {
         costReport: async () => {
           return await this.runCostReportSchedulerIfDue({ force: true, recordCronState: false });
         },
-        updateReview: async () => {
-          return await this.runUpdateReviewSchedulerIfDue({ force: true, recordCronState: false });
+        updateReview: async (context) => {
+          return await this.runUpdateReviewSchedulerIfDue({
+            force: true,
+            recordCronState: false,
+            reviewTrigger: context?.trigger,
+          });
         },
         curator: async () => {
           return await this.curatorService.runCuratorWeeklyIfDue({ force: true, recordCronState: false });
@@ -7320,6 +7332,7 @@ export class GatewayService {
               presentation: detectPresentationArtifactIntent(content),
               document: detectDocumentArtifactIntent(content),
             },
+            contextDocs: this.createWorkspaceSkillContextDocReader(input.workspaceId),
           }),
       },
       {
@@ -7425,7 +7438,16 @@ export class GatewayService {
       profile,
       loadedSkills,
       lifecycleRows: await this.storage.skillLifecycle.list(),
+      contextDocs: this.createWorkspaceSkillContextDocReader(profile.identity.workspaceId),
     });
+  }
+
+  /** Workspace PRODUCT.md / DESIGN.md reader for governed skill routes that declare context docs (never global). */
+  private createWorkspaceSkillContextDocReader(workspaceId: string): SkillContextDocReader {
+    return createWorkspaceSkillContextDocReader(
+      { config: this.config, normalizeWorkspaceId: (value) => this.normalizeWorkspaceId(value) },
+      workspaceId,
+    );
   }
 
   public resolveChatTurnEffectiveRoute(sessionId: string, request: ChatSendMessageRequest) {

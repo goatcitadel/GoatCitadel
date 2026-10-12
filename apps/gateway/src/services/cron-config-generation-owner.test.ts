@@ -12,6 +12,7 @@ import {
 } from "./config-generation-service.js";
 import { CronConfigGenerationOwner, readCanonicalCronSpecs } from "./cron-config-generation-owner.js";
 import { computeNextCronRunAt } from "./gateway/cron-automation-service.js";
+import { PRIVATE_BETA_BACKUP_JOB_ID } from "./gateway/cron-job-ids.js";
 
 const roots: string[] = [];
 const stores: Storage[] = [];
@@ -140,12 +141,19 @@ describe("CronConfigGenerationOwner", () => {
       action: "backup",
       schedule: "30 2 * * * America/Los_Angeles",
     });
-    const { root } = await createRoot([curator, backup]);
+    const improvement = spec({
+      jobId: "self_improvement_weekly_replay",
+      name: "Improvement",
+      action: "improvement",
+      schedule: "0 3 * * 0 America/Los_Angeles",
+    });
+    const { root } = await createRoot([curator, backup, improvement]);
     const storage = createStorage(root);
     storage.cronJobs.createSpec(curator);
     storage.cronJobs.createSpec(backup);
+    storage.cronJobs.createSpec(improvement);
     const pacificNextRunAt = "2026-07-19T09:00:00.000Z";
-    for (const jobId of [curator.jobId, backup.jobId]) {
+    for (const jobId of [curator.jobId, backup.jobId, improvement.jobId]) {
       storage.cronJobs.mergeRuntimeTelemetry(jobId, { lastRunId: "run-1", nextRunAt: pacificNextRunAt });
     }
     const owner = new CronConfigGenerationOwner(new ConfigGenerationService(root), createSqliteAsyncStorage(storage));
@@ -158,10 +166,15 @@ describe("CronConfigGenerationOwner", () => {
     expect(rezonedCurator.nextRunAt).not.toBe(pacificNextRunAt);
     expect(rezonedCurator.lastRunId).toBe("run-1");
 
-    // Built-in actions without self-scheduling project no nextRunAt, matching startup reconciliation.
+    // System maintenance jobs are due-swept by CronAutomation, so they project like curator.
     const rezonedBackup = await owner.reconcileSpec({ ...backup, schedule: "30 2 * * * UTC" });
-    expect(rezonedBackup.nextRunAt).toBeUndefined();
+    expect(rezonedBackup.nextRunAt).toBe(computeNextCronRunAt("30 2 * * * UTC", new Date()));
     expect(rezonedBackup.lastRunId).toBe("run-1");
+
+    // Improvement runs on ImprovementService's own scheduler and projects no nextRunAt.
+    const rezonedImprovement = await owner.reconcileSpec({ ...improvement, schedule: "0 3 * * 0 UTC" });
+    expect(rezonedImprovement.nextRunAt).toBeUndefined();
+    expect(rezonedImprovement.lastRunId).toBe("run-1");
   });
 
   it("rolls Storage back exactly when owner apply fails and publishes the prior canonical state", async () => {
@@ -305,6 +318,25 @@ describe("CronConfigGenerationOwner", () => {
     expect(storage.cronJobs.get(job.jobId)).toBeUndefined();
     expect(await recoveredOwner.reconcileCommittedGeneration()).toEqual([]);
     await recoveredConfig.completeRuntimeOwnerReconciliation();
+  });
+
+  it("projects nextRunAt for a due-swept system job when a committed generation changes its spec", async () => {
+    const stored = spec({
+      jobId: PRIVATE_BETA_BACKUP_JOB_ID,
+      name: "Private Beta Daily Backup",
+      action: "backup",
+      schedule: "30 2 * * * UTC",
+    });
+    const committed = { ...stored, schedule: "45 2 * * * UTC" };
+    const { root } = await createRoot([committed]);
+    const storage = createStorage(root);
+    storage.cronJobs.createSpec(stored);
+    const owner = new CronConfigGenerationOwner(new ConfigGenerationService(root), createSqliteAsyncStorage(storage));
+
+    const [reconciled] = await owner.reconcileCommittedGeneration();
+
+    expect(reconciled).toMatchObject({ jobId: PRIVATE_BETA_BACKUP_JOB_ID, schedule: committed.schedule });
+    expect(reconciled?.nextRunAt).toMatch(/T02:45:00\.000Z$/);
   });
 
   it("canonicalizes legacy telemetry and adopts Storage-only specs once without disturbing telemetry", async () => {

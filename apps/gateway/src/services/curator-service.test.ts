@@ -799,6 +799,33 @@ describe("CuratorService.maybeRunIdleCurator (S3 idle janitor)", () => {
     await expect(service.maybeRunIdleCurator()).resolves.toBeUndefined();
   });
 
+  it("never throws even when publishing the sweep failure also rejects", async () => {
+    const publishRealtime = vi.fn(async () => {
+      throw new Error("realtime bus unavailable");
+    });
+    const service = new CuratorService({
+      listSkills: () => {
+        throw new Error("skill registry unavailable");
+      },
+      archiveSkill: () => makeSkill(),
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-06-15T12:00:00Z"),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime,
+      cycleDays: 7,
+      idleSweep: {
+        isWorkspaceIdle: () => true,
+        isAutonomyEnabled: () => true,
+        snapshotSkill: () => undefined,
+      },
+    });
+    await expect(service.maybeRunIdleCurator({ force: true })).resolves.toBeUndefined();
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "curator",
+      expect.objectContaining({ type: "curator_idle_sweep_failed", error: "skill registry unavailable" }),
+    );
+  });
+
   it("does NOT sweep while the workspace is not idle (a turn is active)", async () => {
     const archived: Array<{ skillId: string; reason: string }> = [];
     const service = makeIdleService([selfGenerated({ name: "ghost", usageCount: 0 })], archived, {
