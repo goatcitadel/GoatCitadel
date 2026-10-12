@@ -12,6 +12,7 @@ import {
 import type { DirectoryLifecycleReview as LifecycleReview } from "../../../features/native-routes/settings/directory-lifecycle-binding";
 import { DirectoryLifecycleReview } from "./DirectoryLifecycleReview";
 import { CitadelDirectory } from "./CitadelDirectory";
+import { WorkspaceDesignContextSettings } from "./WorkspaceDesignContextSettings";
 import { Button } from "../../ui/Button";
 
 const PAGE_SIZE = 20;
@@ -27,6 +28,12 @@ export function WorkspaceSettings(props: WorkspaceSettingsProps) {
     <>
       <WorkspaceDirectory key={`workspaces:${props.citadelId}`} {...props} />
       <CitadelDirectory key={`citadels:${props.citadelId}`} activeCitadelId={props.citadelId} />
+      {props.activeWorkspaceId ? (
+        <WorkspaceDesignContextSettings
+          key={`design-context:${props.activeWorkspaceId}`}
+          workspaceId={props.activeWorkspaceId}
+        />
+      ) : null}
     </>
   );
 }
