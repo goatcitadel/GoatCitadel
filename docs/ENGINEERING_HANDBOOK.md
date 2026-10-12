@@ -768,8 +768,14 @@ Optional list of scheduled jobs loaded into SQLite for dashboard visibility.
 Current convention:
 
 - Active runtime schedules are:
-  - `self_improvement_weekly_replay`
-  - `private_beta_backup_daily`
+  - `self_improvement_weekly_replay` (dispatched by `ImprovementService`'s own scheduler)
+  - `curator_weekly`
+  - `private_beta_backup_daily` (creates a backup, then applies retention pruning)
+  - `memory-flush-daily`
+  - `memory-consolidation-weekly` (seeded disabled; also requires `memoryConsolidationV1Enabled`)
+  - `cost-report-hourly`
+  - `update-review-daily`
+- Every schedule except the improvement replay is due-dispatched only by the Gateway cron due sweep (`CronAutomationService.runDueTaskCronJobs`); a paused job does not fire, a missed five-minute due window is not caught up, and a run that fails inside its window is not retried until the next occurrence.
 - Non-runtime placeholders are marked with `[planned]` in name and `enabled: false`.
 
 ## 12. Development and Operations

@@ -157,6 +157,14 @@ export type CronSystemHandlerOutcome =
   | { status: "completed"; summary?: Record<string, unknown>; partial?: { reason: string } }
   | { status: "skipped"; reason: string; detail?: Record<string, unknown> };
 
+/** Why an inline cron run happened, as recorded in review items. */
+export type CronRunTrigger = "scheduled_run" | "manual_run" | "force_run";
+
+/** Passed to system handlers, whose schedulers always run forced and cannot tell a sweep from Run now. */
+export interface CronSystemRunContext {
+  trigger: CronRunTrigger;
+}
+
 export interface CronDueRunItem {
   jobId: string;
   status: "ran" | "pending" | "settled" | "failed" | "backoff";
@@ -206,13 +214,13 @@ export interface CronAutomationServiceDeps {
       job: CronJobRecord,
       context?: { contextFrom?: string; contextOutput?: string },
     ) => Promise<{ taskId?: string } | void>;
-    improvement: () => Promise<CronSystemHandlerOutcome | void>;
-    backup: () => Promise<CronSystemHandlerOutcome | void>;
-    memoryFlush: () => Promise<CronSystemHandlerOutcome | void>;
-    memoryConsolidation: () => Promise<CronSystemHandlerOutcome | void>;
-    costReport: () => Promise<CronSystemHandlerOutcome | void>;
-    updateReview: () => Promise<CronSystemHandlerOutcome | void>;
-    curator: () => Promise<CronSystemHandlerOutcome | void>;
+    improvement: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
+    backup: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
+    memoryFlush: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
+    memoryConsolidation: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
+    costReport: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
+    updateReview: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
+    curator: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
     watchdog: (job: CronJobRecord) => Promise<CronWatchdogRunResult>;
     noAgent: (input: {
       command: string;
@@ -469,7 +477,9 @@ export class CronAutomationService {
             }
           }
         } else if (isSystemHandlerAction(job.action)) {
-          const outcome = await this.deps.runHandlers[SYSTEM_HANDLER_BY_ACTION[job.action]]();
+          const outcome = await this.deps.runHandlers[SYSTEM_HANDLER_BY_ACTION[job.action]]({
+            trigger: cronRunTrigger(force, options.reason),
+          });
           const finishedAt = new Date().toISOString();
           const outputSummary = summarizeSystemHandlerOutcome(outcome, job.action, force, options.reason);
           // Written on every path so a later run never inherits a stale skip or partial output.
@@ -523,16 +533,17 @@ export class CronAutomationService {
           job.action !== "watchdog" &&
           !watchdogReviewRecorded
         ) {
+          const trigger = cronRunTrigger(force, options.reason);
           await this.recordCronReviewItem({
             jobId: normalizedJobId,
             runId,
             severity: "low",
             status: "resolved",
             summary: {
-              trigger: force ? "force_run" : "manual_run",
+              trigger,
               ...runSummary,
             },
-            diff: { type: "manual_run", changed: false },
+            diff: { type: trigger === "scheduled_run" ? "scheduled_run" : "manual_run", changed: false },
           });
         }
         const evidenceEnvelopeId = await this.finalizeCronRunEvidenceOnSuccess(normalizedJobId, runId, runSummary);
@@ -1760,6 +1771,11 @@ const SYSTEM_HANDLER_BY_ACTION = {
   curator: "curator",
 } as const satisfies Partial<Record<CronJobRecord["action"], keyof CronAutomationServiceDeps["runHandlers"]>>;
 
+function cronRunTrigger(force: boolean, reason: string | undefined): CronRunTrigger {
+  if (force) return "force_run";
+  return reason === "scheduled_due" ? "scheduled_run" : "manual_run";
+}
+
 function isSystemHandlerAction(action: CronJobRecord["action"]): action is keyof typeof SYSTEM_HANDLER_BY_ACTION {
   return Object.hasOwn(SYSTEM_HANDLER_BY_ACTION, action);
 }
@@ -1882,11 +1898,22 @@ function normalizeWatchdogCheckId(value: unknown): CronWatchdogCheckId {
   return "runtime_health";
 }
 
-function isScheduledCronAction(action: CronJobRecord["action"]): boolean {
+/**
+ * Actions whose due cadence is owned by runDueTaskCronJobs (and so carry a
+ * projected nextRunAt). The built-in maintenance handlers run their system
+ * schedulers forced, so this sweep is their only scheduled dispatcher.
+ * `improvement` is excluded: ImprovementService runs its own weekly scheduler.
+ */
+export function isScheduledCronAction(action: CronJobRecord["action"]): boolean {
   return (
     action === "task" ||
     action === "watchdog" ||
     action === "curator" ||
+    action === "backup" ||
+    action === "memory_flush" ||
+    action === "memory_consolidation" ||
+    action === "cost_report" ||
+    action === "update_review" ||
     action === "no_agent" ||
     action === "agent_turn"
   );
