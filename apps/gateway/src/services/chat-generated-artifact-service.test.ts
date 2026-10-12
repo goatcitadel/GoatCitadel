@@ -166,6 +166,38 @@ describe("chat-generated-artifact-service", () => {
     assert.equal(storage.chatGeneratedArtifacts.listByTurn("turn-1", 10).length, 1);
   });
 
+  it("derives design advisories for HTML artifacts on create and read, and none for other kinds", async () => {
+    const { storage, asyncStorage, rootDir } = await createStorage();
+    roots.push(rootDir);
+    storages.push(storage);
+    const session = seedSession(storage, "sess-advisories");
+    seedAssistantTurn(
+      storage,
+      session.sessionId,
+      "turn-html",
+      '```html\n<section class="backdrop-blur-md">\n<p class="eyebrow">Overview</p>\n</section>\n```',
+    );
+    seedAssistantTurn(storage, session.sessionId, "turn-md", "```ts\nexport const eyebrow = 'backdrop-blur-md';\n```");
+    const host = { storage: asyncStorage, requireChatSession: async () => session };
+
+    const html = await createChatGeneratedArtifactFromTurn(host, { sessionId: session.sessionId, turnId: "turn-html" });
+    const hydrated = await getChatGeneratedArtifact(host, html.artifactId, { workspaceId: session.workspaceId });
+    const code = await createChatGeneratedArtifactFromTurn(host, { sessionId: session.sessionId, turnId: "turn-md" });
+
+    assert.equal(html.kind, "html");
+    assert.deepEqual(
+      html.designAdvisories?.map((advisory) => [advisory.ruleId, advisory.line]),
+      [
+        ["glass-by-default", 1],
+        ["kicker-eyebrow", 2],
+      ],
+    );
+    assert.deepEqual(hydrated.designAdvisories, html.designAdvisories);
+    assert.equal(code.kind, "code");
+    assert.equal("designAdvisories" in code, false);
+    assert.equal(storage.chatGeneratedArtifacts.get(html.artifactId).content.includes("backdrop-blur-md"), true);
+  });
+
   it("persists artifact provenance metadata and supersede lineage", async () => {
     const { storage, asyncStorage, rootDir } = await createStorage();
     roots.push(rootDir);

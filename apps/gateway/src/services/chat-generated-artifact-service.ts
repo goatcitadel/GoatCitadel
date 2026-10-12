@@ -8,6 +8,7 @@ import type {
   ChatThreadTurnRecord,
 } from "@goatcitadel/contracts";
 import { redactStructuredSecrets, ValidationError } from "@goatcitadel/contracts";
+import { detectDesignAdvisories } from "@goatcitadel/skills";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 export interface ChatGeneratedArtifactDependencies {
@@ -28,15 +29,31 @@ export async function listChatGeneratedArtifacts(
 ): Promise<ChatGeneratedArtifactRecord[]> {
   if (input.sessionId?.trim()) {
     await deps.requireChatSession(input.sessionId.trim());
-    return await deps.storage.chatGeneratedArtifacts.listBySession(input.sessionId.trim(), input.limit ?? 300);
+    const bySession = await deps.storage.chatGeneratedArtifacts.listBySession(
+      input.sessionId.trim(),
+      input.limit ?? 300,
+    );
+    return bySession.map(withDesignAdvisories);
   }
-  return await deps.storage.chatGeneratedArtifacts.listVisible({
+  const visible = await deps.storage.chatGeneratedArtifacts.listVisible({
     workspaceId: input.workspaceId?.trim() || undefined,
     projectId: input.projectId?.trim() || undefined,
     sourceSurface: input.sourceSurface,
     kind: input.kind,
     limit: input.limit ?? 500,
   });
+  return visible.map(withDesignAdvisories);
+}
+
+/**
+ * HTML artifacts carry informational design advisories derived from their content on every read.
+ * They are never stored: the artifact table stays unchanged and the advisories always reflect the
+ * current rule set. Other kinds are returned untouched.
+ */
+function withDesignAdvisories(artifact: ChatGeneratedArtifactRecord): ChatGeneratedArtifactRecord {
+  if (artifact.kind !== "html" || artifact.publicProjection?.contentRedacted) return artifact;
+  const designAdvisories = detectDesignAdvisories(artifact.content);
+  return designAdvisories.length > 0 ? { ...artifact, designAdvisories } : artifact;
 }
 
 export async function getChatGeneratedArtifact(
@@ -57,7 +74,7 @@ export async function getChatGeneratedArtifact(
   if (session.workspaceId !== workspaceId) {
     throw new ValidationError({ message: "Artifact does not belong to the requested workspace." });
   }
-  return artifact;
+  return withDesignAdvisories(artifact);
 }
 
 export async function createChatGeneratedArtifactFromTurn(
@@ -88,7 +105,7 @@ export async function createChatGeneratedArtifactFromTurn(
   const turnArtifacts = await deps.storage.chatGeneratedArtifacts.listByTurn(turnId, 50);
   const latestSameTurnArtifact = turnArtifacts[0];
   if (!input.supersedeLatest && latestSameTurnArtifact) {
-    return latestSameTurnArtifact;
+    return withDesignAdvisories(latestSameTurnArtifact);
   }
   const assistantText = await resolveAssistantTextFromTrace(deps, turnId);
   const inferred = inferGeneratedArtifactFromAssistantText(assistantText);
@@ -99,7 +116,7 @@ export async function createChatGeneratedArtifactFromTurn(
     latestSameTurnArtifact.sourceBlockIndex === inferred.sourceBlockIndex &&
     latestSameTurnArtifact.contentHash === inferred.contentHash
   ) {
-    return latestSameTurnArtifact;
+    return withDesignAdvisories(latestSameTurnArtifact);
   }
   const now = new Date().toISOString();
   const nextVersion =
@@ -115,7 +132,7 @@ export async function createChatGeneratedArtifactFromTurn(
     : buildStableGeneratedArtifactId(turnId, inferred.kind, inferred.contentHash, inferred.sourceBlockIndex);
   const expectedSupersedesArtifactId = input.supersedeLatest ? latestSameTurnArtifact?.artifactId : undefined;
   try {
-    return await deps.storage.chatGeneratedArtifacts.create({
+    const created = await deps.storage.chatGeneratedArtifacts.create({
       artifactId,
       sessionId,
       workspaceId: session.workspaceId,
@@ -135,6 +152,7 @@ export async function createChatGeneratedArtifactFromTurn(
       createdAt: now,
       updatedAt: now,
     });
+    return withDesignAdvisories(created);
   } catch (error) {
     try {
       const currentArtifact = await deps.storage.chatGeneratedArtifacts.get(artifactId);
@@ -145,7 +163,7 @@ export async function createChatGeneratedArtifactFromTurn(
         currentArtifact.contentHash === inferred.contentHash &&
         currentArtifact.supersedesArtifactId === expectedSupersedesArtifactId
       ) {
-        return currentArtifact;
+        return withDesignAdvisories(currentArtifact);
       }
     } catch {
       // Fall through and rethrow the original persistence error.
