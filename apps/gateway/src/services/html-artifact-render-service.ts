@@ -3,13 +3,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   ConflictError,
+  ServiceUnavailableError,
   type ChatArtifactRenderRecord,
   type ChatArtifactRenderResponse,
   type ChatAttachmentRecord,
   type ChatGeneratedArtifactRecord,
 } from "@goatcitadel/contracts";
 import {
+  BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE,
   HTML_RENDER_DEFAULT_VIEWPORTS,
+  isMissingPlaywrightBrowserError,
   renderHtmlSnapshot as renderHtmlSnapshotDefault,
   type HtmlRenderViewport,
 } from "@goatcitadel/policy-engine";
@@ -65,7 +68,9 @@ export async function renderChatGeneratedArtifact(
   );
   const uploaded: ChatArtifactRenderRecord[] = [];
   try {
-    const result = await render({ html: artifact.content, outputDir, writeJailRoots });
+    const result = await render({ html: artifact.content, outputDir, writeJailRoots }).catch((error: unknown) => {
+      throw mapRenderFailure(error);
+    });
     for (const snapshot of result.renders) {
       const bytes = await fs.readFile(snapshot.path);
       const attachment = await deps.uploadChatAttachment({
@@ -145,6 +150,21 @@ async function listStoredRenders(
     const record = byViewport.get(viewport.name);
     return record ? [record] : [];
   });
+}
+
+/**
+ * Renderer failures the operator must read: a missing Chromium is a 503 carrying the manual-install
+ * diagnostic, oversize markup is a 409; anything else stays a plain error (500, redacted).
+ */
+function mapRenderFailure(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  if (isMissingPlaywrightBrowserError(error) || message.startsWith(BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE)) {
+    return new ServiceUnavailableError(message, { code: BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE });
+  }
+  if (message.startsWith("html_render_too_large")) {
+    return new ConflictError({ code: "STATE_CONFLICT", message });
+  }
+  return error instanceof Error ? error : new Error(message);
 }
 
 function coversEveryViewport(renders: ChatArtifactRenderRecord[]): boolean {

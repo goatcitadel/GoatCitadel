@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { ConflictError } from "@goatcitadel/contracts";
+import { ConflictError, ServiceUnavailableError } from "@goatcitadel/contracts";
 import { registerChatArtifactRenderRoutes } from "./chat.artifact-render.js";
 
 const renderResponse = {
@@ -111,6 +111,25 @@ describe("chat artifact render routes", () => {
       { operatorId: "operator-1", authActorId: "operator-1", authActorSource: "token" },
       expect.anything(),
     );
+  });
+
+  it("surfaces a missing Chromium as 503 with the manual-install diagnostic", async () => {
+    app = buildApp({
+      renderChatGeneratedArtifact: vi.fn(async () => {
+        throw new ServiceUnavailableError(
+          "browser_chromium_manual_install_required: Playwright Chromium is unavailable.",
+        );
+      }),
+      listChatArtifactRenders: vi.fn(),
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/generated-artifacts/artifact-1/renders",
+      payload: { workspaceId: "default" },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.body).toContain("browser_chromium_manual_install_required");
   });
 
   it("maps a non-html artifact to a 409 conflict", async () => {

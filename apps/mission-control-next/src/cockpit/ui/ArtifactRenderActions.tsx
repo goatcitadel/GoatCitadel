@@ -4,6 +4,7 @@ import {
   critiqueChatGeneratedArtifact,
   renderChatGeneratedArtifact,
 } from "@goatcitadel/mission-control-shared/api/chat";
+import { buildGatewayUrl, readGatewayAuthHeaders } from "@goatcitadel/mission-control-shared/api/client-core";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { Button } from "./Button";
 
@@ -24,8 +25,57 @@ export function renderCockpitArtifactActions(artifact: ChatGeneratedArtifactReco
   return <ArtifactRenderActions artifact={artifact} />;
 }
 
-function attachmentContentHref(attachmentId: string): string {
+function attachmentContentPath(attachmentId: string): string {
   return `/api/v1/chat/attachments/${encodeURIComponent(attachmentId)}/content?disposition=inline`;
+}
+
+/**
+ * The gateway may live on another origin and require header auth, which a bare `<img src>` cannot
+ * carry, so the PNG is fetched with the gateway auth headers into a blob URL (same pattern as the
+ * Classic composer's image preview).
+ */
+function RenderImage({ attachmentId, alt }: { attachmentId: string; alt: string }) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+    const contentPath = attachmentContentPath(attachmentId);
+    setBlobUrl(null);
+    setFailure(null);
+    void (async () => {
+      try {
+        const response = await fetch(buildGatewayUrl(contentPath), { headers: readGatewayAuthHeaders(contentPath) });
+        if (!response.ok) throw new Error(`Render image request failed (${response.status}).`);
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (active) setBlobUrl(objectUrl);
+      } catch (error) {
+        if (active) setFailure(describeFailure(error));
+      }
+    })();
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [attachmentId]);
+
+  if (failure) {
+    return (
+      <p role="alert" className="text-sm text-status-failed">
+        {failure}
+      </p>
+    );
+  }
+  if (!blobUrl) {
+    return (
+      <p role="status" className="text-xs text-fg-muted">
+        Loading {alt}…
+      </p>
+    );
+  }
+  return <img src={blobUrl} alt={alt} className="max-w-full rounded-md border border-line bg-sunken" />;
 }
 
 function describeFailure(error: unknown): string {
@@ -120,11 +170,9 @@ export function ArtifactRenderActions({
         <ul className="grid gap-3 sm:grid-cols-2">
           {state.renders.map((item) => (
             <li key={item.attachmentId} className="min-w-0">
-              <img
-                src={attachmentContentHref(item.attachmentId)}
+              <RenderImage
+                attachmentId={item.attachmentId}
                 alt={`${item.viewport} render (${item.width}×${item.height})`}
-                className="max-w-full rounded-md border border-line bg-sunken"
-                loading="lazy"
               />
               <p className="mt-1 text-xs text-fg-muted">
                 {item.viewport} · {item.width}×{item.height}

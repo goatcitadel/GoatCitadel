@@ -151,6 +151,28 @@ describe("critiqueChatGeneratedArtifact", () => {
     expect(deps.backgroundTasks.size).toBe(0);
   });
 
+  it("refuses to dispatch when the route is blocked or resolves no provider", async () => {
+    const blocked = createDeps({ providerId: "openai", vision: true });
+    blocked.deps.routePreflight = vi.fn(async () => ({
+      ...preflightFixture("openai"),
+      blockedReason: "No provider is configured for this session.",
+    }));
+    await expect(critiqueChatGeneratedArtifact(blocked.deps, "artifact-1", "default", actor)).rejects.toMatchObject({
+      httpStatus: 409,
+      message: expect.stringContaining("No provider is configured"),
+    });
+    expect(blocked.sendChatTurn).not.toHaveBeenCalled();
+
+    const unrouted = createDeps({ providerId: "openai", vision: true });
+    const noProvider = preflightFixture("openai") as unknown as Record<string, unknown>;
+    delete noProvider.effectiveProviderId;
+    unrouted.deps.routePreflight = vi.fn(async () => noProvider as unknown as RoutingPreflightResult);
+    await expect(critiqueChatGeneratedArtifact(unrouted.deps, "artifact-1", "default", actor)).rejects.toMatchObject({
+      httpStatus: 409,
+    });
+    expect(unrouted.sendChatTurn).not.toHaveBeenCalled();
+  });
+
   it("builds a prompt that never embeds the artifact markup", () => {
     const prompt = buildArtifactCritiquePrompt({
       artifact: artifactFixture({ designAdvisories: [] }),

@@ -127,7 +127,8 @@ function isSecureRuntimeConfigurationSubmitPath(url: string): boolean {
  */
 // Pinned to the policy-engine constant so the html artifact preview (a srcdoc iframe inheriting this
 // policy) and the offline PNG render evidence (which injects it) never drift apart. D4: fonts may be
-// inline data: URIs; scripts never run and nothing is fetched from the network.
+// inline data: URIs; scripts never run and no cross-origin fetch is allowed. Same-origin ('self')
+// shell assets can still load in the preview; the offline renders have no origin and no network.
 const BASELINE_CONTENT_SECURITY_POLICY = MISSION_CONTROL_BASELINE_CSP;
 
 interface GatewayRequestState {

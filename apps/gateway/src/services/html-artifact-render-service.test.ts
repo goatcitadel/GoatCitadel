@@ -243,6 +243,30 @@ describe("html-artifact-render-service", () => {
     expect(fixture.renderHtmlSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it("maps renderer diagnostics to typed errors the route can surface", async () => {
+    const missingChromium = await createDeps();
+    roots.push(missingChromium.rootDir);
+    missingChromium.renderHtmlSnapshot.mockRejectedValueOnce(
+      new Error(
+        "browser_chromium_manual_install_required: Playwright Chromium is unavailable. Automatic installation is disabled.",
+      ),
+    );
+    await expect(renderChatGeneratedArtifact(missingChromium.deps, "artifact-1", "default")).rejects.toMatchObject({
+      httpStatus: 503,
+      message: expect.stringContaining("browser_chromium_manual_install_required"),
+    });
+
+    const oversize = await createDeps();
+    roots.push(oversize.rootDir);
+    oversize.renderHtmlSnapshot.mockRejectedValueOnce(
+      new Error("html_render_too_large: the HTML is 600000 bytes; the render limit is 524288 bytes."),
+    );
+    await expect(renderChatGeneratedArtifact(oversize.deps, "artifact-1", "default")).rejects.toMatchObject({
+      httpStatus: 409,
+      message: expect.stringContaining("html_render_too_large"),
+    });
+  });
+
   it("falls back to hashing the content when the artifact carries no content hash", async () => {
     const fixture = await createDeps(artifactFixture({ contentHash: undefined }));
     roots.push(fixture.rootDir);

@@ -19,6 +19,16 @@ vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
   critiqueChatGeneratedArtifact: api.critiqueChatGeneratedArtifact,
 }));
 
+// The gateway may live on another origin and require header auth, so images load through
+// an authenticated fetch into a blob URL rather than a bare <img src>.
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({
+  buildGatewayUrl: (path: string) => `http://gateway.test${path}`,
+  readGatewayAuthHeaders: () => ({ Authorization: "Bearer test-token" }),
+}));
+
+const fetchMock = vi.fn(async () => ({ ok: true, status: 200, blob: async () => new Blob(["png"]) }));
+let objectUrls = 0;
+
 const now = "2026-10-12T10:00:00.000Z";
 const renders = [
   {
@@ -65,6 +75,10 @@ let container: HTMLDivElement;
 beforeEach(() => {
   api.renderChatGeneratedArtifact.mockReset();
   api.critiqueChatGeneratedArtifact.mockReset();
+  fetchMock.mockClear();
+  vi.stubGlobal("fetch", fetchMock);
+  URL.createObjectURL = vi.fn(() => `blob:render-${(objectUrls += 1)}`);
+  URL.revokeObjectURL = vi.fn();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -97,7 +111,13 @@ describe("ArtifactRenderActions", () => {
       "desktop render (1440×900)",
       "phone render (390×844)",
     ]);
-    expect(images[0]?.getAttribute("src")).toBe("/api/v1/chat/attachments/att-desktop/content?disposition=inline");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://gateway.test/api/v1/chat/attachments/att-desktop/content?disposition=inline",
+      {
+        headers: { Authorization: "Bearer test-token" },
+      },
+    );
+    expect(images[0]?.getAttribute("src")).toMatch(/^blob:render-/);
     expect(container.textContent).toContain("Rendered 2 snapshots");
   });
 

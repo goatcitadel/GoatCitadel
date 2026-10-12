@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ConflictError } from "@goatcitadel/contracts";
 import type {
   ChatArtifactCritiqueResponse,
   ChatArtifactRenderResponse,
@@ -66,8 +67,19 @@ export async function critiqueChatGeneratedArtifact(
     authActorId: actor.authActorId,
     authActorSource: actor.authActorSource,
   });
+  // The send route refuses a blocked route; refuse here too so the operator never reads "sent"
+  // for a turn that would only fail in the background.
+  if (preflight.blockedReason) {
+    throw new ConflictError({ code: "STATE_CONFLICT", message: `Critique cannot be sent: ${preflight.blockedReason}` });
+  }
   const effectiveProviderId = preflight.effectiveProviderId;
-  const visuallyInspected = Boolean(effectiveProviderId && deps.providerSupportsVision(effectiveProviderId));
+  if (!effectiveProviderId) {
+    throw new ConflictError({
+      code: "STATE_CONFLICT",
+      message: "Critique cannot be sent: the session resolves no effective provider. Configure a model route first.",
+    });
+  }
+  const visuallyInspected = deps.providerSupportsVision(effectiveProviderId);
   const content = buildArtifactCritiquePrompt({ artifact, visuallyInspected, effectiveProviderId });
   const turnIdentity: ArtifactCritiqueTurnIdentity = {
     turnId: randomUUID(),
