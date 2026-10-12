@@ -37,7 +37,7 @@ Both themes are first-class. Contrast: body and placeholder text at least 4.5:1,
 
 ## Type
 
-- Geist Variable for interface text; Hanken Grotesk Variable for page titles only (`font-display`); the system monospace for code, IDs, hashes, and receipts, never as a costume for "technical".
+- Geist Variable for interface text; Hanken Grotesk Variable (`font-display`) for page titles and the section headings that settings pages already use it for, never for body copy; the system monospace for code, IDs, hashes, and receipts, never as a costume for "technical".
 - Seven sizes: `xs` 12/16 metadata, `sm` 13/18 dense UI, `base` 14/20 default UI, `md` 16/24 chat prose, `lg` 20/28 section titles, `xl` 24/32 page titles, `2xl` 32/40 empty-state heroes. Use the `--text-*` tokens; no hard-coded sizes.
 - Sentence case everywhere. No all-caps labels. Headings carry their own weight: no kicker or eyebrow label above a heading, anywhere in the cockpit.
 
@@ -46,7 +46,7 @@ Both themes are first-class. Contrast: body and placeholder text at least 4.5:1,
 - A 4px spacing grid; tight groups, generous separation, more space above a heading than below it.
 - Radius 6, 8, 12, or full (`--r-sm`, `--r-md`, `--r-lg`, `--r-pill`).
 - Flat surfaces with hairline borders. No boxes inside boxes, no nested cards. Shadows only on overlays, and a shadow carries an offset and a soft blur; a zero-offset colored halo is decoration.
-- Motion: 150ms for panels, 200ms for sheets (`--motion-fast/base/slow`, `--motion-ease`), one authored moment per view, a pulse marks live runs, and `prefers-reduced-motion` is honored.
+- Motion: the token durations are `--motion-fast` 120ms, `--motion-base` 160ms, `--motion-slow` 220ms with `--motion-ease` (the cockpit declares no durations of its own); one authored moment per view, a pulse marks live runs, and `prefers-reduced-motion` is honored.
 - Breakpoints (min-width): `sm` 640, `md` 1024, `lg` 1280, `xl` 1600. Below 640px the sidebar is a drawer, the inspector a bottom sheet, and navigation moves to bottom tabs. Density is Comfortable or Compact via `data-density`; it never hides content.
 
 ## Status and trust vocabulary
@@ -67,4 +67,4 @@ The cockpit follows the impeccable craft floor (`skills/bundled/impeccable/refer
 
 ## Decks, documents, and HTML artifacts
 
-Generated decks and documents are rendered by the policy engine's templates, which never see CSS; the design skill shapes their content, structure, and the `design` arguments (mode, preset, audience, brand). A workspace's `DESIGN.md` brand block (see Settings › Workspaces › Design context) supplies `design.brand` when the model gives none; the first color is the accent. HTML artifacts preview inside a sandboxed iframe under the gateway's baseline content security policy, so fonts and images must be embedded or served from the gateway.
+Generated decks and documents are rendered by the policy engine's templates, which never see CSS; the design skill shapes their content, structure, and the `design` arguments (mode, preset, audience, brand). A workspace's `DESIGN.md` brand block (see Settings › Workspaces › Design context) supplies `design.brand` when the model gives none; the first color is the accent. HTML artifacts preview inside a sandboxed iframe under the gateway's baseline content security policy: images may be inline `data:` URIs, but fonts must be served from the gateway itself (`font-src 'self'`) until the planned preview-policy change admits embedded fonts.

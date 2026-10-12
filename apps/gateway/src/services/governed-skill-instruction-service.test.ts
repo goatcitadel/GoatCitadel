@@ -9,7 +9,6 @@ import type {
   SkillLifecycleRecord,
 } from "@goatcitadel/contracts";
 import { createHash } from "node:crypto";
-import { canonicalJsonString } from "@goatcitadel/contracts";
 import { captureSkillContentIntegritySync } from "./skill-content-integrity.js";
 import {
   buildGovernedActivatedSkillReceipts,
@@ -339,18 +338,27 @@ describe("workspace design context", () => {
     const instructions = render(harness, receipts, reader({ design: designDoc })) ?? "";
     expect(instructions).toContain("## Project design context: DESIGN.md (workspace)");
     expect(instructions).toContain("name: Acme");
+    expect(instructions).toContain("only from this workspace's own copies");
+    expect(instructions).not.toContain("No workspace PRODUCT.md or DESIGN.md exists yet");
     expect(instructions.indexOf("Project design context")).toBeGreaterThan(
       instructions.indexOf("Runtime skill module: bundled:impeccable/craft-floor"),
     );
   });
 
-  it("omits the field when the workspace has no docs so receipts stay canonical-equal to reader-less ones", () => {
+  it("records an empty context list and the workspace-only trailer when the workspace has no docs yet", () => {
     const harness = buildImpeccableHarness();
     const withReader = freeze(harness, reader({}));
     const withoutReader = freeze(harness);
 
-    expect(withReader[0]).not.toHaveProperty("contextDocuments");
-    expect(canonicalJsonString(withReader[0])).toBe(canonicalJsonString(withoutReader[0]));
+    expect(withReader[0]?.contextDocuments).toEqual([]);
+    expect(withoutReader[0]).not.toHaveProperty("contextDocuments");
+    const instructions = render(harness, withReader, reader({})) ?? "";
+    expect(instructions).toContain("## Project design context");
+    expect(instructions).toContain("only from this workspace's own copies");
+    expect(instructions).toContain("No workspace PRODUCT.md or DESIGN.md exists yet");
+    expect(instructions).toContain("return the draft as a reply");
+    expect(() => render(harness, withReader)).toThrow(/cannot be re-verified without a workspace reader/u);
+    expect(render(harness, withoutReader) ?? "").not.toContain("Project design context");
   });
 
   it("truncates an oversize doc on a character boundary and flags it", () => {
@@ -364,7 +372,7 @@ describe("workspace design context", () => {
       truncated: true,
     });
     const instructions = render(harness, receipts, reader({ design: big })) ?? "";
-    const section = instructions.slice(instructions.indexOf("## Project design context"));
+    const section = instructions.slice(instructions.indexOf("## Project design context: DESIGN.md"));
     expect(section.trimEnd().endsWith("[truncated to 6144 bytes]")).toBe(true);
     expect(section).not.toContain("�");
     expect(Buffer.byteLength(section, "utf8")).toBeLessThanOrEqual(6144 + 160);

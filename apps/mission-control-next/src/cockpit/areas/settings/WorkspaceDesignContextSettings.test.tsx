@@ -54,6 +54,20 @@ async function mount() {
         content: "# Design\n\n```brand\nname: Acme\n```\n",
         contentHash: "hash-1",
       },
+      {
+        artifactId: "artifact-redacted",
+        workspaceId: "ws-1",
+        title: "Redacted draft",
+        kind: "markdown",
+        content: "# Design\n\n[redacted]\n",
+        contentHash: "hash-2",
+        publicProjection: {
+          contentRedacted: true,
+          redactionCount: 1,
+          redactedPaths: ["content"],
+          canonicalContentHashRefersToStoredArtifact: true,
+        },
+      },
     ],
   });
   api.updateWorkspaceGuidance.mockImplementation(
@@ -100,18 +114,55 @@ describe("WorkspaceDesignContextSettings", () => {
     await vi.waitFor(() => expect(container!.textContent).toContain("Saved DESIGN.md"));
   });
 
-  it("applies a generated artifact as DESIGN.md with its hash recorded", async () => {
+  it("loads a generated artifact into the DESIGN.md editor with its hash recorded, saving only on Save", async () => {
     await mount();
     await vi.waitFor(() => expect(container!.querySelector("select")?.options.length).toBeGreaterThan(0));
 
     await act(async () => button("Apply as DESIGN.md").click());
 
-    expect(api.updateWorkspaceGuidance).toHaveBeenCalledWith(
-      "ws-1",
-      "design",
-      "<!-- applied from generated artifact artifact-1 contentHash hash-1 -->\n# Design\n\n```brand\nname: Acme\n```\n",
-    );
-    await vi.waitFor(() => expect(textarea("DESIGN.md").value).toContain("applied from generated artifact artifact-1"));
+    const applied =
+      "<!-- applied from generated artifact artifact-1 contentHash hash-1 -->\n# Design\n\n```brand\nname: Acme\n```\n";
+    expect(textarea("DESIGN.md").value).toBe(applied);
+    expect(api.updateWorkspaceGuidance).not.toHaveBeenCalled();
+    expect(container!.textContent).toContain("Review the DESIGN.md editor, then save");
+
+    await act(async () => button("Save DESIGN.md").click());
+
+    expect(api.updateWorkspaceGuidance).toHaveBeenCalledWith("ws-1", "design", applied);
+  });
+
+  it("does not offer redacted artifacts", async () => {
+    await mount();
+    await vi.waitFor(() => expect(container!.querySelector("select")?.options.length).toBeGreaterThan(0));
+
+    const options = [...container!.querySelectorAll("option")].map((option) => option.value);
+    expect(options).toEqual(["artifact-1"]);
+  });
+
+  it("keeps Save and Apply disabled until the workspace docs have loaded", async () => {
+    api.fetchWorkspaceGuidance.mockReturnValue(new Promise(() => undefined));
+    api.fetchChatGeneratedArtifacts.mockReturnValue(new Promise(() => undefined));
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => root!.render(<WorkspaceDesignContextSettings workspaceId="ws-1" />));
+
+    expect(button("Save DESIGN.md").disabled).toBe(true);
+    expect(button("Save PRODUCT.md").disabled).toBe(true);
+    expect(textarea("DESIGN.md").disabled).toBe(true);
+  });
+
+  it("keeps Save disabled after the workspace docs failed to load", async () => {
+    api.fetchWorkspaceGuidance.mockRejectedValue(new Error("gateway unavailable"));
+    api.fetchChatGeneratedArtifacts.mockResolvedValue({ items: [] });
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => root!.render(<WorkspaceDesignContextSettings workspaceId="ws-1" />));
+    await vi.waitFor(() => expect(container!.textContent).toContain("Workspace documents unavailable"));
+
+    expect(button("Save DESIGN.md").disabled).toBe(true);
+    expect(textarea("DESIGN.md").disabled).toBe(true);
   });
 
   it("explains the brand block and that the docs are workspace-only", async () => {

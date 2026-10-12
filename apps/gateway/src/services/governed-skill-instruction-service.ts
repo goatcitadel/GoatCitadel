@@ -188,16 +188,29 @@ function resolveFrozenContextDocs(
   expected: ChatTurnCapabilityActivatedSkill,
   read: SkillContextDocReader | undefined,
 ): ContextDocsInput | undefined {
-  const frozen = expected.contextDocuments ?? [];
-  if (frozen.length === 0) return undefined;
+  const frozen = expected.contextDocuments;
+  if (!frozen) return undefined;
   if (!read) {
-    const files = frozen.map((doc) => GUIDANCE_DOC_FILE_MAP[doc.docType]).join(", ");
+    const files = frozen.map((doc) => GUIDANCE_DOC_FILE_MAP[doc.docType]).join(", ") || "PRODUCT.md/DESIGN.md";
     throw new Error(
       `Workspace ${files} context for activated skill ${expected.skillId} cannot be re-verified without a workspace reader.`,
     );
   }
   return { docTypes: frozen.map((doc) => doc.docType), read, frozen };
 }
+
+/**
+ * Gateway-owned framing injected whenever a route declares context docs, so the model never writes
+ * PRODUCT.md / DESIGN.md to a project root expecting the runtime to read it (plan D3; the vendored
+ * skill text is not edited, so this sentence travels with the injection instead).
+ */
+const CONTEXT_DOCS_TRAILER = [
+  "## Project design context",
+  "",
+  "The runtime reads PRODUCT.md and DESIGN.md only from this workspace's own copies (Settings › Workspaces › Design context); a file written to a project root is never injected. When asked to create or update either document, return the draft as a reply so the operator can review and apply it; do not write the file.",
+].join("\n");
+
+const CONTEXT_DOCS_EMPTY_NOTE = "No workspace PRODUCT.md or DESIGN.md exists yet.";
 
 function assertRuntimeSkillPromptwareSafe(skillIds: string[], instruction: string, instructionSha256: string): void {
   const cacheKey = `${PROMPTWARE_SCANNER_VERSION}:${instructionSha256}`;
@@ -304,12 +317,18 @@ function buildReceipt(input: {
       `Activated skill ${input.source.skillId} resolved modules total ${totalBytes} bytes and exceed the ${input.budgetBytes}-byte budget.`,
     );
   }
-  const contextDocuments = input.contextDocs ? readContextDocuments(input.contextDocs) : [];
+  const contextDocuments = input.contextDocs ? readContextDocuments(input.contextDocs) : undefined;
+  const contextSections = contextDocuments
+    ? [
+        CONTEXT_DOCS_TRAILER,
+        ...(contextDocuments.length > 0 ? contextDocuments.map((doc) => doc.section) : [CONTEXT_DOCS_EMPTY_NOTE]),
+      ]
+    : [];
   const instruction = [
     ...modules.map(
       (module) => `## Runtime skill module: ${input.trusted.skillId}/${module.receipt.name}\n\n${module.content}`,
     ),
-    ...contextDocuments.map((doc) => doc.section),
+    ...contextSections,
   ].join("\n\n");
   return {
     receipt: {
@@ -321,7 +340,9 @@ function buildReceipt(input: {
       instructionSha256: createHash("sha256").update(instruction, "utf8").digest("hex"),
       instructionBytes: Buffer.byteLength(instruction, "utf8"),
       modules: modules.map((module) => module.receipt),
-      ...(contextDocuments.length > 0 ? { contextDocuments: contextDocuments.map((doc) => doc.receipt) } : {}),
+      // Present (possibly empty) whenever the route injected design context; absent for other skills and
+      // for receipts frozen before context docs existed, which therefore render unchanged.
+      ...(contextDocuments ? { contextDocuments: contextDocuments.map((doc) => doc.receipt) } : {}),
     },
     instruction,
   };

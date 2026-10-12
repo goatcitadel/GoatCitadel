@@ -44,6 +44,7 @@ export function WorkspaceDesignContextSettings({ workspaceId }: { workspaceId: s
   const [status, setStatus] = useState<DocState<string | null>>({ product: null, design: null });
   const [saving, setSaving] = useState<ContextDocType | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [artifacts, setArtifacts] = useState<ChatGeneratedArtifactRecord[]>([]);
   const [artifactsError, setArtifactsError] = useState<string | null>(null);
   const [selectedArtifactId, setSelectedArtifactId] = useState("");
@@ -51,6 +52,7 @@ export function WorkspaceDesignContextSettings({ workspaceId }: { workspaceId: s
   useEffect(() => {
     let cancelled = false;
     setLoadError(null);
+    setLoaded(false);
     setArtifactsError(null);
     void (async () => {
       try {
@@ -59,13 +61,20 @@ export function WorkspaceDesignContextSettings({ workspaceId }: { workspaceId: s
         const content = (docType: ContextDocType) =>
           bundle.workspace.find((doc) => doc.docType === docType)?.content ?? "";
         setDrafts({ product: content("product"), design: content("design") });
+        setLoaded(true);
       } catch (error) {
         if (!cancelled) setLoadError(describeApiError(error).summary);
       }
       try {
         const response = await fetchChatGeneratedArtifacts({ workspaceId, kind: "markdown", limit: 50 });
         if (cancelled) return;
-        const items = response.items.filter((item) => item.content.trim().length > 0);
+        // A redacted projection's hash names the stored bytes, not the text shown; never apply those.
+        const items = response.items.filter(
+          (item) =>
+            item.content.trim().length > 0 &&
+            !item.publicProjection?.contentRedacted &&
+            !item.publicProjection?.artifactRedacted,
+        );
         setArtifacts(items);
         setSelectedArtifactId((current) => current || items[0]?.artifactId || "");
       } catch (error) {
@@ -98,12 +107,19 @@ export function WorkspaceDesignContextSettings({ workspaceId }: { workspaceId: s
     [workspaceId],
   );
 
+  // Saving is only possible once the stored documents are in the editors: an early or failed load must
+  // never be overwritten with empty text.
+  const editable = loaded && !loadError;
+
   const applyArtifact = (docType: ContextDocType) => {
     const artifact = artifacts.find((item) => item.artifactId === selectedArtifactId);
     if (!artifact) return;
+    const fileName = DOCS.find((doc) => doc.docType === docType)?.fileName ?? docType;
     // The applied artifact's hash travels inside the document, so the provenance stays inspectable.
+    // Applying only fills the editor; the operator reviews and presses Save, so nothing is replaced silently.
     const provenance = `<!-- applied from generated artifact ${artifact.artifactId} contentHash ${artifact.contentHash ?? "unknown"} -->\n`;
-    void save(docType, `${provenance}${artifact.content}`);
+    setDrafts((current) => ({ ...current, [docType]: `${provenance}${artifact.content}` }));
+    setStatus((current) => ({ ...current, [docType]: `Review the ${fileName} editor, then save.` }));
   };
 
   return (
@@ -132,6 +148,7 @@ export function WorkspaceDesignContextSettings({ workspaceId }: { workspaceId: s
                 <textarea
                   {...field}
                   value={drafts[doc.docType]}
+                  disabled={!editable}
                   spellCheck={false}
                   onChange={(event) => {
                     const value = event.target.value;
@@ -145,7 +162,7 @@ export function WorkspaceDesignContextSettings({ workspaceId }: { workspaceId: s
               <Button
                 size="sm"
                 variant="primary"
-                disabled={saving !== null}
+                disabled={!editable || saving !== null}
                 onClick={() => void save(doc.docType, drafts[doc.docType])}
               >
                 Save {doc.fileName}
@@ -172,8 +189,8 @@ export function WorkspaceDesignContextSettings({ workspaceId }: { workspaceId: s
       <div className="space-y-2">
         <h4 className="text-sm font-semibold text-fg">Apply a generated artifact</h4>
         <p className="text-xs text-fg-muted">
-          When a chat turn drafts PRODUCT.md or DESIGN.md, save it as a generated artifact first; applying it here
-          records the artifact and its hash at the top of the document.
+          When a chat turn drafts PRODUCT.md or DESIGN.md, save it as a generated artifact first; applying it here loads
+          it into the editor with the artifact and its hash recorded at the top, and nothing changes until you save.
         </p>
         {artifactsError ? (
           <p role="alert" className="text-sm text-status-failed">
@@ -198,10 +215,10 @@ export function WorkspaceDesignContextSettings({ workspaceId }: { workspaceId: s
                 ))}
               </select>
             </label>
-            <Button size="sm" disabled={saving !== null} onClick={() => applyArtifact("design")}>
+            <Button size="sm" disabled={!editable || saving !== null} onClick={() => applyArtifact("design")}>
               Apply as DESIGN.md
             </Button>
-            <Button size="sm" disabled={saving !== null} onClick={() => applyArtifact("product")}>
+            <Button size="sm" disabled={!editable || saving !== null} onClick={() => applyArtifact("product")}>
               Apply as PRODUCT.md
             </Button>
           </div>
