@@ -12,6 +12,7 @@ import {
 } from "./config-generation-service.js";
 import { CronConfigGenerationOwner, readCanonicalCronSpecs } from "./cron-config-generation-owner.js";
 import { computeNextCronRunAt } from "./gateway/cron-automation-service.js";
+import { PRIVATE_BETA_BACKUP_JOB_ID } from "./gateway/cron-job-ids.js";
 
 const roots: string[] = [];
 const stores: Storage[] = [];
@@ -305,6 +306,25 @@ describe("CronConfigGenerationOwner", () => {
     expect(storage.cronJobs.get(job.jobId)).toBeUndefined();
     expect(await recoveredOwner.reconcileCommittedGeneration()).toEqual([]);
     await recoveredConfig.completeRuntimeOwnerReconciliation();
+  });
+
+  it("projects nextRunAt for a due-swept system job when a committed generation changes its spec", async () => {
+    const stored = spec({
+      jobId: PRIVATE_BETA_BACKUP_JOB_ID,
+      name: "Private Beta Daily Backup",
+      action: "backup",
+      schedule: "30 2 * * * UTC",
+    });
+    const committed = { ...stored, schedule: "45 2 * * * UTC" };
+    const { root } = await createRoot([committed]);
+    const storage = createStorage(root);
+    storage.cronJobs.createSpec(stored);
+    const owner = new CronConfigGenerationOwner(new ConfigGenerationService(root), createSqliteAsyncStorage(storage));
+
+    const [reconciled] = await owner.reconcileCommittedGeneration();
+
+    expect(reconciled).toMatchObject({ jobId: PRIVATE_BETA_BACKUP_JOB_ID, schedule: committed.schedule });
+    expect(reconciled?.nextRunAt).toMatch(/T02:45:00\.000Z$/);
   });
 
   it("canonicalizes legacy telemetry and adopts Storage-only specs once without disturbing telemetry", async () => {

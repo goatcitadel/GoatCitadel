@@ -20,6 +20,7 @@ import {
 } from "./config-generation-service.js";
 import {
   computeNextCronRunAt,
+  isScheduledCronAction,
   normalizeCronContextFrom,
   normalizeCronEndAt,
   normalizeCronJobDescription,
@@ -525,19 +526,9 @@ function hasTelemetryFields(patch: CronJobRuntimeTelemetryPatch): boolean {
 }
 
 function projectNextRunAt(spec: CronJobSpecInput): string | null {
-  return isSelfScheduledAction(spec.action)
+  return isScheduledCronAction(spec.action)
     ? (computeNextCronRunAt(spec.schedule, new Date(), spec.endAt) ?? null)
     : null;
-}
-
-function isSelfScheduledAction(action: CronJobAction): boolean {
-  return (
-    action === "task" ||
-    action === "watchdog" ||
-    action === "curator" ||
-    action === "no_agent" ||
-    action === "agent_turn"
-  );
 }
 
 function findResourceConflict(error: unknown): ConflictError | undefined {

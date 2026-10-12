@@ -3,18 +3,23 @@ import type { CronJobRecord, CronRunRecord, DurableRunStatus } from "@goatcitade
 import type { Storage } from "@goatcitadel/storage";
 import {
   computeNextCronRunAt,
+  COST_REPORT_HOURLY_JOB_ID,
   CronAutomationService,
   EXPERIMENTAL_NO_AGENT_CRON_ENV,
   type CronAutomationServiceDeps,
   didCronJobRunInCurrentWindow,
+  IMPROVEMENT_WEEKLY_JOB_ID,
   isCronJobActive,
   isExplicitCronJobDueNow,
+  MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
+  MEMORY_FLUSH_DAILY_JOB_ID,
   normalizeCronEndAt,
   normalizeCronJobDescription,
   normalizeCronJobId,
   normalizeCronJobName,
   normalizeCronSchedule,
   parseSimpleCronSchedule,
+  PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./cron-automation-service.js";
 import { createTestCronSpecOwner } from "./cron-spec-owner.test-utils.js";
@@ -1387,6 +1392,232 @@ function makeServiceWithNoAgent(opts: {
   };
   return new CronAutomationService(deps);
 }
+
+interface SystemCronJobCase {
+  action: CronJobRecord["action"];
+  handler: "backup" | "memoryFlush" | "memoryConsolidation" | "costReport" | "updateReview";
+  jobId: string;
+  schedule: string;
+  windowStart: string;
+  /** A sweep after the five-minute due window closes, before the next occurrence. */
+  afterWindow: string;
+  nextWindowStart: string;
+}
+
+// 2026-05-17 is a Sunday.
+const SYSTEM_CRON_JOB_CASES: SystemCronJobCase[] = [
+  {
+    action: "backup",
+    handler: "backup",
+    jobId: PRIVATE_BETA_BACKUP_JOB_ID,
+    schedule: "30 2 * * * UTC",
+    windowStart: "2026-05-17T02:30:00.000Z",
+    afterWindow: "2026-05-17T02:35:00.000Z",
+    nextWindowStart: "2026-05-18T02:30:00.000Z",
+  },
+  {
+    action: "memory_flush",
+    handler: "memoryFlush",
+    jobId: MEMORY_FLUSH_DAILY_JOB_ID,
+    schedule: "0 3 * * * UTC",
+    windowStart: "2026-05-17T03:00:00.000Z",
+    afterWindow: "2026-05-17T03:05:00.000Z",
+    nextWindowStart: "2026-05-18T03:00:00.000Z",
+  },
+  {
+    action: "memory_consolidation",
+    handler: "memoryConsolidation",
+    jobId: MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
+    schedule: "30 2 * * 0 UTC",
+    windowStart: "2026-05-17T02:30:00.000Z",
+    // Same clock window on Monday is not a Sunday occurrence.
+    afterWindow: "2026-05-18T02:31:00.000Z",
+    nextWindowStart: "2026-05-24T02:30:00.000Z",
+  },
+  {
+    action: "cost_report",
+    handler: "costReport",
+    jobId: COST_REPORT_HOURLY_JOB_ID,
+    schedule: "0 * * * * UTC",
+    windowStart: "2026-05-17T12:00:00.000Z",
+    afterWindow: "2026-05-17T12:05:00.000Z",
+    nextWindowStart: "2026-05-17T13:00:00.000Z",
+  },
+  {
+    action: "update_review",
+    handler: "updateReview",
+    jobId: UPDATE_REVIEW_DAILY_JOB_ID,
+    schedule: "15 4 * * * UTC",
+    windowStart: "2026-05-17T04:15:00.000Z",
+    afterWindow: "2026-05-17T04:20:00.000Z",
+    nextWindowStart: "2026-05-18T04:15:00.000Z",
+  },
+];
+
+describe("system maintenance cron jobs on the due sweep", () => {
+  it.each(SYSTEM_CRON_JOB_CASES)(
+    "fires $action once per due window and dedups repeat sweeps",
+    async ({ action, handler, jobId, schedule, windowStart, afterWindow, nextWindowStart }) => {
+      vi.useFakeTimers();
+      const db = new FakeDb();
+      const cronJobs = new FakeCronJobs();
+      const cronRuns = new FakeCronRuns(cronJobs);
+      const effect = vi.fn(async () => {});
+      const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { [handler]: effect } });
+      cronJobs.upsert(buildTaskJob({ jobId, action, schedule }));
+      const start = Date.parse(windowStart);
+      const sweeps: Array<[at: Date, expectedEffects: number]> = [
+        [new Date(start - 60_000), 0],
+        [new Date(start), 1],
+        [new Date(start), 1],
+        [new Date(start + 4 * 60_000), 1],
+        [new Date(afterWindow), 1],
+        [new Date(Date.parse(nextWindowStart) + 60_000), 2],
+      ];
+
+      const effectsAfterEachSweep: number[] = [];
+      try {
+        for (const [at] of sweeps) {
+          vi.setSystemTime(at);
+          await service.runDueTaskCronJobs(at);
+          effectsAfterEachSweep.push(effect.mock.calls.length);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+
+      expect(effectsAfterEachSweep).toEqual(sweeps.map(([, expectedEffects]) => expectedEffects));
+      expect(cronRuns.list()).toMatchObject([
+        {
+          jobId,
+          trigger: "scheduled_due",
+          scheduledFor: windowStart,
+          admissionKey: `scheduled:${windowStart}`,
+          status: "completed",
+        },
+        {
+          jobId,
+          trigger: "scheduled_due",
+          scheduledFor: nextWindowStart,
+          admissionKey: `scheduled:${nextWindowStart}`,
+          status: "completed",
+        },
+      ]);
+      expect(cronJobs.get(jobId)).toMatchObject({ lastRunStatus: "ok", failureCount: 0 });
+      expect(cronJobs.get(jobId)?.nextRunAt).toBeDefined();
+    },
+  );
+
+  it.each(SYSTEM_CRON_JOB_CASES)(
+    "admits one $action effect and one canonical run under overlapping same-tick sweeps",
+    async ({ action, handler, jobId, schedule, windowStart }) => {
+      vi.useFakeTimers();
+      const now = new Date(windowStart);
+      vi.setSystemTime(now);
+      const db = new FakeDb();
+      const cronJobs = new FakeCronJobs();
+      const cronRuns = new FakeCronRuns(cronJobs);
+      let releaseEffect: (() => void) | undefined;
+      const effectGate = new Promise<void>((resolve) => {
+        releaseEffect = resolve;
+      });
+      const effect = vi.fn(() => effectGate);
+      const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { [handler]: effect } });
+      cronJobs.upsert(buildTaskJob({ jobId, action, schedule }));
+
+      try {
+        const firstSweep = service.runDueTaskCronJobs(now);
+        await vi.waitFor(() => expect(effect).toHaveBeenCalledTimes(1));
+        await service.runDueTaskCronJobs(now);
+        // A later tick inside the same window, while the first effect is still running.
+        await service.runDueTaskCronJobs(new Date(now.getTime() + 30_000));
+        releaseEffect?.();
+        await firstSweep;
+      } finally {
+        vi.useRealTimers();
+      }
+
+      expect(effect).toHaveBeenCalledTimes(1);
+      expect(cronRuns.list()).toMatchObject([{ jobId, trigger: "scheduled_due", status: "completed" }]);
+    },
+  );
+
+  it("leaves the seeded-disabled consolidation job unswept until an operator enables it", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-05-17T02:31:00.000Z");
+    vi.setSystemTime(now);
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const memoryConsolidation = vi.fn(async () => {});
+    const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { memoryConsolidation } });
+    cronJobs.upsert(
+      buildTaskJob({
+        jobId: MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
+        action: "memory_consolidation",
+        schedule: "30 2 * * 0 UTC",
+        enabled: false,
+      }),
+    );
+
+    try {
+      await service.runDueTaskCronJobs(now);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(memoryConsolidation).not.toHaveBeenCalled();
+    expect(cronRuns.list()).toEqual([]);
+  });
+
+  it("leaves the weekly improvement job to ImprovementService's own scheduler", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-05-17T02:31:00.000Z");
+    vi.setSystemTime(now);
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const improvement = vi.fn(async () => {});
+    const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { improvement } });
+    cronJobs.upsert(
+      buildTaskJob({ jobId: IMPROVEMENT_WEEKLY_JOB_ID, action: "improvement", schedule: "30 2 * * 0 UTC" }),
+    );
+
+    try {
+      await service.runDueTaskCronJobs(now);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(improvement).not.toHaveBeenCalled();
+    expect(cronRuns.list()).toEqual([]);
+  });
+
+  it("projects the next due occurrence when an operator re-enables a system job", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-17T12:00:00.000Z"));
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const service = createService(db, vi.fn(), { cronJobs });
+    cronJobs.upsert(
+      buildTaskJob({
+        jobId: PRIVATE_BETA_BACKUP_JOB_ID,
+        action: "backup",
+        schedule: "30 2 * * * UTC",
+        enabled: false,
+      }),
+    );
+
+    let resumed: CronJobRecord;
+    try {
+      resumed = await service.setCronJobEnabled(PRIVATE_BETA_BACKUP_JOB_ID, true, 1);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(resumed).toMatchObject({ enabled: true, nextRunAt: "2026-05-18T02:30:00.000Z" });
+  });
+});
 
 describe("createCronJob workdir + contextFrom", () => {
   it("stores workdir and contextFrom on the persisted record", async () => {

@@ -1882,11 +1882,22 @@ function normalizeWatchdogCheckId(value: unknown): CronWatchdogCheckId {
   return "runtime_health";
 }
 
-function isScheduledCronAction(action: CronJobRecord["action"]): boolean {
+/**
+ * Actions whose due cadence is owned by runDueTaskCronJobs (and so carry a
+ * projected nextRunAt). The built-in maintenance handlers run their system
+ * schedulers forced, so this sweep is their only scheduled dispatcher.
+ * `improvement` is excluded: ImprovementService runs its own weekly scheduler.
+ */
+export function isScheduledCronAction(action: CronJobRecord["action"]): boolean {
   return (
     action === "task" ||
     action === "watchdog" ||
     action === "curator" ||
+    action === "backup" ||
+    action === "memory_flush" ||
+    action === "memory_consolidation" ||
+    action === "cost_report" ||
+    action === "update_review" ||
     action === "no_agent" ||
     action === "agent_turn"
   );
