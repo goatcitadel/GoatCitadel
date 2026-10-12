@@ -439,6 +439,26 @@ describe("presentation research evidence", () => {
     expect(twoSearches.report.passed).toBe(true);
   });
 
+  it("requires at least one exclusion like the presentations.create schema and executor", () => {
+    const args = buildGeneralResearchArgs();
+    const result = groundResearchPresentationArgs({
+      userContent: "Research competing note-taking apps and put the comparison in a PowerPoint.",
+      priorToolRuns: [
+        browserSearchRun([sourceResult(GENERAL_RESEARCH_SOURCES[0])], {
+          query: "note taking app official feature documentation",
+        }),
+        browserSearchRun([sourceResult(GENERAL_RESEARCH_SOURCES[1])], {
+          query: "note taking app independent retailer adoption signals",
+          toolRunId: "search-run-2",
+        }),
+      ],
+      args: { ...args, research: { ...(args.research as Record<string, unknown>), exclusions: [] } },
+    });
+
+    expect(result.report.passed).toBe(false);
+    expect(result.report.findings).toContain("Research metadata must include at least one `exclusions` entry.");
+  });
+
   it("does not let one broad or repeated equivalent search satisfy the CCG benchmark", () => {
     const results = CCG_SOURCES.map(sourceResult);
     const repeatedSearches = [
@@ -998,7 +1018,7 @@ function buildGeneralResearchArgs(): Record<string, unknown> {
       geography: "North America",
       physicalDigitalBoundary: "Digital applications only",
       inclusionCriteria: ["Actively supported note-taking applications"],
-      exclusions: [],
+      exclusions: ["Discontinued or unsupported note-taking applications"],
       methodology: ["Compare official features with independent adoption evidence"],
       limitations: ["Public evidence does not expose directly comparable active-user counts"],
       competitors: ["Official Notes", "Independent Notes"],
