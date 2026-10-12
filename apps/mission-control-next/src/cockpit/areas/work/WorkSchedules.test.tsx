@@ -433,6 +433,24 @@ describe("scheduler review and run evidence", () => {
     expect(fetchCronReviewQueue).toHaveBeenCalledTimes(1);
   });
 
+  it("revalidates the flag on Refresh and skips the queue request when it has been switched off", async () => {
+    await render();
+    const region = await vi.waitFor(() => {
+      const found = container.querySelector<HTMLElement>('[aria-label="Scheduler review"]');
+      expect(found?.textContent).toContain("No scheduler review items");
+      return found!;
+    });
+    expect(fetchCronReviewQueue).toHaveBeenCalledTimes(1);
+    vi.mocked(fetchSettings).mockResolvedValue(settingsWith({ cronReviewQueueV1Enabled: false }));
+    const refresh = [...region.querySelectorAll("button")].find((item) => item.textContent?.trim() === "Refresh");
+    if (!refresh) throw new Error("Missing scheduler review Refresh button");
+    await act(async () => refresh.click());
+    await vi.waitFor(() => expect(container.querySelector('[aria-label="Scheduler review"]')?.textContent).toContain("Scheduler review is switched off in runtime settings"));
+    expect(fetchSettings).toHaveBeenCalledTimes(2);
+    expect(fetchCronReviewQueue).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[aria-label="Scheduler review"]')?.textContent).not.toContain("No scheduler review items");
+  });
+
   it("reports unknown review availability, without requesting the queue, when settings cannot be read", async () => {
     vi.mocked(fetchSettings).mockRejectedValue(new Error("Settings unreachable"));
     await render();

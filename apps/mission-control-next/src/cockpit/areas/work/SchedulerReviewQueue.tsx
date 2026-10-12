@@ -25,6 +25,12 @@ export function SchedulerReviewQueue() {
   });
   // A disabled query keeps its cached data and error, so everything shown below the callouts follows `enabled`.
   const items = enabled ? (queue.data?.items ?? []) : [];
+  // Refresh re-reads the flag owner first; a cached `true` may be stale, and the queue is only requested
+  // when the fresh snapshot still reports it on, so a just-disabled flag never produces the 409.
+  const refresh = async () => {
+    const fresh = await settings.refetch();
+    if (fresh.data?.features.cronReviewQueueV1Enabled === true) await queue.refetch();
+  };
   return (
     <section aria-label="Scheduler review" className="grid min-w-0 gap-3 rounded-lg border border-line bg-raised p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -35,7 +41,7 @@ export function SchedulerReviewQueue() {
           </p>
         </div>
         {enabled ? (
-          <Button size="sm" disabled={queue.isFetching} onClick={() => void queue.refetch()}>
+          <Button size="sm" disabled={settings.isFetching || queue.isFetching} onClick={() => void refresh()}>
             Refresh
           </Button>
         ) : null}
