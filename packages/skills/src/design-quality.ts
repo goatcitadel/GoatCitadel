@@ -7,7 +7,11 @@ import type {
   OpsDesignQualitySnapshot,
 } from "@goatcitadel/contracts";
 // The calibrated anti-slop table lives with the design detector so Ops evidence and runtime advisories share it.
-import { ANTI_SLOP_PATTERNS } from "./design-detector/rules.js";
+import { ANTI_SLOP_PATTERNS, DESIGN_DETECTOR_RULES } from "./design-detector/rules.js";
+
+function isRetiringClassicPath(filePath: string): boolean {
+  return /[\\/]features[\\/](?:native-routes|threaded-surface)[\\/]/u.test(filePath);
+}
 
 const REQUIRED_SKILL_MODULES = [
   "SKILL.md",
@@ -226,6 +230,34 @@ export function readDesignQualityEvidence(repoRoot: string): OpsDesignQualitySna
       nextAction:
         antiSlopHits.length > 0
           ? `Review token-backed intent for anti-slop hit(s): ${summarizeHits(antiSlopHits)}.`
+          : undefined,
+    }),
+  );
+
+  // Cockpit-only craft-floor advisories (plan D6): counts per rule, informational, never blocking. The
+  // retiring Classic shell is out of scope.
+  const craftFloorHits = collectPatternHits(
+    [
+      path.join(root, "apps", "mission-control-next", "src", "cockpit"),
+      path.join(root, "packages", "mission-control-shared", "src", "components"),
+    ],
+    DESIGN_DETECTOR_RULES,
+    { recursive: true, repoRoot: root, exclude: isRetiringClassicPath },
+  );
+  const craftFloorCounts = [...new Map(craftFloorHits.map((hit) => [hit.pattern, 0]))]
+    .map(([pattern]) => `${pattern}: ${craftFloorHits.filter((hit) => hit.pattern === pattern).length}`)
+    .sort();
+  checks.push(
+    check({
+      id: "mission-control.craft-floor.scan",
+      label: "Craft-floor advisory scan",
+      severity: craftFloorHits.length > 0 ? "P2" : "P3",
+      status: craftFloorHits.length > 0 ? "advisory" : "passing",
+      owner: "mission-control-next",
+      evidence: craftFloorHits[0]?.path ?? "apps/mission-control-next/src/cockpit",
+      nextAction:
+        craftFloorHits.length > 0
+          ? `Informational craft-floor advisories by rule (never blocking): ${craftFloorCounts.join(", ")}.`
           : undefined,
     }),
   );
