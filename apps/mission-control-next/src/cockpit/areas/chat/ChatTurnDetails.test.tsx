@@ -81,6 +81,19 @@ describe("ChatTurnDetails design advisories", () => {
     expect(container.textContent).toContain("line 9");
   });
 
+  it("labels patch-scoped lines as lines of the patch text, not the file", () => {
+    render(
+      turnWith([
+        toolRun({
+          designAdvisories: [{ ruleId: "glass-by-default", line: 2, summary: "Backdrop blur.", scope: "patch" }],
+        }),
+      ]),
+    );
+
+    expect(container.textContent).toContain("line 2 of the patch text");
+    expect(container.textContent).not.toContain("(line 2)");
+  });
+
   it("renders no advisory list when the tool result carries none", () => {
     render(turnWith([toolRun({ bytesWritten: 120 })]));
 

@@ -5,7 +5,11 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage, type AsyncStorage } from "@goatcitadel/storage";
-import { createChatGeneratedArtifactFromTurn, getChatGeneratedArtifact } from "./chat-generated-artifact-service.js";
+import {
+  createChatGeneratedArtifactFromTurn,
+  getChatGeneratedArtifact,
+  listChatGeneratedArtifacts,
+} from "./chat-generated-artifact-service.js";
 
 async function createStorage(): Promise<{ storage: Storage; asyncStorage: AsyncStorage; rootDir: string }> {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-generated-artifacts-"));
@@ -193,6 +197,11 @@ describe("chat-generated-artifact-service", () => {
       ],
     );
     assert.deepEqual(hydrated.designAdvisories, html.designAdvisories);
+    const listed = await listChatGeneratedArtifacts(host, { sessionId: session.sessionId });
+    assert.deepEqual(
+      listed.find((item) => item.artifactId === html.artifactId)?.designAdvisories,
+      html.designAdvisories,
+    );
     assert.equal(code.kind, "code");
     assert.equal("designAdvisories" in code, false);
     assert.equal(storage.chatGeneratedArtifacts.get(html.artifactId).content.includes("backdrop-blur-md"), true);

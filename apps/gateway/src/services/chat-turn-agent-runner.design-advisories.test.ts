@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
 import type { ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
-import { createExecuteToolCallForTest } from "./chat-turn-agent-runner-test-fixtures.js";
+import { createExecuteToolCallForTest, createMockStorage } from "./chat-turn-agent-runner-test-fixtures.js";
 
 const GRADIENT_CSS = ".hero h1 { background-clip: text; -webkit-text-fill-color: transparent; }";
 
@@ -87,6 +87,69 @@ describe("design advisories on governed UI file writes", () => {
       expect.objectContaining({ ruleId: "gradient-text", line: 1, craftFloorRule: "skill-ban-gradient-text" }),
     ]);
     expect(JSON.stringify(result.record.result)).not.toContain("background-clip");
+  });
+
+  it("keeps the executed result when persisting the advisories fails", async () => {
+    const storage = createMockStorage() as {
+      chatToolRuns: { patch: (id: string, patch: Record<string, unknown>) => unknown };
+    };
+    const originalPatch = storage.chatToolRuns.patch.bind(storage.chatToolRuns);
+    storage.chatToolRuns.patch = (toolRunId, patch) => {
+      const result = patch.result as Record<string, unknown> | undefined;
+      if (result && "designAdvisories" in result) throw new Error("canonical write fence closed");
+      return originalPatch(toolRunId, patch);
+    };
+    const invokeTool = vi.fn(
+      async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: { path: request.args.path, bytesWritten: GRADIENT_CSS.length },
+      }),
+    );
+    const executeToolCall = createExecuteToolCallForTest({
+      invokeTool,
+      toolNames: ["fs.write"],
+      storage: storage as never,
+      evaluateToolAccess: vi.fn(async () => ({ allowed: true, requiresApproval: false, reasonCodes: ["allowed"] })),
+    });
+
+    const result = await executeToolCall({
+      input: turnInput({ capabilityProfile: profileWith(["bundled:impeccable"]) }),
+      turnId: "turn-design-advisories-fence",
+      toolName: "fs.write",
+      rawArgs: { path: "src/hero.css", content: GRADIENT_CSS },
+      localFileIntent: true,
+    });
+
+    expect(result.record.status).toBe("executed");
+    expect(result.record.result).not.toHaveProperty("designAdvisories");
+  });
+
+  it("skips advisories on eval-integrity turns so the harness stays neutral", async () => {
+    const invokeTool = vi.fn(
+      async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: { path: request.args.path, bytesWritten: GRADIENT_CSS.length },
+      }),
+    );
+    const executeToolCall = createExecuteToolCallForTest({
+      invokeTool,
+      toolNames: ["fs.write"],
+      evaluateToolAccess: vi.fn(async () => ({ allowed: true, requiresApproval: false, reasonCodes: ["allowed"] })),
+    });
+
+    const result = await executeToolCall({
+      input: turnInput({
+        capabilityProfile: profileWith(["bundled:impeccable"]),
+        normalizationProfile: "prompt_pack_harness",
+      }),
+      turnId: "turn-design-advisories-eval",
+      toolName: "fs.write",
+      rawArgs: { path: "src/hero.css", content: GRADIENT_CSS },
+      localFileIntent: true,
+    });
+
+    expect(result.record.status).toBe("executed");
+    expect(result.record.result).not.toHaveProperty("designAdvisories");
   });
 
   it("leaves the result untouched without a design receipt", async () => {

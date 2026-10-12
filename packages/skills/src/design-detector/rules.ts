@@ -126,6 +126,9 @@ const CRAFT_FLOOR_RULES: readonly DesignDetectorRule[] = [
   },
 ];
 
+/** Bump when a rule id, regex, or summary changes; memo keys and evidence cite it. */
+export const DESIGN_DETECTOR_RULES_VERSION = 1;
+
 export const DESIGN_DETECTOR_RULES: readonly DesignDetectorRule[] = Object.freeze([
   ...ANTI_SLOP_PATTERNS.map((pattern) => ({
     id: pattern.id,

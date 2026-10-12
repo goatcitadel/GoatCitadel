@@ -91,6 +91,15 @@ describe("buildToolResultDesignAdvisories", () => {
       },
     });
     expect(patched?.map((advisory) => advisory.ruleId)).toEqual(["glass-by-default"]);
+    // A patch's line counts within the replacement text, not the file; the advisory says so.
+    expect(patched?.[0]).toMatchObject({ line: 1, scope: "patch" });
+    expect(
+      buildToolResultDesignAdvisories({
+        capabilityProfile: profileWith(["bundled:impeccable"]),
+        toolName: "fs.write",
+        args: { path: "src/hero.css", content: GRADIENT_CSS },
+      })?.[0],
+    ).toMatchObject({ scope: "file" });
 
     for (const extension of ["tsx", "jsx", "css", "html", "vue", "svelte"]) {
       expect(

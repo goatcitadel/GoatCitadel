@@ -8,7 +8,7 @@ import type {
   ChatThreadTurnRecord,
 } from "@goatcitadel/contracts";
 import { redactStructuredSecrets, ValidationError } from "@goatcitadel/contracts";
-import { detectDesignAdvisories } from "@goatcitadel/skills";
+import { withDesignAdvisories } from "./chat-generated-artifact-advisories.js";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 export interface ChatGeneratedArtifactDependencies {
@@ -43,17 +43,6 @@ export async function listChatGeneratedArtifacts(
     limit: input.limit ?? 500,
   });
   return visible.map(withDesignAdvisories);
-}
-
-/**
- * HTML artifacts carry informational design advisories derived from their content on every read.
- * They are never stored: the artifact table stays unchanged and the advisories always reflect the
- * current rule set. Other kinds are returned untouched.
- */
-function withDesignAdvisories(artifact: ChatGeneratedArtifactRecord): ChatGeneratedArtifactRecord {
-  if (artifact.kind !== "html" || artifact.publicProjection?.contentRedacted) return artifact;
-  const designAdvisories = detectDesignAdvisories(artifact.content);
-  return designAdvisories.length > 0 ? { ...artifact, designAdvisories } : artifact;
 }
 
 export async function getChatGeneratedArtifact(

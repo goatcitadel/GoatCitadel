@@ -24,13 +24,12 @@ export function buildToolResultDesignAdvisories(input: {
   if (!hasDesignSkillReceipt(input.capabilityProfile)) return undefined;
   const path = typeof input.args?.path === "string" ? input.args.path : "";
   if (!UI_FILE_EXTENSION.test(path)) return undefined;
-  const text =
-    input.toolName === "fs.write"
-      ? input.args?.content
-      : input.toolName === "fs.patch"
-        ? input.args?.newText
-        : undefined;
+  const scope: DesignAdvisory["scope"] =
+    input.toolName === "fs.write" ? "file" : input.toolName === "fs.patch" ? "patch" : undefined;
+  if (!scope) return undefined;
+  const text = scope === "file" ? input.args?.content : input.args?.newText;
   if (typeof text !== "string" || text.length === 0) return undefined;
-  const advisories = detectDesignAdvisories(text);
+  // A patch's lines count within the replacement text, not the file; the scope says which.
+  const advisories = detectDesignAdvisories(text).map((advisory) => ({ ...advisory, scope }));
   return advisories.length > 0 ? advisories : undefined;
 }

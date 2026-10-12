@@ -41,9 +41,9 @@ function readDesignAdvisories(tool: ChatToolRunRecord): DesignAdvisory[] {
   if (!Array.isArray(raw)) return [];
   return raw.flatMap((entry) => {
     if (!entry || typeof entry !== "object") return [];
-    const { ruleId, line, summary } = entry as Record<string, unknown>;
+    const { ruleId, line, summary, scope } = entry as Record<string, unknown>;
     return typeof ruleId === "string" && typeof summary === "string" && typeof line === "number"
-      ? [{ ruleId, line, summary }]
+      ? [{ ruleId, line, summary, ...(scope === "patch" ? { scope: "patch" as const } : {}) }]
       : [];
   });
 }
@@ -156,7 +156,12 @@ export function ChatTurnDetails({
                       <ul aria-label="Design advisories" className="mt-1 grid gap-1">
                         {advisories.map((advisory) => (
                           <li key={advisory.ruleId}>
-                            {advisory.summary} <span className="text-fg-muted">(line {advisory.line})</span>
+                            {advisory.summary}{" "}
+                            <span className="text-fg-muted">
+                              {advisory.scope === "patch"
+                                ? `(line ${advisory.line} of the patch text)`
+                                : `(line ${advisory.line})`}
+                            </span>
                           </li>
                         ))}
                       </ul>
