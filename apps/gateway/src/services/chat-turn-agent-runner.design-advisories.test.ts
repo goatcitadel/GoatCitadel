@@ -25,7 +25,10 @@ function turnInput(overrides: Partial<ChatTurnAgentRunnerInput> = {}): ChatTurnA
   };
 }
 
-function profileWith(skillIds: string[]): ChatTurnAgentRunnerInput["capabilityProfile"] {
+function profileWith(
+  skillIds: string[],
+  allowedTools: string[] = ["fs.write"],
+): ChatTurnAgentRunnerInput["capabilityProfile"] {
   return {
     profileId: "profile-design-advisories",
     identity: { workspaceId: "workspace-design" },
@@ -50,12 +53,56 @@ function profileWith(skillIds: string[]): ChatTurnAgentRunnerInput["capabilityPr
       })),
     },
     governance: {
-      policyDecisions: [
-        { toolName: "fs.write", allowed: true, requiresApproval: false, reasonCodes: ["frozen_allowed"] },
-      ],
+      policyDecisions: allowedTools.map((toolName) => ({
+        toolName,
+        allowed: true,
+        requiresApproval: false,
+        reasonCodes: ["frozen_allowed"],
+      })),
     },
   } as unknown as ChatTurnAgentRunnerInput["capabilityProfile"];
 }
+
+describe("model-authored html on documents.create", () => {
+  const MODEL_HTML = "<!doctype html><html><head><title>Page</title></head><body><h1>Hi</h1></body></html>";
+
+  async function createPage(capabilityProfile: ChatTurnAgentRunnerInput["capabilityProfile"]) {
+    const invokeTool = vi.fn(
+      async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: { path: request.args.path, bytesWritten: 10, format: "html" },
+      }),
+    );
+    const executeToolCall = createExecuteToolCallForTest({
+      invokeTool,
+      toolNames: ["documents.create"],
+      evaluateToolAccess: vi.fn(async () => ({ allowed: true, requiresApproval: false, reasonCodes: ["allowed"] })),
+    });
+    const result = await executeToolCall({
+      input: turnInput({ capabilityProfile, content: "Build the landing page as an HTML document." }),
+      turnId: "turn-model-html",
+      toolName: "documents.create",
+      rawArgs: { path: "./workspace/goatcitadel_out/page.html", format: "html", title: "Page", html: MODEL_HTML },
+    });
+    return { result, args: invokeTool.mock.calls[0]?.[0]?.args };
+  }
+
+  it("strips the html argument when the turn carries no design receipt", async () => {
+    const { result, args } = await createPage(undefined);
+
+    expect(result.record.status, JSON.stringify(result.record)).toBe("executed");
+    expect(args).toBeDefined();
+    expect(args).not.toHaveProperty("html");
+    expect(args?.design).toMatchObject({ mode: "polished" });
+  });
+
+  it("keeps the html argument under an impeccable receipt", async () => {
+    const { result, args } = await createPage(profileWith(["bundled:impeccable"], ["documents.create"]));
+
+    expect(result.record.status, JSON.stringify(result.record)).toBe("executed");
+    expect(args?.html).toBe(MODEL_HTML);
+  });
+});
 
 describe("design advisories on governed UI file writes", () => {
   async function writeHero(capabilityProfile: ChatTurnAgentRunnerInput["capabilityProfile"]) {

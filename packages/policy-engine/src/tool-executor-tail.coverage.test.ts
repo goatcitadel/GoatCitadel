@@ -441,6 +441,29 @@ describe("tool executor tail coverage", () => {
     expect(JSON.stringify(created)).not.toContain("iVBORw0KGgo");
   }, 20_000);
 
+  it("writes model-authored html documents verbatim and reports the markup source", async () => {
+    const root = createRoot();
+    const config = createConfig(root);
+    const storage = createKnowledgeStorage();
+    const htmlPath = path.join(root, "landing.html");
+    const html = "<!doctype html><html><head><title>Landing</title></head><body><h1>Hi</h1></body></html>";
+
+    const authored = await executeTool(
+      request("documents.create", { path: htmlPath, format: "html", title: "Landing", html }),
+      config,
+      storage,
+    );
+    const templated = await executeTool(
+      request("documents.create", { path: path.join(root, "plain.html"), format: "html", title: "Plain", body: "x" }),
+      config,
+      storage,
+    );
+
+    expect(fs.readFileSync(htmlPath, "utf8")).toBe(html);
+    expect(authored).toMatchObject({ format: "html", designReport: { markup: "model-authored" } });
+    expect(templated).toMatchObject({ format: "html", designReport: { markup: "template" } });
+  });
+
   it("creates real document artifacts inside the write jail", async () => {
     const root = createRoot();
     const config = createConfig(root);

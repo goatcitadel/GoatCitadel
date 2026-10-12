@@ -174,7 +174,7 @@ import {
   extractProviderFailureRecord,
   extractSkillSecurityFailureRecord,
 } from "./chat-turn-agent-runner/failure-records.js";
-import { buildToolResultDesignAdvisories } from "./chat-turn-agent-runner/design-advisories.js";
+import { buildToolResultDesignAdvisories, hasDesignSkillReceipt } from "./chat-turn-agent-runner/design-advisories.js";
 import {
   analyzePresentationContentQuality,
   buildWorkspaceFileDownloadHref,
@@ -7265,6 +7265,7 @@ export class ChatTurnAgentRunner {
           workspaceId: input.input.workspaceId,
           capabilityProfile: input.input.capabilityProfile,
         }),
+      designSkillReceipt: hasDesignSkillReceipt(input.input.capabilityProfile),
     });
     if (input.input.content.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) {
       preflight = {
@@ -8543,6 +8544,8 @@ export class ChatTurnAgentRunner {
     quickWebProfile?: boolean;
     /** Lazily read workspace brand; consulted only for non-plain artifact tools without a model brand. */
     workspaceDesignBrand?: () => ArtifactBrandInput | undefined;
+    /** True when the frozen profile admitted a design skill; gates model-authored document markup. */
+    designSkillReceipt?: boolean;
   }): {
     toolName: string;
     args: Record<string, unknown>;
@@ -8713,7 +8716,13 @@ export class ChatTurnAgentRunner {
     }
 
     if (!input.evalIntegrityTurn) {
-      attachArtifactDesignSkillArgs(input.toolName, args, input.userContent, input.workspaceDesignBrand);
+      attachArtifactDesignSkillArgs(
+        input.toolName,
+        args,
+        input.userContent,
+        input.workspaceDesignBrand,
+        input.designSkillReceipt ?? false,
+      );
     }
 
     if (LOCAL_PATH_TOOL_NAMES.has(input.toolName) && typeof args.path === "string") {
@@ -9564,9 +9573,15 @@ function attachArtifactDesignSkillArgs(
   args: Record<string, unknown>,
   userContent: string,
   workspaceDesignBrand?: () => ArtifactBrandInput | undefined,
+  designSkillReceipt = false,
 ): void {
   if (toolName !== "presentations.create" && toolName !== "documents.create" && toolName !== "artifacts.create") {
     return;
+  }
+  // Model-authored page markup is admitted only when the frozen profile injected a design skill;
+  // without that receipt the renderer template stays the only path to an HTML document.
+  if (toolName === "documents.create" && "html" in args && !designSkillReceipt) {
+    delete args.html;
   }
   const rawDesign = coerceArtifactDesignRecord(args.design);
   const existingMode = typeof rawDesign.mode === "string" ? rawDesign.mode.toLowerCase() : undefined;

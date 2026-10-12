@@ -133,6 +133,8 @@ async function documentsCreate(args: Record<string, unknown>, config: ToolPolicy
     sections,
     rows,
     design,
+    // Present only when the gateway admitted model-authored markup under a design receipt.
+    html: asString(args.html),
   });
   await fs.mkdir(path.dirname(full), { recursive: true });
   if (artifact.binary) {
@@ -149,6 +151,7 @@ async function documentsCreate(args: Record<string, unknown>, config: ToolPolicy
     sectionCount: sections.length,
     designReport: buildArtifactDesignReport(design, {
       localPath: full,
+      markup: artifact.markup,
       usedAssetIds: usedDocumentAssetIds(format, design.mode),
       designQuality: {
         retryAttempted: design.mode !== "minimal" && design.mode !== "plain",
