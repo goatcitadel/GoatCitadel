@@ -1479,6 +1479,16 @@ function buildBrowserConsoleEvidence(filteredConsole, snapshot, clientSseDiagnos
   };
 }
 
+/** Registered steps prove Classic owners; Cockpit is the default shell, so pin Classic for this visit only. */
+export function setRegisteredStepShell(params, cockpit) {
+  if (cockpit) {
+    params.set("shell", "cockpit");
+    return;
+  }
+  params.set("shell", "classic");
+  params.set("shellScope", "visit");
+}
+
 async function executeBrowserActionStep(input) {
   const startedAt = new Date().toISOString();
   const operatorActions = [];
@@ -1487,7 +1497,7 @@ async function executeBrowserActionStep(input) {
     if (!route) throw new Error(`release route ${input.registeredStep.routeSlug} is not registered`);
     const params = new URLSearchParams({ theme: "dark" });
     if (route.slug === "chat") params.set("sessionId", input.sessionId);
-    if (input.cockpit) params.set("shell", "cockpit");
+    setRegisteredStepShell(params, input.cockpit);
     const routeHref = `${route.href}${route.href.includes("?") ? "&" : "?"}${params.toString()}`;
     await input.page.goto(input.deps.buildVerificationUiUrl(input.stack.uiUrl, routeHref), {
       waitUntil: "domcontentloaded",
@@ -1770,7 +1780,7 @@ async function executeOperation(page, operation, state) {
       const params = new URLSearchParams({ theme: "dark", sessionId: fixtureSessionId });
       if (state.route.slug === "ops-approvals" && operation.sessionKey === "opsApproval")
         params.set("approvalId", requireText(state.fixture.approvals?.ops, "Ops approval ID"));
-      if (state.cockpit) params.set("shell", "cockpit");
+      setRegisteredStepShell(params, state.cockpit);
       const routeHref = `${state.route.href}${state.route.href.includes("?") ? "&" : "?"}${params.toString()}`;
       await page.goto(state.deps.buildVerificationUiUrl(state.uiUrl, routeHref), { waitUntil: "domcontentloaded" });
       if (state.cockpit) await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: ACTION_TIMEOUT_MS });
@@ -1784,7 +1794,8 @@ async function executeOperation(page, operation, state) {
         throw new Error("pending approval selection requires an exact baseline index");
       const approvalId = requireText(Object.keys(state.approvalDecisionBaseline ?? {})[operation.index], "pending approval identity",
       );
-      const params = new URLSearchParams({ theme: "dark", approvalId });
+      // The pending-approval inspector is a Classic owner.
+      const params = new URLSearchParams({ theme: "dark", approvalId, shell: "classic", shellScope: "visit" });
       await page.goto(state.deps.buildVerificationUiUrl(state.uiUrl, `/ops/approvals?${params.toString()}`), {
         waitUntil: "domcontentloaded",
       });
