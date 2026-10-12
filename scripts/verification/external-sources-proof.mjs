@@ -422,9 +422,11 @@ for (const [index, check] of checks.entries()) {
     // Connection-reset signatures get ONE fresh-cluster re-attempt: on this
     // host a hermetic postmaster can sporadically lose backends to external
     // interference (AV-style file scanning), which is environmental, not a
-    // proof failure. Genuine assertion failures never match and never retry.
+    // proof failure. A cluster that passed readiness and then refuses the
+    // test's connection (ECONNREFUSED, seen under heavy host load) is the same
+    // environmental class. Genuine assertion failures never match and never retry.
     const connectionResetPattern =
-      /ECONNRESET|Connection terminated|server closed the connection|terminated unexpectedly/iu;
+      /ECONNRESET|ECONNREFUSED|Connection terminated|server closed the connection|terminated unexpectedly/iu;
     const maxAttempts = 2;
     let attempt = 0;
     let outcome;
@@ -462,7 +464,7 @@ for (const [index, check] of checks.entries()) {
       if (outcome.status === "passed" || attempt >= maxAttempts) break;
       if (!connectionResetPattern.test(outcome.combined)) break;
       process.stdout.write(
-        "  connection-reset signature detected (environmental interference); retrying once on a fresh cluster...\n",
+        "  connection-reset or refused signature detected (environmental interference); retrying once on a fresh cluster...\n",
       );
     }
     const settled = checkResults.get(check.id);
