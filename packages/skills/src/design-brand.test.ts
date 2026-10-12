@@ -58,6 +58,21 @@ describe("parseDesignBrandBlock", () => {
     expect(parsed).toEqual({ name: "n".repeat(80) });
   });
 
+  it("parses the repository's own DESIGN.md brand block", async () => {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const designDoc = await fs.readFile(path.join(repoRoot, "DESIGN.md"), "utf8");
+
+    expect(parseDesignBrandBlock(designDoc)).toEqual({
+      name: "GoatCitadel",
+      colors: ["#006f85", "#5ce9ff", "#142536", "#f0f8ff", "#0e1a27", "#cfe0ee"],
+      fonts: ["Geist Variable", "Hanken Grotesk Variable"],
+      logoPath: "apps/mission-control-next/public/brand/source/goatcitadel-mark.svg",
+    });
+  });
+
   it("ships an example that parses", () => {
     expect(parseDesignBrandBlock(DESIGN_BRAND_BLOCK_EXAMPLE)).toMatchObject({
       name: expect.any(String),
