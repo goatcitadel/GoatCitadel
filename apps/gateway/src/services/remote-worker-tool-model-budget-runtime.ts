@@ -42,13 +42,19 @@ export class RemoteWorkerToolModelBudgetRuntime {
     // Recovery may settle completed usage even when no further request is made.
     await storage.remoteWorkerBudgets.reconcileToolAttempts(key);
     let active = true;
+    // js/trivial-conditional: keep this guard in a closure. `finally` clears
+    // `active` while a detached attempt is suspended at an await below, so each
+    // re-check is load-bearing; inline `!active` reads look constant to CodeQL.
+    const assertActive = (): void => {
+      if (!active) throw new Error("Worker tool execution has ended.");
+    };
     try {
       return await llm.runWithDispatchAuthority(
         lineage,
         async (attempt) => {
-          if (!active) throw new Error("Worker tool execution has ended.");
+          assertActive();
           await input.checkExecution();
-          if (!active) throw new Error("Worker tool execution has ended.");
+          assertActive();
           await storage.remoteWorkerBudgets.authorizeToolAttempt({
             ...key,
             protectedAuthority,
@@ -61,7 +67,7 @@ export class RemoteWorkerToolModelBudgetRuntime {
           });
           // A detached request may have awaited either owner while the tool
           // returned. A completed hold is not permission to dispatch afterward.
-          if (!active) throw new Error("Worker tool execution has ended.");
+          assertActive();
         },
         operation,
       );
