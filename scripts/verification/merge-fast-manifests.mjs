@@ -38,6 +38,7 @@ import {
   tallyScenarioCounts,
   writeJson,
   writeText,
+  verificationErrorDiagnostic,
 } from "./lib/shared.mjs";
 import { acquireWorktreeOutputLock } from "../lib/worktree-output-lock.mjs";
 
@@ -53,6 +54,45 @@ async function main() {
   });
   try {
     await mergeFastManifests();
+  } catch (error) {
+    const diagnosticError = verificationErrorDiagnostic(error);
+    const { options } = parseCliArgs(process.argv.slice(2));
+    const runId = createRunId("fast-merge-failure");
+    const artifactRoot = path.resolve(repoRoot, String(options.out ?? path.join(artifactsRoot, runId)));
+    const artifact = "diagnostics/manifest-merge-failure.json";
+    const at = new Date().toISOString();
+    const scenario = {
+      id: "fast.manifest-merge",
+      lane: "fast",
+      title: "Fast manifest aggregation",
+      subsystem: "verification",
+      status: "failed",
+      startedAt: at,
+      finishedAt: at,
+      durationMs: 0,
+      error: diagnosticError,
+      notes: [],
+      metrics: {},
+      artifacts: { diagnostics: [artifact] },
+    };
+    const manifest = createVerificationRunManifest({
+      runId,
+      lane: "fast",
+      repoRoot,
+      artifactRoot,
+      startedAt: at,
+      finishedAt: at,
+      durationMs: 0,
+      status: "failed",
+      metadata: { aggregationFailure: true },
+      counts: { failed: 1 },
+      scenarios: [scenario],
+    });
+    await writeJson(path.join(artifactRoot, artifact), { scenarioId: scenario.id, error: diagnosticError });
+    await writeJson(path.join(artifactRoot, "manifest.json"), manifest);
+    await writeText(path.join(artifactRoot, "summary.md"), buildSummaryMarkdown(manifest));
+    await writeText(path.join(artifactRoot, "junit.xml"), buildJunitXml(manifest));
+    throw error;
   } finally {
     await outputLockLease.release();
   }
@@ -81,6 +121,7 @@ async function mergeFastManifests() {
     parts.push({ manifestPath, manifest });
   }
 
+  assertSameCandidate(parts);
   const scenarios = parts.flatMap((part) => part.manifest.scenarios ?? []);
   assertNoDuplicateScenarios(scenarios);
   assertLaneIsComplete(scenarios, maybeParseBool(options["allow-partial"], false));
@@ -194,6 +235,28 @@ async function exists(filePath) {
     .catch(() => false);
 }
 
+function assertSameCandidate(parts) {
+  if (!parts.some((part) => part.manifest.metadata?.candidate)) return;
+  const first = parts[0]?.manifest.metadata?.candidate;
+  if (!first || !/^[a-f0-9]{40}$/u.test(first.revision ?? "") || !/^[a-f0-9]{64}$/u.test(first.sourceDigest ?? ""))
+    throw new Error("Fast shards must bind the same candidate revision and implementation digest.");
+  for (const part of parts) {
+    const metadata = part.manifest.metadata,
+      current = metadata?.candidate,
+      final = metadata?.candidateFinal;
+    if (
+      metadata?.candidateUnchanged !== true ||
+      current?.revision !== first.revision ||
+      current?.sourceDigest !== first.sourceDigest ||
+      final?.revision !== first.revision ||
+      final?.sourceDigest !== first.sourceDigest
+    )
+      throw new Error(
+        "Fast shards must bind the same candidate revision and implementation digest throughout every run.",
+      );
+  }
+}
+
 function assertNoDuplicateScenarios(scenarios) {
   const seen = new Set();
   const duplicates = new Set();
@@ -250,6 +313,6 @@ function latest(values) {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
+  console.error(verificationErrorDiagnostic(error));
   process.exitCode = 1;
 });

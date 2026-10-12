@@ -105,7 +105,12 @@ describe("fast lane manifest merge", () => {
     withTempDir((tempDir) => {
       const outDir = path.join(tempDir, "merged");
       // parts/<artifact-name>/artifacts/verification/<runId>/manifest.json
-      writePart(tempDir, "parts/verification-fast-part-checks/artifacts/verification/run-1", ["fast.docs"], "2026-07-25T10:00:00.000Z");
+      writePart(
+        tempDir,
+        "parts/verification-fast-part-checks/artifacts/verification/run-1",
+        ["fast.docs"],
+        "2026-07-25T10:00:00.000Z",
+      );
       writePart(
         tempDir,
         "parts/verification-fast-part-tests-gateway/artifacts/verification/run-2",
@@ -162,6 +167,40 @@ describe("fast lane manifest merge", () => {
   });
 });
 
+describe("candidate and failure evidence integrity", () => {
+  it("rejects shards from different implementation digests", () => {
+    withTempDir((tempDir) => {
+      const candidate = (digest) => ({ revision: "a".repeat(40), sourceDigest: digest.repeat(64) });
+      writePart(tempDir, "part-a", ["fast.docs"], "2026-07-25T10:00:00.000Z", {
+        metadata: { candidate: candidate("b"), candidateFinal: candidate("b"), candidateUnchanged: true },
+      });
+      writePart(
+        tempDir,
+        "part-b",
+        allCommandIds.filter((id) => id !== "fast.docs"),
+        "2026-07-25T10:00:30.000Z",
+        { metadata: { candidate: candidate("c"), candidateFinal: candidate("c"), candidateUnchanged: true } },
+      );
+      const result = runMerge([tempDir, "--out=" + path.join(tempDir, "merged")]);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /same candidate/i);
+    });
+  });
+  it("retains an originating bounded diagnostic when required shards are missing", () => {
+    withTempDir((tempDir) => {
+      const out = path.join(tempDir, "merged");
+      writePart(tempDir, "part-a", ["fast.docs"], "2026-07-25T10:00:00.000Z");
+      const result = runMerge([tempDir, "--out=" + out]);
+      assert.notEqual(result.status, 0);
+      const manifest = JSON.parse(fs.readFileSync(path.join(out, "manifest.json"), "utf8"));
+      assert.equal(manifest.status, "failed");
+      assert.match(manifest.scenarios[0].error, /missing/);
+      assert.equal(manifest.scenarios[0].artifacts.diagnostics.length, 1);
+      assert.ok(fs.existsSync(path.join(out, manifest.scenarios[0].artifacts.diagnostics[0])));
+    });
+  });
+});
+
 function runMerge(args) {
   return spawnSync(process.execPath, [scriptPath, ...args], { encoding: "utf8" });
 }
@@ -207,7 +246,7 @@ function writePart(tempDir, name, commandIds, startedAt, overrides = {}) {
       status: overrides.status === "failed" ? "failed" : "passed",
       repoRoot: tempDir,
       artifactRoot: partDir,
-      metadata: { profile: "local" },
+      metadata: { profile: "local", ...overrides.metadata },
       counts: {
         passed: overrides.status === "failed" ? 0 : scenarios.length,
         failed: overrides.status === "failed" ? scenarios.length : 0,
