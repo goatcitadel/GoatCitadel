@@ -27,7 +27,10 @@ test("on Windows the hygiene and native suites partition every script test exact
   const hygiene = selectScriptTestFiles(all, "hygiene", "win32");
   const native = selectScriptTestFiles(all, "native-windows", "win32");
   assert.deepEqual(native, [...NATIVE_WINDOWS_SCRIPT_TEST_FILES].sort());
-  assert.equal(hygiene.some((file) => native.includes(file)), false);
+  assert.equal(
+    hygiene.some((file) => native.includes(file)),
+    false,
+  );
   assert.deepEqual([...hygiene, ...native].sort(), all);
   assert.ok(hygiene.includes("scripts/script-test-partition.test.mjs"), "this guard must run in hygiene");
 });
@@ -52,8 +55,10 @@ test("script test discovery skips node_modules and returns repo-relative forward
   }
 });
 
-test("runner arguments default to hygiene at concurrency 2 and reject unknown flags", () => {
-  assert.deepEqual(parseScriptTestArgs([]), { suite: "hygiene", concurrency: 2 });
+test("runner arguments bound Windows lifecycle contention and reject unknown flags", () => {
+  assert.deepEqual(parseScriptTestArgs([], "linux"), { suite: "hygiene", concurrency: 2 });
+  assert.deepEqual(parseScriptTestArgs([], "win32"), { suite: "hygiene", concurrency: 1 });
+  assert.deepEqual(parseScriptTestArgs(["--test-concurrency=4"], "win32"), { suite: "hygiene", concurrency: 4 });
   assert.deepEqual(parseScriptTestArgs(["--suite=native-windows", "--test-concurrency=1"]), {
     suite: "native-windows",
     concurrency: 1,

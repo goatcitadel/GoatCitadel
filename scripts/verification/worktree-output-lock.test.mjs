@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 
 import {
@@ -13,12 +13,6 @@ import {
   acquireWorktreeOutputLock,
   worktreeOutputLockPath,
 } from "../lib/worktree-output-lock.mjs";
-import {
-  buildExtensionsSdkDist,
-  publishStagedDirectory,
-  recoverInterruptedPublication,
-} from "../../packages/extensions-sdk/scripts/build-dist.mjs";
-import { collectVerificationSecretEnvKeys } from "./lib/scenarios/usability-coverage.mjs";
 
 const currentFile = fileURLToPath(import.meta.url);
 const WORKER_FLAG = "--fr362-lock-worker";
@@ -29,6 +23,12 @@ if (process.argv.includes(WORKER_FLAG)) {
     process.exitCode = 2;
   });
 } else {
+  // The child exercises only the output lock. Do not include compiler/browser
+  // module initialization in its unchanged five-second lock-readiness budget.
+  const { buildExtensionsSdkDist, publishStagedDirectory, recoverInterruptedPublication } =
+    await import("../../packages/extensions-sdk/scripts/build-dist.mjs");
+  const { collectVerificationSecretEnvKeys } = await import("./lib/scenarios/usability-coverage.mjs");
+
   test("official raw output entrypoints use the shared boundary and staged SDK owner", async () => {
     const repoRoot = path.resolve(path.dirname(currentFile), "..", "..");
     const rootPackage = JSON.parse(await fs.readFile(path.join(repoRoot, "package.json"), "utf8"));
@@ -67,6 +67,26 @@ if (process.argv.includes(WORKER_FLAG)) {
       assert.ok(!scrubbed.includes(WORKTREE_OUTPUT_LOCK_ROOT_ENV));
     } finally {
       await fs.rm(configRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("output-lock worker does not require compiler or browser verification modules", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "gc-fr362-thin-worker-"));
+    const loader = path.join(root, "without-heavy-verifiers.mjs");
+    try {
+      await fs.writeFile(loader, [
+        "export async function resolve(specifier, context, nextResolve) {",
+        "  const result = await nextResolve(specifier, context);",
+        "  if (result.url.endsWith('/packages/extensions-sdk/scripts/build-dist.mjs') || result.url.endsWith('/verification/lib/scenarios/usability-coverage.mjs'))",
+        "    throw new Error('Compiler/browser verification modules are unavailable in the lock worker.');",
+        "  return result;",
+        "}",
+      ].join("\n"), "utf8");
+      const result = await collectChild(spawnWorker(["once", root, "verification:thin-worker"], ["--experimental-loader", pathToFileURL(loader).href]));
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.stdout, "acquired\n");
+    } finally {
+      await fs.rm(root, {recursive:true,force:true});
     }
   });
 
@@ -260,8 +280,8 @@ async function runWorker() {
   throw new Error(`unknown worker mode: ${mode}`);
 }
 
-function spawnWorker(args) {
-  return spawn(process.execPath, [currentFile, WORKER_FLAG, ...args], {
+function spawnWorker(args, nodeOptions = []) {
+  return spawn(process.execPath, [...nodeOptions, currentFile, WORKER_FLAG, ...args], {
     cwd: path.dirname(currentFile),
     env: withoutInheritedLock(process.env),
     stdio: ["ignore", "pipe", "pipe"],

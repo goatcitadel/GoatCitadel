@@ -6,7 +6,6 @@ import { randomUUID } from "node:crypto";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { verificationSourceDigest } from "./source-identity.mjs";
-import { redactSecretText } from "../../../packages/contracts/dist/secret-redaction.js";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import {
@@ -214,12 +213,30 @@ async function flushManifestWrites(context) {
   }
 }
 
-export function verificationErrorDiagnostic(error) {
+export async function verificationErrorDiagnostic(error) {
+  // Verification entrypoints must load before workspace build output exists.
+  // Suppress the diagnostic if the canonical parser cannot load; never emit raw errors.
+  let redactSecretText;
+  try {
+    ({ redactSecretText } = await import("../../../packages/contracts/dist/secret-redaction.js"));
+  } catch {
+    return "Verification diagnostic suppressed: canonical redactor is unavailable before contracts build.";
+  }
   const rawError = error instanceof Error ? (error.stack ?? error.message) : String(error);
   const secretEnv = Object.fromEntries(
-    Object.entries(process.env).filter(([name]) => /(?:API_KEY|ACCESS_TOKEN|AUTH_TOKEN|SECRET|PASSWORD)/iu.test(name)),
+    Object.entries(process.env).filter(([name]) =>
+      /(?:TOKEN|(?:^|_)KEY(?:_|$)|SECRET|PASSWORD|CREDENTIAL)/iu.test(name),
+    ),
   );
-  const redacted = redactSecretText(rawError, { env: secretEnv }).value;
+  // These values come from explicitly classified credential variables, so exact
+  // matching also covers short passwords and secrets containing whitespace.
+  // Keep the generic parser unchanged for ordinary, unclassified text.
+  let protectedError = rawError;
+  const knownSecrets = [...new Set(Object.values(secretEnv).filter((value) => value))].sort(
+    (a, b) => b.length - a.length,
+  );
+  for (const secret of knownSecrets) protectedError = protectedError.split(secret).join("[REDACTED]");
+  const redacted = redactSecretText(protectedError, { env: secretEnv }).value;
   return redacted.length > 8192 ? redacted.slice(0, 8150) + "\n[Diagnostic truncated]" : redacted;
 }
 
@@ -254,7 +271,7 @@ export async function runScenario(context, definition, fn) {
       },
     });
   } catch (error) {
-    const diagnosticError = verificationErrorDiagnostic(error);
+    const diagnosticError = await verificationErrorDiagnostic(error);
     const diagnostic = "diagnostics/" + sanitizeFilePart(definition.id) + "-" + correlationId + "-failure.json";
     await writeJson(path.join(context.artifactRoot, diagnostic), {
       scenarioId: definition.id,

@@ -106,7 +106,7 @@ test("verification entrypoints load before contracts build output exists", async
         pathToFileURL(loader).href,
         "--input-type=module",
         "-e",
-        `await import(${JSON.stringify(entry)}); process.stdout.write('VERIFICATION_BOOTSTRAP_OK');`,
+        `await import(${JSON.stringify(entry)}); const {verificationErrorDiagnostic}=await import(${JSON.stringify(new URL('../shared.mjs',import.meta.url).href)}); const diagnostic=await verificationErrorDiagnostic(new Error('apiKey=bootstrap-fixture-secret')); if(diagnostic.includes('bootstrap-fixture-secret') || !diagnostic.includes('diagnostic suppressed')) throw new Error('Unsafe early diagnostic'); process.stdout.write('VERIFICATION_BOOTSTRAP_OK');`,
       ],
       { encoding: "utf8", timeout: 30_000 },
     );

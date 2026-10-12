@@ -7,9 +7,11 @@ import { listScriptTestFiles, selectScriptTestFiles } from "./script-test-partit
 const scriptPath = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(scriptPath), "..");
 
-export function parseScriptTestArgs(argv) {
+export function parseScriptTestArgs(argv, platform = process.platform) {
   let suite = "hygiene";
-  let concurrency = 2;
+  // Windows identity/launch fixtures must not contend with build-heavy script files.
+  // Keep exact lifecycle assertions and deadlines; callers can explicitly override.
+  let concurrency = platform === "win32" ? 1 : 2;
   for (const arg of argv) {
     const suiteMatch = /^--suite=(.+)$/.exec(arg);
     const concurrencyMatch = /^--test-concurrency=([1-9]\d*)$/.exec(arg);

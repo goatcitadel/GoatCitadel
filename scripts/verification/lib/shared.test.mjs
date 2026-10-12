@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import {
+  verificationErrorDiagnostic,
   runScenario,
   readVerificationCandidateIdentity,
   buildFastLanePerfPayload,
@@ -448,5 +449,41 @@ test("a passed status override cannot conceal changed candidate source", async (
     assert.equal(manifest.status, "failed");
   } finally {
     await fs.rm(context.artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test("originating diagnostics redact designated credential-reference env values", async () => {
+  const keys = ["TRELLO_VERIFICATION_KEY", "MESH_TEST_CREDENTIAL"];
+  const previous = keys.map((key) => process.env[key]);
+  const values = keys.map((_, index) => "fixture-value-" + index);
+  try {
+    keys.forEach((key, index) => {
+      process.env[key] = values[index];
+    });
+    const diagnostic = await verificationErrorDiagnostic(new Error("Owner failed with " + values.join(" and ")));
+    values.forEach((value) => assert.ok(!diagnostic.includes(value)));
+    assert.match(diagnostic, /Owner failed/);
+  } finally {
+    keys.forEach((key, index) => {
+      if (previous[index] === undefined) delete process.env[key];
+      else process.env[key] = previous[index];
+    });
+  }
+});
+
+test("originating diagnostics redact exact short and spaced designated credentials", async () => {
+  const key = "GOATCITADEL_VERIFY_BASIC_PASSWORD";
+  const previous = process.env[key];
+  try {
+    for (const value of ["tiny", "fixture with spaces"]) {
+      process.env[key] = value;
+      const diagnostic = await verificationErrorDiagnostic(new Error("Owner rejected " + value + " during recovery"));
+      assert.ok(!diagnostic.includes(value));
+      assert.match(diagnostic, /Owner rejected/);
+      assert.match(diagnostic, /during recovery/);
+    }
+  } finally {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
   }
 });

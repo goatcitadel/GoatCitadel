@@ -55,7 +55,7 @@ async function main() {
   try {
     await mergeFastManifests();
   } catch (error) {
-    const diagnosticError = verificationErrorDiagnostic(error);
+    const diagnosticError = await verificationErrorDiagnostic(error);
     const { options } = parseCliArgs(process.argv.slice(2));
     const runId = createRunId("fast-merge-failure");
     const artifactRoot = path.resolve(repoRoot, String(options.out ?? path.join(artifactsRoot, runId)));
@@ -312,7 +312,7 @@ function latest(values) {
   return new Date(Math.max(...usable)).toISOString();
 }
 
-main().catch((error) => {
-  console.error(verificationErrorDiagnostic(error));
+main().catch(async (error) => {
+  console.error(await verificationErrorDiagnostic(error));
   process.exitCode = 1;
 });
