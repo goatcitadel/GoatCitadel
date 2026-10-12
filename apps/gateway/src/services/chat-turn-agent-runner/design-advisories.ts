@@ -1,5 +1,5 @@
 import type { ChatTurnCapabilityProfileRecord, DesignAdvisory } from "@goatcitadel/contracts";
-import { detectDesignAdvisories } from "@goatcitadel/skills";
+import { DESIGN_ADVISORY_MAX_BYTES, detectDesignAdvisories } from "@goatcitadel/skills";
 
 const DESIGN_SKILL_NAMES = new Set(["impeccable", "design-intelligence"]);
 const UI_FILE_EXTENSION = /\.(?:tsx|jsx|css|html|vue|svelte)$/iu;
@@ -31,5 +31,9 @@ export function buildToolResultDesignAdvisories(input: {
   if (typeof text !== "string" || text.length === 0) return undefined;
   // A patch's lines count within the replacement text, not the file; the scope says which.
   const advisories = detectDesignAdvisories(text).map((advisory) => ({ ...advisory, scope }));
+  // The detector capped its own JSON; the scope field adds bytes, so re-apply the cap to what ships.
+  while (advisories.length > 0 && Buffer.byteLength(JSON.stringify(advisories), "utf8") > DESIGN_ADVISORY_MAX_BYTES) {
+    advisories.pop();
+  }
   return advisories.length > 0 ? advisories : undefined;
 }

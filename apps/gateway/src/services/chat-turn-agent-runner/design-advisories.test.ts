@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatTurnCapabilityProfileRecord } from "@goatcitadel/contracts";
+import { DESIGN_ADVISORY_MAX_BYTES } from "@goatcitadel/skills";
 import { buildToolResultDesignAdvisories, hasDesignSkillReceipt } from "./design-advisories.js";
 
 function profileWith(skillIds: string[]): ChatTurnCapabilityProfileRecord {
@@ -110,6 +111,34 @@ describe("buildToolResultDesignAdvisories", () => {
         }),
       ).toHaveLength(1);
     }
+  });
+
+  it("keeps the serialized advisories within the byte cap after the scope is added", () => {
+    const manyRules = [
+      ".a { background-clip: text; }",
+      ".b { border-left: 4px solid red; }",
+      ".c { box-shadow: 4px 4px 0 #000; }",
+      ".d { backdrop-filter: blur(8px); }",
+      '<p class="kicker">Section</p>',
+      ".e { transition: all 300ms cubic-bezier(0.68, -0.55, 0.27, 1.55); }",
+      "<span>01 / 02</span>",
+      ".f { color: #6366f1; }",
+      ".g { background: linear-gradient(90deg, purple, cyan); }",
+      "<p>Lorem ipsum dolor</p>",
+      "<p>Feature one</p>",
+      "<p>placeholder text</p>",
+      "<p>99.99% uptime</p>",
+    ].join("\n");
+
+    const advisories = buildToolResultDesignAdvisories({
+      capabilityProfile: profileWith(["bundled:impeccable"]),
+      toolName: "fs.write",
+      args: { path: "src/page.html", content: manyRules },
+    });
+
+    expect(advisories?.length).toBeGreaterThanOrEqual(5);
+    expect(advisories?.every((advisory) => advisory.scope === "file")).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(advisories), "utf8")).toBeLessThanOrEqual(DESIGN_ADVISORY_MAX_BYTES);
   });
 
   it("never echoes the written content", () => {
