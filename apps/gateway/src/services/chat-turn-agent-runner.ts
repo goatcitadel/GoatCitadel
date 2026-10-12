@@ -174,6 +174,7 @@ import {
   extractProviderFailureRecord,
   extractSkillSecurityFailureRecord,
 } from "./chat-turn-agent-runner/failure-records.js";
+import { buildToolResultDesignAdvisories } from "./chat-turn-agent-runner/design-advisories.js";
 import {
   analyzePresentationContentQuality,
   buildWorkspaceFileDownloadHref,
@@ -6900,6 +6901,24 @@ export class ChatTurnAgentRunner {
           }),
           finishedAt: new Date().toISOString(),
         });
+        res.record = updated;
+        if (res.chunk?.type === "tool_result") {
+          res.chunk.toolRun = updated;
+        }
+      }
+    }
+    if (res.record.status === "executed" && res.record.result) {
+      // Informational design advisories for governed UI file writes: computed from the text the tool
+      // wrote (never re-read from disk), only when the frozen profile admitted a design skill.
+      const designAdvisories = buildToolResultDesignAdvisories({
+        capabilityProfile: input.input.capabilityProfile,
+        toolName: res.record.toolName,
+        args: res.record.args,
+      });
+      if (designAdvisories) {
+        const result = { ...res.record.result, designAdvisories };
+        assertNoToolOutputInjection(result);
+        const updated = await this.patchToolRun(input.input, res.record.toolRunId, { result });
         res.record = updated;
         if (res.chunk?.type === "tool_result") {
           res.chunk.toolRun = updated;
