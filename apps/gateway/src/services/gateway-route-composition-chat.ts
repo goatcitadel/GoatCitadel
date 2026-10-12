@@ -7,7 +7,13 @@ import * as chatAttachmentService from "./chat-attachment-service.js";
 import * as chatCommandService from "./chat-command-service.js";
 import * as chatGeneratedArtifactService from "./chat-generated-artifact-service.js";
 import * as chatHistoryService from "./chat-history-service.js";
+import * as htmlArtifactCritiqueService from "./html-artifact-critique-service.js";
 import * as htmlArtifactRenderService from "./html-artifact-render-service.js";
+import { logger } from "@goatcitadel/gateway-core";
+
+/** Critique turns dispatched from the artifact route, tracked until each settles. */
+const artifactCritiqueTasks = new Set<Promise<unknown>>();
+const artifactCritiqueLog = logger.child("html-artifact-critique");
 import * as chatMessageRouteRuntime from "./chat-message-route-runtime.js";
 import * as chatSessionService from "./chat-session-service.js";
 import { assertCallerPolicyScopeBound } from "./chat-policy-scope-service.js";
@@ -160,11 +166,40 @@ export function composeChatRouteDependencies(
       chatGeneratedArtifactService.getChatGeneratedArtifact(ChatGeneratedArtifactDependencies, artifactId, options),
     uploadChatAttachment: (input) => chatAttachmentService.uploadChatAttachment(chatAttachmentHost, input),
   };
+  const htmlArtifactCritiqueDependencies: htmlArtifactCritiqueService.HtmlArtifactCritiqueDependencies = {
+    getChatGeneratedArtifact: htmlArtifactRenderDependencies.getChatGeneratedArtifact,
+    renderChatGeneratedArtifact: (artifactId, workspaceId) =>
+      htmlArtifactRenderService.renderChatGeneratedArtifact(htmlArtifactRenderDependencies, artifactId, workspaceId),
+    routePreflight: (sessionId, input) => gateway.chatTurnRuntime.routePreflight(sessionId, input),
+    providerSupportsVision: (providerId) =>
+      gateway.llmService
+        .listProviders()
+        .some((provider) => provider.providerId === providerId && provider.capabilities?.vision === true),
+    sendChatTurn: async (sessionId, input, turnIdentity, authenticatedOperator) =>
+      await gateway.chatTurnRuntime.agentSendChatMessage(
+        sessionId,
+        await gateway.resolveChatRunVariableInput(sessionId, input),
+        {
+          turnIdentity,
+          ...(authenticatedOperator ? { authenticatedOperator: authenticatedOperator as never } : {}),
+        },
+      ),
+    backgroundTasks: artifactCritiqueTasks,
+    log: artifactCritiqueLog,
+  };
   const chatArtifactRenders: GatewayRouteServiceDependencies["chatArtifactRenders"] = {
     renderChatGeneratedArtifact: (artifactId, workspaceId) =>
       htmlArtifactRenderService.renderChatGeneratedArtifact(htmlArtifactRenderDependencies, artifactId, workspaceId),
     listChatArtifactRenders: (artifactId, workspaceId) =>
       htmlArtifactRenderService.listChatArtifactRenders(htmlArtifactRenderDependencies, artifactId, workspaceId),
+    critiqueChatGeneratedArtifact: (artifactId, workspaceId, actor, authenticatedOperator) =>
+      htmlArtifactCritiqueService.critiqueChatGeneratedArtifact(
+        htmlArtifactCritiqueDependencies,
+        artifactId,
+        workspaceId,
+        actor,
+        authenticatedOperator,
+      ),
   };
   const chatSessions: GatewayRouteServiceDependencies["chatSessions"] = {
     archiveChatSession: (sessionId, expectedRevision) =>

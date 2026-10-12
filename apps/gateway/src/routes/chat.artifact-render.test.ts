@@ -75,6 +75,44 @@ describe("chat artifact render routes", () => {
     expect(service.listChatArtifactRenders).toHaveBeenCalledWith("artifact-1", "default");
   });
 
+  it("accepts a critique request and returns the dispatched turn", async () => {
+    const critique = {
+      sessionId: "sess-1",
+      turnId: "turn-critique",
+      visuallyInspected: true,
+      renders: renderResponse.renders,
+    };
+    const service = {
+      renderChatGeneratedArtifact: vi.fn(),
+      listChatArtifactRenders: vi.fn(),
+      critiqueChatGeneratedArtifact: vi.fn(async () => critique),
+    };
+    app = buildApp(service);
+    app.decorateRequest("authActorId", "operator-1");
+    app.decorateRequest("authActorSource", "token");
+
+    const missingWorkspace = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/generated-artifacts/artifact-1/critique",
+      payload: {},
+    });
+    expect(missingWorkspace.statusCode).toBe(400);
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/generated-artifacts/artifact-1/critique",
+      payload: { workspaceId: "default" },
+    });
+    expect(accepted.statusCode).toBe(202);
+    expect(accepted.json()).toEqual(critique);
+    expect(service.critiqueChatGeneratedArtifact).toHaveBeenCalledWith(
+      "artifact-1",
+      "default",
+      { operatorId: "operator-1", authActorId: "operator-1", authActorSource: "token" },
+      expect.anything(),
+    );
+  });
+
   it("maps a non-html artifact to a 409 conflict", async () => {
     app = buildApp({
       renderChatGeneratedArtifact: vi.fn(async () => {

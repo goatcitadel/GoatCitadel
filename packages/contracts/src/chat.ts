@@ -644,6 +644,15 @@ export interface ChatArtifactRenderResponse {
   renders: ChatArtifactRenderRecord[];
 }
 
+/** A critique turn dispatched into the artifact's session; the report arrives as that turn's reply. */
+export interface ChatArtifactCritiqueResponse {
+  sessionId: string;
+  turnId: string;
+  /** False when the effective provider cannot inspect images, so the critique ran text-only. */
+  visuallyInspected: boolean;
+  renders: ChatArtifactRenderRecord[];
+}
+
 /**
  * Server-owned provenance for persisted chat content. This value is resolved at
  * trusted ingress boundaries and must never be accepted from an untrusted event

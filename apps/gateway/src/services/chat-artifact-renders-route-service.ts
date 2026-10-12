@@ -1,6 +1,10 @@
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 
-export const chatArtifactRendersRouteMethods = ["renderChatGeneratedArtifact", "listChatArtifactRenders"] as const;
+export const chatArtifactRendersRouteMethods = [
+  "renderChatGeneratedArtifact",
+  "listChatArtifactRenders",
+  "critiqueChatGeneratedArtifact",
+] as const;
 
 export type ChatArtifactRendersRouteMethod = (typeof chatArtifactRendersRouteMethods)[number];
 export type ChatArtifactRendersRoutePort = RoutePort<ChatArtifactRendersRouteMethod>;

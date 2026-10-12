@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { sendRouteError } from "./_error-handler.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
+import { resolveAuthenticatedOperatorAdmissionContext } from "./session-control-request-context.js";
 
 const RATE_LIMIT_MUTATION_MAX = 180;
 
@@ -40,6 +41,40 @@ export function registerChatArtifactRenderRoutes(fastify: FastifyInstance): void
         );
         await markMutationCommitted(request);
         return reply.code(201).send(rendered);
+      } catch (error) {
+        await markMutationCommittedFromError(request, error);
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
+
+  fastify.post(
+    "/api/v1/chat/generated-artifacts/:artifactId/critique",
+    { config: { rateLimit: { max: RATE_LIMIT_MUTATION_MAX } } },
+    async (request, reply) => {
+      const params = artifactParamsSchema.safeParse(request.params);
+      const body = workspaceBodySchema.safeParse(request.body ?? {});
+      if (!params.success || !body.success) {
+        return reply.code(400).send({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
+          },
+        });
+      }
+      try {
+        const accepted = await fastify.services.chatArtifactRenders.critiqueChatGeneratedArtifact(
+          params.data.artifactId,
+          body.data.workspaceId,
+          {
+            operatorId: request.authActorId,
+            authActorId: request.authActorId,
+            authActorSource: request.authActorSource,
+          },
+          resolveAuthenticatedOperatorAdmissionContext(request),
+        );
+        await markMutationCommitted(request);
+        return reply.code(202).send(accepted);
       } catch (error) {
         await markMutationCommittedFromError(request, error);
         return sendRouteError(reply, error, request.log);

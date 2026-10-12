@@ -138,6 +138,11 @@ describe("enumerateSkillRoutes", () => {
       "reference/craft-floor.md",
       "reference/polish.md",
     ]);
+    // critique evaluates and never edits UI, so it loads no craft floor.
+    expect(routes.find((route) => route.routeId === "command:critique")?.modules.map((m) => m.relativePath)).toEqual([
+      "SKILL.md",
+      "reference/critique.md",
+    ]);
     expect(routes.every((route) => route.budgetBytes === IMPECCABLE_BUDGET_BYTES)).toBe(true);
   });
 

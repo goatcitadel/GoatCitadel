@@ -54,6 +54,7 @@ export const IMPECCABLE_COMMANDS: readonly string[] = Object.freeze([
   "init",
   "document",
   "extract",
+  "critique",
   "audit",
   "polish",
   "bolder",
