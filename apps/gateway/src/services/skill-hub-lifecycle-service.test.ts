@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   APPROVAL_EXPIRY_ACTOR_ID,
   canonicalJsonString,
@@ -18,7 +19,11 @@ import {
   type SkillHubSnapshotCreateInput,
 } from "@goatcitadel/storage";
 import { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
-import { SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
+import { NodeSkillHubArtifactFilesystem, SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
+import {
+  NodeSkillHubWindowsSecurity,
+  PowerShellSkillHubWindowsSecurityProtocol,
+} from "./skill-hub-windows-security.js";
 import {
   buildSkillHubLifecycleApprovalInput,
   materializeApprovedSkillHubIntent,
@@ -48,6 +53,40 @@ interface AddSnapshotInput {
 }
 
 const harnesses: Harness[] = [];
+
+// Per-file fixtures. Every harness used to replay the full SQLite migration
+// registry (24-36s per database on a loaded Windows host) and to construct
+// filesystem ports whose PowerShell ACL worker exits after 100ms idle, so each
+// case respawned powershell.exe many times; a stalled process launch blocked the
+// test worker for 12+ minutes. Migrate once and copy the file into each harness
+// root (Storage still runs `migrate` and the schema-shape check against the copy,
+// finding every version applied), and share one real Node filesystem whose
+// Windows ACL/reparse worker stays up for the whole file.
+let migratedDbTemplatePath: string | undefined;
+let windowsSecurityProtocol: PowerShellSkillHubWindowsSecurityProtocol | undefined;
+let sharedFilesystem: NodeSkillHubArtifactFilesystem;
+
+beforeAll(async () => {
+  windowsSecurityProtocol =
+    process.platform === "win32"
+      ? new PowerShellSkillHubWindowsSecurityProtocol({ idleShutdownMs: Number.POSITIVE_INFINITY })
+      : undefined;
+  sharedFilesystem = new NodeSkillHubArtifactFilesystem(
+    windowsSecurityProtocol ? { windowsSecurity: new NodeSkillHubWindowsSecurity(windowsSecurityProtocol) } : {},
+  );
+  const templateDir = await fs.mkdtemp(path.join(os.tmpdir(), "gc-skill-hub-lifecycle-schema-"));
+  migratedDbTemplatePath = path.join(templateDir, "gateway.sqlite");
+  new Storage({
+    dbPath: migratedDbTemplatePath,
+    transcriptsDir: path.join(templateDir, "transcripts"),
+    auditDir: path.join(templateDir, "audit"),
+  }).close();
+}, 120_000); // One full migration replay, inherently slow on a loaded host.
+
+afterAll(async () => {
+  windowsSecurityProtocol?.dispose();
+  if (migratedDbTemplatePath) await fs.rm(path.dirname(migratedDbTemplatePath), { recursive: true, force: true });
+});
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -689,8 +728,10 @@ describe("SkillHubLifecycleService", () => {
 
 async function createHarness(): Promise<Harness> {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "gc-skill-hub-lifecycle-"));
+  const dbPath = path.join(rootDir, "gateway.sqlite");
+  await fs.copyFile(migratedDbTemplatePath!, dbPath, fsConstants.COPYFILE_EXCL);
   const storage = new Storage({
-    dbPath: path.join(rootDir, "gateway.sqlite"),
+    dbPath,
     transcriptsDir: path.join(rootDir, "transcripts"),
     auditDir: path.join(rootDir, "audit"),
   });
@@ -701,7 +742,9 @@ async function createHarness(): Promise<Harness> {
     "---\nname: demo\ndescription: Demo\nmetadata:\n  version: 1.0.0\n  keywords: [demo]\n---\n\nUse the demo skill.\n",
     "utf8",
   );
-  const artifactStore = new SkillHubArtifactStore(path.join(rootDir, "data", "skill-hub", "artifacts"));
+  const artifactStore = new SkillHubArtifactStore(path.join(rootDir, "data", "skill-hub", "artifacts"), {
+    filesystem: sharedFilesystem,
+  });
   const observed = await captureManifest(sourceDir);
   const published = await artifactStore.publishFromDirectory({
     sourceDir,
@@ -744,6 +787,7 @@ function lifecycleFor(
     skillsExtraRoot: "skills/extra",
     artifactStore: harness.artifactStore,
     storage: harness.asyncStorage,
+    filesystem: sharedFilesystem,
     afterRuntimeProjection,
     beforeFilesystemMutation,
   });

@@ -2,6 +2,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   NodeSkillHubWindowsSecurity,
+  PowerShellSkillHubWindowsSecurityProtocol,
   SkillHubWindowsSecurityError,
   type SkillHubWindowsSecurityProtocol,
 } from "./skill-hub-windows-security.js";
@@ -43,5 +44,15 @@ describe("NodeSkillHubWindowsSecurity", () => {
         expect((error as Error).message).not.toContain(target);
       }
     }
+  });
+});
+
+describe("PowerShellSkillHubWindowsSecurityProtocol", () => {
+  it("rejects an invalid idle shutdown and disposes without a running worker", () => {
+    for (const idleShutdownMs of [-1, Number.NaN]) {
+      expect(() => new PowerShellSkillHubWindowsSecurityProtocol({ idleShutdownMs })).toThrow(TypeError);
+    }
+    const protocol = new PowerShellSkillHubWindowsSecurityProtocol({ idleShutdownMs: Number.POSITIVE_INFINITY });
+    expect(() => protocol.dispose()).not.toThrow();
   });
 });
