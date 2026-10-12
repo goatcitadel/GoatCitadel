@@ -6,6 +6,12 @@ import type {
   OpsDesignQualitySeverity,
   OpsDesignQualitySnapshot,
 } from "@goatcitadel/contracts";
+// The calibrated anti-slop table lives with the design detector so Ops evidence and runtime advisories share it.
+import { ANTI_SLOP_PATTERNS, DESIGN_DETECTOR_RULES } from "./design-detector/rules.js";
+
+function isRetiringClassicPath(filePath: string): boolean {
+  return /[\\/]features[\\/](?:native-routes|threaded-surface)[\\/]/u.test(filePath);
+}
 
 const REQUIRED_SKILL_MODULES = [
   "SKILL.md",
@@ -59,37 +65,6 @@ const UI_SCAN_ROOTS = ["apps/mission-control-next/src", "packages/mission-contro
 const MISSION_CONTROL_RAW_COLOR_BUDGET = 92;
 
 const PLACEHOLDER_PATTERNS = [{ id: "unresolved-placeholder", re: /<PLACEHOLDER|TODO_PLACEHOLDER/iu }] as const;
-
-const ANTI_SLOP_PATTERNS = [
-  {
-    id: "default-indigo",
-    re: /#(?:6366f1|4f46e5|4338ca|3730a3|8b5cf6|7c3aed|a855f7)\b/iu,
-  },
-  {
-    id: "generic-trust-gradient",
-    re: /linear-gradient\([^)]*(?:purple|violet|indigo|#6366f1|#4f46e5|#8b5cf6|#7c3aed|#a855f7|#3b82f6|#06b6d4|cyan|pink)[^)]*\)/iu,
-  },
-  {
-    id: "emoji-as-ui-icon",
-    re: /[✨🚀🎯⚡🔥💡]/u,
-  },
-  {
-    id: "invented-metric",
-    re: /\b(?:10×\s+(?:faster|better|easier)|100×\s+(?:faster|better)|99\.\d+%\s+uptime|zero[- ]downtime|3×\s+more\s+(?:productive|efficient))\b/iu,
-  },
-  {
-    id: "lorem-copy",
-    re: /\blorem\s+ipsum\b/iu,
-  },
-  {
-    id: "feature-one-copy",
-    re: /\bfeature\s+(one|two|three|1|2|3)\b/iu,
-  },
-  {
-    id: "placeholder-copy",
-    re: /\bplaceholder\s+text\b/iu,
-  },
-] as const;
 
 const RAW_COLOR_LITERAL_PATTERNS = [
   { id: "raw-hex-color", re: /#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/u },
@@ -255,6 +230,34 @@ export function readDesignQualityEvidence(repoRoot: string): OpsDesignQualitySna
       nextAction:
         antiSlopHits.length > 0
           ? `Review token-backed intent for anti-slop hit(s): ${summarizeHits(antiSlopHits)}.`
+          : undefined,
+    }),
+  );
+
+  // Cockpit-only craft-floor advisories (plan D6): counts per rule, informational, never blocking. The
+  // retiring Classic shell is out of scope.
+  const craftFloorHits = collectPatternHits(
+    [
+      path.join(root, "apps", "mission-control-next", "src", "cockpit"),
+      path.join(root, "packages", "mission-control-shared", "src", "components"),
+    ],
+    DESIGN_DETECTOR_RULES,
+    { recursive: true, repoRoot: root, exclude: isRetiringClassicPath },
+  );
+  const craftFloorCounts = [...new Map(craftFloorHits.map((hit) => [hit.pattern, 0]))]
+    .map(([pattern]) => `${pattern}: ${craftFloorHits.filter((hit) => hit.pattern === pattern).length}`)
+    .sort();
+  checks.push(
+    check({
+      id: "mission-control.craft-floor.scan",
+      label: "Craft-floor advisory scan",
+      severity: craftFloorHits.length > 0 ? "P2" : "P3",
+      status: craftFloorHits.length > 0 ? "advisory" : "passing",
+      owner: "mission-control-next",
+      evidence: craftFloorHits[0]?.path ?? "apps/mission-control-next/src/cockpit",
+      nextAction:
+        craftFloorHits.length > 0
+          ? `Informational craft-floor advisories by rule (never blocking): ${craftFloorCounts.join(", ")}.`
           : undefined,
     }),
   );

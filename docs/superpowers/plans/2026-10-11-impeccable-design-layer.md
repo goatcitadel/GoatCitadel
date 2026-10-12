@@ -135,16 +135,16 @@ Reading DESIGN.md from a project repository root (later: explicit "import from p
 
 ## Phase 3: Deterministic detector (advisory only)
 
-- [ ] Create `packages/skills/src/design-detector/rules.ts` and `detect.ts`: move `ANTI_SLOP_PATTERNS` from `design-quality.ts` unchanged and import them back (no behavior change); add about ten text-detectable craft-floor rules (gradient text, side-stripe border > 1px, zero-blur offset shadow, default `backdrop-filter` glass, `01`/`02` section markers, emoji icons, kicker/eyebrow class heuristic, invented metrics, placeholder copy, bounce/elastic easing). Each rule: id, severity (always advisory), pointer to the craft-floor section. Attribute ported rules in `NOTICE`. Never claim parity with impeccable's 59-rule engine.
-- [ ] Modify `apps/gateway/src/services/chat-turn-agent-runner.ts` tool-result path (next to the artifact design hook near `attachArtifactDesignSkillArgs`): when the frozen profile holds a design-group receipt and the tool is `fs.write`/`fs.patch` on `.tsx`/`.jsx`/`.css`/`.html`/`.vue`/`.svelte`, add `designAdvisories` to the result from the written content (added lines only for patches; never re-read disk); cap at 8 findings and about 1 KiB; must pass `assertNoToolOutputInjection`.
-- [ ] Modify `apps/gateway/src/services/chat-generated-artifact-service.ts`: run the detector once on HTML generated artifacts and store advisories with the artifact record.
-- [ ] Surface per-turn advisories in `cockpit/areas/chat/ChatTurnDetails.tsx`. Ops Quality stays repo-scope (its posture says it reads repo files only): add one advisory P2 repo check running the shared rules over `apps/mission-control-next/src/cockpit` and `packages/mission-control-shared/src/components`, excluding the Classic directories (`features/native-routes`, `features/threaded-surface`); findings are counts, informational, never blocking.
+- [x] Create `packages/skills/src/design-detector/rules.ts` and `detect.ts`: move `ANTI_SLOP_PATTERNS` from `design-quality.ts` unchanged and import them back (no behavior change); add about ten text-detectable craft-floor rules (gradient text, side-stripe border > 1px, zero-blur offset shadow, default `backdrop-filter` glass, `01`/`02` section markers, emoji icons, kicker/eyebrow class heuristic, invented metrics, placeholder copy, bounce/elastic easing). Each rule: id, severity (always advisory), pointer to the craft-floor section. Attribute ported rules in `NOTICE`. Never claim parity with impeccable's 59-rule engine.
+- [x] Modify `apps/gateway/src/services/chat-turn-agent-runner.ts` tool-result path (next to the artifact design hook near `attachArtifactDesignSkillArgs`): when the frozen profile holds a design-group receipt and the tool is `fs.write`/`fs.patch` on `.tsx`/`.jsx`/`.css`/`.html`/`.vue`/`.svelte`, add `designAdvisories` to the result from the written content (added lines only for patches; never re-read disk); cap at 8 findings and about 1 KiB; must pass `assertNoToolOutputInjection`.
+- [x] Modify `apps/gateway/src/services/chat-generated-artifact-service.ts`: run the detector on HTML generated artifacts and attach the advisories on every read (derived and memoized per content hash, not stored: the artifact table is column-based on both engines; see the Task 20 ruling).
+- [x] Surface per-turn advisories in `cockpit/areas/chat/ChatTurnDetails.tsx`. Ops Quality stays repo-scope (its posture says it reads repo files only): add one advisory P2 repo check running the shared rules over `apps/mission-control-next/src/cockpit` and `packages/mission-control-shared/src/components`, excluding the Classic directories (`features/native-routes`, `features/threaded-surface`); findings are counts, informational, never blocking.
 
 ### Tests
 
-- [ ] `design-detector.test.ts`: one positive and one negative per rule.
-- [ ] Gateway advisory injection test: only with a design receipt; bounded; passes the output-injection assertion.
-- [ ] `design-quality.test.ts`: unchanged behavior plus the new check.
+- [x] `design-detector.test.ts`: one positive and one negative per rule.
+- [x] Gateway advisory injection test: only with a design receipt; bounded; passes the output-injection assertion.
+- [x] `design-quality.test.ts`: unchanged behavior plus the new check.
 
 ### Proof
 
@@ -455,3 +455,67 @@ Steps:
 Steps:
 1. `pnpm typecheck`, `pnpm docs:check`, `pnpm verify:routed-context:snapshots`, `pnpm verify:runtime:truth`, `pnpm verify:surface:regression`, `git diff --check`. Expected: pass; record any lane that cannot run locally with its reason.
 2. Tick the Phase 2 boxes. Commit: `docs(plan): mark impeccable Phase 2 done`.
+
+---
+
+## Phase 3 Task Breakdown (execution order; TDD per task)
+
+Vocabulary: a **design advisory** is `{ ruleId, line, summary, craftFloorRule? }` produced by the deterministic detector from text alone (never from a rendered page); it carries no excerpt of the scanned content. A **design receipt** is an activated-skill receipt in the frozen capability profile whose skill name is `impeccable` or `design-intelligence`. Advisories are always advisory: nothing in this phase blocks a write, fails a turn, or changes a verification lane's status beyond `advisory`.
+
+### Task 18: Detector rules and the shared anti-slop table
+
+Files: `packages/skills/src/design-detector/rules.ts` (new), `detect.ts` (new), `design-detector.test.ts` (new), `packages/skills/src/design-quality.ts` (import `ANTI_SLOP_PATTERNS` from the detector instead of declaring it), `packages/skills/src/index.ts` (export), `THIRD_PARTY_NOTICES.md` (one line: the regex rules approximate impeccable craft-floor rules by id; they are GoatCitadel-authored and are not impeccable's rule engine; no parity claim).
+
+Produces: `ANTI_SLOP_PATTERNS` (the seven existing `{ id, re }` entries, byte-identical ids and regexes), `DESIGN_DETECTOR_RULES: DesignDetectorRule[]` where `DesignDetectorRule = { id, severity: "advisory", summary, craftFloorRule?: string, re: RegExp }` covering the seven anti-slop ids plus: `gradient-text` (`background-clip: text`, `-webkit-background-clip: text`, `bg-clip-text`), `side-stripe-border` (`border-left|right` ≥ 2px, Tailwind `border-[lr]-[2-9]`), `hard-offset-shadow` (`box-shadow` with non-zero offsets and `0` blur), `glass-by-default` (`backdrop-filter: blur`, `backdrop-blur-`), `numbered-section-marker` (`01 / 02`-style markers), `kicker-eyebrow` (`kicker` or `eyebrow` class or element names), `bounce-easing` (`cubic-bezier` with an overshoot fourth value above 1, `ease-*-back`, `elastic`, `bounce`); `detectDesignAdvisories(text, { maxFindings = 8, maxBytes = 1024 })` returning `DesignAdvisory[]` with 1-based line numbers, first occurrence per rule, sorted by line, truncated to the caps (bytes measured on the JSON of the list). Pointers use the craft-floor comment ids (`skill-ban-gradient-text`, `skill-ban-side-stripe-borders`, `skill-ban-hard-offset-shadow`, `skill-ban-glassmorphism-default`, `skill-ban-numbered-section-markers`, `skill-ban-eyebrow-on-every-section`, `skill-ban-glyph-icons`, `skill-motion-floor`, `skill-copy-design-material`, `skill-reflex-theme-by-habit`).
+
+Steps:
+1. Test first: one positive and one negative per rule (17 rules), caps (9 distinct hits → 8; a 50-rule-hit file stays ≤ 1024 bytes), no excerpt of the input in any advisory, `ANTI_SLOP_PATTERNS` ids equal the seven known ids. Run `pnpm --filter @goatcitadel/skills exec vitest run src/design-detector.test.ts`. Expected: fails (module missing).
+2. Implement; move the table; rerun with `src/design-quality.test.ts`. Expected: pass, design-quality unchanged. Skills typecheck.
+3. Commit: `feat(skills): add the deterministic design advisory detector`.
+
+### Task 19: Runner attaches advisories to design-file writes
+
+Files: `apps/gateway/src/services/chat-turn-agent-runner/design-advisories.ts` (new), `design-advisories.test.ts` (new), `apps/gateway/src/services/chat-turn-agent-runner.ts` (result path after `assertNoToolOutputInjection`), `chat-turn-agent-runner.effect-truth.test.ts` or a new focused runner test.
+
+Produces: `buildToolResultDesignAdvisories({ capabilityProfile, toolName, args }): DesignAdvisory[] | undefined` — `undefined` unless the profile holds a design receipt, the tool is `fs.write` or `fs.patch`, and the path ends in `.tsx .jsx .css .html .vue .svelte`; the scanned text is `args.content` for `fs.write` and `args.newText` for `fs.patch` (never a disk read); `[]` when nothing fires is still attached as `designAdvisories: []`? No: attach only when non-empty. The runner patches the executed tool run's `result` with `designAdvisories` and re-runs `assertNoToolOutputInjection` on the patched result.
+
+Steps:
+1. Tests first: helper — design receipt + `fs.write` of a `.css` with `background-clip: text` → one advisory; no receipt → undefined; `fs.patch` scans `newText` only; `.ts` path → undefined; a hostile `content` never appears in the advisories. Runner — with a frozen profile carrying an impeccable receipt, an executed `fs.write` of `hero.css` containing gradient text yields `toolRun.result.designAdvisories` with `ruleId: "gradient-text"`; the same write without the receipt has no `designAdvisories`. Expected: fail.
+2. Implement; run both tests and `pnpm --filter @goatcitadel/gateway typecheck`. Expected: pass.
+3. Commit: `feat(gateway): attach design advisories to governed UI file writes`.
+
+### Task 20: Generated HTML artifacts carry advisories on read
+
+Files: `packages/contracts/src/chat.ts` (`ChatGeneratedArtifactRecord.designAdvisories?: DesignAdvisory[]`, with `DesignAdvisory` declared in contracts and re-used by the detector), `apps/gateway/src/services/chat-generated-artifact-service.ts` (attach for `kind === "html"` on every read and create response; derived, not persisted), `chat-generated-artifact-service.test.ts`.
+
+Ruling recorded here: advisories are derived on read instead of stored, because the artifact table is column-based on SQLite and PostgreSQL and a new column would need a parity migration for an informational field that must track the current rule set anyway.
+
+Steps:
+1. Test first: an HTML artifact with `backdrop-filter: blur(8px)` lists `glass-by-default`; a markdown artifact has no field. Expected: fail. Implement; rerun; contracts build; gateway typecheck. Expected: pass.
+2. Commit: `feat(gateway): derive design advisories for HTML generated artifacts`.
+
+### Task 21: Cockpit shows per-turn advisories
+
+Files: `apps/mission-control-next/src/cockpit/areas/chat/ChatTurnDetails.tsx`, `ChatTurnDetails.test.tsx` (new). Cockpit only.
+
+Produces: under each tool run that carries `result.designAdvisories`, a `<ul aria-label="Design advisories">` listing `summary` and `line`, prefixed by a one-line "Design advisories (n) · informational" label; nothing renders without the field.
+
+Steps:
+1. Test first (happy-dom): a turn with one executed `fs.write` whose result carries two advisories renders both summaries and the count; a turn without advisories renders no such list. Expected: fail. Implement; rerun; mission-control-next typecheck. Expected: pass.
+2. Commit: `feat(cockpit): show design advisories on tool activity`.
+
+### Task 22: Ops quality craft-floor check
+
+Files: `packages/skills/src/design-quality.ts`, `design-quality.test.ts`.
+
+Produces: check `mission-control.craft-floor.scan` ("Craft-floor advisory scan") over `apps/mission-control-next/src/cockpit` and `packages/mission-control-shared/src/components`, excluding `features/native-routes` and `features/threaded-surface`, using `DESIGN_DETECTOR_RULES`; `P2`/`advisory` when any file hits, else `P3`/`passing`; `nextAction` lists hit counts per rule id; never `blocking`.
+
+Steps:
+1. Test first: fixture with a cockpit file containing `backdrop-blur-md` → advisory; the same text under `features/native-routes` → passing. Expected: fail. Implement; rerun the file; `pnpm verify:design:quality`. Expected: pass with the new check listed.
+2. Commit: `feat(skills): add the craft-floor advisory check to design quality`.
+
+### Task 23: Proof lanes and plan ticks
+
+Steps:
+1. `pnpm typecheck`, `pnpm verify:design:quality`, `pnpm verify:gateway:async-boundary`, `git diff --check`; focused suites for skills, gateway (helper, runner, artifact service), cockpit. Expected: pass; record any lane that cannot run locally with its reason.
+2. Tick the Phase 3 boxes. Commit: `docs(plan): mark impeccable Phase 3 done`.

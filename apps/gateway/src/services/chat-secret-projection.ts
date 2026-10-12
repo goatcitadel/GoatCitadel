@@ -112,13 +112,17 @@ export function projectChatGeneratedArtifactForPublic(
   artifact: ChatGeneratedArtifactRecord,
 ): ChatGeneratedArtifactRecord {
   const projected = redactStructuredSecrets(artifact);
+  const contentRedacted = projected.redactedPaths.includes("$.content");
+  // Design advisories are derived from the canonical content before projection; once the
+  // content is redacted they would describe (and locate lines in) text the reader cannot see.
+  const { designAdvisories: _advisories, ...withoutAdvisories } = projected.value;
   return {
-    ...projected.value,
+    ...(contentRedacted ? withoutAdvisories : projected.value),
     ...(projected.redactionCount > 0
       ? {
           publicProjection: {
             artifactRedacted: true as const,
-            contentRedacted: projected.redactedPaths.includes("$.content"),
+            contentRedacted,
             redactionCount: projected.redactionCount,
             redactedPaths: projected.redactedPaths,
             canonicalContentHashRefersToStoredArtifact: true as const,
