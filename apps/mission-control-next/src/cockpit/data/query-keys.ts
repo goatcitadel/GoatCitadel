@@ -58,6 +58,8 @@ export const SETTINGS_READER_KEYS: readonly QueryKey[] = [
   ["settings", "gateway-auth"],
   ["settings", "permission-selection"],
   ["settings", "local-operator-overrides"],
+  // Work > Schedules reads the cron review-queue flag before requesting the queue.
+  ["work", "schedules-settings"],
   // Library panels that read settings (engineering learnings; memory editor and proposals).
   ["library", "engineering-settings"],
   ["library", "memory-settings"],
