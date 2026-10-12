@@ -189,6 +189,36 @@ describe("chat secret projection", () => {
     expect(artifact.content).toContain("legacy-content-secret");
   });
 
+  it("drops derived design advisories when the projection redacts the content they were derived from", () => {
+    const advisories = [{ ruleId: "gradient-text", line: 3, summary: "Gradient text" }];
+    const base: ChatGeneratedArtifactRecord = {
+      artifactId: "artifact-advised",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      title: "Landing page",
+      kind: "html",
+      content: '<style>.hero { background-clip: text; }</style><p>DATABASE_PASSWORD="content-secret"</p>',
+      sourceSurface: "chat",
+      version: 1,
+      contentHash: "sha256:stored-content",
+      designAdvisories: advisories,
+      createdAt: "2026-07-09T12:00:00.000Z",
+      updatedAt: "2026-07-09T12:00:00.000Z",
+    };
+
+    const contentRedacted = projectChatGeneratedArtifactForPublic(base);
+    expect(contentRedacted.publicProjection).toMatchObject({ contentRedacted: true });
+    expect(contentRedacted).not.toHaveProperty("designAdvisories");
+
+    const metadataOnly = projectChatGeneratedArtifactForPublic({
+      ...base,
+      title: "password: title-secret",
+      content: "<p>credential-free</p>",
+    });
+    expect(metadataOnly.publicProjection).toMatchObject({ contentRedacted: false });
+    expect(metadataOnly.designAdvisories).toEqual(advisories);
+  });
+
   it("does not claim content was redacted when only generated-artifact metadata changed", () => {
     const artifact: ChatGeneratedArtifactRecord = {
       artifactId: "artifact-title-only",

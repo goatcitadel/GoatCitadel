@@ -2,8 +2,8 @@ import type { DesignAdvisory } from "@goatcitadel/contracts";
 import { DESIGN_DETECTOR_RULES } from "./rules.js";
 
 export const DESIGN_ADVISORY_MAX_FINDINGS = 8;
-// Eight advisories with their craft-floor pointers serialize to ~1.2 KB; "about 1 KiB" in the plan.
-export const DESIGN_ADVISORY_MAX_BYTES = 1280;
+// The plan's contract: at most 1 KiB of serialized advisories reaches a tool result or artifact.
+export const DESIGN_ADVISORY_MAX_BYTES = 1024;
 
 export interface DetectDesignAdvisoriesOptions {
   maxFindings?: number;

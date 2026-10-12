@@ -94,7 +94,8 @@ const CRAFT_FLOOR_RULES: readonly DesignDetectorRule[] = [
     severity: "advisory",
     summary: "Hard zero-blur offset shadow; a depth system needs offset and soft blur.",
     craftFloorRule: "skill-ban-hard-offset-shadow",
-    re: /box-shadow\s*:\s*-?[1-9]\d*(?:\.\d+)?px\s+-?[1-9]\d*(?:\.\d+)?px\s+0(?:px)?(?=\s|;|$)/iu,
+    // Either offset may be zero, but at least one must be nonzero, and the blur must be zero.
+    re: /box-shadow\s*:\s*(?:-?[1-9]\d*(?:\.\d+)?px\s+-?\d+(?:\.\d+)?(?:px)?|-?0(?:px)?\s+-?[1-9]\d*(?:\.\d+)?px)\s+0(?:px)?(?=\s|;|$)/iu,
   },
   {
     id: "glass-by-default",
