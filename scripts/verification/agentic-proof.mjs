@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { parseCliArgs } from "./lib/shared.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const execFileAsync = promisify(execFile);
@@ -805,29 +806,10 @@ function quoteWindowsCommand(parts) {
     .join(" ");
 }
 
+// Delegates to the shared, unit-tested parser so inline values keep every "=" after the first.
 function parseArgs(argv) {
-  const parsed = { _: [] };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (!arg.startsWith("--")) {
-      parsed._.push(arg);
-      continue;
-    }
-    const [rawKey, inlineValue] = arg.split("=", 2);
-    const key = rawKey.slice(2);
-    if (inlineValue !== undefined) {
-      parsed[key] = inlineValue;
-      continue;
-    }
-    const next = argv[index + 1];
-    if (!next || next.startsWith("--")) {
-      parsed[key] = true;
-      continue;
-    }
-    parsed[key] = next;
-    index += 1;
-  }
-  return parsed;
+  const { positional, options } = parseCliArgs(argv);
+  return { _: positional, ...options };
 }
 
 main().catch((error) => {

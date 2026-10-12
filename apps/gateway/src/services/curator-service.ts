@@ -373,11 +373,17 @@ export class CuratorService {
       await this.recordIdleSweepRun();
       return result;
     } catch (error) {
-      // Best-effort: a janitor failure must never crash the maintenance tick.
-      await this.deps.publishRealtime("curator", {
-        type: "curator_idle_sweep_failed",
-        error: error instanceof Error ? error.message : String(error),
-      });
+      // Best-effort: a janitor failure must never crash the maintenance tick, so
+      // publishing the failure is best-effort too (publishRealtime may reject).
+      try {
+        await this.deps.publishRealtime("curator", {
+          type: "curator_idle_sweep_failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } catch (publishError) {
+        void publishError;
+        // The realtime bus is unavailable; the cadence cursor still retries next tick.
+      }
       return undefined;
     }
   }

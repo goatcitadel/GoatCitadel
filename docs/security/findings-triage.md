@@ -299,6 +299,19 @@ The authenticated AI view reported seven findings in five files after the 2026-1
 | `docs/security/findings-triage.md` — the rate-limit constant instruction omits the `sse` bucket | Accepted and widened: the bucket table also lacked `webhook_ingress` and the URL-first classification order. |
 | `apps/mission-control-next/src/cockpit/areas/chat/ChatArea.tsx` (three findings) — callback-identity cleanups emit a spurious `false` / `undefined` | Rejected as false positives. Both callbacks are React state setters (`setWorkbenchRequested` in `MissionThreadedControllerHost`, `setVisibleSessionId` in `CockpitApp`), whose identity is stable for the component lifetime, so the cleanup-then-reapply sequence never runs. The third finding is the union of the first two. Revisit only if a non-stable callback is ever passed. |
 
+### 2026-10-12 AI queue snapshot
+
+The authenticated AI view reported six findings in four files after the late 2026-10-11 default-branch pushes. Each premise was checked against the source before acting:
+
+| Reported | Disposition and evidence |
+|---|---|
+| `scripts/verification/agentic-proof.mjs` — `arg.split("=", 2)` truncates inline values containing `=` | Accepted. `--output=proofs/run=latest.json` parsed as `proofs/run`. The shared `parseCliArgs` in `scripts/verification/lib/shared.mjs` had the same defect; it now splits at the first `=` only (unit-tested), and `agentic-proof.mjs` delegates to it. |
+| `apps/gateway/src/services/chat-turn-agent-runner/presentation-research-evidence.ts` — competitor aliases built from single words and truncated acronyms are over-broad | Accepted. `textMatchesAliases` matches by substring, so word aliases such as `piece` and `unlimited` and the three-letter truncation let generic text satisfy cross-competitor coverage. Those derived aliases were removed; a regression test proves a generic snippet no longer covers One Piece or Star Wars: Unlimited. |
+| `apps/gateway/src/services/curator-service.ts` — `maybeRunIdleCurator` can still reject from its catch block | Accepted. The method documents that it never throws, but awaited `publishRealtime` (typed `Promise<unknown>`) inside the catch. The failure publication is now best-effort; a test covers a rejecting publisher. |
+| `apps/gateway/src/services/chat-turn-agent-runner/presentation-research-evidence.ts` — independent source roles are model-declared | Concern acknowledged; offered diff rejected. Roles are declared by the model, though every source must already be present in canonical tool evidence and registered competitor domains cannot count as independent. The generated fix rejects every independent, retailer, marketplace, financial, and event source, which would block all research decks. A real fix needs a server-side domain classification design. |
+| `apps/gateway/src/services/curator-service.ts` — the weekly dedup read/run/write can race between scheduler workers | Rejected. The only caller (the system cron handler) passes `force: true`, which skips that cursor, and scheduled cron runs are deduplicated per occurrence by `(jobId, admissionKey "scheduled:<occurrence>")` in `cron-run-repo.ts`. |
+| `apps/gateway/src/services/gateway/cron-automation-service.ts` — `hour12: false` emits `24` at midnight | Rejected as not reproducible on the supported runtime. Node 24 resolves `hourCycle` to `h23` and formats midnight as `00` in UTC, America/Los_Angeles, and Europe/London. `hourCycle: "h23"` would be optional hardening for older engines. |
+
 ### There is no way to dismiss an AI finding
 
 Unlike Standard findings, which carry a per-row **Dismiss** button, the AI findings surface offers

@@ -3,7 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { buildFastLanePerfPayload, finalizeRunContext, renameFileWithRetry, runCommand } from "./shared.mjs";
+import {
+  buildFastLanePerfPayload,
+  finalizeRunContext,
+  parseCliArgs,
+  renameFileWithRetry,
+  runCommand,
+} from "./shared.mjs";
 
 test("atomic file replacement retries transient Windows-style rename locks", async () => {
   const calls = [];
@@ -379,3 +385,10 @@ function emptyArtifacts() {
     playwright: [],
   };
 }
+
+test("parseCliArgs keeps every character after the first = in an inline option value", () => {
+  assert.deepEqual(parseCliArgs(["lane", "--output=proofs/run=latest.json", "--empty=", "--flag"]), {
+    positional: ["lane"],
+    options: { output: "proofs/run=latest.json", empty: "", flag: true },
+  });
+});
