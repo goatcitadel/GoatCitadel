@@ -1147,6 +1147,64 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     );
   });
 
+  it("applies the workspace brand block to polished decks when the model supplied no brand", async () => {
+    const invokeTool = vi.fn(
+      async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: {
+          path: "F:\\code\\personal-ai\\workspace\\goatcitadel_out\\daily-walking.pptx",
+          bytesWritten: 12345,
+          format: "pptx",
+          title: request.args.title,
+          slideCount: 5,
+        },
+      }),
+    );
+    const storage = createMockStorage() as Record<string, unknown>;
+    storage.chatSessionMeta = {
+      get: () => ({ workspaceId: "workspace-loop24" }),
+    };
+    const workspaceBrand = { name: "Acme", colors: ["#0ea5e9", "#0f172a"], fonts: ["Inter"] };
+    const resolveWorkspaceDesignBrand = vi.fn(() => workspaceBrand);
+    const run = async (args: Record<string, unknown>) => {
+      const orchestrator = new ChatTurnAgentRunner({
+        storage: storage as never,
+        listToolCatalog: () => createToolCatalog(["presentations.create"]),
+        createChatCompletion: vi
+          .fn<() => Promise<ChatCompletionResponse>>()
+          .mockResolvedValueOnce(namedToolCallCompletion("presentations.create", args))
+          .mockResolvedValue(completion("The presentation was created.")),
+        invokeTool,
+        resolveWorkspaceDesignBrand,
+      });
+      await orchestrator.run(
+        turnInput({
+          turnId: randomUUID(),
+          workspaceId: "workspace-loop24",
+          policyRunId: "durable-presentation-brand",
+          policyTaskId: "task-presentation-brand",
+          mode: "cowork",
+          content: "Put all that information into a real PowerPoint presentation.",
+          historyMessages: [
+            { role: "user", content: "Explain the benefits and a practical routine for daily walking." },
+            { role: "assistant", content: WALKING_RESEARCH },
+            { role: "user", content: "Put all that information into a real PowerPoint presentation." },
+          ],
+        }),
+      );
+      return invokeTool.mock.calls.at(-1)?.[0].args.design as Record<string, unknown> | undefined;
+    };
+
+    expect(await run(walkingPresentationArgs())).toMatchObject({ mode: "polished", brand: workspaceBrand });
+    expect(resolveWorkspaceDesignBrand).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "workspace-loop24" }),
+    );
+    expect(
+      await run({ ...walkingPresentationArgs(), design: { mode: "polished", brand: { name: "Model brand" } } }),
+    ).toMatchObject({ brand: { name: "Model brand" } });
+    expect(await run({ ...walkingPresentationArgs(), design: { mode: "plain" } })).not.toHaveProperty("brand");
+  });
+
   it("defers model-authored presentation visuals until after policy authorization", async () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()

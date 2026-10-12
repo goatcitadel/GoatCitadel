@@ -221,6 +221,7 @@ import {
   type RuntimeConfigurationTargetId,
   type McpToolPolicyBinding,
   type MeshToolPolicyBinding,
+  type ArtifactBrandInput,
   MESH_TOOL_POLICY_DEFINITION,
 } from "@goatcitadel/policy-engine";
 import { MAX_PARALLEL_TOOL_CALLS, decideToolBatchParallelism } from "./chat-tool-parallelism.js";
@@ -835,6 +836,14 @@ export interface ChatTurnAgentRunnerDeps {
     request: ImageGenerationRequest,
     attribution?: ModelUsageAttributionContext,
   ) => Promise<ImageGenerationResponse>;
+  /**
+   * Workspace DESIGN.md brand for deck/document tools when the frozen profile injected the
+   * workspace design context; a host without it leaves `design.brand` to the model.
+   */
+  resolveWorkspaceDesignBrand?: (input: {
+    workspaceId?: string;
+    capabilityProfile?: ChatTurnCapabilityProfileRecord;
+  }) => ArtifactBrandInput | undefined;
   invokeTool: (
     request: ToolInvokeRequest,
     options?: {
@@ -7217,6 +7226,11 @@ export class ChatTurnAgentRunner {
       priorToolRuns: input.priorToolRuns,
       evalIntegrityTurn: input.input.normalizationProfile === "prompt_pack_harness",
       quickWebProfile: input.input.normalizationProfile === "quick_web",
+      workspaceDesignBrand: () =>
+        this.deps.resolveWorkspaceDesignBrand?.({
+          workspaceId: input.input.workspaceId,
+          capabilityProfile: input.input.capabilityProfile,
+        }),
     });
     if (input.input.content.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) {
       preflight = {
@@ -8493,6 +8507,8 @@ export class ChatTurnAgentRunner {
     priorToolRuns?: ChatToolRunRecord[];
     evalIntegrityTurn?: boolean;
     quickWebProfile?: boolean;
+    /** Lazily read workspace brand; consulted only for non-plain artifact tools without a model brand. */
+    workspaceDesignBrand?: () => ArtifactBrandInput | undefined;
   }): {
     toolName: string;
     args: Record<string, unknown>;
@@ -8663,7 +8679,7 @@ export class ChatTurnAgentRunner {
     }
 
     if (!input.evalIntegrityTurn) {
-      attachArtifactDesignSkillArgs(input.toolName, args, input.userContent);
+      attachArtifactDesignSkillArgs(input.toolName, args, input.userContent, input.workspaceDesignBrand);
     }
 
     if (LOCAL_PATH_TOOL_NAMES.has(input.toolName) && typeof args.path === "string") {
@@ -9509,7 +9525,12 @@ function buildToolAccessProbeArgs(toolName: string, safeWriteFallbackDir?: strin
   return {};
 }
 
-function attachArtifactDesignSkillArgs(toolName: string, args: Record<string, unknown>, userContent: string): void {
+function attachArtifactDesignSkillArgs(
+  toolName: string,
+  args: Record<string, unknown>,
+  userContent: string,
+  workspaceDesignBrand?: () => ArtifactBrandInput | undefined,
+): void {
   if (toolName !== "presentations.create" && toolName !== "documents.create" && toolName !== "artifacts.create") {
     return;
   }
@@ -9523,10 +9544,14 @@ function attachArtifactDesignSkillArgs(toolName: string, args: Record<string, un
     };
     return;
   }
+  // The model's brand wins; otherwise the workspace DESIGN.md brand block (when the turn injected it).
+  const modelBrand = typeof rawDesign.brand === "object" && rawDesign.brand !== null;
+  const workspaceBrand = modelBrand ? undefined : workspaceDesignBrand?.();
   args.design = {
     ...rawDesign,
     mode: existingMode ?? "polished",
     skillId: typeof rawDesign.skillId === "string" && rawDesign.skillId.trim() ? rawDesign.skillId : "impeccable",
+    ...(workspaceBrand ? { brand: workspaceBrand } : {}),
   };
 }
 

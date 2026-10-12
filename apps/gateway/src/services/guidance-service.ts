@@ -4,7 +4,17 @@ import { GUIDANCE_DOC_FILE_MAP } from "./guidance-doc-files.js";
 import { readGuidanceDocument, writeGuidanceDocument, type GuidanceDocumentHost } from "./guidance-document-helpers.js";
 import type { ResolvedRuntimeGuidance } from "./chat-turn-planning-helpers.js";
 
-const WORKSPACE_GUIDANCE_DOC_TYPES: GuidanceDocType[] = ["goatcitadel", "agents", "claude", "vision"];
+// PRODUCT.md and DESIGN.md exist only per workspace (one workspace can hold a family design, another a
+// company brand); they never fall back to a global copy and never join the runtime-guidance budget,
+// which stays for GOATCITADEL/AGENTS/CLAUDE. Impeccable's module routes inject them instead.
+const WORKSPACE_ONLY_GUIDANCE_DOC_TYPES: GuidanceDocType[] = ["product", "design"];
+const WORKSPACE_GUIDANCE_DOC_TYPES: GuidanceDocType[] = [
+  "goatcitadel",
+  "agents",
+  "claude",
+  "vision",
+  ...WORKSPACE_ONLY_GUIDANCE_DOC_TYPES,
+];
 const RUNTIME_GUIDANCE_DOC_TYPES: GuidanceDocType[] = ["goatcitadel", "agents", "claude"];
 const MAX_RUNTIME_GUIDANCE_CHARS = 6000;
 const GUIDANCE_DEBUG_KILL_SWITCH_ENV = "GOATCITADEL_DISABLE_GUIDANCE_INJECTION";
@@ -19,9 +29,9 @@ export class GuidanceService {
 
   public async listGlobalGuidance(): Promise<GuidanceDocumentRecord[]> {
     return Promise.all(
-      (Object.keys(GUIDANCE_DOC_FILE_MAP) as GuidanceDocType[]).map((docType) =>
-        readGuidanceDocument(this.ctx, docType, "global"),
-      ),
+      (Object.keys(GUIDANCE_DOC_FILE_MAP) as GuidanceDocType[])
+        .filter((docType) => !WORKSPACE_ONLY_GUIDANCE_DOC_TYPES.includes(docType))
+        .map((docType) => readGuidanceDocument(this.ctx, docType, "global")),
     );
   }
 
@@ -44,6 +54,9 @@ export class GuidanceService {
   }
 
   public async updateGlobalGuidance(docType: GuidanceDocType, content: string): Promise<GuidanceDocumentRecord> {
+    if (WORKSPACE_ONLY_GUIDANCE_DOC_TYPES.includes(docType)) {
+      throw new Error(`Global guidance is not supported for ${docType}; it is workspace-only.`);
+    }
     await writeGuidanceDocument(this.ctx, docType, "global", undefined, content);
     await this.ctx.publishRealtime("guidance_updated", "system", {
       scope: "global",

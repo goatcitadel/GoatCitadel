@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { sendRouteError } from "./_error-handler.js";
 
-const workspaceDocTypeSchema = z.enum(["goatcitadel", "agents", "claude", "vision"]);
+const workspaceDocTypeSchema = z.enum(["goatcitadel", "agents", "claude", "vision", "product", "design"]);
 
 const globalDocTypeSchema = z.enum(["goatcitadel", "agents", "claude", "contributing", "security", "vision"]);
 

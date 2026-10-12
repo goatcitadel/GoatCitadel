@@ -106,22 +106,22 @@ A Gateway `/design` command; editing or deleting design-intelligence files (dele
 
 ## Phase 2: Project context (PRODUCT.md / DESIGN.md, operator-owned)
 
-- [ ] Modify `packages/contracts/src/workspaces.ts` `GuidanceDocType`: add `"product" | "design"`.
-- [ ] Modify `apps/gateway/src/services/guidance-doc-files.ts`: map to `PRODUCT.md` and `DESIGN.md`.
-- [ ] Modify `apps/gateway/src/services/guidance-service.ts`: add both to `WORKSPACE_GUIDANCE_DOC_TYPES`; do not add to `RUNTIME_GUIDANCE_DOC_TYPES` (the 6000-character shared budget must not be spent on design text every turn); exclude from global listing and global writes (D3).
-- [ ] Modify `apps/gateway/src/routes/workspaces.ts`: add both to the workspace zod enum only.
-- [ ] Modify `governed-skill-instruction-service.ts`: when a module route declares `contextDocs`, read the workspace docs; scan them with a distinct guidance-security error (not "skill security"); truncate deterministically to about 6 KiB each with a `truncated` flag; append a "Project design context" section; record `contextDocuments?: [{docType, scope, sha256, bytes, truncated}]` in the receipt.
-- [ ] Modify `packages/contracts/src/chat-capability-profile.ts`: optional receipt field, omitted when empty so earlier frozen profiles stay canonical-JSON-equal.
-- [ ] Brand block: define a small fenced block in DESIGN.md (name, up to six hex colors, up to three font names, optional logo path inside the workspace jail) parsed by a pure helper in `packages/skills`; `attachArtifactDesignSkillArgs` fills `design.brand` from it when the turn has a design receipt and the model supplied none, so `artifact-design.ts` `applyBrandColors`/`resolveTypography` use the workspace brand for decks and documents.
-- [ ] Writing the documents (`init` / `document` commands): the model drafts PRODUCT.md/DESIGN.md as a normal reply; the operator saves it as a generated artifact (existing `createChatGeneratedArtifactFromTurn`); a new explicit operator action "Apply as workspace DESIGN.md / PRODUCT.md" calls `updateWorkspaceGuidance` and records the artifact hash. Add a minimal guidance editor plus apply control as a new cockpit settings section (`apps/mission-control-next/src/cockpit/areas/settings/WorkspaceDesignContextSettings.tsx`, following `AppearanceSettings.tsx` patterns), since no guidance editor UI exists in the cockpit today. No Classic counterpart.
-- [ ] Create root `DESIGN.md` and `PRODUCT.md` for repo coding agents only, seeded from `docs/superpowers/specs/2026-09-27-mission-control-cockpit-design.md`, `docs/superpowers/specs/2026-09-22-goatcitadel-mark-and-icons-design.md`, `docs/review/mission-control-claude-design-convergence-audit.md`, `apps/mission-control-next/src/styles/mission-control-next-tokens.css`, `apps/mission-control-next/src/cockpit/styles/cockpit-tokens.css`, and the AGENTS.md North Star / UI-UX Direction sections; the cockpit follows impeccable's craft floor (D6) and Classic is marked retiring and out of scope. One sentence in AGENTS.md pointing to them.
+- [x] Modify `packages/contracts/src/workspaces.ts` `GuidanceDocType`: add `"product" | "design"`.
+- [x] Modify `apps/gateway/src/services/guidance-doc-files.ts`: map to `PRODUCT.md` and `DESIGN.md`.
+- [x] Modify `apps/gateway/src/services/guidance-service.ts`: add both to `WORKSPACE_GUIDANCE_DOC_TYPES`; do not add to `RUNTIME_GUIDANCE_DOC_TYPES` (the 6000-character shared budget must not be spent on design text every turn); exclude from global listing and global writes (D3).
+- [x] Modify `apps/gateway/src/routes/workspaces.ts`: add both to the workspace zod enum only.
+- [x] Modify `governed-skill-instruction-service.ts`: when a module route declares `contextDocs`, read the workspace docs; scan them with a distinct guidance-security error (not "skill security"); truncate deterministically to about 6 KiB each with a `truncated` flag; append a "Project design context" section; record `contextDocuments?: [{docType, scope, sha256, bytes, truncated}]` in the receipt.
+- [x] Modify `packages/contracts/src/chat-capability-profile.ts`: optional receipt field, omitted when empty so earlier frozen profiles stay canonical-JSON-equal.
+- [x] Brand block: define a small fenced block in DESIGN.md (name, up to six hex colors, up to three font names, optional logo path inside the workspace jail) parsed by a pure helper in `packages/skills`; `attachArtifactDesignSkillArgs` fills `design.brand` from it when the turn has a design receipt and the model supplied none, so `artifact-design.ts` `applyBrandColors`/`resolveTypography` use the workspace brand for decks and documents.
+- [x] Writing the documents (`init` / `document` commands): the model drafts PRODUCT.md/DESIGN.md as a normal reply; the operator saves it as a generated artifact (existing `createChatGeneratedArtifactFromTurn`); a new explicit operator action "Apply as workspace DESIGN.md / PRODUCT.md" calls `updateWorkspaceGuidance` and records the artifact hash. Add a minimal guidance editor plus apply control as a new cockpit settings section (`apps/mission-control-next/src/cockpit/areas/settings/WorkspaceDesignContextSettings.tsx`, following `AppearanceSettings.tsx` patterns), since no guidance editor UI exists in the cockpit today. No Classic counterpart.
+- [x] Create root `DESIGN.md` and `PRODUCT.md` for repo coding agents only, seeded from `docs/superpowers/specs/2026-09-27-mission-control-cockpit-design.md`, `docs/superpowers/specs/2026-09-22-goatcitadel-mark-and-icons-design.md`, `docs/review/mission-control-claude-design-convergence-audit.md`, `apps/mission-control-next/src/styles/mission-control-next-tokens.css`, `apps/mission-control-next/src/cockpit/styles/cockpit-tokens.css`, and the AGENTS.md North Star / UI-UX Direction sections; the cockpit follows impeccable's craft floor (D6) and Classic is marked retiring and out of scope. One sentence in AGENTS.md pointing to them.
 
 ### Tests
 
-- [ ] `guidance-service.test.ts`: workspace-only types; global listing excludes them.
-- [ ] `routes/workspaces.test.ts`: enum.
-- [ ] Receipt test: context hash drift fails closed with a clear message; old receipts unaffected.
-- [ ] Mission Control component test for the apply action.
+- [x] `guidance-service.test.ts`: workspace-only types; global listing excludes them.
+- [x] `routes/workspaces.test.ts`: enum.
+- [x] Receipt test: context hash drift fails closed with a clear message; old receipts unaffected.
+- [x] Mission Control component test for the apply action.
 
 ### Proof
 
@@ -374,3 +374,84 @@ Steps:
 Steps:
 1. `pnpm typecheck` (root), `pnpm verify:skills:catalog`, `pnpm verify:design:quality`, `pnpm verify:routed-context:snapshots`, `git diff --check`. Expected: pass; record any lane that cannot run locally with its reason.
 2. Tick the Phase 1 boxes in this plan. Commit: `docs(plan): mark impeccable Phase 1 done`.
+
+---
+
+## Phase 2 Task Breakdown (execution order; TDD per task)
+
+Vocabulary used by every task: a **context doc** is a workspace guidance document of type `product` (file `PRODUCT.md`) or `design` (file `DESIGN.md`) under `workspaces/<workspaceId>/`; there is never a global copy (D3). The **brand block** is a fenced code block in DESIGN.md whose info string is `brand`, holding `key: value` lines (`name`, `colors`, `fonts`, `logo`). The **context ceiling** is 6144 bytes per doc. Context docs are injected only through impeccable's module routes, never through `resolveRuntimeGuidance` (its 6000-character budget stays for GOATCITADEL/AGENTS/CLAUDE).
+
+### Task 11: Workspace-only PRODUCT.md and DESIGN.md guidance docs
+
+Files: `packages/contracts/src/workspaces.ts` (`GuidanceDocType` gains `"product" | "design"`), `apps/gateway/src/services/guidance-doc-files.ts` (`product: "PRODUCT.md"`, `design: "DESIGN.md"`), `apps/gateway/src/services/guidance-service.ts` (`WORKSPACE_GUIDANCE_DOC_TYPES` gains both; new `WORKSPACE_ONLY_GUIDANCE_DOC_TYPES = ["product", "design"]`; `listGlobalGuidance` skips them; `updateGlobalGuidance` throws `Global guidance is not supported for <docType>; it is workspace-only.`; `RUNTIME_GUIDANCE_DOC_TYPES` unchanged), `apps/gateway/src/routes/workspaces.ts` (`workspaceDocTypeSchema` gains both; `globalDocTypeSchema` unchanged), tests `guidance-service.test.ts`, `routes/workspaces.test.ts`.
+
+Produces: `GuidanceDocType` includes `product`/`design`; `GET /api/v1/workspaces/:id/guidance` returns them in `workspace`; `PUT /api/v1/workspaces/:id/guidance/design` writes `workspaces/<id>/DESIGN.md`; `PUT /api/v1/guidance/global/design` is a 400 (enum); `GuidanceService.updateGlobalGuidance("design", …)` throws.
+
+Steps:
+1. Tests first: `guidance-service.test.ts` — workspace listing includes `product` and `design` records with `fileName` `PRODUCT.md`/`DESIGN.md`; global listing has no `product`/`design`; `updateGlobalGuidance("design", "x")` rejects with `/workspace-only/`; `resolveRuntimeGuidance` ignores a workspace DESIGN.md (no `DESIGN.md` in `workspaceFilesUsed`). `routes/workspaces.test.ts` — PUT workspace `design` reaches the service with `("default", "design", content)`; PUT global `design` is 400.
+2. Run `pnpm --filter @goatcitadel/gateway exec vitest run src/services/guidance-service.test.ts src/routes/workspaces.test.ts`. Expected: new cases fail.
+3. Implement; `pnpm --filter @goatcitadel/contracts build`; rerun; `pnpm --filter @goatcitadel/gateway typecheck`. Expected: pass.
+4. Commit: `feat(guidance): add workspace-only PRODUCT.md and DESIGN.md guidance docs`.
+
+### Task 12: Brand block parser
+
+Files: `packages/skills/src/design-brand.ts` (new), `design-brand.test.ts` (new), `packages/skills/src/index.ts` (export).
+
+Produces: `parseDesignBrandBlock(markdown: string): DesignBrand | undefined` where `DesignBrand = { name?: string; colors?: string[]; fonts?: string[]; logoPath?: string }` (same shape as policy-engine `ArtifactBrandInput`, which this package must not import). Rules: first fenced block whose info string is exactly `brand` (case-insensitive) wins; lines are `key: value`, unknown keys ignored; `colors` is comma-separated, each normalised to `#rrggbb` (accepts `#rgb`, `#rrggbb`, with or without `#`; invalid entries dropped), at most 6 kept; `fonts` comma-separated, trimmed, non-empty, at most 3; `logo` kept as `logoPath` only when it is a relative path with forward slashes, no `..` segment, no leading `/`, no drive letter, no URL scheme; `name` trimmed, at most 80 chars. Returns `undefined` when there is no block or the block yields no fields. Also exports `DESIGN_BRAND_BLOCK_EXAMPLE` (a 5-line example string used by the settings help text).
+
+Steps:
+1. Test first (RED): full block parses; limits (7 colors → 6, 4 fonts → 3); invalid color dropped; `logo: ../x.svg`, `/abs.svg`, `C:/x.svg`, `https://x` all dropped; no block → undefined; block with only unknown keys → undefined; second `brand` block ignored; a `css` block is not a brand block.
+2. Implement; `pnpm --filter @goatcitadel/skills exec vitest run src/design-brand.test.ts`; typecheck. Expected: pass.
+3. Commit: `feat(skills): parse the DESIGN.md brand block`.
+
+### Task 13: Module routes declare context docs; receipts carry them and fail closed on drift
+
+Files: `packages/skills/src/skill-module-routes.ts` (+test), `packages/contracts/src/chat-capability-profile.ts`, `apps/gateway/src/services/governed-skill-instruction-service.ts` (+test), `apps/gateway/src/services/workspace-skill-context-docs.ts` (new, +test), `apps/gateway/src/services/gateway-service.ts`.
+
+Produces:
+- `SkillModuleResolution.contextDocs?: SkillContextDocType[]` with `SkillContextDocType = "product" | "design"`; every impeccable route declares `["product", "design"]`; other skills declare nothing. `enumerateSkillRoutes` carries the field.
+- Contract: `ChatTurnCapabilityActivatedSkillContextDocument { docType: "product" | "design"; scope: "workspace"; sha256: string; bytes: number; truncated: boolean }` and `ChatTurnCapabilityActivatedSkill.contextDocuments?: …[]` (omitted when empty so earlier frozen profiles stay canonical-JSON-equal).
+- `SkillContextDocReader = (docType) => { exists: boolean; content: string }` (sync). `createWorkspaceSkillContextDocReader(host: GuidanceDocumentHost, workspaceId)` reads `workspaces/<id>/PRODUCT.md|DESIGN.md` with `resolveGuidancePath` + `readFileSync`; a missing file is `{ exists: false, content: "" }`.
+- `buildGovernedActivatedSkillReceipts` takes `contextDocs?: SkillContextDocReader`; `renderGovernedActivatedSkillInstructions` takes the same. `buildReceipt` reads the route's declared docs (freeze) or the frozen receipt's `contextDocuments` doc types (render): for each existing non-blank doc, `sha256` and `bytes` of the full stored content, content cut to the ceiling on a UTF-8 character boundary with `truncated: true` when cut, scanned with `scanPromptwareContent({ source: "memory_context", sourcePath: "workspace-guidance:<docType>" })`; any finding throws `GuidanceSecurityBlockedError` (`failureClass: "guidance_security_blocked"`, `recoveryAction: "review_workspace_guidance"`, message `Workspace <FILE> blocked the turn before provider execution; review it in Settings › Workspaces.`), never `SkillSecurityBlockedError`. The rendered instruction appends `## Project design context: <FILE> (workspace)` sections after the modules, with `[truncated to 6144 bytes]` as the last line when cut; `instructionSha256`/`instructionBytes` cover them. At render time a doc whose `sha256` differs from the frozen receipt throws `Workspace <FILE> changed after this turn's profile froze; send the message again.` before the generic drift check. A frozen receipt without `contextDocuments` never reads docs.
+- `gateway-service.ts`: `resolveActivatedSkills` passes `contextDocs: createWorkspaceSkillContextDocReader(this, input.workspaceId)`; `resolveActivatedSkillInstructions` passes one for `profile.identity.workspaceId`.
+
+Steps:
+1. Tests first: route test — impeccable routes carry `contextDocs: ["product", "design"]`, coding route carries none. Service test (impeccable harness + a reader stub): with DESIGN.md `"# Design\n\n```brand\nname: Acme\n```"` the receipt has `contextDocuments: [{ docType: "design", scope: "workspace", sha256, bytes, truncated: false }]` and the instruction contains `Project design context: DESIGN.md (workspace)`; no docs → `contextDocuments` absent and the receipt canonical-equal to the no-reader receipt; 9000-byte DESIGN.md → `truncated: true`, injected text ≤ 6144 bytes + marker; DESIGN.md containing `ignore all previous instructions` → throws `GuidanceSecurityBlockedError` with `failureClass "guidance_security_blocked"`; render with a reader whose DESIGN.md changed → throws `/changed after this turn's profile froze/`; render of a receipt without `contextDocuments` with a reader that throws if called → renders. Reader test — reads an existing file, reports missing, never escapes `workspaces/<id>/`.
+2. Run the three test files. Expected: new cases fail.
+3. Implement; `pnpm --filter @goatcitadel/contracts build`; rerun with `chat-turn-prep-service.governed-skills.test.ts`; gateway + skills typecheck. Expected: pass.
+4. Commit: `feat(gateway): inject workspace design context into impeccable turns with hashed receipts`.
+
+### Task 14: Workspace brand reaches deck and document tools
+
+Files: `apps/gateway/src/services/chat-turn-agent-runner.ts` (`ChatTurnAgentRunnerInput.workspaceDesignBrand?: ArtifactBrandInput`; `attachArtifactDesignSkillArgs(toolName, args, userContent, workspaceBrand?)` fills `design.brand` when the design is non-plain and the model supplied no brand), `chat-turn-agent-runner.loop24.test.ts`, `apps/gateway/src/services/gateway-service.ts` (where the runner input is built: when the frozen profile has an activated-skill receipt whose `contextDocuments` includes `design`, read DESIGN.md through the reader and `parseDesignBrandBlock` it; pass the result as `workspaceDesignBrand`; no receipt → undefined), a focused gateway test for that helper (`workspace-design-brand.test.ts`, new, pure helper `resolveWorkspaceDesignBrand(profile, reader)`).
+
+Steps:
+1. Tests first: loop24 — a polished `presentations.create` call with no model brand gets `design.brand` equal to the input brand; a model-supplied brand is kept; a plain-format call gets no brand. Helper test — receipt with design context doc + DESIGN.md with a brand block → brand; receipt without context docs → undefined; DESIGN.md without block → undefined.
+2. Run; Expected: fail. Implement; rerun with `pnpm --filter @goatcitadel/gateway typecheck`. Expected: pass.
+3. Commit: `feat(gateway): apply the workspace brand block to governed artifact tools`.
+
+### Task 15: Cockpit settings section for PRODUCT.md and DESIGN.md
+
+Files: `apps/mission-control-next/src/cockpit/areas/settings/WorkspaceDesignContextSettings.tsx` (new), `WorkspaceDesignContextSettings.test.tsx` (new), `settings-controls.ts` (preloadable + `"workspaces"` list), `SettingsArea.tsx` (render under `case "workspaces"` after `WorkspaceSettings`, keyed by `activeWorkspaceId`), `settings-index.ts` (add `design context product design brand DESIGN.md PRODUCT.md` to the `workspaces` keywords). Cockpit only; no Classic counterpart.
+
+Produces: a `<section aria-label="Design context">` with, per doc (`PRODUCT.md`, `DESIGN.md`): a textarea bound to the workspace guidance content from `fetchWorkspaceGuidance(workspaceId)`, a Save button calling `updateWorkspaceGuidance(workspaceId, docType, content)`, a status line (`Saved`, errors); a help block with `DESIGN_BRAND_BLOCK_EXAMPLE` copy inlined as a string constant in the component (the cockpit depends on contracts only, not on `@goatcitadel/skills`); and an "Apply a generated artifact" control: a select listing the workspace's generated artifacts from `fetchChatGeneratedArtifacts({ workspaceId, kind: "document" })` whose `content` is non-empty, with buttons "Apply as DESIGN.md" / "Apply as PRODUCT.md" that save `<!-- applied from generated artifact <artifactId> contentHash <contentHash> -->\n` + artifact content, so the applied hash is recorded in the document itself.
+
+Steps:
+1. Test first (happy-dom; mock `fetchWorkspaceGuidance`, `updateWorkspaceGuidance`, `fetchChatGeneratedArtifacts` from `@goatcitadel/mission-control-shared/api/client`): renders both editors with fetched content; Save sends `("ws-1", "design", edited)`; Apply sends the provenance comment + artifact content and shows `Saved`.
+2. Run `pnpm --filter @goatcitadel/mission-control-next exec vitest run src/cockpit/areas/settings/WorkspaceDesignContextSettings.test.tsx`. Expected: fail (module missing). Implement; rerun; `pnpm --filter @goatcitadel/mission-control-next typecheck`. Expected: pass.
+3. Commit: `feat(cockpit): add workspace design context settings for DESIGN.md and PRODUCT.md`.
+
+### Task 16: Root DESIGN.md and PRODUCT.md for repo coding agents
+
+Files: `DESIGN.md` (new, root), `PRODUCT.md` (new, root), `AGENTS.md` (one sentence under "How Agents Should Work" pointing at both). Seeded from the sources listed in the Phase 2 section; the cockpit follows impeccable's craft floor (D6); Classic is marked retiring and out of scope; no personal paths; DESIGN.md carries a `brand` block with the GoatCitadel token colors and fonts so the parser has a real example.
+
+Steps:
+1. Write both files (DESIGN.md ≤ 12 KiB, PRODUCT.md ≤ 8 KiB). Add the AGENTS.md sentence.
+2. `pnpm --filter @goatcitadel/skills exec vitest run src/design-brand.test.ts` with a case that parses the root DESIGN.md brand block (added test-first in this task); `node scripts/validate-governance-docs.mjs`; `node scripts/verify-repo-hygiene.mjs`. Expected: pass.
+3. Commit: `docs: add DESIGN.md and PRODUCT.md for repo coding agents`.
+
+### Task 17: Proof lanes and plan ticks
+
+Steps:
+1. `pnpm typecheck`, `pnpm docs:check`, `pnpm verify:routed-context:snapshots`, `pnpm verify:runtime:truth`, `pnpm verify:surface:regression`, `git diff --check`. Expected: pass; record any lane that cannot run locally with its reason.
+2. Tick the Phase 2 boxes. Commit: `docs(plan): mark impeccable Phase 2 done`.

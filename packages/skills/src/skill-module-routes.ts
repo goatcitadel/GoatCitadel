@@ -30,13 +30,20 @@ export interface ResolveSkillModulesInput {
   artifactIntent?: SkillArtifactIntent;
 }
 
+/** Workspace guidance documents a route may inject after its modules: PRODUCT.md and DESIGN.md. */
+export type SkillContextDocType = "product" | "design";
+
 export interface SkillModuleResolution {
   routeId: string;
   command?: string;
   modules: SkillModuleRef[];
   /** Total byte ceiling across the resolved modules. */
   budgetBytes: number;
+  /** Workspace context docs the gateway reads, hashes into the receipt, and appends; absent for most skills. */
+  contextDocs?: SkillContextDocType[];
 }
+
+const IMPECCABLE_CONTEXT_DOCS: readonly SkillContextDocType[] = Object.freeze(["product", "design"]);
 
 export const IMPECCABLE_SKILL_NAME = "impeccable";
 export const DESIGN_INTELLIGENCE_SKILL_NAME = "design-intelligence";
@@ -123,9 +130,10 @@ const IMPECCABLE_MAIN = impeccableModule("main", "SKILL.md");
 const IMPECCABLE_CRAFT_FLOOR = impeccableModule("craft-floor", "reference/craft-floor.md");
 
 function impeccableRoute(routeId: string, modules: SkillModuleRef[], command?: string): SkillModuleResolution {
+  const contextDocs = [...IMPECCABLE_CONTEXT_DOCS];
   return command
-    ? { routeId, command, modules, budgetBytes: IMPECCABLE_BUDGET_BYTES }
-    : { routeId, modules, budgetBytes: IMPECCABLE_BUDGET_BYTES };
+    ? { routeId, command, modules, budgetBytes: IMPECCABLE_BUDGET_BYTES, contextDocs }
+    : { routeId, modules, budgetBytes: IMPECCABLE_BUDGET_BYTES, contextDocs };
 }
 
 function impeccableCommandRoute(command: string): SkillModuleResolution {
