@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtimeMocks = vi.hoisted(() => ({
   shouldRenderMonacoRuntime: vi.fn(),
+  stopTheme: vi.fn(),
 }));
 
 const loaderMocks = vi.hoisted(() => ({
@@ -14,9 +15,17 @@ const loaderMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./monaco-runtime", () => ({
-  shouldRenderMonacoRuntime: runtimeMocks.shouldRenderMonacoRuntime,
-}));
+vi.mock("./monaco-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./monaco-runtime")>();
+  return {
+    ...actual,
+    shouldRenderMonacoRuntime: runtimeMocks.shouldRenderMonacoRuntime,
+    observeMonacoTheme: vi.fn((apply: (theme: "vs" | "vs-dark") => void) => {
+      apply(actual.resolveMonacoTheme());
+      return runtimeMocks.stopTheme;
+    }),
+  };
+});
 
 vi.mock("./monaco-loader", () => ({
   loadMonacoEditorRuntime: loaderMocks.loadMonacoEditorRuntime,
@@ -93,7 +102,7 @@ describe("Monaco editor wrappers", () => {
     vi.clearAllMocks();
     vi.unstubAllGlobals();
     runtimeMocks.shouldRenderMonacoRuntime.mockReturnValue(false);
-    vi.stubGlobal("document", { querySelector: vi.fn(() => null) });
+    vi.stubGlobal("document", { documentElement: { dataset: {} }, querySelector: vi.fn(() => null) });
   });
 
   afterEach(() => {
@@ -123,7 +132,7 @@ describe("Monaco editor wrappers", () => {
     const monacoHarness = createMonaco();
     runtimeMocks.shouldRenderMonacoRuntime.mockReturnValue(true);
     loaderMocks.loadMonacoEditorRuntime.mockResolvedValue(monacoHarness.monaco);
-    vi.stubGlobal("document", { querySelector: vi.fn(() => ({ className: "theme-citadel-light" })) });
+    vi.stubGlobal("document", { documentElement: { dataset: {} }, querySelector: vi.fn(() => ({ className: "theme-citadel-light" })) });
     const onChange = vi.fn();
 
     renderer = create(<WorkbenchMonacoEditor value="initial" language="ts" height="50vh" onChange={onChange} />, {
@@ -160,6 +169,7 @@ describe("Monaco editor wrappers", () => {
     renderer.unmount();
     renderer = null;
     expect(monacoHarness.codeEditor.dispose).toHaveBeenCalled();
+    expect(runtimeMocks.stopTheme).toHaveBeenCalled();
     expect(monacoHarness.disposers[0]).toHaveBeenCalled();
   });
 
@@ -192,5 +202,6 @@ describe("Monaco editor wrappers", () => {
     renderer.unmount();
     renderer = null;
     expect(monacoHarness.diffEditor.dispose).toHaveBeenCalled();
+    expect(runtimeMocks.stopTheme).toHaveBeenCalled();
   });
 });
