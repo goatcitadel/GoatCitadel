@@ -21,7 +21,7 @@ import { useGatewayReachability } from "./use-gateway-reachability";
 function GatedCockpit() {
   const { activeWorkspaceId, notifications, theme, density } = useUiPreferences();
   useLayoutEffect(() => applyCockpitAppearance(theme, density), [theme, density]);
-  const { gatewayAccess, gatewayBusy, callerScope, retryGatewayAccess } = useGatewayAccess();
+  const { gatewayAccess, gatewayBusy, callerScope, retryGatewayAccess } = useGatewayAccess({ batchStartupReads: true });
   const accessRevision = useSyncExternalStore(subscribeGatewayAccessChange, getGatewayAccessRevision, () => 0);
   const queryClient = useMemo(createCockpitQueryClient, [callerScope]);
   const route = useCockpitRoute();

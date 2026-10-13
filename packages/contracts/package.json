@@ -22,6 +22,10 @@
     "./mesh-schema-node": {
       "types": "./dist/mesh-schema-node.d.ts",
       "default": "./dist/mesh-schema-node.js"
+    },
+    "./startup-reads": {
+      "types": "./dist/gateway-startup-reads.d.ts",
+      "default": "./dist/gateway-startup-reads.js"
     }
   },
   "repository": {

@@ -746,6 +746,16 @@ describe("client-core", () => {
     } finally { unsubscribe(); }
   });
 
+  it("honors cancellation while a successful response body is decoding", async () => {
+    let enter!: () => void; const entered = new Promise<void>(resolve => { enter = resolve; });
+    let finish!: (body: string) => void; const response = jsonResponse({});
+    vi.spyOn(response, "text").mockImplementation(() => { enter(); return new Promise<string>(resolve => { finish = resolve; }); });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response)); const controller = new AbortController();
+    const pending = request("/api/v1/coalesce/body-cancel", {signal: controller.signal});
+    const rejected = expect(pending).rejects.toMatchObject({name: "AbortError"});
+    await entered; controller.abort(); finish(JSON.stringify({ok: true})); await rejected;
+  });
+
   it("clears the coalescing entry once a GET settles so later calls re-fetch", async () => {
     const fetchMock = vi
       .fn()

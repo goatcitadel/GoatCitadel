@@ -9,6 +9,10 @@ export default defineConfig({
   resolve: {
     alias: [
       {
+        find: "@goatcitadel/contracts/startup-reads",
+        replacement: path.resolve(configDir, "../../packages/contracts/src/gateway-startup-reads.ts"),
+      },
+      {
         find: "@goatcitadel/contracts/remote-worker-runtime-node",
         replacement: path.resolve(configDir, "../../packages/contracts/src/remote-worker-runtime-node.ts"),
       },

@@ -1,3 +1,4 @@
+import { fetchStartupRead } from "./startup-reads";
 import { getGatewayCallerScope, getGatewayCallerScopeRevision, getGatewayAccessRevision, notifyGatewayAccessChanged } from "./access-scope";
 export { getGatewayAccessRevision, subscribeGatewayAccessChange } from "./access-scope";
 import type { OnboardingStartupState, UiActionState } from "@goatcitadel/contracts";
@@ -262,13 +263,13 @@ async function requestUncoalesced<T>(
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     init?.signal?.throwIfAborted();
     try {
-      const res = await fetch(buildGatewayUrl(path), {
+      const res = await fetchStartupRead(buildGatewayUrl(path), {
         ...init,
         headers: {
           ...headers,
         },
         method,
-      });
+      }, { installation, accessRevision, caller: getGatewayCallerScope(), callerRevision }, scopeCurrent);
       init?.signal?.throwIfAborted();
       const responseCorrelationId = res.headers.get("x-goatcitadel-correlation-id") ?? correlationId;
       setDevDiagnosticsActiveCorrelationId(responseCorrelationId);
@@ -339,6 +340,7 @@ async function requestUncoalesced<T>(
         return undefined as T;
       }
       const bodyText = await res.text();
+      init?.signal?.throwIfAborted();
       assertScopeCurrent();
       if (!bodyText) {
         return undefined as T;
