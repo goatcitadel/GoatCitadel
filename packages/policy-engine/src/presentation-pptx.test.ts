@@ -752,6 +752,13 @@ describe("presentation PPTX layout selection", () => {
       if (decision.renderer === "image-text" || decision.renderer === "stacked-list" || decision.renderer === "hero") {
         expect(roundRects, `${decision.renderer} slide ${index + 1}`).toHaveLength(0);
       }
+      // Without a card (and without an image) the bullets follow the title instead of floating mid-slide.
+      if (decision.renderer === "image-text" || decision.renderer === "stacked-list") {
+        const body = (textsBySlide[index] ?? []).find((text) =>
+          ["gc:body", "gc:body:stacked"].includes(String(text.options.objectName)),
+        );
+        expect(body?.options.valign, `${decision.renderer} slide ${index + 1}`).toBe("top");
+      }
       if (decision.renderer === "two-column" || decision.renderer === "comparison") {
         expect(roundRects.length, `${decision.renderer} slide ${index + 1}`).toBeGreaterThan(0);
       }

@@ -262,7 +262,19 @@ function drawImageTextSlide(
   // Narrative bullets sit directly on the background; a bordered card around prose is a default
   // container the craft floor rejects (cards are for things that are actually discrete).
   void pptx;
-  addBulletBlock(slide, content.bullets, design, 0.9, 1.6, showVisual ? 6.5 : 11.3, 4.4, sources);
+  addBulletBlock(
+    slide,
+    content.bullets,
+    design,
+    0.9,
+    1.6,
+    showVisual ? 6.5 : 11.3,
+    4.4,
+    sources,
+    "gc:body",
+    16,
+    showVisual ? "mid" : "top",
+  );
   if (showVisual && visualData) {
     slide.addImage({
       data: visualData,
@@ -308,7 +320,7 @@ function drawStackedListSlide(
   sources: readonly PresentationSource[],
 ): void {
   void pptx;
-  addBulletBlock(slide, content.bullets, design, 0.9, 1.6, 11.3, 4.4, sources, "gc:body:stacked");
+  addBulletBlock(slide, content.bullets, design, 0.9, 1.6, 11.3, 4.4, sources, "gc:body:stacked", 16, "top");
 }
 
 function drawCalloutSlide(
@@ -620,6 +632,7 @@ function addBulletBlock(
   sources: readonly PresentationSource[],
   objectName = "gc:body",
   fontSize = 16,
+  valign: "top" | "mid" = "mid",
 ): void {
   if (bullets.length === 0) {
     return;
@@ -637,7 +650,7 @@ function addBulletBlock(
     breakLine: false,
     paraSpaceAfterPt: 12,
     margin: 0.04,
-    valign: "mid",
+    valign,
   });
 }
 
