@@ -1,4 +1,5 @@
 import { canonicalJsonString } from "./canonical-json.js";
+import { normalizeRemoteWorkerCapabilityBinding, type RemoteWorkerCapabilityBinding } from "./remote-worker-capability-binding.js";
 import { redactSecretText } from "./secret-redaction.js";
 import { normalizeRemoteWorkerChatMessages } from "./remote-worker-chat-context.js";
 import {
@@ -663,7 +664,7 @@ export function normalizeRemoteWorkerInferenceApprovalResolutionReceipt(
   });
 }
 
-export interface RemoteWorkerInferenceBudgetOperationInput {
+export interface RemoteWorkerInferenceBudgetOperationInput extends RemoteWorkerCapabilityBinding {
   readonly operationId: string;
   readonly dispatchGeneration: string;
   readonly requestSha256: string;
@@ -679,7 +680,6 @@ export interface RemoteWorkerInferenceBudgetOperationInput {
   readonly turnId: string;
   readonly durableRunId: string;
   readonly taskId: string;
-  readonly capabilityProfileSha256: string;
   readonly routedContextSha256: string;
   readonly outputTokenCeiling: number;
   readonly reasoningTokenCeiling: number;
@@ -706,7 +706,7 @@ export function remoteWorkerInferenceBudgetOperationMaterial(input: RemoteWorker
     turnId: identifier(input.turnId, "budget turnId"),
     durableRunId: identifier(input.durableRunId, "budget durableRunId"),
     taskId: identifier(input.taskId, "budget taskId"),
-    capabilityProfileSha256: digest(input.capabilityProfileSha256, "budget capabilityProfileSha256"),
+    ...normalizeRemoteWorkerCapabilityBinding(input),
     routedContextSha256: digest(input.routedContextSha256, "budget routedContextSha256"),
     outputTokenCeiling: positiveInteger(
       input.outputTokenCeiling,

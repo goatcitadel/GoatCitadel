@@ -3,6 +3,7 @@ import { NotFoundError } from "@goatcitadel/contracts";
 import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import {
   SkillStateService,
+  buildActivationPolicyStateMaterial,
   type SkillStateMutationPendingOutcome,
   type SkillStateServiceHost,
 } from "./skill-state-service.js";
@@ -414,6 +415,39 @@ describe("approval-first skill state mutations", () => {
 });
 
 describe("approval-first activation policy", () => {
+  it("keeps selector mode legacy until a revision-bound approval applies and permits governed rollback", async () => {
+    const harness = createHarness();
+    expect(await harness.service.getActivationPolicy()).toMatchObject({ selectionMode: "legacy", revision: 1 });
+    for (const [index, selectionMode] of (["shadow", "ranked", "legacy"] as const).entries()) {
+      const before = await harness.service.getActivationPolicy();
+      const outcome = await harness.service.requestActivationPolicyApproval(
+        { selectionMode }, { expectedRevision: index + 1, requesterId: harness.requesterId },
+      );
+      if (!outcome.pendingApproval) throw new Error("expected selector policy approval");
+      expect(await harness.service.getActivationPolicy()).toEqual(before);
+      harness.storage.approvals.resolve(outcome.pendingApproval.approvalId, {
+        decision: "approve", resolvedBy: harness.resolverId,
+      });
+      await harness.service.executeApprovedSkillLifecycleMutation({ approvalId: outcome.pendingApproval.approvalId });
+      expect(await harness.service.getActivationPolicy()).toMatchObject({ selectionMode, revision: index + 2 });
+      await harness.service.executeApprovedSkillLifecycleMutation({ approvalId: outcome.pendingApproval.approvalId });
+      expect(await harness.service.getActivationPolicy()).toMatchObject({ selectionMode, revision: index + 2 });
+    }
+  });
+
+  it("rejects invalid selector modes and keeps old legacy approval hash material unchanged", async () => {
+    const harness = createHarness();
+    await expect(harness.service.requestActivationPolicyApproval(
+      { selectionMode: "automatic" as never }, { expectedRevision: 1 },
+    )).rejects.toThrow(/selectionMode/);
+    expect(countRows(harness, "approvals")).toBe(0);
+    const oldPolicy = { guardedAutoThreshold: 0.72, requireFirstUseConfirmation: true };
+    expect(buildActivationPolicyStateMaterial({ ...oldPolicy, selectionMode: "legacy" }, 1))
+      .toEqual(buildActivationPolicyStateMaterial(oldPolicy, 1));
+    expect(buildActivationPolicyStateMaterial({ ...oldPolicy, selectionMode: "ranked" }, 1))
+      .not.toEqual(buildActivationPolicyStateMaterial(oldPolicy, 1));
+  });
+
   it("requests, approves, and applies a policy update with governed evidence; unchanged patches are no-ops", async () => {
     const harness = createHarness();
     const noOp = await harness.service.requestActivationPolicyApproval(

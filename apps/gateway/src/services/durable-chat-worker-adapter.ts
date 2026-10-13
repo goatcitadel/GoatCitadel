@@ -71,7 +71,9 @@ export function prepareDurableChatWorkerContext(
   payload: unknown,
   required: boolean,
 ): RemoteWorkerChatContextSnapshot | undefined {
-  return prepared.turnAdmission && prepared.capabilityProfile && deps.remoteWorkerChatContexts
+  const placement = prepared.featureAdmission?.references.remotePlacement;
+  const admittedRemote = placement && "version" in placement && placement.version === "chat.remote-placement.admission.v1";
+  return prepared.turnAdmission && (prepared.capabilityProfile || admittedRemote) && deps.remoteWorkerChatContexts
     ? (required ? sealRemoteWorkerChatContextForTurn : trySealRemoteWorkerChatContextForTurn)(
         runId,
         payload,

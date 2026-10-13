@@ -95,6 +95,7 @@ export function buildInstalledIntegrationPluginRecord(
     trustWarnings: installMetadata.trustWarnings,
     descriptorHealth: installMetadata.descriptorHealth,
     theme: installMetadata.manifest?.theme ?? input.existing?.theme,
+    configurationForm: installMetadata.manifest?.configurationForm,
     toolOverrides: installMetadata.manifest?.toolOverrides
       ? installMetadata.manifest.toolOverrides.map((entry) => ({
           toolName: entry.toolName.trim(),

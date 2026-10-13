@@ -14,7 +14,7 @@ import {
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { runIdempotentExternalSideEffect } from "./external-side-effect-runner-service.js";
 import {
-  resolveRemoteWorkerChatProfile,
+  resolveRemoteWorkerChatAuthority,
   type RemoteWorkerChatAuthorityDependencies,
 } from "./remote-worker-chat-authority.js";
 import {
@@ -25,10 +25,15 @@ import {
 } from "./remote-worker-effect-settlement-service.js";
 import type { ToolInvocationCoordinator } from "./tool-invocation-coordinator-service.js";
 import type { McpRequesterScopedTurnContextHandle } from "./mcp-requester-resolution-service.js";
+import { createMcpRequesterAdmissionTurnContext, type McpChatTurnContextHandle } from "./mcp-requester-admission-context.js";
+import { createMeshAdmissionTurnContext } from "./gateway/mesh-chat-binding.js";
+import type { NativeMcpChatToolSchema } from "./gateway/native-mcp-chat-catalog.js";
+import type { McpRequesterAdmissionTurnContextHandle } from "./mcp-requester-admission-context.js";
 import { toolInvokeResultFromPendingAction } from "./approved-external-runtime-side-effect-service.js";
-import { isNativeMcpToolName, resolveNativeMcpChatToolBinding } from "./gateway/native-mcp-chat-binding.js";
+import { isNativeMcpToolName } from "./gateway/native-mcp-chat-binding.js";
 import type { MeshChatTurnContextHandle } from "./gateway/mesh-chat-binding.js";
 import type { MeshChatDispatchPort } from "./gateway/mesh-chat-dispatch.js";
+import { resolveRemoteWorkerNativeBinding } from "./remote-worker-external-tool-binding.js";
 
 type EffectStorage = Pick<
   AsyncStorage,
@@ -52,6 +57,7 @@ export interface RemoteWorkerEffectRuntimeDependencies extends RemoteWorkerChatA
   ): McpRequesterScopedTurnContextHandle | undefined;
   createMeshTurnContext?(profile: ChatTurnCapabilityProfileRecord): MeshChatTurnContextHandle;
   resolveMeshChatToolBinding?: MeshChatDispatchPort["resolveBinding"];
+  restoreRequesterAdmissionSchemas?(handle: McpRequesterAdmissionTurnContextHandle): Promise<NativeMcpChatToolSchema[]>;
   withToolModelBudget(
     input: RemoteWorkerToolModelBudgetInput,
     operation: () => Promise<ToolInvokeResult>,
@@ -69,7 +75,7 @@ export interface RemoteWorkerApprovedActionInput {
   pending: PendingApprovalAction;
   runtimeOwner: ChatTurnCapabilityToolRuntimeOwnerBinding;
   effectPotential: ToolEffectPotential;
-  mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle;
+  mcpRequesterTurnContext?: McpChatTurnContextHandle;
   meshTurnContext?: MeshChatTurnContextHandle;
   checkExecution(): Promise<void>;
   signal?: AbortSignal;
@@ -132,8 +138,12 @@ export class RemoteWorkerEffectRuntime {
         executionInput,
         protectedAuthority,
       );
-      const binding = await resolveRemoteWorkerChatProfile(this.dependencies, execution);
-      const selected = binding.profile.selection.tools.find(
+      const binding = await resolveRemoteWorkerChatAuthority(this.dependencies, execution, async () => {
+        const current = await storage.remoteWorkerAssignments.resolveActiveChatExecution(executionInput, protectedAuthority);
+        if (current.workload.workloadSha256 !== execution.workload.workloadSha256)
+          throw new Error("Worker effect capability authority changed.");
+      });
+      const selected = binding.evidence.tools.find(
         (tool) => tool.canonicalName === retained.intent.effectSelector,
       );
       if (!execution.authority.assignment.manifest.requiredCapabilityClasses.includes("governed_tool") || !selected)
@@ -145,7 +155,8 @@ export class RemoteWorkerEffectRuntime {
       if (
         (selected.meshPublication &&
           (!this.dependencies.createMeshTurnContext || !this.dependencies.resolveMeshChatToolBinding)) ||
-        (isNativeMcpToolName(selected.canonicalName) && !selected.mcpRequesterResolution && !selected.mcpStaticBinding)
+        (isNativeMcpToolName(selected.canonicalName) && !selected.mcpRequesterResolution && !selected.mcpStaticBinding &&
+          !binding.evidence.binding.admissionReference)
       )
         throw new Error("Worker effect requires its canonical scoped runtime owner.");
       return { execution, ...binding, selected };
@@ -156,35 +167,40 @@ export class RemoteWorkerEffectRuntime {
         { fence: input.fence, intent: retained.intent, checkExecution, executionInput },
         operation,
       );
-    const { profile, policy, selected } = binding;
+    const { evidence, policy, selected } = binding;
+    const admission = evidence.binding.admissionReference;
     const mcpRequesterTurnContext =
-      selected.canonicalName === "mcp.invoke" || selected.mcpRequesterResolution || selected.mcpStaticBinding
-        ? this.dependencies.createMcpRequesterTurnContext?.(profile)
+      admission && isNativeMcpToolName(selected.canonicalName) && evidence.assertCurrent
+        ? createMcpRequesterAdmissionTurnContext(admission.scope, admission.featureReferenceSha256, evidence.assertCurrent)
+        : selected.canonicalName === "mcp.invoke" || selected.mcpRequesterResolution || selected.mcpStaticBinding
+        ? evidence.profile && this.dependencies.createMcpRequesterTurnContext?.(evidence.profile)
         : undefined;
-    const meshTurnContext = selected.meshPublication ? this.dependencies.createMeshTurnContext?.(profile) : undefined;
+    const meshTurnContext = selected.meshPublication ? admission && evidence.assertCurrent
+      ? createMeshAdmissionTurnContext(admission.scope, admission.featureReferenceSha256, evidence.assertCurrent)
+      : evidence.profile && this.dependencies.createMeshTurnContext?.(evidence.profile) : undefined;
     const manifest = binding.execution.authority.assignment.manifest;
     const toolRunId = `remote-tool:${retained.intent.intentId}`;
     const idempotencyKey = `chat-tool-effect:${toolRunId}`;
-    const actorScope = profile.identity.workspaceId;
+    const actorScope = evidence.identity.workspaceId;
     const routePath = `external_side_effect:remote_worker_tool:${selected.canonicalName}:unknown_connection:${toolRunId}`;
     const context = {
       toolRunId,
       toolName: selected.canonicalName,
-      sessionId: profile.identity.sessionId,
-      turnId: profile.identity.turnId,
-      workspaceId: profile.identity.workspaceId,
+      sessionId: evidence.identity.sessionId,
+      turnId: evidence.identity.turnId,
+      workspaceId: evidence.identity.workspaceId,
       runId: manifest.durableRunId,
       idempotencyKey,
     };
     // Validate the brand and exact profile/actor/target before starting a Chat
     // tool run. Native arguments cannot mint or redirect requester authority.
-    await resolveNativeMcpChatToolBinding(
-      storage,
+    await resolveRemoteWorkerNativeBinding(
+      this.dependencies,
       {
         ...context,
         args: retained.args,
         agentId: "assistant",
-        citadelId: profile.identity.citadelId,
+        citadelId: evidence.identity.citadelId,
         policyContext: policy,
       },
       mcpRequesterTurnContext,
@@ -197,7 +213,7 @@ export class RemoteWorkerEffectRuntime {
             ...context,
             args: retained.args,
             agentId: "assistant",
-            citadelId: profile.identity.citadelId,
+            citadelId: evidence.identity.citadelId,
             policyContext: policy,
             permissionProfileId: policy.permissionProfileId,
           },
@@ -463,7 +479,7 @@ export class RemoteWorkerEffectRuntime {
                 args: retained.args,
                 agentId: "assistant",
                 taskId: manifest.taskId,
-                citadelId: profile.identity.citadelId,
+                citadelId: evidence.identity.citadelId,
                 surface: "chat",
                 policyContext: policy,
                 signal: input.signal,
@@ -487,13 +503,12 @@ export class RemoteWorkerEffectRuntime {
                 ...(mcpRequesterTurnContext ? { mcpRequesterTurnContext } : {}),
                 ...(meshTurnContext ? { meshTurnContext } : {}),
                 toolRuntimeOwner: selected.runtimeOwner,
-                ...(profile.catalog.runtimeInterpositionHash === undefined ||
-                profile.catalog.toolCallBeforeHookCount === undefined
+                ...(evidence.runtimeInterposition === undefined
                   ? {}
                   : {
                       toolCallBeforeHookInterposition: {
-                        hash: profile.catalog.runtimeInterpositionHash,
-                        count: profile.catalog.toolCallBeforeHookCount,
+                        hash: evidence.runtimeInterposition.hash,
+                        count: evidence.runtimeInterposition.count,
                       },
                     }),
               },

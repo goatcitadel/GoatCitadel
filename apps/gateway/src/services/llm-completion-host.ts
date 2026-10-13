@@ -16,7 +16,7 @@ export interface LlmCompletionHost {
   readonly llmService: Pick<
     LlmService,
     "chatCompletions" | "chatCompletionsStream" | "getRuntimeConfig" | "resolveExecutionApiStyle"
-  >;
+  > & Partial<Pick<LlmService, "runWithDispatchGuard" | "streamWithDispatchGuard">>;
   resolveMemoryWorkspaceRelativeDir(workspace: string | undefined, sessionId: string | undefined): Promise<string>;
   resolveChatCompletionHookWorkspaceId(request: ChatCompletionRequest): Promise<string>;
   persistContextManifestForCompletionRequest(input: {

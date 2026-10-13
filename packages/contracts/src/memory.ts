@@ -183,9 +183,47 @@ export interface MemoryQmdStatsResponse {
 
 export interface MemoryRetrievalBenchmarkRequest {
   prompts: string[];
+  /** Optional operator-authored ground truth; labels score returned sources and never influence retrieval. */
+  labels?: MemoryRetrievalBenchmarkLabel[];
   workspace?: string;
   relationScope?: MemoryRelationScope;
   maxContextTokens?: number;
+}
+
+export interface MemoryRetrievalBenchmarkLabel {
+  prompt: string;
+  relevantSources: Array<Pick<MemoryCitation, "sourceType" | "sourceRef">>;
+  forbiddenSources?: Array<Pick<MemoryCitation, "sourceType" | "sourceRef">>;
+  expectNoResults?: boolean;
+}
+
+export interface MemoryRetrievalRelevanceMetrics {
+  retrievedSourceCount: number;
+  relevantSourceCount: number;
+  matchedRelevantCount: number;
+  precision: number;
+  recall: number;
+  reciprocalRank: number;
+  forbiddenSourceCount: number;
+  abstentionCorrect?: boolean;
+}
+
+/** Request-local evaluation diagnostics, not persisted memory authority or provider tokenizer usage. */
+export interface MemoryContextCompositionDiagnostics {
+  outcome: "completed" | "aborted" | "failed";
+  contextStatus?: MemoryQmdStatus;
+  embeddingCacheStatus: "skipped" | "supplied" | "hit" | "miss" | "shared" | "refresh";
+  embeddingProviderIsReal: boolean;
+  contextCacheStatus: "not_checked" | "hit" | "miss" | "refresh";
+  timings: {
+    totalMs: number; accessMs: number; embeddingMs: number; sourceReadMs: number;
+    rankingMs: number; contextCacheMs: number; distillationMs: number;
+  };
+  availableCandidateCount?: number;
+  selectedCandidateCount?: number;
+  citationsCount?: number;
+  originalTokenEstimate?: number;
+  retainedTokenEstimate?: number;
 }
 
 export interface MemoryRetrievalBenchmarkItem {
@@ -197,6 +235,8 @@ export interface MemoryRetrievalBenchmarkItem {
   originalTokenEstimate: number;
   distilledTokenEstimate: number;
   overlapScore: number;
+  relevance?: MemoryRetrievalRelevanceMetrics;
+  composition?: MemoryContextCompositionDiagnostics;
   retrievalStrategy?: MemoryRetrievalStrategy;
   semanticCoverageNote?: string;
   qmdStatus?: MemoryQmdStatus;
@@ -208,6 +248,15 @@ export interface MemoryRetrievalBenchmarkResponse {
   itemCount: number;
   avgLatencyMs: number;
   avgOverlapScore: number;
+  relevanceSummary?: {
+    evaluatedItemCount: number;
+    avgPrecision: number;
+    avgRecall: number;
+    meanReciprocalRank: number;
+    forbiddenSourceCount: number;
+    noResultCaseCount: number;
+    correctAbstentions: number;
+  };
   retrievalStrategies: MemoryRetrievalStrategy[];
   semanticCoverageNote: string;
   items: MemoryRetrievalBenchmarkItem[];

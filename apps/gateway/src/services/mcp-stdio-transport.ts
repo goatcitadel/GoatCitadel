@@ -4,10 +4,13 @@ import { existsSync } from "node:fs";
 import type { McpServerRecord } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import type { McpRuntimeTransportOptions, JsonRpcEnvelope } from "./mcp-runtime.js";
-import type { McpStdioSessionPool } from "./mcp-stdio-session-pool.js";
+import type { McpStdioSessionPool, McpStdioResourceOwner } from "./mcp-stdio-session-pool.js";
 import { terminateProcessTree } from "./process-tree-killer.js";
 import { isReviewedPlaywrightServer, resolveReviewedMcpLaunch } from "./reviewed-mcp-package.js";
-import { assertMcpStaticEnvironmentCurrent, type McpStaticEnvironmentHandle } from "./mcp-static-environment-service.js";
+import {
+  assertMcpStaticEnvironmentCurrent,
+  type McpStaticEnvironmentHandle,
+} from "./mcp-static-environment-service.js";
 import { buildMcpChildEnv, prepareStaticEnvironment } from "./mcp-transport-credentials.js";
 const log = logger.child("mcp-runtime");
 const MCP_PROTOCOL_VERSION = "2024-11-05";
@@ -17,7 +20,11 @@ const MCP_STDOUT_LINE_MAX_BYTES = 512 * 1024;
 interface McpStdioTransportPort extends McpRuntimeTransportOptions {
   staticEnvironment?: McpStaticEnvironmentHandle;
 }
-interface McpStdioSessionPort { pool: McpStdioSessionPool<StdioClient>; scopeKey: string; }
+interface McpStdioSessionPort {
+  pool: McpStdioSessionPool<StdioClient>;
+  scopeKey: string;
+  resourceOwner?: McpStdioResourceOwner;
+}
 export interface StdioClient {
   request(method: string, params?: Record<string, unknown>, signal?: AbortSignal): Promise<JsonRpcEnvelope>;
   notify(method: string, params?: Record<string, unknown>): void;
@@ -25,7 +32,6 @@ export interface StdioClient {
   isClosed(): boolean;
   readStderr(): string;
 }
-
 
 /**
  * Whether a child's stdin can still accept writes. A child that exited between
@@ -37,7 +43,6 @@ export function isChildStdinWritable(child: ChildProcess): boolean {
   const stdin = child.stdin;
   return Boolean(stdin) && !stdin!.destroyed && !stdin!.writableEnded && stdin!.writable !== false;
 }
-
 
 /**
  * Write a JSON-RPC line to a child's stdin, tolerating a broken pipe.
@@ -71,7 +76,6 @@ export function writeToChildStdin(child: ChildProcess, server: McpServerRecord, 
   }
 }
 
-
 /**
  * Attach a one-time error handler to a child's stdin so a broken pipe (EPIPE /
  * ERR_STREAM_DESTROYED) emitted asynchronously is caught and logged as a
@@ -96,11 +100,13 @@ export function attachChildStdinErrorHandler(
   });
 }
 
-
-export function createMcpChildStreamError(server: McpServerRecord, streamName: "stdin" | "stdout" | "stderr", error: Error) {
+export function createMcpChildStreamError(
+  server: McpServerRecord,
+  streamName: "stdin" | "stdout" | "stderr",
+  error: Error,
+) {
   return new Error(`MCP server ${server.label} ${streamName} stream failed: ${error.message}`, { cause: error });
 }
-
 
 export function attachChildOutputErrorHandlers(
   child: ChildProcess,
@@ -114,7 +120,6 @@ export function attachChildOutputErrorHandlers(
     onError(createMcpChildStreamError(server, "stderr", error));
   });
 }
-
 
 /**
  * Terminate an MCP child process robustly across platforms.
@@ -141,7 +146,6 @@ export function terminateChild(child: ChildProcess, server: McpServerRecord): vo
   });
 }
 
-
 export async function withStdioMcpClient<T>(
   server: McpServerRecord,
   timeoutMs: number,
@@ -153,13 +157,30 @@ export async function withStdioMcpClient<T>(
   options = await prepareStaticEnvironment(server, options);
   if (session) {
     // Hash effective spawn environment without retaining credentials in the key.
-    const binding = createHash("sha256").update(JSON.stringify({
-      command: server.command, args: server.args, env: buildMcpChildEnv(server, options),
-      policy: server.policy, trustTier: server.trustTier, cwd: process.cwd(), timeoutMs,
-      packageRoot: options.packageRoot, networkAllowlist: options.networkAllowlist,
-    })).digest("hex");
-    return session.pool.use(server.serverId, session.scopeKey, binding,
-      (creationSignal) => createStdioMcpClient(server, timeoutMs, creationSignal, true, options), run, signal);
+    const binding = createHash("sha256")
+      .update(
+        JSON.stringify({
+          command: server.command,
+          args: server.args,
+          env: buildMcpChildEnv(server, options),
+          policy: server.policy,
+          trustTier: server.trustTier,
+          cwd: process.cwd(),
+          timeoutMs,
+          packageRoot: options.packageRoot,
+          networkAllowlist: options.networkAllowlist,
+        }),
+      )
+      .digest("hex");
+    return session.pool.use(
+      server.serverId,
+      session.scopeKey,
+      binding,
+      (creationSignal) => createStdioMcpClient(server, timeoutMs, creationSignal, true, options),
+      run,
+      signal,
+      session.resourceOwner,
+    );
   }
   const client = await createStdioMcpClient(server, timeoutMs, signal, false, options);
   try {
@@ -171,7 +192,6 @@ export async function withStdioMcpClient<T>(
   }
 }
 
-
 export async function createStdioMcpClient(
   server: McpServerRecord,
   timeoutMs: number,
@@ -182,7 +202,8 @@ export async function createStdioMcpClient(
   const command = resolveSpawnCommand(server.command ?? "");
   // Avoid adding an asynchronous boundary to ordinary stdio initialization.
   const reviewed = isReviewedPlaywrightServer(server)
-    ? await resolveReviewedMcpLaunch(server, { ...options, signal }) : undefined;
+    ? await resolveReviewedMcpLaunch(server, { ...options, signal })
+    : undefined;
   if (options.staticEnvironment) await assertMcpStaticEnvironmentCurrent(options.staticEnvironment, server);
   signal?.throwIfAborted();
   const spawnSpec = reviewed ?? resolveSpawnSpec(command, server.args ?? []);
@@ -391,14 +412,12 @@ export async function createStdioMcpClient(
   }
 }
 
-
 export function enrichStdioError(error: unknown, client: StdioClient): Error {
   const baseMessage = error instanceof Error ? error.message : String(error);
   const suffix = client.readStderr().slice(0, 500);
   const message = suffix && !baseMessage.includes(suffix) ? `${baseMessage} [stderr: ${suffix}]`.trim() : baseMessage;
   return new Error(message, { cause: error });
 }
-
 
 export function resolveSpawnCommand(
   command: string,
@@ -428,7 +447,6 @@ export function resolveSpawnCommand(
   return command;
 }
 
-
 export function resolveSpawnSpec(
   command: string,
   args: string[],
@@ -443,11 +461,9 @@ export function resolveSpawnSpec(
   return { command, args };
 }
 
-
 export function buildWindowsCommand(parts: string[]): string {
   return parts.map((value) => quoteWindowsCommandArg(value)).join(" ");
 }
-
 
 export function quoteWindowsCommandArg(value: string): string {
   assertSafeWindowsCommandArg(value);
@@ -459,7 +475,6 @@ export function quoteWindowsCommandArg(value: string): string {
   }
   return `"${value}"`;
 }
-
 
 export function assertSafeWindowsCommandArg(value: string): void {
   if (/["%\r\n\0]/.test(value)) {

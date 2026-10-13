@@ -33,6 +33,7 @@ import {
 } from "./chat-durable-runtime-authority.js";
 import { markGeneralChatPostCommitPending } from "./chat-durable-run-service.js";
 import { RemoteWorkerApprovalResumeRequiredError } from "./remote-worker-approved-action-guard.js";
+import { ChatFanoutApprovalResumeRequiredError } from "./chat-fanout-approval-service.js";
 import {
   StaleDelegationScopeResumeError,
   UnverifiableDelegationInstructionsError,
@@ -55,6 +56,39 @@ const APPROVAL_TEST_POST_COMMIT_ELIGIBILITY = {
 };
 
 describe("approval-resolution-effects-service", () => {
+  it("yields fanout execution to durable Chat without changing its pending action or replaying the effect after restart", async () => {
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    try {
+      const approvalId = "fanout-owner-approval";
+      storage.approvals.createDeterministicDetachedWithTtlDuration({
+        approvalId, kind: "tool.invoke", riskLevel: "danger", payload: { toolName: "agent.fanout" }, preview: {},
+        linkage: { workspaceId: "workspace", sessionId: "session", turnId: "turn", runId: "run" },
+      }, 60_000);
+      storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator" });
+      storage.pendingApprovalActions.upsertPending({ approvalId, actionType: "tool.invoke", createdAt: new Date().toISOString(),
+        request: { toolName: "agent.fanout", args: { tasks: ["Review fixture"] }, sessionId: "session", turnId: "turn", runId: "run" } });
+      const original = storage.pendingApprovalActions.find(approvalId);
+      const effect = storage.approvalEffects.upsert({ approvalId, effectKind: "pending_action_execute",
+        targetKind: "pending_action", targetId: approvalId, payload: {} });
+      const deps = createApprovalEffectDeps();
+      deps.executeApprovedPendingAction.mockRejectedValue(new ChatFanoutApprovalResumeRequiredError());
+      const processor = new ApprovalEffectsService({ storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
+        deps) as unknown as { workerId: string; handlePendingActionExecute(effect: ApprovalEffectRecord): Promise<void> };
+      const claim = storage.approvalEffects.claimNextPendingEffect(processor.workerId, new Date().toISOString(),
+        new Date(Date.now() + 60_000).toISOString())!;
+      await processor.handlePendingActionExecute(claim);
+      expect(storage.pendingApprovalActions.find(approvalId)).toEqual(original);
+      expect(storage.approvalEffects.get(effect.effectId)).toMatchObject({ status: "skipped",
+        result: { reason: "chat_fanout_resume_required", actionType: "tool.invoke", resolutionStatus: "pending" } });
+      expect(storage.approvalEffects.claimNextPendingEffect("replacement-worker", new Date().toISOString(),
+        new Date(Date.now() + 60_000).toISOString())).toBeUndefined();
+      expect(deps.executeApprovedPendingAction).toHaveBeenCalledOnce();
+      expect(deps.wakeDurableRun).not.toHaveBeenCalled();
+    } finally {
+      storage.close();
+    }
+  });
+
   it.each([
     { error: new UnverifiableDelegationInstructionsError(), terminal: true },
     { error: new StaleDelegationScopeResumeError(), terminal: true },

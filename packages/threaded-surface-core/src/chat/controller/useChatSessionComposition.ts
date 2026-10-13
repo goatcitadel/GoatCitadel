@@ -130,6 +130,7 @@ export function useChatSessionComposition({
   const chatTimersEnabled = sessionData.settings?.features?.chatTimersV1Enabled === true;
   const typedRunVariablesEnabled = sessionData.settings?.features?.typedRunVariablesV1Enabled === true;
   const documentEditingEnabled = sessionData.settings?.features?.documentEditingV1Enabled === true;
+  const explicitContextEnabled = sessionData.settings?.chatFeatureAvailability?.explicitContext === true;
   const runVariables = useRunVariablePanel({
     selectedSessionId: selection.selectedSessionId,
     setDraft,
@@ -303,6 +304,7 @@ export function useChatSessionComposition({
     selectedSession: threadController.selectedSession,
     selectedSessionId: selection.selectedSessionId,
     documentEditingEnabled,
+    explicitContextEnabled,
     setUiError: setUiError,
     setActiveGeneratedArtifact,
     loadSessionSecondaryState: loadSessionSecondaryState,
@@ -315,6 +317,7 @@ export function useChatSessionComposition({
     sessionData,
     captureOutboundExternalContextRefs,
     documentContext,
+    explicitContextEnabled,
     runVariables,
     sessionStatusEnabled,
     refresh,

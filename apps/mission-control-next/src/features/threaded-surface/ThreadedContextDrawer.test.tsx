@@ -134,6 +134,21 @@ function baseProps(overrides: Record<string, unknown> = {}) {
 afterEach(() => { __resetSessionDraftsForTests(); });
 
 describe("ThreadedContextDrawer", () => {
+  it("offers available supervised coding delegates and guards unbound projects", async () => {
+    const onSuggestDelegation = vi.fn(), onRunCodeDelegation = vi.fn(), onAcceptDelegation = vi.fn();
+    let renderer: ReactTestRenderer | null = null;
+    const props = baseProps({ supervisedDelegationAvailable: true, codingDelegationAvailable: true, onSuggestDelegation, onRunCodeDelegation, onAcceptDelegation,
+      selectedSession: { sessionId: "session-1", projectId: "project-1" }, selectedProject: { lifecycleStatus: "active" },
+      delegationSuggestion: { mode: "parallel", objective: "Review a change", roles: ["QA"] } });
+    await act(async () => { renderer = create(<ThreadedContextDrawer surface="chat" props={props} />); });
+    await act(async () => findButton(renderer!.root, "Assist").props.onClick());
+    expect(renderer!.root.findByProps({ "aria-label": "Subagent policy" }).props.disabled).toBe(false);
+    await act(async () => { findButton(renderer!.root, "Suggest delegation").props.onClick(); findButton(renderer!.root, "Delegate review").props.onClick(); findButton(renderer!.root, "Approve delegation").props.onClick(); });
+    expect(onSuggestDelegation).toHaveBeenCalledOnce(); expect(onRunCodeDelegation).toHaveBeenCalledWith("review"); expect(onAcceptDelegation).toHaveBeenCalledOnce();
+    expect(collectText(renderer!.root)).toContain("separate code review and hash check");
+    await act(async () => renderer!.update(<ThreadedContextDrawer surface="chat" props={{ ...props, codingDelegationAvailable: false }} />));
+    expect(findButton(renderer!.root, "Delegate implementation").props.disabled).toBe(true);
+  });
   it("keeps informational context disclosures closed with explicit ARIA targets", async () => {
     let renderer: ReactTestRenderer | null = null;
     await act(async () => {
@@ -192,7 +207,7 @@ describe("ThreadedContextDrawer", () => {
     expect(select.props.value).toBe("ask_when_useful");
     expect(select.props.disabled).toBe(true);
     expect(select.findByProps({ value: "auto_when_useful" }).props.disabled).toBe(true);
-    expect(collectText(renderer!.root)).toContain("Temporarily unavailable for new Chat turns");
+    expect(collectText(renderer!.root)).toContain("Supervised delegation is not enabled for this runtime");
     expect(onPrefPatch).not.toHaveBeenCalled();
   });
 

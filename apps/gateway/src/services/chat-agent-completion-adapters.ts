@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ChatCompletionResponse } from "@goatcitadel/contracts";
+import { readCanonicalStreamRouting } from "./llm-stream-routing.js";
 
 export interface ParsedToolCall {
   readonly id: string;
@@ -37,6 +38,7 @@ export interface CompletionStreamAggregate {
   finishReason?: string;
   content: string;
   usage?: Record<string, unknown>;
+  routing?: ChatCompletionResponse["routing"];
   modelUsageEventIds: Set<string>;
   toolCalls: Map<number, CompletionStreamToolCallState>;
   providerNativeContent: Array<Record<string, unknown>>;
@@ -383,6 +385,8 @@ export function absorbCompletionStreamChunk(
     aggregate.usage = rawChunk.usage as Record<string, unknown>;
   }
   collectModelUsageEventIds(aggregate.modelUsageEventIds, rawChunk);
+  const routing = readCanonicalStreamRouting(rawChunk);
+  if (routing) aggregate.routing = routing;
 
   const choices = Array.isArray(rawChunk.choices) ? (rawChunk.choices as Array<Record<string, unknown>>) : [];
   let textDelta = "";
@@ -536,6 +540,7 @@ export function buildCompletionFromAggregate(aggregate: CompletionStreamAggregat
       },
     ],
     usage: aggregate.usage,
+    ...(aggregate.routing ? { routing: aggregate.routing } : {}),
     ...(aggregate.modelUsageEventIds.size > 0 ? { modelUsageEventIds: [...aggregate.modelUsageEventIds] } : {}),
   };
 }

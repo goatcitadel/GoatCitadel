@@ -38,6 +38,7 @@ type Input = {
   session: Pick<
     ReturnType<typeof useChatSessionComposition>,
     | "documentContext"
+    | "explicitContextEnabled"
     | "routeArtifactId"
     | "sessionData"
     | "loadSessionCoreState"
@@ -294,6 +295,8 @@ export function useChatGovernedActionComposition({
   });
   const paletteActions = useChatComposerPaletteActions({
     workspaceId,
+    explicitContextEnabled: session.explicitContextEnabled,
+    includeDocumentContext: session.documentContext.includeDocumentContext,
     ensureSession: session.sessionControls.ensureSession,
     setPendingAttachments,
     pushLocalNotice: pushLocalNotice,

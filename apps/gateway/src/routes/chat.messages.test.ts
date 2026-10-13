@@ -114,6 +114,22 @@ describe("chat message routes", () => {
     expect(JSON.stringify(denied.json())).not.toContain("profile-1");
   });
 
+  it("scopes admission-bound routed context inspection to the authenticated operator", async () => {
+    const getChatTurnRoutedContext = vi.fn().mockResolvedValueOnce({ state: "admission_bound", routedContext: { snapshotId: "snapshot-1" } })
+      .mockRejectedValueOnce(new NotFoundError({ entity: "chat routed context", id: "turn-1" }));
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.addHook("onRequest", async (request) => { request.authActorId = "operator-1"; });
+    app.decorate("services", { chatMessages: { getChatTurnRoutedContext } } as never);
+    await app.register(chatRoutes);
+    const allowed = await app.inject({ method: "GET", url: "/api/v1/chat/sessions/session-1/turns/turn-1/routed-context?workspaceId=workspace-1" });
+    expect(allowed.statusCode).toBe(200);
+    expect(getChatTurnRoutedContext).toHaveBeenLastCalledWith("session-1", "turn-1", { workspaceId: "workspace-1", operatorId: "operator-1" });
+    const denied = await app.inject({ method: "GET", url: "/api/v1/chat/sessions/session-1/turns/turn-1/routed-context?workspaceId=other" });
+    expect(denied.statusCode).toBe(404);
+    expect(denied.body).not.toContain("snapshot-1");
+  });
+
   it("rejects invalid decision trace include flags without loading the thread", async () => {
     const getChatThread = vi.fn();
     app = Fastify();

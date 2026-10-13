@@ -15,6 +15,7 @@ import type { McpServerStore } from "./mcp-server-store.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import { DEFAULT_WORKSPACE_ID, getLlmConfigForGateway } from "./gateway-route-composition-shared.js";
 import { updateLlmConfigWithTransportReceipt } from "./provider-transport-receipt.js";
+import { readMcpServerTestEvidence } from "./mcp-server-test-evidence.js";
 
 export function composeMcpAdministration(
   store: Pick<McpServerStore, "readServers" | "writeServers" | "patchServerState" | "completeConnection" | "readTools" |
@@ -113,6 +114,11 @@ export function composeToolsMcpRouteDependencies(
       listMcpTemplateDiscovery: async () => await mcpDiagnosticsService.listMcpTemplateDiscovery(mcpDiagnosticsDeps),
       listMcpTemplates: async () => await gateway.listMcpTemplates(),
       listMcpTools: async (serverId: string) => await gateway.listMcpTools(serverId),
+      readMcpServerTestEvidence: (serverId, scope) => readMcpServerTestEvidence({
+        storage: gateway.storage,
+        readServer: async (id) => (await gateway.listMcpServers()).find((server) => server.serverId === id),
+        readTools: (id) => gateway.listMcpTools(id),
+      }, serverId, scope),
       runMcpServerHealthCheck: async (serverId: string) =>
         await mcpDiagnosticsService.runMcpServerHealthCheck(mcpDiagnosticsDeps, serverId),
       startMcpOAuth: async (serverId: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>) =>

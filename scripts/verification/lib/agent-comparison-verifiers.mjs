@@ -4,6 +4,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import { COMPARISON_TASKS, PRODUCTS, sha256 } from "./agent-comparison.mjs";
+import { FEATURE_ACCEPTANCE_TASKS } from "./agent-comparison-acceptance-fixtures.mjs";
+import { verifyFeatureAcceptance } from "./agent-comparison-acceptance.mjs";
 import {
   EXECUTION_BINDING_FIELDS,
   normalizeComparisonPermissions,
@@ -16,6 +18,9 @@ export const COMPARISON_VERIFIER_SHA256 = sha256({
   verifier: sha256(readFileSync(new URL(import.meta.url))),
   fixtures: sha256(readFileSync(new URL("./agent-comparison.mjs", import.meta.url))),
   permissions: sha256(readFileSync(new URL("./agent-comparison-permissions.mjs", import.meta.url))),
+  acceptance: sha256(readFileSync(new URL("./agent-comparison-acceptance.mjs", import.meta.url))),
+  acceptanceFixtures: sha256(readFileSync(new URL("./agent-comparison-acceptance-fixtures.mjs", import.meta.url))),
+  acceptanceProfile: sha256(readFileSync(new URL("./agent-comparison-acceptance-profile.mjs", import.meta.url))),
 });
 const EVIDENCE_VERSION = "goatcitadel.agent-comparison.execution.v1";
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
@@ -27,7 +32,7 @@ const requireValue = (condition, message) => {
  * directory. These checks do not accept model self-grades or authenticate a
  * third-party log by its filename; retain the native source receipts as well. */
 export async function verifyComparisonEvidence({ taskId, workspaceRoot, evidenceRoot }) {
-  const task = COMPARISON_TASKS.find((item) => item.id === taskId);
+  const task = [...COMPARISON_TASKS, ...FEATURE_ACCEPTANCE_TASKS].find((item) => item.id === taskId);
   requireValue(task, "Unknown comparison task.");
   const workspace = await ordinaryRoot(workspaceRoot);
   const evidence = await ordinaryRoot(evidenceRoot);
@@ -53,7 +58,7 @@ export async function verifyComparisonEvidence({ taskId, workspaceRoot, evidence
   requireValue(
     Array.isArray(execution.nativeReceipts) &&
       execution.nativeReceipts.length > 0 &&
-      execution.nativeReceipts.length <= 100,
+      execution.nativeReceipts.length <= (FEATURE_ACCEPTANCE_TASKS.some((entry) => entry.id === taskId) ? 512 : 100),
     "At least one retained native receipt is required.",
   );
   const receiptPaths = new Set();
@@ -104,7 +109,10 @@ export async function verifyComparisonEvidence({ taskId, workspaceRoot, evidence
     fixturesPreserved &&= (await read(workspace, name)) === value;
   }
   const passed = Object.fromEntries(task.criteria.map((criterion) => [criterion, false]));
-  if (taskId === "cited_research") {
+  if (FEATURE_ACCEPTANCE_TASKS.some((entry) => entry.id === taskId)) {
+    Object.assign(passed, await verifyFeatureAcceptance({ taskId, execution,
+      readEvidence: (name) => read(evidence, name), readWorkspace: (name) => read(workspace, name) }));
+  } else if (taskId === "cited_research") {
     const answer = JSON.parse(await read(workspace, "answer.json"));
     const plans = Array.isArray(answer.plans) ? answer.plans : [];
     const find = (name, gb) => plans.find((plan) => plan.name === name && plan.includedGb === gb);
@@ -258,7 +266,9 @@ export async function verifyComparisonEvidence({ taskId, workspaceRoot, evidence
     product: execution.product,
     evidenceKind: execution.source === "controlled_fixture" ? "controlled" : "live",
     permissionEvidence,
-    outcome: fixturesPreserved && Object.values(passed).every(Boolean) ? "passed" : "failed",
+    outcome: FEATURE_ACCEPTANCE_TASKS.some(entry => entry.id === taskId) && execution.acceptanceDisposition !== undefined
+      ? execution.acceptanceDisposition
+      : fixturesPreserved && Object.values(passed).every(Boolean) ? "passed" : "failed",
     fixturesPreserved,
     evidence: Object.fromEntries(reads),
     verificationRuns,

@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { GUIDED_CHANNEL_CATALOG_IDS, assertGuidedChannelCatalog, assertGuidedNarrowCoverage, assertExactChannelPlanHandoff, filterAssertedChannelApprovalConflict, assertResumedChannelDraftEvidence } from "./channel-guided-setup-lane.mjs";
+import { GUIDED_CHANNEL_CATALOG_IDS, assertGuidedChannelCatalog, assertGuidedNarrowCoverage, assertExactChannelPlanHandoff, filterAssertedChannelApprovalConflict, assertResumedChannelDraftEvidence, isChannelProofMutation } from "./channel-guided-setup-lane.mjs";
 describe("Guided Channels browser proof assertions", () => {
+  it("separates only the exact PUT presence signal from guarded API mutations", () => {
+    assert.equal(isChannelProofMutation("PUT", "/api/v1/notifications/presence"), false);
+    assert.equal(isChannelProofMutation("GET", "/api/v1/channels/drafts/draft-a/evidence"), false);
+    for (const [method, pathname] of [["POST", "/api/v1/notifications/presence"],
+      ["PUT", "/api/v1/notifications/presence/other"], ["PATCH", "/api/v1/channels/drafts/draft-a"],
+      ["POST", "/api/v1/channels/drafts/draft-a/test"], ["POST", "/api/v1/change-plans"],
+      ["DELETE", "/api/v1/integrations/connections/connection-a"]]) {
+      assert.equal(isChannelProofMutation(method, pathname), true);
+    }
+  });
   it("rejects a same-sized catalog that silently loses or adds an adapter", () => {
     const definitions = GUIDED_CHANNEL_CATALOG_IDS.map(catalogId => ({ catalog: { catalogId }, wizard: { introSummary: "Guided preparation", steps: [{}] }, lifecycle: { supportsDrafts: true } }));
     assert.doesNotThrow(() => assertGuidedChannelCatalog(definitions));

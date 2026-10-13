@@ -3,6 +3,11 @@ import {
   REMOTE_WORKER_ASSIGNMENT_WORKLOAD_SCHEMA_VERSION,
   REMOTE_WORKER_INFERENCE_FRAME_GENESIS_SHA256,
   canonicalJsonString,
+  normalizeRemoteWorkerCapabilityBinding,
+  remoteWorkerCapabilityBindingForTurn,
+  readDurableChatTurnExecutionPayloadAuthority,
+  sameRemoteWorkerCapabilityBinding,
+  type RemoteWorkerCapabilityBinding,
   normalizeRemoteWorkerInferenceFramePayload,
   normalizeRemoteWorkerInferenceUsageEventIds,
   remoteWorkerInferenceFramePayloadSha256,
@@ -52,6 +57,12 @@ export function buildWorkerInferenceSubmission(
     throw new Error("Native Chat context differs from its continuation.");
   const payload = record(workload.payload, "workload payload");
   const request = record(payload.request, "Chat request");
+  const capability = normalizeRemoteWorkerCapabilityBinding(workload as RemoteWorkerCapabilityBinding);
+  if (capability.admissionReference) {
+    const admitted = readDurableChatTurnExecutionPayloadAuthority({ workflowKey: "chat.turn.execute", durableRunId: workload.durableRunId, payload });
+    if (!admitted || workload.capabilityProfileId !== undefined || !sameRemoteWorkerCapabilityBinding(remoteWorkerCapabilityBindingForTurn(admitted), capability))
+      throw new Error("Worker inference admission reference differs from its canonical workload.");
+  }
   const identity = {
     schemaVersion: workload.schemaVersion,
     registryWorkspaceId: workload.registryWorkspaceId,
@@ -60,8 +71,8 @@ export function buildWorkerInferenceSubmission(
     durableRunId: workload.durableRunId,
     durableRunVersion: workload.durableRunVersion,
     durableRunPayloadSha256: workload.durableRunPayloadSha256,
-    capabilityProfileId: workload.capabilityProfileId,
-    capabilityProfileSha256: workload.capabilityProfileSha256,
+    ...(workload.capabilityProfileId === undefined ? {} : { capabilityProfileId: workload.capabilityProfileId }),
+    ...capability,
     contextSnapshotSha256: workload.contextSnapshotSha256,
     ...(native ? { nativeContinuation: native.continuation, nativeChatContext: native } : {}),
     ...(history ? { nativeChatHistory: history } : {}),
@@ -72,8 +83,8 @@ export function buildWorkerInferenceSubmission(
     workload.assignmentId !== lease.assignmentId ||
     !Number.isSafeInteger(identity.durableRunVersion) ||
     Number(identity.durableRunVersion) < 1 ||
-    [identity.durableRunId, identity.capabilityProfileId].some((value) => typeof value !== "string" || !value.trim()) ||
-    [identity.assignmentManifestSha256, identity.durableRunPayloadSha256, identity.capabilityProfileSha256].some(
+    [identity.durableRunId, ...(capability.admissionReference ? [] : [identity.capabilityProfileId])].some((value) => typeof value !== "string" || !value.trim()) ||
+    [identity.assignmentManifestSha256, identity.durableRunPayloadSha256].some(
       (value) => typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value),
     ) ||
     payload.capabilityProfileId !== identity.capabilityProfileId ||

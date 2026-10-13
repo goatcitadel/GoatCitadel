@@ -86,6 +86,39 @@ export interface AgentCommitmentRecord {
   createdAt: string;
   /** Set when the due check-in is confirmed delivered (`status === "sent"`). */
   sentAt?: string;
+  /** Monotonic inferred-material revision. Frozen once a cron occurrence is claimed. */
+  revision?: number;
+  /** Server-derived source-turn receipt; never populated from classifier output. */
+  creatorReceipt?: CommitmentCreatorReceipt;
+  creatorReceiptSha256?: string;
+  scheduledJobId?: string;
+  scheduledRunId?: string;
+  scheduledMaterialSha256?: string;
+}
+
+export interface CommitmentCreatorReceipt {
+  version: "commitment.creator.v1";
+  sourceTurnId: string;
+  admissionId: string;
+  sessionIncarnationId: string;
+  durableRunId: string;
+  admissionMaterialSha256: string;
+  actorId: string;
+  permissionProfileId: string;
+}
+
+export interface CommitmentOccurrenceReference {
+  commitmentId: string;
+  revision: number;
+  materialSha256: string;
+}
+
+export function buildCommitmentCheckInPrompt(suggestedText: string): string {
+  return (
+    "This is a scheduled, self-initiated follow-up check-in you committed to earlier. " +
+    "Send the user a brief, friendly check-in. Suggested intent:\n\n" +
+    suggestedText
+  );
 }
 
 /**

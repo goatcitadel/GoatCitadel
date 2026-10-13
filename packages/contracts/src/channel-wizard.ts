@@ -1,5 +1,6 @@
 import type { IntegrationCatalogEntry, IntegrationConnection } from "./integrations.js";
 import type { ChannelProbeReport } from "./channel-probes.js";
+import type { IntegrationConfigurationGuidance } from "./ui-forms.js";
 
 export type ChannelArchetype =
   | "local_surface"
@@ -202,6 +203,7 @@ export interface ChannelSetupAdapterMeta {
 }
 
 export interface ChannelSetupDefinition {
+  configurationGuidance?: IntegrationConfigurationGuidance;
   catalog: ChannelSetupCatalogMeta;
   wizard: ChannelSetupWizardContent;
   adapter: ChannelSetupAdapterMeta;

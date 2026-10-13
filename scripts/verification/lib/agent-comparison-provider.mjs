@@ -49,15 +49,23 @@ export async function createComparisonProviderProxy({
   upstreamApiKey,
   persistReceipt,
   fetchUpstream = fetch,
+  acceptanceFaults,
 }) {
   validateComparisonProviderProfile(profile);
   const transport = normalizeComparisonTransport({
     upstreamUrl,
     outputField: profile.outputField,
-    pricing: profile.pricing,
+    ...(profile.transportKind === "local"
+      ? { kind: "local", localRuntime: profile.localRuntime }
+      : { pricing: profile.pricing }),
   });
+  const local = transport.kind === "local";
   const upstream = new URL(transport.upstreamUrl);
-  if (!upstreamApiKey || /[\r\n]/u.test(upstreamApiKey) || typeof persistReceipt !== "function")
+  if (
+    (!local && !upstreamApiKey) ||
+    (upstreamApiKey !== undefined && (typeof upstreamApiKey !== "string" || /[\r\n]/u.test(upstreamApiKey))) ||
+    typeof persistReceipt !== "function"
+  )
     throw new Error("Comparison upstream credentials and a durable receipt sink are required.");
   if (typeof cellId !== "string" || !cellId || !budget || typeof budget.dispatch !== "function")
     throw new Error("Comparison proxy requires a campaign cell and budget owner.");
@@ -141,11 +149,12 @@ export async function createComparisonProviderProxy({
       );
     }
     const startedAt = new Date().toISOString();
-    const maximumCostUsd =
-      (profile.contextTokens * profile.pricing.inputUsdPerMillion +
-        profile.outputTokens * profile.pricing.outputUsdPerMillion) /
-        1_000_000 +
-      profile.pricing.requestUsd;
+    const maximumCostUsd = local
+      ? 0
+      : (profile.contextTokens * profile.pricing.inputUsdPerMillion +
+          profile.outputTokens * profile.pricing.outputUsdPerMillion) /
+          1_000_000 +
+        profile.pricing.requestUsd;
     let attempted = false;
     try {
       await budget
@@ -162,10 +171,37 @@ export async function createComparisonProviderProxy({
             // A cell can close while its reservation is being fsynced. Recheck
             // after that await so shutdown cannot start a new upstream request.
             if (closed || response.destroyed) throw new Error("Comparison cell closed before upstream dispatch.");
+            const fault = await acceptanceFaults?.consumeProviderFault({
+              budgetSequence: reservation.sequence, requestSha256: sha256(body), startedAt,
+            });
+            if (fault) {
+              const bytes = Buffer.from(JSON.stringify({ error: {
+                message: "Controlled comparison failure before upstream forwarding.", type: "server_error",
+              } }));
+              native = {
+                schemaVersion: "goatcitadel.agent-comparison.provider-attempt.v1",
+                cellId, budgetSequence: reservation.sequence, role: "unclassified", model: profile.model,
+                requestSha256: sha256(body), responseSha256: sha256(bytes), status: 503,
+                startedAt, finishedAt: new Date().toISOString(), usage: null, costUsd: 0,
+                costKind: "controlled_no_upstream_forward", controlledFault: fault,
+                pricingSha256: local ? null : sha256(profile.pricing),
+                ...(local ? { localRuntimeSha256: sha256(transport.localRuntime) } : {}),
+                upstreamOriginSha256: sha256(upstream.origin),
+              };
+              await persistReceipt(native);
+              receipts.push(native);
+              response.statusCode = 503;
+              response.setHeader("content-type", "application/json");
+              // This real attempt still spends the shared request allowance.
+              // No upstream dispatch occurred, so zero dollars is observed;
+              // provider-reported token usage remains unavailable.
+              return { costUsd: 0, bytes };
+            }
+            if (closed || response.destroyed) throw new Error("Comparison cell closed before upstream dispatch.");
             const result = await fetchUpstream(upstream.href, {
               method: "POST",
               headers: {
-                authorization: `Bearer ${upstreamApiKey}`,
+                ...(upstreamApiKey ? { authorization: `Bearer ${upstreamApiKey}` } : {}),
                 "content-type": "application/json",
                 "accept-encoding": "identity",
               },
@@ -190,8 +226,9 @@ export async function createComparisonProviderProxy({
               finishedAt: new Date().toISOString(),
               usage,
               costUsd: cost,
-              costKind: cost === null ? "unavailable" : "usage_with_pinned_rates",
-              pricingSha256: sha256(profile.pricing),
+              costKind: cost === null ? "unavailable" : local ? "local_no_provider_charge" : "usage_with_pinned_rates",
+              pricingSha256: local ? null : sha256(profile.pricing),
+              ...(local ? { localRuntimeSha256: sha256(transport.localRuntime) } : {}),
               upstreamOriginSha256: sha256(upstream.origin),
             };
             // Retain before returning bytes to the product. The local proxy buffers
@@ -228,7 +265,8 @@ export async function createComparisonProviderProxy({
                 usage: null,
                 costUsd: null,
                 costKind: "unavailable",
-                pricingSha256: sha256(profile.pricing),
+                pricingSha256: local ? null : sha256(profile.pricing),
+                ...(local ? { localRuntimeSha256: sha256(transport.localRuntime) } : {}),
                 upstreamOriginSha256: sha256(upstream.origin),
               };
               await persistReceipt(failure);
@@ -408,6 +446,7 @@ function priceUsage(usage, profile) {
     usage.outputTokens > profile.outputTokens
   )
     return null;
+  if (profile.transportKind === "local") return 0;
   return (
     (usage.inputTokens * profile.pricing.inputUsdPerMillion +
       usage.outputTokens * profile.pricing.outputUsdPerMillion) /

@@ -56,6 +56,11 @@ export function assertResumedChannelDraftEvidence(response, { draftId, draftRevi
 
 const APPROVAL_CONFLICT_CONSOLE_TEXT = "Failed to load resource: the server responded with a status of 409 (Conflict)";
 
+export function isChannelProofMutation(method, pathname) {
+  return ["POST", "PATCH", "PUT", "DELETE"].includes(method) && pathname.startsWith("/api/v1/") &&
+    !(method === "PUT" && pathname === "/api/v1/notifications/presence");
+}
+
 /** Acknowledges only the single browser resource error for the approval guard exercised by this lane. */
 export function filterAssertedChannelApprovalConflict(snapshot, proof) {
   const retained = { snapshot, acknowledgedCount: 0 };
@@ -115,8 +120,31 @@ export async function runChannelGuidedSetupLane(context, deps) {
     const api = async (route, init) => { const response = await requestJson(stack.gatewayUrl, route, init); assertOk(response, "Disposable channel owner request"); return response.body; };
     await runScenario(context, { id: "channels.guided-setup", lane: "channel-guided-setup",
       title: "Fourteen guided adapters, destination cards, exact plan review and return", subsystem: "settings" }, async ({ correlationId }) => {
+      const baselineGoogleChat = await api("/api/v1/channels/catalog/channel.google-chat/setup-definition");
+      const configurationForm = {
+        version: "goatcitadel.extension-configuration.v1",
+        prerequisites: ["Review the controlled Google Chat account before setup."],
+        fields: [
+          { key: "webhookUrl", kind: "url", label: "Reviewed Google Chat endpoint", help: "Use the connector's existing reviewed destination controls.", defaultValue: "https://example.invalid/author-suggestion" },
+          { key: "accessTokenEnv", kind: "secret_ref", referenceKind: "environment", label: "Google Chat credential reference", help: "Keep the credential in the supported secret owner." },
+        ],
+        sampleTask: { prompt: "Review the saved Google Chat destination and propose a read-only check.", expectedOutcome: "A reviewed check with a retained result, not an automatic send" },
+      };
+      const guidanceRoot = path.join(runtimeRoot, "verification-extension-guidance");
+      await fs.mkdir(guidanceRoot, { recursive: true });
+      await writeJson(path.join(guidanceRoot, "goatcitadel.integration-plugin.json"), {
+        pluginId: "googlechat", label: "Guided proof Google Chat metadata", version: "1.0.0",
+        capabilities: ["configuration.guidance"], configurationForm,
+      });
+      const installedGuidance = await api("/api/v1/integrations/plugins/install", {
+        method: "POST", body: { pluginId: "googlechat", source: guidanceRoot, sourceType: "local" },
+      });
+      assert.deepEqual(installedGuidance.configurationForm, configurationForm);
       const definitions = (await api("/api/v1/channels/setup-definitions")).items;
       assertGuidedChannelCatalog(definitions);
+      const guidedGoogleChat = definitions.find(item => item.catalog.catalogId === "channel.google-chat");
+      assert.deepEqual(guidedGoogleChat.wizard, baselineGoogleChat.wizard, "Author metadata must preserve the canonical wizard and accepted defaults.");
+      assert.deepEqual(guidedGoogleChat.configurationGuidance.form, configurationForm);
       const workspaces = await api("/api/v1/workspaces");
       const workspace = workspaces.items.find(item => item.workspaceId === "default") ?? workspaces.items[0];
       assert.ok(workspace);
@@ -129,7 +157,7 @@ export async function runChannelGuidedSetupLane(context, deps) {
       }
       const browser = await chromium.launch({ headless: true });
       let page, browserLog, logCursor;
-      const artifacts = [], accessibilityArtifacts = [], locationArtifacts = [], rendered = [], focusProof = [], narrowProof = [], writes = [];
+      const artifacts = [], accessibilityArtifacts = [], locationArtifacts = [], rendered = [], focusProof = [], narrowProof = [], writes = [], presenceWrites = [];
       try {
         const browserContext = await browser.newContext({ viewport: { width: 1440, height: 1080 }, colorScheme: "dark" });
         await browserContext.addInitScript(() => window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit"));
@@ -138,7 +166,9 @@ export async function runChannelGuidedSetupLane(context, deps) {
         browserLog = attachBrowserLogging(page); logCursor = browserLog.mark();
         page.on("request", request => {
           const pathname = new URL(request.url()).pathname;
-          if (["POST", "PATCH", "PUT", "DELETE"].includes(request.method()) && pathname.startsWith("/api/v1/")) writes.push({ method: request.method(), pathname });
+          const method = request.method();
+          if (method === "PUT" && pathname === "/api/v1/notifications/presence") presenceWrites.push({ method, pathname });
+          if (isChannelProofMutation(method, pathname)) writes.push({ method, pathname });
         });
         const settings = buildVerificationUiUrl(stack.uiUrl, "/settings/connections?shell=cockpit#channels");
         await page.goto(settings, { waitUntil: "domcontentloaded" });
@@ -194,6 +224,24 @@ export async function runChannelGuidedSetupLane(context, deps) {
           }
           assert.equal(writes.length, writesBeforeReview, "Reading setup instructions dispatched a mutation.");
           focusProof.push({ catalogId: definition.catalog.catalogId, headings });
+          if (definition.catalog.catalogId === "channel.google-chat") {
+            const guidance = guide.locator("details").filter({ has: page.getByText("Extension setup guidance · googlechat", { exact: true }) });
+            const summary = guidance.locator("summary");
+            await summary.focus(); await page.keyboard.press("Enter");
+            await guidance.getByText(configurationForm.prerequisites[0], { exact: true }).waitFor();
+            await guidance.getByText(configurationForm.sampleTask.prompt, { exact: true }).waitFor();
+            assert.equal(await guidance.locator("input,select,textarea").count(), 0, "Author metadata must not create configuration inputs.");
+            assert.equal(await guide.getByLabel("Connection label", { exact: true }).inputValue(), draft.label);
+            assert.equal((await guidance.innerText()).includes(configurationForm.fields[0].defaultValue), false, "Author default values are not applied or displayed.");
+            await summary.scrollIntoViewIfNeeded();
+            await capture("channel-extension-guidance-desktop");
+            await page.setViewportSize({ width: 390, height: 844 });
+            await summary.scrollIntoViewIfNeeded();
+            await capture("channel-extension-guidance-390");
+            await page.setViewportSize({ width: 1440, height: 1080 });
+            await summary.focus(); await page.keyboard.press("Enter");
+            assert.equal(writes.length, writesBeforeReview, "Viewing installed extension guidance must remain read-only.");
+          }
           await capture("channel-guided-" + definition.catalog.catalogId.replace("channel.", ""));
           // Exercise each guide's largest visible account/configuration step at the narrow viewport.
           const narrowStep = definition.wizard.steps
@@ -404,14 +452,21 @@ export async function runChannelGuidedSetupLane(context, deps) {
         const approvalItem = inbox.items.find(item => item.kind === "approval" && item.source.approvalId === approvalId);
         assert.ok(approvalItem); assert.equal(approvalItem.source.workspaceId, workspace.workspaceId);
         const approvalPage = await browserContext.newPage();
+        const approvalBrowserLog = attachBrowserLogging(approvalPage);
+        const approvalLogCursor = approvalBrowserLog.mark();
         try {
           await approvalPage.goto(buildVerificationUiUrl(stack.uiUrl, "/inbox?shell=cockpit&workspaceId=" + encodeURIComponent(workspace.workspaceId) + "&item=" + encodeURIComponent(approvalItem.id)), { waitUntil: "domcontentloaded" });
-          const inspector = approvalPage.getByLabel("Inspector: " + approvalItem.title, { exact: true });
+          // The exact approval link can first open a safe "Approval" placeholder;
+          // its inspector title is not the canonical record or decision authority.
+          const inspector = approvalPage.getByRole("region", { name: "Current approval", exact: true });
           await inspector.getByRole("button", { name: "Approve once", exact: true }).waitFor();
           const approvalResponse = approvalPage.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/v1/approvals/" + approvalId + "/resolve");
           await inspector.getByRole("button", { name: "Approve once", exact: true }).click();
           const approvedHttp = await approvalResponse; assert.equal(approvedHttp.status(), 200);
           const approved = await approvedHttp.json(); assert.equal(approved.approval.approvalId, approvalId); assert.equal(approved.approval.status, "approved");
+        } catch (error) {
+          await captureBrowserArtifacts(context, { slug: "channel-canonical-approval-failure", page: approvalPage, browserLog: approvalBrowserLog, gatewayUrl: stack.gatewayUrl, correlationId, logCursor: approvalLogCursor });
+          throw error;
         } finally { await approvalPage.close(); }
         const approvedPlan = await api("/api/v1/change-plans/" + completionPlan.planId + "?workspaceId=" + encodeURIComponent(workspace.workspaceId));
         assert.equal(approvedPlan.status, "awaiting_approval", "Channel plans retain an explicit continuation after canonical approval.");
@@ -443,14 +498,14 @@ export async function runChannelGuidedSetupLane(context, deps) {
         const browserHealth = filterAssertedChannelApprovalConflict(browserLog.getSnapshot(logCursor), approvalConflictProof);
         assertBrowserConsoleHealthy({ getSnapshot: () => browserHealth.snapshot }, undefined, NEXT_UI_PACKAGE);
         const diagnostics = path.join(context.artifactRoot, "diagnostics", "channel-guided-setup.json");
-        await writeJson(diagnostics, { rendered, focusProof, narrowProof, planId: plan.planId, workspaceId: workspace.workspaceId,
+        await writeJson(diagnostics, { rendered, focusProof, narrowProof, extensionGuidance: { pluginId: installedGuidance.pluginId, version: installedGuidance.version, catalogId: "channel.google-chat", metadataVersion: configurationForm.version, unchangedWizard: true, readOnly: true }, planId: plan.planId, workspaceId: workspace.workspaceId,
           draftId: draft.draftId, cancelledStatus: cancelled.status, completedPlanId: completionPlan.planId, completedStatus: completed.status, approvedConnectionId: connectionId, loopbackMessages: received.length,
-          boundHandoff: true, narrowWidth: 390, resumedTestEvidenceId: tested.evidenceId, resumedDraftRevision: savedTestDraft.revision, resumeTestPostCount: testsBeforeResume, assertedApprovalConflict: { requestPath: prematurePath, method: "POST", status: 409, acknowledgedConsoleErrors: browserHealth.acknowledgedCount }, note: "Real disposable owner/browser proof. No external provider, OAuth exchange or credential/keychain write. Exact canonical approval completed one disabled task-owned ntfy connection using only a loopback notification receiver." });
+          boundHandoff: true, narrowWidth: 390, presenceWrites, resumedTestEvidenceId: tested.evidenceId, resumedDraftRevision: savedTestDraft.revision, resumeTestPostCount: testsBeforeResume, assertedApprovalConflict: { requestPath: prematurePath, method: "POST", status: 409, acknowledgedConsoleErrors: browserHealth.acknowledgedCount }, note: "Real disposable owner/browser proof. No external provider, OAuth exchange or credential/keychain write. Exact canonical approval completed one disabled task-owned ntfy connection using only a loopback notification receiver." });
         const combined = Object.fromEntries(Object.keys(artifacts[0]).map(key => [key, artifacts.flatMap(item => item[key] ?? [])]));
         combined.diagnostics = [...(combined.diagnostics ?? []), ...accessibilityArtifacts, ...locationArtifacts, relativeToRun(context, diagnostics)];
         return { status: "passed", metrics: { renderedAdapters: rendered.length, keyboardHeadings: focusProof.reduce((total, entry) => total + entry.headings.length, 0), keyboardAdapterCoverage: focusProof.length, narrowAdapterCoverage: narrowProof.length,
-          targetCardAdapters: 2, persistedDraftTestResume: 1, resumeWithoutResend: 1, exactSettingsPlan: 1, planReload: 1, canonicalReturn: 1, cancelledPlan: 1, cancelledReturn: 1, canonicalApproval: 1, approvalGuard: 1, completedPlan: 1, completedReturn: 1, savedDiagnostics: 1,
-          loopbackSandboxMessages: received.length, narrowWidth: 390 }, artifacts: combined };
+          targetCardAdapters: 2, installedExtensionGuidance: 1, persistedDraftTestResume: 1, resumeWithoutResend: 1, exactSettingsPlan: 1, planReload: 1, canonicalReturn: 1, cancelledPlan: 1, cancelledReturn: 1, canonicalApproval: 1, approvalGuard: 1, completedPlan: 1, completedReturn: 1, savedDiagnostics: 1,
+          loopbackSandboxMessages: received.length, presenceSignals: presenceWrites.length, narrowWidth: 390 }, artifacts: combined };
       } catch (error) {
         if (page && browserLog) {
           const actual = await page.evaluate(() => ({ pathname: window.location.pathname, search: window.location.search, hash: window.location.hash }));

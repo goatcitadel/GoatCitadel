@@ -46,7 +46,7 @@ import {
   isMcpAuthReadinessInvokeBlocked,
   resolveMcpInvokeAuthReadiness,
 } from "./mcp-oauth-token-service.js";
-import type { McpRequesterScopedTurnContextHandle } from "./mcp-requester-resolution-service.js";
+import type { McpChatTurnContextHandle } from "./mcp-requester-admission-context.js";
 import {
   isMeshChatToolName,
   type MeshChatTurnContextHandle,
@@ -545,7 +545,7 @@ export interface RequesterScopedMcpDispatchInput {
    * `McpInvokeRequest`. The dispatch provider brand-asserts it; a missing or
    * forged (plain-object) value fails closed `requester_context_missing`.
    */
-  mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle;
+  mcpRequesterTurnContext?: McpChatTurnContextHandle;
 }
 
 /**
@@ -598,7 +598,7 @@ export interface ToolInvocationCoordinatorHost {
   assertChatToolDispatchAllowed?(request: ToolInvokeRequest): Promise<void>;
   resolveNativeMcpChatToolBinding?(
     request: ToolInvokeRequest,
-    handle: McpRequesterScopedTurnContextHandle | undefined,
+    handle: McpChatTurnContextHandle | undefined,
   ): Promise<NativeMcpChatToolBinding | undefined>;
   resolveMeshChatToolBinding?: MeshChatDispatchPort["resolveBinding"];
   dispatchMeshCapabilityInvocation?: MeshChatDispatchPort["dispatch"];
@@ -692,7 +692,7 @@ export interface ToolInvocationRuntimeOptions {
    * to fail closed (`requester_context_missing`) one level deeper.
    * Never serialized; brand-checked at the dispatch provider.
    */
-  mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle;
+  mcpRequesterTurnContext?: McpChatTurnContextHandle;
   /** Process-local durable fence immediately before the main tool executor. */
   executionFence?: () => Promise<void>;
   /** Canonical owner's execution receipt, after policy and deepest spawn fences. */
@@ -1949,7 +1949,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     if (
       nativeBinding &&
       "serverId" in server &&
-      resolveMcpServerConnectionMode(server) !== (nativeBinding.staticBinding ? "static" : "requester_scoped")
+      resolveMcpServerConnectionMode(server) !== (nativeBinding.staticBinding || nativeBinding.staticAdmissionBinding ? "static" : "requester_scoped")
     ) {
       throw new ToolExecutionPreconditionError("Native MCP server connection mode drifted from the frozen binding");
     }
@@ -2224,7 +2224,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     wardEffect?: WardEffect,
     markExternalCallStarted?: () => void | Promise<void>,
     executionFence?: () => Promise<void>,
-    mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle,
+    mcpRequesterTurnContext?: McpChatTurnContextHandle,
     nativeCanonicalToolName?: string,
   ): Promise<McpInvokeResponse> {
     return executeMcpRuntime(

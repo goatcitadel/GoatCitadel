@@ -99,6 +99,8 @@ type Input = {
   sessionData: Pick<
     ReturnType<typeof useChatSessionData>,
     | "prefs"
+    | "settings"
+    | "projects"
     | "proactiveStatus"
     | "proactiveRuns"
     | "specialistCandidates"
@@ -121,6 +123,9 @@ type Input = {
     | "capabilitySuggestions"
     | "specialistSuggestions"
     | "delegationSuggestion"
+    | "handleSuggestDelegation"
+    | "handleAcceptDelegation"
+    | "handleRunCodeDelegation"
     | "handleTriggerProactive"
     | "handleProactivePolicyPatch"
     | "handleCapabilitySuggestionAction"
@@ -178,6 +183,10 @@ export function createChatContextDockProps({
   metadataActions,
 }: Input): Pick<MissionThreadedRenderSurfaceInput, "contextDockProps"> {
   const { selectedSession } = threadController;
+  const codingDelegationAvailable = sessionData.settings?.chatFeatureAvailability?.supervisedDelegation === true &&
+    Boolean(selectedSession?.projectId && sessionData.projects?.items.some((project) =>
+      project.projectId === selectedSession.projectId && project.lifecycleStatus === "active" &&
+      (project.workspaceId ?? "default") === (selectedSession.workspaceId ?? "default")));
   const { setStreamEnabled } = streamPreferences;
   const { setVisualStreamMode } = streamPreferences;
   const { handleRetryPreferenceDraft } = preferenceActions;
@@ -257,7 +266,9 @@ export function createChatContextDockProps({
           selectedTurn: surfaceState.selectedTurn,
           capabilityProfileInspection,
           activeGeneratedArtifact,
-          documents,
+          documents: documents ? { ...documents, onToggleInclude: (ref) => {
+            if (!blockHistoricalMutation()) documents.onToggleInclude(ref);
+          } } : undefined,
           routePreflight: currentRoutePreflight,
           trust: runPresentation.sessionTrust,
           providerLabelById: runPresentation.providerLabelById,
@@ -283,6 +294,9 @@ export function createChatContextDockProps({
           selectedSessionProjectValue: workbenchController.selectedSessionProjectValue,
           projectOptions: chatSessionRailPresentation.projectOptions,
           automaticFanout,
+          supervisedDelegationAvailable: sessionData.settings?.chatFeatureAvailability?.supervisedDelegation === true,
+          codingDelegationAvailable,
+          providerFallbackAvailable: sessionData.settings?.chatFeatureAvailability?.providerFallback === true,
           loadModelsForProvider: providerCatalog.loadModelsForProvider,
           getCachedModels: providerCatalog.getCachedModels,
           resolveProviderModelSelection,
@@ -295,8 +309,11 @@ export function createChatContextDockProps({
             await handlePrefPatch(patch);
           },
           onSuggestDelegation: async () => {
-            if (!blockHistoricalMutation())
-              pushLocalNotice("Subagent delegation is temporarily unavailable.", "warning");
+            if (blockHistoricalMutation()) return;
+            if (sessionData.settings?.chatFeatureAvailability?.supervisedDelegation !== true) {
+              pushLocalNotice("Subagent delegation is temporarily unavailable.", "warning"); return;
+            }
+            await contextActions.handleSuggestDelegation();
           },
           onTriggerProactive: async () => {
             if (!blockHistoricalMutation()) await handleTriggerProactive();
@@ -304,8 +321,15 @@ export function createChatContextDockProps({
           onProactivePolicyPatch: async (patch) => {
             if (!blockHistoricalMutation()) await handleProactivePolicyPatch(patch);
           },
-          onRunCodeDelegation: async () => {
-            if (!blockHistoricalMutation()) pushLocalNotice("Code delegation is temporarily unavailable.", "warning");
+          onRunCodeDelegation: async (preset) => {
+            if (blockHistoricalMutation()) return;
+            if (sessionData.settings?.chatFeatureAvailability?.supervisedDelegation !== true) {
+              pushLocalNotice("Code delegation is temporarily unavailable.", "warning"); return;
+            }
+            if (!codingDelegationAvailable) {
+              pushLocalNotice("Bind this Chat to an active project before delegating coding work.", "warning"); return;
+            }
+            await contextActions.handleRunCodeDelegation(preset);
           },
           onCapabilitySuggestionAction: (suggestion) => {
             if (!blockHistoricalMutation()) handleCapabilitySuggestionAction(suggestion);
@@ -320,8 +344,11 @@ export function createChatContextDockProps({
             if (!blockHistoricalMutation()) await handleSpecialistCandidatePatch(candidateId, patch, notice);
           },
           onAcceptDelegation: async () => {
-            if (!blockHistoricalMutation())
-              pushLocalNotice("Subagent delegation is temporarily unavailable.", "warning");
+            if (blockHistoricalMutation()) return;
+            if (sessionData.settings?.chatFeatureAvailability?.supervisedDelegation !== true) {
+              pushLocalNotice("Subagent delegation is temporarily unavailable.", "warning"); return;
+            }
+            await contextActions.handleAcceptDelegation();
           },
           onRebuildLearnedMemory: async () => {
             if (!blockHistoricalMutation()) await handleRebuildLearnedMemory();

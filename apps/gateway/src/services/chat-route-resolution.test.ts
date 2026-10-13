@@ -736,3 +736,48 @@ describe("chat-route-resolution", () => {
     ).toEqual(expect.any(String));
   });
 });
+
+
+describe("opt-in provider fallback preflight", () => {
+  function enabledHost() {
+    return { ...createHost(), isFeatureEnabled: vi.fn(async () => true) };
+  }
+  it("arms only one operator-selected target and fingerprints target plus consent", async () => {
+    const host = enabledHost();
+    const preference = { providerId: "ollama", model: "llama3.2", allowLocalToCloud: false };
+    const result = await preflightChatRoute(host as never, "session-1", { action: "send", providerFallback: preference });
+    expect(result).toMatchObject({ fallbackPolicy: "armed", fallbackResult: "cloud_to_local", providerFallback: preference });
+    expect(result.decision.providerFallback).toEqual(preference);
+    expect(createRoutingDecisionFingerprint({ ...result.decision, providerFallback: { ...preference, allowLocalToCloud: true } }))
+      .not.toBe(result.decision.fingerprint);
+    expect(host.resolveFallbackTargets).not.toHaveBeenCalled();
+  });
+  it("stays off when disabled, missing, same-provider, invalid target, or explicitly cleared", async () => {
+    for (const preference of [undefined, null,
+      { providerId: "openai", model: "gpt-5.4-mini", allowLocalToCloud: false },
+      { providerId: "missing", model: "none", allowLocalToCloud: false }]) {
+      expect((await preflightChatRoute(enabledHost() as never, "session-1", { action: "send", providerFallback: preference })).fallbackPolicy).toBe("off");
+    }
+    const host = createHost();
+    expect((await preflightChatRoute(host as never, "session-1", { action: "send",
+      providerFallback: { providerId: "ollama", model: "llama3.2", allowLocalToCloud: false } })).fallbackPolicy).toBe("off");
+  });
+  it("requires explicit local-to-cloud consent", async () => {
+    const host = { ...createHost({ runtime: { activeProviderId: "ollama", activeModel: "llama3.2" } }),
+      isFeatureEnabled: async () => true };
+    for (const allowLocalToCloud of [false, true]) {
+      const result = await preflightChatRoute(host as never, "session-1", { action: "send",
+        providerFallback: { providerId: "openai", model: "gpt-5.4-mini", allowLocalToCloud } });
+      expect(result.fallbackPolicy).toBe(allowLocalToCloud ? "armed" : "off");
+      if (allowLocalToCloud) expect(result.fallbackResult).toBe("local_to_cloud");
+    }
+  });
+  it("lets explicit null override a saved session target", async () => {
+    const host = enabledHost();
+    const saved = host.storage.chatSessionPrefs.ensure();
+    host.storage.chatSessionPrefs.ensure.mockReturnValue({ ...saved,
+      providerFallback: { providerId: "ollama", model: "llama3.2", allowLocalToCloud: false } } as never);
+    expect((await preflightChatRoute(host as never, "session-1", { action: "send" })).fallbackPolicy).toBe("armed");
+    expect((await preflightChatRoute(host as never, "session-1", { action: "send", providerFallback: null })).fallbackPolicy).toBe("off");
+  });
+});

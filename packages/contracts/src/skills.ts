@@ -59,6 +59,8 @@ export interface SkillActivationPolicy {
   revision: number;
   guardedAutoThreshold: number;
   requireFirstUseConfirmation: boolean;
+  /** Missing on older policies; legacy remains the default until operator approval. */
+  selectionMode?: "legacy" | "shadow" | "ranked";
 }
 
 export interface SkillListItem extends LoadedSkill {

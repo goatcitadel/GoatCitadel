@@ -140,7 +140,7 @@ export async function reconcileInterruptedChatTurns(
  */
 export async function reconcileInterruptedDurableChatTurn(
   deps: ChatTurnInterruptionRecoveryDeps,
-  input: { runId: string; turnId: string },
+  input: { runId: string; turnId: string; failure?: ChatTurnFailureRecord },
 ): Promise<ChatTurnInterruptionRecoveryResult> {
   const result = createInterruptionRecoveryResult();
   let trace: ChatTurnTraceRecord;
@@ -160,6 +160,7 @@ export async function reconcileInterruptedDurableChatTurn(
   }
   await reconcileActiveInterruptedTrace(deps, trace, deps.now ? deps.now() : new Date().toISOString(), result, {
     durableTerminalFailure: true,
+    failure: input.failure,
   });
   return result;
 }
@@ -219,7 +220,7 @@ async function reconcileActiveInterruptedTrace(
   trace: ChatTurnTraceRecord,
   now: string,
   result: ChatTurnInterruptionRecoveryResult,
-  options: { durableTerminalFailure?: boolean } = {},
+  options: { durableTerminalFailure?: boolean; failure?: ChatTurnFailureRecord } = {},
 ): Promise<void> {
   try {
     if (await isOwnedByLiveDurableRun(deps, trace)) {
@@ -235,6 +236,7 @@ async function reconcileActiveInterruptedTrace(
         recoveredSource,
         now,
         options.durableTerminalFailure ? "failed" : "partial",
+        options.failure,
       );
       result.transcriptEventsEnqueued += enqueued ? 1 : 0;
       if (recoveredSource.final) {
@@ -246,7 +248,9 @@ async function reconcileActiveInterruptedTrace(
         deps,
         trace.sessionId,
         trace.turnId,
-        recoveredSource.final
+        options.failure
+          ? "chat.turn.output_preserved_after_execution_failure"
+          : recoveredSource.final
           ? "chat.turn.final_source_restored_after_restart"
           : "chat.turn.partial_prefix_preserved_after_restart",
         {
@@ -265,7 +269,7 @@ async function reconcileActiveInterruptedTrace(
   try {
     await deps.storage.chatTurnTraces.patch(trace.turnId, {
       status: "failed",
-      failure: buildInterruptedByRestartFailure(),
+      failure: options.failure ?? buildInterruptedByRestartFailure(),
       completion: {
         finishReason: trace.completion?.finishReason,
         status: "interrupted",
@@ -277,7 +281,7 @@ async function reconcileActiveInterruptedTrace(
       finishedAt: now,
     });
     result.interruptedTurnIds.push(trace.turnId);
-    await announceInterruptedTurn(deps, trace.sessionId, trace.turnId, "chat.turn.interrupted_by_restart", {
+    await announceInterruptedTurn(deps, trace.sessionId, trace.turnId, options.failure ? "chat.turn.execution_failed" : "chat.turn.interrupted_by_restart", {
       previousStatus: trace.status,
     });
   } catch (error) {
@@ -578,6 +582,7 @@ async function persistRecoveredAssistantSource(
   source: RecoveredAssistantSource,
   now: string,
   interruptedStatus: "partial" | "failed" | "cancelled" = "partial",
+  failure?: ChatTurnFailureRecord,
 ): Promise<boolean> {
   const storage = deps.storage;
   const session = await storage.sessions.getBySessionId(trace.sessionId);
@@ -611,7 +616,7 @@ async function persistRecoveredAssistantSource(
     await storage.chatTurnTraces.patch(trace.turnId, {
       assistantMessageId: source.messageId,
       status: source.final ? "completed" : interruptedStatus,
-      failure: source.final || interruptedStatus === "cancelled" ? undefined : buildInterruptedByRestartFailure(true),
+      failure: source.final || interruptedStatus === "cancelled" ? undefined : failure ?? buildInterruptedByRestartFailure(true),
       completion: {
         status: source.final ? "complete" : "interrupted",
         repaired: source.final ? Boolean(source.repaired) : false,

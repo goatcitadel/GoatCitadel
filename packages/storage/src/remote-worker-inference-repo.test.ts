@@ -182,6 +182,35 @@ function claimInputFor(a: SeededAuthority, owner: string, key = keyFor(a)) {
 }
 
 describe("RemoteWorkerInferenceRepository SQLite", () => {
+  it("stores admission references and refuses replay or budget authority drift", () => {
+    const a = seedAuthority("admission-reference");
+    const reference = {
+      version: "goatcitadel.remote-worker-admission-reference.v1" as const,
+      scope: { admissionId: "admission", sessionIncarnationId: "incarnation", workspaceId: "default",
+        sessionId: a.sessionId, turnId: a.turnId, aggregateRevision: 1, controllerGeneration: 1,
+        materialSha256: D("material"), actorId: "operator", actorSource: "loopback" as const },
+      featureReferenceSha256: D("feature-reference"),
+    };
+    const historical = admissionFor(a);
+    const input = { ...historical, capabilityProfileSha256: undefined, admissionReference: reference,
+      budgetOperation: { ...historical.budgetOperation!, capabilityProfileSha256: undefined, admissionReference: reference } };
+    const created = a.repo.admitOrReplay(input);
+    assert.equal(created.request.capabilityProfileSha256, undefined);
+    assert.deepEqual(created.request.admissionReference, reference);
+    assert.equal(a.repo.admitOrReplay(input).disposition, "replayed");
+    const drift = { ...reference, featureReferenceSha256: D("changed") };
+    assert.throws(() => a.repo.admitOrReplay({ ...input, admissionReference: drift }), /does not bind/u);
+    assert.throws(() => a.repo.admitOrReplay({ ...input, admissionReference: drift,
+      budgetOperation: { ...input.budgetOperation, admissionReference: drift } }), /replay does not match/u);
+    assert.throws(() => a.repo.admitOrReplay({ ...input, capabilityProfileSha256: D("mixed") }), /exactly one/u);
+    assert.throws(() => a.db.prepare("UPDATE remote_worker_inference_requests SET admission_reference_json = '{}' WHERE inference_request_id = ?")
+      .run(input.submission.inferenceRequestId), /immutable/u);
+    const denied = { ...admissionFor(a, { idempotencyKey: "reference-denied", inferenceRequestId: "reference-denied" }, "denied"),
+      capabilityProfileSha256: undefined, admissionReference: reference };
+    a.repo.admitOrReplay(denied);
+    assert.throws(() => a.repo.admitOrReplay({ ...denied, admissionReference: drift }), /replay does not match/u);
+  });
+
   it("admits, exactly replays, and conflicts on changed canonical bytes", () => {
     const a = seedAuthority("admit");
     const created = a.repo.admitOrReplay(admissionFor(a));

@@ -5,6 +5,7 @@ import { nativeChatContextFixture } from "../../../../packages/contracts/src/rem
 import { buildWorkerInferenceSubmission } from "../../../remote-worker/src/worker-inference-execution.js";
 import { RemoteWorkerInferenceRuntime, type RemoteWorkerInferenceRuntimeDependencies } from "./remote-worker-inference-runtime.js";
 import { buildRemoteWorkerChatSequenceContext, readCanonicalWorkerChatInput, readCanonicalWorkerChatOutput } from "./remote-worker-chat-output-service.js";
+import type { RemoteWorkerChatEvidence } from "./remote-worker-chat-authority.js";
 
 it("binds the worker and Gateway to identical native facts and never reuses the pre-native answer", async () => {
   const nativeChatContext = nativeChatContextFixture();
@@ -19,9 +20,24 @@ it("binds the worker and Gateway to identical native facts and never reuses the 
     request: { content: "Explain the recorded execution outcome." } } };
   const lease = { ...scope, leaseRevision: 1, leaseToken: "a".repeat(43) };
   const submission = buildWorkerInferenceSubmission(workload, lease);
-  const sequence = buildRemoteWorkerChatSequenceContext({} as never, {} as never, {
+  const evidence: RemoteWorkerChatEvidence = {
+    binding: { capabilityProfileSha256: identity.capabilityProfileSha256 },
+    identity: {
+      workspaceId: "default", sessionId: "session", turnId: "turn", citadelId: "citadel",
+      durableRunId: identity.durableRunId,
+    },
+    tools: [],
+    permission: { profileId: "safe", approvalMode: "approve_all", profileHash: digest("permission") },
+    route: { providerId: "provider", model: "model" },
+    contentHash: digest(workload.payload.request.content),
+    memoryMode: "off",
+  };
+  const sequence = buildRemoteWorkerChatSequenceContext({} as never, evidence, {
     workload, authority: { assignment: { manifest: { taskId: "task" } }, generation: { workerId: "worker", workerGeneration: 1 } },
   } as never);
+  expect(sequence.evidence).toBe(evidence);
+  expect(sequence.evidence?.binding.capabilityProfileSha256).toBe(workload.capabilityProfileSha256);
+  expect(sequence.evidence?.route).toEqual({ providerId: "provider", model: "model" });
   const inference = { getRequestByIdempotency: vi.fn(async () => undefined), listFramesAfter: vi.fn(),
     hasInferenceOutsideChatSequence: vi.fn(async () => false), listAssignmentChatRequests: vi.fn(async () => []) };
   expect(await readCanonicalWorkerChatInput(inference as never, scope, 0, sequence)).toEqual(submission.messages);

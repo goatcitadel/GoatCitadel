@@ -52,7 +52,7 @@ interface AddSnapshotInput {
   audit?: SkillHubSnapshotCreateInput["audit"];
 }
 
-const harnesses: Harness[] = [];
+const harnesses: Array<{ rootDir: string; storage?: Storage }> = [];
 
 // Per-file fixtures. Every harness used to replay the full SQLite migration
 // registry (24-36s per database on a loaded Windows host) and to construct
@@ -91,7 +91,7 @@ afterAll(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const harness of harnesses.splice(0)) {
-    harness.storage.close();
+    harness.storage?.close();
     await fs.rm(harness.rootDir, { recursive: true, force: true });
   }
 });
@@ -185,7 +185,7 @@ describe("SkillHubLifecycleService", () => {
     });
     expect(replay.replayed).toBe(true);
     expect(replay.settlement.operationId).toBe(intent.operationId);
-  });
+  }, 60_000); // Migrated SQLite plus approval/CAS hashing uses the full lifecycle fixture budget.
 
   it("recovers idempotently after a crash following runtime projection", async () => {
     const harness = await createHarness();
@@ -255,7 +255,7 @@ describe("SkillHubLifecycleService", () => {
       boundaryCrossed: true,
     });
     expect(harness.storage.skillLifecycle.find("extra:demo")).toBeUndefined();
-  });
+  }, 60_000); // Includes installation, activation, atomic projection and tamper settlement.
 
   it("stages immutable update and rollback candidates before separately approved activations", async () => {
     const harness = await createHarness();
@@ -728,6 +728,10 @@ describe("SkillHubLifecycleService", () => {
 
 async function createHarness(): Promise<Harness> {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "gc-skill-hub-lifecycle-"));
+  // Register cleanup before asynchronous setup: a timeout must not transfer an
+  // untracked database or late setup result into the next test's ownership.
+  const owned: (typeof harnesses)[number] = { rootDir };
+  harnesses.push(owned);
   const dbPath = path.join(rootDir, "gateway.sqlite");
   await fs.copyFile(migratedDbTemplatePath!, dbPath, fsConstants.COPYFILE_EXCL);
   const storage = new Storage({
@@ -735,6 +739,7 @@ async function createHarness(): Promise<Harness> {
     transcriptsDir: path.join(rootDir, "transcripts"),
     auditDir: path.join(rootDir, "audit"),
   });
+  owned.storage = storage;
   const sourceDir = path.join(rootDir, "source");
   await fs.mkdir(sourceDir, { recursive: true });
   await fs.writeFile(
@@ -772,7 +777,6 @@ async function createHarness(): Promise<Harness> {
     treeSha256: observed.treeSha256,
   };
   harness.lifecycle = lifecycleFor(harness);
-  harnesses.push(harness);
   return harness;
 }
 

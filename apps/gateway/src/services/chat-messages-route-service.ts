@@ -11,6 +11,7 @@ export const chatMessagesRouteMethods = [
   "editChatTurnStream",
   "getChatThread",
   "getChatTurnCapabilityProfile",
+  "getChatTurnRoutedContext",
   "getTurnContextManifestForSession",
   "listChatMessagePage",
   "listChatMessages",

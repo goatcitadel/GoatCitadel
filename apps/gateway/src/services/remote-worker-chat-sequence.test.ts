@@ -44,7 +44,9 @@ const result = {
 };
 const identity = { workspaceId: "workspace", sessionId: "session", turnId: "turn", durableRunId: "run" };
 const context = {
-  profile: { profileId: "profile", identity, hashes: { profileHash: "a".repeat(64) } },
+  profile: { profileId: "profile", identity, hashes: { profileHash: "a".repeat(64) },
+    selection: { effectiveProviderId: "local", effectiveModel: "test", tools: [], memory: { mode: "off" }, contentHash: digest("Read the note") },
+    governance: { permission: { profileId: "safe", approvalMode: "approve_all", profileHash: digest("safe") } }, catalog: {} },
   baseMessages,
   contextSha256: "b".repeat(64),
   taskId: "task",
@@ -154,7 +156,7 @@ describe("canonical worker model/tool sequence", () => {
       remoteWorkerAssignments: { findAssignmentAggregate: vi.fn(async () => ({
         assignment: { manifestSha256: workload.assignmentManifestSha256, manifest: { durableRunId: identity.durableRunId, taskId: context.taskId } },
         generation: { assignmentGeneration: 1, workerId: context.workerId, workerGeneration: context.workerGeneration },
-      })) }, chatTurnCapabilityProfiles: { findByRun: vi.fn(async () => context.profile) } };
+      })) }, chatTurnCapabilityProfiles: { get: vi.fn(async () => context.profile), findByRun: vi.fn(async () => context.profile) } };
     const projected = await projectRemoteWorkerNativeChatWorkload(storage as never, workload as never, scope);
     const submission = buildWorkerInferenceSubmission(projected as never, { ...scope, leaseRevision: 2, leaseToken: "a".repeat(43) });
     if (kind === "output") {

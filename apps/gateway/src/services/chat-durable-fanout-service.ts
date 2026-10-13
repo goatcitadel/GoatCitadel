@@ -1,13 +1,13 @@
-import { createHash } from "node:crypto";
+import { assertFanoutInvocationAuthority, assertFanoutFeatureDispatchCurrent, assertFanoutLiveAuthority, assertFanoutParentAdmissionCurrent, resolveFanoutActiveProject, findFanoutGrant, FanoutAuthorityError, buildGrantEvaluationInput, freezeGrantBinding, hash, assertFanoutRuntimeEnabled } from "./chat-fanout-admission-authority.js";
 import {
   canonicalJsonString,
-  type AutonomousActivationGrantEvaluationInput,
+  isDurableRunTerminal,
   type AutonomousActivationGrantRecord,
-  type ChatDelegateResponse,
   type ChatFanoutInvocationRecord,
   type ChatProjectRecord,
   type ChatTurnTraceRecord,
   type ToolPolicyActorContext,
+  type ChatTurnFeatureReferences,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { SUBAGENT_FANOUT_MAX_SUBTASKS } from "@goatcitadel/policy-engine";
@@ -19,20 +19,23 @@ import {
 } from "./chat-delegation-service.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import { ChatTurnToolUseClosedError } from "./chat-turn-control.js";
+import { CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE } from "./chat-fanout-admission-reference.js";
+import { assertFanoutInitialSelection } from "./chat-fanout-admission-authority.js";
+import { hasDurableFanoutWaitingEvidence } from "./chat-fanout-wait-evidence.js";
+import { mapDelegationStatus, projectDelegationResult, projectCanonicalResult } from "./chat-fanout-result-projection.js";
 
 /** Immutable workflow discriminator for the Chat-native durable fan-out bridge. */
-export const CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE = "chat.durable.agent.fanout.v1";
+export { CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE };
 /** Keyed only by the canonical fan-out invocation that has settled all children. */
 export const CHAT_DURABLE_FANOUT_RESOLVED_WAKE_EVENT = "chat.fanout.resolved";
 /** Conservative admission ceiling, reserved before any of the at-most-three children start. */
 export const CHAT_DURABLE_FANOUT_CHILD_COST_CEILING_USD = 0.25;
-/** Bound tool-visible child excerpts without importing the legacy registry bridge. */
-const SUBAGENT_FANOUT_OUTPUT_EXCERPT_LIMIT = 3_000;
 
 export interface ChatDurableFanoutSubtask {
   objective: string;
   label?: string;
   expectedOutput?: string;
+  resultSchema?: import("@goatcitadel/contracts").ChatDelegationResultSchema;
 }
 
 export interface ChatDurableFanoutExecutionInput {
@@ -53,7 +56,8 @@ export interface ChatDurableFanoutExecutionInput {
 }
 
 export interface ChatDurableFanoutServiceHost {
-  storage: Pick<Storage, "chatFanoutInvocations" | "chatSessionProjects" | "chatProjects" | "chatDelegationSteps">;
+  storage: Pick<Storage, "chatFanoutInvocations" | "chatSessionProjects" | "chatProjects" | "chatDelegationSteps" | "chatDelegationRuns" |
+    "chatTurnTraces" | "chatToolRuns" | "chatMessages" | "durableChildWatchers" | "durableRuns" | "sessionMutationAdmissions" | "sessionControls" | "chatSessionPrefs">;
   capabilitySystem: Pick<
     CapabilitySystemService,
     | "listAutonomousActivationGrants"
@@ -69,15 +73,11 @@ export interface ChatDurableFanoutServiceHost {
     event: { eventKey: string; correlationId?: string; payload?: Record<string, unknown> },
   ): Promise<unknown>;
   isEnabled(): Promise<boolean>;
+  isLiveAdmissionEnabled?(): Promise<boolean>;
   assertParentToolUseOpen(parentRunId: string, sessionId: string): Promise<void>;
 }
 
-class FanoutAuthorityError extends Error {
-  public constructor(message: string) {
-    super(message);
-    this.name = "FanoutAuthorityError";
-  }
-}
+
 
 /**
  * Durably connects the server-authored parent tool run to the existing
@@ -86,13 +86,77 @@ class FanoutAuthorityError extends Error {
  * the single source of child execution truth.
  */
 export class ChatDurableFanoutService {
+  private waitingParentCursor: string | undefined;
   public constructor(private readonly host: ChatDurableFanoutServiceHost) {}
 
-  public async execute(input: ChatDurableFanoutExecutionInput): Promise<Record<string, unknown>> {
-    if (!(await this.host.isEnabled())) {
-      throw new Error("Automatic fan-out is unavailable because the durable Chat fan-out rollout is disabled.");
+  /** Retry lost settlement/wake handoffs independently of watcher delivery ACKs. */
+  public async reconcileWaitingParents(): Promise<void> {
+    const storage = this.host.storage;
+    const candidates = await storage.chatFanoutInvocations.listWaitingParentCandidateIds(100, this.waitingParentCursor);
+    this.waitingParentCursor = candidates.length === 100 ? candidates.at(-1) : undefined;
+    const failures: unknown[] = [];
+    for (const candidateId of candidates) {
+      try {
+        const candidate = await storage.chatFanoutInvocations.get(candidateId);
+        const parent = await storage.durableRuns.getRun(candidate.parentRunId);
+        const wait = parent.metadata?.waitForEvent as { eventKey?: string; correlationId?: string } | undefined;
+        if (parent.status !== "waiting" || wait?.eventKey !== CHAT_DURABLE_FANOUT_RESOLVED_WAKE_EVENT ||
+            wait.correlationId !== candidate.invocationId || typeof parent.payload.turnId !== "string") continue;
+        await this.host.assertParentToolUseOpen(parent.runId, candidate.sessionId);
+        if (candidate.parentAdmission) await this.assertParentAdmissionCurrent(candidate,
+          await this.resolveActiveProject(candidate.sessionId, candidate.workspaceId));
+        const trace = await storage.chatTurnTraces.get(parent.payload.turnId);
+        const tools = await storage.chatToolRuns.listByTurn(trace.turnId);
+        if (!await hasDurableFanoutWaitingEvidence(storage, parent, trace, tools)) {
+          throw new Error("Waiting fanout has mismatched canonical parent/child evidence.");
+        }
+        for (const step of await storage.chatDelegationSteps.listByRun(candidate.delegationRunId!)) {
+          if (step.status !== "running" || !step.durableRunId || !step.childTurnId || !step.childSessionId) continue;
+          const child = await storage.durableRuns.getRun(step.durableRunId);
+          if (!isDurableRunTerminal(child.status)) continue;
+          const childTrace = await storage.chatTurnTraces.get(step.childTurnId);
+          if (!isTerminalChildTrace(childTrace.status)) continue;
+          const message = childTrace.assistantMessageId ? await storage.chatMessages.get(childTrace.assistantMessageId) : undefined;
+          await this.host.materializeTerminalDelegatedChild({ delegationRunId: candidate.delegationRunId!, stepId: step.stepId,
+            durableRunId: step.durableRunId, childSessionId: step.childSessionId, childTurnId: step.childTurnId,
+            trace: childTrace, ...(message?.content ? { output: message.content } : {}) });
+        }
+        const steps = await storage.chatDelegationSteps.listByRun(candidate.delegationRunId!);
+        const status = terminalFanoutStatus(steps.map((step) => step.status));
+        if (!status) continue;
+        const current = await storage.chatFanoutInvocations.get(candidate.invocationId);
+        if (!isTerminal(current.status)) await storage.chatFanoutInvocations.patch(current.invocationId, { status });
+        if (!await hasDurableFanoutWaitingEvidence(storage, parent, trace, tools, { requireSettled: true })) continue;
+        await this.host.assertParentToolUseOpen(parent.runId, candidate.sessionId);
+        if (current.parentAdmission) await this.assertParentAdmissionCurrent(current,
+          await this.resolveActiveProject(current.sessionId, current.workspaceId));
+        // The canonical wake owner rereads and CAS-fences the current waiting
+        // run/checkpoint. Cancellation or another wake cannot be overwritten.
+        await this.host.wakeDurableChatRun?.(parent.runId, { eventKey: CHAT_DURABLE_FANOUT_RESOLVED_WAKE_EVENT,
+          correlationId: candidate.invocationId, payload: { fanoutInvocationId: candidate.invocationId, recovered: true } });
+      } catch (error) { failures.push(error); }
     }
+    if (failures.length) throw new AggregateError(failures, "Fanout recovery could not reconcile every waiting parent.");
+  }
+
+  /** Read committed aggregate/child evidence for a resumed parent's existing tool run. */
+  public async readToolResult(parentRunId: string, toolRunId: string): Promise<Record<string, unknown> | undefined> {
+    const invocation = await this.host.storage.chatFanoutInvocations.findByParentAndTool(parentRunId, toolRunId);
+    return invocation ? await this.projectResult(invocation) : undefined;
+  }
+
+  public async assertInvocationAuthority(invocationId: string): Promise<void> { return await assertFanoutInvocationAuthority(this.host, invocationId); }
+
+  public async assertFeatureDispatchCurrent(input: {
+    featureAdmission?: { references: ChatTurnFeatureReferences; referenceSha256: string };
+    policyRunId?: string; canonicalDurableRunId?: string; parentDelegationStepId?: string; sessionId: string; turnId: string; workspaceId?: string;
+    canonicalWriteFence?: <T>(work: () => T | Promise<T>) => Promise<Awaited<T>>;
+  }): Promise<void> { return await assertFanoutFeatureDispatchCurrent(this.host, input); }
+
+  public async execute(input: ChatDurableFanoutExecutionInput): Promise<Record<string, unknown>> {
+    await assertFanoutRuntimeEnabled(this.host);
     const parentRunId = requireDurableParentRunId(input);
+    await assertFanoutInitialSelection(this.host, input.prepared);
     const toolRunId = input.toolRunId?.trim();
     if (!toolRunId) {
       throw new Error("Automatic fan-out requires a server-authored Chat tool-run identity.");
@@ -150,6 +214,7 @@ export class ChatDurableFanoutService {
             objective: subtask.objective,
             ...(subtask.label ? { label: subtask.label } : {}),
             ...(subtask.expectedOutput ? { expectedOutput: subtask.expectedOutput } : {}),
+            ...(subtask.resultSchema ? { resultSchema: subtask.resultSchema } : {}),
             parallelizable: true,
           })),
           operatorId: input.operatorId,
@@ -296,6 +361,14 @@ export class ChatDurableFanoutService {
     toolRunId: string,
   ): Promise<ChatFanoutInvocationRecord> {
     const project = await this.resolveActiveProject(input.prepared.session.sessionId, input.prepared.workspaceId);
+    const parentAdmission = input.prepared.featureAdmission?.references.childWork && input.prepared.turnAdmission ? {
+      admissionId: input.prepared.turnAdmission.identity.admissionId,
+      sessionIncarnationId: input.prepared.turnAdmission.identity.sessionIncarnationId,
+      materialSha256: input.prepared.turnAdmission.identity.materialSha256,
+      featureReferenceSha256: input.prepared.featureAdmission.referenceSha256,
+    } : undefined;
+    if (parentAdmission) await this.assertParentAdmissionCurrent({ parentRunId, parentAdmission,
+      sessionId: input.prepared.session.sessionId, workspaceId: input.prepared.workspaceId }, project);
     const evaluationInput = buildGrantEvaluationInput({
       workspaceId: input.prepared.workspaceId,
       projectId: project.projectId,
@@ -326,8 +399,10 @@ export class ChatDurableFanoutService {
       reservedActivations: input.subtasks.length,
       reservedBudgetUsd: reserveBudget(input.subtasks.length),
       objective: truncate(input.prepared.content, 2_000),
-      capabilityProfileHash: capabilityProfileHash(input.prepared),
-      policyProfileHash: policyProfileHash(input.prepared),
+      ...(parentAdmission ? { parentAdmission } : {
+        capabilityProfileHash: capabilityProfileHash(input.prepared),
+        policyProfileHash: policyProfileHash(input.prepared),
+      }),
       projectBindingHash: hash({
         projectId: project.projectId,
         workspaceId: project.workspaceId ?? "default",
@@ -368,63 +443,13 @@ export class ChatDurableFanoutService {
     }
   }
 
-  private async assertLiveAuthority(invocation: ChatFanoutInvocationRecord): Promise<void> {
-    await this.host.assertParentToolUseOpen(invocation.parentRunId, invocation.sessionId);
-    const project = await this.resolveActiveProject(invocation.sessionId, invocation.workspaceId);
-    if (project.projectId !== invocation.projectId) {
-      throw new FanoutAuthorityError("The Chat session project changed after fan-out admission.");
-    }
-    const currentProjectBindingHash = hash({
-      projectId: project.projectId,
-      workspaceId: project.workspaceId ?? "default",
-      revision: project.revision,
-      lifecycleStatus: project.lifecycleStatus,
-    });
-    if (currentProjectBindingHash !== invocation.projectBindingHash) {
-      throw new FanoutAuthorityError("The admitted project binding changed after fan-out admission.");
-    }
-    const liveGrant = await this.findGrant(invocation.grantId);
-    if (!liveGrant || hash(freezeGrantBinding(liveGrant)) !== invocation.grantBindingHash) {
-      throw new FanoutAuthorityError("The admitted automatic fan-out grant binding changed after admission.");
-    }
-    const evaluated = await this.host.capabilitySystem.evaluateAutonomousActivationGrantAuthorityById(
-      invocation.grantId,
-      buildGrantEvaluationInput({
-        workspaceId: invocation.workspaceId,
-        projectId: invocation.projectId,
-        estimatedCostUsd: 0,
-      }),
-    );
-    if (!evaluated.allowed) {
-      throw new FanoutAuthorityError(
-        `The admitted automatic fan-out grant is no longer valid. ${evaluated.blockers.join(" ")}`.trim(),
-      );
-    }
-    // Grant checks can yield while an operator closes the parent turn.
-    await this.host.assertParentToolUseOpen(invocation.parentRunId, invocation.sessionId);
-  }
+  private async assertLiveAuthority(invocation: ChatFanoutInvocationRecord): Promise<void> { return await assertFanoutLiveAuthority(this.host, invocation); }
 
-  private async resolveActiveProject(sessionId: string, workspaceId: string): Promise<ChatProjectRecord> {
-    const storage = this.host.storage;
-    const binding = await storage.chatSessionProjects.get(sessionId);
-    if (!binding?.projectId) {
-      throw new FanoutAuthorityError("Automatic fan-out requires an active project-bound Chat session.");
-    }
-    const project = await storage.chatProjects.find(binding.projectId);
-    if (!project || project.lifecycleStatus !== "active") {
-      throw new FanoutAuthorityError("Automatic fan-out requires a non-archived active project.");
-    }
-    if ((project.workspaceId ?? "default") !== workspaceId) {
-      throw new FanoutAuthorityError("The active project belongs to a different workspace.");
-    }
-    return project;
-  }
+  private async assertParentAdmissionCurrent(invocation: Pick<ChatFanoutInvocationRecord, "parentRunId" | "parentAdmission" | "sessionId" | "workspaceId">, project: ChatProjectRecord): Promise<void> { return await assertFanoutParentAdmissionCurrent(this.host, invocation, project); }
 
-  private async findGrant(grantId: string): Promise<AutonomousActivationGrantRecord | undefined> {
-    return (await this.host.capabilitySystem.listAutonomousActivationGrants(true)).find(
-      (grant) => grant.grantId === grantId,
-    );
-  }
+  private async resolveActiveProject(sessionId: string, workspaceId: string): Promise<ChatProjectRecord> { return await resolveFanoutActiveProject(this.host, sessionId, workspaceId); }
+
+  private async findGrant(grantId: string): Promise<AutonomousActivationGrantRecord | undefined> { return await findFanoutGrant(this.host, grantId); }
 
   private assertInvocationMatchesPrepared(
     invocation: ChatFanoutInvocationRecord,
@@ -445,10 +470,16 @@ export class ChatDurableFanoutService {
       );
     }
     if (
-      invocation.capabilityProfileHash !== capabilityProfileHash(prepared) ||
-      invocation.policyProfileHash !== policyProfileHash(prepared)
+      !invocation.parentAdmission && (invocation.capabilityProfileHash !== capabilityProfileHash(prepared) ||
+      invocation.policyProfileHash !== policyProfileHash(prepared))
     ) {
       throw new FanoutAuthorityError("The frozen capability or policy profile changed before fan-out recovery.");
+    }
+    if (invocation.parentAdmission && (invocation.parentAdmission.admissionId !== prepared.turnAdmission?.identity.admissionId ||
+      invocation.parentAdmission.sessionIncarnationId !== prepared.turnAdmission?.identity.sessionIncarnationId ||
+      invocation.parentAdmission.materialSha256 !== prepared.turnAdmission?.identity.materialSha256 ||
+      invocation.parentAdmission.featureReferenceSha256 !== prepared.featureAdmission?.referenceSha256)) {
+      throw new FanoutAuthorityError("Fanout replay differs from its admitted parent feature references.");
     }
   }
 
@@ -490,22 +521,7 @@ function requireDurableParentRunId(input: ChatDurableFanoutExecutionInput): stri
   return supplied;
 }
 
-function buildGrantEvaluationInput(input: {
-  workspaceId: string;
-  projectId: string;
-  estimatedCostUsd: number;
-}): AutonomousActivationGrantEvaluationInput {
-  return {
-    workspaceId: input.workspaceId,
-    projectId: input.projectId,
-    surface: "chat",
-    riskLevel: "caution",
-    activationKind: "subagent_fanout",
-    capabilityId: "agent.fanout",
-    toolName: "agent.fanout",
-    estimatedCostUsd: input.estimatedCostUsd,
-  };
-}
+
 
 function reserveBudget(childCount: number): number {
   return Math.round(childCount * CHAT_DURABLE_FANOUT_CHILD_COST_CEILING_USD * 1_000_000) / 1_000_000;
@@ -523,104 +539,9 @@ function policyProfileHash(prepared: PreparedAgentChatTurn): string {
   return hash(prepared.capabilityProfile?.governance?.permission ?? { legacy: "no-capability-profile" });
 }
 
-function freezeGrantBinding(grant: AutonomousActivationGrantRecord): Record<string, unknown> {
-  return {
-    grantId: grant.grantId,
-    status: grant.status,
-    workspaceId: grant.workspaceId,
-    projectId: grant.projectId ?? null,
-    activationKinds: grant.activationKinds,
-    maxActivations: grant.maxActivations ?? null,
-    budgetUsd: grant.budgetUsd ?? null,
-    expiresAt: grant.expiresAt,
-  };
-}
 
-function hash(value: unknown): string {
-  return createHash("sha256").update(canonicalJsonString(value)).digest("hex");
-}
 
-function mapDelegationStatus(response: ChatDelegateResponse): ChatFanoutInvocationRecord["status"] {
-  if (response.status === "running") return "waiting";
-  if (response.status === "completed") {
-    return response.steps.every((step) => step.status === "completed") ? "completed" : "partial";
-  }
-  if (response.status === "partial") return "partial";
-  return "failed";
-}
 
-function projectDelegationResult(
-  invocation: ChatFanoutInvocationRecord,
-  response: ChatDelegateResponse,
-): Record<string, unknown> {
-  return projectCanonicalResult(invocation, response.steps, response.stitchedOutput, response.citations);
-}
-
-function projectCanonicalResult(
-  invocation: ChatFanoutInvocationRecord,
-  steps: Array<{
-    index: number;
-    status: string;
-    label?: string;
-    summary?: string;
-    output?: string;
-    error?: string;
-    durableRunId?: string;
-    childSessionId?: string;
-    childTurnId?: string;
-  }>,
-  stitchedOutput?: string,
-  citations?: unknown[],
-): Record<string, unknown> {
-  const results = [...steps]
-    .sort((left, right) => left.index - right.index)
-    .map((step) => {
-      const completed = step.status === "completed";
-      const output = completed ? truncate(step.output?.trim() ?? "", SUBAGENT_FANOUT_OUTPUT_EXCERPT_LIMIT) : "";
-      return {
-        index: step.index,
-        ...(step.label ? { label: step.label } : {}),
-        status: completed
-          ? "completed"
-          : step.status === "running" || step.status === "pending"
-            ? "waiting"
-            : step.status,
-        ...(step.summary ? { summary: step.summary } : {}),
-        ...(output ? { output } : {}),
-        ...(step.error ? { error: step.error } : {}),
-        ...(step.durableRunId ? { durableRunId: step.durableRunId } : {}),
-        ...(step.childSessionId ? { childSessionId: step.childSessionId } : {}),
-        ...(step.childTurnId ? { childTurnId: step.childTurnId } : {}),
-      };
-    });
-  const completedCount = results.filter((result) => result.status === "completed").length;
-  const waiting = results.some((result) => result.status === "waiting");
-  return {
-    status: invocation.status,
-    fanoutInvocationId: invocation.invocationId,
-    parentRunId: invocation.parentRunId,
-    toolRunId: invocation.toolRunId,
-    ...(invocation.delegationRunId ? { delegationRunId: invocation.delegationRunId } : {}),
-    grant: {
-      grantId: invocation.grantId,
-      projectId: invocation.projectId,
-      reservedActivations: invocation.reservedActivations,
-      reservedBudgetUsd: invocation.reservedBudgetUsd,
-    },
-    childCount: invocation.childCount,
-    completedCount,
-    waitingCount: results.filter((result) => result.status === "waiting").length,
-    results,
-    ...(stitchedOutput && !waiting
-      ? { stitchedOutput: truncate(stitchedOutput, SUBAGENT_FANOUT_OUTPUT_EXCERPT_LIMIT) }
-      : {}),
-    ...(citations && citations.length > 0 ? { citations } : {}),
-    ...(invocation.terminalReason ? { terminalReason: invocation.terminalReason } : {}),
-    guidance: waiting
-      ? "Fan-out is durably waiting for child terminal states or approvals. Do not synthesize from incomplete child work."
-      : "Use only the committed completed-child outputs and explicit failure or approval state when synthesizing.",
-  };
-}
 
 function appendCancellationTruth(message: string, cancellation: { requested: number; unresolved: number }): string {
   if (cancellation.requested === 0) return message;

@@ -1,4 +1,14 @@
+import type { ExtensionConfigurationForm } from "./channels.js";
+
 export type UiActionState = "idle" | "pending" | "success" | "error";
+
+/** Presentation metadata; this never extends the connector's accepted configuration. */
+export interface IntegrationConfigurationGuidance {
+  pluginId: string;
+  pluginVersion: string;
+  form: ExtensionConfigurationForm;
+  supportedFieldKeys: string[];
+}
 
 export type IntegrationFieldType = "text" | "password" | "textarea" | "number" | "boolean" | "select" | "url" | "json";
 
@@ -27,4 +37,5 @@ export interface IntegrationFormSchema {
   description?: string;
   allowAdvancedJson?: boolean;
   fields: IntegrationFieldSchema[];
+  configurationGuidance?: IntegrationConfigurationGuidance;
 }

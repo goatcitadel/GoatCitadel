@@ -4,6 +4,96 @@ This is the C6 evidence workflow in the [master program](../MASTER_COMPLETION_PR
 Preparation and report generation are local operations. They do not dispatch models,
 send channel messages, or certify product quality.
 
+## October 11 feature-quality pilot
+
+The approved hosted pilot has one aggregate **$25 and 450-request** limit,
+whichever is reached first, across baseline, retries, child calls and retests.
+The local track has a separate 450-request limit and zero provider dollars.
+Each track targets the existing five tasks, three trials and three products
+(45 trials per track). Both use 64,000 context tokens, 4,096 output tokens and a
+ten-minute task deadline. Exhausting either cap leaves remaining trials unrun;
+it never authorizes another budget or a parity claim.
+
+Initialize one retained pilot directory, then reuse its `pilot.json` for every
+hosted baseline or retest. These commands prepare files only:
+
+```text
+node scripts/verification/agent-comparison-pilot.mjs init NEW_PILOT_DIRECTORY
+node scripts/verification/agent-comparison-pilot.mjs prepare PILOT_JSON CONFIG_JSON NEW_CAMPAIGN_DIRECTORY
+```
+
+The configuration supplies the product revisions/model/tools/grants/reasoning
+and transport described below. Preparation fixes the pilot limits and binds each
+hosted manifest to the same absolute shared budget directory. Sessions acquire
+both the campaign journal and that shared pilot journal before dispatch. Both
+reserve and fsync before upstream calls; partial failures remain conservatively
+reserved. A second manifest cannot reset the hosted cap. Creating a new pilot,
+editing its authorization or running a legacy standalone manifest is outside this
+pilot's acceptance. The journals are operator-owned evidence, not protection
+against an administrator rewriting files or an uninstrumented product route.
+
+Each hosted session also exports `pilot-budget-export.json`. Supply it as the
+final recorder argument; pilot-bound receipts cannot pass without matching
+shared reservation and settlement evidence:
+
+```text
+node scripts/verification/agent-comparison-record.mjs MANIFEST TASK TRIAL WORKSPACE EVIDENCE JOURNAL MEASUREMENTS NEW_RESULT_FILE PILOT_JOURNAL
+```
+
+`feature-acceptance.json` starts with unrun hosted/local rows for web research,
+scheduled agent work, provider recovery, delegation, skill/context quality and
+MCP setup/use. Retain actual outcomes and evidence there separately from the
+unchanged comparison fixtures. In particular, `cited_research` uses two supplied
+files, while `scheduled_delivery` is a fixed reminder. Neither proves open-web
+research quality or autonomous scheduled tool execution.
+
+The native launcher remains revision-pinned and requires source review before
+repinning to a new release candidate. Its current Hermes profile requires at
+least 64,000 context tokens. A smaller local model may be tested separately for
+GoatCitadel usability, but cannot silently replace the shared campaign profile.
+
+### Local inference transport
+
+For a local campaign, replace the hosted transport/pricing object with:
+
+```json
+{
+  "kind": "local",
+  "upstreamUrl": "http://127.0.0.1:8080/v1/chat/completions",
+  "outputField": "max_tokens",
+  "localRuntime": {
+    "runtime": "REVIEWED_RUNTIME_AND_VERSION",
+    "modelSha256": "ACTUAL_64_CHARACTER_MODEL_HASH",
+    "quantization": "ACTUAL_QUANTIZATION",
+    "hardware": "ACTUAL_CPU_GPU_AND_MEMORY"
+  }
+}
+```
+
+Local mode accepts only literal `127.0.0.1` or `[::1]` HTTP endpoints. Hostnames,
+alternate IP spellings, remote addresses, URL credentials/query/fragment and
+redirects are refused. Declare `maxCostUsd: 0` when using the general preparation
+command; the pilot helper sets it automatically. A zero request limit still
+prepares only. Hosted transport keeps its HTTPS and positive-rate requirements.
+
+Copy `kind`, `localRuntime`, endpoint and output field into supervised options.
+`apiKeyEnv` may be omitted only for an unauthenticated local endpoint; when
+specified, its named credential must exist. No secret value belongs in metadata.
+Local calls still require the proxy token, durable request reservation, bounded
+input/output usage, response size and deadline. They settle provider charges to
+zero only after receiving valid bounded usage. Missing or over-limit usage keeps
+the attempt unsettled and its measurements unknown; it does not manufacture a
+passing result. Reports identify zero provider charges separately from unpriced
+hardware/electricity/operator time. The buffered proxy cannot measure TTFT.
+
+The transport and pilot tests use controlled responses and disposable directories:
+
+```text
+node --test scripts/verification/lib/agent-comparison-local.test.mjs scripts/verification/lib/agent-comparison-pilot.test.mjs scripts/verification/lib/agent-comparison-provider.test.mjs scripts/verification/lib/agent-comparison-session.test.mjs scripts/verification/lib/agent-comparison-verifiers.test.mjs scripts/verification/lib/agent-comparison.test.mjs
+```
+
+## Campaign workflow
+
 1. Pin each checkout's full commit SHA. Record effective provider, model, reasoning,
    context/output limits, tool capabilities, grants, and task deadline. Use fresh,
    dedicated test workspaces with equivalent tools and input files. The capture
@@ -17,7 +107,7 @@ send channel messages, or certify product quality.
    an exclusive, fsynced campaign journal for that purpose.
 3. Run `node scripts/verification/agent-comparison.mjs prepare config.json NEW_DIRECTORY`.
    The manifest contains at least three repetitions of each of the five common tasks
-   for all three products, with rotating product order. A zero budget permits
+   for all three products, with rotating product order. A zero request budget permits
    preparation only. No fixture becomes a successful result during preparation.
 4. Execute the cells through instrumented product adapters or supervised runs whose
    canonical provider boundary enforces the declared combined cap. The shipped
@@ -211,7 +301,8 @@ node scripts/verification/agent-comparison-serve.mjs MANIFEST OPTIONS NEW_CELL_D
 
 `NEW_CELL_DIRECTORY` must be directly under the manifest's canonical campaign
 directory. The command checks the product's clean checkout and pinned commit,
-requires positive authorized caps, and opens the campaign's one budget writer.
+requires authorized request/dollar caps (zero dollars only in declared local
+mode), and opens the campaign's budget writer plus any bound shared pilot writer.
 It creates the initial task workspace, prompt, evidence directory, and a
 `provider-connection.json` containing only a short-lived loopback token. Setup
 makes no upstream call. The upstream credential stays in the supervising process;

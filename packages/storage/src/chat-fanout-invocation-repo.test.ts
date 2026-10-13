@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { ChatFanoutInvocationRecord } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { ChatFanoutInvocationRepository } from "./chat-fanout-invocation-repo.js";
+import { DurableRunRepository } from "./durable-run-repo.js";
 import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
 const tempDbs = new TempSqliteFiles();
@@ -42,6 +43,25 @@ function invocation(overrides: Partial<ChatFanoutInvocationRecord> = {}): ChatFa
 }
 
 describe("ChatFanoutInvocationRepository", () => {
+  it("discovers terminal lost-wake candidates by waiting parent with bounded fair keyset pages", () => {
+    const { db, repo } = createStore();
+    try {
+      const runs = new DurableRunRepository(db);
+      for (let index = 0; index < 103; index++) {
+        const id = index.toString().padStart(3, "0");
+        runs.createRun({ runId: `parent-${id}`, workflowKey: index === 102 ? "other" : "chat.turn.execute",
+          status: index === 101 ? "cancelled" : "waiting" });
+        repo.createOrGet(invocation({ invocationId: `fanout-${id}`, parentRunId: `parent-${id}`, toolRunId: `tool-${id}`,
+          delegationRunId: `delegation-${id}`, status: "completed", finishedAt: "2026-10-11T00:00:00.000Z" }));
+      }
+      assert.deepEqual(repo.listActive(), []);
+      const first = repo.listWaitingParentCandidateIds(1000);
+      assert.equal(first.length, 100);
+      const second = repo.listWaitingParentCandidateIds(100, first.at(-1)!);
+      assert.deepEqual(second, ["fanout-100"]);
+      assert.deepEqual(repo.listWaitingParentCandidateIds(100, second[0]!), []);
+    } finally { db.close(); }
+  });
   it("converges duplicate parent/tool admission and preserves terminal aggregate truth", () => {
     const { db, repo } = createStore();
     try {

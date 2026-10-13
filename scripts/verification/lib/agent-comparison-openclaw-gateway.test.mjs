@@ -13,6 +13,7 @@ import {
   callNativeOpenclawApproval,
   startNativeOpenclawApprovalGateway,
 } from "./agent-comparison-openclaw-gateway.mjs";
+import { buildFeatureAcceptanceProfile } from "./agent-comparison-acceptance-profile.mjs";
 
 const profile = {
   revision: NATIVE_COMPARISON_PINS.openclaw,
@@ -150,4 +151,42 @@ it("starts an empty isolated owner, never grants by itself and stops only its pr
 it("retains a bounded failure when its owned Gateway exits before readiness", async (t) => {
   const f = await fixture(t, true);
   await assert.rejects(f.start(), /fixture startup refused/);
+});
+
+it("writes recovery bindings through the normal owned Gateway config owner without automatic approvals", async (t) => {
+  const f = await fixture(t);
+  const recovery = buildFeatureAcceptanceProfile(
+    "openclaw",
+    { ...profile, tools: ["files", "fallback"], contextTokens: 64000, outputTokens: 4096, maxTaskMs: 600000 },
+    "provider_recovery",
+    "max_tokens",
+  );
+  f.input.plan = recovery;
+  f.input.connection = { ...connection, effectiveConfigSha256: recovery.effectiveConfigSha256 };
+  f.input.recoveryFixture = {
+    url: "http://127.0.0.1:31303/mcp",
+    authType: "none",
+    nativeToolName: "record_marker",
+    scope: "controlled_loopback_fixture",
+  };
+  f.input.deadlineAt = Date.now() + 60_000;
+  const gateway = await f.start(),
+    config = JSON.parse(await readFile(f.input.configFile, "utf8"));
+  assert.deepEqual(config.agents.defaults.model.fallbacks, ["comparison-fallback/fixture-model"]);
+  assert.equal(config.mcp.servers["comparison-recovery"].url, f.input.recoveryFixture.url);
+  assert.equal(config.models.providers["comparison-fallback"].baseUrl, connection.baseUrl);
+  assert.equal(gateway.evidence.automaticApprovals, false);
+  assert.equal(gateway.evidence.initialPendingApprovals, 0);
+});
+
+it("rejects recovery configuration for an unrelated native launch before writing or starting it", async (t) => {
+  const f = await fixture(t);
+  f.input.recoveryFixture = {
+    url: "http://127.0.0.1:31303/mcp",
+    authType: "none",
+    nativeToolName: "record_marker",
+    scope: "controlled_loopback_fixture",
+  };
+  f.input.deadlineAt = Date.now() + 60_000;
+  await assert.rejects(f.start(), /reviewed feature profile/);
 });

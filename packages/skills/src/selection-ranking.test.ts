@@ -18,6 +18,14 @@ function skill(name: string, keywords: string[] = []): LoadedSkill {
 }
 
 describe("skill-selection shadow ranking", () => {
+  it("retrieves description terms without searching instruction bodies", () => {
+    const networking = { ...skill("networking"), description: "Diagnose reverse proxy routing and unreachable containers." };
+    const ranked = rankSkillSelectionCandidates({ text: "unreachable containers" }, [networking, skill("unrelated")]);
+    expect(ranked.method).toBe("metadata_bm25_v2");
+    expect(ranked.candidates.map((candidate) => candidate.skillId)).toEqual(["bundled:networking"]);
+    expect(rankSkillSelectionCandidates({ text: "zebras" }, [networking]).candidates).toEqual([]);
+  });
+
   it("matches metadata tokens without substring false positives or reading instructions", () => {
     const skills = [skill("coding", ["code"]), skill("research", ["sources"])];
     expect(resolveSkillActivation({ text: "decode an image" }, skills).selected).toHaveLength(1);

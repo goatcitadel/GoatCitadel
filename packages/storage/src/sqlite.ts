@@ -1,4 +1,8 @@
 import { createChannelGuidedSetupSchema } from "./channel-guided-setup-schema.js";
+import { upgradeChatRoutedContextAdmissionSchema } from "./chat-routed-context-admission-schema.js";
+import { upgradeHeartbeatFeatureBindingSchema } from "./heartbeat-feature-binding-schema.js";
+import { upgradeCommitmentOccurrenceSchema } from "./commitment-occurrence-schema.js";
+import { upgradeRemoteWorkerAdmissionBindingSchema } from "./remote-worker-admission-binding-schema.js";
 import { createGovernedRemediationParentReservationSchema } from "./governed-remediation-parent-reservation-schema.js";
 import { upgradeGovernedRemediationResumeVersion } from "./governed-remediation-resume-version.js";
 import { createGovernedRemediationParentResolutionSchema } from "./governed-remediation-parent-resolution-schema.js";
@@ -7368,6 +7372,52 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         name: "purge_credential_route_idempotency_payload_hashes",
         up: purgeCredentialRouteIdempotencyPayloadHashes,
       },
+      {
+        version: 254,
+        name: "chat_provider_fallback_preference",
+        up: (db) => {
+          addColumnIfMissing(db, "chat_session_prefs", "provider_fallback_json", "TEXT");
+        },
+      },
+      {
+        version: 255,
+        name: "chat_turn_feature_references",
+        up: (db) => {
+          db.exec(`
+            CREATE TABLE chat_turn_feature_references (
+              admission_id TEXT PRIMARY KEY REFERENCES chat_session_mutation_admissions(admission_id),
+              reference_sha256 TEXT NOT NULL CHECK(length(reference_sha256) = 64),
+              references_json TEXT NOT NULL CHECK(json_valid(references_json))
+            );
+            CREATE TRIGGER chat_turn_feature_references_no_update BEFORE UPDATE ON chat_turn_feature_references
+            BEGIN SELECT RAISE(ABORT, 'Chat feature references are immutable'); END;
+            CREATE TRIGGER chat_turn_feature_references_no_delete BEFORE DELETE ON chat_turn_feature_references
+            BEGIN SELECT RAISE(ABORT, 'Chat feature references are immutable'); END;
+          `);
+        },
+      },
+      {
+        version: 256,
+        name: "chat_fanout_parent_admission",
+        up: (db) => {
+          addColumnIfMissing(db, "chat_fanout_invocations", "parent_admission_json", "TEXT CHECK(parent_admission_json IS NULL OR json_valid(parent_admission_json))");
+          db.exec(`CREATE TRIGGER chat_fanout_parent_admission_immutable BEFORE UPDATE OF parent_admission_json ON chat_fanout_invocations
+            WHEN NEW.parent_admission_json IS NOT OLD.parent_admission_json
+            BEGIN SELECT RAISE(ABORT, 'Fanout parent admission is immutable'); END;`);
+        },
+      },
+      { version: 257, name: "chat_routed_context_admission", up: upgradeChatRoutedContextAdmissionSchema },
+      { version: 258, name: "heartbeat_feature_binding", up: upgradeHeartbeatFeatureBindingSchema },
+      { version: 259, name: "commitment_occurrence_authority", up: upgradeCommitmentOccurrenceSchema },
+      { version: 260, name: "remote_worker_admission_binding", up: upgradeRemoteWorkerAdmissionBindingSchema },
+      { version: 261, name: "cron_creator_authority", up: (db) => {
+        if (!tableHasColumn(db, "cron_jobs", "creator_authority_json")) db.exec(`
+          ALTER TABLE cron_jobs ADD COLUMN creator_authority_json TEXT
+            CHECK (CASE WHEN creator_authority_json IS NULL THEN 1
+              WHEN length(creator_authority_json) > 4096 OR NOT json_valid(creator_authority_json) THEN 0
+              ELSE COALESCE(json_extract(creator_authority_json, '$.version') = 'cron.creator-authority.v1', 0) END);
+        `);
+      } },
     ],
   },
 ];

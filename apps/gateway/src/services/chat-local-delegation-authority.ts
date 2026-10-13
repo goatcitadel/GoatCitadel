@@ -10,10 +10,12 @@ import type { AsyncStorage } from "@goatcitadel/storage";
 import { buildStableDelegationTurnIdentity, type DelegationTurnIdentity } from "./chat-delegation-identity.js";
 import type { ActiveTurnAdmission } from "./chat-turn-types.js";
 import { computeFrozenChatTurnAdmissionMaterialSha256 } from "./session-control-service.js";
+import { CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE } from "./chat-fanout-admission-reference.js";
 
 export type LocalDelegationAuthorityStorage = Pick<
   AsyncStorage,
   | "chatDelegationRuns"
+  | "chatFanoutInvocations"
   | "chatDelegationSteps"
   | "chatSessionMeta"
   | "chatSessionLifecycles"
@@ -41,6 +43,7 @@ export interface LocalDelegationTurnAuthorityInput extends DelegationTurnIdentit
 export async function assertLocalDelegationTurnAuthority(
   storage: LocalDelegationAuthorityStorage,
   input: LocalDelegationTurnAuthorityInput,
+  options?: { assertAutomaticFanoutAuthority?(invocationId: string): Promise<void> },
 ): Promise<void> {
   const admission = input.admission;
   if (
@@ -81,10 +84,10 @@ export async function assertLocalDelegationTurnAuthority(
   await storage.runImmediateTransaction(async () => {
     const delegation = await storage.chatDelegationRuns.getForUpdate(admitted.policyRunId!);
     const step = await storage.chatDelegationSteps.getForUpdate(admitted.parentDelegationStepId!);
+    const automatic = delegation.workflowTemplate === CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE;
     const expected = buildStableDelegationTurnIdentity(delegation.runId, step.stepId);
     if (
-      delegation.workflowTemplate ||
-      delegation.executionPlanId ||
+      (!automatic && (delegation.workflowTemplate || delegation.executionPlanId)) ||
       !delegation.parentRunId ||
       delegation.sessionId === input.sessionId ||
       delegation.taskId !== admitted.policyTaskId ||
@@ -116,6 +119,28 @@ export async function assertLocalDelegationTurnAuthority(
     )
       reject();
     await assertCanonicalParentAdmission(storage, parentAuthority, parent.runId);
+    if (automatic) {
+      if (!options?.assertAutomaticFanoutAuthority || !delegation.executionPlanId) reject();
+      const invocation = await storage.chatFanoutInvocations.get(delegation.executionPlanId);
+      if (!invocation.parentAdmission || invocation.parentRunId !== parent.runId ||
+        invocation.sessionId !== delegation.sessionId || invocation.workspaceId !== admission.identity.workspaceId ||
+        invocation.delegationRunId !== delegation.runId ||
+        invocation.parentAdmission.admissionId !== parentAuthority.admissionId ||
+        invocation.parentAdmission.sessionIncarnationId !== parentAuthority.sessionIncarnationId ||
+        invocation.parentAdmission.materialSha256 !== parentAuthority.admissionMaterialSha256 ||
+        invocation.parentAdmission.featureReferenceSha256 !== parentAuthority.featureReferenceSha256 ||
+        step.index < 0 || step.index >= invocation.childCount ||
+        step.role !== "worker" || step.instructionSnapshot.objective !== invocation.subtasks[step.index]?.objective ||
+        step.instructionSnapshot.label !== invocation.subtasks[step.index]?.label ||
+        step.instructionSnapshot.expectedOutput !== invocation.subtasks[step.index]?.expectedOutput ||
+        canonicalJsonString(step.instructionSnapshot.resultSchema ?? null) !==
+          canonicalJsonString(invocation.subtasks[step.index]?.resultSchema ?? null)) reject();
+      const terminalSettlement = admission.durableClaim && step.status === "completed" &&
+        ["completed", "partial"].includes(invocation.status);
+      // Exact terminal trace/watch bindings below can settle postcommit work;
+      // they never regain dispatch authority from an expired/revoked grant.
+      if (!terminalSettlement) await options.assertAutomaticFanoutAuthority(invocation.invocationId);
+    }
     await assertCurrentIncarnation(
       storage,
       delegation.sessionId,

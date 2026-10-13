@@ -868,8 +868,8 @@ async function runAgentSendChatMessageLlmPath(
       content: prepared.content,
       mode: prepared.capabilityProfile?.selection.mode ?? mode,
       providerId:
-        prepared.capabilityProfile?.selection.effectiveProviderId ?? input.providerId ?? prepared.prefs.providerId,
-      model: prepared.capabilityProfile?.selection.effectiveModel ?? input.model ?? prepared.prefs.model,
+        prepared.capabilityProfile?.selection.effectiveProviderId ?? prepared.featureAdmission?.references.providerRoute?.primary.providerId ?? input.providerId ?? prepared.prefs.providerId,
+      model: prepared.capabilityProfile?.selection.effectiveModel ?? prepared.featureAdmission?.references.providerRoute?.primary.model ?? input.model ?? prepared.prefs.model,
       webMode: prepared.capabilityProfile?.selection.webMode ?? prepared.normalized.webMode ?? prepared.prefs.webMode,
       memoryMode:
         prepared.capabilityProfile?.selection.memory.mode ??
@@ -906,6 +906,7 @@ async function runAgentSendChatMessageLlmPath(
       modelRouter: prepared.modelRouterDecision,
       signal: controller.signal,
       capabilityProfile: prepared.capabilityProfile,
+      featureAdmission: prepared.featureAdmission,
       capabilityProfileContent: prepared.capabilityProfileContent,
       compactionDimensionHash: prepared.compactionDimensionHash,
     });

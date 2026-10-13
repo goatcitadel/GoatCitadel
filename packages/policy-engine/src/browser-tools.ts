@@ -176,6 +176,12 @@ export function describeBrowserSessionState(sessionId: string): BrowserSessionSt
   };
 }
 
+/** Browser handles close per operation; this drops only the named session's volatile state. */
+export function forgetBrowserSessionState(sessionId: string): boolean {
+  if (!sessionId.trim()) throw new Error("Browser state cleanup requires an exact session owner.");
+  return browserSessionStates.delete(sessionId);
+}
+
 export function isBrowserToolName(name: string): name is BrowserToolName {
   return (
     name === "browser.search" ||
@@ -1826,6 +1832,9 @@ async function withBrowserPage(
           : undefined,
         updatedAt: Date.now(),
       };
+      // A terminal child can clear its volatile state while an awaited snapshot
+      // finishes. Never resurrect that state after execution cancellation.
+      throwIfBrowserExecutionAborted(abortSignal);
       storeBrowserSessionState(browserSessionId, nextState);
     }
     return {

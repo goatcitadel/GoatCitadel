@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import { prepareChatOfferFixture } from "../../../../packages/storage/src/remote-worker-chat-offer-fixture.js";
 import {
@@ -43,8 +43,14 @@ function fixture() {
 }
 
 describe("canonical Chat offer scheduling", () => {
+  let prepared: ReturnType<typeof fixture>;
+  // Fresh database migration/seed preparation is not offer execution. Keep
+  // the actual schedule/replay assertions under the unchanged 15-second limit.
+  beforeEach(() => {
+    prepared = fixture();
+  }, 45_000);
   it("creates one bounded offer from the original admission and exactly replays it", async () => {
-    const { run, dependencies, count } = fixture();
+    const { run, dependencies, count } = prepared;
     const service = new RemoteWorkerChatOfferService(dependencies);
     const created = await service.schedule(run);
     expect(created.disposition).toBe("created");
@@ -64,7 +70,7 @@ describe("canonical Chat offer scheduling", () => {
   });
 
   it("rejects disabled operation and stale durable claims before creating an offer", async () => {
-    const { run, dependencies, count } = fixture();
+    const { run, dependencies, count } = prepared;
     await expect(new RemoteWorkerChatOfferService({ ...dependencies, enabled: false }).schedule(run)).rejects.toThrow(
       "not activated",
     );
@@ -77,7 +83,7 @@ describe("canonical Chat offer scheduling", () => {
   });
 
   it("rejects changed permission authority without publishing work", async () => {
-    const { run, dependencies, count } = fixture();
+    const { run, dependencies, count } = prepared;
     await expect(
       new RemoteWorkerChatOfferService({
         ...dependencies,
@@ -88,7 +94,7 @@ describe("canonical Chat offer scheduling", () => {
   });
 
   it("rechecks the claim atomically after asynchronous capability and policy preflight", async () => {
-    const { run, storage, dependencies, count } = fixture();
+    const { run, storage, dependencies, count } = prepared;
     await expect(
       new RemoteWorkerChatOfferService({
         ...dependencies,

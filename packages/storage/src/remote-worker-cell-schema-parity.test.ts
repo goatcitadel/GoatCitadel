@@ -90,7 +90,7 @@ const TABLE_COLUMNS = {
 } as const;
 
 describe("HX-505 remote worker cell schema parity", () => {
-  it("keeps SQLite 178 and PostgreSQL 120 paired across exactly two cell/evidence tables", () => {
+  it("keeps historical cell columns paired with the SQLite 260 and PostgreSQL 207 authority addition", () => {
     assert.equal(
       postgresSql.match(/CREATE TABLE IF NOT EXISTS remote_worker_cell/gu)?.length,
       2,
@@ -98,7 +98,9 @@ describe("HX-505 remote worker cell schema parity", () => {
     );
     for (const [table, columns] of Object.entries(TABLE_COLUMNS)) {
       assert.match(postgresSql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
-      const headColumns = table === "remote_worker_cells" ? [...columns, "native_platform_json"] : [...columns];
+      const headColumns = table === "remote_worker_cells"
+        ? [...columns.flatMap(column => column === "capability_profile_sha256" ? ["admission_reference_json", column] : [column]), "native_platform_json"]
+        : [...columns];
       assert.deepEqual(tableColumns(db, table), headColumns, `${table} SQLite columns drifted`);
       for (const column of columns) {
         assert.match(
@@ -113,6 +115,8 @@ describe("HX-505 remote worker cell schema parity", () => {
       POSTGRES_MIGRATIONS.find((migration) => migration.version === 151)?.sql ?? "",
       /ALTER TABLE remote_worker_cells ADD COLUMN IF NOT EXISTS native_platform_json TEXT/u,
     );
+    assert.match(POSTGRES_MIGRATIONS.find(migration => migration.version === 207)?.sql ?? "",
+      /ALTER TABLE remote_worker_cells ADD COLUMN IF NOT EXISTS admission_reference_json TEXT/u);
   });
 
   it("never stores a transcript, artifact payload, raw terminal output, or credential in either dialect", () => {

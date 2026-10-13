@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { readPassedTestCount } from "./lib/scenarios/external-sources-lane.mjs";
 import { parseCliArgs } from "./lib/shared.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
@@ -109,6 +110,9 @@ const CHECK_GROUPS = Object.freeze({
           "exec",
           "vitest",
           "run",
+          // Keep source-heavy Gateway imports and migrated public fixtures from
+          // starving each other's lease timers on the shared Windows host.
+          "--maxWorkers=1",
           "--reporter",
           "verbose",
           "src/services/autonomous-activation-grant-service.test.ts",
@@ -119,9 +123,13 @@ const CHECK_GROUPS = Object.freeze({
           "src/services/chat-turn-prep-service.agentic-state-capsule.test.ts",
           "src/services/chat-message-history-service.test.ts",
           "src/routes/chat.fanout.test.ts",
+          "src/chat-automatic-fanout.integration.test.ts",
+          "src/services/chat-fanout-approval-service.test.ts",
+          "src/services/chat-fanout-wait-evidence.test.ts",
+          "src/services/gateway-service.chat-turn-runtime-host.test.ts",
         ],
         {
-          timeoutMs: 180_000,
+          timeoutMs: 420_000,
           minimumPassedTests: 90,
           expectedStdout: [
             "reserves all three child slots and the conservative ceiling before dispatching the durable delegation",
@@ -131,6 +139,9 @@ const CHECK_GROUPS = Object.freeze({
             "keeps canonical fan-out recovery references and waits while excluding child output, host paths, and secrets",
             "never compacts across an active durable fan-out parent and keeps the capsule outside transcript summaries",
             "stops only the canonical aggregate for the requested Chat session",
+            "runs fresh public automatic fanout with two real governed children and resumes the same parent for synthesis",
+            "resumes public automatic fanout through its exact approval and current durable parent authority",
+            "recovers a terminal aggregate after a lost wake with a fresh owner and no duplicate child materialization",
           ],
         },
       ),
@@ -147,10 +158,13 @@ const CHECK_GROUPS = Object.freeze({
           "src/chat-fanout-invocation-repo.test.ts",
         ],
         {
-          timeoutMs: 120_000,
+          // Schema-initialized fixtures take ~114s under the shared Windows host
+          // load. This is a harness allowance, not a runtime execution deadline.
+          timeoutMs: 240_000,
           expectedStdout: [
             "materializes a terminal durable child once and never lets a late result replace cancellation or a new child binding",
             "converges duplicate parent/tool admission and preserves terminal aggregate truth",
+            "discovers terminal lost-wake candidates by waiting parent with bounded fair keyset pages",
           ],
         },
       ),
@@ -326,7 +340,7 @@ const CHECK_GROUPS = Object.freeze({
         "agentic_diagnostic",
       ]),
       fileContains("apps/gateway/src/services/capability-system-service.ts", [
-        "listCatalog(\"inspectable\")",
+        'listCatalog("inspectable")',
         "callableEntries",
         "approval",
       ]),
@@ -338,6 +352,7 @@ const CHECK_GROUPS = Object.freeze({
         ["--filter", "@goatcitadel/storage", "exec", "tsx", "--test", "src/permission-profile-repo.test.ts"],
         {
           timeoutMs: 120_000,
+          sqliteSchemaTemplate: true,
         },
       ),
       commandCheck(
@@ -354,9 +369,11 @@ const CHECK_GROUPS = Object.freeze({
           "src/routes/tools.permission-profiles.test.ts",
           "src/services/plugin-tool-override-service.test.ts",
           "src/services/tool-invocation-coordinator-service.test.ts",
+          "--maxWorkers=1",
         ],
         {
           timeoutMs: 180_000,
+          sqliteSchemaTemplate: true,
           expectedStdout: [
             "routes execution to plugin override handler when an active override exists",
             "blocks plugin overrides when final policy would require approval",
@@ -402,6 +419,7 @@ const CHECK_GROUPS = Object.freeze({
           // ran past 360s on a Release Proof runner (2026-09-22). Budgets bound
           // hangs, not loaded schedulers, so give this check 2x its CI time.
           timeoutMs: 720_000,
+          sqliteSchemaTemplate: true,
           expectedStdout: [
             "freezes Code Mode wrapper policy context at run approval time",
             "does not silently swap an explicit Code Mode permission profile during policy resolution",
@@ -533,11 +551,13 @@ const CHECK_GROUPS = Object.freeze({
           "exec",
           "tsx",
           "--test",
+          "--test-concurrency=1",
           "apps/gateway/src/services/improvement-service.node.test.ts",
           "apps/gateway/src/improvement-operator-proof.node.test.ts",
         ],
         {
           timeoutMs: 180_000,
+          sqliteSchemaTemplate: true,
           expectedStdout: [
             "persists agentic bridge proposals as governed candidates with mutationApplied=false",
             "keeps review-first skill drift proposals from mutating through direct activation",
@@ -555,11 +575,7 @@ const CHECK_GROUPS = Object.freeze({
         "gated by availability and operator intent",
         "must not claim full parity",
       ]),
-      fileContains("docs/HARNESS_AUDIT_LENS.md", [
-        "external",
-        "review",
-        "GoatCitadel already owns orchestration",
-      ]),
+      fileContains("docs/HARNESS_AUDIT_LENS.md", ["external", "review", "GoatCitadel already owns orchestration"]),
       fileContains("docs/review/HERMES_GOATCITADEL_PARITY_AUDIT_2026-05-02.md", [
         "Hermes",
         "Curator/self-improvement",
@@ -683,6 +699,7 @@ function commandCheck(title, command, args, options = {}) {
     timeoutMs: options.timeoutMs ?? 120_000,
     expectedStdout: options.expectedStdout ?? [],
     minimumPassedTests: options.minimumPassedTests,
+    sqliteSchemaTemplate: options.sqliteSchemaTemplate === true,
   };
 }
 
@@ -699,6 +716,7 @@ async function runCheck(check) {
         env: {
           ...process.env,
           CI: process.env.CI ?? "1",
+          ...(check.sqliteSchemaTemplate ? { GOATCITADEL_SQLITE_SCHEMA_TEMPLATE: "1" } : {}),
         },
       });
       const output = `${stdout}\n${stderr}`;
@@ -717,6 +735,7 @@ async function runCheck(check) {
         durationMs: Date.now() - startedAt,
         expectedStdout: check.expectedStdout,
         minimumPassedTests: check.minimumPassedTests,
+        sqliteSchemaTemplate: check.sqliteSchemaTemplate,
         passedTestCount,
         missingOutput: missing,
         stdoutTail: clampString(stdout, 4000),
@@ -731,6 +750,7 @@ async function runCheck(check) {
         durationMs: Date.now() - startedAt,
         expectedStdout: check.expectedStdout,
         exitCode: typeof error?.code === "number" ? error.code : undefined,
+        sqliteSchemaTemplate: check.sqliteSchemaTemplate,
         signal: error?.signal,
         error: error instanceof Error ? error.message : String(error),
         stdoutTail: clampString(String(error?.stdout ?? ""), 4000),
@@ -766,19 +786,6 @@ function clampString(value, maxLength) {
     return value;
   }
   return `${value.slice(0, Math.max(0, maxLength - 32))}\n…truncated ${value.length - maxLength + 32} chars`;
-}
-
-function readPassedTestCount(output) {
-  const normalized = stripAnsi(output).replace(/\s+/g, " ");
-  const matches = [...normalized.matchAll(/Tests\s+(\d+)\s+passed/g)];
-  if (matches.length === 0) {
-    return 0;
-  }
-  return matches.reduce((total, match) => total + Number(match[1] ?? 0), 0);
-}
-
-function stripAnsi(value) {
-  return value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
 function resolveInvocation(command, args) {

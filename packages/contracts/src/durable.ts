@@ -201,7 +201,8 @@ export interface DurableCheckpointRecord {
     | "run_reclaimed"
     | "run_incomplete_worker_exit"
     | "run_retry_budget_exhausted"
-    | "coding_progress";
+    | "coding_progress"
+    | "delegated_result_correction";
   state: Record<string, unknown>;
   createdAt: string;
 }

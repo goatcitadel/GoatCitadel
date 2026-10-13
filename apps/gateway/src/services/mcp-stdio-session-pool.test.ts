@@ -23,13 +23,193 @@ afterEach(() => {
 });
 
 describe("MCP stdio session ownership", () => {
+  it("settles only the exact child owner, leaving sibling, parent and unowned sessions connected", async () => {
+    const pool = createPool();
+    const owners = [
+      { sessionId: "child", turnId: "turn" },
+      { sessionId: "child", turnId: "other-turn" },
+      { sessionId: "parent", turnId: "turn" },
+      undefined,
+    ];
+    const clients = owners.map(() => createClient());
+    for (const [index, owner] of owners.entries()) {
+      await pool.use(
+        "server",
+        `scope-${index}`,
+        "binding",
+        async () => clients[index]!,
+        async () => undefined,
+        undefined,
+        owner,
+      );
+    }
+    const closeOwned = pool.captureOwnerCloser({ sessionId: "child", turnId: "turn" });
+    expect(closeOwned()).toBe(1);
+    await Promise.resolve();
+    expect(clients[0]!.close).toHaveBeenCalledOnce();
+    clients.slice(1).forEach((client) => expect(client.close).not.toHaveBeenCalled());
+    expect(closeOwned()).toBe(0);
+  });
+
+  it("copies ownership and refuses to reuse a process across different child owners", async () => {
+    const pool = createPool();
+    const owner = { sessionId: "child", turnId: "first" };
+    const first = createClient(),
+      replacement = createClient();
+    await pool.use(
+      "server",
+      "scope",
+      "binding",
+      async () => first,
+      async () => undefined,
+      undefined,
+      owner,
+    );
+    owner.turnId = "second";
+    const closeFirst = pool.captureOwnerCloser({ sessionId: "child", turnId: "first" });
+    await pool.use(
+      "server",
+      "scope",
+      "binding",
+      async () => replacement,
+      async () => undefined,
+      undefined,
+      owner,
+    );
+    expect(first.close).toHaveBeenCalledOnce();
+    expect(closeFirst()).toBe(0);
+    expect(replacement.close).not.toHaveBeenCalled();
+    expect(pool.captureOwnerCloser(owner)()).toBe(1);
+  });
+
+  it("a delayed child closer does not close a replacement for the same owner", async () => {
+    const pool = createPool();
+    const owner = { sessionId: "child", turnId: "turn" };
+    const first = createClient(),
+      replacement = createClient();
+    await pool.use(
+      "server",
+      "scope",
+      "old-binding",
+      async () => first,
+      async () => undefined,
+      undefined,
+      owner,
+    );
+    const closeCaptured = pool.captureOwnerCloser(owner);
+    await pool.use(
+      "server",
+      "scope",
+      "new-binding",
+      async () => replacement,
+      async () => undefined,
+      undefined,
+      owner,
+    );
+    expect(closeCaptured()).toBe(0);
+    expect(first.close).toHaveBeenCalledOnce();
+    expect(replacement.close).not.toHaveBeenCalled();
+  });
+
+  it("closes a captured client that finishes creation after settlement and rejects queued work", async () => {
+    const pool = createPool();
+    const owner = { sessionId: "child", turnId: "turn" };
+    const client = createClient();
+    let release!: (value: typeof client) => void;
+    let creationSignal!: AbortSignal;
+    const create = vi.fn((signal: AbortSignal) => {
+      creationSignal = signal;
+      return new Promise<typeof client>((resolve) => {
+        release = resolve;
+      });
+    });
+    const run = vi.fn(async () => undefined);
+    const first = pool.use("server", "scope", "binding", create, run, undefined, owner);
+    const firstRejected = expect(first).rejects.toThrow("no longer connected");
+    const queued = pool.use("server", "scope", "binding", create, run, undefined, owner);
+    const queuedRejected = expect(queued).rejects.toThrow("disconnected before dispatch");
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(pool.captureOwnerCloser(owner)()).toBe(1);
+    expect(creationSignal.aborted).toBe(true);
+    release(client);
+    await Promise.all([firstRejected, queuedRejected]);
+    expect(client.close).toHaveBeenCalledOnce();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("rejects later acquisition from a cancelled child before creating a client", async () => {
+    const pool = createPool();
+    const controller = new AbortController();
+    controller.abort(new Error("child settled"));
+    const create = vi.fn(async () => createClient());
+    await expect(
+      pool.use("server", "scope", "binding", create, async () => undefined, controller.signal, {
+        sessionId: "child",
+        turnId: "turn",
+      }),
+    ).rejects.toThrow("child settled");
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("isolates a client close failure from other captured child sessions", async () => {
+    const pool = createPool();
+    const owner = { sessionId: "child", turnId: "turn" };
+    const failing = createClient(),
+      healthy = createClient();
+    failing.close.mockImplementation(() => {
+      throw new Error("native close unavailable");
+    });
+    await pool.use(
+      "server",
+      "first",
+      "binding",
+      async () => failing,
+      async () => undefined,
+      undefined,
+      owner,
+    );
+    await pool.use(
+      "server",
+      "second",
+      "binding",
+      async () => healthy,
+      async () => undefined,
+      undefined,
+      owner,
+    );
+    expect(pool.captureOwnerCloser(owner)()).toBe(2);
+    await Promise.resolve();
+    expect(failing.close).toHaveBeenCalledOnce();
+    expect(healthy.close).toHaveBeenCalledOnce();
+  });
+
   it("a delayed configuration cleanup closes only the captured sessions", async () => {
     const pool = createPool();
-    const first = createClient(), replacement = createClient(), another = createClient();
-    await pool.use("server", "session", "old-binding", async () => first, async () => undefined);
+    const first = createClient(),
+      replacement = createClient(),
+      another = createClient();
+    await pool.use(
+      "server",
+      "session",
+      "old-binding",
+      async () => first,
+      async () => undefined,
+    );
     const closeOwned = pool.captureServerCloser("server");
-    await pool.use("server", "session", "new-binding", async () => replacement, async () => undefined);
-    await pool.use("server", "new-session", "new-binding", async () => another, async () => undefined);
+    await pool.use(
+      "server",
+      "session",
+      "new-binding",
+      async () => replacement,
+      async () => undefined,
+    );
+    await pool.use(
+      "server",
+      "new-session",
+      "new-binding",
+      async () => another,
+      async () => undefined,
+    );
     closeOwned();
     expect(first.close).toHaveBeenCalledOnce();
     expect(replacement.close).not.toHaveBeenCalled();

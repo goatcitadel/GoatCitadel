@@ -2,7 +2,13 @@ import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath, unlink } from "node:fs/promises";
 import path from "node:path";
-import { ComparisonDispatchBudget, summarizeComparison } from "./agent-comparison.mjs";
+import {
+  ComparisonDispatchBudget,
+  normalizeComparisonPilotBudget,
+  normalizeComparisonLocalPilotBudget,
+  sha256,
+  summarizeComparison,
+} from "./agent-comparison.mjs";
 
 const MAX_BYTES = 16 * 1024 * 1024;
 const VERSION = "goatcitadel.agent-comparison.budget-journal.v1";
@@ -12,6 +18,32 @@ const VERSION = "goatcitadel.agent-comparison.budget-journal.v1";
  * lock or truncate an incomplete reservation: either could hide a paid call. */
 export async function openComparisonJournal({ directory, manifest }) {
   summarizeComparison(manifest, []);
+  const cellIds = new Set(manifest.cells.map((cell) => `${cell.product}:${cell.task}:${cell.trial}`));
+  return openBudgetJournal({
+    directory,
+    identity: { manifestSha256: manifest.manifestSha256 },
+    maxRequests: manifest.maxRequests,
+    maxCostUsd: manifest.maxCostUsd,
+    allowZeroCost: manifest.transportProfile?.kind === "local",
+    acceptsCell: (id) => cellIds.has(id),
+  });
+}
+
+/** Multiple hosted manifests share one retained cap. The immutable manifest pins
+ * the canonical directory, so choosing another cell/campaign cannot reset it. */
+export async function openComparisonPilotJournal(pilotBudget, { local = false } = {}) {
+  const policy = local ? normalizeComparisonLocalPilotBudget(pilotBudget) : normalizeComparisonPilotBudget(pilotBudget);
+  return openBudgetJournal({
+    directory: policy.directory,
+    identity: { pilotId: policy.pilotId, pilotBudgetSha256: sha256(policy), ...(local ? { budgetTrack: "local" } : {}) },
+    maxRequests: policy.maxRequests,
+    maxCostUsd: policy.maxCostUsd,
+    allowZeroCost: local,
+    acceptsCell: (id) => /^[a-f0-9]{64}:(?:goatcitadel|openclaw|hermes):[a-z_]+:[1-9][0-9]*$/u.test(id),
+  });
+}
+
+async function openBudgetJournal({ directory, identity, maxRequests, maxCostUsd, allowZeroCost, acceptsCell }) {
   if (!path.isAbsolute(directory)) throw new Error("Campaign journal directory must be absolute.");
   const root = await realpath(directory);
   const comparablePath = (value) => (process.platform === "win32" ? value.toLowerCase() : value);
@@ -24,15 +56,11 @@ export async function openComparisonJournal({ directory, manifest }) {
   let closed = false;
   let tail = Promise.resolve();
   const events = [];
-  const cellIds = new Set(manifest.cells.map((cell) => `${cell.product}:${cell.task}:${cell.trial}`));
   try {
-    await lock.writeFile(
-      JSON.stringify({ schemaVersion: VERSION, manifestSha256: manifest.manifestSha256, pid: process.pid, nonce }) +
-        "\n",
-    );
+    await lock.writeFile(JSON.stringify({ schemaVersion: VERSION, ...identity, pid: process.pid, nonce }) + "\n");
     await lock.sync();
     const filename = path.join(root, "budget.jsonl");
-    const header = { schemaVersion: VERSION, manifestSha256: manifest.manifestSha256 };
+    const header = { schemaVersion: VERSION, ...identity };
     try {
       handle = await open(filename, "wx+", 0o600);
     } catch (error) {
@@ -68,15 +96,16 @@ export async function openComparisonJournal({ directory, manifest }) {
         throw new Error("Campaign journal belongs to another manifest.");
       events.push(...lines);
     }
-    if (events.some((event) => !cellIds.has(event.cellId)))
+    if (events.some((event) => !acceptsCell(event.cellId)))
       throw new Error("Campaign budget journal contains an undeclared cell.");
     let position = (await handle.stat()).size;
     const budget = new ComparisonDispatchBudget({
-      maxRequests: manifest.maxRequests,
-      maxCostUsd: manifest.maxCostUsd,
+      maxRequests,
+      maxCostUsd,
+      allowZeroCost,
       events,
       persist: (event) => {
-        if (closed || !cellIds.has(event.cellId))
+        if (closed || !acceptsCell(event.cellId))
           return Promise.reject(new Error("Campaign budget writer is closed or the cell is undeclared."));
         const snapshot = structuredClone(event);
         tail = tail.then(async () => {
@@ -98,7 +127,7 @@ export async function openComparisonJournal({ directory, manifest }) {
     });
     return {
       budget,
-      snapshot: () => ({ manifestSha256: manifest.manifestSha256, events: structuredClone(events) }),
+      snapshot: () => ({ ...identity, events: structuredClone(events) }),
       async close() {
         if (closed) return;
         closed = true;

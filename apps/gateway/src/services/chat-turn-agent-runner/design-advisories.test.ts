@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ChatTurnCapabilityProfileRecord } from "@goatcitadel/contracts";
+import type { ChatTurnCapabilityProfileRecord, ChatTurnFeatureReferences } from "@goatcitadel/contracts";
 import { DESIGN_ADVISORY_MAX_BYTES } from "@goatcitadel/skills";
 import { buildToolResultDesignAdvisories, hasDesignSkillReceipt } from "./design-advisories.js";
 
@@ -22,6 +22,38 @@ function profileWith(skillIds: string[]): ChatTurnCapabilityProfileRecord {
 
 const GRADIENT_CSS = ".hero h1 { background-clip: text; -webkit-text-fill-color: transparent; }";
 
+function featureReferencesWith(skillIds: string[]): ChatTurnFeatureReferences {
+  return {
+    version: "chat.turn.feature-references.v1",
+    selectedSkills: {
+      selectionMode: "ranked",
+      trustedSkills: skillIds.map((skillId) => ({
+        capabilityId: `skill:${skillId}`,
+        skillId,
+        category: "built_in",
+        lifecycleState: "trusted",
+        trustLabel: "Built-in",
+        source: "bundled",
+        contentIntegrityManifestVersion: "goatcitadel.skill-tree.v1",
+        treeSha256: "a".repeat(64),
+        contentFileCount: 1,
+        contentBytes: 10,
+      })),
+      activatedSkills: skillIds.map((skillId) => ({
+        capabilityId: `skill:${skillId}`,
+        skillId,
+        confidence: 0.9,
+        reasons: ["explicit_request"],
+        treeSha256: "a".repeat(64),
+        instructionSha256: "b".repeat(64),
+        instructionBytes: 10,
+        modules: [{ name: "main", relativePath: "SKILL.md", sha256: "c".repeat(64), bytes: 10 }],
+      })),
+      instructionBudgetTokens: 2048,
+    },
+  };
+}
+
 describe("hasDesignSkillReceipt", () => {
   it("recognises impeccable and design-intelligence receipts only", () => {
     expect(hasDesignSkillReceipt(profileWith(["bundled:impeccable"]))).toBe(true);
@@ -30,9 +62,31 @@ describe("hasDesignSkillReceipt", () => {
     expect(hasDesignSkillReceipt(profileWith([]))).toBe(false);
     expect(hasDesignSkillReceipt(undefined)).toBe(false);
   });
+
+  it("reads fresh admission receipts and never resurrects an unselected historical skill", () => {
+    expect(hasDesignSkillReceipt(undefined, featureReferencesWith(["bundled:impeccable"]))).toBe(true);
+    expect(hasDesignSkillReceipt(undefined, featureReferencesWith(["bundled:design-intelligence"]))).toBe(true);
+    expect(hasDesignSkillReceipt(undefined, featureReferencesWith(["bundled:coding"]))).toBe(false);
+    expect(hasDesignSkillReceipt(profileWith(["bundled:impeccable"]), featureReferencesWith([]))).toBe(false);
+    expect(
+      hasDesignSkillReceipt(profileWith(["bundled:impeccable"]), { version: "chat.turn.feature-references.v1" }),
+    ).toBe(false);
+    const trustedOnly = featureReferencesWith(["bundled:impeccable"]);
+    trustedOnly.selectedSkills!.activatedSkills = [];
+    expect(hasDesignSkillReceipt(undefined, trustedOnly)).toBe(false);
+  });
 });
 
 describe("buildToolResultDesignAdvisories", () => {
+  it("scans fresh admitted UI writes without a frozen capability profile", () => {
+    const advisories = buildToolResultDesignAdvisories({
+      capabilityProfile: undefined,
+      featureReferences: featureReferencesWith(["bundled:impeccable"]),
+      toolName: "fs.write",
+      args: { path: "src/hero.css", content: GRADIENT_CSS },
+    });
+    expect(advisories?.[0]).toMatchObject({ ruleId: "gradient-text", scope: "file", line: 1 });
+  });
   it("scans the written content of a UI file when the turn carries a design receipt", () => {
     const advisories = buildToolResultDesignAdvisories({
       capabilityProfile: profileWith(["bundled:impeccable"]),

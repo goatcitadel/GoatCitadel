@@ -47,6 +47,7 @@ const SKILL_LIFECYCLE_APPROVAL_TTL_MS = 15 * 60_000;
 const DEFAULT_SKILL_ACTIVATION_POLICY: Omit<SkillActivationPolicy, "revision"> = {
   guardedAutoThreshold: 0.72,
   requireFirstUseConfirmation: true,
+  selectionMode: "legacy",
 };
 
 type SkillActivationPolicyPatch = Partial<Omit<SkillActivationPolicy, "revision">>;
@@ -203,6 +204,7 @@ interface SkillStateBulkSetMutationV1 {
 interface ActivationPolicyMutationV1 {
   guardedAutoThreshold?: number;
   requireFirstUseConfirmation?: boolean;
+  selectionMode?: SkillActivationPolicy["selectionMode"];
 }
 
 /**
@@ -437,6 +439,9 @@ export class SkillStateService {
     input: SkillActivationPolicyPatch,
     authority: ActivationPolicyMutationAuthorityInput,
   ): Promise<ActivationPolicyMutationOutcome> {
+    if (input.selectionMode !== undefined && !isSkillSelectionMode(input.selectionMode)) {
+      throw new ValidationError({ code: "FIELD_INVALID", field: "selectionMode" });
+    }
     const currentRevision = (
       await this.ctx.skillAggregateRevisions.ensure("activation_policy", SKILL_ACTIVATION_POLICY_AGGREGATE_ID)
     ).revision;
@@ -450,10 +455,12 @@ export class SkillStateService {
     const next: Omit<SkillActivationPolicy, "revision"> = {
       guardedAutoThreshold: clamp01(input.guardedAutoThreshold ?? current.guardedAutoThreshold),
       requireFirstUseConfirmation: input.requireFirstUseConfirmation ?? current.requireFirstUseConfirmation,
+      selectionMode: input.selectionMode ?? current.selectionMode,
     };
     if (
       next.guardedAutoThreshold === current.guardedAutoThreshold &&
-      next.requireFirstUseConfirmation === current.requireFirstUseConfirmation
+      next.requireFirstUseConfirmation === current.requireFirstUseConfirmation &&
+      next.selectionMode === current.selectionMode
     ) {
       return {
         pendingApproval: null,
@@ -468,6 +475,7 @@ export class SkillStateService {
       ...(input.requireFirstUseConfirmation === undefined
         ? {}
         : { requireFirstUseConfirmation: input.requireFirstUseConfirmation }),
+      ...(input.selectionMode === undefined ? {} : { selectionMode: input.selectionMode }),
     };
     const binding = buildSkillLifecycleApprovalBinding({
       subjectKind: "skill_activation_policy",
@@ -486,6 +494,7 @@ export class SkillStateService {
         action: binding.action,
         guardedAutoThreshold: next.guardedAutoThreshold,
         requireFirstUseConfirmation: next.requireFirstUseConfirmation,
+        selectionMode: next.selectionMode,
       },
     });
     return { pendingApproval };
@@ -842,10 +851,12 @@ export class SkillStateService {
       const next: Omit<SkillActivationPolicy, "revision"> = {
         guardedAutoThreshold: clamp01(mutation.guardedAutoThreshold ?? current.guardedAutoThreshold),
         requireFirstUseConfirmation: mutation.requireFirstUseConfirmation ?? current.requireFirstUseConfirmation,
+        selectionMode: mutation.selectionMode ?? current.selectionMode,
       };
       const changed =
         next.guardedAutoThreshold !== current.guardedAutoThreshold ||
-        next.requireFirstUseConfirmation !== current.requireFirstUseConfirmation;
+        next.requireFirstUseConfirmation !== current.requireFirstUseConfirmation ||
+        next.selectionMode !== current.selectionMode;
       if (!changed) {
         return {
           disposition: "no_op" as const,
@@ -890,6 +901,7 @@ export class SkillStateService {
         approvalId: applyAuthority.approvalId,
         guardedAutoThreshold: next.guardedAutoThreshold,
         requireFirstUseConfirmation: next.requireFirstUseConfirmation,
+        selectionMode: next.selectionMode,
       });
       return {
         disposition: "applied" as const,
@@ -1090,6 +1102,7 @@ export class SkillStateService {
       ),
       requireFirstUseConfirmation:
         stored.requireFirstUseConfirmation ?? DEFAULT_SKILL_ACTIVATION_POLICY.requireFirstUseConfirmation,
+      selectionMode: isSkillSelectionMode(stored.selectionMode) ? stored.selectionMode : "legacy",
     };
   }
 
@@ -1313,6 +1326,8 @@ export function buildActivationPolicyStateMaterial(
   return {
     guardedAutoThreshold: policy.guardedAutoThreshold,
     requireFirstUseConfirmation: policy.requireFirstUseConfirmation,
+    // Preserve pre-selector approval hashes for unchanged legacy policies.
+    ...(policy.selectionMode && policy.selectionMode !== "legacy" ? { selectionMode: policy.selectionMode } : {}),
     revision,
   };
 }
@@ -1367,14 +1382,15 @@ function parseSkillStateBulkSetMutation(value: unknown): SkillStateBulkSetMutati
 
 function parseActivationPolicyMutation(value: unknown): ActivationPolicyMutationV1 | undefined {
   if (!isRecord(value)) return undefined;
-  const allowed = new Set(["guardedAutoThreshold", "requireFirstUseConfirmation"]);
+  const allowed = new Set(["guardedAutoThreshold", "requireFirstUseConfirmation", "selectionMode"]);
   if (Object.keys(value).some((key) => !allowed.has(key))) return undefined;
   if (
     (value.guardedAutoThreshold !== undefined &&
       (typeof value.guardedAutoThreshold !== "number" ||
         value.guardedAutoThreshold < 0 ||
         value.guardedAutoThreshold > 1)) ||
-    (value.requireFirstUseConfirmation !== undefined && typeof value.requireFirstUseConfirmation !== "boolean")
+    (value.requireFirstUseConfirmation !== undefined && typeof value.requireFirstUseConfirmation !== "boolean") ||
+    (value.selectionMode !== undefined && !isSkillSelectionMode(value.selectionMode))
   ) {
     return undefined;
   }
@@ -1383,7 +1399,12 @@ function parseActivationPolicyMutation(value: unknown): ActivationPolicyMutation
     ...(value.requireFirstUseConfirmation === undefined
       ? {}
       : { requireFirstUseConfirmation: value.requireFirstUseConfirmation }),
+    ...(value.selectionMode === undefined ? {} : { selectionMode: value.selectionMode }),
   };
+}
+
+function isSkillSelectionMode(value: unknown): value is NonNullable<SkillActivationPolicy["selectionMode"]> {
+  return value === "legacy" || value === "shadow" || value === "ranked";
 }
 
 function isSkillRuntimeState(value: unknown): value is SkillRuntimeState {

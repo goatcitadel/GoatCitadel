@@ -3815,6 +3815,7 @@ export async function runMemoryTruthLane(context, _options = {}) {
         }
 
         const browser = await chromium.launch({ headless: true });
+        let memoryFailurePage, memoryFailureLog, memoryFailureCursor;
         try {
           const browserContext = await browser.newContext({
             viewport: { width: 1440, height: 1024 },
@@ -3824,6 +3825,7 @@ export async function runMemoryTruthLane(context, _options = {}) {
           const page = await browserContext.newPage();
           const browserLog = attachBrowserLogging(page);
           const browserLogCursor = browserLog.mark();
+          memoryFailurePage = page; memoryFailureLog = browserLog; memoryFailureCursor = browserLogCursor;
           await page.goto(buildVerificationUiUrl(stack.uiUrl, "/library/memory"), {
             waitUntil: "domcontentloaded",
           });
@@ -3832,25 +3834,21 @@ export async function runMemoryTruthLane(context, _options = {}) {
             {
               expectedArea: "library",
               expectedSection: "memory",
-              readyText: "Memory items",
+              readyText: "Memory",
             },
             NEXT_UI_PACKAGE,
           );
           await setBrowserCorrelation(page, correlationId, seeded.body.sessionId);
-          await page
-            .getByRole("button", { name: `Memory item ${memoryTitle} in namespace memory-truth,`, exact: false })
-            .click();
+          await page.getByRole("combobox", { name: "Memory status", exact: true }).selectOption("all");
+          await page.getByRole("textbox", { name: "Search memory", exact: true }).fill(memoryTitle);
+          await page.getByRole("button", { name: "Apply memory filter", exact: true }).click();
+          await page.getByRole("button", { name: `Open ${memoryTitle}`, exact: true }).click();
           await page.getByRole("heading", { name: memoryTitle, exact: false }).first().waitFor({ timeout: 15000 });
           if ((await page.getByText(foreignTitle, { exact: false }).count()) > 0) {
             throw new Error(`memory-truth Library exposed foreign workspace item ${foreignTitle}`);
           }
-          await page
-            .getByRole("button", {
-              name: `Memory item ${memoryTitle} in namespace memory-truth, lifecycle expired,`,
-              exact: false,
-            })
-            .waitFor({ timeout: 15000 });
-          await page.getByText("expired · memory-truth", { exact: true }).waitFor({ timeout: 15000 });
+          await page.getByRole("button", { name: `Open ${memoryTitle}`, exact: true }).waitFor({ timeout: 15000 });
+          await page.getByText("expired · memory-truth", { exact: false }).first().waitFor({ timeout: 15000 });
           const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, NEXT_UI_PACKAGE);
           const artifacts = await captureBrowserArtifacts(context, {
             slug: "memory-truth-ttl-lifecycle-visibility",
@@ -3883,6 +3881,12 @@ export async function runMemoryTruthLane(context, _options = {}) {
               diagnostics: [...artifacts.diagnostics, relativeToRun(context, outPath)],
             },
           };
+        } catch (error) {
+          if (memoryFailurePage && memoryFailureLog) await captureBrowserArtifacts(context, {
+            slug: "memory-truth-ttl-failure", page: memoryFailurePage, browserLog: memoryFailureLog,
+            gatewayUrl: stack.gatewayUrl, correlationId, logCursor: memoryFailureCursor,
+          });
+          throw error;
         } finally {
           await browser.close();
         }

@@ -31,6 +31,27 @@ export interface IntegrationPluginThemeMetadata {
   dashboardVariant?: "default" | "compact" | "high_contrast";
 }
 
+export type ExtensionConfigurationField = {
+  key: string;
+  label: string;
+  help?: string;
+  required?: boolean;
+} & (
+  | { kind: "text" | "url"; defaultValue?: string }
+  | { kind: "number"; defaultValue?: number }
+  | { kind: "boolean"; defaultValue?: boolean }
+  | { kind: "choice"; choices: Array<{ value: string; label: string }>; defaultValue?: string }
+  | { kind: "secret_ref"; referenceKind: "environment" | "credential" }
+);
+
+/** Author metadata only: no secret values, installation commands or activation authority. */
+export interface ExtensionConfigurationForm {
+  version: "goatcitadel.extension-configuration.v1";
+  fields: ExtensionConfigurationField[];
+  prerequisites?: string[];
+  sampleTask?: { prompt: string; expectedOutcome: string };
+}
+
 export type PluginDescriptorHealthStatus = "healthy" | "warning" | "quarantined";
 
 export interface PluginDescriptorHealthIssue {
@@ -67,6 +88,7 @@ export interface IntegrationPluginRecord {
   trustWarnings?: IntegrationPluginTrustWarning[];
   descriptorHealth?: PluginDescriptorHealth;
   theme?: IntegrationPluginThemeMetadata;
+  configurationForm?: ExtensionConfigurationForm;
   enabled: boolean;
   installedAt: string;
   updatedAt: string;
@@ -92,6 +114,7 @@ export interface IntegrationPluginAuthorManifest {
     expected?: string;
   };
   theme?: IntegrationPluginThemeMetadata;
+  configurationForm?: ExtensionConfigurationForm;
   toolOverrides?: IntegrationPluginToolOverrideManifestEntry[];
 }
 

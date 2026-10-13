@@ -49,6 +49,7 @@ import {
   type SubagentFanoutRuntime,
 } from "./chat-subagent-fanout-service.js";
 import type { ChatDurableFanoutService } from "./chat-durable-fanout-service.js";
+import { readDurableFanoutWaitInvocationId } from "./chat-durable-run-service.js";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
 import type { ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
 import {
@@ -232,6 +233,7 @@ export interface ChatTurnStreamHost
   readonly subagentFanout?: Pick<SubagentFanoutRuntime, "register">;
   /** Default-disabled durable executor for automatic Chat fan-out. */
   readonly durableFanout?: Pick<ChatDurableFanoutService, "execute">;
+  assertAutomaticFanoutAuthority?(invocationId: string): Promise<void>;
 }
 
 export type ChatTurnCanonicalWriteFence = <T>(work: () => T | Promise<T>) => Promise<Awaited<T>>;
@@ -1771,6 +1773,8 @@ export async function* streamPreparedAgentChatTurn(
     mutationLifecycle?: ChatStreamMutationLifecycle;
     /** Durable runs reconcile general post-commit effects after terminal run finalization. */
     deferGeneralPostCommit?: boolean;
+    /** Internal execution identity supplied by the durable dispatch owner. */
+    canonicalDurableRunId?: string;
     remoteWorkerExecution?: import("./remote-worker-chat-execution-service.js").RemoteWorkerChatExecution;
   },
 ): AsyncGenerator<ChatStreamChunkDraft> {
@@ -2209,6 +2213,7 @@ export async function* streamPreparedAgentChatTurn(
 
     let finalText = "";
     let runnerTerminalStatus: "completed" | "partial" | "failed" | undefined;
+    let runnerFanoutWaitId: string | undefined;
     let assistantUsage: ChatStreamUsageRecord | undefined;
     let assistantModelUsageEventIds: string[] | undefined;
     let hasStreamedDelta = false;
@@ -2317,6 +2322,7 @@ export async function* streamPreparedAgentChatTurn(
             () => {
               const runnerInput: ChatTurnAgentRunnerInput = {
                 sessionId,
+                canonicalDurableRunId: options?.canonicalDurableRunId,
                 workspaceId: prepared.workspaceId,
                 turnId,
                 userMessageId: prepared.userEventId,
@@ -2329,9 +2335,10 @@ export async function* streamPreparedAgentChatTurn(
                 mode: resolvePreparedTurnMode(prepared),
                 providerId:
                   prepared.capabilityProfile?.selection.effectiveProviderId ??
+                  prepared.featureAdmission?.references.providerRoute?.primary.providerId ??
                   input.providerId ??
                   prepared.prefs.providerId,
-                model: prepared.capabilityProfile?.selection.effectiveModel ?? input.model ?? prepared.prefs.model,
+                model: prepared.capabilityProfile?.selection.effectiveModel ?? prepared.featureAdmission?.references.providerRoute?.primary.model ?? input.model ?? prepared.prefs.model,
                 webMode:
                   prepared.capabilityProfile?.selection.webMode ??
                   prepared.normalized.webMode ??
@@ -2382,6 +2389,7 @@ export async function* streamPreparedAgentChatTurn(
                 signal: controller.signal,
                 canonicalWriteFence,
                 capabilityProfile: prepared.capabilityProfile,
+                featureAdmission: prepared.featureAdmission,
                 ...(prepared.serverOnlyPosture ? { serverOnlyPosture: prepared.serverOnlyPosture } : {}),
                 capabilityProfileContent: prepared.capabilityProfileContent,
                 compactionDimensionHash: prepared.compactionDimensionHash,
@@ -2402,6 +2410,7 @@ export async function* streamPreparedAgentChatTurn(
         const status = chunk.trace.status;
         runnerTerminalStatus =
           status === "completed" || status === "partial" || status === "failed" ? status : undefined;
+        runnerFanoutWaitId = readDurableFanoutWaitInvocationId(chunk.trace);
       }
       if (chunk.type === "message_done" && chunk.content) {
         finalText = chunk.content;
@@ -2473,15 +2482,19 @@ export async function* streamPreparedAgentChatTurn(
     // The runner persists its own terminal trace before emitting its answer.
     // Admit only the terminal state emitted by this execution; cancellation,
     // a competing terminal state, and stale durable generations still win.
-    const completionOwnerStatuses: ChatTurnTraceRecord["status"][] = ["running", runnerTerminalStatus ?? "completed"];
+    const settledTrace = await readFanoutCompletionTrace(host, turnId);
+    const fanoutWaiting = deferGeneralPostCommit && Boolean(options?.canonicalDurableRunId) &&
+      settledTrace.durable?.runId === options?.canonicalDurableRunId && runnerFanoutWaitId !== undefined &&
+      readDurableFanoutWaitInvocationId(settledTrace) === runnerFanoutWaitId;
+    const completionOwnerStatuses: ChatTurnTraceRecord["status"][] = ["running", runnerTerminalStatus ?? "completed",
+      ...(fanoutWaiting ? ["waiting_for_tool" as const] : [])];
     await assertChatStreamCompletionWritable(host, turnId, controller.signal, completionOwnerStatuses);
 
-    const settledTrace = await chatTurnTraces.get(turnId);
     const delegationWaiting =
       deferGeneralPostCommit &&
       Boolean(settledTrace.durable?.runId) &&
       settledTrace.status === "waiting_for_tool" &&
-      settledTrace.routing.confirmedDelegation?.waiting === true;
+      (settledTrace.routing.confirmedDelegation?.waiting === true || fanoutWaiting);
     if (!approvalRequired && !userInputRequired && !delegationWaiting && !finalText.trim()) {
       if (options?.remoteWorkerExecution) throw new Error("Worker Chat completion has no verified response.");
       const preRepairContent = finalText;
@@ -3041,3 +3054,4 @@ function bindExternalAbortToController(
     externalSignal.removeEventListener("abort", abortController);
   };
 }
+import { readFanoutCompletionTrace } from "./chat-fanout-wait-evidence.js";

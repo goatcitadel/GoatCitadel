@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { captureMemoryRecoveryVisual } from "./memory-recovery-visual.mjs";
 
 /** Real Gateway and browser journey, using only the lane's fresh fixture runtime. */
 export async function runMemoryEnumerationScenario(context, stack, deps) {
@@ -67,56 +68,79 @@ export async function runMemoryEnumerationScenario(context, stack, deps) {
       browserLog = attachBrowserLogging(page);
       browserCursor = browserLog.mark();
       await page.goto(buildVerificationUiUrl(stack.uiUrl, "/library/memory"), { waitUntil: "domcontentloaded" });
-      await waitForVerificationRouteReady(page, { expectedArea: "library", expectedSection: "memory", readyText: "Memory items" }, NEXT_UI_PACKAGE);
-      await page.getByRole("searchbox", { name: "Search memory", exact: true }).fill(query);
-      await page.getByText("500 of 503 total", { exact: false }).waitFor();
-      await page.getByRole("button", { name: "Load more memory", exact: true }).click();
-      await page.getByText("503 of 503 total", { exact: false }).waitFor();
-      assert.equal(await page.getByRole("button", { name: "Load more memory", exact: true }).count(), 0);
-      const visibleIds = await page.locator('button[id^="memory-list-item-"]').evaluateAll(elements => elements.map(element => element.id.slice("memory-list-item-".length)));
+      await waitForVerificationRouteReady(page, { expectedArea: "library", expectedSection: "memory", readyText: "Memory" }, NEXT_UI_PACKAGE);
+      const memoryResponse = () => page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return url.pathname === "/api/v1/memory/items" && url.searchParams.get("query") === query && response.status() === 200;
+      });
+      const search = async () => {
+        await page.getByRole("combobox", { name: "Memory status", exact: true }).selectOption("all");
+        await page.getByRole("textbox", { name: "Search memory", exact: true }).fill(query);
+        const [response] = await Promise.all([memoryResponse(), page.getByRole("button", { name: "Apply memory filter", exact: true }).click()]);
+        return response.json();
+      };
+      const inspectPage = async value => {
+        assert.equal(value.items.every(item => item.workspaceId === workspaceId), true);
+        const names = value.items.map(item => `Select memory ${item.title}`).sort();
+        await page.waitForFunction(({ prefix, names }) => {
+          const actual = [...document.querySelectorAll('input[type="checkbox"][aria-label]')]
+            .map(element => element.getAttribute("aria-label")).filter(name => name.startsWith(prefix)).sort();
+          return JSON.stringify(actual) === JSON.stringify(names);
+        }, { prefix: `Select memory ${query} item `, names });
+        return value.items.map(item => item.itemId);
+      };
+      const enumerateBrowser = async (value, total) => {
+        const ids = [];
+        for (let pages = 0; ; pages++) {
+          assert.ok(pages < 20, "the canonical browser enumeration must settle within its bounded page count");
+          assert.equal(value.total, total);
+          ids.push(...await inspectPage(value));
+          if (!value.nextCursor) break;
+          const [response] = await Promise.all([memoryResponse(), page.getByRole("button", { name: "Next memory page", exact: true }).click()]);
+          value = await response.json();
+        }
+        assert.equal(await page.getByRole("button", { name: "Next memory page", exact: true }).isDisabled(), true);
+        assert.equal(ids.length, total);
+        assert.equal(new Set(ids).size, total);
+        return ids;
+      };
+      const visibleIds = await enumerateBrowser(await search(), 503);
       assert.equal(visibleIds.length, 503);
       assert.deepEqual(new Set(visibleIds), new Set(expectedIds));
       assertBrowserConsoleHealthy(browserLog, browserCursor, NEXT_UI_PACKAGE);
       const artifacts = await captureBrowserArtifacts(context, { slug: "memory-complete-enumeration", page, browserLog,
         gatewayUrl: stack.gatewayUrl, correlationId, logCursor: browserCursor });
 
-      const refreshedSearch = page.waitForResponse(response => {
-        const url = new URL(response.url());
-        return url.pathname === "/api/v1/memory/items" && url.searchParams.get("query") === query &&
-          !url.searchParams.has("cursor") && response.status() === 200;
-      });
       await page.reload({ waitUntil: "domcontentloaded" });
-      await page.getByRole("searchbox", { name: "Search memory", exact: true }).fill(query);
-      await (await refreshedSearch).finished();
-      await page.getByText("500 of 503 total", { exact: false }).waitFor();
+      await inspectPage(await search());
       // Commit the real fixture mutation after the browser has selected its
       // continuation, before that request reaches the real Gateway. This avoids
       // the search debounce racing the seed and legitimately issuing a fresh cursor.
-      let insertedDuringContinuation = false;
+      let insertedDuringContinuation = false, insertedId;
       await page.route("**/api/v1/memory/items?*", async route => {
         if (!insertedDuringContinuation && new URL(route.request().url()).searchParams.has("cursor")) {
           insertedDuringContinuation = true;
-          await seed(503);
+          insertedId = await seed(503);
         }
         await route.continue();
       });
       const [staleResponse] = await Promise.all([
         page.waitForResponse(response => response.url().includes("/api/v1/memory/items?") && new URL(response.url()).searchParams.has("cursor")),
-        page.getByRole("button", { name: "Load more memory", exact: true }).click(),
+        page.getByRole("button", { name: "Next memory page", exact: true }).click(),
       ]);
       assert.ok(insertedDuringContinuation);
       assert.equal(staleResponse.status(), 409, "a mutation committed before continuation must invalidate its cursor");
       assert.equal((await staleResponse.json()).details?.reason, "MEMORY_CURSOR_STALE");
-      await page.getByRole("button", { name: "Reload memory", exact: true }).waitFor();
-      await page.getByText("Loaded results may be out of date", { exact: false }).waitFor();
+      await page.getByRole("button", { name: "Reload memory directory", exact: true }).waitFor();
+      await page.getByRole("alert").filter({ hasText: "Memory changed while paging. Reload the directory to read the current records." }).waitFor();
+      assert.equal(await page.getByRole("button", { name: "Next memory page", exact: true }).isDisabled(), true);
       assert.equal(await page.getByText("API error 409", { exact: false }).count(), 0);
       assert.equal(await page.getByText("MEMORY_CURSOR_STALE", { exact: false }).count(), 0);
-      const staleArtifacts = await captureBrowserArtifacts(context, { slug: "memory-stale-enumeration", page, browserLog,
-        gatewayUrl: stack.gatewayUrl, correlationId, logCursor: browserCursor });
-      await page.getByRole("button", { name: "Reload memory", exact: true }).click();
-      await page.getByText("500 of 504 total", { exact: false }).waitFor();
-      await page.getByRole("button", { name: "Load more memory", exact: true }).click();
-      await page.getByText("504 of 504 total", { exact: false }).waitFor();
+      const staleArtifacts = await captureMemoryRecoveryVisual(context, stack, deps, {
+        slug: "memory-stale-enumeration", page, browserLog, correlationId, logCursor: browserCursor });
+      const [reloaded] = await Promise.all([memoryResponse(), page.getByRole("button", { name: "Reload memory directory", exact: true }).click()]);
+      const afterIds = await enumerateBrowser(await reloaded.json(), 504);
+      assert.deepEqual(new Set(afterIds), new Set([...expectedIds, insertedId]));
       const diagnostics = path.join(context.artifactRoot, "diagnostics", "memory-enumeration.json");
       await writeJson(diagnostics, { workspaceId, foreignWorkspaceId, expectedIds, apiIds: allIds, browserIds: visibleIds,
         total: 503, afterMutationTotal: 504, wrongScopeStatus: wrongScope.status, staleStatus: 409,

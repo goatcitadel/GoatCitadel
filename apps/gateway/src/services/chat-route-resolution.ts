@@ -1,3 +1,4 @@
+import { resolveOptedInFallback } from "./chat-provider-fallback-preview.js";
 import {
   applyChatModePresetToPatch,
   inferProviderForModelId,
@@ -7,10 +8,12 @@ import {
   type RoutingPreflightRequest,
   type RoutingPreflightResult,
   type ChatSessionPrefsRecord,
+  type ChatProviderFallbackPreference,
 } from "@goatcitadel/contracts";
 import { createHash } from "node:crypto";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { LlmService } from "./llm-service.js";
+import { isLocalChatProviderUrl } from "./chat-provider-fallback-authority.js";
 import { splitChatPrefsPatch } from "./chat-session-utils.js";
 
 type LlmRuntimeConfig = ReturnType<LlmService["getRuntimeConfig"]>;
@@ -26,6 +29,7 @@ export interface ChatRouteResolutionDependencies {
     primaryProviderId: string,
     primaryModel: string,
   ): Array<{ providerId: string; model: string }>;
+  isFeatureEnabled?(feature: "chatProviderFallbackV1Enabled"): boolean | Promise<boolean>;
   listLlmModels?(providerId: string): Promise<Array<{ id: string }>>;
   requireChatTurnContext?(
     sessionId: string,
@@ -56,25 +60,7 @@ export interface ResolvedChatRouteDescriptor {
   degradedReason?: string;
   runtimeProvider?: RuntimeProvider;
   fallbackTarget?: { providerId: string; model: string };
-}
-
-function isLikelyLocalProviderUrl(baseUrl: string | undefined): boolean {
-  try {
-    const url = new URL(baseUrl ?? "");
-    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-    const host = url.hostname.toLowerCase();
-    return (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "0.0.0.0" ||
-      host === "[::1]" ||
-      /^10(?:\.\d{1,3}){3}$/.test(host) ||
-      /^192\.168(?:\.\d{1,3}){2}$/.test(host) ||
-      /^172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}$/.test(host)
-    );
-  } catch {
-    return false;
-  }
+  providerFallback?: ChatProviderFallbackPreference;
 }
 
 function normalizeRequestedModel(providerId: string, model: string): string {
@@ -99,6 +85,7 @@ export function buildPreviewPrefs(
     ...(input.prefsOverride ?? {}),
     mode: input.mode ?? input.prefsOverride?.mode,
     providerId: input.providerId ?? input.prefsOverride?.providerId,
+    providerFallback: input.providerFallback !== undefined ? input.providerFallback : input.prefsOverride?.providerFallback,
     model: input.model ?? input.prefsOverride?.model,
     webMode: input.webMode ?? input.prefsOverride?.webMode,
     thinkingLevel: input.thinkingLevel ?? input.prefsOverride?.thinkingLevel,
@@ -109,6 +96,7 @@ export function buildPreviewPrefs(
   return {
     ...sessionPrefs,
     ...splitPrefs.basePatch,
+    providerFallback: prefsOverride.providerFallback === null ? undefined : prefsOverride.providerFallback ?? sessionPrefs.providerFallback,
   };
 }
 
@@ -213,7 +201,7 @@ function classifyRuntime(provider: RuntimeProvider | undefined): RoutingPrefligh
   if (!provider) {
     return "unknown";
   }
-  return isLikelyLocalProviderUrl(provider.baseUrl) ? "local" : "cloud";
+  return isLocalChatProviderUrl(provider.baseUrl) ? "local" : "cloud";
 }
 
 export async function resolveChatRouteDescriptor(
@@ -278,17 +266,24 @@ export async function resolveChatRouteDescriptor(
     };
   }
 
+  const getModelAvailability = llmService.getCachedModelAvailability?.bind(llmService);
   const effectiveModelResolution = resolveEffectiveModel({
     runtime,
     provider: requestedProvider,
     requestedModel,
-    getModelAvailability: llmService.getCachedModelAvailability?.bind(llmService),
+    getModelAvailability,
   });
   if (runtimeClass === "cloud") {
     llmService.refreshModelCatalogInBackground?.(requestedProvider.providerId);
   }
   const effectiveProviderId = requestedProvider.providerId;
   const effectiveModel = effectiveModelResolution.model;
+  const providerFallback = !effectiveModelResolution.blockedReason && effectiveModel
+    ? await resolveOptedInFallback(deps, runtime, requestedProvider, previewPrefs.providerFallback, getModelAvailability, resolveEffectiveModel)
+    : undefined;
+  const fallbackRuntimeClass = providerFallback
+    ? classifyRuntime(runtime.providers.find((provider) => provider.providerId === providerFallback.providerId))
+    : undefined;
   return {
     requestedProviderId,
     requestedModel,
@@ -296,14 +291,15 @@ export async function resolveChatRouteDescriptor(
     effectiveModel,
     selectionSource,
     normalizationReason: effectiveModelResolution.normalizationReason,
-    // Cross-provider fallback depended on the removed frozen turn binding.
-    fallbackPolicy: "off",
-    fallbackResult: "not_applicable",
+    fallbackPolicy: providerFallback ? "armed" : "off",
+    fallbackResult: !providerFallback ? "not_applicable" : fallbackRuntimeClass === runtimeClass
+      ? "same_boundary" : runtimeClass === "local" ? "local_to_cloud" : "cloud_to_local",
     runtimeClass,
     blockedReason: effectiveModelResolution.blockedReason,
     degradedReason: undefined,
     runtimeProvider: requestedProvider,
-    fallbackTarget: undefined,
+    fallbackTarget: providerFallback ? { providerId: providerFallback.providerId, model: providerFallback.model } : undefined,
+    providerFallback,
   };
 }
 
@@ -348,10 +344,9 @@ export async function preflightChatRoute(
     effectiveModel: descriptor.effectiveModel,
     selectionSource: descriptor.selectionSource,
     normalizationReason: descriptor.normalizationReason,
-    // Every new send, edit, and retry stays on its preflight route until a
-    // replacement authority can govern cross-provider fallback.
-    fallbackPolicy: "off",
-    fallbackResult: "not_applicable",
+    fallbackPolicy: descriptor.fallbackPolicy,
+    fallbackResult: descriptor.fallbackResult,
+    providerFallback: descriptor.providerFallback,
     runtimeReachability,
     runtimeClass: descriptor.runtimeClass,
     blockedReason,
@@ -382,6 +377,7 @@ export function createRoutingDecisionSnapshot(
     effectiveModel: result.effectiveModel,
     selectionSource: result.selectionSource,
     normalizationReason: result.normalizationReason,
+    providerFallback: result.providerFallback,
     fallbackPolicy: result.fallbackPolicy,
     fallbackResult: result.fallbackResult,
     runtimeReachability: result.runtimeReachability,
@@ -415,6 +411,7 @@ export function createRoutingDecisionFingerprint(
     effectiveModel: input.effectiveModel,
     selectionSource: input.selectionSource,
     normalizationReason: input.normalizationReason,
+    providerFallback: input.providerFallback,
     fallbackPolicy: input.fallbackPolicy,
     fallbackResult: input.fallbackResult,
     runtimeReachability: input.runtimeReachability,

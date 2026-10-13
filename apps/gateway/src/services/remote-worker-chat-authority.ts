@@ -4,9 +4,15 @@ import {
   type ChatTurnCapabilityProfileRecord,
   type ToolPolicyActorContext,
   type RemoteWorkerAssignmentManifest,
+  type RemoteWorkerCapabilityBinding,
+  type RemoteWorkerAdmissionReference,
+  type ChatTurnCapabilityToolDefinition,
+  type ChatTurnCapabilityPermissionSnapshot,
+  type ChatTurnFeatureReferences,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { assertChatCapabilityBindingsCurrent } from "./chat-capability-current-binding.js";
+import { resolveRemoteWorkerLiveAdmissionAuthority } from "./remote-worker-live-admission-guard.js";
 
 export interface RemoteWorkerChatAuthorityDependencies {
   storage: Pick<AsyncStorage, "chatTurnCapabilityProfiles" | "capabilityCatalogSnapshots" | "skillLifecycle">;
@@ -15,6 +21,53 @@ export interface RemoteWorkerChatAuthorityDependencies {
   /** Gateway-owned native MCP authority for either connection mode; never supplied by a worker request. */
   revalidateRequesterTool?(profile: ChatTurnCapabilityProfileRecord, canonicalName: string): Promise<void>;
   revalidateMeshTool?(profile: ChatTurnCapabilityProfileRecord, canonicalName: string): Promise<void>;
+  resolveAdmissionAuthority?(input: { reference: RemoteWorkerAdmissionReference; durableRunId: string; taskId?: string;
+    assertCurrent(): Promise<void> }): Promise<{ evidence: RemoteWorkerChatEvidence; policy: ToolPolicyActorContext }>;
+}
+
+/** Selected execution evidence shared by both authority variants. This is not
+ * a capability profile: it has no profile ID, catalog, source or derived hashes. */
+export interface RemoteWorkerChatEvidence {
+  readonly binding: RemoteWorkerCapabilityBinding;
+  readonly identity: ChatTurnCapabilityProfileRecord["identity"];
+  readonly tools: readonly ChatTurnCapabilityToolDefinition[];
+  readonly permission: ChatTurnCapabilityPermissionSnapshot;
+  readonly route: { providerId: string; model: string };
+  readonly contentHash: string;
+  readonly memoryMode: ChatTurnCapabilityProfileRecord["selection"]["memory"]["mode"];
+  readonly profile?: ChatTurnCapabilityProfileRecord;
+  readonly features?: ChatTurnFeatureReferences;
+  readonly assertCurrent?: () => Promise<void>;
+  readonly runtimeInterposition?: { hash: string; count: number };
+}
+
+export function remoteWorkerEvidenceFromProfile(profile: ChatTurnCapabilityProfileRecord): RemoteWorkerChatEvidence {
+  if (!profile.selection.effectiveProviderId || !profile.selection.effectiveModel)
+    throw new Error("Remote worker profile lacks its admitted route.");
+  return { binding: { capabilityProfileSha256: profile.hashes.profileHash }, identity: profile.identity,
+    tools: profile.selection.tools, permission: profile.governance.permission,
+    route: { providerId: profile.selection.effectiveProviderId, model: profile.selection.effectiveModel },
+    contentHash: profile.selection.contentHash, memoryMode: profile.selection.memory.mode, profile,
+    ...(profile.catalog.runtimeInterpositionHash !== undefined && profile.catalog.toolCallBeforeHookCount !== undefined
+      ? { runtimeInterposition: { hash: profile.catalog.runtimeInterpositionHash, count: profile.catalog.toolCallBeforeHookCount } } : {}) };
+}
+
+export function remoteWorkerChatEvidence(value: RemoteWorkerChatEvidence | ChatTurnCapabilityProfileRecord): RemoteWorkerChatEvidence {
+  return "binding" in value ? value : remoteWorkerEvidenceFromProfile(value);
+}
+
+export function remoteWorkerChatEvidenceMaterial(evidence: RemoteWorkerChatEvidence) {
+  const { profile: _historical, assertCurrent: _liveClaim, ...material } = evidence;
+  return material;
+}
+
+export async function resolveRemoteWorkerChatAuthority(dependencies: RemoteWorkerChatAuthorityDependencies,
+  execution: RemoteWorkerChatExecution, assertCurrent: () => Promise<void>) {
+  if (execution.workload.admissionReference) {
+    return (await resolveRemoteWorkerLiveAdmissionAuthority(dependencies, execution, assertCurrent))!;
+  }
+  const resolved = await resolveRemoteWorkerChatProfile(dependencies, execution);
+  return { evidence: remoteWorkerEvidenceFromProfile(resolved.profile), policy: resolved.policy };
 }
 
 export type RemoteWorkerChatExecution = Awaited<
@@ -28,7 +81,7 @@ export async function resolveRemoteWorkerChatProfile(
 ): Promise<{ profile: ChatTurnCapabilityProfileRecord; policy: ToolPolicyActorContext }> {
   return await resolveRemoteWorkerChatProfileReference(dependencies, {
     ...execution.authority.assignment.manifest,
-    capabilityProfileId: execution.workload.capabilityProfileId,
+    capabilityProfileId: execution.workload.capabilityProfileId ?? "",
   });
 }
 

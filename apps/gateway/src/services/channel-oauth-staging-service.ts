@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import path from "node:path";
 import {
   ConflictError, NotFoundError, PolicyViolationError, ValidationError,
   type ChannelOAuthAdoptInput, type ChannelOAuthAdoptResponse, type ChannelOAuthAttempt,
@@ -21,6 +22,24 @@ export interface ChannelOAuthStagingPort {
   channelSecrets?: Pick<ChannelSecretCustodyService, "storeTemporary" | "deleteTemporary" | "assertUsableForDraft" | "resolve">;
   recentChannelSetupTests: { delete(draftId: string): unknown };
   fetcher?: (url: string, init?: RequestInit) => Promise<Response>;
+}
+
+export interface ChannelOAuthCompositionHost {
+  config: { rootDir: string };
+  storage: ChannelOAuthStagingPort["storage"];
+  recentChannelSetupTests: ChannelOAuthStagingPort["recentChannelSetupTests"];
+  fetchWithDiagnosticsTimeout(url: string, init?: RequestInit): Promise<Response>;
+}
+
+/** Composition retains installation identity, diagnostics egress and draft secret custody. */
+export function createChannelOAuthStagingService(host: ChannelOAuthCompositionHost,
+  draft: { channelSecrets?: ChannelOAuthStagingPort["channelSecrets"] }) {
+  return new ChannelOAuthStagingService({
+    installationId: "root-" + createHash("sha256").update(path.resolve(host.config.rootDir)).digest("hex").slice(0, 24),
+    storage: host.storage, channelSecrets: draft.channelSecrets,
+    recentChannelSetupTests: host.recentChannelSetupTests,
+    fetcher: (url, init) => host.fetchWithDiagnosticsTimeout(url, init),
+  });
 }
 const ttlMs = 10 * 60 * 1000;
 /** The callback stages credentials; only the channel Change Plan can activate them. */

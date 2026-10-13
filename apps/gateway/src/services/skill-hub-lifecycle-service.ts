@@ -1,3 +1,4 @@
+import { createSkillHubLifecycleFilesystem } from "./skill-hub-lifecycle-filesystem-composition.js";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
@@ -138,10 +139,7 @@ export class SkillHubLifecycleService {
     this.rootDir = path.resolve(options.rootDir);
     this.candidateRoot = resolveManagedRoot(this.rootDir, options.candidateRoot, "candidate root");
     this.skillsExtraRoot = resolveManagedRoot(this.rootDir, options.skillsExtraRoot, "runtime skill root");
-    this.filesystem = new SkillHubLifecycleFilesystem(this.rootDir, {
-      filesystem: options.filesystem,
-      beforeMutation: options.beforeFilesystemMutation,
-    });
+    this.filesystem = createSkillHubLifecycleFilesystem(this.rootDir, options);
   }
 
   public async applyApprovedOperation(input: {

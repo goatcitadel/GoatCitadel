@@ -1,6 +1,6 @@
 export { getChannelSetupJourney } from "./channel-setup-journey-service.js";
 export { acknowledgeChannelSetupTest, getChannelSetupDraftEvidence } from "./channel-setup-evidence-service.js";
-import { persistChannelSetupTestEvidence, restoreChannelSetupTestEvidence, buildCurrentChannelSetupEvidenceSignature } from "./channel-setup-evidence-service.js";
+import { persistChannelSetupTestEvidence, restoreChannelSetupTestEvidence, buildCurrentChannelSetupEvidenceSignature, buildChannelSetupActivationEvidence } from "./channel-setup-evidence-service.js";
 import { protectChannelOAuthDraftMetadata } from "./channel-oauth-draft-metadata.js";
 import { evaluateChannelSetupEligibility } from "./channel-setup-eligibility.js";
 export { discoverChannelSetupTelegramTargets } from "./channel-setup-telegram-discovery.js";
@@ -458,9 +458,9 @@ export async function finalizeChannelSetupDraft(
     throw new Error("Channel setup draft changed after its live test; run the test again before finalizing.");
   }
   const ephemeral = await buildEphemeralChannelConnection(host, hydrateChannelSetupDraftSecrets(host, readyDraft));
-  const priorEvidence = test.evidenceId && host.storage.channelSetupEvidence ? await host.storage.channelSetupEvidence.get(test.evidenceId) : undefined;
+  const setupEvidence = await buildChannelSetupActivationEvidence(host, test, eligibility);
   const payload = {
-    ...(priorEvidence ? { setupEvidence: { ...priorEvidence, evidenceId: randomUUID(), createdAt: undefined, phase: "activation" as const, priorEvidenceId: priorEvidence.evidenceId, checkedAt: new Date().toISOString(), finalizationEligibility: eligibility } } : {}),
+    ...(setupEvidence ? { setupEvidence } : {}),
     connectionId: readyDraft.connectionId ?? randomUUID(),
     catalogId: ephemeral.catalogId,
     kind: ephemeral.kind,

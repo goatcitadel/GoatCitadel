@@ -180,6 +180,8 @@ export interface DurableChatTurnExecutionPayload {
   assistantMessageId: string;
   capabilityProfileId?: string;
   capabilityProfileHash?: string;
+  /** Hash-only link to immutable feature references owned by the admission aggregate. */
+  featureReferenceSha256?: string;
   /** Durable replay binding placeholder; replay loading is owned by the durable runtime. */
   routedContextSnapshotId?: string;
   routedContextSnapshotHash?: string;

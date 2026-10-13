@@ -1,4 +1,4 @@
-import { ComparisonDispatchBudget, summarizeComparison } from "./agent-comparison.mjs";
+import { ComparisonDispatchBudget, sha256, summarizeComparison } from "./agent-comparison.mjs";
 import { verifyComparisonEvidence } from "./agent-comparison-verifiers.mjs";
 
 /** Record only a freshly verified cell. Provider measurements come from the
@@ -11,6 +11,7 @@ export async function recordComparisonCell({
   workspaceRoot,
   evidenceRoot,
   journal,
+  pilotJournal,
   measurements,
 }) {
   summarizeComparison(manifest, []);
@@ -22,6 +23,7 @@ export async function recordComparisonCell({
   const budget = new ComparisonDispatchBudget({
     maxRequests: manifest.maxRequests,
     maxCostUsd: manifest.maxCostUsd,
+    allowZeroCost: manifest.transportProfile?.kind === "local",
     persist: async () => {
       throw new Error("Recording evidence cannot dispatch or mutate the budget.");
     },
@@ -48,6 +50,11 @@ export async function recordComparisonCell({
   )
     throw new Error("Measurements do not match the verified native execution binding.");
   const calls = budget.snapshot().receipts.filter((entry) => entry.cellId === cellKey(cell));
+  if (["unsupported", "blocked"].includes(verification.outcome) && calls.length > 0)
+    throw new Error("A no-call acceptance disposition cannot hide already dispatched provider attempts.");
+  const pilotAccounting = manifest.pilotBudget || manifest.localPilotBudget
+    ? verifyPilotAccounting(manifest, pilotJournal, cellKey(cell), calls)
+    : undefined;
   const costUsd = calls.every((call) => call.state === "settled")
     ? calls.reduce((total, call) => total + call.costUsd, 0)
     : null;
@@ -61,6 +68,7 @@ export async function recordComparisonCell({
     durationMs: measurements.durationMs,
     requests: calls.length,
     costUsd,
+    ...(pilotAccounting ? { pilotAccounting } : {}),
     manualInterventions: measurements.manualInterventions,
     timeToUsefulOutputMs: measurements.timeToUsefulOutputMs ?? null,
     inputTokens: measurements.inputTokens ?? null,
@@ -74,6 +82,49 @@ export async function recordComparisonCell({
   // Apply the exact same telemetry and evidence validation as the final report.
   summarizeComparison(manifest, [receipt]);
   return { receipt, verification, budgetSequences: calls.map((call) => call.sequence) };
+}
+
+export function verifyPilotAccounting(manifest, journal, cellId, calls) {
+  const policy = manifest.pilotBudget ?? manifest.localPilotBudget;
+  if (
+    !policy ||
+    journal?.pilotId !== policy.pilotId ||
+    (manifest.localPilotBudget && journal.budgetTrack !== "local") ||
+    journal.pilotBudgetSha256 !== sha256(policy) ||
+    !Array.isArray(journal.events)
+  )
+    throw new Error("The complete shared pilot journal must bind the declared track.");
+  if (
+    journal.events.some(
+      (event) => !/^[a-f0-9]{64}:(?:goatcitadel|openclaw|hermes):[a-z_]+:[1-9][0-9]*$/u.test(event.cellId),
+    )
+  )
+    throw new Error("Shared pilot journal contains an invalid campaign cell.");
+  const budget = new ComparisonDispatchBudget({
+    ...policy,
+    allowZeroCost: Boolean(manifest.localPilotBudget),
+    events: journal.events,
+    persist: async () => {
+      throw new Error("Evidence verification cannot dispatch.");
+    },
+  });
+  const snapshot = budget.snapshot();
+  const matching = snapshot.receipts.filter((entry) => entry.cellId === `${manifest.manifestSha256}:${cellId}`);
+  if (
+    matching.length !== calls.length ||
+    matching.some((entry, index) =>
+      ["role", "maximumCostUsd", "costUsd", "state"].some((key) => entry[key] !== calls[index][key]),
+    )
+  )
+    throw new Error("Cell accounting does not match the shared pilot reservations and settlements.");
+  return {
+    pilotId: policy.pilotId,
+    pilotBudgetSha256: sha256(policy),
+    journalSha256: sha256(journal),
+    requests: snapshot.requests,
+    committedOrReservedUsd: snapshot.committedOrReservedUsd,
+    unsettledRequests: snapshot.receipts.filter((entry) => entry.state !== "settled").length,
+  };
 }
 
 function cellKey(cell) {

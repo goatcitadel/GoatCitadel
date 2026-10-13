@@ -28,6 +28,7 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   buildRemoteWorkerAssignmentParentContext,
+  CHAT_ROUTED_CONTEXT_ADMISSION_SNAPSHOT_VERSION,
   canonicalJsonString,
   isDurableRunTerminal,
   NotFoundError,
@@ -269,7 +270,7 @@ export function resolveCanonicalChatDurableWaitForEvent(trace: ChatTurnTraceReco
   return { eventKey: CHAT_TOOL_WAIT_RESOLVED_WAKE_EVENT };
 }
 
-function readDurableFanoutWaitInvocationId(trace: ChatTurnTraceRecord): string | undefined {
+export function readDurableFanoutWaitInvocationId(trace: ChatTurnTraceRecord): string | undefined {
   if (trace.status !== "waiting_for_tool") return undefined;
   for (const toolRun of [...trace.toolRuns].reverse()) {
     if (toolRun.toolName !== "agent.fanout" || toolRun.status !== "executed") {
@@ -492,13 +493,14 @@ export async function beginDurableChatRun(
     }
     let routedContextSnapshot: ChatRoutedContextSnapshotRecord | undefined;
     if (provisionalRoutedContextSnapshot) {
-      if (!prepared.capabilityProfile || !deps.routedContextSnapshots) {
+      if ((!prepared.capabilityProfile && !provisionalRoutedContextSnapshot.admissionBinding) || !deps.routedContextSnapshots) {
         throw new Error(`Durable Chat turn ${prepared.turnId} has an incomplete routed-context admission bundle.`);
       }
-      routedContextSnapshot = rebindChatRoutedContextSnapshot(provisionalRoutedContextSnapshot, {
-        profileId: prepared.capabilityProfile.profileId,
-        profileHash: prepared.capabilityProfile.hashes.profileHash,
-      });
+      routedContextSnapshot = provisionalRoutedContextSnapshot.admissionBinding ? provisionalRoutedContextSnapshot
+        : rebindChatRoutedContextSnapshot(provisionalRoutedContextSnapshot, {
+          profileId: prepared.capabilityProfile!.profileId,
+          profileHash: prepared.capabilityProfile!.hashes.profileHash,
+        });
       assertPreparedRoutedContextSnapshotBinding(prepared, routedContextSnapshot);
       routedContextSnapshot = await deps.routedContextSnapshots.create(routedContextSnapshot);
       verifyChatRoutedContextSnapshot(routedContextSnapshot);
@@ -638,6 +640,22 @@ function assertPreparedRoutedContextSnapshotBinding(
   snapshot: ChatRoutedContextSnapshotRecord,
 ): void {
   const profile = prepared.capabilityProfile;
+  if (snapshot.schemaVersion === CHAT_ROUTED_CONTEXT_ADMISSION_SNAPSHOT_VERSION) {
+    const identity = prepared.turnAdmission?.identity;
+    const binding = snapshot.admissionBinding;
+    const context = prepared.featureAdmission?.references.explicitContext;
+    const route = prepared.featureAdmission?.references.providerRoute?.primary;
+    if (profile || !identity || !binding || !context || !route ||
+      snapshot.turnId !== prepared.turnId || snapshot.sessionId !== prepared.session.sessionId ||
+      snapshot.workspaceId !== prepared.workspaceId || binding.admissionId !== identity.admissionId ||
+      binding.sessionIncarnationId !== identity.sessionIncarnationId || binding.materialSha256 !== identity.materialSha256 ||
+      binding.aggregateRevision !== identity.aggregateRevision || binding.controllerGeneration !== identity.controllerGeneration ||
+      context.snapshotId !== snapshot.snapshotId || context.snapshotHash !== snapshot.snapshotHash ||
+      snapshot.budget.effectiveProviderId !== route.providerId || snapshot.budget.effectiveModel !== route.model) {
+      throw new Error(`Durable Chat turn ${prepared.turnId} has a mismatched admission-bound context snapshot.`);
+    }
+    return;
+  }
   if (
     !profile ||
     snapshot.turnId !== prepared.turnId ||
