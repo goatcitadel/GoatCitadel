@@ -40,13 +40,20 @@ it("keeps no-content results and separately retrieves an oversized canonical res
  const values=await Promise.all(["settings","agents"].map(path=>fetchStartupRead(scope.installation+"/api/v1/"+path,init(),scope,()=>true)));expect(values[0]!.status).toBe(204);expect(await values[0]!.text()).toBe("");expect(await values[1]!.json()).toEqual({large:"complete"});expect(fetch).toHaveBeenCalledTimes(2);
 });
 it("evicts all read results after settlement and expires the startup window", async () => {
- vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });const fetch=vi.fn().mockImplementation(async () => json({items:[result({}),result({})]}));vi.stubGlobal("fetch",fetch);beginStartupReadWindow(scope);
+ vi.useFakeTimers({ toFake: ["Date"] });const fetch=vi.fn().mockImplementation(async () => json({items:[result({}),result({})]}));vi.stubGlobal("fetch",fetch);beginStartupReadWindow(scope);
  const read=()=>Promise.all(["settings","agents"].map(path=>fetchStartupRead(scope.installation+"/api/v1/"+path,init(),scope,()=>true)));await read();await read();expect(fetch).toHaveBeenCalledTimes(2);
- vi.advanceTimersByTime(10001);fetch.mockImplementation(async () => json({plain:true}));await read();expect(fetch).toHaveBeenCalledTimes(4);expect(fetch.mock.calls.slice(2).every(call=>!new URL(call[0]).pathname.includes("startup-reads"))).toBe(true);
+ vi.setSystemTime(Date.now() + 10001);fetch.mockImplementation(async () => json({plain:true}));await read();expect(fetch).toHaveBeenCalledTimes(4);expect(fetch.mock.calls.slice(2).every(call=>!new URL(call[0]).pathname.includes("startup-reads"))).toBe(true);
 });
 
 it("preserves canonical activity, expiry and surface query parameters within one read packet", async () => {
  const fetch=vi.fn().mockResolvedValue(json({items:[result({}),result({}),result({})]}));vi.stubGlobal("fetch",fetch);beginStartupReadWindow(scope);
  const paths=["/api/v1/chat/sessions?workspaceId=w1&includeActivity=true", "/api/v1/capabilities/autonomy-grants?includeExpired=false", "/api/v1/agentic/runs?surface=chat&workspaceId=w1"];
  await Promise.all(paths.map(path=>fetchStartupRead(scope.installation+path,init(),scope,()=>true)));expect(fetch).toHaveBeenCalledOnce();const request=new URL(fetch.mock.calls[0][0]);expect(JSON.parse(request.searchParams.get("reads")!).map((row:{path:string})=>row.path)).toEqual(paths);
+});
+
+it("coalesces promise-scheduled metadata reads within the same browser task", async () => {
+ const fetch=vi.fn().mockResolvedValue(json({items:[result({owner:"settings"}),result({owner:"agents"})]}));vi.stubGlobal("fetch",fetch);beginStartupReadWindow(scope);
+ const first=fetchStartupRead(scope.installation+"/api/v1/settings",init(),scope,()=>true);
+ const second=Promise.resolve().then(()=>fetchStartupRead(scope.installation+"/api/v1/agents",init(),scope,()=>true));
+ const responses=await Promise.all([first,second]);expect(fetch).toHaveBeenCalledOnce();expect(await responses[0]!.json()).toEqual({owner:"settings"});expect(await responses[1]!.json()).toEqual({owner:"agents"});
 });

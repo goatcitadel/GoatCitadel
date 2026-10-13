@@ -53,7 +53,8 @@ export function fetchStartupRead(url: string, init: RequestInit, scope: StartupR
     [...headers.keys()].some(key => !ALLOWED_HEADERS.has(key))) return fetch(url, init);
   const item = { path, correlationId: headers.get("x-goatcitadel-correlation-id") ?? "startup-read", ...(headers.get("x-goatcitadel-origin-surface") ? { originSurface: headers.get("x-goatcitadel-origin-surface")! } : {}) };
   let queue = queues.find(candidate => sameScope(candidate.scope, scope) && candidate.authorization === headers.get("authorization") && candidate.credentials === init.credentials && candidate.mode === init.mode && candidate.redirect === init.redirect);
-  if (!queue) { queue = { scope, authorization: headers.get("authorization"), credentials: init.credentials, mode: init.mode, redirect: init.redirect, rows: [] }; queues.push(queue); const owner = queue; queueMicrotask(() => { void dispatch(owner); }); }
+  // Flush at the next task boundary so promise-based owner reads join the same packet.
+  if (!queue) { queue = { scope, authorization: headers.get("authorization"), credentials: init.credentials, mode: init.mode, redirect: init.redirect, rows: [] }; queues.push(queue); const owner = queue; globalThis.setTimeout(() => { void dispatch(owner); }, 0); }
   const owner = queue;
   return new Promise<Response>((resolve, reject) => {
     const row: PendingRead = { item, url, init, current, settled: false,

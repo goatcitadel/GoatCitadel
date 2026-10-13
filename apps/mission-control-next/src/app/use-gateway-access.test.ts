@@ -51,6 +51,15 @@ describe("useGatewayAccess", () => {
     apiMocks.rejectionListener = undefined;
   });
 
+  it("uses current request authority from the startup response without a second identity read", async () => {
+    apiMocks.preflightGatewayAccess.mockResolvedValueOnce({ status: "ready", message: "ready", onboardingState: { completed: true, currentAccess: { actorId: "operator-b", actorSource: "basic", operatorAccess: true, readStatusScope: "operator" } } });
+    let latest!: UseGatewayAccessResult; let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(createElement(Harness, { onResult: (result) => { latest = result; } })); await Promise.resolve(); });
+    expect(latest.gatewayAccess.status).toBe("ready"); expect(JSON.parse(latest.callerScope!)).toContain("operator-b");
+    expect(apiMocks.fetchGatewayCurrentAccess).not.toHaveBeenCalled();
+    act(() => renderer.unmount());
+  });
+
   it("leaves ready state immediately when the Gateway rejects active credentials", async () => {
     let latest!: UseGatewayAccessResult;
     let renderer: ReactTestRenderer | null = null;

@@ -71,7 +71,7 @@ export function useGatewayAccess(options?: { batchStartupReads?: boolean }): Use
       const next = await preflightGatewayAccess({ bootstrap });
       if (generation !== requestGeneration.current || revision !== getGatewayAccessRevision()) return;
       if (next.status === "ready") {
-        const caller = await fetchGatewayCurrentAccess();
+        const caller = next.onboardingState?.currentAccess ?? await fetchGatewayCurrentAccess();
         if (generation !== requestGeneration.current || revision !== getGatewayAccessRevision()) return;
         const scope = JSON.stringify([
           getGatewayApiBaseUrl(),

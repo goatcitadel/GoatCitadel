@@ -1,3 +1,5 @@
+import { projectGatewayCurrentAccess } from "./auth-current-access.js";
+import { hasOperatorControlPlaneAccess } from "../plugins/auth.js";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { LlmProviderCapabilitiesSchema, LlmProviderGoogleCloudConfigSchema } from "@goatcitadel/contracts";
@@ -151,7 +153,10 @@ const completeSchema = z.object({
 export const onboardingRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/onboarding/startup", async (request, reply) => {
     try {
-      return reply.send(fastify.services.onboarding.getOnboardingStartupState());
+      const state = fastify.services.onboarding.getOnboardingStartupState();
+      const currentAccess = request.authActorSource !== undefined
+        ? projectGatewayCurrentAccess(request, hasOperatorControlPlaneAccess(fastify, request.authActorSource)) : undefined;
+      return reply.header("Cache-Control", "private, no-store").send({ ...state, ...(currentAccess ? { currentAccess } : {}) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
