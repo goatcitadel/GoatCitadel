@@ -25,6 +25,10 @@ export default defineConfig({
         replacement: path.resolve(configDir, "../../packages/contracts/src/citadel-vault-node.ts"),
       },
       {
+        find: "@goatcitadel/contracts/external-source-chat",
+        replacement: path.resolve(configDir, "../../packages/contracts/src/external-source-chat.ts"),
+      },
+      {
         find: "@goatcitadel/contracts",
         replacement: path.resolve(configDir, "../../packages/contracts/src/index.ts"),
       },
