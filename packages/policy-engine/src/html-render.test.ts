@@ -12,6 +12,7 @@ import { loadPlaywright } from "./playwright-runtime.js";
 import {
   HTML_RENDER_DEFAULT_VIEWPORTS,
   HTML_RENDER_MAX_BYTES,
+  injectContentSecurityPolicy,
   MISSION_CONTROL_BASELINE_CSP,
   renderHtmlSnapshot,
 } from "./html-render.js";
@@ -158,4 +159,22 @@ describe("renderHtmlSnapshot", () => {
       expect(render.bytes).toBe(bytes.byteLength);
     }
   }, 60_000);
+});
+
+describe("injectContentSecurityPolicy", () => {
+  it("ignores a <head> that only appears inside a leading comment", () => {
+    const html = "<!-- <head> --><!doctype html><html><head><title>t</title></head><body></body></html>";
+
+    const out = injectContentSecurityPolicy(html);
+
+    const meta = out.indexOf('<meta http-equiv="Content-Security-Policy"');
+    expect(meta).toBe(out.indexOf("<html><head>") + "<html><head>".length);
+    expect(out.slice(0, out.indexOf("-->"))).not.toContain("Content-Security-Policy");
+  });
+
+  it("ignores an <html> tag inside a comment when synthesizing a head", () => {
+    const out = injectContentSecurityPolicy("<!-- <html> --><html><body></body></html>");
+
+    expect(out.indexOf("<html><head><meta http-equiv=")).toBe(out.indexOf("-->") + 3);
+  });
 });

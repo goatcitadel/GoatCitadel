@@ -224,6 +224,34 @@ describe("html-artifact-render-service", () => {
     expect(redacted.renderHtmlSnapshot).not.toHaveBeenCalled();
   });
 
+  it("refuses to render stored content that the public projection would redact", async () => {
+    const secret = await createDeps(
+      artifactFixture({
+        content: '<!doctype html><html><body><p>{"DATABASE_PASSWORD":"render-content-secret"}</p></body></html>',
+      }),
+    );
+    roots.push(secret.rootDir);
+
+    await expect(renderChatGeneratedArtifact(secret.deps, "artifact-1", "default")).rejects.toBeInstanceOf(
+      ConflictError,
+    );
+    expect(secret.renderHtmlSnapshot).not.toHaveBeenCalled();
+    expect(secret.uploadChatAttachment).not.toHaveBeenCalled();
+  });
+
+  it("shares one render between concurrent requests for the same content", async () => {
+    const harness = await createDeps(artifactFixture());
+    roots.push(harness.rootDir);
+
+    const [first, second] = await Promise.all([
+      renderChatGeneratedArtifact(harness.deps, "artifact-1", "default"),
+      renderChatGeneratedArtifact(harness.deps, "artifact-1", "default"),
+    ]);
+
+    expect(harness.renderHtmlSnapshot).toHaveBeenCalledTimes(1);
+    expect(harness.uploads).toHaveLength(2);
+    expect(second.renders.map((item) => item.attachmentId)).toEqual(first.renders.map((item) => item.attachmentId));
+  });
   it("lists stored renders for the current content hash without rendering", async () => {
     const fixture = await createDeps();
     roots.push(fixture.rootDir);

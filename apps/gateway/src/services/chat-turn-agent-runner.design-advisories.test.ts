@@ -66,7 +66,10 @@ function profileWith(
 describe("model-authored html on documents.create", () => {
   const MODEL_HTML = "<!doctype html><html><head><title>Page</title></head><body><h1>Hi</h1></body></html>";
 
-  async function createPage(capabilityProfile: ChatTurnAgentRunnerInput["capabilityProfile"]) {
+  async function createPage(
+    capabilityProfile: ChatTurnAgentRunnerInput["capabilityProfile"],
+    overrides: Partial<ChatTurnAgentRunnerInput> = {},
+  ) {
     const invokeTool = vi.fn(
       async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => ({
         outcome: "executed",
@@ -79,7 +82,7 @@ describe("model-authored html on documents.create", () => {
       evaluateToolAccess: vi.fn(async () => ({ allowed: true, requiresApproval: false, reasonCodes: ["allowed"] })),
     });
     const result = await executeToolCall({
-      input: turnInput({ capabilityProfile, content: "Build the landing page as an HTML document." }),
+      input: turnInput({ capabilityProfile, content: "Build the landing page as an HTML document.", ...overrides }),
       turnId: "turn-model-html",
       toolName: "documents.create",
       rawArgs: { path: "./workspace/goatcitadel_out/page.html", format: "html", title: "Page", html: MODEL_HTML },
@@ -94,6 +97,14 @@ describe("model-authored html on documents.create", () => {
     expect(args).toBeDefined();
     expect(args).not.toHaveProperty("html");
     expect(args?.design).toMatchObject({ mode: "polished" });
+  });
+
+  it("strips the html argument on an eval-integrity turn that carries no design receipt", async () => {
+    const { result, args } = await createPage(undefined, { normalizationProfile: "prompt_pack_harness" });
+
+    expect(result.record.status, JSON.stringify(result.record)).toBe("executed");
+    expect(args).toBeDefined();
+    expect(args).not.toHaveProperty("html");
   });
 
   it("keeps the html argument under an impeccable receipt", async () => {

@@ -147,6 +147,26 @@ describe("ArtifactRenderActions", () => {
     expect(container.textContent).not.toContain("sent without images");
   });
 
+  it("starts fresh when the viewer switches to another artifact version", async () => {
+    api.renderChatGeneratedArtifact.mockResolvedValue({
+      artifactId: "artifact-1",
+      contentHash: "a".repeat(64),
+      renders,
+    });
+    const view = (record: ChatGeneratedArtifactRecord) => (
+      <GeneratedArtifactActionsContext.Provider value={renderCockpitArtifactActions}>
+        <GeneratedArtifactViewer artifact={record} compact />
+      </GeneratedArtifactActionsContext.Provider>
+    );
+    act(() => root.render(view(artifact())));
+    await act(async () => button("Render").click());
+    expect(container.querySelectorAll("img")).toHaveLength(2);
+
+    act(() => root.render(view(artifact({ contentHash: "c".repeat(64), version: 3 }))));
+
+    expect(container.querySelectorAll("img")).toHaveLength(0);
+    expect(container.textContent).not.toContain("Rendered 2 snapshots");
+  });
   it("mounts under every shared viewer through the cockpit actions slot", () => {
     act(() =>
       root.render(

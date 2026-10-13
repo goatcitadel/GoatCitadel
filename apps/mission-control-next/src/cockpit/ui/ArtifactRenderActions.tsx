@@ -22,7 +22,12 @@ const TEXT_ONLY_MARKER = "(sent without images: the current model has no vision 
 
 /** The cockpit's value for the shared viewer's actions slot (see GeneratedArtifactActionsContext). */
 export function renderCockpitArtifactActions(artifact: ChatGeneratedArtifactRecord) {
-  return <ArtifactRenderActions artifact={artifact} />;
+  // Keyed by identity so another artifact (or version) mounts with fresh state in the same commit.
+  return <ArtifactRenderActions key={artifactIdentity(artifact)} artifact={artifact} />;
+}
+
+function artifactIdentity(artifact: ChatGeneratedArtifactRecord): string {
+  return `${artifact.artifactId}:${artifact.contentHash ?? artifact.version}`;
 }
 
 function attachmentContentPath(attachmentId: string): string {
@@ -49,8 +54,10 @@ function RenderImage({ attachmentId, alt }: { attachmentId: string; alt: string 
         const response = await fetch(buildGatewayUrl(contentPath), { headers: readGatewayAuthHeaders(contentPath) });
         if (!response.ok) throw new Error(`Render image request failed (${response.status}).`);
         const blob = await response.blob();
+        // Create the object URL only while mounted; one created after cleanup would never be revoked.
+        if (!active) return;
         objectUrl = URL.createObjectURL(blob);
-        if (active) setBlobUrl(objectUrl);
+        setBlobUrl(objectUrl);
       } catch (error) {
         if (active) setFailure(describeFailure(error));
       }
@@ -97,11 +104,7 @@ export function ArtifactRenderActions({
   workspaceId?: string;
 }) {
   const scope = workspaceId ?? artifact.workspaceId ?? "default";
-  const identity = `${artifact.artifactId}:${artifact.contentHash ?? artifact.version}`;
   const [state, setState] = useState<RenderState>(IDLE);
-  useEffect(() => {
-    setState(IDLE);
-  }, [identity]);
 
   if (
     artifact.kind !== "html" ||

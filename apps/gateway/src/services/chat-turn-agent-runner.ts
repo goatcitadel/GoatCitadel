@@ -8715,14 +8715,13 @@ export class ChatTurnAgentRunner {
       };
     }
 
+    // Model-authored page markup is admitted only when the frozen profile injected a design skill;
+    // the receipt gate holds on every turn kind, eval-integrity harness turns included.
+    if (input.toolName === "documents.create" && "html" in args && !input.designSkillReceipt) {
+      delete args.html;
+    }
     if (!input.evalIntegrityTurn) {
-      attachArtifactDesignSkillArgs(
-        input.toolName,
-        args,
-        input.userContent,
-        input.workspaceDesignBrand,
-        input.designSkillReceipt ?? false,
-      );
+      attachArtifactDesignSkillArgs(input.toolName, args, input.userContent, input.workspaceDesignBrand);
     }
 
     if (LOCAL_PATH_TOOL_NAMES.has(input.toolName) && typeof args.path === "string") {
@@ -9573,15 +9572,9 @@ function attachArtifactDesignSkillArgs(
   args: Record<string, unknown>,
   userContent: string,
   workspaceDesignBrand?: () => ArtifactBrandInput | undefined,
-  designSkillReceipt = false,
 ): void {
   if (toolName !== "presentations.create" && toolName !== "documents.create" && toolName !== "artifacts.create") {
     return;
-  }
-  // Model-authored page markup is admitted only when the frozen profile injected a design skill;
-  // without that receipt the renderer template stays the only path to an HTML document.
-  if (toolName === "documents.create" && "html" in args && !designSkillReceipt) {
-    delete args.html;
   }
   const rawDesign = coerceArtifactDesignRecord(args.design);
   const existingMode = typeof rawDesign.mode === "string" ? rawDesign.mode.toLowerCase() : undefined;

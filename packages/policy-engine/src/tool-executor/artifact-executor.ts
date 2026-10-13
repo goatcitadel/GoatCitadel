@@ -134,7 +134,7 @@ async function documentsCreate(args: Record<string, unknown>, config: ToolPolicy
     rows,
     design,
     // Present only when the gateway admitted model-authored markup under a design receipt.
-    html: asString(args.html),
+    html: typeof args.html === "string" ? args.html : undefined,
   });
   await fs.mkdir(path.dirname(full), { recursive: true });
   if (artifact.binary) {

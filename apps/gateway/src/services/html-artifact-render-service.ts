@@ -18,6 +18,7 @@ import {
 } from "@goatcitadel/policy-engine";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
+import { projectChatGeneratedArtifactForPublic } from "./chat-secret-projection.js";
 
 /**
  * Renders `html` generated artifacts into PNG evidence stored as chat attachments. Renders are
@@ -46,6 +47,9 @@ const RENDER_FILE_SUFFIX = ".png";
 const RENDER_SCRATCH_DIR = ".artifact-renders";
 const ATTACHMENT_LIST_LIMIT = 2000;
 
+/** One render per artifact and content hash at a time; concurrent callers share the same promise. */
+const inFlightRenders = new Map<string, Promise<ChatArtifactRenderResponse>>();
+
 export async function renderChatGeneratedArtifact(
   deps: HtmlArtifactRenderDependencies,
   artifactId: string,
@@ -53,6 +57,21 @@ export async function renderChatGeneratedArtifact(
 ): Promise<ChatArtifactRenderResponse> {
   const artifact = await loadRenderableArtifact(deps, artifactId, workspaceId);
   const contentHash = resolveContentHash(artifact);
+  const flightKey = `${artifact.workspaceId}:${artifact.artifactId}:${contentHash}`;
+  const inFlight = inFlightRenders.get(flightKey);
+  if (inFlight) return inFlight;
+  const flight = renderOrReuse(deps, artifact, contentHash).finally(() => {
+    inFlightRenders.delete(flightKey);
+  });
+  inFlightRenders.set(flightKey, flight);
+  return flight;
+}
+
+async function renderOrReuse(
+  deps: HtmlArtifactRenderDependencies,
+  artifact: ChatGeneratedArtifactRecord,
+  contentHash: string,
+): Promise<ChatArtifactRenderResponse> {
   const existing = await listStoredRenders(deps, artifact, contentHash);
   if (coversEveryViewport(existing)) {
     return { artifactId: artifact.artifactId, contentHash, renders: existing };
@@ -118,7 +137,10 @@ async function loadRenderableArtifact(
   if (artifact.kind !== "html") {
     throw new ConflictError({ code: "STATE_CONFLICT", message: "Only html artifacts can be rendered." });
   }
-  if (artifact.publicProjection?.contentRedacted || artifact.publicProjection?.artifactRedacted) {
+  // The composed service receives the stored record; apply the same secret projection the artifact
+  // routes apply so a secret in the markup never reaches a PNG or an image provider.
+  const projection = projectChatGeneratedArtifactForPublic(artifact).publicProjection ?? artifact.publicProjection;
+  if (projection?.contentRedacted || projection?.artifactRedacted) {
     throw new ConflictError({
       code: "STATE_CONFLICT",
       message: "Redacted artifacts cannot be rendered; the stored content would not match the projection.",

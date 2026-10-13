@@ -205,15 +205,27 @@ function sanitizeViewportName(name: string): string {
 
 /** Insert the CSP meta tag as the first child of `<head>`; synthesize a head when the document has none. */
 export function injectContentSecurityPolicy(html: string): string {
-  const headMatch = /<head(\s[^>]*)?>/i.exec(html);
-  if (headMatch && headMatch.index !== undefined) {
-    const insertAt = headMatch.index + headMatch[0].length;
-    return `${html.slice(0, insertAt)}${CSP_META_TAG}${html.slice(insertAt)}`;
+  const headEnd = findTagEnd(html, "head");
+  if (headEnd !== undefined) {
+    return `${html.slice(0, headEnd)}${CSP_META_TAG}${html.slice(headEnd)}`;
   }
-  const htmlMatch = /<html(\s[^>]*)?>/i.exec(html);
-  if (htmlMatch && htmlMatch.index !== undefined) {
-    const insertAt = htmlMatch.index + htmlMatch[0].length;
-    return `${html.slice(0, insertAt)}<head>${CSP_META_TAG}</head>${html.slice(insertAt)}`;
+  const htmlEnd = findTagEnd(html, "html");
+  if (htmlEnd !== undefined) {
+    return `${html.slice(0, htmlEnd)}<head>${CSP_META_TAG}</head>${html.slice(htmlEnd)}`;
   }
   return `<head>${CSP_META_TAG}</head>${html}`;
+}
+
+/**
+ * Offset just past the first real `<tag ...>` start tag. Comments are consumed by the same scan,
+ * so a `<head>` or `<html>` that only appears inside `<!-- ... -->` never counts.
+ */
+function findTagEnd(html: string, tag: "head" | "html"): number | undefined {
+  const scanner = new RegExp(`<!--[\\s\\S]*?(?:-->|$)|<${tag}(?:\\s[^>]*)?>`, "gi");
+  for (let match = scanner.exec(html); match; match = scanner.exec(html)) {
+    if (!match[0].startsWith("<!--")) {
+      return match.index + match[0].length;
+    }
+  }
+  return undefined;
 }
