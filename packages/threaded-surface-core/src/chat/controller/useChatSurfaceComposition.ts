@@ -6,7 +6,7 @@ import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/compo
 import { pageCopy } from "@goatcitadel/mission-control-shared/content/copy";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { useCallback, useEffect, useMemo } from "react";
-import { type CoworkAgenticControlItem } from "../../cowork-view-model";
+import type { CoworkAgenticControlItem } from "../../cowork-view-model";
 import type { MissionThreadedControllerHostProps } from "../../MissionThreadedControllerHost.types";
 import { describeChatUiError } from "../chat-error-copy";
 import { buildSuggestionSyncKey } from "../chat-page-pure-helpers";
@@ -25,6 +25,7 @@ import { useChatSessionSelection } from "./useChatSessionSelection";
 import { useChatSubmissionComposition } from "./useChatSubmissionComposition";
 
 type Input = {
+  coworkViewModelFactory: MissionThreadedControllerHostProps["coworkViewModelFactory"];
   session: Pick<
     ReturnType<typeof useChatSessionComposition>,
     | "sessionData"
@@ -78,6 +79,7 @@ type Input = {
 
 /** Composes display, workbench and admission evidence without changing runtime authority. */
 export function useChatSurfaceComposition({
+  coworkViewModelFactory,
   session,
   lockSurface,
   surface,
@@ -257,6 +259,7 @@ export function useChatSurfaceComposition({
     }
   }, [compactSurfaceLayout, workbenchController.dockOpen, sessionRailOpen, setDockOpen]);
   const runPresentation = useChatRunPresentation({
+    coworkViewModelFactory,
     providerOptions: submission.providerRouting.providerOptions,
     selectedProviderLabel: submission.providerRouting.selectedProviderLabel,
     selectedModelLabel: submission.providerRouting.selectedModelLabel,

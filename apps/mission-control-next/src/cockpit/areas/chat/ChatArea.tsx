@@ -58,6 +58,7 @@ export function ChatArea({
   return (
     <div className="cockpit-chat-host flex min-h-0 min-w-0 flex-1 flex-col">
       <MissionThreadedControllerHost
+        coworkViewModelFactory={null}
         workspaceId={activeWorkspaceId ?? "default"}
         surface="chat"
         lockSurface

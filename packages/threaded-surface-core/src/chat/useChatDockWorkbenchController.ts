@@ -2,7 +2,7 @@ import type { ChatMessageRecord, ChatMode, ChatThreadResponse, OrchestrationRun 
 import type { OrchestrationCheckpointRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
-import { resolveActiveWorkflowTurn } from "@goatcitadel/mission-control-shared/components/cowork-view-model";
+import { resolveActiveWorkflowTurn } from "@goatcitadel/mission-control-shared/components/chat/active-workflow-turn";
 import { useRefreshSubscription } from "@goatcitadel/mission-control-shared/hooks/useRefreshSubscription";
 import { deriveCoworkItems } from "./chat-page-derivations";
 import { defaultDockOpenForMode } from "./surface-config";

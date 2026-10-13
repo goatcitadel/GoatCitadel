@@ -154,6 +154,7 @@ export function MissionThreadedControllerHost({
   onNavigateSurface,
   onResolvedModeChange,
   renderSurface,
+  coworkViewModelFactory,
 }: MissionThreadedControllerHostProps) {
   const selection = useChatSessionSelection({ initialModeOverride });
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
@@ -316,6 +317,7 @@ export function MissionThreadedControllerHost({
     setRenameTitle,
   });
   const surfaceRuntime = useChatSurfaceComposition({
+    coworkViewModelFactory,
     session,
     lockSurface,
     surface,

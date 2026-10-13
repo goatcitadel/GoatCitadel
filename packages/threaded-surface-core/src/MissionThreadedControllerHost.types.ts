@@ -193,6 +193,8 @@ export type MissionThreadedActiveSessionSurfaceProps = MissionControlActiveSessi
 export type MissionThreadedContextDockProps = ChatContextDockPanelsProps;
 
 export interface MissionThreadedControllerHostProps {
+  /** Legacy presentation adapter; native Chat keeps canonical runtime controls without this projection. */
+  coworkViewModelFactory: typeof import("./cowork-view-model").deriveCoworkRunViewModel | null;
   workspaceId?: string;
   workspaceName?: string;
   approvalsCount?: number;

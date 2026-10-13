@@ -84,7 +84,7 @@ export function createChatRunControlProps({
     coworkStopRunControl: resolveCoworkComposerStopControl({
       mode: messageMode,
       delegationRunStatus: runPresentation.visibleDelegationRun?.status,
-      controls: runPresentation.coworkViewModel.agenticRuntime?.controls,
+      controls: runPresentation.coworkViewModel?.agenticRuntime?.controls,
     }),
     onCoworkStopRun: (control) => {
       if (historicalModeActive && control.action !== "cancel") {

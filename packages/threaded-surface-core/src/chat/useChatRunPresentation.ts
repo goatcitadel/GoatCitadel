@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import type { AgenticRunTreeResponse } from "@goatcitadel/mission-control-shared/api/agentic";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
-import { deriveCoworkRunViewModel } from "../cowork-view-model";
 import {
   formatWorkProviderModelSummary,
   type ThreadedGatewayStatusSummary,
@@ -24,6 +23,8 @@ import type { useChatProviderRoutingController } from "./useChatProviderRoutingC
 import type { useChatContextActions } from "./useChatContextActions";
 import type { useChatRoutePreflight } from "./useChatRoutePreflight";
 
+type CoworkViewModelFactory = typeof import("../cowork-view-model").deriveCoworkRunViewModel;
+
 type Input = Pick<
   ReturnType<typeof useChatProviderRoutingController>,
   | "providerOptions"
@@ -35,6 +36,7 @@ type Input = Pick<
   | "runtimeSummary"
   | "runtimeTone"
 > & {
+  coworkViewModelFactory: CoworkViewModelFactory | null;
   workbenchController: Pick<
     ReturnType<typeof useChatDockWorkbenchController>,
     | "activeWorkflowTurn"
@@ -61,6 +63,7 @@ type Input = Pick<
 
 /** Display-only summaries of existing routing, durable execution, and delegation owners. */
 export function useChatRunPresentation({
+  coworkViewModelFactory,
   providerOptions,
   selectedProviderLabel,
   selectedModelLabel,
@@ -234,7 +237,7 @@ export function useChatRunPresentation({
   }, [activeWorkflowTurn, agenticRunTree, orchestrationCheckpoints, visibleDelegationRun]);
   const coworkViewModel = useMemo(
     () =>
-      deriveCoworkRunViewModel({
+      coworkViewModelFactory?.({
         items: coworkItems,
         orchestration: latestOrchestration ?? undefined,
         orchestrationRun,
@@ -247,8 +250,9 @@ export function useChatRunPresentation({
         selectedTurn,
         workbenchState,
         agenticRunTree,
-      }),
+      }) ?? null,
     [
+      coworkViewModelFactory,
       activeWorkflowTurn,
       agenticRunTree,
       coworkItems,
