@@ -1,6 +1,6 @@
 import { ChatConversationStarters } from "./ChatConversationStarters";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { Virtuoso } from "react-virtuoso";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
+import { useDeferredVirtuoso } from "../../ui/DeferredVirtuoso";
 import { getChatTurnRecoveryActionSummary, isChatTurnTerminalStatus, type ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import { NativeMessageRenderer as AssistantMessageRenderer } from "./NativeMessageRenderer";
 const ChatChangePlanCard = lazy(async () => ({ default: (await import("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard")).ChatChangePlanCard }));
@@ -120,6 +120,7 @@ function Turn({
 }
 
 type TranscriptFooterContext = {
+  renderedTurns?: readonly ChatThreadTurnRecord[];
   props: MissionThreadedActiveSessionSurfaceProps;
   receipt?: MissionThreadedRenderSurfaceInput["changePlanReceipt"];
   gatewayUnavailable?: boolean;
@@ -167,6 +168,8 @@ function ChatTranscriptFooter({ context }: { context?: TranscriptFooterContext }
     onInspectRun,
     onInspectTurn,
   } = context;
+  const renderedTurns = context.renderedTurns ?? visibleTurns;
+  const hasRenderedPreviewTurn = context.renderedTurns ? renderedTurns.some(turn => turn.turnId === pendingTurnId) : hasPreviewTurn;
   const importantNotices = props.notices?.filter((notice) => notice.tone === "warning" || notice.tone === "critical") ?? [];
   const routineNotices = props.notices?.filter((notice) => notice.tone !== "warning" && notice.tone !== "critical") ?? [];
   // Notices remain owned by the conversation controller; only routine history folds away.
@@ -176,12 +179,12 @@ function ChatTranscriptFooter({ context }: { context?: TranscriptFooterContext }
     <>
       <div className="mx-auto max-w-3xl px-3 pb-3 sm:px-6">
         {props.optimisticUserMessage &&
-        !visibleTurns.some((turn) => turn.userMessage.messageId === props.optimisticUserMessage?.canonicalMessageId) ? (
+        !renderedTurns.some((turn) => turn.userMessage.messageId === props.optimisticUserMessage?.canonicalMessageId) ? (
           <p className="rounded-lg border border-line bg-raised p-3 text-sm text-fg-secondary">
             {props.optimisticUserMessage.content} · Sending…
           </p>
         ) : null}
-        {pendingTurnId && !hasPreviewTurn && preview?.visibleText ? (
+        {pendingTurnId && !hasRenderedPreviewTurn && preview?.visibleText ? (
           <div className="py-4">
             <AssistantMessageRenderer
               role="assistant"
@@ -216,7 +219,7 @@ function ChatTranscriptFooter({ context }: { context?: TranscriptFooterContext }
 }
 
 // Stable component identities preserve review and question input through owner refreshes.
-const TRANSCRIPT_COMPONENTS = { EmptyPlaceholder: ChatTranscriptEmpty, Footer: ChatTranscriptFooter };
+const TRANSCRIPT_COMPONENTS = { EmptyPlaceholder: ChatTranscriptEmpty };
 const IGNORE_BOTTOM_STATE = () => {};
 
 export function ChatTranscript({
@@ -276,6 +279,8 @@ export function ChatTranscript({
       streamError: props.streamError ?? null,
     },
   });
+  const { Virtuoso, virtualized, initialIndex, rangeChanged, failure: virtualizationFailure, retry: retryVirtualization } = useDeferredVirtuoso({ needed: visibleTurns.length > 100, host: scrollRef, attribute: "data-turn-id", keys: visibleTurns.map(turn => turn.turnId), scopeKey: JSON.stringify([props.workspaceId, props.selectedSessionId]) });
+  const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
   const lastScroll = useRef<{ top: number; height: number } | null>(null);
   const readingGesture = useRef(false);
   const observeReadingGesture = useCallback(
@@ -306,6 +311,23 @@ export function ChatTranscript({
     }
     handleThreadScroll();
   }, [scrollRef, handleThreadScroll, jumpToLatest, props.followOutput]);
+  const onTranscriptBoundaryKey = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (
+      event.target !== event.currentTarget || event.defaultPrevented ||
+      event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
+      (event.key !== "Home" && event.key !== "End")
+    ) return;
+    // Browser keyboard scrolling animates against an estimated virtual height.
+    // Use the shared reading/follow owner at the actual boundary instead.
+    event.preventDefault();
+    if (event.key === "End") {
+      jumpToLatest();
+      return;
+    }
+    readingGesture.current = true;
+    event.currentTarget.scrollTop = 0;
+    observeScroll();
+  }, [observeScroll, jumpToLatest]);
   const scrollObservers = useRef({ observeScroll, observeReadingGesture });
   scrollObservers.current = { observeScroll, observeReadingGesture };
   const onNativeScroll = useCallback(() => scrollObservers.current.observeScroll(), []);
@@ -317,7 +339,7 @@ export function ChatTranscript({
       scrollRef.current?.removeEventListener("scroll", onNativeScroll);
       for (const type of ["wheel", "touchstart", "keydown", "pointerdown"])
         scrollRef.current?.removeEventListener(type, onReadingGesture);
-      scrollRef.current = next;
+      scrollRef.current = next; setScrollElement(next);
       readingGesture.current = false;
       lastScroll.current = scrollRef.current
         ? { top: scrollRef.current.scrollTop, height: scrollRef.current.scrollHeight }
@@ -344,6 +366,22 @@ export function ChatTranscript({
       </p>
     );
 
+  const fallbackTurns = visibleTurns.length > 100 ? visibleTurns.slice(props.followOutput ? -100 : 0, props.followOutput ? undefined : 100) : visibleTurns;
+  const footerContext: TranscriptFooterContext = {
+          ...(virtualized ? {} : { renderedTurns: fallbackTurns }),
+          props,
+          gatewayUnavailable,
+          receipt,
+          preview,
+          pendingTurnId,
+          hasPreviewTurn,
+          visibleTurns,
+          latestTurn,
+          onInspectTurn,
+          onInspectRun,
+          threadEndRef,
+          jumpToLatest,
+  };
   return (
     <div role="region" className="relative h-full min-h-0 flex-1" aria-label="Messages">
       <span role="status" aria-live="polite" className="sr-only">{announcement}</span>
@@ -351,13 +389,19 @@ export function ChatTranscript({
         className="absolute bottom-3 right-3 z-10 rounded-md border border-accent bg-overlay px-3 py-2 text-sm text-accent shadow-overlay">
         Jump to latest{unread ? ` · ${unread} new message${unread === 1 ? "" : "s"}` : ""}{props.pendingApproval || props.pendingUserInput ? " · Decision waiting" : ""}
       </button> : null}
+      <div key={JSON.stringify([props.workspaceId, props.selectedSessionId])} ref={bindScroller} data-transcript-scroller data-follow-output="false" tabIndex={0} onKeyDown={onTranscriptBoundaryKey}
+        className="h-full w-full overflow-y-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
+        <div className="w-full">
+          {virtualized && Virtuoso && scrollElement ? (
       <Virtuoso<ChatThreadTurnRecord, TranscriptFooterContext>
         key={props.selectedSessionId}
-        scrollerRef={bindScroller}
+        customScrollParent={scrollElement ?? undefined}
         data={visibleTurns}
+        initialTopMostItemIndex={props.followOutput ? visibleTurns.length - 1 : initialIndex ?? 0}
+        rangeChanged={rangeChanged}
         // Render the first row immediately, then measure actual long and enlarged-text row heights.
         initialItemCount={Math.min(visibleTurns.length, 1)}
-        className="h-full w-full"
+        className="w-full"
         followOutput={false}
         computeItemKey={(_index, turn) => turn.turnId}
         components={TRANSCRIPT_COMPONENTS}
@@ -387,6 +431,31 @@ export function ChatTranscript({
           />
         )}
       />
+
+          ) : (
+            <>
+              {fallbackTurns.map(turn => (
+                <div key={turn.turnId}>
+          <Turn
+            turn={turn}
+            previewText={preview?.turnId === turn.turnId ? preview.visibleText : null}
+            streaming={pendingTurnId === turn.turnId && props.hasActiveStream}
+            actions={props}
+            onInspectTurn={onInspectTurn}
+            onOpenArtifact={onOpenArtifact}
+            onReviewPlan={onReviewPlan}
+          />
+                </div>
+              ))}
+              {!visibleTurns.length ? <ChatTranscriptEmpty context={footerContext} /> : null}
+            </>
+          )}
+        </div>
+        {!virtualized && visibleTurns.length > 100 ? virtualizationFailure
+          ? <p role="alert" className="p-3 text-sm text-fg-muted">More messages could not be shown. Visible messages and pending decisions are still available. <button type="button" onClick={retryVirtualization} className="text-accent underline">Try again</button> · <button type="button" onClick={() => window.location.reload()} className="text-accent underline">Reload app</button></p>
+          : <p role="status" className="p-3 text-sm text-fg-muted">Loading {visibleTurns.length} conversation turns…</p> : null}
+        <ChatTranscriptFooter context={footerContext} />
+      </div>
     </div>
   );
 }

@@ -35,7 +35,7 @@ export async function runCockpitChatBranchProof({ context, browser, stack, citad
           await page.goto(buildVerificationUiUrl(stack.uiUrl, `/chat?sessionId=${encodeURIComponent(sessionId)}&shell=cockpit`), { waitUntil: "domcontentloaded" });
           const messages = page.locator('[aria-label="Messages"]');
           await messages.waitFor({ timeout: 30_000 });
-          const scroller = messages.locator('[data-testid="virtuoso-scroller"]');
+          const scroller = messages.locator('[data-transcript-scroller]');
           await scroller.evaluate((element) => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new element.ownerDocument.defaultView.Event("scroll", { bubbles: true })); });
           await clickTurnAction(messages, "Edit and resend", { timeout: 10_000 });
           await page.getByRole("status").getByText("Editing a new version of this message.").waitFor();

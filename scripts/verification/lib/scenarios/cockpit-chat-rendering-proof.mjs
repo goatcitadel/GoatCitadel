@@ -280,7 +280,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
       }
       async function findTurn(content, position = "bottom") {
         const messages = page.locator('[aria-label="Messages"]'); await messages.waitFor({ timeout: 30_000 });
-        const scroller = messages.locator('[data-testid="virtuoso-scroller"]');
+        const scroller = messages.locator('[data-transcript-scroller]');
         await scroller.evaluate((element, top) => { element.scrollTop = top ? 0 : element.scrollHeight; element.dispatchEvent(new window.Event("scroll", { bubbles: true })); }, position === "top");
         const article = messages.getByRole("article", { name: "Conversation messages", exact: true }).filter({ hasText: content });
         await article.waitFor({ timeout: 15_000 }); return article;
@@ -325,7 +325,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
 export async function revealConversationRun(page) {
   const messages = page.getByRole("region", { name: "Messages", exact: true });
   await messages.waitFor({ timeout: 30_000 });
-  const scroller = messages.locator('[data-testid="virtuoso-scroller"]');
+  const scroller = messages.locator('[data-transcript-scroller]');
   await scroller.evaluate((element) => { element.scrollTop = element.scrollHeight; });
   const disclosure = messages.getByRole("group", { name: "Conversation run", exact: true });
   await disclosure.waitFor({ state: "attached", timeout: 15_000 });

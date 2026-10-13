@@ -53,7 +53,9 @@ export function ThreadList({
             items={sessions}
             itemKey={(session) => session.sessionId}
             label="Recent conversations"
-            threshold={0}
+            threshold={100}
+            bounded
+            scopeKey={JSON.stringify([[...new Set(sessions.map(session => session.workspaceId))].sort(), rail.historyView, rail.selectedProjectId, rail.selectedFolderId, rail.selectedTag, rail.search])}
             className="h-full min-h-0"
           >
             {(session) => (

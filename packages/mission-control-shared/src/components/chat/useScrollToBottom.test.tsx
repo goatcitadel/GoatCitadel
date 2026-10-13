@@ -187,6 +187,149 @@ describe("useScrollToBottom", () => {
     expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
+
+  function deferredGeometry() {
+    const observations: Array<{
+      callback: ResizeObserverCallback;
+      observe: ReturnType<typeof vi.fn>;
+      disconnect: ReturnType<typeof vi.fn>;
+    }> = [];
+    vi.stubGlobal("ResizeObserver", class {
+      observe = vi.fn();
+      disconnect = vi.fn();
+      constructor(callback: ResizeObserverCallback) {
+        observations.push({ callback, observe: this.observe, disconnect: this.disconnect });
+      }
+    });
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrame = 1;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      const id = nextFrame++;
+      frames.set(id, callback);
+      return id;
+    });
+    const cancel = vi.fn((id: number) => frames.delete(id));
+    vi.stubGlobal("cancelAnimationFrame", cancel);
+    const resize = (index = observations.length - 1) => act(() => {
+      observations[index].callback([], {} as ResizeObserver);
+    });
+    const flush = () => {
+      const pending = [...frames.entries()];
+      frames.clear();
+      act(() => pending.forEach(([, callback]) => callback(0)));
+    };
+    return { observations, frames, cancel, resize, flush };
+  }
+
+  it("follows deferred content geometry after the unchanged stream signal has already pinned", () => {
+    const geometry = deferredGeometry();
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    const onBottomStateChange = vi.fn();
+    render({ followOutput: true, onBottomStateChange, signals: baseSignals({ streamStatus: "streaming" }) });
+    const scroller = container!.querySelector(".scroll") as HTMLElement;
+    const sentinel = scroller.firstElementChild as HTMLElement;
+    geometry.flush();
+    scrollIntoView.mockClear();
+    onBottomStateChange.mockClear();
+    setScrollMetrics(scroller, { scrollHeight: 2000, scrollTop: 700, clientHeight: 400 });
+
+    // Markdown/layout commits later, with no further provider signal or scroll.
+    geometry.resize();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    geometry.flush();
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView.mock.instances[0]).toBe(sentinel);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "end", behavior: "auto" });
+    expect(onBottomStateChange).not.toHaveBeenCalledWith(false);
+    expect(geometry.observations[0].observe.mock.calls.map(([element]) => element)).toEqual([scroller, sentinel]);
+  });
+
+  it("coalesces repeated deferred geometry with the existing pending follow frame", () => {
+    const geometry = deferredGeometry();
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    render({ followOutput: true, onBottomStateChange: vi.fn(), signals: baseSignals() });
+    geometry.resize();
+    geometry.resize();
+    expect(geometry.frames.size).toBe(1);
+    geometry.flush();
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    geometry.resize();
+    geometry.resize();
+    expect(geometry.frames.size).toBe(1);
+    geometry.flush();
+    expect(scrollIntoView).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let deferred geometry repin a reader who left the bottom before its frame", () => {
+    const geometry = deferredGeometry();
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    render({ followOutput: true, onBottomStateChange: vi.fn(), signals: baseSignals() });
+    geometry.flush();
+    scrollIntoView.mockClear();
+    geometry.resize();
+    const staleFrame = [...geometry.frames.values()][0];
+    const scroller = container!.querySelector(".scroll") as HTMLElement;
+    setScrollMetrics(scroller, { scrollHeight: 2000, scrollTop: 100, clientHeight: 400 });
+    act(() => scroller.dispatchEvent(new Event("scroll", { bubbles: true })));
+    expect(geometry.cancel).toHaveBeenCalled();
+    geometry.resize();
+    expect(geometry.frames.size).toBe(0);
+    act(() => staleFrame(0));
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("rejects the previous session's geometry callback and frame while accepting the new session", () => {
+    const geometry = deferredGeometry();
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    const onBottomStateChange = vi.fn();
+    render({ followOutput: true, onBottomStateChange, signals: baseSignals() });
+    const previousFrame = [...geometry.frames.values()][0];
+    render({ followOutput: true, onBottomStateChange, signals: baseSignals({ sessionId: "session-2" }) });
+    expect(geometry.observations[0].disconnect).toHaveBeenCalledTimes(1);
+    expect(geometry.observations).toHaveLength(2);
+    const currentFrame = [...geometry.frames.keys()][0];
+    geometry.resize(0);
+    act(() => previousFrame(0));
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect([...geometry.frames.keys()]).toEqual([currentFrame]);
+    geometry.flush();
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    scrollIntoView.mockClear();
+    geometry.resize(1);
+    geometry.flush();
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["scroller", "sentinel"] as const)("rejects deferred geometry after the exact %s owner changes", (owner) => {
+    const geometry = deferredGeometry();
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    render({ followOutput: true, onBottomStateChange: vi.fn(), signals: baseSignals() });
+    const previousFrame = [...geometry.frames.values()][0];
+    geometry.flush();
+    scrollIntoView.mockClear();
+    const replacement = document.createElement("div");
+    if (owner === "scroller") latest!.scrollRef.current = replacement;
+    else latest!.threadEndRef.current = replacement;
+    geometry.resize();
+    act(() => previousFrame(0));
+    expect(geometry.frames.size).toBe(0);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("disconnects deferred geometry and rejects a queued callback after unmount", async () => {
+    const geometry = deferredGeometry();
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    render({ followOutput: true, onBottomStateChange: vi.fn(), signals: baseSignals() });
+    const previousFrame = [...geometry.frames.values()][0];
+    await act(async () => root!.unmount());
+    root = null;
+    expect(geometry.observations[0].disconnect).toHaveBeenCalledTimes(1);
+    expect(geometry.frames.size).toBe(0);
+    geometry.resize(0);
+    act(() => previousFrame(0));
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
   it("auto-follows new content while followOutput is true, pinning to the end via rAF", () => {
     const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {

@@ -100,7 +100,7 @@ it("reveals the virtual footer's actual named disclosure without changing its ex
   const disclosure = { waitFor: async (options) => calls.push(["wait-disclosure", options]), scrollIntoViewIfNeeded: async () => calls.push(["reveal-disclosure"]) };
   const messages = {
     waitFor: async () => calls.push(["wait-messages"]),
-    locator: (selector) => { assert.equal(selector, '[data-testid="virtuoso-scroller"]'); return { evaluate: async (fn) => {
+    locator: (selector) => { assert.equal(selector, '[data-transcript-scroller]'); return { evaluate: async (fn) => {
       const element = { scrollTop: 0, scrollHeight: 2500 }; fn(element); assert.equal(element.scrollTop, 2500); calls.push(["latest"]);
     } }; },
     getByRole: (role, options) => { calls.push([role, options]); return disclosure; },

@@ -233,30 +233,52 @@ export function useScrollToBottom<
     emitBottomState(true);
   }, [emitBottomState]);
 
-  // WRITE: while following, pin the transcript to its end whenever new content
-  // arrives. Batched through requestAnimationFrame so layout-thrashing reads in
-  // the sibling effect never interleave with this write.
+  // WRITE: content signals and later layout growth share the same follow owner.
+  // A deferred renderer can change heights after its signal-triggered frame.
   useLayoutEffect(() => {
-    if (!followOutput) {
+    const scrollElement = scrollRef.current;
+    const endElement = threadEndRef.current;
+    if (!followOutput || !scrollElement || !endElement) {
       return;
     }
+    let active = true;
+    const ownsElements = () => active &&
+      scrollRef.current === scrollElement && threadEndRef.current === endElement;
     const pinToThreadEnd = () => {
-      if (!followingRef.current) return;
-      threadEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+      if (!ownsElements() || !followingRef.current) return;
+      endElement.scrollIntoView({ block: "end", behavior: "auto" });
       emitBottomState(true);
     };
-    if (typeof requestAnimationFrame !== "function") {
-      pinToThreadEnd();
-      return;
-    }
-    if (scrollFrameRef.current !== null && typeof cancelAnimationFrame === "function") {
-      cancelAnimationFrame(scrollFrameRef.current);
-    }
-    scrollFrameRef.current = requestAnimationFrame(() => {
-      scrollFrameRef.current = null;
-      pinToThreadEnd();
-    });
+    const schedulePin = () => {
+      if (!ownsElements() || !followingRef.current) return;
+      if (typeof requestAnimationFrame !== "function") {
+        pinToThreadEnd();
+        return;
+      }
+      // Coalesce layout observations with the already pending content frame.
+      if (scrollFrameRef.current !== null) return;
+      let frame: number | undefined;
+      let completed = false;
+      frame = requestAnimationFrame(() => {
+        completed = true;
+        if (ownsElements() && frame !== undefined && scrollFrameRef.current === frame) {
+          scrollFrameRef.current = null;
+        }
+        pinToThreadEnd();
+      });
+      // Synchronous frame implementations must not leave a completed frame queued.
+      if (!completed) scrollFrameRef.current = frame;
+    };
+    schedulePin();
+    const observer = typeof ResizeObserver === "function"
+      ? new ResizeObserver(schedulePin)
+      : null;
+    // The viewport can resize too; descendants expose deferred content growth.
+    observer?.observe(scrollElement);
+    for (const child of Array.from(scrollElement.children)) observer?.observe(child);
     return () => {
+      active = false;
+      observer?.disconnect();
       if (scrollFrameRef.current !== null && typeof cancelAnimationFrame === "function") {
         cancelAnimationFrame(scrollFrameRef.current);
         scrollFrameRef.current = null;
@@ -264,6 +286,7 @@ export function useScrollToBottom<
     };
   }, [
     followOutput,
+    sessionId,
     latestTraceStatus,
     latestTurnId,
     latestTurnToolRunCount,

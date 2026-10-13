@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { redactSecretText } from "@goatcitadel/contracts";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
-import { getGatewayAccessRevision, getGatewayCallerScope, subscribeGatewayAccessChange, subscribeGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { getGatewayAccessRevision, getGatewayCallerScope, getGatewayCallerScopeRevision, subscribeGatewayAccessChange, subscribeGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 
@@ -11,47 +10,83 @@ export function ChatLegacyInputNotice({ workspaceId, sessionId, draft, onRestore
   workspaceId?: string; sessionId: string | null; draft: string; onRestore: (text: string) => void; disabled?: boolean;
 }) {
   const caller = useSyncExternalStore(subscribeGatewayCallerScope, getGatewayCallerScope, getGatewayCallerScope);
+  const callerRevision = useSyncExternalStore(subscribeGatewayCallerScope, getGatewayCallerScopeRevision, getGatewayCallerScopeRevision);
   const access = useSyncExternalStore(subscribeGatewayAccessChange, getGatewayAccessRevision, getGatewayAccessRevision);
   const gateway = getGatewayApiBaseUrl();
-  const identity = JSON.stringify([gateway, caller, access, workspaceId, sessionId]);
+  const identity = JSON.stringify([gateway, caller, callerRevision, access, workspaceId, sessionId]);
   const owner = useRef({ identity });
   if (owner.current.identity !== identity) owner.current = { identity };
   const scope = owner.current;
   const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
+  const pending = useRef<{ scope: object } | null>(null);
+  const reviewTrigger = useRef<HTMLButtonElement>(null);
+  const cancelledFocusScope = useRef<object | null>(null);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; pending.current = null; cancelledFocusScope.current = null; }; }, []);
   const current = () => mounted.current && owner.current === scope && getGatewayCallerScope() === caller
-    && getGatewayAccessRevision() === access && getGatewayApiBaseUrl() === gateway;
+    && getGatewayCallerScopeRevision() === callerRevision && getGatewayAccessRevision() === access && getGatewayApiBaseUrl() === gateway;
   const [review, setReview] = useState<Review | null>(null);
   const [recognized, setRecognized] = useState(false);
+  const [checkingScope, setCheckingScope] = useState<object | null>(null);
   const [notice, setNotice] = useState<{ scope: object; text: string } | null>(null);
+  const checking = checkingScope === scope;
+  useLayoutEffect(() => {
+    const requestedScope = cancelledFocusScope.current;
+    if (checking || !requestedScope) return;
+    cancelledFocusScope.current = null;
+    if (requestedScope === scope && current() && !disabledRef.current) reviewTrigger.current?.focus({ preventScroll: true });
+  }, [checking, scope]);
   const key = `goatcitadel.chat.draft.${workspaceId}.${sessionId ?? "new"}`;
   let retained = false;
   try { retained = Boolean(caller && workspaceId && window.localStorage.getItem(key)); } catch { /* Storage unavailable: intentionally treated as no retained draft. */ }
-  const begin = () => {
-    if (!current() || !caller || !workspaceId || disabled) return;
+  const begin = async () => {
+    if (!current() || !caller || !workspaceId || disabledRef.current || pending.current?.scope === scope) return;
+    const request = { scope };
+    pending.current = request;
+    const ownsReview = () => pending.current === request && current() && !disabledRef.current;
+    setReview(null); setRecognized(false); setNotice(null); setCheckingScope(scope);
+    const rejected = () => setNotice({ scope, text: "This saved input cannot be recovered here because it exceeds the draft limit or contains sensitive or structured content. Its original bytes remain unchanged." });
     try {
       const text = window.localStorage.getItem(key);
-      if (!text?.trim()) return;
-      if (text.length > 64 * 1024 || redactSecretText(text).redactionCount > 0 || /<workflow_evidence[>\s]/i.test(text)) {
-        setNotice({ scope, text: "This saved input cannot be recovered here because it exceeds the draft limit or contains sensitive or structured content. Its original bytes remain unchanged." });
-        return;
+      if (!text?.trim() || !ownsReview()) return;
+      if (text.length > 64 * 1024 || /<workflow_evidence[>\s]/i.test(text)) { rejected(); return; }
+      // Load the existing validator only on an explicit review; unvalidated bytes never reach a view.
+      const { redactSecretText } = await import("@goatcitadel/contracts/secret-redaction");
+      if (!ownsReview()) return;
+      const latest = window.localStorage.getItem(key);
+      if (!ownsReview()) return;
+      if (latest !== text) {
+        setNotice({ scope, text: "The saved input changed. Review it again before restoring." }); return;
       }
-      setRecognized(false); setReview({ scope, key, text });
-    } catch { setNotice({ scope, text: "Saved input is unavailable in this host. Nothing was restored." }); }
+      if (redactSecretText(text).redactionCount > 0) { rejected(); return; }
+      if (ownsReview()) setReview({ scope, key, text });
+    } catch {
+      if (ownsReview()) setNotice({ scope, text: "Saved input could not be checked. Try reviewing it again. Nothing was restored." });
+    } finally {
+      if (pending.current === request) { pending.current = null; setCheckingScope(null); }
+    }
+  };
+  const cancelCheck = () => {
+    if (pending.current?.scope !== scope) return;
+    cancelledFocusScope.current = scope;
+    pending.current = null; setCheckingScope(null); setNotice(null);
   };
   const restore = () => {
-    if (!current() || !review || review.scope !== scope || !recognized || draft.length > 0 || disabled) return;
+    if (!current() || !review || review.scope !== scope || !recognized || draft.length > 0 || disabledRef.current) return;
     try {
       if (window.localStorage.getItem(review.key) !== review.text) {
         setReview(null); setNotice({ scope, text: "The saved input changed. Review it again before restoring." }); return;
       }
+      if (!current()) return;
       onRestore(review.text);
       setReview(null); setNotice({ scope, text: "Reviewed text restored to this conversation's draft. Nothing was sent; the original saved input is unchanged." });
     } catch { setNotice({ scope, text: "Saved input could not be reread. Nothing was restored." }); }
   };
-  return retained || notice?.scope === scope ? <div className="mt-2 text-xs text-fg-secondary">
+  return retained || checking || notice?.scope === scope ? <div className="mt-2 text-xs text-fg-secondary">
     {retained ? <><p>Older text is saved without a verified caller identity. It has not been imported.</p>
-      <Button size="sm" onClick={begin} disabled={disabled}>Review older saved text</Button></> : null}
+      <Button ref={reviewTrigger} size="sm" onClick={() => { void begin(); }} disabled={disabled || checking}>Review older saved text</Button></> : null}
+    {checking ? <><p role="status">Checking saved input…</p><Button size="sm" onClick={cancelCheck}>Cancel review</Button></> : null}
     {notice?.scope === scope ? <p role="status">{notice.text}</p> : null}
     <Dialog open={review?.scope === scope} onOpenChange={(open) => { if (!open) setReview(null); }} title="Review older saved text"
       description="Only restore text you recognize as yours. Attachments and queued messages are excluded. This copies text into the current conversation draft and does not send it or alter the original saved input.">

@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatMobileConversationSelect } from "./ChatMobileConversationSelect";
 import { ThreadList } from "./ThreadList";
 
-vi.mock("../../ui/WindowedRecordList", () => ({ WindowedRecordList: ({ items, children }: { items: unknown[]; children: (item: unknown) => ReactNode }) => <div>{items.map((item, index) => <div key={index}>{children(item)}</div>)}</div> }));
+const viewportContract = vi.hoisted(() => ({ threshold: -1, bounded: false }));
+vi.mock("../../ui/WindowedRecordList", () => ({ WindowedRecordList: ({ items, children, itemKey, threshold, bounded }: { items: unknown[]; children: (item: unknown) => ReactNode; itemKey: (item: unknown) => string; threshold: number; bounded: boolean }) => { viewportContract.threshold = threshold; viewportContract.bounded = bounded; return <div>{items.map(item => <div key={itemKey(item)}>{children(item)}</div>)}</div>; } }));
 
 vi.mock("./use-thread-activity", () => ({
   useThreadActivity: () => ({}),
@@ -83,4 +84,18 @@ it("keeps full titles, server previews and exact search targets on desktop and p
   expect(select.querySelector('optgroup[label="Matching messages"]')?.textContent).toContain(hit.excerpt);
   await act(async () => { select.value = "match:0"; select.dispatchEvent(new Event("change", { bubbles: true })); });
   expect(rail.onSelectSession).toHaveBeenLastCalledWith("session-1", { searchHit: hit });
+});
+
+it.each([0, 1, 99, 100, 1000])("keeps the conversation rail bounded and delegates windowing only above100 for %s records", async count => {
+  viewportContract.threshold = -1; viewportContract.bounded = false;
+  const sessions = Array.from({ length: count }, (_, index) => ({ sessionId: "rail-" + index, lifecycleStatus: "active", lastActivityAt: "2026-10-13T00:00:00Z" }));
+  const rail = { missionSessions: sessions, externalSessions: [], availableFolders: [], selectedSessionId: count ? "rail-0" : null, selectedFolderId: "all", selectedProjectId: "all", search: "", historyView: "active", renderSessionLabel: (id: string) => id, onSelectSession: vi.fn(), onSearchChange: vi.fn(), onHistoryViewChange: vi.fn(), onSelectProjectId: vi.fn(), onCreateSession: vi.fn() } as unknown as MissionThreadedSessionRailData;
+  await act(async () => root.render(<ThreadList rail={rail} />));
+  if (!count) { expect(container.textContent).toContain("No conversations in this view"); return; }
+  expect(viewportContract.threshold).toBe(100); expect(viewportContract.bounded).toBe(true);
+  const selected = container.querySelector<HTMLButtonElement>('[aria-current="page"]')!;
+  selected.focus();
+  await act(async () => root.render(<ThreadList rail={{ ...rail, missionSessions: sessions.map(record => ({ ...record })) as never }} />));
+  expect(container.querySelector('[aria-current="page"]')).toBe(selected); expect(document.activeElement).toBe(selected);
+  await act(async () => selected.click()); expect(rail.onSelectSession).toHaveBeenCalledWith("rail-0");
 });
