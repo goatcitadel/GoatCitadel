@@ -1,6 +1,6 @@
 # GitHub Security Findings — Triage Reference
 
-Last updated: 2026-08-04
+Last updated: 2026-10-12
 
 This document explains how to triage the recurring categories of GitHub Security findings against this repo and how to fix them **once** without rediscovering the same root cause every time. New AI agents (Claude, Codex, Copilot review bots) and human contributors should read this before opening a PR that touches rate-limit configuration, stream pipeline error handling, Dependabot alerts, the secret-scanning allowlist, or the synthetic-token fixtures used by the secret-redaction tests.
 
@@ -311,6 +311,16 @@ The authenticated AI view reported six findings in four files after the late 202
 | `apps/gateway/src/services/chat-turn-agent-runner/presentation-research-evidence.ts` — independent source roles are model-declared | Concern acknowledged; offered diff rejected. Roles are declared by the model, though every source must already be present in canonical tool evidence and registered competitor domains cannot count as independent. The generated fix rejects every independent, retailer, marketplace, financial, and event source, which would block all research decks. A real fix needs a server-side domain classification design. |
 | `apps/gateway/src/services/curator-service.ts` — the weekly dedup read/run/write can race between scheduler workers | Rejected. The only caller (the system cron handler) passes `force: true`, which skips that cursor, and scheduled cron runs are deduplicated per occurrence by `(jobId, admissionKey "scheduled:<occurrence>")` in `cron-run-repo.ts`. |
 | `apps/gateway/src/services/gateway/cron-automation-service.ts` — `hour12: false` emits `24` at midnight | Rejected as not reproducible on the supported runtime. Node 24 resolves `hourCycle` to `h23` and formats midnight as `00` in UTC, America/Los_Angeles, and Europe/London. `hourCycle: "h23"` would be optional hardening for older engines. |
+
+### 2026-10-12 AI queue snapshot (afternoon)
+
+After the 2026-10-12 morning pushes the AI view reported four findings in four files; three were read and checked against the source (the browser view froze before the fourth, `packages/skills/src/skill-module-routes.ts`, could be opened):
+
+| Reported | Disposition and evidence |
+|---|---|
+| `apps/gateway/src/services/workspace-design-brand.ts` — the brand is read from the live DESIGN.md without checking the frozen context-document hash | Accepted with a different fix. The frozen profile already records the design document's `sha256` and `bytes` in `contextDocuments`; `resolveWorkspaceDesignBrand` now hashes the live content the same way the governed render does and omits the brand on any mismatch. The offered diff read a nonexistent `contextDocumentReceipts` field. A regression test covers a DESIGN.md edited after the profile froze. Cosmetic only: the brand never widens authority. |
+| `apps/mission-control-next/src/cockpit/areas/settings/WorkspaceDesignContextSettings.tsx` — list `kind: "document"` artifacts instead of `"markdown"` | Rejected. `ChatGeneratedArtifactKind` is `markdown \| html \| mermaid \| code \| text`; `"document"` is not a valid kind, so the offered change would fail typecheck. DESIGN.md content is markdown. |
+| `apps/gateway/src/services/gateway/cron-automation-service.ts` — `hour12: false` emits `24` at midnight | Repeat of the earlier 2026-10-12 finding; still rejected as not reproducible on Node 24. |
 
 ### There is no way to dismiss an AI finding
 

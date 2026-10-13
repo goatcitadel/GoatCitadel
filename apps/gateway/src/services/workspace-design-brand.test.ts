@@ -1,10 +1,22 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatTurnCapabilityProfileRecord } from "@goatcitadel/contracts";
 import { resolveWorkspaceDesignBrand } from "./workspace-design-brand.js";
 
 const DESIGN_DOC = "# Design\n\n```brand\nname: Acme\ncolors: #0ea5e9, #0f172a\nfonts: Inter\n```\n";
 
-function profileWith(contextDocuments?: Array<{ docType: "product" | "design" }>): ChatTurnCapabilityProfileRecord {
+// The frozen receipt records the full stored document exactly as the governed render hashes it.
+function receiptFor(content: string): { sha256: string; bytes: number } {
+  return {
+    sha256: createHash("sha256").update(content, "utf8").digest("hex"),
+    bytes: Buffer.byteLength(content, "utf8"),
+  };
+}
+
+function profileWith(
+  contextDocuments?: Array<{ docType: "product" | "design" }>,
+  frozenContent = DESIGN_DOC,
+): ChatTurnCapabilityProfileRecord {
   return {
     selection: {
       activatedSkills: [
@@ -22,8 +34,7 @@ function profileWith(contextDocuments?: Array<{ docType: "product" | "design" }>
                 contextDocuments: contextDocuments.map((doc) => ({
                   ...doc,
                   scope: "workspace" as const,
-                  sha256: "doc",
-                  bytes: 10,
+                  ...receiptFor(frozenContent),
                   truncated: false,
                 })),
               }
@@ -55,11 +66,21 @@ describe("resolveWorkspaceDesignBrand", () => {
     expect(read).not.toHaveBeenCalled();
   });
 
+  it("does not brand from a DESIGN.md that changed after the profile froze", () => {
+    const edited = DESIGN_DOC.replace("#0ea5e9", "#ff0000");
+    const read = vi.fn(() => ({ exists: true, content: edited }));
+
+    expect(resolveWorkspaceDesignBrand(profileWith([{ docType: "design" }], DESIGN_DOC), read)).toBeUndefined();
+    expect(read).toHaveBeenCalledWith("design");
+  });
+
   it("returns undefined when DESIGN.md has no brand block or is missing", () => {
+    // Freeze the same prose document so this exercises the missing brand block, not hash drift.
+    const proseOnly = "# Design\n\nProse only.\n";
     expect(
-      resolveWorkspaceDesignBrand(profileWith([{ docType: "design" }]), () => ({
+      resolveWorkspaceDesignBrand(profileWith([{ docType: "design" }], proseOnly), () => ({
         exists: true,
-        content: "# Design\n\nProse only.\n",
+        content: proseOnly,
       })),
     ).toBeUndefined();
     expect(

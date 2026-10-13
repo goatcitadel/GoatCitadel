@@ -47,6 +47,10 @@ const IMPECCABLE_CONTEXT_DOCS: readonly SkillContextDocType[] = Object.freeze(["
 
 export const IMPECCABLE_SKILL_NAME = "impeccable";
 export const DESIGN_INTELLIGENCE_SKILL_NAME = "design-intelligence";
+// Privileged module routes and workspace context documents key on these canonical ids: a display
+// name is mutable, so a non-bundled skill named `impeccable` must not inherit them.
+export const IMPECCABLE_SKILL_ID = "bundled:impeccable";
+export const DESIGN_INTELLIGENCE_SKILL_ID = "bundled:design-intelligence";
 
 /** The impeccable commands this build vendors, in Commands-table order. */
 export const IMPECCABLE_COMMANDS: readonly string[] = Object.freeze([
@@ -198,9 +202,9 @@ function resolveDesignIntelligenceModules(input: ResolveSkillModulesInput): Skil
 
 /** Resolve which skill modules a turn injects. Pure: no filesystem access. */
 export function resolveSkillModules(input: ResolveSkillModulesInput): SkillModuleResolution {
-  const name = input.skillName.trim().toLowerCase();
-  if (name === IMPECCABLE_SKILL_NAME) return resolveImpeccableModules(input);
-  if (name === DESIGN_INTELLIGENCE_SKILL_NAME) return resolveDesignIntelligenceModules(input);
+  const skillId = input.skillId.trim();
+  if (skillId === IMPECCABLE_SKILL_ID) return resolveImpeccableModules(input);
+  if (skillId === DESIGN_INTELLIGENCE_SKILL_ID) return resolveDesignIntelligenceModules(input);
   return mainRoute();
 }
 
@@ -211,10 +215,10 @@ export function resolveSkillModules(input: ResolveSkillModulesInput): SkillModul
 export function enumerateSkillRoutes(
   input: Pick<ResolveSkillModulesInput, "skillId" | "skillName">,
 ): SkillModuleResolution[] {
-  const name = input.skillName.trim().toLowerCase();
-  if (name === IMPECCABLE_SKILL_NAME) {
+  const skillId = input.skillId.trim();
+  if (skillId === IMPECCABLE_SKILL_ID) {
     return [impeccableDesignRoute(), impeccableArtifactsRoute(), ...IMPECCABLE_COMMANDS.map(impeccableCommandRoute)];
   }
-  if (name === DESIGN_INTELLIGENCE_SKILL_NAME) return [mainRoute(), designIntelligencePresentationRoute()];
+  if (skillId === DESIGN_INTELLIGENCE_SKILL_ID) return [mainRoute(), designIntelligencePresentationRoute()];
   return [mainRoute()];
 }

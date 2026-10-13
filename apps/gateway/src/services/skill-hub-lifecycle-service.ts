@@ -27,7 +27,7 @@ import {
   type SkillHubSnapshotRecord,
 } from "@goatcitadel/storage";
 import { parseSkillMarkdown } from "@goatcitadel/skills";
-import { SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
+import { SkillHubArtifactStore, type SkillHubArtifactFilesystem } from "./skill-hub-artifact-store.js";
 import {
   PROMPTWARE_SCANNER_ID,
   PROMPTWARE_MAX_FINDINGS,
@@ -67,6 +67,8 @@ export interface SkillHubLifecycleServiceOptions {
   >;
   reloadSkills?: () => Promise<unknown>;
   now?: () => string;
+  /** Filesystem port for runtime projection; defaults to the Node implementation. */
+  filesystem?: SkillHubArtifactFilesystem;
   /** Test-only crash seam after filesystem projection and before canonical DB mutation. */
   afterRuntimeProjection?: (operationId: string) => Promise<void> | void;
   /** Test-only race seam after filesystem identity capture and before mutation-time revalidation. */
@@ -137,6 +139,7 @@ export class SkillHubLifecycleService {
     this.candidateRoot = resolveManagedRoot(this.rootDir, options.candidateRoot, "candidate root");
     this.skillsExtraRoot = resolveManagedRoot(this.rootDir, options.skillsExtraRoot, "runtime skill root");
     this.filesystem = new SkillHubLifecycleFilesystem(this.rootDir, {
+      filesystem: options.filesystem,
       beforeMutation: options.beforeFilesystemMutation,
     });
   }
