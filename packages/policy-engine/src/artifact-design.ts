@@ -397,7 +397,11 @@ export function buildArtifactDesignReport(
     guideReferences: plan.guideReferences,
     localPath: output.localPath,
     google,
-    residualRisks: output.residualRisks ?? buildResidualRisks(plan, google, assetPlan, designQuality),
+    // Caller warnings (renderer, provider) are composed with the plan's own risks, not substituted
+    // for them, so a skipped provider image stays reported alongside render warnings.
+    residualRisks: [
+      ...new Set([...(output.residualRisks ?? []), ...buildResidualRisks(plan, google, assetPlan, designQuality)]),
+    ],
     designQuality,
     ...(output.markup ? { markup: output.markup } : {}),
   };

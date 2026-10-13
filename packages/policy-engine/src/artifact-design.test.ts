@@ -290,6 +290,18 @@ describe("provider image skip reasons", () => {
     expect(report.residualRisks.join("\n")).not.toMatch(/without visuals/iu);
   });
 
+  it("keeps the skipped-image reason when the caller also supplies render warnings", () => {
+    const report = buildArtifactDesignReport(plan, {
+      localPath: "deck.pptx",
+      usedAssetIds: ["built-in-shapes-icons"],
+      providerVisualSupplied: true,
+      residualRisks: ["Renderer warning: one slide title was shortened."],
+    });
+
+    expect(report.residualRisks).toContain("Renderer warning: one slide title was shortened.");
+    expect(report.residualRisks.join("\n")).toMatch(/supplied but/iu);
+  });
+
   it("says no provider image was supplied without claiming the artifact has no visuals", () => {
     const report = buildArtifactDesignReport(plan, { localPath: "deck.pptx", usedAssetIds: ["built-in-shapes-icons"] });
 
