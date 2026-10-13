@@ -268,7 +268,7 @@ function buildSlideXml(
     y: 6355080,
     cx: 548640,
     cy: 274320,
-    paragraphs: [runParagraph(String(index + 1).padStart(2, "0"), 1000, true)],
+    paragraphs: [runParagraph(String(index + 1).padStart(2, "0"), 1000, false)],
   });
   return xmlDocument(
     `<p:sld xmlns:a="${DRAWING_NS}" xmlns:r="${REL_NS}" xmlns:p="${PRESENTATION_NS}">` +

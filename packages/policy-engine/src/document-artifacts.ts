@@ -1,8 +1,6 @@
 import {
-  AlignmentType,
   Document,
   HeadingLevel,
-  ImageRun,
   Packer,
   Paragraph,
   ShadingType,
@@ -12,7 +10,6 @@ import {
   TextRun,
   WidthType,
 } from "docx";
-import sharp from "sharp";
 import { createArtifactDesignPlan, cssColor, type ArtifactDesignPlan } from "./artifact-design.js";
 import { createStoredZip, type ZipEntry } from "./presentation-pptx.js";
 
@@ -214,7 +211,6 @@ async function buildDocx(input: DocumentArtifactInput): Promise<Buffer> {
 
 async function buildStyledDocx(input: DocumentArtifactInput): Promise<Buffer> {
   const design = resolveDocumentDesign(input, "docx");
-  const heroImage = await buildDocxVisualBuffer(design);
   const children: Array<Paragraph | Table> = [
     new Paragraph({
       heading: HeadingLevel.TITLE,
@@ -230,26 +226,6 @@ async function buildStyledDocx(input: DocumentArtifactInput): Promise<Buffer> {
       ],
     }),
   ];
-  if (design.mode !== "plain" && design.mode !== "minimal") {
-    children.push(
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing: { after: 260 },
-        children: [
-          new ImageRun({
-            type: "png",
-            data: heroImage,
-            transformation: { width: 520, height: 180 },
-            altText: {
-              name: `Generated visual for ${input.title}`,
-              title: `Generated visual for ${input.title}`,
-              description: `Abstract generated visual supporting ${input.title}.`,
-            },
-          }),
-        ],
-      }),
-    );
-  }
   if (input.body?.trim()) {
     children.push(bodyParagraph(input.body.trim(), design));
   }
@@ -402,21 +378,6 @@ function calloutTable(text: string, design: ArtifactDesignPlan): Table {
       }),
     ],
   });
-}
-
-async function buildDocxVisualBuffer(design: ArtifactDesignPlan): Promise<Buffer> {
-  const svg = [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420">`,
-    `<rect width="1200" height="420" rx="40" fill="#${design.tokens.surface}"/>`,
-    `<circle cx="1020" cy="86" r="170" fill="#${design.tokens.accent}" opacity="0.18"/>`,
-    `<circle cx="190" cy="345" r="210" fill="#${design.tokens.accent2}" opacity="0.16"/>`,
-    `<path d="M94 225 C300 80 455 310 650 180 S950 110 1090 250" fill="none" stroke="#${design.tokens.accent}" stroke-width="26" stroke-linecap="round" opacity="0.82"/>`,
-    `<rect x="88" y="285" width="175" height="64" rx="16" fill="#${design.tokens.accent}" opacity="0.9"/>`,
-    `<rect x="292" y="285" width="175" height="64" rx="16" fill="#${design.tokens.accent2}" opacity="0.9"/>`,
-    `<rect x="496" y="285" width="175" height="64" rx="16" fill="#${design.tokens.accent3}" opacity="0.9"/>`,
-    `</svg>`,
-  ].join("");
-  return sharp(Buffer.from(svg, "utf8")).png().toBuffer();
 }
 
 function cssFont(font: string): string {

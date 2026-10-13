@@ -533,8 +533,11 @@ export function composeChatRouteDependencies(
       }),
     getChatThread: (sessionId, options) =>
       chatMessageRouteRuntime.getChatThread(chatMessageRouteRuntimeHost, sessionId, options),
-    getChatTurnRoutedContext: (sessionId: string, turnId: string, options?: { workspaceId?: string; operatorId?: string }) =>
-      inspectAdmittedChatRoutedContext(gateway, sessionId, turnId, options),
+    getChatTurnRoutedContext: (
+      sessionId: string,
+      turnId: string,
+      options?: { workspaceId?: string; operatorId?: string },
+    ) => inspectAdmittedChatRoutedContext(gateway, sessionId, turnId, options),
     getChatTurnCapabilityProfile: (
       sessionId: string,
       turnId: string,

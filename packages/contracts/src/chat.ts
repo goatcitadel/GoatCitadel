@@ -1752,8 +1752,12 @@ export interface ChatDelegationStepRecord {
   runId: string;
   role: string;
   /** Frozen step instructions used to reject replay drift and restore pending work. */
-  instructionSnapshot?: { objective?: string; label?: string; expectedOutput?: string;
-    resultSchema?: import("./chat-delegation-result.js").ChatDelegationResultSchema };
+  instructionSnapshot?: {
+    objective?: string;
+    label?: string;
+    expectedOutput?: string;
+    resultSchema?: import("./chat-delegation-result.js").ChatDelegationResultSchema;
+  };
   label?: string;
   status: ChatDelegationStepStatus;
   index: number;

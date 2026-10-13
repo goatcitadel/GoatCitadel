@@ -1123,7 +1123,9 @@ export async function fetchChatTurnCapabilityProfile(
 }
 
 export async function fetchChatTurnRoutedContext(
-  sessionId: string, turnId: string, workspaceId?: string,
+  sessionId: string,
+  turnId: string,
+  workspaceId?: string,
 ): Promise<ChatRoutedContextInspectionEnvelope> {
   const query = new URLSearchParams();
   if (workspaceId?.trim()) query.set("workspaceId", workspaceId.trim());

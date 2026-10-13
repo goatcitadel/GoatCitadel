@@ -185,15 +185,15 @@ A new preview component; running JavaScript in renders; replacing `presentations
 
 ## Phase 5: Native renderer craft (impeccable cannot do this)
 
-- [ ] Modify `packages/policy-engine/src/presentation-pptx-renderers.ts`: remove the 0.13-inch accent side stripe and the bold accent `01` slide number; quiet page number; drop the bordered card as the default body container on narrative slides. Update `presentation-pptx-audit.ts`, `presentation-pptx-fallback.ts`, and `scripts/verification/lib/pptx-package-audit.mjs` together (the audit keys on `gc:slide-number` and `gc:layout:`).
-- [ ] Modify `packages/policy-engine/src/presentation-pdf.ts` for the same frame and container changes.
-- [ ] Modify `packages/policy-engine/src/artifact-design.ts`: stop choosing a preset by content regex; default `clean-professional` unless an explicit `preset` or `brand` is supplied; replace `7C3AED` in the `pitch` preset; make `design-skill-applied` report the injected module list from the receipt rather than "planned".
-- [ ] Modify `packages/policy-engine/src/presentation-pptx.ts` and `document-artifacts.ts`: replace the hashed SVG blob with no visual or a typographic treatment when no provider image exists; never ship the blob as a DOCX hero.
-- [ ] PDF font embedding (`pdf-writer.ts`, Helvetica only) is flagged as a separate large item; not bundled here.
+- [x] Modify `packages/policy-engine/src/presentation-pptx-renderers.ts`: remove the 0.13-inch accent side stripe and the bold accent `01` slide number; quiet page number; drop the bordered card as the default body container on narrative slides. Update `presentation-pptx-audit.ts`, `presentation-pptx-fallback.ts`, and `scripts/verification/lib/pptx-package-audit.mjs` together (the audit keys on `gc:slide-number` and `gc:layout:`).
+- [x] Modify `packages/policy-engine/src/presentation-pdf.ts` for the same frame and container changes.
+- [x] Modify `packages/policy-engine/src/artifact-design.ts`: stop choosing a preset by content regex; default `clean-professional` unless an explicit `preset` or `brand` is supplied; replace `7C3AED` in the `pitch` preset; make `design-skill-applied` report the injected module list from the receipt rather than "planned".
+- [x] Modify `packages/policy-engine/src/presentation-pptx.ts` and `document-artifacts.ts`: replace the hashed SVG blob with no visual or a typographic treatment when no provider image exists; never ship the blob as a DOCX hero.
+- [ ] (deferred, unchanged in Phase 5) PDF font embedding (`pdf-writer.ts`, Helvetica only) is flagged as a separate large item; not bundled here.
 
 ### Tests
 
-- [ ] `presentation-pptx.test.ts`, `presentation-pptx-audit.test.ts`, `presentation-pdf.test.ts`, `artifact-design.test.ts`, `document-artifacts.test.ts`, `pptx-package-audit.test.mjs`.
+- [x] `presentation-pptx.test.ts`, `presentation-pptx-audit.test.ts`, `presentation-pdf.test.ts`, `artifact-design.test.ts`, `document-artifacts.hero.test.ts` (new), `tool-executor-tail.coverage.test.ts`, `pptx-package-audit.test.mjs`, `research-artifact-powerpoint.test.mjs`.
 
 ### Proof
 
@@ -606,3 +606,54 @@ Steps:
 Steps:
 1. `pnpm typecheck`, `pnpm verify:gateway:async-boundary`, `pnpm verify:auth:matrix`, `pnpm verify:skills:catalog`, `pnpm verify:surface:regression`, `pnpm verify:visual:regression` (report, do not rebaseline), `git diff --check`; focused suites. A browser proof: render one HTML artifact through the new route and attach the PNG path to the ledger. Expected: pass; record any lane that cannot run locally with its reason.
 2. Tick the Phase 4 boxes. Commit: `docs(plan): mark impeccable Phase 4 done`.
+
+## Phase 5 Task Breakdown (execution order; TDD per task)
+
+Phase 5 is independent of Phases 1–4 and branches from `main`. It changes only `packages/policy-engine` renderers and their tests. Before/after renders of the sample deck (PPTX via PowerPoint PNG export, PDF, DOCX) are the visual proof attached to the PR.
+
+### Task 32: Preset by request only
+
+Files: `packages/policy-engine/src/artifact-design.ts`, `artifact-design.test.ts`, `tool-executor-tail.coverage.test.ts`.
+
+Produces: `resolvePreset` returns the explicit `preset` when supplied, else `clean-professional`; the content regex table is gone. The `pitch` preset uses `0F766E` accent and `99F6E4` border (no `7C3AED`). The `design-skill-applied` validation detail reads "Injected governed impeccable design instructions (<register>, <lifecycle>): <skillId> [<modules>]" from the receipt, never "planned".
+
+Steps:
+1. Test first: a wellness-flavoured title with no preset resolves `clean-professional`; `preset: "wellness"` still resolves `wellness`; the pitch tokens contain no `7C3AED`; the applied detail lists the receipt modules. Expected: fail. Implement; rerun `artifact-design.test.ts` and the tail coverage test (one expectation pinned the regex-chosen preset). Expected: pass.
+2. Commit: `feat(artifact-design): default to clean-professional and report injected modules`.
+
+### Task 33: PPTX frame and containers
+
+Files: `packages/policy-engine/src/presentation-pptx-renderers.ts`, `presentation-pptx-fallback.ts`, `presentation-pptx.test.ts`.
+
+Produces: `drawSlideFrame` draws no 0.13 in accent stripe; `gc:slide-number` is regular weight in `mutedText` at 10 pt (the package audit's semantic font floor for that object; the brief's 9 pt would fail it); `drawImageTextSlide` and `drawStackedListSlide` draw bullets on the background with no roundRect card; two-column and comparison keep their cards; the fallback writer's slide number is regular weight.
+
+Steps:
+1. Test first (recording pptxgenjs mock): no shape with `x: 0, w: 0.13`; one quiet slide number per rendered slide; zero roundRects on image-text/stacked-list slides and at least one on two-column; the fallback zip's slide-number run is not bold. Expected: fail. Implement; rerun `presentation-pptx.test.ts`, `presentation-pptx-audit.test.ts`, `tool-executor-tail.coverage.test.ts`, `scripts/verification/lib/pptx-package-audit.test.mjs`. Expected: pass.
+2. Commit: `feat(pptx): quiet the slide frame and drop the default body card`.
+
+### Task 34: PDF frame and containers
+
+Files: `packages/policy-engine/src/presentation-pdf.ts`, `presentation-pdf.test.ts`.
+
+Produces: no 9.4 pt stripe; the page number is set in the regular face (`/F1`) in `theme.muted`; stacked pages draw bullets on the background (no `55 54 836 382 re B` card); the cover has no three-rectangle motif.
+
+Steps:
+1. Test first (content streams): no ` 9.4 540 re`; regex for a regular-face `(02)` page number and none in `/F2`; no ` 150 110 re`; no stacked card rect; layout names include `image-text`. Expected: fail. Implement; rerun `presentation-pdf.test.ts`. Expected: pass.
+2. Commit: `feat(pdf): quiet the deck frame and drop the default body card`.
+
+### Task 35: No placeholder visuals
+
+Files: `packages/policy-engine/src/presentation-pptx.ts`, `presentation-pptx-renderers.ts`, `presentation-pdf.ts`, `document-artifacts.ts`, `artifact-design.ts`, `tool-executor/artifact-executor.ts`, `tool-registry.ts`, `document-artifacts.hero.test.ts` (new), `presentation-pptx.test.ts`, `tool-executor-tail.coverage.test.ts`, `artifact-design.test.ts`.
+
+Produces: `PresentationSlideVisual.dataUri` is optional; with no provider asset a visual is `{ source: "none", altText }`; `buildAbstractVisualDataUri`, its hash helpers, and the pptx `sharp` import are gone; the PPTX has no file under `ppt/media/` and `usedAssetIds` is `["built-in-shapes-icons"]` with `visualCount: 0`; the DOCX hero `ImageRun`, `buildDocxVisualBuffer`, and its `sharp` import are gone (no `word/media/`); the hero layout spans the slide when it has no image; the asset plan's `renderer-generated-visual` entry reads "configured image provider" and is `skipped` with reason "No provider image was supplied; the artifact ships without placeholder visuals." when unused; residual risks and the asset-specificity findings say the artifact ships without visuals (no "local renderer" claim); the tool hint says the same.
+
+Steps:
+1. Test first: `document-artifacts.hero.test.ts` (DOCX no media; PPTX no media file, built-in asset only, `visualCount` 0; report marks the generated asset skipped with that reason); pptx tests expect `source: "none"` and no `dataUri` without an asset; the tail coverage docx test expects no `word/media/`. Expected: fail. Implement; rerun those files plus `presentation-pdf.test.ts`, `artifact-design.test.ts`, `presentation-pptx-audit.test.ts`, and gateway `chat-turn-agent-runner.loop24.test.ts`; policy-engine typecheck. Expected: pass.
+2. Commit: `feat(artifacts): drop the hashed placeholder visuals`.
+
+### Task 36: After renders and lanes
+
+Steps:
+1. Render the sample deck/PDF/DOCX "after" set with the same script as the "before" set and export the PPTX slides to PNG through PowerPoint. Compare: if a layout reads worse without the placeholder art (an empty panel card, for instance), fix it under TDD and commit it as its own `feat(artifacts)` commit.
+2. `pnpm typecheck`, `pnpm verify:research-artifact:reliability`, `pnpm verify:research-artifact:powerpoint`, `pnpm verify:ux:budgets`, `pnpm verify:visual:regression` (report only; never rebaseline), `pnpm verify:design:quality`, `git diff --check`. Expected: pass; record any lane that is red for a pre-existing reason with the evidence.
+3. Tick the Phase 5 boxes. Commit: `docs(plan): mark impeccable Phase 5 done`.

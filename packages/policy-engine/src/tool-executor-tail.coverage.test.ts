@@ -321,7 +321,8 @@ describe("tool executor tail coverage", () => {
       },
       designReport: {
         mode: "polished",
-        preset: "wellness",
+        // No preset was requested, so the calm default applies regardless of the deck's words.
+        preset: "clean-professional",
         google: { requested: false, status: "not_requested" },
       },
     });
@@ -533,12 +534,13 @@ describe("tool executor tail coverage", () => {
     });
     expect(docxBytes.subarray(0, 2).toString("utf8")).toBe("PK");
     expect(docxBytes.includes("word/document.xml")).toBe(true);
-    expect(docxBytes.includes("word/media/")).toBe(true);
+    // No hashed placeholder hero: a DOCX without a provider image ships no media part.
+    expect(docxBytes.includes("word/media/")).toBe(false);
     expect(pdfBytes.subarray(0, 5).toString("utf8")).toBe("%PDF-");
     expect(pdfBytes.includes("/Type /Catalog")).toBe(true);
   });
 
-  it("warns when a media-dependent deck falls back to local-only visuals", async () => {
+  it("warns when a media-dependent deck ships without visuals", async () => {
     const root = createRoot();
     const config = createConfig(root);
     const storage = createKnowledgeStorage();
@@ -565,7 +567,9 @@ describe("tool executor tail coverage", () => {
       findings: expect.arrayContaining([expect.objectContaining({ id: "asset-specificity" })]),
     });
     expect(designReport.validation?.find((check) => check.id === "asset-specificity")?.status).toBe("warning");
-    expect(designReport.residualRisks?.join("\n")).toContain("local renderer-only visuals");
+    expect(designReport.residualRisks?.join("\n")).toContain(
+      "No provider image was supplied, so the deck carries no provider imagery",
+    );
   }, 20_000);
 
   it("keeps renderer provenance out of visible HTML and PDF document content", async () => {

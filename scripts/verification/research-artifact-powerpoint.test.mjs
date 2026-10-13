@@ -16,6 +16,9 @@ test("PowerPoint proof is read-only, hidden, ownership-aware, and non-destructiv
   assert.match(source, /if \(\$ownsApplicationProcess[^]*\$application\.Quit\(\)/u);
   assert.match(source, /\$presentation\.Close\(\)/u);
   assert.match(source, /\$slide\.Export\(\$slidePath, "PNG", 1600, 900\)/u);
+  // A text-only slide (no card, no image) must still register: the sampler grid is dense enough to hit glyphs.
+  assert.match(source, /\$y -lt \$bitmap\.Height; \$y \+= 15\)/u);
+  assert.match(source, /\$x -lt \$bitmap\.Width; \$x \+= 25\)/u);
   assert.match(source, /sampledColors\.Count -lt 2/u);
   assert.match(source, /contact-sheet\.png/u);
   assert.match(source, /\$cellHeight = \$thumbHeight \+ \$labelHeight/u);

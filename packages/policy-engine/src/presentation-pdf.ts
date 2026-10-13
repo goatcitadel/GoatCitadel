@@ -70,6 +70,8 @@ interface SlideContext {
   theme: PdfDeckTheme;
   sources: readonly PresentationSource[];
   image?: PdfImageXObject & { width: number; height: number };
+  /** Slide indexes whose page actually drew its image; shared across the deck's pages. */
+  drawnImages: Set<number>;
   warnings: string[];
 }
 
@@ -107,6 +109,9 @@ export async function createPresentationPdf(input: PresentationPdfInput): Promis
       else if (decision.renderer === "sources") decision.renderer = "sources-continuation";
     }
   }
+  // Table, chart, and sources pages never draw a mapped image, so count what the pages drew,
+  // not what was converted for the document.
+  const drawnImages = new Set<number>();
   const pageIds = deckSlides.map((slide, index) => {
     const page = new PdfPage(PAGE_W, PAGE_H);
     const context: SlideContext = {
@@ -116,6 +121,7 @@ export async function createPresentationPdf(input: PresentationPdfInput): Promis
       theme,
       sources: input.sources,
       image: images.get(index),
+      drawnImages,
       warnings,
     };
     drawSlideFrame(context, input.title);
@@ -135,11 +141,12 @@ export async function createPresentationPdf(input: PresentationPdfInput): Promis
       slides: input.slides,
       sources: input.sources,
       layoutNames,
-      visualCount: images.size,
+      visualCount: drawnImages.size,
     }),
     layoutNames,
     warnings,
-    usedAssetIds: ["renderer-generated-visual", "built-in-shapes-icons"],
+    usedAssetIds:
+      drawnImages.size > 0 ? ["renderer-generated-visual", "built-in-shapes-icons"] : ["built-in-shapes-icons"],
   };
 }
 
@@ -226,10 +233,14 @@ async function embedVisuals(
 function drawSlideFrame(context: SlideContext, deckTitle: string): void {
   const { page, theme, index } = context;
   page.rect(0, 0, PAGE_W, PAGE_H, theme.background);
-  page.rect(0, 0, 9.4, PAGE_H, theme.accent);
+  // No accent side stripe (decoration, not hierarchy); the page number is wayfinding, set quietly.
   page.line(37, 500, 908, 500, mixPdfColors(theme.background, theme.border, 0.6), 1);
   const number = String(index + 1).padStart(2, "0");
-  page.text(908 - measureWinAnsi(number, "bold", 10), 516, number, { font: "bold", size: 10, color: theme.accent });
+  page.text(908 - measureWinAnsi(number, "regular", 10), 516, number, {
+    font: "regular",
+    size: 10,
+    color: theme.muted,
+  });
   if (index > 0) {
     const footer = truncateWinAnsi(toWinAnsiBytes(deckTitle), "regular", 10, 600);
     page.text(37, 516, footer, { font: "regular", size: 10, color: theme.muted });
@@ -268,15 +279,20 @@ function drawSlide(context: SlideContext, renderer: PresentationDeckRenderer): v
 
 function drawCover(context: SlideContext): void {
   const { page, slide, theme, image } = context;
+  // With a provider image the cover splits a text panel and the image; without one the cover is
+  // typographic: no empty panel, the title sits in the lower half of the page.
   const panelWidth = image ? 504 : 870;
-  page.rect(47.5, 46, panelWidth, 432, theme.surface, { color: theme.border, width: 0.75 });
-  page.rect(72, 92, 64, 5, theme.accent);
+  const titleTop = image ? 112 : 200;
+  if (image) {
+    page.rect(47.5, 46, panelWidth, 432, theme.surface, { color: theme.border, width: 0.75 });
+  }
+  page.rect(72, titleTop - 20, 64, 5, theme.accent);
   const titleWidth = panelWidth - 50;
   const titleSize = fitTextSize(slide.title, "bold", titleWidth, image ? 40 : 46, 28, 3);
   const titleHeight = drawWrappedText(
     page,
     slide.title,
-    { x: 72, y: 112, w: titleWidth },
+    { x: 72, y: titleTop, w: titleWidth },
     {
       font: "bold",
       size: titleSize,
@@ -289,7 +305,7 @@ function drawCover(context: SlideContext): void {
     drawWrappedText(
       page,
       subtitle,
-      { x: 74, y: 112 + titleHeight + 18, w: titleWidth - 20 },
+      { x: 74, y: titleTop + titleHeight + 18, w: titleWidth - 20 },
       {
         font: "regular",
         size: 20,
@@ -300,12 +316,7 @@ function drawCover(context: SlideContext): void {
   }
   if (image) {
     drawImage(context, { x: 580, y: 52, w: 331, h: 410 });
-    return;
   }
-  // Geometric motif stands in for a cover visual when none was provided.
-  page.rect(700, 330, 150, 110, mixPdfColors(theme.surface, theme.accent, 0.85));
-  page.rect(760, 280, 110, 90, mixPdfColors(theme.surface, theme.accent2, 0.8));
-  page.rect(820, 360, 60, 60, mixPdfColors(theme.surface, theme.accent3, 0.85));
 }
 
 function drawContentTitle(context: SlideContext): void {
@@ -325,7 +336,7 @@ function drawContentTitle(context: SlideContext): void {
 
 function drawStacked(context: SlideContext): void {
   drawContentTitle(context);
-  const { page, theme, image } = context;
+  const { image } = context;
   const cardWidth = image ? 508 : 836;
   const imageLeft = Boolean(image && context.index % 2 === 0);
   const imageWidth = 836 - cardWidth - 18;
@@ -335,7 +346,8 @@ function drawStacked(context: SlideContext): void {
     w: cardWidth,
     h: BODY_BOTTOM - BODY_TOP,
   };
-  page.rect(card.x, card.y, card.w, card.h, theme.surface, { color: theme.border, width: 0.75 });
+  // Narrative bullets sit on the background; the bordered card was a default container, not a
+  // grouping, so only the geometry survives (the image split still uses it).
   drawBullets(
     context,
     context.slide.bullets.map((bullet) => bulletRuns(bullet, context.sources)),
@@ -530,6 +542,7 @@ function drawBullets(
 function drawImage(context: SlideContext, box: PdfTextBox): void {
   const { page, image, theme } = context;
   if (!image) return;
+  context.drawnImages.add(context.index);
   page.rect(box.x, box.y, box.w, box.h, theme.surface, { color: theme.border, width: 0.75 });
   const scale = Math.min(box.w / image.width, box.h / image.height);
   const width = image.width * scale;

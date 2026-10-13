@@ -276,6 +276,7 @@ async function presentationsCreate(
     designReport: buildArtifactDesignReport(design, {
       localPath: full,
       usedAssetIds: rendered.usedAssetIds,
+      providerVisualSupplied: Boolean(visualAsset) || preparedVisuals.assets.length > 0,
       validationResults: rendered.validationResults,
       residualRisks: buildPresentationResidualRisks(
         [...preparedVisuals.warnings, ...rendered.warnings],
@@ -589,7 +590,8 @@ function presentationAssetSpecificityFindings(
       id: "asset-specificity",
       severity: "P2",
       dimension: "Visual Coherence",
-      message: "Presentation used local renderer-only visuals because no provider-generated visual asset was supplied.",
+      message:
+        "No provider image was supplied, so the deck carries no provider imagery; charts and tables are unaffected.",
       repaired: false,
     },
   ];
@@ -621,7 +623,7 @@ function documentAssetSpecificityFindings(
       id: "asset-specificity",
       severity: "P3",
       dimension: "Visual Coherence",
-      message: "DOCX output used local decorative renderer visuals rather than provider-generated imagery.",
+      message: "No provider image was supplied, so the DOCX carries no provider imagery.",
       repaired: false,
     },
   ];
@@ -656,7 +658,6 @@ function usedDocumentAssetIds(format: DocumentArtifactFormat, mode: string): str
   }
   switch (format) {
     case "docx":
-      return ["renderer-generated-visual", "built-in-shapes-icons"];
     case "html":
       return ["built-in-shapes-icons"];
     default:

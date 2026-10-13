@@ -242,10 +242,10 @@ const PRESET_TOKENS: Record<Exclude<ArtifactDesignPreset, "auto">, ArtifactColor
     surface: "FFFFFF",
     text: "111827",
     mutedText: "4B5563",
-    accent: "7C3AED",
+    accent: "0F766E",
     accent2: "06B6D4",
     accent3: "F97316",
-    border: "DDD6FE",
+    border: "99F6E4",
   },
   "technical-report": {
     background: "F8FAFC",
@@ -367,13 +367,19 @@ export function buildArtifactDesignReport(
     google?: Partial<ArtifactGoogleImportStatus>;
     residualRisks?: string[];
     usedAssetIds?: string[];
+    /** True when the caller supplied a provider image, even if no layout embedded it. */
+    providerVisualSupplied?: boolean;
     validationResults?: Record<string, Partial<Pick<ArtifactValidationCheck, "status" | "detail">>>;
     designQuality?: Partial<ArtifactDesignQualityReport>;
     markup?: ArtifactDesignReport["markup"];
   } = {},
 ): ArtifactDesignReport {
   const google = resolveGoogleImportStatus(plan.destination, output.google);
-  const assetPlan = finalizeAssetPlan(plan.assetPlan, output.usedAssetIds ?? []);
+  const assetPlan = finalizeAssetPlan(
+    plan.assetPlan,
+    output.usedAssetIds ?? [],
+    output.providerVisualSupplied ?? false,
+  );
   const designQuality = buildArtifactDesignQualityReport(plan, output.designQuality);
   const validation = finalizeValidationChecks(plan.validationChecks, Boolean(output.localPath), google, {
     ...buildArtifactDesignQualityValidationResults(plan, designQuality),
@@ -391,7 +397,11 @@ export function buildArtifactDesignReport(
     guideReferences: plan.guideReferences,
     localPath: output.localPath,
     google,
-    residualRisks: output.residualRisks ?? buildResidualRisks(plan, google, assetPlan, designQuality),
+    // Caller warnings (renderer, provider) are composed with the plan's own risks, not substituted
+    // for them, so a skipped provider image stays reported alongside render warnings.
+    residualRisks: [
+      ...new Set([...(output.residualRisks ?? []), ...buildResidualRisks(plan, google, assetPlan, designQuality)]),
+    ],
     designQuality,
     ...(output.markup ? { markup: output.markup } : {}),
   };
@@ -428,25 +438,11 @@ function resolvePreset(
   if (design.preset && design.preset !== "auto") {
     return design.preset;
   }
-  if (mode === "minimal" || mode === "plain") {
-    return "clean-professional";
-  }
-  const text = collectContentText(input);
-  if (/\b(walk|walking|wellness|health|stress|sleep|fitness|mindful|mood|energy)\b/u.test(text)) {
-    return "wellness";
-  }
-  if (/\b(lesson|course|teach|student|classroom|guide|worksheet|learn|training)\b/u.test(text)) {
-    return "education";
-  }
-  if (/\b(pitch|investor|fundraise|market|revenue|growth|proposal|offer)\b/u.test(text)) {
-    return "pitch";
-  }
-  if (/\b(api|runtime|security|audit|report|technical|architecture|benchmark|incident|diagnostic)\b/u.test(text)) {
-    return "technical-report";
-  }
-  if (/\b(cyberpunk|mission control|ops|observability|operator|neon|gateway)\b/u.test(text)) {
-    return "cyberpunk-ops";
-  }
+  // A look is a request, never an inference: content words used to pick wellness/pitch/... presets,
+  // which made every walking deck green and every pitch deck purple. The calm default stands unless
+  // the caller names a preset; a brand recolors whichever preset applies.
+  void input;
+  void mode;
   return "clean-professional";
 }
 
@@ -492,10 +488,11 @@ function buildAssetPlan(
       type: "generated",
       role: "hero",
       status: "planned",
-      description: `Generated or renderer-produced visual system for ${input.title}.`,
-      altText: `Abstract visual supporting ${input.title}.`,
-      source: "configured image provider or local renderer",
-      license: "Generated locally by GoatCitadel",
+      description: `Provider-generated visual for ${input.title}.`,
+      altText: `Provider visual supporting ${input.title}.`,
+      source: "configured image provider",
+      // The provider's own terms govern a remotely generated image; no local-generation claim.
+      license: "Per the configured image provider's terms",
     },
     {
       id: "built-in-shapes-icons",
@@ -527,7 +524,7 @@ function buildAssetPlan(
       status: "skipped",
       description: "Web image fallback for real-world visuals.",
       altText: `Optional sourced image for ${input.title}.`,
-      reason: "Generated/local visuals were available; web assets require source and license metadata.",
+      reason: "Provider visuals were preferred; web assets require source and license metadata.",
     });
   }
   return base;
@@ -660,10 +657,26 @@ function resolveGoogleImportStatus(
   };
 }
 
-function finalizeAssetPlan(assets: ArtifactAssetPlanItem[], usedAssetIds: string[]): ArtifactAssetPlanItem[] {
+const PROVIDER_IMAGE_NOT_SUPPLIED_REASON = "No provider image was supplied; no placeholder art stands in for it.";
+const PROVIDER_IMAGE_NOT_EMBEDDED_REASON =
+  "A provider image was supplied but no page embedded it: the selected layout places no image (table, chart, semantic, and fallback pages), or the renderer could not decode the bytes (see the render warnings).";
+
+function finalizeAssetPlan(
+  assets: ArtifactAssetPlanItem[],
+  usedAssetIds: string[],
+  providerVisualSupplied: boolean,
+): ArtifactAssetPlanItem[] {
   const used = new Set(usedAssetIds);
   return assets.map((asset) =>
-    used.has(asset.id) && asset.status === "planned" ? { ...asset, status: "used" } : asset,
+    used.has(asset.id) && asset.status === "planned"
+      ? { ...asset, status: "used" }
+      : asset.id === "renderer-generated-visual" && asset.status === "planned"
+        ? {
+            ...asset,
+            status: "skipped",
+            reason: providerVisualSupplied ? PROVIDER_IMAGE_NOT_EMBEDDED_REASON : PROVIDER_IMAGE_NOT_SUPPLIED_REASON,
+          }
+        : asset,
   );
 }
 
@@ -709,10 +722,16 @@ function buildResidualRisks(
   designQuality: ArtifactDesignQualityReport,
 ): string[] {
   const risks: string[] = [];
-  if (assets.some((asset) => asset.status === "skipped" && asset.type !== "built_in")) {
+  if (assets.some((asset) => asset.status === "skipped" && asset.type !== "built_in" && asset.type !== "generated")) {
     risks.push(
       "Some external or web assets were skipped because source, license, provider, or approval data was unavailable.",
     );
+  }
+  // Charts, tables, and built-in accents still render; only provider imagery is missing.
+  for (const asset of assets) {
+    if (asset.type === "generated" && asset.status === "skipped" && asset.reason) {
+      risks.push(`Provider imagery: ${asset.reason}`);
+    }
   }
   if (google.requested && google.status !== "imported") {
     risks.push("Google import was requested, but only the local artifact was produced in this runtime.");
@@ -783,11 +802,14 @@ function buildArtifactDesignQualityValidationResults(
     };
   }
   const runtimeInstructionsInjected = designQuality.runtimeInstructions?.status === "injected";
+  const injectedModules = (designQuality.runtimeInstructions?.skills ?? [])
+    .map((skill) => `${skill.skillId} [${skill.modules.join(", ")}]`)
+    .join("; ");
   return {
     "design-skill-applied": {
       status: runtimeInstructionsInjected ? "passed" : "warning",
       detail: runtimeInstructionsInjected
-        ? `Injected governed impeccable design instructions (${designQuality.register}, ${designQuality.lifecycle}); no external design runtime was invoked.`
+        ? `Injected governed impeccable design instructions (${designQuality.register}, ${designQuality.lifecycle}): ${injectedModules || "receipt lists no modules"}; no external design runtime was invoked.`
         : "Renderer design defaults ran, but no governed runtime design-instruction receipt was attached.",
     },
     "visible-placeholder-copy": validationStatusForFinding(

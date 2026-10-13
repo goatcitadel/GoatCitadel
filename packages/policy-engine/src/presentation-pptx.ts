@@ -87,7 +87,8 @@ export interface PresentationPptxInput {
 }
 
 export interface PresentationSlideVisual {
-  dataUri: string;
+  /** Absent when no provider image was mapped to the slide: the slide then ships without a visual. */
+  dataUri?: string;
   source: string;
   altText: string;
 }
@@ -164,7 +165,7 @@ export async function createPresentationPptxWithDiagnostics(
         renderer: "pptxgenjs",
         fallbackTriggered: false,
         warnings: [],
-        usedAssetIds: ["renderer-generated-visual", "built-in-shapes-icons"],
+        usedAssetIds: rendered.usedAssetIds,
         retryAttempted: false,
         packageAudit: firstAudit,
       };
@@ -174,7 +175,7 @@ export async function createPresentationPptxWithDiagnostics(
       renderer: "pptxgenjs",
       fallbackTriggered: false,
       warnings: [],
-      usedAssetIds: ["renderer-generated-visual", "built-in-shapes-icons"],
+      usedAssetIds: rendered.usedAssetIds,
       retryAttempted: false,
     };
   } catch (error) {
@@ -193,7 +194,7 @@ async function rerenderAfterAuditFailure(
 ): Promise<PresentationPptxResult> {
   const repairedInput = deterministicallyRepairPresentationInput(input);
   assertPresentationLayoutQuality(repairedInput);
-  let rendered: { buffer: Buffer; manifest: PresentationRenderManifest };
+  let rendered: { buffer: Buffer; manifest: PresentationRenderManifest; usedAssetIds: string[] };
   try {
     rendered = await createPptxGenPresentation(repairedInput);
   } catch (error) {
@@ -212,7 +213,7 @@ async function rerenderAfterAuditFailure(
     renderer: "pptxgenjs",
     fallbackTriggered: false,
     warnings: ["The first structural package audit failed; one deterministic repair and rerender passed."],
-    usedAssetIds: ["renderer-generated-visual", "built-in-shapes-icons"],
+    usedAssetIds: rendered.usedAssetIds,
     retryAttempted: true,
     packageAudit: secondAudit,
   };
@@ -264,7 +265,7 @@ async function auditRenderedPresentation(
 
 async function createPptxGenPresentation(
   input: PresentationPptxInput,
-): Promise<{ buffer: Buffer; manifest: PresentationRenderManifest }> {
+): Promise<{ buffer: Buffer; manifest: PresentationRenderManifest; usedAssetIds: string[] }> {
   const PptxGen = await loadPptxGen();
   const design =
     input.design ??
@@ -337,21 +338,28 @@ async function createPptxGenPresentation(
   });
 
   const output = await pptx.write({ outputType: "nodebuffer", compression: true });
+  // Only the cover and image-text slides draw a provider image; a mapped asset that lands on a
+  // semantic slide (comparison, table, section, ...) is never embedded, so it is not "used".
+  const embeddedProviderImages =
+    (slideVisuals[0]?.dataUri ? 1 : 0) +
+    layoutPlan.filter(
+      (decision) =>
+        decision.slideIndex > 0 &&
+        decision.renderer === "image-text" &&
+        mappedVisualSlideIndexes.has(decision.slideIndex),
+    ).length;
   const manifest = buildPresentationRenderManifest({
     slides: input.slides,
     sources: input.sources ?? [],
     layoutNames: layoutPlan.map((decision) => decision.renderer),
-    visualCount:
-      1 +
-      layoutPlan.filter(
-        (decision) =>
-          decision.slideIndex > 0 &&
-          decision.renderer === "image-text" &&
-          mappedVisualSlideIndexes.has(decision.slideIndex),
-      ).length +
-      input.slides.filter((slide) => Boolean(slide.table || slide.chart)).length,
+    visualCount: embeddedProviderImages + input.slides.filter((slide) => Boolean(slide.table || slide.chart)).length,
   });
-  return { buffer: toBuffer(output), manifest };
+  return {
+    buffer: toBuffer(output),
+    manifest,
+    usedAssetIds:
+      embeddedProviderImages > 0 ? ["renderer-generated-visual", "built-in-shapes-icons"] : ["built-in-shapes-icons"],
+  };
 }
 
 function preparePresentationPptxInput(input: PresentationPptxInput): PresentationPptxInput {
@@ -534,6 +542,9 @@ export async function buildPresentationSlideVisuals(
     throw new Error("Presentation input supplies two cover visual assets; choose one explicit cover asset.");
   }
   if (visualAsset) mapped.set(0, visualAsset);
+  // The design and layout plan shaped the former placeholder art; the signature stays for callers.
+  void design;
+  void layoutPlan;
   return Promise.all(
     slides.map(async (slide, index) => {
       const mappedAsset = mapped.get(index);
@@ -551,20 +562,9 @@ export async function buildPresentationSlideVisuals(
               : `Generated supporting visual for ${slide.title}.`),
         };
       }
-      return {
-        dataUri: await buildAbstractVisualDataUri(
-          {
-            deckTitle,
-            slideTitle: slide.title,
-            bullets: presentationSlideText(slide),
-            slideIndex: index,
-            renderer: layoutPlan[index]?.renderer ?? "image-text",
-          },
-          design,
-        ),
-        source: "local-renderer",
-        altText: `Generated supporting visual for ${slide.title}.`,
-      };
+      // No provider image: the slide ships without a visual. The hashed abstract SVG that used to
+      // stand in here was a placeholder, and placeholders are what the craft floor bans.
+      return { source: "none", altText: `No visual for ${slide.title}.` };
     }),
   );
 }
@@ -598,63 +598,6 @@ function normalizeRequiredVisualText(value: string, label: string): string {
     throw new Error(`Presentation visual asset ${label} must be a non-empty string when supplied.`);
   }
   return normalized;
-}
-
-interface AbstractVisualSeed {
-  deckTitle: string;
-  slideTitle: string;
-  bullets: string[];
-  slideIndex: number;
-  renderer: string;
-}
-
-async function buildAbstractVisualDataUri(seed: AbstractVisualSeed, design: ArtifactDesignPlan): Promise<string> {
-  const hash = hashVisualSeed(`${seed.deckTitle}|${seed.slideTitle}|${seed.bullets.join("|")}|${seed.slideIndex}`);
-  const colors = rotatePalette([design.tokens.accent, design.tokens.accent2, design.tokens.accent3], hash % 3);
-  const curveY = 300 + (hash % 90);
-  const circleX = 760 + (hash % 220);
-  const circleY = 160 + ((hash >>> 4) % 120);
-  const lowerCircleX = 170 + ((hash >>> 8) % 180);
-  const barCount = Math.max(2, Math.min(4, seed.bullets.length || 2));
-  const bars = Array.from({ length: barCount }, (_, index) => {
-    const width = 155 + ((hash >>> (index * 3)) % 150);
-    const x = 155 + index * 230;
-    const y = 815 + index * 72;
-    return `<rect x="${x}" y="${y}" width="${width}" height="48" rx="24" fill="#${colors[index % colors.length]}" opacity="${index === 0 ? "0.9" : "0.72"}"/>`;
-  }).join("");
-  const markerCount = Math.max(2, Math.min(5, seed.bullets.length + 1));
-  const markers = Array.from({ length: markerCount }, (_, index) => {
-    const x = 190 + index * 190;
-    const y = 1105 + ((hash >>> (index + 2)) % 70);
-    return `<circle cx="${x}" cy="${y}" r="${34 - Math.min(index, 3) * 3}" fill="#${colors[index % colors.length]}" opacity="0.82"/>`;
-  }).join("");
-  const svg = [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1500" viewBox="0 0 1200 1500">`,
-    `<rect width="1200" height="1500" rx="48" fill="#${design.tokens.surface}"/>`,
-    `<circle cx="${circleX}" cy="${circleY}" r="250" fill="#${colors[0]}" opacity="0.18"/>`,
-    `<circle cx="${lowerCircleX}" cy="1190" r="315" fill="#${colors[1]}" opacity="0.16"/>`,
-    `<path d="M120 ${curveY} C320 ${curveY - 170} 520 ${curveY + 180} 730 ${curveY + 32} S1030 ${curveY - 70} 1110 ${curveY + 190}" fill="none" stroke="#${colors[0]}" stroke-width="34" stroke-linecap="round" opacity="0.82"/>`,
-    `<path d="M155 720 H1030" stroke="#${design.tokens.border}" stroke-width="8" opacity="0.75"/>`,
-    bars,
-    markers,
-    `</svg>`,
-  ].join("");
-  const sharp = (await import("sharp")).default;
-  const buffer = await sharp(Buffer.from(svg, "utf8")).png().toBuffer();
-  return `data:image/png;base64,${buffer.toString("base64")}`;
-}
-
-function rotatePalette(colors: string[], offset: number): string[] {
-  return colors.map((_, index) => colors[(index + offset) % colors.length] ?? colors[index] ?? "0EA5E9");
-}
-
-function hashVisualSeed(value: string): number {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
 }
 
 function truncateSvgText(value: unknown, maxLength: number): string {
