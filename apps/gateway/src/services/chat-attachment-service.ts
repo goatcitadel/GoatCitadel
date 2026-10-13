@@ -32,6 +32,8 @@ export async function uploadChatAttachment(
     fileName: string;
     mimeType: string;
     bytesBase64: string;
+    /** `skip` stores the bytes as evidence without queuing OCR/transcription (artifact renders). */
+    analysis?: "skip";
   },
 ): Promise<ChatAttachmentRecord> {
   await deps.getSession(input.sessionId);
@@ -70,7 +72,8 @@ export async function uploadChatAttachment(
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const { extractStatus, extractPreview } = extractAttachmentPreview(bytes, mimeType, fileName);
   const mediaType = detectAttachmentMediaType(mimeType);
-  const analysisStatus = inferAttachmentAnalysisStatus(mediaType, extractStatus);
+  const analysisStatus =
+    input.analysis === "skip" ? ("skipped" as const) : inferAttachmentAnalysisStatus(mediaType, extractStatus);
   const created = await deps.storage.chatAttachments.create({
     attachmentId,
     sessionId: input.sessionId,

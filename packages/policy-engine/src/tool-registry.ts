@@ -94,7 +94,8 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     readOnly: true,
     deterministic: true,
     codeModeAllowed: false,
-    description: "Find currently callable tools or skills by task. Results are discovery only; tool execution still requires current policy and approvals.",
+    description:
+      "Find currently callable tools or skills by task. Results are discovery only; tool execution still requires current policy and approvals.",
     pack: "core",
     recommendedContexts: ["chat"],
     argSchema: {
@@ -115,7 +116,8 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     readOnly: true,
     deterministic: true,
     codeModeAllowed: false,
-    description: "Read an exact, verified instruction file from a currently callable trusted skill. Defaults to SKILL.md; reading grants no tool permissions and executes no scripts.",
+    description:
+      "Read an exact, verified instruction file from a currently callable trusted skill. Defaults to SKILL.md; reading grants no tool permissions and executes no scripts.",
     pack: "core",
     recommendedContexts: ["chat"],
     argSchema: {
@@ -894,7 +896,11 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
               },
               label: { type: "string", description: "Short display label for the subtask." },
               expectedOutput: { type: "string", description: "What the subtask should hand back." },
-              resultSchema: { type: "object", description: "Optional bounded JSON Schema for the final child JSON result. Supported types: object, array, string, number, integer, boolean, null. Objects require properties and additionalProperties:false; arrays require maxItems<=128 and items; strings require maxLength<=8192. No refs, patterns or schema combinators." },
+              resultSchema: {
+                type: "object",
+                description:
+                  "Optional bounded JSON Schema for the final child JSON result. Supported types: object, array, string, number, integer, boolean, null. Objects require properties and additionalProperties:false; arrays require maxItems<=128 and items; strings require maxLength<=8192. No refs, patterns or schema combinators.",
+              },
             },
             required: ["objective"],
           },
@@ -1899,6 +1905,11 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
           },
         },
         rows: { type: "array" },
+        html: {
+          type: "string",
+          description:
+            "Optional complete HTML document (<!doctype html> … </html>) written verbatim for format html, at most 512 KiB. Honored only with a governed design receipt (impeccable or design-intelligence); otherwise the renderer template is used.",
+        },
         design: ARTIFACT_DESIGN_ARG_SCHEMA,
         destination: ARTIFACT_DESTINATION_ARG_SCHEMA,
       },
@@ -1929,6 +1940,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       "Use design.mode minimal or plain for raw data, logs, JSON, CSV, code, or explicitly plain outputs.",
       "For non-plain DOCX, PDF, HTML, reports, briefs, and handouts, set design.skillId to impeccable so Design Quality V1 is reflected in the artifact design report.",
       "Keep renderer provenance in the design report rather than visible document body copy unless the user explicitly asks for an evidence appendix.",
+      "For format html under a design receipt, you may author the whole page yourself in the html argument; the design report records markup: model-authored and the artifact can be rendered to PNG evidence from Chat.",
     ],
   },
   {

@@ -158,20 +158,20 @@ Blocking writes, auto-fix, contrast checks (need rendering, Phase 4), the impecc
 
 ## Phase 4: Render and look (preview already exists)
 
-- [ ] Create `packages/policy-engine/src/playwright-runtime.ts`: move and export `loadPlaywright` and `launchPlaywrightChromium` (with the existing WebRTC security args) out of `browser-tools.ts`, which then imports them.
-- [ ] Create `packages/policy-engine/src/html-render.ts` with `renderHtmlSnapshot({ html, viewports, outputPath, writeJailRoots, signal })`: `assertWritePathInJail`; HTML size cap (about 512 KiB) and timeout; `javaScriptEnabled: false` to match the preview's `sandbox=""`; `offline: true` and block every route except `data:` and `about:`; inject a CSP `<meta>` equal to the Mission Control baseline so the critique sees what the operator sees; PNG at 1440×900 and 390×844 plus optional `page.pdf()`; missing Chromium returns the existing manual-install diagnostic.
-- [ ] Create gateway `html-artifact-render-service.ts` and route `POST /api/v1/chat/artifacts/:artifactId/render`: workspace-bound, idempotency plugin, rate-limited. PNGs stored as evidence linked to the artifact `contentHash`; the artifact itself is never changed (`1_0_CONTRACT.md` line 42 holds).
-- [ ] Modify `packages/policy-engine/src/document-artifacts.ts` and `tool-registry.ts`: `documents.create` with `format: "html"` accepts an optional full `html` document argument when the turn carries a design receipt; the detector runs on it; the design report records `markup: "model-authored"` instead of the ten-rule template. Without a receipt the existing template path stays.
-- [ ] Critique: an explicit operator action opens a normal Chat turn with `@skill impeccable critique` and the PNGs attached, only when the route model is capability-detected as vision-capable; otherwise a text-only critique labelled "not visually inspected". A follow-up produces a new artifact version; nothing edits in place. This phase also re-vendors a trimmed `critique` reference without the launcher loop.
-- [ ] Cockpit only: "Render" and "Critique render" actions beside the three cockpit `GeneratedArtifactViewer` uses: `cockpit/areas/chat/ChatInspector.tsx`, `cockpit/areas/library/LibraryResourceDetail.tsx`, `cockpit/areas/work/RunArtifacts.tsx`. The Classic consumers (`features/threaded-surface/*`, `features/native-routes/library/LibraryArtifactsSection.tsx`) are left untouched.
-- [ ] D4: verify the preview CSP in both dev (Vite) and packaged shells; document the font limit.
+- [x] Create `packages/policy-engine/src/playwright-runtime.ts`: move and export `loadPlaywright` and `launchPlaywrightChromium` (with the existing WebRTC security args) out of `browser-tools.ts`, which then imports them. (Done 2026-10-12.)
+- [x] Create `packages/policy-engine/src/html-render.ts` with `renderHtmlSnapshot({ html, viewports, outputDir, writeJailRoots, signal, timeoutMs })`: `assertWritePathInJail`; HTML size cap (512 KiB) and timeout; `javaScriptEnabled: false` to match the preview's `sandbox=""`; `offline: true` and block every route except `data:` and `about:`; inject a CSP `<meta>` equal to the Mission Control baseline so the critique sees what the operator sees; PNG at 1440×900 and 390×844 (no `page.pdf()`: not needed by any consumer); missing Chromium returns the existing manual-install diagnostic. Blocked requests are recorded from the page's `requestfailed` events because the injected CSP refuses them before the route layer. (Done 2026-10-12.)
+- [x] Create gateway `html-artifact-render-service.ts` and route `POST /api/v1/chat/generated-artifacts/:artifactId/renders` (`GET` lists): workspace-bound, idempotency markers, rate-limited. PNGs stored as chat attachments named `render-<hash16>-<viewport>.png` with analysis skipped, keyed by the artifact `contentHash`; the artifact itself is never changed (`1_0_CONTRACT.md` line 42 holds). (Done 2026-10-12.)
+- [x] Modify `packages/policy-engine/src/document-artifacts.ts` and `tool-registry.ts`: `documents.create` with `format: "html"` accepts an optional full `html` document argument when the turn carries a design receipt (the runner deletes it otherwise); the Phase 3 runner hook scans it; the design report records `markup: "model-authored"` instead of the template. Without a receipt the existing template path stays. (Done 2026-10-12.)
+- [x] Critique: `POST …/:artifactId/critique` dispatches a normal Chat turn with `@skill impeccable critique`, the artifact as routed context, and the PNGs attached only when the effective provider is capability-detected as vision-capable; otherwise a text-only critique labelled "Render evidence unavailable". A follow-up produces a new artifact version; nothing edits in place. The trimmed `critique` reference is re-vendored without the launcher loop as a single-context routed turn. (Done 2026-10-12.)
+- [x] Cockpit only: "Render" and "Critique render" actions under every cockpit `GeneratedArtifactViewer` (Chat inspector, Library detail, Run artifacts) through a host-provided actions slot (`GeneratedArtifactActionsContext`) filled once in `CockpitApp`, so the three dense area files are not reformatted. The Classic consumers (`features/threaded-surface/*`, `features/native-routes/library/LibraryArtifactsSection.tsx`) provide no slot value and are untouched. (Done 2026-10-12.)
+- [x] D4: baseline policy pinned to `MISSION_CONTROL_BASELINE_CSP` (`font-src 'self' data:`). Packaged shell verified through the gateway header test; the Vite dev shell was verified by config inspection only (`apps/mission-control-next/vite.config.ts` sets no Content-Security-Policy, so the dev preview runs unpoliced), not by a browser check. Font limit and the same-origin caveat (shell assets can load in the preview but not in the offline renders) recorded in `DESIGN.md` and `docs/1_0_CONTRACT.md`. (Done 2026-10-12; narrowed from the original two-shell browser verification.)
 
 ### Tests
 
-- [ ] `html-render.test.ts`: jail rejection, blocked network request, JS disabled, size cap, missing-Chromium diagnostic (model on `browser-tools.manual-chromium.test.ts`).
-- [ ] Route tests: auth, workspace scope, idempotency.
-- [ ] `document-artifacts.test.ts`: raw-HTML path gated on receipt.
-- [ ] Mission Control component test for the actions.
+- [x] `html-render.test.ts`: jail rejection, blocked network request (route layer with a mocked browser; CSP refusal in a real headless render), JS disabled, size cap, missing-Chromium diagnostic.
+- [x] Route tests: workspace scope (400), 409 mapping, 201/202 shapes, idempotency markers; auth comes from the global plugin (not re-tested per route).
+- [x] `document-artifacts.test.ts`: raw-HTML path gated on receipt (runner test strips/keeps `html`).
+- [x] Mission Control component test for the actions (`ArtifactRenderActions.test.tsx`, including the viewer slot).
 
 ### Proof
 
@@ -519,6 +519,93 @@ Steps:
 Steps:
 1. `pnpm typecheck`, `pnpm verify:design:quality`, `pnpm verify:gateway:async-boundary`, `git diff --check`; focused suites for skills, gateway (helper, runner, artifact service), cockpit. Expected: pass; record any lane that cannot run locally with its reason.
 2. Tick the Phase 3 boxes. Commit: `docs(plan): mark impeccable Phase 3 done`.
+
+---
+
+## Phase 4 Task Breakdown (execution order; TDD per task)
+
+Vocabulary: a **render** is a PNG of an `html` generated artifact at one viewport (`desktop` 1440×900 or `phone` 390×844), produced headless with JavaScript off, offline, under the Mission Control baseline CSP. Renders are stored as chat attachments of the artifact's session (file name `render-<first 16 hex of contentHash>-<viewport>.png`, `image/png`, analysis skipped), so the artifact record is never changed and the existing attachment routes serve the bytes. A **critique** is a normal operator turn in the artifact's session whose content is `@skill impeccable critique` plus the artifact title, with the renders attached when the session's route provider is capability-detected as vision-capable, otherwise a text-only critique whose content says `(not visually inspected: the current model has no vision capability)`.
+
+### Task 24: Playwright runtime module
+
+Files: `packages/policy-engine/src/playwright-runtime.ts` (new), `playwright-runtime.test.ts` (new), `browser-tools.ts` (imports instead of defining), `packages/policy-engine/src/index.ts` (export).
+
+Produces: `loadPlaywright()`, `launchPlaywrightChromium(playwright, headless)`, `BROWSER_CHROMIUM_SECURITY_ARGS`, `BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE/MESSAGE`, `isMissingPlaywrightBrowserError`, `browserChromiumManualRequiredError` moved byte-for-byte; `browser-tools.ts` re-exports the two diagnostic constants it exported before.
+
+Steps:
+1. Test first: a mocked `playwright` whose `chromium.launch` rejects with `browserType.launch: executable doesn't exist` makes `launchPlaywrightChromium` throw the manual-install diagnostic; a successful launch passes `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`; an import failure makes `loadPlaywright` throw the same diagnostic. Expected: fail (module missing).
+2. Implement the move; run the new test plus `browser-tools.manual-chromium.test.ts` and `browser-tools-load-failure.coverage.test.ts`; policy-engine typecheck. Expected: pass unchanged.
+3. Commit: `refactor(policy-engine): extract the Playwright runtime from browser tools`.
+
+### Task 25: HTML snapshot renderer
+
+Files: `packages/policy-engine/src/html-render.ts` (new), `html-render.test.ts` (new), `packages/policy-engine/src/index.ts` (export).
+
+Produces: `renderHtmlSnapshot({ html, viewports?, outputDir, writeJailRoots, signal?, timeoutMs? })` → `{ renders: Array<{ viewport, width, height, path, sha256, bytes }>, contentSecurityPolicy }`. Rules: `assertWritePathInJail(outputDir, writeJailRoots)` before any browser work; HTML over `HTML_RENDER_MAX_BYTES` (512 KiB) throws `html_render_too_large`; the page context is `javaScriptEnabled: false`, `offline: true`, and `context.route("**/*", abort)` for every scheme except `data:` and `about:`; a `<meta http-equiv="Content-Security-Policy">` equal to `MISSION_CONTROL_BASELINE_CSP` (exported from this module as the gateway's baseline string with `font-src 'self' data:`, see Task 30) is injected into `<head>`; viewports default to desktop 1440×900 and phone 390×844; `page.setContent` with `waitUntil: "load"` and a 15 s default timeout; missing Chromium surfaces the Task 24 diagnostic unchanged; `signal` aborts between steps.
+
+Steps:
+1. Tests first: jail rejection throws before launching (mock `loadPlaywright` and assert it was not called); size cap throws `html_render_too_large`; missing-Chromium diagnostic propagates from a mocked launch; one real render (Chromium is installed here): an HTML page with an `<img src="https://example.test/x.png">` and `<script>document.title="js"</script>` renders two PNGs under a temp jail root, each starting with the PNG signature, the desktop one 1440 px wide, and the page title stays the authored one (JS ran not), with the blocked request recorded in `renders[].blockedRequests`. Expected: fail.
+2. Implement; run the test; policy-engine typecheck. Expected: pass.
+3. Commit: `feat(policy-engine): render HTML artifacts to offline sandboxed snapshots`.
+
+### Task 26: Gateway render service and route
+
+Files: `apps/gateway/src/services/html-artifact-render-service.ts` (new, +test), `apps/gateway/src/routes/chat.artifact-render.ts` (new, +test), `apps/gateway/src/routes/chat.ts` (register), `apps/gateway/src/services/gateway-route-composition-chat.ts` + `chat-sessions-route-service.ts` (dependency surface), `packages/contracts/src/chat.ts` (`ChatArtifactRenderRecord { artifactId, contentHash, viewport, attachmentId, sha256, width, height, createdAt }` and `ChatArtifactRenderResponse { artifactId, contentHash, renders }`), `packages/mission-control-shared/src/api/chat.ts` (`renderChatGeneratedArtifact(artifactId, workspaceId)`, `listChatArtifactRenders(artifactId, workspaceId)`).
+
+Produces: `POST /api/v1/chat/generated-artifacts/:artifactId/renders` (body `{ workspaceId }`): loads the artifact through `getChatGeneratedArtifact` (workspace-bound), rejects non-`html` kinds and redacted projections with 409, renders into a temp directory inside the workspace write jail, stores each PNG through the chat attachment service with analysis skipped, and returns 201 with the render records; repeated calls for the same `contentHash` return the existing attachments (lookup by session attachments whose file name starts with `render-<hash16>-`) without rendering again. `GET …/renders` returns the stored records. Mutation routes carry `config: { rateLimit: { max: RATE_LIMIT_MUTATION_MAX } }` and the idempotency plugin markers like the other chat mutations.
+
+Steps:
+1. Tests first: route test (mocked services, model `chat.sessions.test.ts`): POST without `workspaceId` is 400; POST for a markdown artifact is 409; POST for an html artifact calls the service with `(artifactId, workspaceId)` and returns 201 with the records; GET returns the list. Service test: stores two attachments named `render-<hash16>-desktop.png` / `-phone.png` with `analysisStatus: "skipped"` and returns them; a second call reuses them (renderer called once). Expected: fail.
+2. Implement; run both tests; gateway typecheck; `pnpm verify:gateway:async-boundary`. Expected: pass.
+3. Commit: `feat(gateway): render HTML generated artifacts to attached PNG evidence`.
+
+### Task 27: Model-authored HTML documents gated on a design receipt
+
+Files: `packages/policy-engine/src/document-artifacts.ts` (+test), `tool-registry.ts` (`documents.create` gains optional `html: { type: "string" }` with a usage hint "only with a governed design receipt"), `artifact-design.ts` (`ArtifactDesignReport.markup?: "template" | "model-authored"` and `designAdvisories?: DesignAdvisory[]`), `apps/gateway/src/services/chat-turn-agent-runner.ts` (`attachArtifactDesignSkillArgs` deletes `args.html` when the turn has no design receipt; the receipt check reuses `hasDesignSkillReceipt` from Phase 3) + loop24 test.
+
+Produces: with `format: "html"` and a string `html` argument that contains `<html` or `<!doctype`, capped at 512 KiB, the document is written verbatim (after `escapeHtml` is NOT applied) and the design report records `markup: "model-authored"` plus the detector's advisories; without `html` the template path runs with `markup: "template"`.
+
+Steps:
+1. Tests first: `document-artifacts.test.ts` — model-authored html is written verbatim and reported; oversize html throws; the template path reports `markup: "template"`. Runner test — `documents.create` args with `html` are stripped without a receipt and kept with one. Expected: fail.
+2. Implement; run policy-engine + gateway tests; typechecks. Expected: pass.
+3. Commit: `feat(artifacts): accept model-authored HTML documents under a design receipt`.
+
+### Task 28: Critique turn and the trimmed critique reference
+
+Files: `apps/gateway/src/services/html-artifact-render-service.ts` (`critiqueArtifact`), `apps/gateway/src/routes/chat.artifact-render.ts` (`POST …/critique`), `scripts/sync-impeccable.mjs` (vendor `reference/critique.md` with the launcher loop, critique-storage, and detect references removed), `skills/bundled/impeccable/reference/critique.md` (+ `UPSTREAM.md`, `NOTICE` regenerated by the script), `packages/skills/src/bundled-skill-lock.generated.ts` (`pnpm update:skills:lock`), `packages/skills/src/skill-module-routes.ts` (`critique` joins `IMPECCABLE_COMMANDS`, loads `main` + `critique`), `routing-hints.generated.ts` (command summary), `packages/mission-control-shared/src/api/chat.ts` (`critiqueChatGeneratedArtifact`).
+
+Produces: `POST /api/v1/chat/generated-artifacts/:artifactId/critique` (body `{ workspaceId }`): ensures renders exist (rendering if needed), resolves the session's effective route and the provider's `capabilities.vision`, and sends an operator turn through the same service the agent-send route uses, with the render attachment ids when vision is available or the text-only marker otherwise; returns 202 with `{ sessionId, turnId, visuallyInspected }`. The upstream clone is re-created at `.tmp/upstream/impeccable` at the pinned SHA before syncing; the sync test gains the critique transforms.
+
+Steps:
+1. Tests first: sync test fixture for `critique.md` (launcher lines and the `impeccable critique-storage` references removed, prose kept); route/service test: vision provider → attachments present and `visuallyInspected: true`; non-vision → no attachments and the marker in the content; route table test: `@skill impeccable critique` → `main` + `critique`. Expected: fail.
+2. Implement; re-vendor; `pnpm update:skills:lock`; run `pnpm verify:skills:catalog`, the gateway tests, skills tests; typechecks. Expected: pass.
+3. Commit: `feat(design): critique rendered HTML artifacts through a governed chat turn`.
+
+### Task 29: Cockpit render and critique actions
+
+Files: `apps/mission-control-next/src/cockpit/ui/ArtifactRenderActions.tsx` (new, +test), `cockpit/areas/chat/ChatInspector.tsx`, `cockpit/areas/library/LibraryResourceDetail.tsx`, `cockpit/areas/work/RunArtifacts.tsx` (render the actions beside each `GeneratedArtifactViewer` for `html` artifacts).
+
+Produces: two buttons, "Render" and "Critique render", a status line, and the rendered PNGs shown as `<img>` from `/api/v1/chat/attachments/<id>/content` with the viewport as alt text; the critique button reports "Critique sent to the conversation" and, when the model has no vision, "(sent without images: the current model has no vision capability)". Non-html artifacts render nothing. Classic shell untouched.
+
+Steps:
+1. Test first (happy-dom, mocked shared API): Render calls the API and shows two images; Critique shows the sent message and the vision marker from the response; a markdown artifact renders no actions. Expected: fail.
+2. Implement; run the test and the three touched areas' existing tests; mission-control-next typecheck. Expected: pass.
+3. Commit: `feat(cockpit): render and critique HTML artifacts from the viewer`.
+
+### Task 30: Preview CSP (D4)
+
+Files: `apps/gateway/src/app.ts` (`font-src 'self' data:`), `apps/gateway/src/app.test.ts` or the CSP test that pins the baseline, `DESIGN.md` (the font sentence), `docs/1_0_CONTRACT.md` (one sentence on the preview policy and the font limit).
+
+Steps:
+1. Test first: the baseline CSP test expects `font-src 'self' data:`. Expected: fail. Implement; rerun; `node scripts/validate-governance-docs.mjs`. Expected: pass.
+2. Record in the ledger how the preview CSP was verified: `srcdoc` iframes inherit the embedding document's policy, so the packaged shell (served by the gateway) applies the baseline and the Vite dev server applies none unless configured; note it in the contract sentence.
+3. Commit: `feat(gateway): allow embedded fonts in the baseline preview policy`.
+
+### Task 31: Proof lanes and plan ticks
+
+Steps:
+1. `pnpm typecheck`, `pnpm verify:gateway:async-boundary`, `pnpm verify:auth:matrix`, `pnpm verify:skills:catalog`, `pnpm verify:surface:regression`, `pnpm verify:visual:regression` (report, do not rebaseline), `git diff --check`; focused suites. A browser proof: render one HTML artifact through the new route and attach the PNG path to the ledger. Expected: pass; record any lane that cannot run locally with its reason.
+2. Tick the Phase 4 boxes. Commit: `docs(plan): mark impeccable Phase 4 done`.
 
 ## Phase 5 Task Breakdown (execution order; TDD per task)
 

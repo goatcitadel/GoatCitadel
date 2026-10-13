@@ -30,6 +30,7 @@ export const VENDORED_REFERENCES = Object.freeze([
   "init",
   "document",
   "extract",
+  "critique",
   "audit",
   "polish",
   "bolder",
@@ -54,6 +55,7 @@ export const COMMAND_REFERENCES = Object.freeze([
   "init",
   "document",
   "extract",
+  "critique",
   "audit",
   "polish",
   "bolder",
@@ -74,8 +76,6 @@ export const COMMAND_REFERENCES = Object.freeze([
 
 /** Upstream references deliberately not vendored, with the reason recorded in UPSTREAM.md. */
 export const EXCLUDED_REFERENCES = Object.freeze({
-  critique:
-    "launcher-driven (critique-storage, detect loop); Phase 4 re-vendors a trimmed version with the render step",
   "new-work": "launcher-driven (concept-seed rolls, surface-brief, build-phase gates)",
   "component-review": "launcher-driven (component-review, comp-spec)",
   visualize: "launcher-driven comp pipeline that needs image generation and build-phase state",
@@ -111,7 +111,7 @@ export const SKILL_TAGS = Object.freeze(["design", "frontend", "ui", "ux"]);
 const ASK_INSTRUCTION = "Ask the operator with the user_input.request tool and wait for the answer.";
 const NOT_VENDORED = "(not vendored in this GoatCitadel build)";
 const UNAVAILABLE_COMMANDS_LINE =
-  "Not available in this vendored build: `craft`, `critique`, `live`, `generate`, pin shortcuts, hooks, doctor, and the native-platform references. Use `audit` and `polish` for review passes. `new-work` (the visual-world workshop) is not vendored either: when a step routes through it, choose and commit the visual world with the operator through user_input.request and record it in DESIGN.md.";
+  "Not available in this vendored build: `craft`, `live`, `generate`, pin shortcuts, hooks, doctor, and the native-platform references. Use `critique`, `audit`, and `polish` for review passes. `new-work` (the visual-world workshop) is not vendored either: when a step routes through it, choose and commit the visual world with the operator through user_input.request and record it in DESIGN.md.";
 
 const GOATCITADEL_SETUP = [
   "## Setup",
@@ -127,7 +127,7 @@ const LAUNCHER_LINE =
   /\{\{scripts_path\}\}|\bimpeccable (?:detect|context|pin|hooks|doctor|critique-storage|concept-seed|surface-brief|build-phase|component-review|comp-spec|live-server)\b|\bnpx impeccable\b|~\/\.impeccable|\.impeccable\/|\bsnapshot_file\b/u;
 
 /** Lines that invoke a command this vendored build does not carry. */
-const UNAVAILABLE_COMMAND_LINE = /`(?:\/|@skill )?impeccable (?:live|generate|critique|craft)\b/u;
+const UNAVAILABLE_COMMAND_LINE = /`(?:\/|@skill )?impeccable (?:live|generate|craft)\b/u;
 
 /** Lines that route to the excluded native-platform references. */
 const NATIVE_REFERENCE_LINE = /\b(?:ios|android)\.md\b|\b(?:audit|adapt)\.native\.md\b/u;
@@ -147,19 +147,44 @@ const FORBIDDEN_PATTERNS = Object.freeze([
   // The .impeccable/design.json sidecar was removed; any surviving mention would send the model to recreate it.
   { label: "sidecar", re: /\bsidecar\b/giu },
   // Commands this build does not carry must not survive as invocations after placeholder resolution.
-  { label: "unavailable command", re: /@skill impeccable (?:live|generate|critique|craft)\b/giu },
+  { label: "unavailable command", re: /@skill impeccable (?:live|generate|craft)\b/giu },
 ]);
 
 /** Whole paragraphs (single lines) dropped from a reference by prefix, when a rewrite would leave nothing useful. */
 const REFERENCE_PARAGRAPH_DROPS = {
   document: ["**What changed from schemaVersion 1.**"],
+  critique: [
+    "- Any local server started only for critique visualization",
+    "- Do not claim a user-visible overlay exists",
+    "   Every later command also accepts the resolved target directly",
+    "If browser automation is available, each assessment creates its own new tab.",
+    "Sub-agent gate (all harnesses):",
+    "- Unless a harness-specific gate below overrides this",
+    '- "Unavailable" means exactly one thing',
+    "- If and only if sub-agents are unavailable",
+    "- Whichever path you take, declare it in the report header",
+    "- Pass markup files/directories as",
+    "- For URLs, skip CLI scan",
+    "- For very large trees",
+    "- Exit code 0 = clean",
+    "- If the detector entrypoint is missing",
+    "1. Create a fresh tab and navigate.",
+    "2. Preflight mutable injection",
+    "3. If mutation is unavailable",
+    "5. For multi-view targets",
+    "- Dual-agent: `Method: dual-agent",
+    "Do this first because the alternative is the most common way",
+    "Persistence is not the end of the run.",
+  ],
 };
 
-/** Upstream description claims that this build cannot honour (live browser mode, the critique command). */
-const DESCRIPTION_REPLACEMENTS = [
-  { find: ", live browser iteration on UI elements,", replace: "," },
-  { find: "shape, critique, audit,", replace: "shape, audit," },
-];
+/** Harness-specific blocks (`<codex>` … `</codex>`) dropped whole from a reference. */
+const REFERENCE_TAG_DROPS = {
+  critique: ["codex"],
+};
+
+/** Upstream description claims that this build cannot honour (live browser mode). */
+const DESCRIPTION_REPLACEMENTS = [{ find: ", live browser iteration on UI elements,", replace: "," }];
 
 /** Exact-anchor rewrites per file. Every entry is required; a missing anchor means upstream drifted and the transform must be revisited. */
 const SKILL_REPLACEMENTS = [
@@ -292,29 +317,139 @@ const REFERENCE_REPLACEMENTS = {
     },
     { find: "or new-work's exploration established them", replace: "or the operator's choice established them" },
   ],
+  // The GoatCitadel critique turn carries routed context (which pins the route and disables
+  // delegation) and render evidence instead of the upstream detector, browser overlay, and
+  // snapshot persistence; the flow is rewritten to a single-context run over that evidence.
+  critique: [
+    {
+      find: "Resolve one stable target, run two independent assessments, synthesize a design critique, persist a snapshot, and ask the user what to improve next. The chat response is the primary deliverable; the snapshot is an archive of that run.",
+      replace:
+        "Resolve one stable target, run two independent assessments, synthesize a design critique, and ask the user what to improve next. The chat response is the deliverable.",
+    },
+    {
+      find: "- Assessment A (design review) and Assessment B (detector/browser evidence) are both required.",
+      replace: "- Assessment A (design review) and Assessment B (render evidence) are both required.",
+    },
+    {
+      find: '- Assessment A and B MUST run as two isolated sub-agents whenever a sub-agent/Task tool is exposed. Running them inline in this context is "possible" but is NOT permitted; it is a degraded run. Inline is allowed ONLY when no sub-agent tool exists (or the user declined, on harnesses that ask).',
+      replace:
+        "- The GoatCitadel critique turn carries routed context, which pins the provider and model and disables delegation, so Assessment A and Assessment B run sequentially in this context: finish and record Assessment A before reading the render evidence and advisories for Assessment B.",
+    },
+    {
+      find: "- If you degrade for any reason, the report's first line MUST be a banner: `⚠️ DEGRADED: single-context (<reason>)`. A silent degraded critique is a failed critique.",
+      replace: "- The report's first line MUST declare the method: `Method: single-context (routed-context critique)`.",
+    },
+    {
+      find: "- Assessment A must finish before detector findings enter the parent synthesis context. Detector output is deterministic, but it still anchors judgment.",
+      replace:
+        "- Assessment A must finish before render evidence and runtime advisories enter the synthesis. Advisories are deterministic, but they still anchor judgment.",
+    },
+    {
+      find: "- Viewable targets require browser inspection when available.",
+      replace: "- Viewable targets require inspection of the attached renders when they are available.",
+    },
+    {
+      find: "Delegate Assessment A and Assessment B to separate sub-agents. They must not see each other's output. Do not show findings to the user until synthesis.",
+      replace:
+        "Run Assessment A, then Assessment B. Record Assessment A's findings before Assessment B begins so the evidence cannot anchor the review. Do not show findings to the user until synthesis.",
+    },
+    {
+      find: "Read relevant source files and visually inspect the live page when browser automation is available. Think like a design director.",
+      replace:
+        "Read the artifact markup from the routed context and inspect the attached renders when they are available. Think like a design director.",
+    },
+    {
+      find: "Make this judgment before seeing detector output.",
+      replace: "Make this judgment before seeing the renders or the runtime advisories.",
+    },
+    { find: "### Assessment B: Detector + Browser Evidence", replace: "### Assessment B: Render Evidence" },
+    {
+      find: "noting where the LLM review and detector agree, where the detector caught issues the LLM missed, and where detector findings are false positives.",
+      replace:
+        "noting where the design review and the render evidence or advisories agree, where the advisories caught issues the review missed, and where advisories are false positives.",
+    },
+    {
+      find: "Run the bundled detector and browser visualization evidence. Assessment B is mandatory and must remain isolated from Assessment A until both are complete.",
+      replace:
+        "Review the render evidence GoatCitadel attached to this critique: offline PNG snapshots of the artifact at desktop (1440×900) and phone (390×844) viewports when the provider can inspect images, plus the runtime design advisories recorded on the artifact. Assessment B is mandatory and must remain isolated from Assessment A until both are complete.",
+    },
+    {
+      find: "Browser visualization is required for a viewable target when browser automation is available. Use a localhost dev/static URL for local files; avoid `file://` unless the available browser explicitly supports this workflow. Overlay flow:",
+      replace:
+        "Read the renders like a design director: compare the desktop and phone snapshots for hierarchy, density, overflow, contrast, and responsive breaks, and tie every observation to a region of the page. When no renders were attached, say so and assess the markup alone.",
+    },
+    {
+      find: "Return: CLI findings JSON/counts, browser console findings if applicable, false positives, and skipped/failed browser steps with concrete reasons.",
+      replace:
+        "Return: what each render shows, the runtime advisories with counts and line locations, false positives, and whether renders were unavailable with the concrete reason.",
+    },
+    {
+      find: "The chat response is the primary user-facing deliverable. Present the full structured critique below in chat; do not replace it with a summary and a link. The persisted snapshot is an archive of that run.",
+      replace:
+        "The chat response is the deliverable. Present the full structured critique below in chat; do not replace it with a summary and a link.",
+    },
+    {
+      find: "The report's first line MUST declare how the assessments were run, so a degraded run is never silent:",
+      replace: "The report's first line declares the method:",
+    },
+    {
+      find: "- Degraded: `⚠️ DEGRADED: single-context (<reason, e.g. no sub-agent tool exposed>)`",
+      replace: "- `Method: single-context (routed-context critique)`",
+    },
+    {
+      find: " The persisted snapshot must record the applicable maximum and which heuristics were scored n/a.",
+      replace: "",
+    },
+    {
+      find: "**Deterministic scan**: Summarize what the automated detector found, with counts and file locations. Note any additional issues the detector caught that you missed, and flag any false positives.",
+      replace:
+        "**Runtime advisories**: Summarize the design advisories GoatCitadel recorded on the artifact, with counts and line locations. Note any additional issues they caught that you missed, and flag any false positives.",
+    },
+    {
+      find: "**Visual overlays** (if injection succeeded): Tell the user that overlays are now visible in the **[Human]** tab in their browser, highlighting the detected issues. Summarize what the console output reported. If browser visualization was attempted but injection failed, say that no reliable user-visible overlay is available and report the fallback signal instead.",
+      replace:
+        "**Render evidence** (when snapshots were attached): Say what the desktop and phone renders show that the markup alone would not. When no renders were attached, state that the critique is text-only.",
+    },
+    {
+      find: "If `{{config_file}}` contains a `## Design Context` section from `impeccable init`, also generate 1-2 project-specific personas from the audience/brand info.",
+      replace:
+        "If the workspace PRODUCT.md or DESIGN.md names the audience or brand, also generate 1-2 project-specific personas from that context.",
+    },
+    {
+      find: "Write the full report into the chat response now, before any persistence work. This is the deliverable; everything below it is bookkeeping.",
+      replace: "Write the full report into the chat response now. This is the deliverable.",
+    },
+    {
+      find: "If `{{config_file}}` contains a `## Design Context` section (generated by `impeccable init`), derive 1–2 additional personas from the audience and brand information:",
+      replace:
+        "If the workspace PRODUCT.md or DESIGN.md names the audience or brand, derive 1–2 additional personas from that information:",
+    },
+  ],
 };
 
 const REFERENCE_SECTION_DROPS = {
   document: [/^### Step 4b: Write \.impeccable\/design\.json sidecar/u],
   init: [/^## Step 5: Record workflow defaults/u],
+  critique: [/^### Persist the Snapshot/u],
 };
 
 const SKILL_PARAGRAPH_DROPS = ["**Never repair drift", "- **Workflow or command-selection question:**"];
 
 export const TRANSFORMS_APPLIED = Object.freeze([
-  "SKILL.md frontmatter keeps name and description; argument-hint, user-invocable, allowed-tools, and license are dropped; metadata (version, tags, keywords) is added; the description no longer claims live browser iteration or the critique command.",
+  "SKILL.md frontmatter keeps name and description; argument-hint, user-invocable, allowed-tools, and license are dropped; metadata (version, tags, keywords) is added; the description no longer claims live browser iteration.",
   "new-work (the upstream visual-world workshop) is not vendored: SKILL.md, init.md, document.md, shape.md, and bolder.md sentences that routed through it now ask the operator (user_input.request) to choose and commit the visual world in DESIGN.md; remaining links to it are marked as not vendored.",
   "document.md: sentences that pointed at the removed design.json sidecar now point at DESIGN.md prose and the schemaVersion paragraph is removed; any other surviving sidecar mention fails the guard so a re-sync must add a rewrite rather than ship it.",
   "An Apache License 2.0 section 4(b) modification notice follows the SKILL.md frontmatter.",
   "The SKILL.md Setup section is replaced: no launcher runs; context comes from the workspace PRODUCT.md and DESIGN.md.",
   "SKILL.md routing: inline no-argument rule, workflow-questions bullet removed, launcher context clauses rewritten, deprecated craft alias removed.",
-  "SKILL.md Commands table: craft, critique, live, and generate rows removed; native-platform suffixes removed; an availability note added.",
+  "SKILL.md Commands table: craft, live, and generate rows removed; native-platform suffixes removed; an availability note added.",
   "Pin, Hooks, Doctor, drift-repair, and post-init launcher paragraphs removed.",
   "Mode references: the concept-seed clause becomes plain prose.",
   "init.md: the PRODUCT.md path sentence points at the workspace context and the live-mode workflow-defaults step is removed; polish.md: the launcher context sentence is rewritten; audit.md: the bundled-detector sentence points at runtime design advisories; document.md: the sidecar mention in the seed-mode wrap-up is removed.",
   "document.md: the .impeccable/design.json sidecar section is removed.",
   "Sections about live mode are removed at any heading level.",
-  "Fenced code blocks that only invoke the launcher are removed together with a lead-in line ending in a colon; any other line invoking the launcher, a launcher artifact such as snapshot_file, an .impeccable/ path, a native-platform reference, or an unavailable command (live, generate, critique, craft) is removed.",
+  "Fenced code blocks that only invoke the launcher are removed together with a lead-in line ending in a colon; any other line invoking the launcher, a launcher artifact such as snapshot_file, an .impeccable/ path, a native-platform reference, or an unavailable command (live, generate, craft) is removed.",
+  "critique.md: Codex-only harness blocks (<codex>…</codex>) are removed; the launcher slug and ignore-list steps, the detector and browser-overlay evidence, the sub-agent gate, and the snapshot-persistence section are removed or rewritten so the critique runs as a single-context routed turn over GoatCitadel's render evidence (attached offline PNG snapshots plus runtime design advisories).",
   "Placeholders: {{command_prefix}} becomes `@skill impeccable`, upstream `/impeccable <command>` syntax becomes `@skill impeccable <command>`, {{ask_instruction}} becomes the user_input.request phrasing, {{available_commands}} becomes the vendored command list.",
   "Links to references that are not vendored become plain text marked as not vendored.",
   "Line endings normalized to LF, trailing whitespace trimmed, runs of blank lines collapsed, single trailing newline.",
@@ -525,7 +660,7 @@ function transformCommandsTable(text) {
   while (last + 1 < lines.length && lines[last + 1].startsWith("|")) last += 1;
   const rows = lines
     .slice(first, last + 1)
-    .filter((row) => !/^\| `(?:craft|critique|live|generate)\b/u.test(row))
+    .filter((row) => !/^\| `(?:craft|live|generate)\b/u.test(row))
     .map((row) => row.replace(/ · native: \[[^\]]*\]\([^)]*\)/gu, ""));
   return [...lines.slice(0, first), ...rows, "", UNAVAILABLE_COMMANDS_LINE, ...lines.slice(last + 1)].join("\n");
 }
@@ -597,8 +732,30 @@ export function transformSkillSource(text, { sha }) {
   return finishProse(assembled);
 }
 
+/** Drop every `<tag>` … `</tag>` block (the tag lines may be indented) for the listed tags. */
+function dropTagBlocks(text, tags) {
+  const out = [];
+  let closing;
+  for (const line of text.split("\n")) {
+    if (closing) {
+      if (line.trim() === closing) closing = undefined;
+      continue;
+    }
+    const tag = tags.find((candidate) => line.trim() === `<${candidate}>`);
+    if (tag) {
+      closing = `</${tag}>`;
+      continue;
+    }
+    out.push(line);
+  }
+  if (closing) throw new SyncError(`unterminated ${closing.slice(2, -1)} block`);
+  return out.join("\n");
+}
+
 export function transformReference(name, text) {
   let content = normalizeNewlines(text);
+  const tagDrops = REFERENCE_TAG_DROPS[name];
+  if (tagDrops) content = dropTagBlocks(content, tagDrops);
   const replacements = REFERENCE_REPLACEMENTS[name];
   if (replacements) content = applyReplacements(content, replacements, `reference/${name}.md`);
   const sectionDrops = REFERENCE_SECTION_DROPS[name];

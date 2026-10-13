@@ -58,6 +58,7 @@ export const IMPECCABLE_COMMANDS: readonly string[] = Object.freeze([
   "init",
   "document",
   "extract",
+  "critique",
   "audit",
   "polish",
   "bolder",
@@ -97,6 +98,15 @@ export const IMPECCABLE_CRAFT_COMMANDS: readonly string[] = Object.freeze([
 
 export const IMPECCABLE_BUDGET_BYTES = 40 * 1024;
 export const IMPECCABLE_MODULE_MAX_BYTES = 24 * 1024;
+/**
+ * The critique reference is split by section (the sync script splits references over 20 KiB):
+ * the index carries the flow and the part carries the scoring guide, cognitive-load checklist,
+ * and personas the flow tells the model to consult, so the route loads both and its budget grows.
+ */
+export const IMPECCABLE_CRITIQUE_BUDGET_BYTES = 48 * 1024;
+const IMPECCABLE_SPLIT_PARTS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  critique: Object.freeze(["reference/critique/01-reference-material.md"]),
+});
 export const DEFAULT_SKILL_BUDGET_BYTES = 64 * 1024;
 const DESIGN_INTELLIGENCE_PRESENTATION_MAX_BYTES = 8 * 1024;
 
@@ -133,19 +143,28 @@ function impeccableModule(name: string, relativePath: string): SkillModuleRef {
 const IMPECCABLE_MAIN = impeccableModule("main", "SKILL.md");
 const IMPECCABLE_CRAFT_FLOOR = impeccableModule("craft-floor", "reference/craft-floor.md");
 
-function impeccableRoute(routeId: string, modules: SkillModuleRef[], command?: string): SkillModuleResolution {
+function impeccableRoute(
+  routeId: string,
+  modules: SkillModuleRef[],
+  command?: string,
+  budgetBytes: number = IMPECCABLE_BUDGET_BYTES,
+): SkillModuleResolution {
   const contextDocs = [...IMPECCABLE_CONTEXT_DOCS];
   return command
-    ? { routeId, command, modules, budgetBytes: IMPECCABLE_BUDGET_BYTES, contextDocs }
-    : { routeId, modules, budgetBytes: IMPECCABLE_BUDGET_BYTES, contextDocs };
+    ? { routeId, command, modules, budgetBytes, contextDocs }
+    : { routeId, modules, budgetBytes, contextDocs };
 }
 
 function impeccableCommandRoute(command: string): SkillModuleResolution {
   const commandModule = impeccableModule(command, `reference/${command}.md`);
+  const parts = (IMPECCABLE_SPLIT_PARTS[command] ?? []).map((relativePath, index) =>
+    impeccableModule(`${command}-part-${index + 1}`, relativePath),
+  );
   const modules = IMPECCABLE_CRAFT_COMMANDS.includes(command)
-    ? [IMPECCABLE_MAIN, IMPECCABLE_CRAFT_FLOOR, commandModule]
-    : [IMPECCABLE_MAIN, commandModule];
-  return impeccableRoute(`command:${command}`, modules, command);
+    ? [IMPECCABLE_MAIN, IMPECCABLE_CRAFT_FLOOR, commandModule, ...parts]
+    : [IMPECCABLE_MAIN, commandModule, ...parts];
+  const budgetBytes = command === "critique" ? IMPECCABLE_CRITIQUE_BUDGET_BYTES : IMPECCABLE_BUDGET_BYTES;
+  return impeccableRoute(`command:${command}`, modules, command, budgetBytes);
 }
 
 function impeccableArtifactsRoute(): SkillModuleResolution {

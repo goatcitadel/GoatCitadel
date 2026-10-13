@@ -154,6 +154,8 @@ export interface ArtifactDesignReport {
   google: ArtifactGoogleImportStatus;
   residualRisks: string[];
   designQuality?: ArtifactDesignQualityReport;
+  /** Documents only: whether the bytes came from the renderer template or model-authored markup. */
+  markup?: "template" | "model-authored";
 }
 
 interface ArtifactDesignPlanInput {
@@ -369,6 +371,7 @@ export function buildArtifactDesignReport(
     providerVisualSupplied?: boolean;
     validationResults?: Record<string, Partial<Pick<ArtifactValidationCheck, "status" | "detail">>>;
     designQuality?: Partial<ArtifactDesignQualityReport>;
+    markup?: ArtifactDesignReport["markup"];
   } = {},
 ): ArtifactDesignReport {
   const google = resolveGoogleImportStatus(plan.destination, output.google);
@@ -396,6 +399,7 @@ export function buildArtifactDesignReport(
     google,
     residualRisks: output.residualRisks ?? buildResidualRisks(plan, google, assetPlan, designQuality),
     designQuality,
+    ...(output.markup ? { markup: output.markup } : {}),
   };
 }
 

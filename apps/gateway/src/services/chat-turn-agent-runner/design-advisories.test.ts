@@ -98,6 +98,24 @@ describe("buildToolResultDesignAdvisories", () => {
     expect(advisories?.[0]).toMatchObject({ line: 1, craftFloorRule: "skill-ban-gradient-text" });
   });
 
+  it("scans model-authored html handed to documents.create under a design receipt", () => {
+    const html = `<!doctype html><html><head><style>${GRADIENT_CSS}</style></head><body></body></html>`;
+    const advisories = buildToolResultDesignAdvisories({
+      capabilityProfile: profileWith(["bundled:impeccable"]),
+      toolName: "documents.create",
+      args: { path: "./workspace/out/page.html", format: "html", title: "Page", html },
+    });
+
+    expect(advisories).toEqual([expect.objectContaining({ ruleId: "gradient-text", line: 1, scope: "file" })]);
+    expect(
+      buildToolResultDesignAdvisories({
+        capabilityProfile: profileWith(["bundled:impeccable"]),
+        toolName: "documents.create",
+        args: { path: "./workspace/out/page.html", format: "html", title: "Page", body: GRADIENT_CSS },
+      }),
+    ).toBeUndefined();
+  });
+
   it("returns nothing without a design receipt, for non-UI files, or for other tools", () => {
     const args = { path: "src/hero.css", content: GRADIENT_CSS };
 

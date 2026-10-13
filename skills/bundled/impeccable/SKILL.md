@@ -1,6 +1,6 @@
 ---
 name: impeccable
-description: "Use when the user wants to design, redesign, shape, audit, polish, clarify, distill, harden, optimize, adapt, animate, colorize, extract, or otherwise improve a frontend interface. Covers websites, landing pages, dashboards, product UI, app shells, components, forms, settings, onboarding, and empty states. Handles UX review, visual hierarchy, information architecture, cognitive load, accessibility, performance, responsive behavior, theming, anti-patterns, typography, fonts, spacing, layout, alignment, color, motion, micro-interactions, UX copy, error states, edge cases, i18n, and reusable design systems or tokens. Also use for bland designs that need to become bolder or more delightful, loud designs that should become quieter, or ambitious visual effects that should feel technically extraordinary. Not for backend-only or non-UI tasks."
+description: "Use when the user wants to design, redesign, shape, critique, audit, polish, clarify, distill, harden, optimize, adapt, animate, colorize, extract, or otherwise improve a frontend interface. Covers websites, landing pages, dashboards, product UI, app shells, components, forms, settings, onboarding, and empty states. Handles UX review, visual hierarchy, information architecture, cognitive load, accessibility, performance, responsive behavior, theming, anti-patterns, typography, fonts, spacing, layout, alignment, color, motion, micro-interactions, UX copy, error states, edge cases, i18n, and reusable design systems or tokens. Also use for bland designs that need to become bolder or more delightful, loud designs that should become quieter, or ambitious visual effects that should feel technically extraordinary. Not for backend-only or non-UI tasks."
 metadata:
   version: "0.1.0"
   tags:
@@ -57,6 +57,7 @@ Choose the mode from the requested surface, not the product, and persist it only
 | `init` | Build | Capture durable product context in PRODUCT.md | [reference/init.md](reference/init.md) |
 | `document` | Build | Generate DESIGN.md from existing project code | [reference/document.md](reference/document.md) |
 | `extract [target]` | Build | Pull reusable tokens and components into design system | [reference/extract.md](reference/extract.md) |
+| `critique [target]` | Evaluate | UX design review with heuristic scoring | [reference/critique.md](reference/critique.md) |
 | `audit [target]` | Evaluate | Technical quality checks (a11y, perf, responsive) | [reference/audit.md](reference/audit.md) |
 | `polish [target]` | Refine | Final quality pass before shipping | [reference/polish.md](reference/polish.md) |
 | `bolder [target]` | Refine | Amplify safe or bland designs | [reference/bolder.md](reference/bolder.md) |
@@ -74,7 +75,7 @@ Choose the mode from the requested surface, not the product, and persist it only
 | `adapt [target]` | Fix | Adapt for different devices and screen sizes | [reference/adapt.md](reference/adapt.md) |
 | `optimize [target]` | Fix | Diagnose and fix UI performance | [reference/optimize.md](reference/optimize.md) |
 
-Not available in this vendored build: `craft`, `critique`, `live`, `generate`, pin shortcuts, hooks, doctor, and the native-platform references. Use `audit` and `polish` for review passes. `new-work` (the visual-world workshop) is not vendored either: when a step routes through it, choose and commit the visual world with the operator through user_input.request and record it in DESIGN.md.
+Not available in this vendored build: `craft`, `live`, `generate`, pin shortcuts, hooks, doctor, and the native-platform references. Use `critique`, `audit`, and `polish` for review passes. `new-work` (the visual-world workshop) is not vendored either: when a step routes through it, choose and commit the visual world with the operator through user_input.request and record it in DESIGN.md.
 
 Routing: <!-- rule:skill-routing -->
 
