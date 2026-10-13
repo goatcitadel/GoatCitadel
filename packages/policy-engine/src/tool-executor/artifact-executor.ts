@@ -273,6 +273,7 @@ async function presentationsCreate(
     designReport: buildArtifactDesignReport(design, {
       localPath: full,
       usedAssetIds: rendered.usedAssetIds,
+      providerVisualSupplied: Boolean(visualAsset) || preparedVisuals.assets.length > 0,
       validationResults: rendered.validationResults,
       residualRisks: buildPresentationResidualRisks(
         [...preparedVisuals.warnings, ...rendered.warnings],
@@ -586,7 +587,8 @@ function presentationAssetSpecificityFindings(
       id: "asset-specificity",
       severity: "P2",
       dimension: "Visual Coherence",
-      message: "Presentation ships without visuals because no provider-generated visual asset was supplied.",
+      message:
+        "No provider image was supplied, so the deck carries no provider imagery; charts and tables are unaffected.",
       repaired: false,
     },
   ];
@@ -618,7 +620,7 @@ function documentAssetSpecificityFindings(
       id: "asset-specificity",
       severity: "P3",
       dimension: "Visual Coherence",
-      message: "DOCX output ships without imagery because no provider-generated visual was supplied.",
+      message: "No provider image was supplied, so the DOCX carries no provider imagery.",
       repaired: false,
     },
   ];

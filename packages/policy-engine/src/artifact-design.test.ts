@@ -252,7 +252,8 @@ describe("artifact design brief selection", () => {
             id: "asset-specificity",
             severity: "P2",
             dimension: "Visual Coherence",
-            message: "Presentation ships without visuals because no provider-generated visual asset was supplied.",
+            message:
+              "No provider image was supplied, so the deck carries no provider imagery; charts and tables are unaffected.",
             repaired: false,
           },
         ],
@@ -263,7 +264,34 @@ describe("artifact design brief selection", () => {
     expect(report.validation.find((check) => check.id === "asset-specificity")?.status).toBe("warning");
     expect(report.validation.find((check) => check.id === "artifact-audit")?.status).toBe("warning");
     expect(report.residualRisks).toContain(
-      "Presentation ships without visuals because no provider-generated visual asset was supplied.",
+      "No provider image was supplied, so the deck carries no provider imagery; charts and tables are unaffected.",
     );
+  });
+});
+
+describe("provider image skip reasons", () => {
+  const plan = createArtifactDesignPlan({ kind: "presentation", format: "pptx", title: "Daily Walking" });
+
+  it("says a provider image was supplied but not embedded when the layout dropped it", () => {
+    const report = buildArtifactDesignReport(plan, {
+      localPath: "deck.pptx",
+      usedAssetIds: ["built-in-shapes-icons"],
+      providerVisualSupplied: true,
+    });
+
+    const generated = report.skippedAssets.find((asset) => asset.id === "renderer-generated-visual");
+    expect(generated?.reason).toMatch(/supplied but/iu);
+    expect(generated?.reason).not.toMatch(/no provider image was supplied/iu);
+    expect(report.residualRisks.join("\n")).toMatch(/supplied but/iu);
+    expect(report.residualRisks.join("\n")).not.toMatch(/without visuals/iu);
+  });
+
+  it("says no provider image was supplied without claiming the artifact has no visuals", () => {
+    const report = buildArtifactDesignReport(plan, { localPath: "deck.pptx", usedAssetIds: ["built-in-shapes-icons"] });
+
+    const generated = report.skippedAssets.find((asset) => asset.id === "renderer-generated-visual");
+    expect(generated?.reason).toMatch(/no provider image was supplied/iu);
+    expect(generated?.description).not.toMatch(/renderer-produced|abstract/iu);
+    expect(report.residualRisks.join("\n")).not.toMatch(/without visuals/iu);
   });
 });

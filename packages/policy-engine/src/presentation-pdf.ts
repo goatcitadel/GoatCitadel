@@ -70,6 +70,8 @@ interface SlideContext {
   theme: PdfDeckTheme;
   sources: readonly PresentationSource[];
   image?: PdfImageXObject & { width: number; height: number };
+  /** Slide indexes whose page actually drew its image; shared across the deck's pages. */
+  drawnImages: Set<number>;
   warnings: string[];
 }
 
@@ -107,6 +109,9 @@ export async function createPresentationPdf(input: PresentationPdfInput): Promis
       else if (decision.renderer === "sources") decision.renderer = "sources-continuation";
     }
   }
+  // Table, chart, and sources pages never draw a mapped image, so count what the pages drew,
+  // not what was converted for the document.
+  const drawnImages = new Set<number>();
   const pageIds = deckSlides.map((slide, index) => {
     const page = new PdfPage(PAGE_W, PAGE_H);
     const context: SlideContext = {
@@ -116,6 +121,7 @@ export async function createPresentationPdf(input: PresentationPdfInput): Promis
       theme,
       sources: input.sources,
       image: images.get(index),
+      drawnImages,
       warnings,
     };
     drawSlideFrame(context, input.title);
@@ -135,11 +141,12 @@ export async function createPresentationPdf(input: PresentationPdfInput): Promis
       slides: input.slides,
       sources: input.sources,
       layoutNames,
-      visualCount: images.size,
+      visualCount: drawnImages.size,
     }),
     layoutNames,
     warnings,
-    usedAssetIds: images.size > 0 ? ["renderer-generated-visual", "built-in-shapes-icons"] : ["built-in-shapes-icons"],
+    usedAssetIds:
+      drawnImages.size > 0 ? ["renderer-generated-visual", "built-in-shapes-icons"] : ["built-in-shapes-icons"],
   };
 }
 
@@ -535,6 +542,7 @@ function drawBullets(
 function drawImage(context: SlideContext, box: PdfTextBox): void {
   const { page, image, theme } = context;
   if (!image) return;
+  context.drawnImages.add(context.index);
   page.rect(box.x, box.y, box.w, box.h, theme.surface, { color: theme.border, width: 0.75 });
   const scale = Math.min(box.w / image.width, box.h / image.height);
   const width = image.width * scale;

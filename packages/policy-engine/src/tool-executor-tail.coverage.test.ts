@@ -530,7 +530,7 @@ describe("tool executor tail coverage", () => {
     });
     expect(designReport.validation?.find((check) => check.id === "asset-specificity")?.status).toBe("warning");
     expect(designReport.residualRisks?.join("\n")).toContain(
-      "ships without visuals because no provider-generated visual asset was supplied",
+      "No provider image was supplied, so the deck carries no provider imagery",
     );
   }, 20_000);
 

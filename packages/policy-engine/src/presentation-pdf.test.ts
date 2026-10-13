@@ -480,3 +480,35 @@ function createConfig(root: string): ToolPolicyConfig {
     },
   };
 }
+
+describe("provider images that no page draws", () => {
+  it("does not count an image mapped to a table page as used", async () => {
+    const bytes = await sharp({ create: { width: 100, height: 80, channels: 3, background: "#24aabb" } })
+      .png()
+      .toBuffer();
+    const slides: PresentationSlide[] = [
+      {
+        title: "Venue Comparison",
+        archetype: "matrix",
+        bullets: [],
+        table: {
+          headers: [{ text: "Venue" }, { text: "Closes" }],
+          rows: [[{ text: "Westfield Topanga" }, { text: "7 PM" }]],
+        },
+      },
+    ];
+
+    const result = await createPresentationPdf({
+      title: "Travel",
+      slides,
+      sources: [],
+      design: designFor("Travel", slides),
+      visualAssets: [{ slideIndex: 1, asset: { bytesBase64: bytes.toString("base64"), mimeType: "image/png" } }],
+    });
+
+    expect(result.layoutNames).toEqual(["hero", "table"]);
+    expect(contentStreams(result.buffer).join("\n")).not.toContain(" Do");
+    expect(result.manifest.visualCount).toBe(0);
+    expect(result.usedAssetIds).toEqual(["built-in-shapes-icons"]);
+  });
+});

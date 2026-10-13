@@ -365,12 +365,18 @@ export function buildArtifactDesignReport(
     google?: Partial<ArtifactGoogleImportStatus>;
     residualRisks?: string[];
     usedAssetIds?: string[];
+    /** True when the caller supplied a provider image, even if no layout embedded it. */
+    providerVisualSupplied?: boolean;
     validationResults?: Record<string, Partial<Pick<ArtifactValidationCheck, "status" | "detail">>>;
     designQuality?: Partial<ArtifactDesignQualityReport>;
   } = {},
 ): ArtifactDesignReport {
   const google = resolveGoogleImportStatus(plan.destination, output.google);
-  const assetPlan = finalizeAssetPlan(plan.assetPlan, output.usedAssetIds ?? []);
+  const assetPlan = finalizeAssetPlan(
+    plan.assetPlan,
+    output.usedAssetIds ?? [],
+    output.providerVisualSupplied ?? false,
+  );
   const designQuality = buildArtifactDesignQualityReport(plan, output.designQuality);
   const validation = finalizeValidationChecks(plan.validationChecks, Boolean(output.localPath), google, {
     ...buildArtifactDesignQualityValidationResults(plan, designQuality),
@@ -474,8 +480,8 @@ function buildAssetPlan(
       type: "generated",
       role: "hero",
       status: "planned",
-      description: `Generated or renderer-produced visual system for ${input.title}.`,
-      altText: `Abstract visual supporting ${input.title}.`,
+      description: `Provider-generated visual for ${input.title}.`,
+      altText: `Provider visual supporting ${input.title}.`,
       source: "configured image provider",
       license: "Generated locally by GoatCitadel",
     },
@@ -509,7 +515,7 @@ function buildAssetPlan(
       status: "skipped",
       description: "Web image fallback for real-world visuals.",
       altText: `Optional sourced image for ${input.title}.`,
-      reason: "Generated/local visuals were available; web assets require source and license metadata.",
+      reason: "Provider visuals were preferred; web assets require source and license metadata.",
     });
   }
   return base;
@@ -642,7 +648,15 @@ function resolveGoogleImportStatus(
   };
 }
 
-function finalizeAssetPlan(assets: ArtifactAssetPlanItem[], usedAssetIds: string[]): ArtifactAssetPlanItem[] {
+const PROVIDER_IMAGE_NOT_SUPPLIED_REASON = "No provider image was supplied; no placeholder art stands in for it.";
+const PROVIDER_IMAGE_NOT_EMBEDDED_REASON =
+  "A provider image was supplied but the selected layout did not embed it (table, chart, semantic, and fallback pages carry no image).";
+
+function finalizeAssetPlan(
+  assets: ArtifactAssetPlanItem[],
+  usedAssetIds: string[],
+  providerVisualSupplied: boolean,
+): ArtifactAssetPlanItem[] {
   const used = new Set(usedAssetIds);
   return assets.map((asset) =>
     used.has(asset.id) && asset.status === "planned"
@@ -651,7 +665,7 @@ function finalizeAssetPlan(assets: ArtifactAssetPlanItem[], usedAssetIds: string
         ? {
             ...asset,
             status: "skipped",
-            reason: "No provider image was supplied; the artifact ships without placeholder visuals.",
+            reason: providerVisualSupplied ? PROVIDER_IMAGE_NOT_EMBEDDED_REASON : PROVIDER_IMAGE_NOT_SUPPLIED_REASON,
           }
         : asset,
   );
@@ -704,8 +718,11 @@ function buildResidualRisks(
       "Some external or web assets were skipped because source, license, provider, or approval data was unavailable.",
     );
   }
-  if (assets.some((asset) => asset.type === "generated" && asset.status === "skipped")) {
-    risks.push("No provider image was supplied, so the artifact ships without visuals.");
+  // Charts, tables, and built-in accents still render; only provider imagery is missing.
+  for (const asset of assets) {
+    if (asset.type === "generated" && asset.status === "skipped" && asset.reason) {
+      risks.push(`Provider imagery: ${asset.reason}`);
+    }
   }
   if (google.requested && google.status !== "imported") {
     risks.push("Google import was requested, but only the local artifact was produced in this runtime.");
