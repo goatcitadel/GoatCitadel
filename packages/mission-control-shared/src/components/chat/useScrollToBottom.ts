@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { isThreadScrollNearBottom } from "./ChatThreadPrimitives";
+import { isThreadScrollNearBottom } from "./ChatThreadReadingPrimitives";
 
 /**
  * Content-change signals that should re-evaluate auto-follow / near-bottom state.

@@ -1,4 +1,5 @@
-import { GatewayAccessGate } from "@goatcitadel/mission-control-shared/components/GatewayAccessGate";
+import { lazy, Suspense } from "react";
+const GatewayAccessGate = lazy(async () => ({ default: (await import("@goatcitadel/mission-control-shared/components/GatewayAccessGate")).GatewayAccessGate }));
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import type { GatewayAccessViewState } from "../../app/use-gateway-access";
 import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
@@ -34,16 +35,17 @@ export function CockpitAccessGate({
     : misconfigured
       ? access.message
     : needsSignIn
-      ? "Continue in the classic view to complete gateway access. The cockpit uses the same access state."
+      ? "Restore gateway access with the form below. Unsaved drafts remain in this app session."
       : checking
         ? "Checking gateway access."
         : `It may not be running. ${gatewayStartHint(currentGatewayHost())} This page retries automatically.`;
   if (needsSignIn || blocked)
     return (
       <main className="cockpit-access min-h-dvh overflow-auto bg-canvas p-4">
-        <GatewayAccessGate gatewayBaseUrl={getGatewayApiBaseUrl()} access={access} busy={busy} onRetry={onRetry} />
+        <Suspense fallback={<p role="status">Loading access recovery…</p>}>
+          <GatewayAccessGate gatewayBaseUrl={getGatewayApiBaseUrl()} access={access} busy={busy} onRetry={onRetry} />
+        </Suspense>
         <p className="text-sm text-fg-secondary">Unsaved drafts stay in this app session while access is restored.</p>
-        <Button onClick={shellSwitch.visit}>Open classic view</Button>
         {shellSwitch.feedback}
       </main>
     );

@@ -2,10 +2,10 @@ import { ChatConversationStarters } from "./ChatConversationStarters";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Virtuoso } from "react-virtuoso";
 import { getChatTurnRecoveryActionSummary, isChatTurnTerminalStatus, type ChatThreadTurnRecord } from "@goatcitadel/contracts";
-import { AssistantMessageRenderer } from "@goatcitadel/mission-control-shared/components/chat/AssistantMessageRenderer";
-import { ChatChangePlanCard } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard";
+import { NativeMessageRenderer as AssistantMessageRenderer } from "./NativeMessageRenderer";
+const ChatChangePlanCard = lazy(async () => ({ default: (await import("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard")).ChatChangePlanCard }));
 import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
-import { ActorTimestamp, ChatThreadNotices } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
+import { ActorTimestamp, ChatThreadNotices, ChatNoticeTechnicalDetails } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadReadingPrimitives";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useChatStreamingPreviewSnapshot } from "@goatcitadel/mission-control-shared/state/chat-streaming-preview-store";
 import { HistoricalConversationView } from "../../../features/threaded-surface/ThreadHistoricalConversation";
@@ -201,10 +201,10 @@ function ChatTranscriptFooter({ context }: { context?: TranscriptFooterContext }
               : undefined
           }
         />
-        {importantNotices.map((notice) => <div role="note" key={notice.id} className="rounded-md border border-status-waiting p-2 text-sm text-fg-secondary" aria-label="Conversation warning">{notice.content}</div>)}
-        {latestRoutine ? <div role="note" className="rounded-md border border-line-subtle bg-raised p-2 text-sm text-fg-secondary" aria-label="Latest conversation update">{latestRoutine.content}</div> : null}
+        {importantNotices.map((notice) => <div role="note" key={notice.id} className="rounded-md border border-status-waiting p-2 text-sm text-fg-secondary" aria-label="Conversation warning">{notice.content}<ChatNoticeTechnicalDetails key={`${props.selectedSessionId}:${notice.id}`} notice={notice} /></div>)}
+        {latestRoutine ? <div role="note" className="rounded-md border border-line-subtle bg-raised p-2 text-sm text-fg-secondary" aria-label="Latest conversation update">{latestRoutine.content}<ChatNoticeTechnicalDetails key={`${props.selectedSessionId}:${latestRoutine.id}`} notice={latestRoutine} /></div> : null}
         <ChatThreadNotices notices={routineNotices.filter((notice) => notice !== latestRoutine)} scopeKey={props.selectedSessionId} />
-        {receipt && !receipt.dismissed ? <ChatChangePlanCard {...receipt} /> : null}
+        {receipt && !receipt.dismissed ? <Suspense fallback={<p role="status" className="min-h-24">Loading change-plan receipt…</p>}><ChatChangePlanCard {...receipt} /></Suspense> : null}
         <ChatBlockers key={props.selectedSessionId} props={props} />
         {props.streamError && latestTurn?.trace.status !== "failed" && latestTurn?.trace.status !== "partial" ? (
           <ChatStreamErrorNotice error={props.streamError} source={props.streamErrorSource} />
@@ -340,7 +340,7 @@ export function ChatTranscript({
   if (!props.thread)
     return (
       <p role="alert" className="flex-1 p-5 text-sm text-fg-secondary">
-        Conversation unavailable. Choose it again from the list to retry, or open it in the classic view.
+        Conversation unavailable. Choose it again from the list to retry. Session inspection is available in System.
       </p>
     );
 
@@ -355,6 +355,8 @@ export function ChatTranscript({
         key={props.selectedSessionId}
         scrollerRef={bindScroller}
         data={visibleTurns}
+        // Render the first row immediately, then measure actual long and enlarged-text row heights.
+        initialItemCount={Math.min(visibleTurns.length, 1)}
         className="h-full w-full"
         followOutput={false}
         computeItemKey={(_index, turn) => turn.turnId}

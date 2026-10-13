@@ -1,7 +1,7 @@
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useEffect, useState } from "react";
 import type { ChatCitationRecord, ChatThreadTurnRecord } from "@goatcitadel/contracts";
-import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/components/chat/ChatToolResultPreview";
+import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-display-name";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";

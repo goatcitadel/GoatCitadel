@@ -2,6 +2,7 @@
 import { act, type ComponentType, type ReactNode, type Ref } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { UiPreferencesProvider, useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import type { ChangePlanRecord, ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import type {
   MissionThreadedActiveSessionSurfaceProps,
@@ -21,6 +22,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/approvals", async (importOrigin
   ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/approvals")>()),
   fetchApproval: vi.fn().mockResolvedValue(null),
   fetchApprovalReplay: vi.fn().mockRejectedValue(new Error("No replay fixture")),
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/api/sessions", async (importOriginal) => ({
+  ...(await importOriginal()),
+  fetchRuntimeLifecycle: vi.fn().mockResolvedValue({ canonical: {}, turns: [] }),
 }));
 
 vi.mock("react-virtuoso", () => ({
@@ -60,8 +66,8 @@ vi.mock("react-virtuoso", () => ({
     );
   },
 }));
-vi.mock("@goatcitadel/mission-control-shared/components/chat/AssistantMessageRenderer", () => ({
-  AssistantMessageRenderer: ({ content }: { content: string }) => <span>{content}</span>,
+vi.mock("./NativeMessageRenderer", () => ({
+  NativeMessageRenderer: ({ content }: { content: string }) => <span>{content}</span>,
 }));
 vi.mock("@goatcitadel/mission-control-shared/state/chat-streaming-preview-store", () => ({
   useChatStreamingPreviewSnapshot: () => viewport.preview,
@@ -111,6 +117,7 @@ afterEach(() => {
   container.remove();
   client.clear();
   vi.unstubAllGlobals();
+  localStorage.removeItem("goatcitadel.ui.technical_details.v1");
 });
 
 describe("ChatTranscript", () => {
@@ -587,6 +594,7 @@ describe("ChatTranscript", () => {
         </InspectorProvider>,
       ),
     );
+    await act(async () => { await vi.dynamicImportSettled(); });
     expect(container.textContent).toContain("Use another model");
     const review = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "Review and confirm",
@@ -645,6 +653,7 @@ describe("ChatTranscript", () => {
         </InspectorProvider>,
       ),
     );
+    await act(async () => { await vi.dynamicImportSettled(); });
     expect(container.textContent).toContain("OpenCode report");
     expect(container.textContent).toContain("1 reported file");
     expect(container.textContent).toContain("Reported files");
@@ -767,3 +776,69 @@ it("offers starters only after an editable empty conversation has loaded", async
   );
   expect(container.textContent).not.toContain("Explain this project");
 });
+
+function NoticePreferenceToggle() {
+  const { setShowTechnicalDetails } = useUiPreferences();
+  return <button onClick={() => setShowTechnicalDetails(false)}>Hide notice identifiers</button>;
+}
+
+it.each(["neutral", "warning"] as const)(
+  "keeps %s notice targets visible and record IDs under technical disclosure",
+  async (tone) => {
+    localStorage.setItem("goatcitadel.ui.technical_details.v1", "true");
+    const props = {
+      ...sessionProps([]),
+      notices: [
+        {
+          id: "run-notice",
+          tone,
+          content: "Research is waiting for approval with one child item.",
+          timestamp: "2026-10-01T00:00:00Z",
+          technicalDetails: [{ label: "Run ID", value: "run-private-identifier" }],
+        },
+      ],
+    };
+    await act(async () =>
+      renderWithProviders(
+        <UiPreferencesProvider>
+          <NoticePreferenceToggle />
+          <InspectorProvider>
+            <ChatTranscript props={props} />
+          </InspectorProvider>
+        </UiPreferencesProvider>,
+      ),
+    );
+    const notice = container.querySelector(
+      tone === "warning" ? '[aria-label="Conversation warning"]' : '[aria-label="Latest conversation update"]',
+    )!;
+    expect(notice.textContent).toContain("Research is waiting for approval with one child item.");
+    const details = notice.querySelector("details")!;
+    expect(details).not.toBeNull();
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")?.textContent).toBe("Technical details");
+    expect(details.textContent).toContain("Run ID");
+    expect(details.textContent).toContain("run-private-identifier");
+    const primary = notice.cloneNode(true) as HTMLElement;
+    primary.querySelector("details")!.remove();
+    expect(primary.textContent).not.toContain("run-private-identifier");
+    details.open = true;
+    await act(async () =>
+      renderWithProviders(
+        <UiPreferencesProvider>
+          <NoticePreferenceToggle />
+          <InspectorProvider>
+            <ChatTranscript props={{ ...props, selectedSessionId: "other" }} />
+          </InspectorProvider>
+        </UiPreferencesProvider>,
+      ),
+    );
+    expect(container.querySelector<HTMLDetailsElement>("details")?.open).toBe(false);
+    await act(async () =>
+      [...container.querySelectorAll("button")]
+        .find((button) => button.textContent === "Hide notice identifiers")!
+        .click(),
+    );
+    expect(container.querySelector("details")).toBeNull();
+    expect(container.textContent).toContain("Research is waiting for approval with one child item.");
+  },
+);

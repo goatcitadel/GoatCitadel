@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 
 import { cn } from "../../lib/utils";
-import { copyTextToClipboard } from "./AssistantMessageRenderer";
+import { copyTextToClipboard } from "./AssistantMessageShell";
 import { parseUnifiedDiffLines } from "./chat-tool-diff";
 
 /**
