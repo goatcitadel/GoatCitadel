@@ -148,7 +148,6 @@ export function GeneratedArtifactViewer({
     <article className={`generated-artifact-viewer${compact ? " compact" : ""}`}>
       <header className="generated-artifact-header">
         <div className="generated-artifact-copy">
-          <p className="generated-artifact-kicker">Generated artifact</p>
           <h3>{artifact.title}</h3>
           <div className="generated-artifact-chip-row">
             <StatusChip tone="muted">{artifact.kind}</StatusChip>

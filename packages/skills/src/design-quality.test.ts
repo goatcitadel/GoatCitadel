@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { hasBlockingDesignQualityFindings, readDesignQualityEvidence } from "./design-quality.js";
+import { enumerateSkillRoutes, IMPECCABLE_SKILL_ID, IMPECCABLE_SKILL_NAME } from "./skill-module-routes.js";
 
 const tempRoots: string[] = [];
 
@@ -18,13 +19,18 @@ describe("design-quality evidence", () => {
 
     expect(snapshot.state).toBe("available");
     expect(snapshot.summary.blockingCount).toBe(0);
-    expect(snapshot.checks.map((check) => check.id)).toContain("design-intelligence.modules");
-    expect(snapshot.checks.map((check) => check.id)).toContain("design-quality.proof-lanes");
+    const ids = snapshot.checks.map((check) => check.id);
+    expect(ids).toContain("impeccable.modules");
+    expect(ids).toContain("impeccable.provenance");
+    expect(ids).toContain("impeccable.launcher-strings");
+    expect(ids).toContain("impeccable.artifacts-budget");
+    expect(ids).toContain("design-quality.proof-lanes");
+    expect(ids.some((id) => id.startsWith("design-intelligence."))).toBe(false);
     expect(hasBlockingDesignQualityFindings(snapshot)).toBe(false);
   });
 
-  it("blocks when a required design-intelligence module is missing", async () => {
-    const root = await createFixture({ omitSkillModule: "audit.md" });
+  it("blocks when a required impeccable module is missing", async () => {
+    const root = await createFixture({ omitSkillModule: "reference/craft-floor.md" });
 
     const snapshot = readDesignQualityEvidence(root);
 
@@ -32,16 +38,26 @@ describe("design-quality evidence", () => {
     expect(snapshot.checks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "design-intelligence.modules",
+          id: "impeccable.modules",
           severity: "P0",
           status: "blocking",
+          nextAction: expect.stringContaining("reference/craft-floor.md"),
         }),
       ]),
     );
     expect(hasBlockingDesignQualityFindings(snapshot)).toBe(true);
   });
 
-  it("blocks unresolved local links in the design-intelligence skill", async () => {
+  it("requires every module a skill route injects, not only the hand-picked ones", async () => {
+    const root = await createFixture({ omitSkillModule: "reference/bolder.md" });
+
+    const check = readDesignQualityEvidence(root).checks.find((item) => item.id === "impeccable.modules");
+
+    expect(check).toMatchObject({ severity: "P0", status: "blocking" });
+    expect(check?.nextAction).toContain("reference/bolder.md");
+  });
+
+  it("blocks unresolved local links in the impeccable skill", async () => {
     const root = await createFixture({ skillAppend: "\n[Missing module](./missing-module.md)\n" });
 
     const snapshot = readDesignQualityEvidence(root);
@@ -50,13 +66,69 @@ describe("design-quality evidence", () => {
     expect(snapshot.checks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "design-intelligence.placeholders",
+          id: "impeccable.placeholders",
           severity: "P0",
           status: "blocking",
           nextAction: expect.stringContaining("broken-link:./missing-module.md"),
         }),
       ]),
     );
+  });
+
+  it("blocks when the vendored provenance files are missing", async () => {
+    const root = await createFixture({ omitProvenanceFile: "NOTICE" });
+
+    const check = readDesignQualityEvidence(root).checks.find((item) => item.id === "impeccable.provenance");
+
+    expect(check).toMatchObject({ severity: "P0", status: "blocking" });
+    expect(check?.nextAction).toContain("NOTICE");
+  });
+
+  it("blocks when UPSTREAM.md does not pin a commit", async () => {
+    const root = await createFixture({ upstreamText: "# Upstream provenance: impeccable\n- Commit: `main`\n" });
+
+    const check = readDesignQualityEvidence(root).checks.find((item) => item.id === "impeccable.provenance");
+
+    expect(check).toMatchObject({ severity: "P0", status: "blocking" });
+    expect(check?.nextAction).toContain("commit");
+  });
+
+  it("blocks launcher or banned provider strings in the injectable files", async () => {
+    const root = await createFixture({ skillAppend: "\nRun `npx impeccable detect` first.\n" });
+
+    const check = readDesignQualityEvidence(root).checks.find((item) => item.id === "impeccable.launcher-strings");
+
+    expect(check).toMatchObject({ severity: "P0", status: "blocking" });
+    expect(check?.nextAction).toContain("npx impeccable");
+  });
+
+  it("catches the launcher behind npx options such as -y", async () => {
+    const root = await createFixture({ skillAppend: "\nRun `npx -y impeccable` to set up.\n" });
+
+    const check = readDesignQualityEvidence(root).checks.find((item) => item.id === "impeccable.launcher-strings");
+
+    expect(check).toMatchObject({ severity: "P0", status: "blocking" });
+  });
+
+  it("scans only the injectable files, not the provenance notes that document the launcher", async () => {
+    const root = await createFixture({
+      upstreamText:
+        "# Upstream provenance: impeccable\n- Commit: `c63b8dd7dd5a5f3c32eaabe1af76d0694f863ed2`\n- The `{{scripts_path}}` placeholder and `npx impeccable` launcher steps are removed by the sync.\n",
+    });
+
+    const check = readDesignQualityEvidence(root).checks.find((item) => item.id === "impeccable.launcher-strings");
+
+    expect(check).toMatchObject({ severity: "P3", status: "passing" });
+  });
+
+  it("reports an oversized artifacts module as advisory, measuring UTF-8 bytes rather than string length", async () => {
+    // 4,200 two-byte characters: 8,400 bytes but a string length well under 8 KiB.
+    const root = await createFixture({ artifactsPadding: "é".repeat(4200) });
+
+    const check = readDesignQualityEvidence(root).checks.find((item) => item.id === "impeccable.artifacts-budget");
+
+    expect(check).toMatchObject({ severity: "P1", status: "advisory" });
+    expect(check?.nextAction).toContain("8 KiB");
   });
 
   it("reports calibrated anti-slop hits as advisory evidence", async () => {
@@ -79,22 +151,36 @@ describe("design-quality evidence", () => {
   });
 });
 
+// Every module any impeccable route injects, read from the same route table the runtime uses.
+const IMPECCABLE_MODULES: Array<[string, string]> = [
+  ...new Set(
+    enumerateSkillRoutes({ skillId: IMPECCABLE_SKILL_ID, skillName: IMPECCABLE_SKILL_NAME }).flatMap((route) =>
+      route.modules.map((module) => module.relativePath),
+    ),
+  ),
+]
+  .filter((relativePath) => relativePath !== "SKILL.md")
+  .map((relativePath) => [relativePath, `# ${path.basename(relativePath, ".md")}\nModule text.`]);
+
 async function createFixture(
   options: {
     omitSkillModule?: string;
+    omitProvenanceFile?: "UPSTREAM.md" | "LICENSE" | "NOTICE";
+    upstreamText?: string;
+    artifactsPadding?: string;
     appSource?: string;
     skillAppend?: string;
   } = {},
 ): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "goat-design-quality-"));
   tempRoots.push(root);
-  const skillDir = path.join(root, "skills", "bundled", "design-intelligence");
+  const skillDir = path.join(root, "skills", "bundled", "impeccable");
   const stylesDir = path.join(root, "apps", "mission-control-next", "src", "styles");
   const appDir = path.join(root, "apps", "mission-control-next", "src");
   const sharedDir = path.join(root, "packages", "mission-control-shared", "src");
   const skillsSrcDir = path.join(root, "packages", "skills", "src");
 
-  await fs.mkdir(skillDir, { recursive: true });
+  await fs.mkdir(path.join(skillDir, "reference", "critique"), { recursive: true });
   await fs.mkdir(stylesDir, { recursive: true });
   await fs.mkdir(appDir, { recursive: true });
   await fs.mkdir(sharedDir, { recursive: true });
@@ -102,28 +188,36 @@ async function createFixture(
 
   const skillText = [
     "---",
-    "name: design-intelligence",
-    "description: Design quality.",
+    "name: impeccable",
+    "description: Design work.",
     "---",
-    "# Design Intelligence",
-    "## Design Quality V1",
-    "Start Iterate Polish Maintain",
-    "surface intent design system/tokens craft rules Pre-Ship Loop five-dimension critique",
+    "> Vendored from pbakaus/impeccable at a pinned commit.",
+    "Read the workspace PRODUCT.md and DESIGN.md first.",
+    "Core principles:",
+    "Not available in this vendored build: `craft`, `live`, `generate`.",
     options.skillAppend ?? "",
   ].join("\n");
-  const modules: Array<[string, string]> = [
-    ["SKILL.md", skillText],
-    ["enforcement.md", "# Enforcement\nAccessible controls."],
-    ["audit.md", "# Audit\nEvidence checks."],
-    ["components.md", "# Components\nButtons."],
-    ["layout.md", "# Layout\nResponsive."],
-    ["taste.md", "# Taste\nCalibrated anti-slop."],
-    ["assets.md", "# Assets\nIcons."],
-    ["calibration.md", "# Calibration\nDials."],
-    ["examples.md", "# Examples\nGood examples."],
-  ];
+  const modules: Array<[string, string]> = [["SKILL.md", skillText], ...IMPECCABLE_MODULES];
   for (const [file, content] of modules) {
     if (file === options.omitSkillModule) continue;
+    const body =
+      file === "reference/artifacts.md" && options.artifactsPadding
+        ? `${content}\n${options.artifactsPadding}`
+        : content;
+    await fs.mkdir(path.dirname(path.join(skillDir, file)), { recursive: true });
+    await fs.writeFile(path.join(skillDir, file), body, "utf8");
+  }
+  const provenance: Array<[string, string]> = [
+    [
+      "UPSTREAM.md",
+      options.upstreamText ??
+        "# Upstream provenance: impeccable\n- Commit: `c63b8dd7dd5a5f3c32eaabe1af76d0694f863ed2`\n",
+    ],
+    ["LICENSE", "Apache License 2.0"],
+    ["NOTICE", "Vendored with modifications."],
+  ];
+  for (const [file, content] of provenance) {
+    if (file === options.omitProvenanceFile) continue;
     await fs.writeFile(path.join(skillDir, file), content, "utf8");
   }
 
@@ -139,7 +233,7 @@ async function createFixture(
   await fs.writeFile(path.join(sharedDir, "index.ts"), "export const shared = true;\n", "utf8");
   await fs.writeFile(
     path.join(skillsSrcDir, "routing-hints.generated.ts"),
-    "design quality anti-slop visual polish design-system audit",
+    "design quality anti-slop visual polish design-system audit document design presentation design pptx deck html artifact",
     "utf8",
   );
   await fs.writeFile(

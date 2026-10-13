@@ -153,6 +153,9 @@ describe("GatewayAccessGate", () => {
       />,
     );
     expect(checking).toContain("Starting Mission Control");
+    // The title carries the state; no kicker label above it (craft floor: no eyebrows).
+    expect(checking).not.toContain("Mission Control startup");
+    expect(checking).not.toContain("shell-topbar-kicker");
     expect(checking).toContain("Checking gateway");
     expect(checking).toContain("theme-citadel-light");
     expect(checking).toContain("Reach gateway");

@@ -176,7 +176,6 @@ export function GatewayAccessGate({
 
   const storedAuthPresent = Boolean(readStoredGatewayAuthState());
   const needsAuth = access.status === "needs-auth" || access.status === "access-blocked";
-  const headerKicker = isChecking ? "Mission Control startup" : "Remote gateway handshake";
   const headerTitle = isChecking ? "Starting Mission Control" : "Mission Control access gate";
   const themeClass = resolveGatewayAccessThemeClass();
   const headerSubtitle = isChecking
@@ -244,7 +243,6 @@ export function GatewayAccessGate({
       <div className="panel panel-pad-spacious panel-accent gateway-access-card">
         <div className="gateway-access-header">
           <div className="gateway-access-copy">
-            <p className="shell-topbar-kicker">{headerKicker}</p>
             <h1 className="gateway-access-title">{headerTitle}</h1>
             <p className="office-subtitle gateway-access-subtitle">{headerSubtitle}</p>
           </div>

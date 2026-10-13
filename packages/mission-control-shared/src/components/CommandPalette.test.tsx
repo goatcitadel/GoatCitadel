@@ -219,6 +219,9 @@ describe("CommandPalette", () => {
       />,
     );
     expect(markup).toContain("command-palette-group");
+    // The heading names the palette; no kicker label repeats it above (craft floor: no eyebrows).
+    expect(markup).not.toContain("Command Center");
+    expect(markup).not.toContain("command-palette-kicker");
     expect(markup).toContain("Library");
     expect(markup).toContain("Review memory lifecycle and provenance.");
     expect(markup).toContain("Current");
