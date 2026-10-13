@@ -18,11 +18,12 @@ import type { CronJobSpecInput, AsyncStorage as Storage } from "@goatcitadel/sto
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { CronSpecMutationOwner } from "./cron-config-generation-owner.js";
 import {
-  COST_REPORT_HOURLY_SCHEDULE_LABEL,
-  MEMORY_CONSOLIDATION_WEEKLY_SCHEDULE_LABEL,
-  MEMORY_FLUSH_DAILY_SCHEDULE_LABEL,
-  PRIVATE_BETA_BACKUP_SCHEDULE_LABEL,
-  UPDATE_REVIEW_DAILY_SCHEDULE_LABEL,
+  COST_REPORT_HOURLY_CADENCE,
+  MEMORY_CONSOLIDATION_WEEKLY_CADENCE,
+  MEMORY_FLUSH_DAILY_CADENCE,
+  PRIVATE_BETA_BACKUP_CADENCE,
+  UPDATE_REVIEW_DAILY_CADENCE,
+  systemCronScheduleLabel,
 } from "./cron-job-schedule-labels.js";
 import { describeMalformedCronRow, isPlainRecord, isValidCronRow } from "./cron-row-validation.js";
 
@@ -173,7 +174,7 @@ export async function ensurePrivateBetaBackupCronJob(host: CronJobConfigHost): P
     name: "Private Beta Daily Backup",
     action: "backup",
     description: existing?.description ?? "Create the daily private beta backup and prune retained snapshots.",
-    schedule: PRIVATE_BETA_BACKUP_SCHEDULE_LABEL,
+    schedule: systemCronScheduleLabel(PRIVATE_BETA_BACKUP_CADENCE),
     enabled: existing?.enabled ?? true,
     endAt: existing?.endAt,
     workdir: existing?.workdir,
@@ -188,7 +189,7 @@ export async function ensureMemoryFlushCronJob(host: CronJobConfigHost): Promise
     name: "Memory Flush Daily",
     action: "memory_flush",
     description: existing?.description ?? "Prune expired memory artifacts and clear old maintenance context.",
-    schedule: MEMORY_FLUSH_DAILY_SCHEDULE_LABEL,
+    schedule: systemCronScheduleLabel(MEMORY_FLUSH_DAILY_CADENCE),
     enabled: existing?.enabled ?? true,
     endAt: existing?.endAt,
     workdir: existing?.workdir,
@@ -205,7 +206,7 @@ export async function ensureMemoryConsolidationCronJob(host: CronJobConfigHost):
     description:
       existing?.description ??
       "Propose memory candidates from recent run traces (approval-gated; requires memoryConsolidationV1Enabled).",
-    schedule: MEMORY_CONSOLIDATION_WEEKLY_SCHEDULE_LABEL,
+    schedule: systemCronScheduleLabel(MEMORY_CONSOLIDATION_WEEKLY_CADENCE),
     // Seeded DISABLED, unlike the other system jobs: consolidation is
     // opt-in twice over (job.enabled AND the feature flag).
     enabled: existing?.enabled ?? false,
@@ -222,7 +223,7 @@ export async function ensureCostReportCronJob(host: CronJobConfigHost): Promise<
     name: "Cost Report Hourly",
     action: "cost_report",
     description: existing?.description ?? "Write the hourly usage and cost rollup report.",
-    schedule: COST_REPORT_HOURLY_SCHEDULE_LABEL,
+    schedule: systemCronScheduleLabel(COST_REPORT_HOURLY_CADENCE),
     enabled: existing?.enabled ?? true,
     endAt: existing?.endAt,
     workdir: existing?.workdir,
@@ -237,7 +238,7 @@ export async function ensureUpdateReviewCronJob(host: CronJobConfigHost): Promis
     name: "Daily Update Review",
     action: "update_review",
     description: existing?.description ?? "Generate the daily dependency and skill source review report.",
-    schedule: UPDATE_REVIEW_DAILY_SCHEDULE_LABEL,
+    schedule: systemCronScheduleLabel(UPDATE_REVIEW_DAILY_CADENCE),
     enabled: existing?.enabled ?? true,
     endAt: existing?.endAt,
     workdir: existing?.workdir,

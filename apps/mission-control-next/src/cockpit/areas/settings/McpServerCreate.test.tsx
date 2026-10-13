@@ -56,9 +56,9 @@ function DraftProbe({ workspaceId }: { workspaceId: string }) {
   observedDraft = useSessionDraft(`mcp:${workspaceId}:new`, createEmptyMcpCreateForm(), undefined, { label: "Probe", active: false });
   return null;
 }
-async function mountDraft(workspaceId = "workspace-a") {
+async function mountDraft(workspaceId = "workspace-a", onInspect?: (serverId: string) => void) {
   await act(async () => root.render(<QueryClientProvider client={client}>
-    <McpServerCreate workspaceId={workspaceId} onClose={() => undefined} /><DraftProbe workspaceId={workspaceId} />
+    <McpServerCreate workspaceId={workspaceId} onClose={() => undefined} onInspect={onInspect} /><DraftProbe workspaceId={workspaceId} />
   </QueryClientProvider>));
   await vi.waitFor(() => expect(button(dialog("Register MCP server"), "Use Read-only fixture template")).toBeTruthy());
 }
@@ -113,6 +113,29 @@ it.each(["draft", "caller", "access", "gateway", "workspace", "template"])("inva
 });
 afterEach(async () => {
   await act(async () => root.unmount()); client.clear(); container.remove();
+});
+
+it("guards the saved-server review handoff when a newer registration draft is dirty", async () => {
+  const onInspect = vi.fn();
+  api.fetchMcpServer.mockResolvedValue(structuredClone(saved));
+  await mountDraft("workspace-a", onInspect);
+  const registration = dialog("Register MCP server");
+  await click(registration, "Use Read-only fixture template");
+  await click(registration, "Review MCP registration");
+  await click(registration, "Register reviewed MCP server");
+  await vi.waitFor(() => expect(button(registration, "Continue to connection review")).toBeTruthy());
+  expect(onInspect).not.toHaveBeenCalled();
+  await act(async () => observedDraft.setValue(structuredClone(originalDraft)));
+  await click(registration, "Continue to connection review");
+  expect(dialog("Unsaved changes")).toBeTruthy();
+  expect(onInspect).not.toHaveBeenCalled();
+  await click(dialog("Unsaved changes"), "Cancel");
+  expect(observedDraft.value).toEqual(originalDraft);
+  await click(registration, "Continue to connection review");
+  await click(dialog("Unsaved changes"), "Keep draft and close");
+  expect(onInspect).toHaveBeenCalledExactlyOnceWith(saved.serverId);
+  expect(observedDraft.value).toEqual(originalDraft);
+  expect(api.createMcpServer).toHaveBeenCalledTimes(1);
 });
 
 it("retains one real registration dialog and the confirmed saved identity after asynchronous readback resets its draft", async () => {

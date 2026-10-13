@@ -1,10 +1,15 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import type { SkillImportValidationResult } from "@goatcitadel/contracts";
-import { SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
+import { NodeSkillHubArtifactFilesystem, SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
+import {
+  NodeSkillHubWindowsSecurity,
+  PowerShellSkillHubWindowsSecurityProtocol,
+} from "./skill-hub-windows-security.js";
 import { captureSkillContentIntegrity } from "./skill-content-integrity.js";
 import {
   SKILL_HUB_REVIEW_SCHEMA_VERSION,
@@ -22,11 +27,45 @@ interface Harness {
   service: SkillHubReviewService;
 }
 
-const harnesses: Harness[] = [];
+const harnesses: Array<{ rootDir: string; storage?: Storage }> = [];
+
+// Per-file fixtures. Every harness used to replay the full SQLite migration
+// registry (24-36s per database on a loaded Windows host) and to construct an
+// artifact store whose PowerShell ACL worker exits after 100ms idle, so each case
+// respawned powershell.exe many times; a stalled process launch can block the
+// test worker for minutes. Migrate once and copy the file into each harness root
+// (Storage still runs `migrate` and the schema-shape check against the copy,
+// finding every version applied), and share one real Node filesystem whose
+// Windows ACL/reparse worker stays up for the whole file.
+let migratedDbTemplatePath: string | undefined;
+let windowsSecurityProtocol: PowerShellSkillHubWindowsSecurityProtocol | undefined;
+let sharedFilesystem: NodeSkillHubArtifactFilesystem;
+
+beforeAll(async () => {
+  windowsSecurityProtocol =
+    process.platform === "win32"
+      ? new PowerShellSkillHubWindowsSecurityProtocol({ idleShutdownMs: Number.POSITIVE_INFINITY })
+      : undefined;
+  sharedFilesystem = new NodeSkillHubArtifactFilesystem(
+    windowsSecurityProtocol ? { windowsSecurity: new NodeSkillHubWindowsSecurity(windowsSecurityProtocol) } : {},
+  );
+  const templateDir = await fs.mkdtemp(path.join(os.tmpdir(), "gc-skill-hub-review-schema-"));
+  migratedDbTemplatePath = path.join(templateDir, "gateway.sqlite");
+  new Storage({
+    dbPath: migratedDbTemplatePath,
+    transcriptsDir: path.join(templateDir, "transcripts"),
+    auditDir: path.join(templateDir, "audit"),
+  }).close();
+}, 120_000); // One full migration replay, inherently slow on a loaded host.
+
+afterAll(async () => {
+  windowsSecurityProtocol?.dispose();
+  if (migratedDbTemplatePath) await fs.rm(path.dirname(migratedDbTemplatePath), { recursive: true, force: true });
+});
 
 afterEach(async () => {
   for (const harness of harnesses.splice(0)) {
-    harness.storage.close();
+    harness.storage?.close();
     await fs.rm(harness.rootDir, { recursive: true, force: true });
   }
 });
@@ -227,7 +266,7 @@ describe("SkillHubReviewService", { timeout: 120_000 }, () => {
       expect(databaseCount(harness.storage, "candidate_skill_versions")).toBe(0);
       expect(databaseCount(harness.storage, "skill_lifecycle")).toBe(0);
     }
-  }, 45_000);
+  }, 90_000); // Seven independently migrated SQLite + filesystem review fixtures.
 
   it("rejects credentialed, fragmented, local, and marketplace source URLs before materialization", async () => {
     const harness = await createHarness();
@@ -440,6 +479,8 @@ async function createHarness(
   ) => Promise<MaterializedSkillReviewContext>,
 ): Promise<Harness> {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "gc-skill-hub-review-"));
+  const owned: (typeof harnesses)[number] = { rootDir };
+  harnesses.push(owned);
   const sourceDir = path.join(rootDir, "source");
   await fs.mkdir(sourceDir, { recursive: true });
   await fs.writeFile(
@@ -459,12 +500,17 @@ async function createHarness(
     "utf8",
   );
   await fs.writeFile(path.join(sourceDir, "LICENSE"), "MIT\n", "utf8");
+  const dbPath = path.join(rootDir, "gateway.sqlite");
+  await fs.copyFile(migratedDbTemplatePath!, dbPath, fsConstants.COPYFILE_EXCL);
   const storage = new Storage({
-    dbPath: path.join(rootDir, "gateway.sqlite"),
+    dbPath,
     transcriptsDir: path.join(rootDir, "transcripts"),
     auditDir: path.join(rootDir, "audit"),
   });
-  const artifactStore = new SkillHubArtifactStore(path.join(rootDir, "data", "skill-hub", "artifacts"));
+  owned.storage = storage;
+  const artifactStore = new SkillHubArtifactStore(path.join(rootDir, "data", "skill-hub", "artifacts"), {
+    filesystem: sharedFilesystem,
+  });
   const context = async (): Promise<MaterializedSkillReviewContext> => {
     const integrity = await captureSkillContentIntegrity(sourceDir);
     const validation = validationFixture(integrity);
@@ -494,7 +540,6 @@ async function createHarness(
     service: undefined as unknown as SkillHubReviewService,
   };
   harness.service = serviceFor(harness);
-  harnesses.push(harness);
   return harness;
 }
 

@@ -5,12 +5,13 @@ import type {
   ChatTurnCapabilityProfileEnvelope,
   ChatTurnCapabilityProfileRecord,
 } from "@goatcitadel/contracts";
-import { fetchChatTurnCapabilityProfile } from "@goatcitadel/mission-control-shared/api/client";
+import { fetchChatTurnCapabilityProfile, fetchChatTurnRoutedContext } from "@goatcitadel/mission-control-shared/api/client";
 
 export type ChatCapabilityProfileInspectionStatus =
   | "idle"
   | "loading"
   | "verified"
+  | "admission_verified"
   | "legacy_missing"
   | "invalid"
   | "forbidden"
@@ -230,11 +231,35 @@ export function useChatCapabilityProfileInspection(input: {
       return;
     }
     if (!expectedProfileId && !expectedProfileHash) {
+      const expected = selectedTurn.trace.routing.routedContext;
+      if (expected) {
+        let stale = false;
+        setInspection({ status: "loading", profile: null, mismatchFields: [], message: "Checking scoped routed context…" });
+        void fetchChatTurnRoutedContext(sessionId, selectedTurn.turnId, workspaceId).then((envelope) => {
+          if (stale) return;
+          const actual = envelope.routedContext;
+          const mismatchFields = envelope.state !== "admission_bound" || envelope.sessionId !== sessionId ||
+            envelope.turnId !== selectedTurn.turnId || envelope.workspaceId !== workspaceId ? ["context scope"] : [];
+          for (const key of ["snapshotId", "snapshotHash", "sourceRequestHash", "contentHash"] as const) {
+            if (!actual || actual[key] !== expected[key]) mismatchFields.push(key);
+          }
+          setInspection(mismatchFields.length ? { status: "invalid", profile: null, mismatchFields,
+            message: "The admitted context does not exactly match the selected turn. Source details remain hidden." }
+            : { status: "admission_verified", profile: null, mismatchFields: [], routedContext: actual,
+              message: "Routed context matches the durable admission and selected turn. Current source access was checked." });
+        }).catch((error: unknown) => {
+          if (stale) return;
+          const status = readHttpStatus(error);
+          setInspection({ status: status === 401 || status === 403 ? "forbidden" : status === 404 ? "not_found" : "unavailable",
+            profile: null, mismatchFields: [], message: "Scoped routed context could not be inspected. Current source access may have changed." });
+        });
+        return () => { stale = true; };
+      }
       setInspection({
         status: "legacy_missing",
         profile: null,
         mismatchFields: [],
-        message: "This legacy turn has no persisted immutable capability profile.",
+        message: "This turn has no persisted capability profile or routed context snapshot.",
       });
       return;
     }

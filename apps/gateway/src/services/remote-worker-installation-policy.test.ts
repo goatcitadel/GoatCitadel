@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { remoteWorkerRuntimeInstallRequestSha256, type ToolAccessEvaluateResponse, type ToolAccessEvaluateRequest, type ToolPolicyConfig } from "@goatcitadel/contracts";
 import { ToolPolicyEngine } from "@goatcitadel/policy-engine";
-import { resolveRemoteWorkerChatProfile } from "./remote-worker-chat-authority.js";
+import { resolveRemoteWorkerChatAuthority } from "./remote-worker-chat-authority.js";
 import { createRemoteWorkerInstallationPolicy } from "./remote-worker-installation-policy.js";
-vi.mock("./remote-worker-chat-authority.js", () => ({ resolveRemoteWorkerChatProfile: vi.fn() }));
+vi.mock("./remote-worker-chat-authority.js", async (importOriginal) => ({ ...await importOriginal<typeof import("./remote-worker-chat-authority.js")>(), resolveRemoteWorkerChatAuthority: vi.fn() }));
 function fixture() {
   const installation = { schemaVersion: "goatcitadel.worker-runtime-install.v1" as const, nonce: "1".repeat(64), journalIdentityHex: "2".repeat(48),
     preparedSha256: "3".repeat(64), checkpointSha256: "4".repeat(64), packageSha256: "5".repeat(64),
@@ -13,9 +13,9 @@ function fixture() {
     leaseTokenSha256: "8".repeat(64), protectedAuthority: { credentialAuthority: {}, meshAdmission: {} } as never,
     nonce: installation.nonce, requestSha256: remoteWorkerRuntimeInstallRequestSha256(installation) };
   const manifest = { requiredCapabilityClasses: ["durable_compute"], durableRunId: "run", taskId: "task" };
-  const binding = { profile: { identity: { workspaceId: "workspace", sessionId: "session", citadelId: "citadel" } },
+  const binding = { evidence: { binding: { capabilityProfileSha256: "a".repeat(64) }, route: { providerId: "local", model: "test" }, contentHash: "b".repeat(64), memoryMode: "off", permission: { profileId: "danger" }, tools: [], identity: { workspaceId: "workspace", sessionId: "session", citadelId: "citadel" } },
     policy: { permissionProfileId: "danger", authActorId: "operator" } };
-  vi.mocked(resolveRemoteWorkerChatProfile).mockResolvedValue(binding as never);
+  vi.mocked(resolveRemoteWorkerChatAuthority).mockResolvedValue(binding as never);
   const validateReviewForAssignment = vi.fn(async () => installation);
   const resolveActiveChatExecution = vi.fn(async () => ({ authority: { assignment: { manifest } } }));
   const inspect = vi.fn(async (_request: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateResponse> => ({ toolName: "remote_worker.native_runtime_install", allowed: true,

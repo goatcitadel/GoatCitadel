@@ -78,7 +78,8 @@ const REASON_MESSAGES: Record<McpRequesterResolutionReasonCode, string> = {
   discovery_secret_detected: "The requester MCP discovery output did not pass secret scanning.",
   schema_revalidation_required: "A fresh requester MCP schema revalidation is required.",
   schema_revalidation_drift: "The requester MCP schema revalidation has drifted.",
-  operation_denied: "The requester MCP operation is denied for this authority stage.",
+  operation_denied:
+    "The MCP operation is denied for this authority stage. Inspect current Chat permissions and the server's tool policy before retrying.",
   resolved_connection_invalid: "The resolved MCP connection is invalid.",
   resolved_destination_denied: "The resolved MCP destination is denied.",
   resolved_header_denied: "A resolved MCP header is denied.",

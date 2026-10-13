@@ -5,6 +5,8 @@ import {
   REMOTE_WORKER_CHAT_OUTPUT_PROFILE_SHA256,
   isModelUsageProvenNotDispatched,
   readDurableChatTurnExecutionPayloadAuthority,
+  remoteWorkerCapabilityBindingForTurn,
+  sameRemoteWorkerCapabilityBinding,
   remoteWorkerArtifactManifestSha256,
   remoteWorkerChatInferenceMessages,
   remoteWorkerInferenceCanonicalSha256,
@@ -17,6 +19,7 @@ import type { AsyncStorage, RemoteWorkerAssignmentAggregate } from "@goatcitadel
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import { RemoteWorkerArtifactStore } from "./remote-worker-artifact-store.js";
 import { readCanonicalWorkerChatOutput, type RemoteWorkerChatSequenceContext } from "./remote-worker-chat-output-service.js";
+import { readRetainedRemoteWorkerChatEvidence } from "./remote-worker-chat-admission-authority.js";
 import { readCanonicalDurableChatTerminalOutput } from "./chat-durable-run-service.js";
 import { retainRemoteWorkerChatApprovalWait } from "./remote-worker-chat-approval-wait.js";
 import { normalizeRemoteWorkerNativeContinuation, appendRemoteWorkerNativeChatContext, remoteWorkerNativeChatContextSha256,
@@ -281,13 +284,15 @@ export class RemoteWorkerChatExecutionService {
       admitted.workspaceId !== scope.executionWorkspaceId ||
       admitted.sessionId !== scope.sessionId ||
       admitted.turnId !== scope.turnId ||
-      !prepared.capabilityProfile
+      (!prepared.capabilityProfile && !prepared.featureAdmission)
     )
       throw new Error("Worker Chat completion has no matching canonical admission.");
     const manifest = assignment.assignment.manifest;
     if (
       manifest.durableRunId !== run.runId ||
-      manifest.capabilityProfileSha256 !== prepared.capabilityProfile.hashes.profileHash ||
+      !sameRemoteWorkerCapabilityBinding(manifest, remoteWorkerCapabilityBindingForTurn(admitted)) ||
+      (manifest.admissionReference ? manifest.admissionReference.featureReferenceSha256 !== prepared.featureAdmission?.referenceSha256
+        : manifest.capabilityProfileSha256 !== prepared.capabilityProfile?.hashes.profileHash) ||
       manifest.contextSnapshotSha256 !== run.metadata?.remoteWorkerChatContextSha256
     )
       throw new Error("Worker Chat completion differs from its admitted context or capability profile.");
@@ -328,11 +333,10 @@ export class RemoteWorkerChatExecutionService {
       manifest.totalBytes > REMOTE_WORKER_CHAT_OUTPUT_PROFILE.maxBytes
     )
       throw new Error("Worker Chat completion lacks its verified output manifest.");
-    const profile = await this.storage.chatTurnCapabilityProfiles.findByRun(assignment.manifest.durableRunId);
+    const evidence = await readRetainedRemoteWorkerChatEvidence(this.storage, assignment.manifest);
     const context = await this.storage.remoteWorkerChatContexts.findForRun(assignment.manifest.durableRunId);
-    if (!profile || profile.hashes.profileHash !== assignment.manifest.capabilityProfileSha256 ||
-      (context && (context.contextSha256 !== assignment.manifest.contextSnapshotSha256 ||
-        context.capabilityProfileId !== profile.profileId)))
+    if (context && (context.contextSha256 !== assignment.manifest.contextSnapshotSha256 ||
+        !sameRemoteWorkerCapabilityBinding(context, evidence.binding)))
       throw new Error("Worker Chat completion lost its admitted context or capability profile.");
     // Older text-only assignments did not retain a complete history snapshot.
     // Iterative tool workflows always require that immutable context.
@@ -351,7 +355,7 @@ export class RemoteWorkerChatExecutionService {
       nativeContext = retained;
     }
     const sequence: RemoteWorkerChatSequenceContext | undefined = context ? {
-      profile, baseMessages: nativeContext ? appendRemoteWorkerNativeChatContext(remoteWorkerChatInferenceMessages(context), nativeContext)
+      evidence, baseMessages: nativeContext ? appendRemoteWorkerNativeChatContext(remoteWorkerChatInferenceMessages(context), nativeContext)
         : remoteWorkerChatInferenceMessages(context), contextSha256: context.contextSha256,
       ...(nativeContext ? { continuationSha256: remoteWorkerNativeChatContextSha256(nativeContext), nativeContext } : {}),
       taskId: assignment.manifest.taskId, workerId: generation.workerId,
@@ -369,7 +373,7 @@ export class RemoteWorkerChatExecutionService {
       record.sessionId !== assignment.manifest.sessionId ||
       record.turnId !== assignment.manifest.turnId ||
       record.executionWorkspaceId !== assignment.manifest.executionWorkspaceId ||
-      record.capabilityProfileSha256 !== assignment.manifest.capabilityProfileSha256 ||
+      !sameRemoteWorkerCapabilityBinding(record, assignment.manifest) ||
       record.routedContextSha256 !== assignment.manifest.contextSnapshotSha256
     )
       throw new Error("Worker Chat inference belongs to another execution.");

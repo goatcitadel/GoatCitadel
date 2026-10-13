@@ -3537,11 +3537,13 @@ describe("durable-execution-service orchestration workflow", () => {
       assistantMessage: { messageId: "assistant-1", content: "" },
     }));
     let traceStatus: ChatTurnTraceRecord["status"] = "running";
+    let traceDurable: ChatTurnTraceRecord["durable"] = { runId: run.runId, status: "running" };
     const patchIfStatus = vi.fn((_turnId, expectedStatuses, input) => {
       if (!expectedStatuses.includes(traceStatus)) {
         return undefined;
       }
-      traceStatus = input.status;
+      traceStatus = input.status ?? traceStatus;
+      traceDurable = input.durable ?? traceDurable;
       return { turnId: "turn-1", status: traceStatus };
     });
     const persistChatStreamChunk = vi.fn();
@@ -3563,7 +3565,7 @@ describe("durable-execution-service orchestration workflow", () => {
             sessionId: "session-1",
             userMessageId: "user-1",
             status: traceStatus,
-            durable: { runId: run.runId, status: "running" },
+            durable: traceDurable,
             completion: { finishReason: "error", repaired: true },
           })),
           getForUpdate: vi.fn(() => ({
@@ -3571,7 +3573,7 @@ describe("durable-execution-service orchestration workflow", () => {
             sessionId: "session-1",
             userMessageId: "user-1",
             status: traceStatus,
-            durable: { runId: run.runId, status: "running" },
+            durable: traceDurable,
             completion: { finishReason: "error", repaired: true },
           })),
           patchIfStatus,
@@ -3642,6 +3644,34 @@ describe("durable-execution-service orchestration workflow", () => {
       run.runId,
     );
     expect(persistChatStreamChunk).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes a known pre-provider durable failure exactly once after trace reconciliation", async () => {
+    const run = { ...buildRunWithPayload("chat.turn.execute", {
+      version: "chat.turn.execute.v1", sessionId: "session-1", turnId: "turn-1", userMessageId: "user-1",
+      assistantMessageId: "assistant-1", branchKind: "new", threadEventType: "chat_thread_turn_appended",
+      request: { content: "Read the admitted note." },
+    }), status: "failed" as const };
+    let trace = { turnId: "turn-1", sessionId: "session-1", userMessageId: "user-1", assistantMessageId: "assistant-1",
+      status: "running", durable: { runId: run.runId, status: "running" } } as ChatTurnTraceRecord;
+    const host = {
+      storage: {
+        runImmediateTransaction: async (work: () => unknown) => await work(),
+        durableRuns: { getRun: vi.fn(() => run) },
+        chatTurnTraces: {
+          get: vi.fn(() => trace), getForUpdate: vi.fn(() => trace),
+          patch: vi.fn((_id, patch) => (trace = { ...trace, ...patch })),
+          patchIfStatus: vi.fn((_id, statuses, patch) => statuses.includes(trace.status) ? (trace = { ...trace, ...patch }) : undefined),
+        },
+        chatToolRuns: { listByTurn: vi.fn(() => []) }, chatStreamEvents: { listByTurn: vi.fn(() => []) },
+        chatMessages: { get: vi.fn(() => undefined) }, sessions: { getBySessionId: vi.fn(() => ({ sessionId: "session-1", workspaceId: "default" })) },
+      },
+      persistChatStreamChunk: vi.fn(), publishRealtime: vi.fn(), recordDevDiagnostic: vi.fn(),
+    };
+    await markDurableWorkflowUnrecoverable(host as never, run, "Explicit context access revalidation is unavailable.");
+    await markDurableWorkflowUnrecoverable(host as never, run, "Explicit context access revalidation is unavailable.");
+    expect(trace).toMatchObject({ status: "failed", failure: { failureClass: "unknown", message: "Explicit context access revalidation is unavailable.", retryable: false } });
+    expect(host.persistChatStreamChunk).toHaveBeenCalledExactlyOnceWith({ type: "error", sessionId: "session-1", turnId: "turn-1", error: "Explicit context access revalidation is unavailable." }, run.runId);
   });
 
   it("preserves a location answer and supplies verified configuration as server context on resume", async () => {
@@ -4165,6 +4195,7 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable Chat output was emitted before interruption and cannot be safely replayed.",
+      interrupted: true,
     });
 
     host.storage.chatTurnTraces.get.mockReturnValueOnce({
@@ -4189,6 +4220,7 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable Chat output was emitted before interruption and cannot be safely replayed.",
+      interrupted: true,
     });
 
     host.storage.chatTurnTraces.get.mockReturnValueOnce({
@@ -4213,6 +4245,7 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable Chat output was emitted before interruption and cannot be safely replayed.",
+      interrupted: true,
     });
 
     host.storage.chatTurnTraces.get.mockReturnValueOnce({
@@ -4230,6 +4263,7 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Assistant output was persisted while the Chat turn trace was still active.",
+      interrupted: true,
     });
 
     host.storage.chatTurnTraces.get.mockReturnValueOnce({
@@ -4264,6 +4298,7 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable chat run was interrupted after tool execution began and cannot be safely replayed.",
+      interrupted: true,
     });
 
     const settledConfigurationRun: DurableRunRecord = {
@@ -4333,6 +4368,7 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(await isDurableWorkflowRecoverable(host as never, settledConfigurationRun)).toEqual({
       recoverable: false,
       reason: "Durable chat run was interrupted after tool execution began and cannot be safely replayed.",
+      interrupted: true,
     });
   });
 

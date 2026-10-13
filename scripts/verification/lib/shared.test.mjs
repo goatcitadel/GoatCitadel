@@ -9,6 +9,7 @@ import {
   readVerificationCandidateIdentity,
   buildFastLanePerfPayload,
   finalizeRunContext,
+  parseCliArgs,
   renameFileWithRetry,
   runCommand,
 } from "./shared.mjs";
@@ -486,4 +487,11 @@ test("originating diagnostics redact exact short and spaced designated credentia
     if (previous === undefined) delete process.env[key];
     else process.env[key] = previous;
   }
+});
+
+test("parseCliArgs keeps every character after the first = in an inline option value", () => {
+  assert.deepEqual(parseCliArgs(["lane", "--output=proofs/run=latest.json", "--empty=", "--flag"]), {
+    positional: ["lane"],
+    options: { output: "proofs/run=latest.json", empty: "", flag: true },
+  });
 });

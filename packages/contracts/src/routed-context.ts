@@ -1,7 +1,9 @@
 export const CHAT_ROUTED_CONTEXT_SNAPSHOT_VERSION = "chat.routed-context-snapshot.v2" as const;
+export const CHAT_ROUTED_CONTEXT_ADMISSION_SNAPSHOT_VERSION = "chat.routed-context-snapshot.v3" as const;
 export const CHAT_ROUTED_CONTEXT_LEGACY_SNAPSHOT_VERSION = "chat.routed-context-snapshot.v1" as const;
 export type ChatRoutedContextSnapshotVersion =
   | typeof CHAT_ROUTED_CONTEXT_LEGACY_SNAPSHOT_VERSION
+  | typeof CHAT_ROUTED_CONTEXT_ADMISSION_SNAPSHOT_VERSION
   | typeof CHAT_ROUTED_CONTEXT_SNAPSHOT_VERSION;
 export const CHAT_ROUTED_CONTEXT_BUDGET_POLICY_VERSION = "chat.routed-context-budget.v1" as const;
 export const CHAT_ROUTED_CONTEXT_ESTIMATOR_VERSION = "gc-approx-tokens.v1" as const;
@@ -95,8 +97,11 @@ export interface ChatRoutedContextSnapshotRecord {
   turnId: string;
   sessionId: string;
   workspaceId: string;
-  capabilityProfileId: string;
-  capabilityProfileHash: string;
+  /** Required only for historical v1/v2 snapshots. */
+  capabilityProfileId?: string;
+  capabilityProfileHash?: string;
+  /** Exact server-owned mutation admission; required only for v3 snapshots. */
+  admissionBinding?: ChatRoutedContextAdmissionBinding;
   sourceRequestHash: string;
   contentHash: string;
   snapshotHash: string;
@@ -105,6 +110,14 @@ export interface ChatRoutedContextSnapshotRecord {
   /** Exact system block injected into provider/tool planning and execution. */
   contextText: string;
   createdAt: string;
+}
+
+export interface ChatRoutedContextAdmissionBinding {
+  admissionId: string;
+  sessionIncarnationId: string;
+  materialSha256: string;
+  aggregateRevision: number;
+  controllerGeneration: number;
 }
 
 export interface ChatRoutedContextInspectionEntry {
@@ -136,6 +149,15 @@ export interface ChatRoutedContextInspection {
   alreadyAttachedCount: number;
   budget: ChatRoutedContextBudgetReceipt;
   entries: ChatRoutedContextInspectionEntry[];
+}
+
+/** Scoped, content-free provenance for a current admission-bound turn. */
+export interface ChatRoutedContextInspectionEnvelope {
+  state: "admission_bound";
+  sessionId: string;
+  turnId: string;
+  workspaceId: string;
+  routedContext: ChatRoutedContextInspection;
 }
 
 /** Minimal public trace binding. Rich source receipts require a scoped inspection read. */

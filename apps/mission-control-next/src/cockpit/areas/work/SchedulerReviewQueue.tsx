@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchCronReviewQueue } from "@goatcitadel/mission-control-shared/api/cron";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { fetchSettings } from "@goatcitadel/mission-control-shared/api/settings";
 import { formatSchedulerReviewItem } from "../../../features/native-routes/ops/runtime-schedule-model";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
@@ -12,12 +13,25 @@ const statusOf = (error: unknown) =>
 
 /** Runs the scheduler flagged for follow-up. Read-only: the retry owner is not offered here, as in Classic. */
 export function SchedulerReviewQueue() {
+  // The Gateway refuses the queue (409) while `cronReviewQueueV1Enabled` is off, so read the flag first and only
+  // request the queue when it is on. Classic never hits this: its timeline is gated server-side.
+  const settings = useQuery({ queryKey: ["work", "schedules-settings"], queryFn: () => fetchSettings() });
+  const enabled = settings.data?.features.cronReviewQueueV1Enabled === true && !settings.isError;
   // Under the schedules topic, so cron realtime signals refresh it with the schedule list.
   const queue = useQuery({
     queryKey: [...queryKeys.schedules(), "review-queue"],
     queryFn: () => fetchCronReviewQueue(200),
+    enabled,
   });
-  const items = queue.data?.items ?? [];
+  // A disabled query keeps its cached data and error, so everything shown below the callouts follows `enabled`.
+  const items = enabled ? (queue.data?.items ?? []) : [];
+  // Refresh re-reads the flag owner first; a cached `true` may be stale, and the queue is only requested
+  // when the fresh snapshot still reports it on, so a just-disabled flag never produces the 409.
+  const refresh = async () => {
+    const fresh = await settings.refetch();
+    // A failed refetch keeps the cached data, so a stale `true` must not request the queue.
+    if (fresh.isSuccess && fresh.data?.features.cronReviewQueueV1Enabled === true) await queue.refetch();
+  };
   return (
     <section aria-label="Scheduler review" className="grid min-w-0 gap-3 rounded-lg border border-line bg-raised p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -27,23 +41,42 @@ export function SchedulerReviewQueue() {
             Scheduled runs flagged for follow-up, across all workspaces. Retrying is not offered here.
           </p>
         </div>
-        <Button size="sm" disabled={queue.isFetching} onClick={() => void queue.refetch()}>
-          Refresh
-        </Button>
+        {enabled ? (
+          <Button size="sm" disabled={settings.isFetching || queue.isFetching} onClick={() => void refresh()}>
+            Refresh
+          </Button>
+        ) : null}
       </div>
-      {queue.isPending ? (
+      {settings.isPending ? (
+        <p role="status" className="text-sm text-fg-muted">
+          Checking scheduler review availability…
+        </p>
+      ) : null}
+      {settings.isError ? (
+        <Callout tone="error">
+          Scheduler review availability is unknown. {describeApiError(settings.error).summary}
+        </Callout>
+      ) : null}
+      {settings.isSuccess && !enabled ? (
+        <Callout tone="warning">
+          Scheduler review is switched off in runtime settings on this Gateway. No review items can be shown.
+        </Callout>
+      ) : null}
+      {enabled && queue.isPending ? (
         <p role="status" className="text-sm text-fg-muted">
           Reading the review queue…
         </p>
       ) : null}
-      {queue.isError ? (
+      {enabled && queue.isError ? (
         <Callout tone={statusOf(queue.error) === 409 ? "warning" : "error"}>
           {statusOf(queue.error) === 409
             ? "Scheduler review is unavailable on this Gateway; it is usually switched off in runtime settings. No review items can be shown."
             : describeApiError(queue.error).summary}
         </Callout>
       ) : null}
-      {queue.isSuccess && !items.length ? <p className="text-sm text-fg-muted">No scheduler review items.</p> : null}
+      {enabled && queue.isSuccess && !items.length ? (
+        <p className="text-sm text-fg-muted">No scheduler review items.</p>
+      ) : null}
       {items.length ? (
         <ul className="grid min-w-0 gap-2">
           {items.map((item) => {

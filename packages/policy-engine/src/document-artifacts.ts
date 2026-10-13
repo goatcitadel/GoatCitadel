@@ -1,8 +1,6 @@
 import {
-  AlignmentType,
   Document,
   HeadingLevel,
-  ImageRun,
   Packer,
   Paragraph,
   ShadingType,
@@ -12,7 +10,6 @@ import {
   TextRun,
   WidthType,
 } from "docx";
-import sharp from "sharp";
 import { createArtifactDesignPlan, cssColor, type ArtifactDesignPlan } from "./artifact-design.js";
 import { createStoredZip, type ZipEntry } from "./presentation-pptx.js";
 
@@ -31,14 +28,25 @@ export interface DocumentArtifactInput {
   rows?: Array<Record<string, unknown> | unknown[]>;
   createdAt?: Date;
   design?: ArtifactDesignPlan;
+  /**
+   * A complete HTML document authored by the model (only honored for the `html` format, only when
+   * the gateway admitted it under a design receipt). Written verbatim: nothing is escaped.
+   */
+  html?: string;
 }
+
+export type DocumentArtifactMarkup = "template" | "model-authored";
 
 export interface DocumentArtifactOutput {
   data: Buffer | string;
   extension: string;
   mimeType: string;
   binary: boolean;
+  /** Whether the bytes came from the fixed renderer template or from model-authored markup. */
+  markup: DocumentArtifactMarkup;
 }
+
+export const MODEL_AUTHORED_HTML_MAX_BYTES = 512 * 1024;
 
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -65,14 +73,18 @@ export async function createDocumentArtifact(
   format: DocumentArtifactFormat,
   input: DocumentArtifactInput,
 ): Promise<DocumentArtifactOutput> {
-  const output = FORMAT_OUTPUTS[format];
+  const output = { ...FORMAT_OUTPUTS[format], markup: "template" as const };
   switch (format) {
     case "markdown":
       return { ...output, data: buildMarkdown(input) };
     case "txt":
       return { ...output, data: buildPlainText(input) };
-    case "html":
-      return { ...output, data: buildHtml(input) };
+    case "html": {
+      const modelAuthored = resolveModelAuthoredHtml(input.html);
+      return modelAuthored === undefined
+        ? { ...output, data: buildHtml(input) }
+        : { ...output, data: modelAuthored, markup: "model-authored" };
+    }
     case "json":
       return { ...output, data: JSON.stringify(toJsonDocument(input), null, 2) };
     case "csv":
@@ -86,6 +98,24 @@ export async function createDocumentArtifact(
 
 export function documentArtifactExtension(format: DocumentArtifactFormat): string {
   return FORMAT_OUTPUTS[format].extension;
+}
+
+/**
+ * The model's HTML when it is a whole document (`<html` or `<!doctype`) within the size cap;
+ * undefined for a fragment or nothing, so the template path runs. Oversize input is an error
+ * rather than a silent fallback: the caller asked for specific markup and must learn it was refused.
+ */
+function resolveModelAuthoredHtml(html: string | undefined): string | undefined {
+  if (typeof html !== "string") return undefined;
+  const trimmed = html.trim();
+  if (!/<html[\s>]|<!doctype\s/iu.test(trimmed)) return undefined;
+  const bytes = Buffer.byteLength(html, "utf8");
+  if (bytes > MODEL_AUTHORED_HTML_MAX_BYTES) {
+    throw new Error(
+      `model_authored_html_too_large: the html argument is ${bytes} bytes; the limit is ${MODEL_AUTHORED_HTML_MAX_BYTES} bytes.`,
+    );
+  }
+  return html;
 }
 
 function buildMarkdown(input: DocumentArtifactInput): string {
@@ -181,7 +211,6 @@ async function buildDocx(input: DocumentArtifactInput): Promise<Buffer> {
 
 async function buildStyledDocx(input: DocumentArtifactInput): Promise<Buffer> {
   const design = resolveDocumentDesign(input, "docx");
-  const heroImage = await buildDocxVisualBuffer(design);
   const children: Array<Paragraph | Table> = [
     new Paragraph({
       heading: HeadingLevel.TITLE,
@@ -197,26 +226,6 @@ async function buildStyledDocx(input: DocumentArtifactInput): Promise<Buffer> {
       ],
     }),
   ];
-  if (design.mode !== "plain" && design.mode !== "minimal") {
-    children.push(
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        spacing: { after: 260 },
-        children: [
-          new ImageRun({
-            type: "png",
-            data: heroImage,
-            transformation: { width: 520, height: 180 },
-            altText: {
-              name: `Generated visual for ${input.title}`,
-              title: `Generated visual for ${input.title}`,
-              description: `Abstract generated visual supporting ${input.title}.`,
-            },
-          }),
-        ],
-      }),
-    );
-  }
   if (input.body?.trim()) {
     children.push(bodyParagraph(input.body.trim(), design));
   }
@@ -369,21 +378,6 @@ function calloutTable(text: string, design: ArtifactDesignPlan): Table {
       }),
     ],
   });
-}
-
-async function buildDocxVisualBuffer(design: ArtifactDesignPlan): Promise<Buffer> {
-  const svg = [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420">`,
-    `<rect width="1200" height="420" rx="40" fill="#${design.tokens.surface}"/>`,
-    `<circle cx="1020" cy="86" r="170" fill="#${design.tokens.accent}" opacity="0.18"/>`,
-    `<circle cx="190" cy="345" r="210" fill="#${design.tokens.accent2}" opacity="0.16"/>`,
-    `<path d="M94 225 C300 80 455 310 650 180 S950 110 1090 250" fill="none" stroke="#${design.tokens.accent}" stroke-width="26" stroke-linecap="round" opacity="0.82"/>`,
-    `<rect x="88" y="285" width="175" height="64" rx="16" fill="#${design.tokens.accent}" opacity="0.9"/>`,
-    `<rect x="292" y="285" width="175" height="64" rx="16" fill="#${design.tokens.accent2}" opacity="0.9"/>`,
-    `<rect x="496" y="285" width="175" height="64" rx="16" fill="#${design.tokens.accent3}" opacity="0.9"/>`,
-    `</svg>`,
-  ].join("");
-  return sharp(Buffer.from(svg, "utf8")).png().toBuffer();
 }
 
 function cssFont(font: string): string {

@@ -1,8 +1,42 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { EventEmitter } from "node:events";
 
-import { assertOwnedGatewayRestart, assertRuntimeTruthApprovalLifecycle } from "./runtime-truth-lane.mjs";
+import { assertOwnedGatewayRestart, assertRuntimeTruthApprovalLifecycle, observeRecoveredThreadResponse } from "./runtime-truth-lane.mjs";
 import { assertRuntimeTruthToolCompletion, RUNTIME_TRUTH_NOTE } from "./runtime-truth-approval.mjs";
+
+test("recovered-thread observation retains the actual response before readiness and disposes its listener", () => {
+  const page = new EventEmitter();
+  const observe = observeRecoveredThreadResponse(page, "recovered/session");
+  const response = (session, status = 200, method = "GET") => ({
+    url: () => `http://127.0.0.1:43210/api/v1/chat/sessions/${encodeURIComponent(session)}/thread`,
+    status: () => status,
+    request: () => ({ method: () => method }),
+  });
+  for (const ignored of [response("foreign"), response("recovered/session", 401), response("recovered/session", 200, "POST")]) {
+    page.emit("response", ignored);
+    assert.equal(observe.read(), undefined);
+  }
+  const exact = response("recovered/session");
+  page.emit("response", exact);
+  assert.equal(observe.read(), exact);
+  page.emit("response", response("recovered/session"));
+  assert.equal(observe.read(), exact, "a later read must not replace the first identity-bearing response");
+  observe.dispose();
+  observe.dispose();
+  assert.equal(page.listenerCount("response"), 0);
+});
+
+test("recovered-thread observation does not invent a response or survive failed navigation cleanup", () => {
+  const page = new EventEmitter();
+  const observe = observeRecoveredThreadResponse(page, "session");
+  assert.equal(observe.read(), undefined);
+  observe.dispose();
+  page.emit("response", { url: () => "http://127.0.0.1/api/v1/chat/sessions/session/thread",
+    status: () => 200, request: () => ({ method: () => "GET" }) });
+  assert.equal(observe.read(), undefined);
+  assert.equal(page.listenerCount("response"), 0);
+});
 
 test("runtime truth requires the original approved read and persisted response, not a completed run alone", () => {
   const approval = {

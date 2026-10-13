@@ -3,7 +3,11 @@ export * from "./policy-resolver.js";
 export * from "./approval-gate.js";
 export * from "./engine.js";
 export { createMcpToolPolicyBinding, type McpToolPolicyBinding } from "./mcp-tool-policy-binding.js";
-export { createMeshToolPolicyBinding, MESH_TOOL_POLICY_DEFINITION, type MeshToolPolicyBinding } from "./mesh-tool-policy-binding.js";
+export {
+  createMeshToolPolicyBinding,
+  MESH_TOOL_POLICY_DEFINITION,
+  type MeshToolPolicyBinding,
+} from "./mesh-tool-policy-binding.js";
 export * from "./tool-executor.js";
 export * from "./presentation-visual-runtime.js";
 export * from "./tool-security.js";
@@ -12,6 +16,7 @@ export {
   BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE,
   BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_MESSAGE,
   describeBrowserSessionState,
+  forgetBrowserSessionState,
   type BrowserExecutionContext,
 } from "./browser-tools.js";
 export * from "./tool-patterns.js";
@@ -19,6 +24,8 @@ export * from "./safe-env-name.js";
 export * from "./ingestion-backends.js";
 export * from "./local-embeddings.js";
 export * from "./research-search-official-providers.js";
+export * from "./playwright-runtime.js";
+export * from "./html-render.js";
 export * from "./ingestion-source-type.js";
 export * from "./sandbox/path-jail.js";
 export * from "./sandbox/network-guard.js";
@@ -27,3 +34,5 @@ export * from "./sandbox/shell-risk-gate.js";
 export * from "./sandbox/argument-risk-gate.js";
 export * from "./policy-axes.js";
 export { validateResearchPresentationArgs } from "./presentation-model.js";
+/** Artifact design request shapes shared with the gateway (brand block → deck/document renderers). */
+export type { ArtifactBrandInput, ArtifactDesignRequest } from "./artifact-design.js";

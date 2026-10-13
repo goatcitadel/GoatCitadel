@@ -13,6 +13,7 @@ import { routeReceiptFor } from "./remote-worker-inference-service.js";
 import type {
   RemoteWorkerInferenceDispatchOutcome,
   RemoteWorkerInferenceDispatchRequest,
+  RemoteWorkerInferenceProviderResolution,
 } from "./remote-worker-inference-llm-adapter.js";
 
 export interface RemoteWorkerLlmServiceAdapterDependencies {
@@ -28,7 +29,7 @@ export interface RemoteWorkerLlmServiceAdapterDependencies {
   >;
   readonly usage: Pick<AsyncStorage["modelUsageEvents"], "listOperationAttemptsForUpdate">;
   /** Recheck canonical assignment, policy and capabilities for every transport attempt. */
-  readonly assertAuthorityCurrent: (request: RemoteWorkerInferenceDispatchRequest) => Promise<void>;
+  readonly assertAuthorityCurrent: (request: RemoteWorkerInferenceDispatchRequest, route: RemoteWorkerInferenceProviderResolution) => Promise<void>;
 }
 
 /** Reuses LlmService and its sole HX-306 owner; it never creates a second usage event. */
@@ -80,7 +81,7 @@ export class RemoteWorkerInferenceLlmServiceAdapter {
         request.attribution,
         async (attempt) => {
           if (attempt.attribution.operationId !== operationId) {
-            await this.dependencies.assertAuthorityCurrent(request);
+            await this.dependencies.assertAuthorityCurrent(request, attempt.route);
             if (!Number.isSafeInteger(attempt.effectiveOutputTokenCap) || (attempt.effectiveOutputTokenCap ?? 0) <= 0)
               throw new Error("Worker related model dispatch requires an enforceable output bound.");
             await this.dependencies.budgets.authorizeRelatedAttempt({
@@ -101,7 +102,7 @@ export class RemoteWorkerInferenceLlmServiceAdapter {
           ) {
             throw new Error("Worker inference dispatch route or ceiling changed.");
           }
-          await this.dependencies.assertAuthorityCurrent(request);
+          await this.dependencies.assertAuthorityCurrent(request, attempt.route);
           await this.dependencies.budgets.authorizeAttempt(reservation, attempt.usageEventId);
         },
       );

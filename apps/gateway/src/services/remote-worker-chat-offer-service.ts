@@ -1,9 +1,11 @@
 import {
   readDurableChatTurnExecutionPayloadAuthority,
+  remoteWorkerCapabilityBindingForTurn,
   remoteWorkerInferenceCanonicalSha256,
   type DurableRunRecord,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
+import { assertRemoteWorkerOfferAdmission } from "./remote-worker-live-admission-guard.js";
 import {
   resolveRemoteWorkerChatProfileReference,
   type RemoteWorkerChatAuthorityDependencies,
@@ -49,14 +51,15 @@ export class RemoteWorkerChatOfferService {
     if (
       !request ||
       (request.policyTaskId !== undefined &&
-        (typeof request.policyTaskId !== "string" || !request.policyTaskId.trim())) ||
-      typeof payload.capabilityProfileId !== "string" ||
-      typeof payload.capabilityProfileHash !== "string"
+        (typeof request.policyTaskId !== "string" || !request.policyTaskId.trim()))
     )
       throw new Error("Remote worker scheduling requires an admitted capability profile and valid optional task.");
-    await resolveRemoteWorkerChatProfileReference(this.dependencies, {
-      capabilityProfileId: payload.capabilityProfileId,
-      capabilityProfileSha256: payload.capabilityProfileHash,
+    const binding = remoteWorkerCapabilityBindingForTurn(authority);
+    if (binding.admissionReference) {
+      await assertRemoteWorkerOfferAdmission(this.dependencies, binding.admissionReference, run, request.policyTaskId as string | undefined);
+    } else await resolveRemoteWorkerChatProfileReference(this.dependencies, {
+      capabilityProfileId: authority.capabilityProfileId!,
+      capabilityProfileSha256: binding.capabilityProfileSha256,
       executionWorkspaceId: authority.workspaceId,
       sessionId: authority.sessionId,
       turnId: authority.turnId,

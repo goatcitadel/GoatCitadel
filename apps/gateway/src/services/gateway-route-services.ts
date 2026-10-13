@@ -28,6 +28,11 @@ import {
   type ChatAttachmentsRoutePort,
   type ChatAttachmentsRouteService,
 } from "./chat-attachments-route-service.js";
+import {
+  createChatArtifactRendersRouteService,
+  type ChatArtifactRendersRoutePort,
+  type ChatArtifactRendersRouteService,
+} from "./chat-artifact-renders-route-service.js";
 import type { ChatCompactionBreakerActionService } from "./chat-compaction-breaker-action-service.js";
 import {
   createChatDelegateRouteService,
@@ -282,6 +287,7 @@ export interface GatewayRouteServices {
   compliance: ComplianceRouteService;
   capabilities: CapabilitiesRouteService;
   capabilityPacks: CapabilityPacksRouteService;
+  chatArtifactRenders: ChatArtifactRendersRouteService;
   chatAttachments: ChatAttachmentsRouteService;
   chatCompactionBreakerActions: ChatCompactionBreakerActionService;
   chatDelegate: ChatDelegateRouteService;
@@ -385,6 +391,7 @@ export interface GatewayRouteServiceDependencies {
   compliance: ComplianceExportServiceDeps;
   capabilities: CapabilitiesRoutePort;
   capabilityPacks: CapabilityPacksRoutePort;
+  chatArtifactRenders: ChatArtifactRendersRoutePort;
   chatAttachments: ChatAttachmentsRoutePort;
   chatCompactionBreakerActions: ChatCompactionBreakerActionService;
   chatDelegate: ChatDelegateRoutePort;
@@ -468,6 +475,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     compliance: createComplianceRouteService(deps.compliance),
     capabilities: new CapabilitiesRouteService(deps.capabilities),
     capabilityPacks: createCapabilityPacksRouteService(deps.capabilityPacks),
+    chatArtifactRenders: createChatArtifactRendersRouteService(deps.chatArtifactRenders),
     chatAttachments: createChatAttachmentsRouteService(deps.chatAttachments),
     chatCompactionBreakerActions: deps.chatCompactionBreakerActions,
     chatDelegate: createChatDelegateRouteService(deps.chatDelegate),

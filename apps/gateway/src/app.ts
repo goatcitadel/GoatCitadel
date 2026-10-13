@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
+import { MISSION_CONTROL_BASELINE_CSP } from "@goatcitadel/policy-engine";
 import { enterRequestAttribution } from "@goatcitadel/storage";
 import { loadLocalEnvFile } from "./env-file.js";
 import { gatewayPlugin, type GatewayPluginOptions } from "./plugins/storage.js";
@@ -125,8 +126,11 @@ function isSecureRuntimeConfigurationSubmitPath(url: string): boolean {
  * MUST survive: see `applyBaselineSecurityHeaders`, which only installs this
  * baseline when no CSP is already present on the reply.
  */
-const BASELINE_CONTENT_SECURITY_POLICY =
-  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+// Pinned to the policy-engine constant so the html artifact preview (a srcdoc iframe inheriting this
+// policy) and the offline PNG render evidence (which injects it) never drift apart. D4: fonts may be
+// inline data: URIs; scripts never run and no cross-origin fetch is allowed. Same-origin ('self')
+// shell assets can still load in the preview; the offline renders have no origin and no network.
+const BASELINE_CONTENT_SECURITY_POLICY = MISSION_CONTROL_BASELINE_CSP;
 
 interface GatewayRequestState {
   correlationId?: string;

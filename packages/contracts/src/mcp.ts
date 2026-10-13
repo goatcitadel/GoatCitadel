@@ -335,6 +335,32 @@ export interface McpServerTemplateRecord {
   enabledByDefault: boolean;
 }
 
+/** Bounded retained Chat proof, never connection health or future invocation authority. */
+export interface McpServerTestEvidence {
+  serverId: string;
+  workspaceId: string;
+  observedAt: string;
+  state: "verified" | "stale" | "unverified" | "unavailable";
+  historyLimit: number;
+  toolLimitPerTurn: number;
+  receiptCandidateLimit?: number;
+  searchTruncated?: boolean;
+  schemaSource: "cached_inventory";
+  serverRevision?: string;
+  connectionRevision?: string;
+  receipt?: {
+    sessionId: string;
+    turnId: string;
+    durableRunId: string;
+    toolRunId: string;
+    toolName: string;
+    approvalId: string;
+    effectRunId: string;
+    finishedAt: string;
+    chatHref: string;
+  };
+}
+
 export interface McpToolRecord {
   serverId: string;
   toolName: string;

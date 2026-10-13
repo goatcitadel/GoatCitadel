@@ -18,7 +18,10 @@ export function buildChatTurnFailureRecord(
   return {
     failureClass,
     message,
-    retryable: failureClass !== "auth_required" && failureClass !== "skill_security_blocked",
+    retryable:
+      failureClass !== "auth_required" &&
+      failureClass !== "skill_security_blocked" &&
+      failureClass !== "guidance_security_blocked",
     recommendedAction,
     ...(provider ? { provider } : {}),
     ...(security ? { security } : {}),
@@ -27,15 +30,20 @@ export function buildChatTurnFailureRecord(
 
 export function extractSkillSecurityFailureRecord(error: unknown): ChatSkillSecurityFailureRecord | undefined {
   const details = toPlainRecord((error as { details?: unknown } | undefined)?.details);
-  if (!details || details.failureClass !== "skill_security_blocked") return undefined;
+  if (!details) return undefined;
+  const guidance = details.failureClass === "guidance_security_blocked";
+  if (!guidance && details.failureClass !== "skill_security_blocked") return undefined;
   const scannerVersion = readProviderFailureString(details.scannerVersion);
   const skillIds = readStringArray(details.skillIds);
+  // A workspace guidance document names its file, never its content; the record stays hash-only.
+  const guidanceFiles = guidance ? readStringArray([details.fileName]) : [];
   const ruleIds = readStringArray(details.ruleIds);
   const evidenceHashes = readStringArray(details.evidenceHashes).filter((value) => /^[a-f0-9]{64}$/u.test(value));
-  if (!scannerVersion || skillIds.length === 0 || ruleIds.length === 0 || evidenceHashes.length === 0) {
+  const subjects = guidance ? guidanceFiles.length : skillIds.length;
+  if (!scannerVersion || subjects === 0 || ruleIds.length === 0 || evidenceHashes.length === 0) {
     return undefined;
   }
-  return { scannerVersion, skillIds, ruleIds, evidenceHashes };
+  return { scannerVersion, skillIds, ...(guidance ? { guidanceFiles } : {}), ruleIds, evidenceHashes };
 }
 
 export function extractProviderFailureRecord(error: unknown): ChatProviderFailureRecord | undefined {
@@ -78,8 +86,9 @@ export function classifyChatTurnFailure(input: {
   error?: unknown;
   toolRuns: ChatToolRunRecord[];
 }): ChatTurnFailureClass {
-  if ((input.error as { failureClass?: unknown } | undefined)?.failureClass === "skill_security_blocked") {
-    return "skill_security_blocked";
+  const errorFailureClass = (input.error as { failureClass?: unknown } | undefined)?.failureClass;
+  if (errorFailureClass === "skill_security_blocked" || errorFailureClass === "guidance_security_blocked") {
+    return errorFailureClass;
   }
   if (hasToolBlockedFailure(input.toolRuns)) {
     return "tool_blocked";

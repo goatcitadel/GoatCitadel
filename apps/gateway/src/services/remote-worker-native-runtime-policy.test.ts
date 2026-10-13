@@ -1,18 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolAccessEvaluateResponse } from "@goatcitadel/contracts";
 import { windowsRuntimeDispatchFixture } from "../../../remote-worker/src/worker-windows-runtime-dispatch-test-fixture.js";
-import { resolveRemoteWorkerChatProfile } from "./remote-worker-chat-authority.js";
+import { resolveRemoteWorkerChatAuthority } from "./remote-worker-chat-authority.js";
 import { createRemoteWorkerNativeRuntimePolicy } from "./remote-worker-native-runtime-policy.js";
-vi.mock("./remote-worker-chat-authority.js", () => ({ resolveRemoteWorkerChatProfile: vi.fn() }));
+vi.mock("./remote-worker-chat-authority.js", async (importOriginal) => ({ ...await importOriginal<typeof import("./remote-worker-chat-authority.js")>(), resolveRemoteWorkerChatAuthority: vi.fn() }));
 function fixture() {
   const request = windowsRuntimeDispatchFixture(), stop = new AbortController();
   const input = { registryWorkspaceId: "registry", assignmentId: "assignment", assignmentGeneration: 1, leaseRevision: 1,
     leaseTokenSha256: "11".repeat(32), protectedAuthority: { credentialAuthority: {}, meshAdmission: {} } as never,
     launch: request.launch, inventoryLimits: request.inventoryLimits, signal: stop.signal };
   const manifest = { requiredCapabilityClasses: ["durable_compute", "governed_tool"], taskId: "task", durableRunId: "run" };
-  const binding = { profile: { identity: { sessionId: "session", workspaceId: "execution", citadelId: "citadel" },
-    selection: { tools: [{ canonicalName: "shell.exec", runtimeOwner: { kind: "builtin" }, effectPotential: { potential: "effectful" } }] } }, policy: { permissionProfileId: "safe", authActorId: "operator" } };
-  vi.mocked(resolveRemoteWorkerChatProfile).mockResolvedValue(binding as never);
+  const binding = { evidence: { binding: { capabilityProfileSha256: "a".repeat(64) }, route: { providerId: "local", model: "test" }, contentHash: "b".repeat(64), memoryMode: "off", permission: { profileId: "safe" }, identity: { sessionId: "session", workspaceId: "execution", citadelId: "citadel" },
+    tools: [{ canonicalName: "shell.exec", runtimeOwner: { kind: "builtin" }, effectPotential: { potential: "effectful" } }] }, policy: { permissionProfileId: "safe", authActorId: "operator" } };
+  vi.mocked(resolveRemoteWorkerChatAuthority).mockResolvedValue(binding as never);
   const resolveActiveChatExecution = vi.fn(async () => ({ authority: { assignment: { manifest } } }));
   const evaluate = vi.fn(async (_request: unknown): Promise<ToolAccessEvaluateResponse> => ({ toolName: "shell.exec", allowed: true, requiresApproval: true, reasonCodes: [], riskLevel: "danger" }));
   const inspectAdmitted = vi.fn(async (_request: unknown, _authority: unknown): Promise<ToolAccessEvaluateResponse> => ({ toolName: "shell.exec", allowed: true, requiresApproval: true, reasonCodes: [], riskLevel: "danger" }));
@@ -56,23 +56,23 @@ describe("native execution uses current Chat tool policy", () => {
     const f = fixture(); await f.owner.authorize(f.input);
     expect(f.evaluate).toHaveBeenCalledWith(expect.objectContaining({ toolName: "shell.exec", agentId: "assistant", sessionId: "session", workspaceId: "execution",
       citadelId: "citadel", taskId: "task", runId: "run", policyContext: f.binding.policy, args: { command: f.input.launch.commandLine, cwd: f.input.launch.directory } }));
-    expect(f.resolveActiveChatExecution).toHaveBeenCalledTimes(2); expect(resolveRemoteWorkerChatProfile).toHaveBeenCalledTimes(2);
+    expect(f.resolveActiveChatExecution).toHaveBeenCalledTimes(2); expect(resolveRemoteWorkerChatAuthority).toHaveBeenCalledTimes(2);
   });
   it.each(["assignment", "compute", "governed", "missing-tool", "plugin", "classification", "cancel"])("refuses %s before evaluating command policy", async mode => {
     const f = fixture();
     if (mode === "assignment") f.resolveActiveChatExecution.mockRejectedValue(new Error("revoked"));
     if (mode === "compute") f.manifest.requiredCapabilityClasses = ["governed_tool"];
     if (mode === "governed") f.manifest.requiredCapabilityClasses = ["durable_compute"];
-    if (mode === "missing-tool") f.binding.profile.selection.tools = [];
-    if (mode === "plugin") f.binding.profile.selection.tools[0]!.runtimeOwner.kind = "plugin";
-    if (mode === "classification") delete (f.binding.profile.selection.tools[0]! as Partial<typeof f.binding.profile.selection.tools[0]>).effectPotential;
+    if (mode === "missing-tool") f.binding.evidence.tools = [];
+    if (mode === "plugin") f.binding.evidence.tools[0]!.runtimeOwner.kind = "plugin";
+    if (mode === "classification") delete (f.binding.evidence.tools[0]! as Partial<typeof f.binding.evidence.tools[0]>).effectPotential;
     if (mode === "cancel") f.stop.abort();
     await expect(f.owner.authorize(f.input)).rejects.toThrow(); expect(f.evaluate).not.toHaveBeenCalled();
   });
   it.each(["denied", "tool", "profile-drift", "policy-drift", "manifest-drift", "revoked", "cancel"])("refuses %s during the policy boundary", async mode => {
     const f = fixture();
     f.evaluate.mockImplementation(async () => {
-      if (mode === "profile-drift") f.binding.profile.identity.sessionId = "foreign";
+      if (mode === "profile-drift") f.binding.evidence.identity.sessionId = "foreign";
       if (mode === "policy-drift") f.binding.policy.authActorId = "foreign";
       if (mode === "manifest-drift") f.manifest.taskId = "foreign";
       if (mode === "revoked") f.resolveActiveChatExecution.mockRejectedValue(new Error("revoked"));

@@ -331,6 +331,28 @@ function toRunning(s: Seeded) {
 }
 
 describe("RemoteWorkerCellRepository (SQLite)", () => {
+  it("stores immutable admission references without fabricating a historical profile", () => {
+    const s = seed("admission-reference");
+    const reference = {
+      version: "goatcitadel.remote-worker-admission-reference.v1" as const,
+      scope: { admissionId: "admission", sessionIncarnationId: "incarnation", workspaceId: "default",
+        sessionId: "session-admission-reference", turnId: "turn-admission-reference", aggregateRevision: 1,
+        controllerGeneration: 1, materialSha256: D("material"), actorId: "operator", actorSource: "loopback" as const },
+      featureReferenceSha256: D("feature-reference"),
+    };
+    const profile = { ...s.profile, capabilityProfileSha256: undefined, admissionReference: reference };
+    const input = { profile, idempotencyKey: "cell:reference", createdAt: s.now };
+    const created = s.cells.profileOrReplay(input);
+    assert.equal(created.cell.capabilityProfileSha256, undefined);
+    assert.deepEqual(created.cell.admissionReference, reference);
+    assert.equal(s.cells.profileOrReplay(input).disposition, "replayed");
+    assert.throws(() => s.cells.profileOrReplay({ ...input, profile: { ...profile,
+      admissionReference: { ...reference, featureReferenceSha256: D("changed") } } }), /replay does not match/u);
+    assert.throws(() => s.cells.profileOrReplay({ ...input, profile: { ...profile, capabilityProfileSha256: D("mixed") } }), /exactly one/u);
+    assert.throws(() => s.db.prepare("UPDATE remote_worker_cells SET admission_reference_json = '{}' WHERE cell_id = ?")
+      .run(profile.cellId), /immutable/u);
+  });
+
   it("retains the native provisioning plan and exact ordered checkpoints under its winning lease", { timeout: 30_000 }, async () => {
     const s = seed("canonical-checkpoints");
     await assertCanonicalProvisioningCheckpoints(s.db, s.profile);
@@ -356,7 +378,14 @@ describe("RemoteWorkerCellRepository (SQLite)", () => {
       __sqliteInternals.applySchemaMigrationForTest(178, legacy);
       const expected = new Map<string, Record<string, unknown>[]>();
       for (const table of ["remote_worker_cells", "remote_worker_cell_evidence"]) {
-        const rows = s.db.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[];
+        const rows = (s.db.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[]).map((row) => {
+          if (table !== "remote_worker_cells") return row;
+          // Admission references arrive at v260, after the v178->v206 path
+          // under test. This fixture must retain historical profile authority.
+          assert.equal(row.admission_reference_json, null);
+          const { admission_reference_json: _admissionReference, ...historical } = row;
+          return Object.assign(Object.create(null) as Record<string, unknown>, historical);
+        });
         expected.set(table, rows);
         for (const row of rows) {
           const columns = Object.keys(row).filter((column) => column !== "native_platform_json");

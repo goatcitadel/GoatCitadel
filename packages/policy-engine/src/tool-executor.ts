@@ -46,6 +46,7 @@ import {
 import type { AcquireLocalEmbeddingLease, PrepareEmbeddingUsageDispatch } from "./local-embeddings.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import { resolveShellExecTimeout } from "./tool-executor/shell-timeout.js";
+import { captureBackgroundProcessIdentity } from "./tool-executor/background-process-identity.js";
 import {
   killBackgroundProcess,
   registerBackgroundProcess,
@@ -66,7 +67,17 @@ import {
   executeSubagentFanout,
   executeSubmitWorkResult,
 } from "./tool-executor/schedule-agent-executor.js";
-export { killAllBackgroundProcesses, killBackgroundProcess } from "./tool-executor/background-processes.js";
+export {
+  killAllBackgroundProcesses,
+  killBackgroundProcess,
+  killTurnBackgroundProcesses,
+} from "./tool-executor/background-processes.js";
+export {
+  cleanupRecoveredBackgroundProcess,
+  readBackgroundProcessIdentity,
+  type BackgroundProcessIdentity,
+  type RecoveredProcessCleanupOutcome,
+} from "./tool-executor/background-process-identity.js";
 export { resolveFixedOutboundHostsForTool } from "./tool-executor/fixed-outbound-hosts.js";
 const execFileAsync = promisify(execFile);
 const SHELL_EXEC_DEFAULT_TIMEOUT_MS = 20000;
@@ -113,6 +124,10 @@ export function setShellOutputRetentionBytesForTesting(
 }
 
 export interface ToolExecutorRuntimeHooks {
+  /** Read-only, server-scoped callable metadata. Discovery never grants invocation authority. */
+  searchCapabilities?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
+  /** Read-only exact-byte skill content; Gateway revalidates callable state and tree integrity. */
+  readSkill?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
   /** Gateway-owned, session-scoped reads of persisted tool output. */
   readToolArtifact?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
   /**
@@ -366,6 +381,26 @@ export async function executeTool(
         throw new Error("Optional input requires only a bounded title and question.");
       }
       return finalizeToolResult({ status: "optional_input_requested", title: title.trim(), question: question.trim() });
+    }
+    case "capabilities.search": {
+      const { query, limit } = request.args;
+      if (Object.keys(request.args).some((key) => key !== "query" && key !== "limit") ||
+          typeof query !== "string" || !query.trim() || query.length > 512 ||
+          (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 5))) {
+        throw new Error("Capability discovery requires a bounded query and optional limit from 1 to 5.");
+      }
+      if (!runtimeHooks.searchCapabilities) throw new Error("Capability discovery is unavailable in this runtime.");
+      return finalizeToolResult(await runtimeHooks.searchCapabilities(request));
+    }
+    case "skills.read": {
+      const { skillId, relativePath } = request.args;
+      if (Object.keys(request.args).some((key) => key !== "skillId" && key !== "relativePath") ||
+          typeof skillId !== "string" || !skillId.trim() || skillId.length > 256 ||
+          (relativePath !== undefined && (typeof relativePath !== "string" || !relativePath.trim() || relativePath.length > 512))) {
+        throw new Error("Skill reading requires a bounded skill ID and optional relative path.");
+      }
+      if (!runtimeHooks.readSkill) throw new Error("Governed skill reading is unavailable in this runtime.");
+      return finalizeToolResult(await runtimeHooks.readSkill(request));
     }
     case "session.status":
       return finalizeToolResult(
@@ -843,7 +878,7 @@ async function shellExecBackground(
     });
     child.once("error", reject);
     const pid = child.pid;
-    registerBackgroundProcess(child, command, cwd);
+    registerBackgroundProcess(child, command, cwd, { sessionId: request.sessionId, turnId: request.turnId });
     const onAbort = () => {
       if (typeof pid === "number") {
         killBackgroundProcess(pid);
@@ -858,16 +893,24 @@ async function shellExecBackground(
     }
     child.unref();
     setTimeout(() => {
-      resolve({
-        command,
-        cwd,
-        executable: parsed.file,
-        argv: parsed.args,
-        pid: child.pid,
-        detached: true,
-        started: true,
-        envScrubbed: true,
-      });
+      void (async () => {
+        const processIdentity = await captureBackgroundProcessIdentity(child, {
+          sessionId: request.sessionId,
+          turnId: request.turnId,
+        });
+        resolve({
+          command,
+          cwd,
+          executable: parsed.file,
+          argv: parsed.args,
+          pid: child.pid,
+          detached: true,
+          started: true,
+          envScrubbed: true,
+          ...(processIdentity ? { processIdentity } : {}),
+          restartCleanup: processIdentity ? "identity_bound_process_only" : "unavailable",
+        });
+      })().catch(reject);
     }, 20);
   });
 }

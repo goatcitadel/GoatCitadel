@@ -1288,7 +1288,11 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
         }),
       ]),
     );
-    expect(result.assistantContent).toContain("strongest");
+    expect(result.assistantContent).toContain("Loop guard suppressed further tool execution");
+    expect(result.assistantContent).toContain("Useful partial result:");
+    expect(result.assistantContent).toContain("https://example.com/ai-tooling");
+    expect(result.assistantContent).toContain("Evidence from the same repeated search call.");
+    expect(result.turnTrace.completion?.status).toBe("interrupted");
     expect(result.turnTrace.failure?.failureClass).toBe("tool_loop_guard");
   });
 

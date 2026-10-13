@@ -867,15 +867,16 @@ describe("Postgres migration ledger compatibility", () => {
 
   it("models one canonical final shape after bootstrap replacement and dynamic catalog normalization", () => {
     const manifest = buildCanonicalPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
-    // Reviewed registry through v202: v201 adds one table, six columns, and
-    // two explicit indexes; v202 converges their sort direction without rows.
+    // Reviewed published registry through v208 plus task appends v209/v210:
+    // feature admissions, context/heartbeat bindings, remote references and cron
+    // authority remain intact; approval linkage adds six columns and two indexes.
     // Keep independent drift tripwires for the complete current shape.
-    assert.equal(manifest.tables.length, 367);
+    assert.equal(manifest.tables.length, 368);
     assert.equal(
       manifest.tables.reduce((count, table) => count + table.columns.length, 0),
-      5_063,
+      5_084,
     );
-    assert.equal(manifest.indexes.length, 766);
+    assert.equal(manifest.indexes.length, 768);
     assert.deepEqual(
       manifest.tables.find((table) => table.name === "approval_execution_linkages")?.columns.map((column) => column.name),
       ["approval_id", "workspace_id", "run_id", "durable_run_id", "session_id", "created_at"],
@@ -1014,6 +1015,23 @@ describe("Postgres migration ledger compatibility", () => {
       "workspace_path_bridge_snapshots_input_flavor_posix_check",
       "workspace_path_bridge_snapshots_target_flavor_posix_check",
     ]);
+    const atV140 = buildCanonicalPostgresSchemaShapeManifest(
+      POSTGRES_MIGRATIONS.filter((migration) => migration.version <= 140),
+    );
+    assert.deepEqual(
+      new Set(
+        atV140.tables
+          .flatMap((table) => table.constraints.map((constraint) => constraint.name))
+          .filter((name): name is string => name !== null && v140Checks.has(name)),
+      ),
+      v140Checks,
+    );
+    // The feature-admission context migration intentionally replaces v2 with
+    // an exact v3 authority CHECK. Preserve proof of both migration stages.
+    const currentChecks = new Set([
+      ...[...v140Checks].filter((name) => name !== "chat_routed_context_snapshots_schema_version_v2_check"),
+      "chat_routed_context_snapshot_authority_v3",
+    ]);
     for (const head of [102, 105, 122, 128, 132, 139]) {
       const manifest = buildCanonicalPostgresSchemaShapeManifest(
         POSTGRES_MIGRATIONS.filter((migration) => migration.version <= head),
@@ -1033,7 +1051,7 @@ describe("Postgres migration ledger compatibility", () => {
       assert.deepEqual(
         manifest.tables
           .flatMap((table) => table.constraints.map((constraint) => constraint.name))
-          .filter((name): name is string => name !== null && v140Checks.has(name)),
+          .filter((name): name is string => name !== null && (v140Checks.has(name) || currentChecks.has(name))),
         [],
         `Postgres migration head ${head} must not claim schema-context-dependent CHECK authority before v140`,
       );
@@ -1043,16 +1061,16 @@ describe("Postgres migration ledger compatibility", () => {
       new Set(
         canonical.tables
           .flatMap((table) => table.constraints.map((constraint) => constraint.name))
-          .filter((name): name is string => name !== null && v140Checks.has(name)),
+          .filter((name): name is string => name !== null && (v140Checks.has(name) || currentChecks.has(name))),
       ),
-      v140Checks,
+      currentChecks,
     );
   });
 
   it("covers every canonical IF NOT EXISTS table and index and fails closed on catalog issues", () => {
     const manifest = buildPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
-    assert.equal(manifest.tables.length, 367);
-    assert.equal(manifest.indexes.length, 783);
+    assert.equal(manifest.tables.length, 368);
+    assert.equal(manifest.indexes.length, 785);
     assert.equal(
       manifest.tables.every((table) => table.columns.length > 0),
       true,

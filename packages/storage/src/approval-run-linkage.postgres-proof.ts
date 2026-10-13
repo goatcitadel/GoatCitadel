@@ -92,7 +92,7 @@ test("PostgreSQL canonical execution linkage migrates, backfills, indexes and pa
      scope.db.exec("DROP INDEX idx_approval_execution_run; DROP INDEX idx_approval_execution_durable_run;"
       + "CREATE INDEX idx_approval_execution_run ON approval_execution_linkages(workspace_id, run_id, created_at " + previousDirection + ", approval_id " + previousDirection + ");"
       + "CREATE INDEX idx_approval_execution_durable_run ON approval_execution_linkages(workspace_id, durable_run_id, created_at " + previousDirection + ", approval_id " + previousDirection + ");");
-     scope.db.prepare("DELETE FROM schema_migrations WHERE version = 202").run();
+     scope.db.prepare("DELETE FROM schema_migrations WHERE version = 210").run();
     });
     const retained = {
      approvals: scope.db.prepare("SELECT * FROM approvals ORDER BY approval_id").all(),
@@ -102,12 +102,12 @@ test("PostgreSQL canonical execution linkage migrates, backfills, indexes and pa
     };
     assertPages();
     const migrated = await runPostgresMigrations(migrationClient);
-    assert.deepEqual(migrated.appliedVersions, [202]);
-    assert.equal(migrated.latestVersion, 202);
+    assert.deepEqual(migrated.appliedVersions, [210]);
+    assert.equal(migrated.latestVersion, 210);
     await assertDirections();
     assert.deepEqual(scope.db.prepare("SELECT * FROM approvals ORDER BY approval_id").all(), retained.approvals);
     assert.deepEqual(scope.db.prepare("SELECT * FROM approval_execution_linkages ORDER BY approval_id").all(), retained.linkages);
-    assert.deepEqual(scope.db.prepare("SELECT * FROM schema_migrations WHERE version <= 201 ORDER BY version").all(), retained.ledger);
+    assert.deepEqual(scope.db.prepare("SELECT * FROM schema_migrations WHERE version <= 209 ORDER BY version").all(), retained.ledger);
     assert.deepEqual((await scope.scopedPool.query("SELECT relation.relname, relation.relkind, relation.oid::text FROM pg_catalog.pg_class relation JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace WHERE namespace.nspname = current_schema() AND relation.relname NOT IN ('idx_approval_execution_run', 'idx_approval_execution_durable_run') ORDER BY relation.relname")).rows, retained.objects);
     assertPages();
     assert.deepEqual((await runPostgresMigrations(migrationClient)).appliedVersions, []);

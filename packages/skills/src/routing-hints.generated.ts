@@ -104,6 +104,7 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
       { name: "init", summary: "Capture durable product context in PRODUCT.md" },
       { name: "document", summary: "Generate DESIGN.md from existing project code" },
       { name: "extract", summary: "Pull reusable tokens and components into the design system" },
+      { name: "critique", summary: "UX design review with heuristic scoring over rendered artifact evidence" },
       { name: "audit", summary: "Technical quality checks (a11y, perf, responsive)" },
       { name: "polish", summary: "Final quality pass before shipping" },
       { name: "bolder", summary: "Amplify safe or bland designs" },

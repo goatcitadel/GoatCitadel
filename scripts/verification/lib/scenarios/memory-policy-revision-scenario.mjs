@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { captureMemoryRecoveryVisual } from "./memory-recovery-visual.mjs";
 
 /** Real policy conflicts through the Gateway's storage worker and canonical UI; no model calls. */
 export async function runMemoryPolicyRevisionScenario(context, stack, deps) {
@@ -32,10 +33,11 @@ export async function runMemoryPolicyRevisionScenario(context, stack, deps) {
       await installMissionControlNextBrowserState(browserContext, workspaceId);
       page = await browserContext.newPage(); browserLog = attachBrowserLogging(page); logCursor = browserLog.mark();
       await page.goto(buildVerificationUiUrl(stack.uiUrl, "/library/memory"), { waitUntil: "domcontentloaded" });
-      await waitForVerificationRouteReady(page, { expectedArea: "library", expectedSection: "memory", readyText: "Memory items" }, NEXT_UI_PACKAGE);
-      await page.getByRole("button", { name: "Maintenance", exact: true }).click();
-      await page.getByRole("button", { name: "Edit policy", exact: true }).click();
-      const model = page.getByRole("textbox", { name: "Maintenance model identifier", exact: true });
+      await waitForVerificationRouteReady(page, { expectedArea: "library", expectedSection: "memory", readyText: "Memory" }, NEXT_UI_PACKAGE);
+      await page.getByRole("button", { name: "Open memory diagnostics and maintenance", exact: true }).click();
+      await page.getByRole("button", { name: "Memory maintenance", exact: true }).click();
+      await page.getByText("Edit maintenance policy", { exact: true }).click();
+      const model = page.getByRole("textbox", { name: "Maintenance model", exact: true });
       await model.fill("operator-draft-model");
       let concurrentPolicy;
       const submittedRevisions = [];
@@ -54,21 +56,26 @@ export async function runMemoryPolicyRevisionScenario(context, stack, deps) {
         await route.continue();
       });
       const waitForSave = () => page.waitForResponse(response => new URL(response.url()).pathname === "/api/v1/memory/maintenance/policy" && response.request().method() === "PATCH");
-      const [conflict] = await Promise.all([waitForSave(), page.getByRole("button", { name: "Save memory maintenance policy", exact: true }).click()]);
+      await page.getByRole("button", { name: "Review policy changes", exact: true }).click();
+      const [conflict] = await Promise.all([waitForSave(), page.getByRole("button", { name: "Confirm memory operation", exact: true }).click()]);
       assert.equal(conflict.status(), 409);
       assert.equal((await conflict.json()).details?.reason, "MEMORY_POLICY_REVISION_CONFLICT");
-      await page.getByText("The policy changed since editing began. Your draft is preserved.", { exact: true }).waitFor();
-      assert.equal(await model.inputValue(), "operator-draft-model");
+      await page.getByRole("dialog", { name: "Save maintenance policy", exact: true }).getByRole("alert")
+        .filter({ hasText: "This changed somewhere else. Refresh and try again." }).waitFor();
       const stillWinning = await requestJson(stack.gatewayUrl, policyUrl);
       assert.deepEqual(stillWinning.body, concurrentPolicy);
       assert.equal(await page.getByText("API error 409", { exact: false }).count(), 0);
-      const conflictArtifacts = await captureBrowserArtifacts(context, { slug: "memory-policy-conflict", page, browserLog,
-        gatewayUrl: stack.gatewayUrl, correlationId, logCursor });
-      await page.getByText("Review current policy", { exact: true }).click();
-      await page.getByText("concurrent-model", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "Use this version and keep my draft", exact: true }).click();
+      const conflictArtifacts = await captureMemoryRecoveryVisual(context, stack, deps, {
+        slug: "memory-policy-conflict", page, browserLog, correlationId, logCursor });
+      await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      assert.equal(await model.inputValue(), "operator-draft-model");
+      await page.getByRole("button", { name: "Refresh memory diagnostics", exact: true }).click();
+      await page.getByText("The policy changed. Your draft remains separate. Review current policy before rebasing.", { exact: false }).waitFor();
+      await page.getByRole("button", { name: "Use current policy revision and keep draft", exact: true }).click();
+      assert.equal(await model.inputValue(), "operator-draft-model");
       logCursor = browserLog.mark();
-      const [saved] = await Promise.all([waitForSave(), page.getByRole("button", { name: "Save memory maintenance policy", exact: true }).click()]);
+      await page.getByRole("button", { name: "Review policy changes", exact: true }).click();
+      const [saved] = await Promise.all([waitForSave(), page.getByRole("button", { name: "Confirm memory operation", exact: true }).click()]);
       assert.equal(saved.status(), 200);
       const savedPolicy = await saved.json();
       assert.equal(savedPolicy.model, "operator-draft-model");
@@ -76,8 +83,8 @@ export async function runMemoryPolicyRevisionScenario(context, stack, deps) {
       assert.equal(savedPolicy.enabled, false);
       assert.notEqual(savedPolicy.revision, concurrentPolicy.revision);
       assert.deepEqual(submittedRevisions, [base.body.revision, concurrentPolicy.revision]);
-      await page.getByText("Memory maintenance policy saved.", { exact: true }).waitFor();
-      assert.equal(await page.getByRole("button", { name: "Save memory maintenance policy", exact: true }).isDisabled(), true);
+      await page.getByText("Memory maintenance policy saved with a new canonical revision.", { exact: false }).waitFor();
+      assert.equal(await page.getByRole("button", { name: "Review policy changes", exact: true }).isDisabled(), true);
       assert.deepEqual((await requestJson(stack.gatewayUrl, policyUrl)).body, savedPolicy);
       assert.deepEqual((await requestJson(stack.gatewayUrl, "/api/v1/memory/maintenance/policy?workspaceId=default")).body, defaultPolicy.body);
       assertBrowserConsoleHealthy(browserLog, logCursor, NEXT_UI_PACKAGE);

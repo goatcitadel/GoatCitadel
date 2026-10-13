@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { bindNativeComparisonConfig, NATIVE_COMPARISON_PINS } from "./agent-comparison-native-profile.mjs";
+import { bindNativeRecoveryConfiguration } from "./agent-comparison-native-recovery-binding.mjs";
 import { readComparisonJson } from "./agent-comparison-session.mjs";
 import { sha256 } from "./agent-comparison.mjs";
 
@@ -137,6 +138,8 @@ export async function startNativeOpenclawApprovalGateway({
   executablePath,
   signal,
   superviseProcess,
+  recoveryFixture,
+  deadlineAt,
 }) {
   if (plan.product !== "openclaw" || plan.revision !== NATIVE_COMPARISON_PINS.openclaw || plan.approvalGateway !== true)
     throw new Error("Review an OpenClaw launch with an approval Gateway before starting it.");
@@ -154,7 +157,23 @@ export async function startNativeOpenclawApprovalGateway({
   const redact = (value) =>
     value.replaceAll(token, "[approval gateway token]").replaceAll(connection.apiKey, "[supervised proxy token]");
   try {
-    const config = bindNativeComparisonConfig(plan, connection, workspace, { port, token });
+    let config = bindNativeComparisonConfig(plan, connection, workspace, { port, token });
+    if (recoveryFixture) {
+      if (
+        plan.suite !== "feature_acceptance_v1" ||
+        plan.supportedTasks?.length !== 1 ||
+        plan.supportedTasks[0] !== "provider_recovery"
+      )
+        throw new Error("Recovery configuration requires its reviewed feature profile.");
+      config = bindNativeRecoveryConfiguration({
+        product: "openclaw",
+        revision: plan.revision,
+        config,
+        connection,
+        fixture: recoveryFixture,
+        deadlineAt,
+      });
+    }
     const handle = await open(configFile, "wx", 0o600);
     try {
       await handle.writeFile(`${JSON.stringify(config, null, 2)}\n`);

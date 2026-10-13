@@ -60,30 +60,70 @@ function binding(overrides: Partial<McpRequesterResolutionBindingMaterial> = {})
 
 describe("native MCP Chat catalog admission", () => {
   it("excludes dotted-name collisions across static and requester catalogs", () => {
-    const snapshot = createStaticMcpCatalogSnapshot({
-      serverId: "a", label: "Fixture", transport: "http", connectionMode: "static", authType: "none",
-      enabled: true, status: "connected", category: "automation", trustTier: "restricted", costTier: "unknown",
-      configurationBindingId: "c2827339-4843-48ae-a410-cdf3f160c1c5", createdAt: "fixture", updatedAt: "fixture",
-      policy: { requireFirstToolApproval: true, redactionMode: "off", allowedToolPatterns: [], blockedToolPatterns: [] },
-    }, catalog("a", ["b.search"]));
+    const snapshot = createStaticMcpCatalogSnapshot(
+      {
+        serverId: "a",
+        label: "Fixture",
+        transport: "http",
+        connectionMode: "static",
+        authType: "none",
+        enabled: true,
+        status: "connected",
+        category: "automation",
+        trustTier: "restricted",
+        costTier: "unknown",
+        configurationBindingId: "c2827339-4843-48ae-a410-cdf3f160c1c5",
+        createdAt: "fixture",
+        updatedAt: "fixture",
+        policy: {
+          requireFirstToolApproval: true,
+          redactionMode: "off",
+          allowedToolPatterns: [],
+          blockedToolPatterns: [],
+        },
+      },
+      catalog("a", ["b.search"]),
+    );
     expect(collectNativeMcpChatCatalogCandidates([catalog("a.b", ["search"])], [], [snapshot])).toEqual([]);
     expect(() => collectNativeMcpChatCatalogCandidates([], [], [{ ...snapshot }])).toThrow("not server-owned");
     const candidate = collectNativeMcpChatCatalogCandidates([], [], [snapshot])[0]!;
     expect(collectNativeMcpChatCatalogCandidates([], [candidate.entry], [snapshot])).toEqual([]);
     expect(() => bindNativeMcpChatToolSchema(candidate, binding())).toThrow("static configuration binding");
-    const native = bindNativeStaticMcpChatToolSchema(candidate, {
-      profileId: "profile", turnId: "turn", sessionId: "session", workspaceId: "workspace",
-      authActorId: "actor", authActorSource: "token",
-    }, { snapshotId: "snapshot", callableHash: "a".repeat(64) });
-    expect(native.staticBinding).toMatchObject({ serverId: "a", nativeToolName: "b.search", toolName: "mcp.a.b.search" });
+    const native = bindNativeStaticMcpChatToolSchema(
+      candidate,
+      {
+        profileId: "profile",
+        turnId: "turn",
+        sessionId: "session",
+        workspaceId: "workspace",
+        authActorId: "actor",
+        authActorSource: "token",
+      },
+      { snapshotId: "snapshot", callableHash: "a".repeat(64) },
+    );
+    expect(native.staticBinding).toMatchObject({
+      serverId: "a",
+      nativeToolName: "b.search",
+      toolName: "mcp.a.b.search",
+    });
     expect(native.requesterBinding).toBeUndefined();
     expect(native.modelName).toMatch(/^mcp_s_[a-f0-9]{56}$/u);
     expect(() => assertNativeMcpChatToolSchema(native)).not.toThrow();
     expect(() => JSON.stringify(native)).toThrow("cannot be serialized");
-    expect(() => bindNativeStaticMcpChatToolSchema({ ...candidate }, {
-      profileId: "profile", turnId: "turn", sessionId: "session", workspaceId: "workspace",
-      authActorId: "actor", authActorSource: "token",
-    }, { snapshotId: "snapshot", callableHash: "a".repeat(64) })).toThrow("not server-owned");
+    expect(() =>
+      bindNativeStaticMcpChatToolSchema(
+        { ...candidate },
+        {
+          profileId: "profile",
+          turnId: "turn",
+          sessionId: "session",
+          workspaceId: "workspace",
+          authActorId: "actor",
+          authActorSource: "token",
+        },
+        { snapshotId: "snapshot", callableHash: "a".repeat(64) },
+      ),
+    ).toThrow("not server-owned");
   });
 
   it("retains exact schemas and bound aliases with a conservative effect classification", () => {

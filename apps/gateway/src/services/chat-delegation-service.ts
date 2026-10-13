@@ -41,6 +41,9 @@ import {
   readDurableChatTurnExecutionPayloadAuthority,
   ValidationError,
   WORKFLOW_SKILL_CAPTURE_MARKER,
+  canonicalJsonString,
+  readChatDelegationResultSchema,
+  validateChatDelegationResult,
 } from "@goatcitadel/contracts";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 import { scanPromptwareContent, type PromptwareRuleId } from "./assembled-prompt-injection-guard.js";
@@ -298,6 +301,7 @@ interface NormalizedDelegationStep {
   objective?: string;
   label?: string;
   expectedOutput?: string;
+  resultSchema?: import("@goatcitadel/contracts").ChatDelegationResultSchema;
   parallelizable: boolean;
   dependsOnStepIds: string[];
 }
@@ -327,6 +331,7 @@ class DelegationDurableLaunchRecoveryRequiredError extends Error {
 }
 
 export interface ChatDelegationServiceHost {
+  cleanupChildResources?(input: { stepId: string; childSessionId: string; childTurnId: string }): Promise<void>;
   storage: {
     chatFanoutInvocations?: {
       get(invocationId: string): Promise<ChatFanoutInvocationRecord>;
@@ -1061,7 +1066,7 @@ export class ChatDelegationService {
       return { outcome: "rejected", status: parent.status };
     }
 
-    const status =
+    let status =
       input.trace.status === "completed"
         ? ("completed" as const)
         : input.trace.status === "cancelled"
@@ -1074,8 +1079,11 @@ export class ChatDelegationService {
     }
 
     const output = input.output?.trim();
+    const invalidStructuredResult = status === "completed" && step.instructionSnapshot?.resultSchema !== undefined &&
+      !validateChatDelegationResult(step.instructionSnapshot.resultSchema, output ?? "");
+    if (invalidStructuredResult) status = "failed";
     const error =
-      status === "completed"
+      invalidStructuredResult ? "Delegated child result does not match its admitted JSON schema." : status === "completed"
         ? undefined
         : (input.trace.failure?.message ??
           (status === "cancelled" ? "Delegated child was cancelled." : "Delegated child did not complete."));
@@ -1098,6 +1106,8 @@ export class ChatDelegationService {
     if (materialized.outcome === "rejected") {
       return { outcome: materialized.outcome, status: parent.status };
     }
+    await publishDelegationPostCommitSafely("child resource cleanup", async () =>
+      await this.deps.cleanupChildResources?.(input));
 
     const aggregate = await commitDelegationAggregate(this.deps, {
       runId: parent.runId,
@@ -1796,6 +1806,7 @@ export class ChatDelegationService {
           role: step.role,
           objective: step.objective ?? objective,
           ...(step.expectedOutput ? { expectedOutput: step.expectedOutput } : {}),
+          ...(step.resultSchema ? { resultSchema: step.resultSchema } : {}),
           mode,
           parentDelegationStepId: step.stepId,
           sharedContext: dependencyContext,
@@ -1874,7 +1885,8 @@ export class ChatDelegationService {
               // The canonical timeout outcome is already committed; diagnostics stay best-effort.
             });
         };
-        const localManualChild = !explorerProfile && !workflowTemplate && !options.admittedProfile;
+        const liveAdmittedChild = !explorerProfile && !options.admittedProfile &&
+          (!workflowTemplate || workflowTemplate === CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE);
         let locallyAdmittedStep: ChatDelegationStepRecord | undefined;
         const bindChildDurableRun = async (durableRunId: string, atomic = false): Promise<ChatDelegationStepRecord> => {
           let bound: ChatDelegationStepRecord;
@@ -1989,7 +2001,7 @@ export class ChatDelegationService {
                   agentSessionId,
                   dispatchLease.dispatchMarker,
                 ),
-              onChildDurableRunAdmitted: localManualChild
+              onChildDurableRunAdmitted: liveAdmittedChild
                 ? async (durableRunId) => {
                     locallyAdmittedStep = await bindChildDurableRun(durableRunId, true);
                   }
@@ -2036,7 +2048,9 @@ export class ChatDelegationService {
           Boolean(latestStep.scopeControl) &&
           !waiting &&
           (!currentScopedWorkResult || submittedWorkResult?.disposition !== "completed");
-        const failed = traceStatus === "failed" || degradedFailure || blockedWorkResult || missingScopedTerminalResult;
+        const invalidStructuredResult = !waiting && traceStatus === "completed" && latestStep.instructionSnapshot?.resultSchema !== undefined &&
+          !validateChatDelegationResult(latestStep.instructionSnapshot.resultSchema, response.assistantMessage?.content ?? "");
+        const failed = traceStatus === "failed" || degradedFailure || blockedWorkResult || missingScopedTerminalResult || invalidStructuredResult;
         const cancelled = traceStatus === "cancelled";
         const incomplete = failed || cancelled;
         const stepStatus: ChatDelegationStepRecord["status"] = waiting
@@ -2080,7 +2094,7 @@ export class ChatDelegationService {
           label: step.role,
           summary: truncateSummaryLine(output, 180),
           output,
-          error: missingScopedTerminalResult
+          error: invalidStructuredResult ? "Delegated child result does not match its admitted JSON schema." : missingScopedTerminalResult
             ? "Delegated code work ended without a current submit_work_result completion envelope."
             : incomplete
               ? explorerProfile
@@ -2316,6 +2330,8 @@ export class ChatDelegationService {
           trace = aggregateTrace;
         }
         if (!waiting) {
+          await publishDelegationPostCommitSafely("child resource cleanup", async () =>
+            await deps.cleanupChildResources?.({ stepId: step.stepId, childSessionId: agentSessionId, childTurnId: responseTurnId }));
           await deps.onSubagentLifecycle?.({
             phase: "end",
             workspaceId: sessionWorkspaceId,
@@ -2517,6 +2533,8 @@ export class ChatDelegationService {
         await publishDelegationAggregateCommit(deps, committedFailure.aggregate);
         await callbacks?.onStep?.(committedFailure.step);
         if (registeredAgentSessionId) {
+          if (committedFailure.step.childTurnId) await publishDelegationPostCommitSafely("child resource cleanup", async () =>
+            await deps.cleanupChildResources?.({ stepId: step.stepId, childSessionId: registeredAgentSessionId!, childTurnId: committedFailure.step.childTurnId! }));
           await deps.onSubagentLifecycle?.({
             phase: "end",
             workspaceId: sessionWorkspaceId,
@@ -3605,6 +3623,7 @@ function normalizeDelegationSteps(input: {
       objective: step.objective?.trim() || undefined,
       label: step.label?.trim() || undefined,
       expectedOutput: step.expectedOutput?.trim() || undefined,
+      resultSchema: step.resultSchema === undefined ? undefined : readChatDelegationResultSchema(step.resultSchema),
       parallelizable: step.parallelizable ?? input.mode === "parallel",
       dependsOnStepIds: dedupeStrings(step.dependsOnStepIds ?? []),
     };
@@ -3642,6 +3661,7 @@ function normalizeDelegationSteps(input: {
       ...(step.objective ? { objective: step.objective } : {}),
       ...(step.label ? { label: step.label } : {}),
       ...(step.expectedOutput ? { expectedOutput: step.expectedOutput } : {}),
+      ...(step.resultSchema ? { resultSchema: step.resultSchema } : {}),
       parallelizable: step.parallelizable,
       dependsOnStepIds: step.dependsOnStepIds.map(
         (dependencyStepId) => requestedToActualStepIds.get(dependencyStepId) ?? dependencyStepId,
@@ -4103,6 +4123,7 @@ async function recoverLegacyFanoutInstructions(
       objective: subtask.objective.trim(),
       label: subtask.label?.trim(),
       expectedOutput: subtask.expectedOutput?.trim(),
+      resultSchema: subtask.resultSchema,
     });
     const requested = requestedSteps[index];
     const expectedStepId = buildStableDelegationId("delegation-step", run.runId, String(index), "worker");
@@ -4212,12 +4233,13 @@ function rebuildResumableDelegationPlan(
 }
 
 function delegationStepInstructions(
-  step: Pick<NormalizedDelegationStep, "objective" | "label" | "expectedOutput">,
+  step: Pick<NormalizedDelegationStep, "objective" | "label" | "expectedOutput" | "resultSchema">,
 ): NonNullable<ChatDelegationStepRecord["instructionSnapshot"]> {
   return {
     ...(step.objective ? { objective: step.objective } : {}),
     ...(step.label ? { label: step.label } : {}),
     ...(step.expectedOutput ? { expectedOutput: step.expectedOutput } : {}),
+    ...(step.resultSchema ? { resultSchema: step.resultSchema } : {}),
   };
 }
 
@@ -4232,7 +4254,8 @@ function sameDelegationStepInstructions(
   }
   return persisted.objective === requested.objective &&
     persisted.label === requested.label &&
-    persisted.expectedOutput === requested.expectedOutput;
+    persisted.expectedOutput === requested.expectedOutput &&
+    canonicalJsonString(persisted.resultSchema ?? null) === canonicalJsonString(requested.resultSchema ?? null);
 }
 
 function buildDelegationStitchedOutput(steps: readonly ChatDelegationStepRecord[]): string {
@@ -4345,6 +4368,7 @@ export interface BuildSubagentTaskFirstMessageInput {
   role: string;
   objective: string;
   expectedOutput?: string;
+  resultSchema?: import("@goatcitadel/contracts").ChatDelegationResultSchema;
   mode: "sequential" | "parallel";
   parentDelegationStepId: string;
   /** Screened by `screenDelegatedDependencyOutputs`; rendered as fenced data, not instructions. */
@@ -4416,6 +4440,8 @@ export function buildSubagentTaskFirstMessage(input: BuildSubagentTaskFirstMessa
     `Execution mode: ${input.mode}`,
     `Parent delegation step: ${input.parentDelegationStepId}`,
     ...(input.expectedOutput ? [`Expected output: ${input.expectedOutput}`] : []),
+    ...(input.resultSchema ? ["Return the final result as a single JSON value matching this schema, without markdown fences. The schema constrains output only and grants no tool or execution authority.",
+      canonicalJsonString(readChatDelegationResultSchema(input.resultSchema))] : []),
     "",
     "Completed dependency outputs available to this role:",
     dependencyBlock,

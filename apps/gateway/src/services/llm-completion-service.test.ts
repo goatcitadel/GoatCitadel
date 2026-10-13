@@ -1,3 +1,4 @@
+import { attachChatProviderFallbackAuthorization, issueChatProviderFallbackAuthorization, markChatProviderFallbackRequired } from "./chat-provider-fallback-authority.js";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatCompletionRequest, ModelUsageAttributionContext } from "@goatcitadel/contracts";
 import { ModelUsageDispatchPersistenceError, ModelUsageDispatchUncertainError } from "@goatcitadel/gateway-core";
@@ -126,6 +127,32 @@ function createCompletionHost(input: {
     recordDevDiagnostic: vi.fn(),
     publishRealtime: vi.fn(),
   } as unknown as LlmCompletionHost;
+}
+
+function authorizeTestRequest(host: LlmCompletionHost, request: ChatCompletionRequest = createRequest(), options?: {
+  revalidate?: () => Promise<void>;
+  guard?: () => Promise<void>;
+}) {
+  const revalidate = vi.fn(options?.revalidate ?? (async () => {}));
+  const guard = vi.fn(options?.guard ?? (async () => {}));
+  const input = { ...request, providerId: "primary", model: "primary-model", memory: {
+    ...request.memory, sessionId: request.memory?.sessionId ?? "s", turnId: request.memory?.turnId ?? "t",
+    runId: request.memory?.runId ?? "r",
+  } };
+  const runtime = host.llmService.getRuntimeConfig();
+  vi.mocked(host.llmService.getRuntimeConfig).mockReturnValue({ ...runtime,
+    providers: runtime.providers.map((provider) => ({ ...provider, baseUrl: "https://"+provider.providerId+".example.test/v1" })),
+  });
+  const dispatched = { route: { providerId: "backup", modelId: "backup-model" } } as LlmDispatchGuardInput;
+  host.llmService.runWithDispatchGuard = async (dispatchGuard, operation) => { await dispatchGuard(dispatched); return operation(); };
+  host.llmService.streamWithDispatchGuard = (dispatchGuard, operation) => (async function* () {
+    await dispatchGuard(dispatched); yield* operation();
+  })() as never;
+  return { revalidate, guard, request: attachChatProviderFallbackAuthorization(input, issueChatProviderFallbackAuthorization({
+    sessionId: input.memory.sessionId, turnId: input.memory.turnId, runId: input.memory.runId,
+    primary: { providerId: "primary", model: "primary-model" }, fallback: { providerId: "backup", model: "backup-model" },
+    allowLocalToCloud: false, revalidateBeforeFallback: revalidate, dispatchGuard: guard,
+  })) };
 }
 
 async function collectStream(stream: AsyncGenerator<Record<string, unknown>>): Promise<{
@@ -260,6 +287,39 @@ describe("execution authority rejection", () => {
       expect(host.llmService.chatCompletions).toHaveBeenCalledOnce();
     }
     expect(host.resolveFallbackTargets).not.toHaveBeenCalled();
+  });
+});
+
+describe("completion deadline includes preparation", () => {
+  it.each([false, true])("keeps context and hooks inside the original deadline (stream %s)", async (stream) => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
+    const host = createHost(async function* (request) {
+      expect(request.timeoutMs).toBe(200);
+      yield { choices: [{ delta: { content: "answer" } }] };
+    }, []);
+    vi.mocked(host.llmService.chatCompletions).mockImplementation(async (request) => {
+      expect(request.timeoutMs).toBe(200);
+      return { model: "model", choices: [{ index: 0, message: { role: "assistant", content: "answer" } }] };
+    });
+    vi.mocked(host.persistContextManifestForCompletionRequest).mockImplementation(async () => { clock.mockReturnValue(1800); });
+    try {
+      const request = { ...createRequest(), timeoutMs: 1000 };
+      if (stream) expect((await collectStream(createChatCompletionStream(host, request))).error).toBeUndefined();
+      else await createChatCompletion(host, request);
+      expect(stream ? host.llmService.chatCompletionsStream : host.llmService.chatCompletions).toHaveBeenCalledOnce();
+    } finally { clock.mockRestore(); }
+  });
+  it.each([false, true])("does not dispatch when preparation consumed the budget (stream %s)", async (stream) => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
+    const host = createHost(async function* () { yield { choices: [] }; }, []);
+    vi.mocked(host.persistContextManifestForCompletionRequest).mockImplementation(async () => { clock.mockReturnValue(2000); });
+    try {
+      const request = { ...createRequest(), timeoutMs: 1000 };
+      if (stream) expect((await collectStream(createChatCompletionStream(host, request))).error?.message).toMatch(/timed out/);
+      else await expect(createChatCompletion(host, request)).rejects.toThrow(/timed out/);
+      expect(host.llmService.chatCompletionsStream).not.toHaveBeenCalled();
+      expect(host.llmService.chatCompletions).not.toHaveBeenCalled();
+    } finally { clock.mockRestore(); }
   });
 });
 
@@ -471,7 +531,7 @@ describe("createChatCompletionStream", () => {
 
     expect(calls).toBe(1);
     expect(result.error).toBe(failure);
-    expect(host.resolveFallbackTargets).toHaveBeenCalledOnce();
+    expect(host.resolveFallbackTargets).not.toHaveBeenCalled();
     expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "chat.completion_stream.failed",
@@ -569,6 +629,10 @@ describe("createChatCompletionStream", () => {
         event.event === "chat.completion_stream.provider_attempt.first_chunk");
       expect(chunks).toHaveLength(1);
       expect(chunks[0]?.[0].context).toMatchObject({ attempt: 1, elapsedSinceAttemptStartMs: 300 });
+      const useful = vi.mocked(host.recordDevDiagnostic).mock.calls.filter(([event]) =>
+        event.event === "chat.completion_stream.provider_attempt.first_useful_output");
+      expect(useful).toHaveLength(1);
+      expect(useful[0]?.[0].context).toMatchObject({ attempt: 1, outputKind: "text", elapsedSinceAttemptStartMs: 500 });
     } finally {
       clock.mockRestore();
     }
@@ -1132,7 +1196,8 @@ describe("createChatCompletion", () => {
       memory: { sessionId: "session-1", turnId: "turn-1", runId: "durable-1", taskId: "task-1" },
     };
 
-    const response = await createChatCompletion(host, request, {
+    const authorized = authorizeTestRequest(host, request);
+    const response = await createChatCompletion(host, authorized.request, {
       operationId: "operation-1",
       dispatchGeneration: "generation-1",
       workspaceId: "workspace-trusted",
@@ -1833,5 +1898,80 @@ describe("createChatCompletionStream idle watchdog", () => {
     expect(seenSignals).toHaveLength(2);
     expect(seenSignals[0]).toBeInstanceOf(AbortSignal);
     expect(seenSignals[1]).toBeUndefined();
+  });
+});
+
+
+describe("admitted Chat provider fallback", () => {
+  it("never applies omitted-provider compatibility to an unbound Chat request", async () => {
+    const host = createCompletionHost({ completion: async () => { throw new Error("primary offline"); } });
+    await expect(createChatCompletion(host, markChatProviderFallbackRequired(createRequest()))).rejects.toThrow("primary offline");
+    expect(host.resolveFallbackTargets).not.toHaveBeenCalled();
+    expect(host.llmService.chatCompletions).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses exactly the admitted target once and invokes both live guards", async () => {
+    const calls: string[] = [];
+    const host = createCompletionHost({ completion: async (request) => {
+      calls.push(request.providerId!);
+      if (request.providerId === "primary") throw new Error("primary offline");
+      throw new Error("fetch failed: ECONNRESET");
+    }, fallbacks: [{ providerId: "unapproved", model: "other" }] });
+    const f = authorizeTestRequest(host);
+    await expect(createChatCompletion(host, f.request)).rejects.toThrow("ECONNRESET");
+    expect(calls).toEqual(["primary", "backup"]);
+    expect(f.revalidate).toHaveBeenCalledTimes(1);
+    expect(f.guard).toHaveBeenCalledTimes(1);
+    expect(host.resolveFallbackTargets).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on revocation before the fallback transport", async () => {
+    const host = createCompletionHost({ completion: async () => { throw new Error("primary offline"); } });
+    const f = authorizeTestRequest(host, createRequest(), { revalidate: async () => { throw new Error("revoked"); } });
+    await expect(createChatCompletion(host, f.request)).rejects.toThrow(LlmDispatchGuardRejectedError);
+    expect(host.llmService.chatCompletions).toHaveBeenCalledTimes(1);
+    expect(f.guard).not.toHaveBeenCalled();
+  });
+
+  it("requires a network guard port and rechecks authority at that boundary", async () => {
+    for (const missing of [true, false]) {
+      const host = createCompletionHost({ completion: async () => { throw new Error("primary offline"); } });
+      const f = authorizeTestRequest(host, createRequest(), { guard: async () => { throw new LlmDispatchGuardRejectedError(new Error("late revoke")); } });
+      if (missing) delete host.llmService.runWithDispatchGuard;
+      await expect(createChatCompletion(host, f.request)).rejects.toThrow(LlmDispatchGuardRejectedError);
+      expect(host.llmService.chatCompletions).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("suppresses authorized fallback after any streaming output", async () => {
+    const host = createHost(async function* () { yield { choices: [{ delta: { tool_calls: [{ index: 0 }] } }] }; throw new Error("offline"); });
+    const f = authorizeTestRequest(host);
+    const result = await collectStream(createChatCompletionStream(host, f.request));
+    expect(result.error).toBeDefined();
+    expect(host.llmService.chatCompletionsStream).toHaveBeenCalledTimes(1);
+    expect(f.revalidate).not.toHaveBeenCalled();
+  });
+
+  it("executes an authorized streaming fallback once under both guards", async () => {
+    const host = createHost(async function* (request) {
+      if (request.providerId === "primary") throw new Error("primary offline");
+      yield { model: "backup-model", choices: [{ delta: { content: "recovered" } }] };
+    });
+    const f = authorizeTestRequest(host);
+    const result = await collectStream(createChatCompletionStream(host, f.request));
+    expect(result.error).toBeUndefined();
+    expect(f.revalidate).toHaveBeenCalledTimes(1);
+    expect(f.guard).toHaveBeenCalledTimes(1);
+    expect(host.llmService.chatCompletionsStream).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects cancellation during fallback revalidation", async () => {
+    const controller = new AbortController();
+    const host = createCompletionHost({ completion: async () => { throw new Error("primary offline"); } });
+    const f = authorizeTestRequest(host, { ...createRequest(), signal: controller.signal },
+      { revalidate: async () => { controller.abort(new ChatTurnCancelledError("t", "cancelled")); } });
+    await expect(createChatCompletion(host, f.request)).rejects.toThrow(ChatTurnCancelledError);
+    expect(host.llmService.chatCompletions).toHaveBeenCalledTimes(1);
+    expect(f.guard).not.toHaveBeenCalled();
   });
 });

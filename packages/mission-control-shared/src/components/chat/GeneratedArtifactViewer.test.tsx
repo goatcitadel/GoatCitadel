@@ -26,7 +26,9 @@ describe("isSafeSvgLinkTarget", () => {
 
 describe("hardenMermaidSvg", () => {
   it("preserves SVG node and edge labels while removing embedded HTML", () => {
-    const hardened = hardenMermaidSvg('<svg xmlns="http://www.w3.org/2000/svg"><g class="node"><text><tspan>Recorded input</tspan></text></g><text>Visible output</text><foreignObject><p>HTML label</p></foreignObject></svg>');
+    const hardened = hardenMermaidSvg(
+      '<svg xmlns="http://www.w3.org/2000/svg"><g class="node"><text><tspan>Recorded input</tspan></text></g><text>Visible output</text><foreignObject><p>HTML label</p></foreignObject></svg>',
+    );
     expect(hardened).toContain("Recorded input");
     expect(hardened).toContain("Visible output");
     expect(hardened).not.toContain("HTML label");
@@ -61,14 +63,55 @@ describe("hardenMermaidSvg", () => {
   });
 });
 
-vi.mock("mermaid", () => ({ default: { initialize: vi.fn(), render: vi.fn(async () => { throw new Error("Owned parse failure"); }) } }));
-it.each(["text", "code", "mermaid", "html"] as const)("preserves exact %s bytes in accessible source or sandboxed preview", async kind => {
-  const host=document.createElement('div');document.body.append(host);const root=createRoot(host);
-  const content=kind==='mermaid'?'invalid diagram\n  exact source':kind==='html'?'<script>untrusted()</script>':'long '+ 'x'.repeat(500)+'\n  exact indentation';
-  const artifact={artifactId:'owned',title:'Generated note',kind,content,version:1,sourceSurface:'chat',createdAt:'2026-10-06T00:00:00Z'} as ChatGeneratedArtifactRecord;
-  try {
-    await act(async()=>root.render(<GeneratedArtifactViewer artifact={artifact} compact/>));
-    if(kind==='html') {expect(host.querySelector('iframe')?.getAttribute('sandbox')).toBe('');expect(host.querySelector('iframe')?.getAttribute('srcdoc')).toBe(content);}
-    else { const region=host.querySelector<HTMLElement>('[role="region"]')!;expect(region.textContent).toBe(content);expect(region.getAttribute('aria-label')).toBe(kind==='mermaid'?'Diagram source':'Artifact source: Generated note');region.focus();expect(document.activeElement).toBe(region); }
-  } finally {await act(async()=>root.unmount());host.remove();}
-});
+vi.mock("mermaid", () => ({
+  default: {
+    initialize: vi.fn(),
+    render: vi.fn(async () => {
+      throw new Error("Owned parse failure");
+    }),
+  },
+}));
+it.each(["text", "code", "mermaid", "html"] as const)(
+  "preserves exact %s bytes in accessible source or sandboxed preview",
+  async (kind) => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const content =
+      kind === "mermaid"
+        ? "invalid diagram\n  exact source"
+        : kind === "html"
+          ? "<script>untrusted()</script>"
+          : "long " + "x".repeat(500) + "\n  exact indentation";
+    const artifact = {
+      artifactId: "owned",
+      title: "Generated note",
+      kind,
+      content,
+      version: 1,
+      sourceSurface: "chat",
+      createdAt: "2026-10-06T00:00:00Z",
+    } as ChatGeneratedArtifactRecord;
+    try {
+      await act(async () => root.render(<GeneratedArtifactViewer artifact={artifact} compact />));
+      // The title is the heading; no "Generated artifact" kicker above it (craft floor: no eyebrows).
+      expect(host.querySelector(".generated-artifact-kicker")).toBeNull();
+      expect(host.querySelector("h3")?.textContent).toBe("Generated note");
+      if (kind === "html") {
+        expect(host.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
+        expect(host.querySelector("iframe")?.getAttribute("srcdoc")).toBe(content);
+      } else {
+        const region = host.querySelector<HTMLElement>('[role="region"]')!;
+        expect(region.textContent).toBe(content);
+        expect(region.getAttribute("aria-label")).toBe(
+          kind === "mermaid" ? "Diagram source" : "Artifact source: Generated note",
+        );
+        region.focus();
+        expect(document.activeElement).toBe(region);
+      }
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  },
+);

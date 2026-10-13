@@ -45,7 +45,8 @@ export function drawPresentationSlide(input: {
   slide: PptxSlideLike;
   content: PresentationSlide;
   design: ArtifactDesignPlan;
-  visualData: string;
+  /** A provider image for this slide; absent means the slide renders without a visual. */
+  visualData?: string;
   index: number;
   layoutDecision?: PresentationSlideLayoutDecision;
   hasMappedVisual: boolean;
@@ -143,14 +144,7 @@ function drawSlideFrame(
     fill: { color: design.tokens.background },
     line: { color: design.tokens.background, transparency: 100 },
   });
-  slide.addShape(shape(pptx, "rect"), {
-    x: 0,
-    y: 0,
-    w: 0.13,
-    h: SLIDE_H,
-    fill: { color: design.tokens.accent },
-    line: { color: design.tokens.accent, transparency: 100 },
-  });
+  // No accent side stripe: a colored bar on every slide is decoration, not hierarchy (craft floor).
   slide.addShape(shape(pptx, "rect"), {
     x: 0.52,
     y: 6.95,
@@ -159,16 +153,17 @@ function drawSlideFrame(
     fill: { color: design.tokens.border, transparency: 40 },
     line: { color: design.tokens.border, transparency: 100 },
   });
+  // The page number is wayfinding, not a feature: regular weight in the muted text color.
   slide.addText(String(index + 1).padStart(2, "0"), {
     objectName: "gc:slide-number",
     x: 12,
     y: 6.96,
     w: 0.55,
     h: 0.3,
-    fontFace: design.typography.headingFont,
+    fontFace: design.typography.bodyFont,
     fontSize: 10,
-    bold: true,
-    color: design.tokens.accent,
+    bold: false,
+    color: design.tokens.mutedText,
     align: "right",
     margin: 0,
   });
@@ -179,22 +174,28 @@ function drawHeroSlide(
   slide: PptxSlideLike,
   content: PresentationSlide,
   design: ArtifactDesignPlan,
-  visualData: string,
+  visualData?: string,
 ): void {
-  slide.addShape(shape(pptx, "roundRect"), {
-    x: 0.66,
-    y: 0.64,
-    w: 7,
-    h: 6,
-    rectRadius: 0.08,
-    fill: { color: design.tokens.surface, transparency: design.preset === "cyberpunk-ops" ? 10 : 0 },
-    line: { color: design.tokens.border, transparency: 15 },
-  });
+  // With a provider image the cover splits a text panel and the image; without one the cover is
+  // typographic: no empty panel, the title sits in the lower half of the slide.
+  const panelWidth = visualData ? 7 : 12;
+  const titleTop = visualData ? 1.08 : 2.4;
+  if (visualData) {
+    slide.addShape(shape(pptx, "roundRect"), {
+      x: 0.66,
+      y: 0.64,
+      w: panelWidth,
+      h: 6,
+      rectRadius: 0.08,
+      fill: { color: design.tokens.surface, transparency: design.preset === "cyberpunk-ops" ? 10 : 0 },
+      line: { color: design.tokens.border, transparency: 15 },
+    });
+  }
   slide.addText(content.title, {
     objectName: "gc:title",
     x: 1,
-    y: 1.08,
-    w: 6.25,
+    y: titleTop,
+    w: panelWidth - 0.75,
     h: 1.55,
     fontFace: design.typography.headingFont,
     fontSize: 34,
@@ -208,8 +209,8 @@ function drawHeroSlide(
     slide.addText(subtitle, {
       objectName: "gc:subtitle",
       x: 1.04,
-      y: 2.85,
-      w: 5.85,
+      y: titleTop + 1.77,
+      w: panelWidth - 1.15,
       h: 1.1,
       fontFace: design.typography.bodyFont,
       fontSize: 18,
@@ -218,15 +219,17 @@ function drawHeroSlide(
       valign: "top",
     });
   }
-  slide.addImage({
-    data: visualData,
-    x: 8.05,
-    y: 0.72,
-    w: 4.6,
-    h: 5.7,
-    altText: `Supporting visual for ${content.title}`,
-    objectName: "GoatCitadel cover visual",
-  });
+  if (visualData) {
+    slide.addImage({
+      data: visualData,
+      x: 8.05,
+      y: 0.72,
+      w: 4.6,
+      h: 5.7,
+      altText: `Supporting visual for ${content.title}`,
+      objectName: "GoatCitadel cover visual",
+    });
+  }
 }
 
 function drawContentTitle(slide: PptxSlideLike, content: PresentationSlide, design: ArtifactDesignPlan): void {
@@ -251,22 +254,28 @@ function drawImageTextSlide(
   slide: PptxSlideLike,
   content: PresentationSlide,
   design: ArtifactDesignPlan,
-  visualData: string,
+  visualData: string | undefined,
   sources: readonly PresentationSource[],
-  showVisual: boolean,
+  hasMappedVisual: boolean,
 ): void {
-  const contentWidth = showVisual ? 7.05 : 11.62;
-  slide.addShape(shape(pptx, "roundRect"), {
-    x: 0.76,
-    y: 1.42,
-    w: contentWidth,
-    h: 4.86,
-    rectRadius: 0.05,
-    fill: { color: design.tokens.surface },
-    line: { color: design.tokens.border, transparency: 15 },
-  });
-  addBulletBlock(slide, content.bullets, design, 1.08, 1.72, showVisual ? 6.32 : 10.98, 4.25, sources);
-  if (showVisual) {
+  const showVisual = hasMappedVisual && Boolean(visualData);
+  // Narrative bullets sit directly on the background; a bordered card around prose is a default
+  // container the craft floor rejects (cards are for things that are actually discrete).
+  void pptx;
+  addBulletBlock(
+    slide,
+    content.bullets,
+    design,
+    0.9,
+    1.6,
+    showVisual ? 6.5 : 11.3,
+    4.4,
+    sources,
+    "gc:body",
+    16,
+    showVisual ? "mid" : "top",
+  );
+  if (showVisual && visualData) {
     slide.addImage({
       data: visualData,
       x: 8.35,
@@ -310,16 +319,8 @@ function drawStackedListSlide(
   design: ArtifactDesignPlan,
   sources: readonly PresentationSource[],
 ): void {
-  slide.addShape(shape(pptx, "roundRect"), {
-    x: 0.76,
-    y: 1.42,
-    w: 11.62,
-    h: 4.86,
-    rectRadius: 0.05,
-    fill: { color: design.tokens.surface },
-    line: { color: design.tokens.border, transparency: 15 },
-  });
-  addBulletBlock(slide, content.bullets, design, 1.08, 1.72, 10.98, 4.25, sources, "gc:body:stacked");
+  void pptx;
+  addBulletBlock(slide, content.bullets, design, 0.9, 1.6, 11.3, 4.4, sources, "gc:body:stacked", 16, "top");
 }
 
 function drawCalloutSlide(
@@ -631,6 +632,7 @@ function addBulletBlock(
   sources: readonly PresentationSource[],
   objectName = "gc:body",
   fontSize = 16,
+  valign: "top" | "mid" = "mid",
 ): void {
   if (bullets.length === 0) {
     return;
@@ -648,7 +650,7 @@ function addBulletBlock(
     breakLine: false,
     paraSpaceAfterPt: 12,
     margin: 0.04,
-    valign: "mid",
+    valign,
   });
 }
 

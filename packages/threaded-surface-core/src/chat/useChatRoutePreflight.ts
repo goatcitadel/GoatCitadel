@@ -55,6 +55,9 @@ function buildPreflightRequest(input: {
     turnId: input.turnId ?? undefined,
     content: input.content?.trim() || undefined,
     workspaceSnapshot: input.workspaceSnapshot,
+    // Include saved consent in the preview identity so preference changes do not
+    // reuse a cached armed/off result for the previous target.
+    providerFallback: input.prefs?.providerFallback ?? null,
     prefsOverride,
     ...(fullWebAccess ? { fullWebAccess: true } : {}),
   };

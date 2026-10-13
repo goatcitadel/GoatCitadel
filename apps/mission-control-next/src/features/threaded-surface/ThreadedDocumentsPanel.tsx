@@ -98,7 +98,9 @@ export function ThreadedDocumentsPanel({ props }: { props: MissionThreadedContex
             Refresh
           </button>
         </div>
-        <p>Opening a document never adds it to model context. Including documents in a turn is temporarily unavailable.</p>
+        <p>Opening a document never adds it to model context. {documents.contextInclusionEnabled
+          ? "Choose Include in next turn to use its saved content. The Gateway checks access and captures the exact content when you send."
+          : "Including documents in a turn is temporarily unavailable."}</p>
         <div className="mc-next-context-actions" role="group" aria-label="Chat documents">
           {documents.notes.map((note) => (
             <button
@@ -134,10 +136,10 @@ export function ThreadedDocumentsPanel({ props }: { props: MissionThreadedContex
               type="button"
               className="mc-next-panel-button"
               aria-pressed={included}
-              disabled={!included}
+              disabled={!included && !documents.contextInclusionEnabled}
               onClick={() => documents.onToggleInclude(selectedRef)}
             >
-              {included ? "Remove from next turn" : "Include in next turn temporarily unavailable"}
+              {included ? "Remove from next turn" : documents.contextInclusionEnabled ? "Include in next turn" : "Include in next turn temporarily unavailable"}
             </button>
           </div>
           {editable ? (

@@ -14,7 +14,7 @@ type Input = {
 /** Derives advisory fanout evidence from existing grants, agents and scoped session state. */
 export function useChatAutomaticFanout({ sessionData, threadController, workspaceId, activationGrants }: Input) {
   const automaticFanout = useMemo(() => {
-    if (sessionData.settings?.features?.durableChatFanoutV1Enabled !== true) {
+    if (sessionData.settings?.chatFeatureAvailability?.automaticFanout !== true) {
       return {
         enabled: false,
         unavailableReason: "Automatic fan-out is not enabled for this runtime. Ask remains the safe default.",
@@ -88,7 +88,7 @@ export function useChatAutomaticFanout({ sessionData, threadController, workspac
     activationGrants.autonomousActivationGrants,
     sessionData.projects?.items,
     threadController.selectedSession?.projectId,
-    sessionData.settings?.features?.durableChatFanoutV1Enabled,
+    sessionData.settings?.chatFeatureAvailability?.automaticFanout,
     workspaceId,
   ]);
 

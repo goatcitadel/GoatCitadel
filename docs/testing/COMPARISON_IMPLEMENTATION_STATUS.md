@@ -10,6 +10,88 @@ This tracks the approved C0-C6 sequence in the [master program](../MASTER_COMPLE
 It records local evidence separately from live-provider quality, external delivery,
 packaged installation, and two-machine acceptance. The implementation is not complete.
 
+## Feature-quality comparison transport and pilot (2026-10-11)
+
+The existing comparison harness now supports explicit local inference through
+literal-loopback HTTP, with pinned runtime/model-hash/quantization/hardware
+metadata. It retains request, input/output, response-size and deadline limits;
+valid local usage settles at zero provider dollars without fictional pricing.
+Hosted HTTPS and positive-rate requirements are unchanged. Unknown or excessive
+usage remains unsettled rather than becoming a passing zero-cost receipt.
+
+A pilot preparation helper binds hosted baseline and retest manifests to one
+shared fsynced $25/450-request journal. Per-campaign journals remain distinct;
+the shared owner counts all hosted reservations before dispatch. The local
+track has its separate bounded request ledger and zero provider-dollar cap.
+Recorder validation requires matching shared pilot evidence, and additional
+hosted/local feature-acceptance rows begin unrun. Fixed-reminder and supplied-file
+research fixtures remain distinct from scheduled-agent and open-web acceptance.
+
+Focused tests use controlled responses and temporary journals, including
+two-campaign cap enforcement, restart retention, URL refusal, local usage bounds
+and unchanged hosted evidence handling. This is harness proof only. No live
+provider request, external channel message, installed-runtime verification or
+comparative product-quality result is implied. Adapter repinning, equivalent
+native permissions, actual models/endpoints and live acceptance remain open.
+See [pilot workflow](AGENT_COMPARISON.md#october-11-feature-quality-pilot).
+
+## Feature-quality runtime and extension increments (2026-10-11)
+
+The extension SDK accepts an optional versioned configuration form description,
+with bounded fields and secret references rather than secret values. Its local
+author preflight validates manifests and requirements without claiming a runtime
+connection or invocation. MCP Settings now separates saved, last connected,
+discovered, currently callable and task-tested evidence; a sample task opens Chat
+through the normal governed flow and does not auto-send.
+
+Scheduled Chat and proactive heartbeat restoration have separate default-off
+flags. Scheduled turns retain the canonical cron occurrence, immutable action
+snapshot, creator scope and permission intersection at admission and dispatch.
+New scheduled admission also requires the creator receipt stored by the server
+on the existing cron job. Authenticated create or review establishes that receipt;
+config imports and historical `createdBy` text cannot establish creator authority.
+Action changes invalidate the receipt, and missing proof keeps execution Inbox-only.
+Heartbeat restoration binds the existing database occurrence to immutable Chat
+feature references, retains quiet-decision and operator-preemption semantics,
+and refuses interactive-approval tools. Historical profile-bound records remain
+readable. SQLite/PostgreSQL migrations preserve existing frozen JSON and hashes.
+
+Commitment restoration uses another default-off flag and the existing cron
+owner. New source receipts derive from the exact completed, admitted operator
+turn and its frozen permission-profile evidence. Missing or unverifiable creator
+evidence keeps a commitment Inbox-only. A single transaction freezes the revision,
+text, due time and scope while reserving its canonical occurrence. Restart recovery
+reuses that occurrence; delivery settlement and retry stay with the existing
+cron/channel owners. An Inbox handoff does not count as a sent channel message.
+
+Controlled-provider integration tests execute scheduled Chat and heartbeat turns
+through canonical admission, durable execution and the real `time.now` tool owner.
+Restart retains the completed occurrence without a duplicate model dispatch;
+quiet heartbeat completion settles its occurrence without adding an assistant
+message. These are agent execution tests, separate from reminder delivery tests.
+An authenticated skill-capture journey also covers review, approval, activation,
+fresh Chat instruction reuse, a second version, rollback to the prior version,
+fresh reuse of that prior version, and revocation.
+
+Delegated background-process results now retain a Windows creation-time identity
+bound to the exact child session and turn. Terminal delegation cleanup reads that
+existing tool receipt, validates ownership, and checks the identity on the same
+native process handle used for termination. Focused Windows tests exercise a real
+spawn, identity mismatch refusal, result serialization, termination and replay;
+Gateway tests cover canonical step and receipt filtering, plus SQLite close/reopen
+before native termination and again before idempotent settlement replay. Existing
+delegation maintenance now discovers unfinished cleanup through bounded repository
+pages and a retained scan cursor, independently of watcher projection progress.
+The tool receipt acknowledges cleanup under an exact step lock and result CAS;
+tests cover lost acknowledgement, cursor wrap, skipped steps and multiple tool pages.
+This covers the recorded process only. Descendants, POSIX restart cleanup, and a crash before receipt
+persistence remain unconfirmed; legacy PID-only receipts never authorize a kill.
+
+Focused local SDK, UI, SQLite and controlled-provider tests establish individual
+contracts and recovery behavior. These flags remain off by default; none of this
+constitutes live model quality, external-channel, installed-runtime, two-machine
+or comparative-parity acceptance. The feature-quality live matrix remains unrun.
+
 Historical evidence paths beginning with `%TEMP%` refer to the Windows temporary
 directory of the account that ran the check. Their named subdirectories and files
 identify retained local receipts; those receipts are not published with this document.

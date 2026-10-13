@@ -212,7 +212,7 @@ describe("McpRequesterScopedTurnContextHandle (HX-415 slice 7d)", () => {
     }
   });
 
-  it("keeps turn-context construction scoped to the runner, the gateway composition, and the definition site", () => {
+  it("keeps turn-context construction scoped to the runner's feature owner, the gateway composition, and the definition site", () => {
     const sourceRoot = fileURLToPath(new URL("../", import.meta.url));
     const inventory = listProductionTypeScriptSources(sourceRoot).map((filePath) => ({
       relativePath: relative(sourceRoot, filePath).replaceAll("\\", "/"),
@@ -245,6 +245,8 @@ describe("McpRequesterScopedTurnContextHandle (HX-415 slice 7d)", () => {
 const TURN_CONTEXT_DEFINITION_SITE = "services/mcp-requester-resolution-service.ts";
 const TURN_CONTEXT_ALLOWED_CALL_SITES = new Set([
   "services/chat-turn-agent-runner.ts",
+  // The runner delegates exact-scope construction to its stateless feature owner.
+  "services/chat-turn-feature-runtime.ts",
   "services/gateway-service.ts",
   // Recovery rebuilds the handle from the frozen profile read by the Gateway host.
   "services/mcp-requester-runtime-composition.ts",

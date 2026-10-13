@@ -40,3 +40,16 @@ it.each([false, true])("keeps the exact unavailable-context notice once, compact
 it("preserves retained intent for explicit clearing instead of claiming it will be sent", async () => {
  controls.selectedAttachmentIds = ["attachment-a"]; await render(); expect(container.textContent).toContain("Clear the selection to send"); expect(controls.onClearSelection).not.toHaveBeenCalled(); await click("Choose sources"); const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!; expect(checkbox.checked).toBe(true); expect(checkbox.disabled).toBe(false); await act(async () => checkbox.click()); expect(controls.onToggleSelect).toHaveBeenCalledExactlyOnceWith("attachment-a"); await click("Close"); await click("Clear the external source selection"); expect(controls.onClearSelection).toHaveBeenCalledTimes(1);
 });
+it("enables explicit source selection only for available current sessions and keeps attachment separate", async () => {
+ controls.contextInclusionEnabled = true;
+ await render(); await click("Choose sources");
+ const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+ expect(checkbox.checked).toBe(false); expect(checkbox.disabled).toBe(false);
+ expect(container.textContent).toContain("exact content in the next turn");
+ await click("Attach verified import from Owned source read-only");
+ expect(controls.onToggleSelect).not.toHaveBeenCalled();
+ await act(async () => checkbox.click());
+ expect(controls.onToggleSelect).toHaveBeenCalledExactlyOnceWith("attachment-a");
+ controls.canMutate = false; await render();
+ expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.disabled).toBe(true);
+});

@@ -1,6 +1,8 @@
 import {
   HEARTBEAT_PERMISSION_PROFILE_ID,
   SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+  readChatDelegationResultSchema,
+  type ChatDelegationResultSchema,
   type ChatSendMessageRequest,
   type ToolInvokeRequest,
   type ToolPolicyActorContext,
@@ -23,6 +25,7 @@ export interface SubagentFanoutSubtask {
   objective: string;
   label?: string;
   expectedOutput?: string;
+  resultSchema?: ChatDelegationResultSchema;
 }
 
 export type SubagentFanoutParseResult = { ok: true; subtasks: SubagentFanoutSubtask[] } | { ok: false; error: string };
@@ -82,12 +85,16 @@ export function parseSubagentFanoutSubtasks(args: Record<string, unknown>): Suba
     }
     const label = typeof record.label === "string" ? record.label.trim() : "";
     const expectedOutput = typeof record.expectedOutput === "string" ? record.expectedOutput.trim() : "";
+    let resultSchema: ChatDelegationResultSchema | undefined;
+    try { if (record.resultSchema !== undefined) resultSchema = readChatDelegationResultSchema(record.resultSchema); }
+    catch { return { ok: false, error: `Subtask ${index + 1} has an unsupported or unbounded result schema.` }; }
     subtasks.push({
       objective: truncateWithLimit(objective, SUBTASK_OBJECTIVE_MAX_LENGTH),
       ...(label ? { label: truncateWithLimit(label, SUBTASK_LABEL_MAX_LENGTH) } : {}),
       ...(expectedOutput
         ? { expectedOutput: truncateWithLimit(expectedOutput, SUBTASK_EXPECTED_OUTPUT_MAX_LENGTH) }
         : {}),
+      ...(resultSchema ? { resultSchema } : {}),
     });
   }
   return { ok: true, subtasks };

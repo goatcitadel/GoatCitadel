@@ -4269,6 +4269,11 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(result.assistantContent).toContain("partner integrations");
     expect(result.assistantContent).not.toContain("I ran out of time before I could finish a full pass");
     expect(result.turnTrace.failure?.failureClass).toBe("unknown");
+    expect(createChatCompletion).toHaveBeenCalledTimes(4);
+    expect(result.turnTrace.status).toBe("failed");
+    expect(result.turnTrace.completion).toMatchObject({
+      status: "interrupted", repaired: false, degraded: { recoveredByModel: false },
+    });
   });
 
   it("deprioritizes definition-page mechanics when recovering use-case answers from fetched content", async () => {
@@ -4364,6 +4369,11 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
     expect(result.assistantContent).not.toContain("technical writer");
     expect(result.assistantContent).not.toContain("common programming languages");
     expect(result.turnTrace.failure?.failureClass).toBe("unknown");
+    expect(createChatCompletion).toHaveBeenCalledTimes(4);
+    expect(result.turnTrace.status).toBe("failed");
+    expect(result.turnTrace.completion).toMatchObject({
+      status: "interrupted", repaired: false, degraded: { recoveredByModel: false },
+    });
   });
 
   it("reuses duplicate explicit http.get calls for the same URL", async () => {

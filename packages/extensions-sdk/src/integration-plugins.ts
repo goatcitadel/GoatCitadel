@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { IntegrationPluginAuthorManifest, PluginDescriptorHealthIssue } from "@goatcitadel/contracts";
+import { ExtensionConfigurationFormSchema, inspectExtensionConfigurationRequirements } from "./configuration-form.js";
 
 export type { IntegrationPluginAuthorManifest } from "@goatcitadel/contracts";
 
@@ -38,6 +39,7 @@ export const IntegrationPluginAuthorManifestSchema = z.object({
       dashboardVariant: z.enum(["default", "compact", "high_contrast"]).optional(),
     })
     .optional(),
+  configurationForm: ExtensionConfigurationFormSchema.optional(),
   toolOverrides: z
     .array(
       z.object({
@@ -79,7 +81,7 @@ export function validateIntegrationPluginAuthorManifestDetailed(
       issues: parsed.error.issues.map((issue) => ({
         code: `manifest.${issue.code}`,
         severity: "critical",
-        message: `${issue.path.join(".") || "manifest"}: ${issue.message}`,
+        message: `${issue.path.join(".") || "manifest"}: ${issue.path[0] === "configurationForm" ? `Invalid configuration metadata (${issue.code}).` : issue.message}`,
         action: "Fix goatcitadel.integration-plugin.json and reinstall or repair the plugin.",
       })),
     };
@@ -90,6 +92,26 @@ export function validateIntegrationPluginAuthorManifestDetailed(
     manifest,
     descriptorHash: createHash("sha256").update(JSON.stringify(manifest)).digest("hex"),
     issues: [],
+  };
+}
+
+/** Static author preflight shares the install validator/hash. It never connects,
+ * installs, grants permission, resolves credentials or invokes the sample task. */
+export function preflightIntegrationPluginAuthorManifest(input: unknown, configuredKeys: readonly string[] = []) {
+  const validation = validateIntegrationPluginAuthorManifestDetailed(input);
+  if (!validation.ok) return { ok: false as const, issues: validation.issues };
+  const configuration = validation.manifest.configurationForm;
+  const requirements = configuration ? inspectExtensionConfigurationRequirements(configuration, configuredKeys) : [];
+  return {
+    ok: true as const,
+    descriptorHash: validation.descriptorHash,
+    pluginId: validation.manifest.pluginId,
+    requirements,
+    missingRequiredKeys: requirements.filter((entry) => entry.status === "missing").map((entry) => entry.key),
+    prerequisites: configuration?.prerequisites ?? [],
+    sampleTask: configuration?.sampleTask,
+    scope: "static_author_metadata" as const,
+    runtimeVerified: false as const,
   };
 }
 

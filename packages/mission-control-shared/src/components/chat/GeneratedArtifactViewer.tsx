@@ -1,7 +1,15 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import type { ChatGeneratedArtifactRecord } from "@goatcitadel/contracts";
 import { StatusChip } from "../StatusChip";
 import { AssistantMessageRenderer } from "./AssistantMessageRenderer";
+
+/**
+ * Host-supplied actions rendered under an artifact (the cockpit shell provides render and
+ * critique controls). Hosts that provide nothing get the viewer unchanged.
+ */
+export const GeneratedArtifactActionsContext = createContext<
+  ((artifact: ChatGeneratedArtifactRecord) => ReactNode) | null
+>(null);
 
 function formatArtifactTimestamp(value: string): string {
   const parsed = new Date(value);
@@ -102,7 +110,9 @@ function MermaidArtifactRenderer({ source }: { source: string }) {
       <div className="generated-artifact-fallback">
         <p className="generated-artifact-fallback-title">Mermaid render failed</p>
         <p className="generated-artifact-fallback-copy">{error}</p>
-        <pre role="region" aria-label="Diagram source" tabIndex={0} className="generated-artifact-code-block">{source}</pre>
+        <pre role="region" aria-label="Diagram source" tabIndex={0} className="generated-artifact-code-block">
+          {source}
+        </pre>
       </div>
     );
   }
@@ -122,6 +132,8 @@ export function GeneratedArtifactViewer({
   compact?: boolean;
 }) {
   const artifactLanguage = artifact.language?.trim() || (artifact.kind === "text" ? "text" : undefined);
+  const renderActions = useContext(GeneratedArtifactActionsContext);
+  const actions = renderActions?.(artifact) ?? null;
   const artifactMeta = useMemo(
     () =>
       [
@@ -136,7 +148,6 @@ export function GeneratedArtifactViewer({
     <article className={`generated-artifact-viewer${compact ? " compact" : ""}`}>
       <header className="generated-artifact-header">
         <div className="generated-artifact-copy">
-          <p className="generated-artifact-kicker">Generated artifact</p>
           <h3>{artifact.title}</h3>
           <div className="generated-artifact-chip-row">
             <StatusChip tone="muted">{artifact.kind}</StatusChip>
@@ -159,9 +170,17 @@ export function GeneratedArtifactViewer({
         ) : null}
         {artifact.kind === "mermaid" ? <MermaidArtifactRenderer source={artifact.content} /> : null}
         {artifact.kind === "code" || artifact.kind === "text" ? (
-          <pre role="region" aria-label={`Artifact source: ${artifact.title}`} tabIndex={0} className="generated-artifact-code-block">{artifact.content}</pre>
+          <pre
+            role="region"
+            aria-label={`Artifact source: ${artifact.title}`}
+            tabIndex={0}
+            className="generated-artifact-code-block"
+          >
+            {artifact.content}
+          </pre>
         ) : null}
       </div>
+      {actions ? <div className="generated-artifact-actions">{actions}</div> : null}
     </article>
   );
 }

@@ -1,6 +1,8 @@
 /* eslint-disable max-lines -- Chat API helpers intentionally centralize chat surface transport contracts and request wiring. */
 import type {
   ChatAttachmentPreviewResponse,
+  ChatArtifactCritiqueResponse,
+  ChatArtifactRenderResponse,
   ChatAttachmentRecord,
   ChatCancelTurnResponse,
   ChatChangePlanRecord,
@@ -86,6 +88,7 @@ import type {
   ChatStreamChunk,
   ChatThreadResponse,
   ChatTurnCapabilityProfileEnvelope,
+  ChatRoutedContextInspectionEnvelope,
   ChatUserInputPromptAnswerRequest,
   ChatUserInputPromptAnswerResponse,
   ChatSecureConfigurationSubmitRequest,
@@ -191,6 +194,12 @@ export interface ChatToolArtifactResponse {
 export interface ChatGeneratedArtifactsResponse {
   items: ChatGeneratedArtifactRecord[];
 }
+
+export type {
+  ChatArtifactCritiqueResponse,
+  ChatArtifactRenderRecord,
+  ChatArtifactRenderResponse,
+} from "@goatcitadel/contracts";
 
 export interface ChatGeneratedArtifactResponse {
   item: ChatGeneratedArtifactRecord;
@@ -856,6 +865,38 @@ export async function fetchChatGeneratedArtifact(
   );
 }
 
+/** Render an `html` generated artifact to offline PNG evidence (idempotent per content hash). */
+export async function renderChatGeneratedArtifact(
+  artifactId: string,
+  workspaceId: string,
+): Promise<ChatArtifactRenderResponse> {
+  return request<ChatArtifactRenderResponse>(
+    `/api/v1/chat/generated-artifacts/${encodeURIComponent(artifactId)}/renders`,
+    { method: "POST", body: JSON.stringify({ workspaceId }) },
+  );
+}
+
+/** Dispatch an `@skill impeccable critique` turn for an html artifact; the report arrives as that turn's reply. */
+export async function critiqueChatGeneratedArtifact(
+  artifactId: string,
+  workspaceId: string,
+): Promise<ChatArtifactCritiqueResponse> {
+  return request<ChatArtifactCritiqueResponse>(
+    `/api/v1/chat/generated-artifacts/${encodeURIComponent(artifactId)}/critique`,
+    { method: "POST", body: JSON.stringify({ workspaceId }) },
+  );
+}
+
+export async function listChatArtifactRenders(
+  artifactId: string,
+  workspaceId: string,
+): Promise<ChatArtifactRenderResponse> {
+  const query = new URLSearchParams({ workspaceId });
+  return request<ChatArtifactRenderResponse>(
+    `/api/v1/chat/generated-artifacts/${encodeURIComponent(artifactId)}/renders?${query.toString()}`,
+  );
+}
+
 export async function fetchChatSessionGeneratedArtifacts(
   sessionId: string,
   input?: {
@@ -1086,6 +1127,18 @@ export async function fetchChatTurnCapabilityProfile(
   const suffix = query.size > 0 ? `?${query.toString()}` : "";
   return request<ChatTurnCapabilityProfileEnvelope>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/capability-profile${suffix}`,
+  );
+}
+
+export async function fetchChatTurnRoutedContext(
+  sessionId: string,
+  turnId: string,
+  workspaceId?: string,
+): Promise<ChatRoutedContextInspectionEnvelope> {
+  const query = new URLSearchParams();
+  if (workspaceId?.trim()) query.set("workspaceId", workspaceId.trim());
+  return request<ChatRoutedContextInspectionEnvelope>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/routed-context${query.size ? `?${query}` : ""}`,
   );
 }
 

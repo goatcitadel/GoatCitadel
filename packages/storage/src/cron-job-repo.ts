@@ -1,4 +1,5 @@
-import type { CronJobRecord } from "@goatcitadel/contracts";
+import type { CronJobRecord, CronJobCreatorAuthorityInput } from "@goatcitadel/contracts";
+import { buildCronCreatorAuthority, hasCurrentCronCreatorAuthority } from "@goatcitadel/contracts";
 import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
@@ -17,6 +18,7 @@ interface CronJobRow {
   name: string;
   action: string;
   action_config_json: string | null;
+  creator_authority_json: string | null;
   description: string | null;
   schedule: string;
   enabled: number;
@@ -112,6 +114,7 @@ export class CronJobRepository {
           name = @name,
           action = @action,
           action_config_json = @actionConfigJson,
+          creator_authority_json = @creatorAuthorityJson,
           description = @description,
           schedule = @schedule,
           enabled = @enabled,
@@ -196,6 +199,7 @@ export class CronJobRepository {
       }
       const updated = this.specUpdateStmt.run({
         ...toSpecParams(next),
+        creatorAuthorityJson: hasCurrentCronCreatorAuthority(next) ? JSON.stringify(next.creatorAuthority) : null,
         jobId: normalizedJobId,
         expectedRevision,
         updatedAt: now,
@@ -322,6 +326,19 @@ export class CronJobRepository {
     return this.mapRow(row);
   }
 
+  /** Only server mutation owners call this inside their existing spec transaction.
+   * Config reconciliation cannot supply this separate argument or mint a receipt. */
+  public bindCreatorAuthority(jobId: string, expectedRevision: number, input: CronJobCreatorAuthorityInput): CronJobRecord {
+    return this.db.transaction("immediate", () => {
+      this.fenceSpec(jobId, expectedRevision);
+      const current = this.require(jobId);
+      const receipt = buildCronCreatorAuthority(current, input);
+      this.db.prepare("UPDATE cron_jobs SET creator_authority_json = @receipt WHERE job_id = @jobId AND revision = @expectedRevision")
+        .run({ receipt: JSON.stringify(receipt), jobId, expectedRevision });
+      return this.require(jobId);
+    });
+  }
+
   public list(): CronJobRecord[] {
     const rows = this.listStmt.all();
     assertCronJobRows(rows);
@@ -408,6 +425,7 @@ export class CronJobRepository {
       name: row.name,
       action: row.action as CronJobRecord["action"],
       ...(actionConfig ? { actionConfig } : {}),
+      ...(row.creator_authority_json ? { creatorAuthority: JSON.parse(row.creator_authority_json) as CronJobRecord["creatorAuthority"] } : {}),
       description: row.description ?? undefined,
       schedule: row.schedule,
       enabled: Boolean(row.enabled),
@@ -418,7 +436,10 @@ export class CronJobRepository {
       contextFrom: row.context_from ?? undefined,
       lastRunOutput: row.last_run_output ?? undefined,
       lastRunId: row.last_run_id ?? undefined,
-      lastRunStatus: row.last_run_status === "ok" || row.last_run_status === "failed" ? row.last_run_status : undefined,
+      lastRunStatus:
+        row.last_run_status === "ok" || row.last_run_status === "failed" || row.last_run_status === "skipped"
+          ? row.last_run_status
+          : undefined,
       lastRunEvidenceEnvelopeId: row.last_run_evidence_envelope_id ?? undefined,
       lastFailureAt: row.last_failure_at ?? undefined,
       ...(lastFailure ? { lastFailure } : {}),

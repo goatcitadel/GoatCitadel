@@ -272,12 +272,31 @@ const CHECKS = [
   {
     id: "requester-scope.runtime",
     title:
-      "Runtime drivers + static MCP suites: aggregate deadline, zero redirects, effect-at-write, isolated dispatcher, static path unchanged (scenarios 3, 5, 7, 8, 10, 12)",
-    args: gatewayVitest([
-      "services/mcp-runtime.requester-scope.test.ts",
-      "services/mcp-runtime.test.ts",
-      "services/mcp-runtime.lifecycle.test.ts",
-    ]),
+      "Runtime drivers + static MCP suites: aggregate deadline, zero redirects, effect-at-write, isolated dispatcher, historical and admitted static paths (scenarios 3, 5, 7, 8, 10, 12)",
+    // These suites start real HTTP/stdio fixtures. Bound startup time separately
+    // from the production deadline assertions and avoid competing process starts.
+    args: [
+      ...gatewayVitest([
+        "services/mcp-runtime.requester-scope.test.ts",
+        "services/mcp-runtime.test.ts",
+        "services/mcp-runtime.lifecycle.test.ts",
+        "services/mcp-requester-admission-runtime.test.ts",
+        "chat-static-mcp.integration.test.ts",
+        "services/gateway-service.static-mcp-admission.test.ts",
+        "services/chat-turn-agent-runner.native-policy.test.ts",
+        "services/mcp-static-chat-service.test.ts",
+        "services/mcp-stdio-session-pool.test.ts",
+        "services/mcp-static-selection.test.ts",
+        "services/mcp-server-test-evidence.test.ts",
+        "routes/mcp-server-test-evidence.test.ts",
+        "services/mcp-admission-context-budget.test.ts",
+        "services/mcp-chat-admission-schemas.test.ts",
+        "services/gateway/feature-flags.restoration.test.ts",
+      ]),
+      "--maxWorkers=1",
+      "--testTimeout=20000",
+      "--hookTimeout=30000",
+    ],
     count: "vitest",
   },
   {
@@ -303,6 +322,8 @@ const CHECKS = [
       "services/gateway/native-mcp-chat-binding.test.ts",
       "routes/mcp.test.ts",
       "services/mcp-server-admin-service.test.ts",
+      "services/mcp-requester-admission-approval.test.ts",
+      "services/mcp-requester-approval-handoff.test.ts",
     ]),
     count: "vitest",
   },

@@ -1,5 +1,5 @@
 import { useCallback, type Dispatch, type SetStateAction } from "react";
-import type { ChatAttachmentRecord, ChatSessionPrefsPatch } from "@goatcitadel/contracts";
+import type { ChatAttachmentRecord, ChatSessionPrefsPatch, ChatRoutedContextRef } from "@goatcitadel/contracts";
 import { downloadFile, uploadChatAttachment } from "@goatcitadel/mission-control-shared/api/client";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 import { applyComposerSuggestion } from "./useChatComposerInteractions";
@@ -9,6 +9,8 @@ import type { useRunVariablePanel } from "./useRunVariablePanel";
 
 type Input = {
   workspaceId: string;
+  explicitContextEnabled?: boolean;
+  includeDocumentContext?: (ref: ChatRoutedContextRef) => void;
   ensureSession: ReturnType<typeof useChatSessionControls>["ensureSession"];
   setPendingAttachments: Dispatch<SetStateAction<ChatAttachmentRecord[]>>;
   pushLocalNotice: (content: string, tone?: ChatThreadNotice["tone"]) => void;
@@ -26,6 +28,8 @@ type Input = {
 
 export function useChatComposerPaletteActions({
   workspaceId,
+  explicitContextEnabled = false,
+  includeDocumentContext,
   ensureSession,
   setPendingAttachments,
   pushLocalNotice,
@@ -94,7 +98,12 @@ export function useChatComposerPaletteActions({
             pushLocalNotice("This knowledge attachment is available to the next turn.", "success");
             break;
           case "attach_document":
-            pushLocalNotice("Including documents in a turn is temporarily unavailable.", "warning");
+            if (explicitContextEnabled && includeDocumentContext) {
+              includeDocumentContext({ kind: item.action.documentKind, ref: item.action.documentId, label: item.action.label });
+              pushLocalNotice(`Included ${item.action.label} for the next turn. The saved version is used when you send.`, "success");
+            } else {
+              pushLocalNotice("Including documents in a turn is temporarily unavailable.", "warning");
+            }
             break;
           case "attach_url":
             await handleAttachKnowledgeUrlValue(item.action.url);
@@ -122,6 +131,8 @@ export function useChatComposerPaletteActions({
     },
     [
       handleApplyPresetById,
+      explicitContextEnabled,
+      includeDocumentContext,
       handleAssignProject,
       handleAttachKnowledgeUrlValue,
       handleAttachPaletteFile,

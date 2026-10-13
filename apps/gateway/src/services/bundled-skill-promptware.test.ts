@@ -29,7 +29,7 @@ const LAUNCHER_PATTERNS: ReadonlyArray<{ label: string; re: RegExp }> = [
   { label: "xai", re: /\bxai\b/iu },
   { label: "x.ai", re: /\bx\.ai\b/iu },
   { label: "design.json sidecar", re: /\bsidecar\b/iu },
-  { label: "unavailable command", re: /@skill impeccable (?:live|generate|critique|craft)\b/iu },
+  { label: "unavailable command", re: /@skill impeccable (?:live|generate|craft)\b/iu },
 ];
 
 function listMarkdownFiles(dir: string): string[] {

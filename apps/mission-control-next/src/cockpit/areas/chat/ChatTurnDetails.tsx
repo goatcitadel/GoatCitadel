@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from "react";
-import type { ChatThreadTurnRecord, ChatToolRunRecord } from "@goatcitadel/contracts";
+import type { ChatThreadTurnRecord, ChatToolRunRecord, DesignAdvisory } from "@goatcitadel/contracts";
 import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-display-name";
 import { getChatToolRunDiagnostics } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
 import { projectChatToolEffectTruth } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-effect-truth";
@@ -33,6 +33,19 @@ function activityLabel(tool: ChatToolRunRecord): string {
     default:
       return "Unknown";
   }
+}
+
+/** Informational design advisories the gateway attached to a governed UI file write; shape-checked, never trusted blindly. */
+function readDesignAdvisories(tool: ChatToolRunRecord): DesignAdvisory[] {
+  const raw = tool.result?.designAdvisories;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const { ruleId, line, summary, scope } = entry as Record<string, unknown>;
+    return typeof ruleId === "string" && typeof summary === "string" && typeof line === "number"
+      ? [{ ruleId, line, summary, ...(scope === "patch" ? { scope: "patch" as const } : {}) }]
+      : [];
+  });
 }
 
 function safeSourceHref(value: string): string | null {
@@ -108,7 +121,13 @@ export function ChatTurnDetails({
         </details>
       ) : null}
       {turn.toolRuns.length ? (
-        <details open={streaming || turn.toolRuns.some((tool) => tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal)} aria-label="Tool activity for this turn">
+        <details
+          open={
+            streaming ||
+            turn.toolRuns.some((tool) => tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal)
+          }
+          aria-label="Tool activity for this turn"
+        >
           <summary className="cursor-pointer text-accent">
             {turn.toolRuns.length} tool {turn.toolRuns.length === 1 ? "call" : "calls"} · {activitySummary}
           </summary>
@@ -116,6 +135,7 @@ export function ChatTurnDetails({
             {turn.toolRuns.map((tool) => {
               const diagnostics = getChatToolRunDiagnostics(tool);
               const effect = projectChatToolEffectTruth(tool);
+              const advisories = readDesignAdvisories(tool);
               return (
                 <li
                   key={tool.toolRunId}
@@ -130,6 +150,23 @@ export function ChatTurnDetails({
                     </p>
                   ) : null}
                   {effect ? <p className="w-full">{effect.plainSummary}</p> : null}
+                  {advisories.length ? (
+                    <div className="w-full">
+                      <p className="text-fg-secondary">Design advisories ({advisories.length}) · informational</p>
+                      <ul aria-label="Design advisories" className="mt-1 grid gap-1">
+                        {advisories.map((advisory) => (
+                          <li key={advisory.ruleId}>
+                            {advisory.summary}{" "}
+                            <span className="text-fg-muted">
+                              {advisory.scope === "patch"
+                                ? `(line ${advisory.line} of the patch text)`
+                                : `(line ${advisory.line})`}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
                 </li>
               );
             })}

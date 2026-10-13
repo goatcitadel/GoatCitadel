@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
 import { normalizePermissionEvidence } from "./agent-comparison-permissions.mjs";
+import { FEATURE_ACCEPTANCE_SUITE, FEATURE_ACCEPTANCE_TASKS } from "./agent-comparison-acceptance-fixtures.mjs";
 
 export const COMPARISON_VERSION = "goatcitadel.agent-comparison.v1";
 export const PRODUCTS = Object.freeze(["goatcitadel", "openclaw", "hermes"]);
@@ -100,6 +102,11 @@ export const COMPARISON_TASKS = Object.freeze([
   },
 ]);
 export const SEPARATE_TASKS = Object.freeze(["approval_resume", "restart_recovery", "native_windows_remote_worker"]);
+export function comparisonTasks(manifest = {}) {
+  if (manifest.suite === undefined) return COMPARISON_TASKS;
+  if (manifest.suite === FEATURE_ACCEPTANCE_SUITE) return FEATURE_ACCEPTANCE_TASKS;
+  throw new Error("Unsupported opt-in comparison suite.");
+}
 export const sha256 = (value) =>
   createHash("sha256")
     .update(typeof value === "string" || value instanceof Uint8Array ? value : canonical(value))
@@ -120,34 +127,59 @@ function finite(value, minimum = 0) {
   return typeof value === "number" && Number.isFinite(value) && value >= minimum;
 }
 
-/** Public, credential-free transport and price identity shared by every cell. */
+/** Public, credential-free transport and accounting identity shared by every cell. */
 export function normalizeComparisonTransport(value) {
+  const local = value?.kind === "local";
   requireValue(
     value &&
       typeof value === "object" &&
       !Array.isArray(value) &&
-      Object.keys(value).every((key) => ["upstreamUrl", "outputField", "pricing"].includes(key)),
+      Object.keys(value).every((key) =>
+        (local
+          ? ["kind", "upstreamUrl", "outputField", "localRuntime"]
+          : ["upstreamUrl", "outputField", "pricing"]
+        ).includes(key),
+      ),
     "Comparison transport contains unsupported fields.",
   );
   let upstream;
   try {
     upstream = new URL(value.upstreamUrl);
   } catch {
-    throw new Error("Comparison upstream must be one fixed HTTPS chat-completions endpoint.");
+    throw new Error("Comparison upstream must be a fixed supported chat-completions endpoint.");
   }
   requireValue(
-    upstream.protocol === "https:" &&
+    (local
+      ? upstream.protocol === "http:" &&
+        ["127.0.0.1", "[::1]"].includes(upstream.hostname) &&
+        /^http:\/\/(?:127\.0\.0\.1|\[::1\])(?::[0-9]+)?\//u.test(value.upstreamUrl)
+      : upstream.protocol === "https:") &&
       !upstream.username &&
       !upstream.password &&
       !upstream.search &&
       !upstream.hash &&
       upstream.pathname.endsWith("/chat/completions"),
-    "Comparison upstream must be one fixed HTTPS chat-completions endpoint.",
+    "Comparison upstream requires HTTPS, or literal loopback HTTP in declared local mode.",
   );
   requireValue(
     ["max_tokens", "max_completion_tokens"].includes(value.outputField),
     "Comparison output field is unsupported.",
   );
+  if (local) {
+    const runtime = value.localRuntime;
+    requireValue(
+      runtime &&
+        typeof runtime === "object" &&
+        !Array.isArray(runtime) &&
+        Object.keys(runtime).length === 4 &&
+        ["runtime", "modelSha256", "quantization", "hardware"].every(
+          (key) => typeof runtime[key] === "string" && runtime[key].trim() && runtime[key].length <= 256,
+        ) &&
+        /^[a-f0-9]{64}$/u.test(runtime.modelSha256),
+      "Local comparison requires bounded runtime, model hash, quantization and hardware metadata.",
+    );
+    return { kind: "local", upstreamUrl: upstream.href, outputField: value.outputField, localRuntime: { ...runtime } };
+  }
   const pricing = value.pricing;
   requireValue(
     pricing &&
@@ -165,11 +197,56 @@ export function normalizeComparisonTransport(value) {
   return { upstreamUrl: upstream.href, outputField: value.outputField, pricing: { ...pricing } };
 }
 
+export function normalizeComparisonPilotBudget(value) {
+  requireValue(
+    value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      Object.keys(value).length === 4 &&
+      /^[a-f0-9-]{36}$/u.test(value.pilotId ?? "") &&
+      typeof value.directory === "string" &&
+      path.isAbsolute(value.directory) &&
+      Number.isSafeInteger(value.maxRequests) &&
+      value.maxRequests > 0 &&
+      value.maxRequests <= 450 &&
+      finite(value.maxCostUsd, Number.EPSILON) &&
+      value.maxCostUsd <= 25,
+    "Hosted pilot requires an absolute shared journal directory and caps at most 450 requests and $25.",
+  );
+  return {
+    pilotId: value.pilotId,
+    directory: path.resolve(value.directory),
+    maxRequests: value.maxRequests,
+    maxCostUsd: value.maxCostUsd,
+  };
+}
+
+export function normalizeComparisonLocalPilotBudget(value) {
+  requireValue(value?.maxCostUsd === 0, "Local pilot accounting requires zero provider dollars.");
+  const normalized = normalizeComparisonPilotBudget({ ...value, maxCostUsd: Number.EPSILON });
+  return { ...normalized, maxCostUsd: 0 };
+}
+
 export function prepareComparison(config) {
+  const tasks = comparisonTasks(config);
   requireValue(config?.schemaVersion === COMPARISON_VERSION, "Comparison schema is unsupported.");
   requireValue(
     Number.isInteger(config.trials) && config.trials >= 3 && config.trials <= 20,
     "Declare between 3 and 20 trials.",
+  );
+  const transportProfile =
+    config.transportProfile === undefined ? undefined : normalizeComparisonTransport(config.transportProfile);
+  const pilotBudget = config.pilotBudget === undefined ? undefined : normalizeComparisonPilotBudget(config.pilotBudget);
+  const localPilotBudget = config.localPilotBudget === undefined ? undefined : normalizeComparisonLocalPilotBudget(config.localPilotBudget);
+  requireValue(!localPilotBudget || (transportProfile?.kind === "local" && !pilotBudget && config.maxRequests <= localPilotBudget.maxRequests),
+    "Local pilot accounting requires the local transport and its independent aggregate cap.");
+  requireValue(
+    transportProfile?.kind !== "local" || (config.maxCostUsd === 0 && !pilotBudget),
+    "Local comparison has zero provider dollars and cannot consume a hosted pilot budget.",
+  );
+  requireValue(
+    !pilotBudget || (config.maxRequests <= pilotBudget.maxRequests && config.maxCostUsd <= pilotBudget.maxCostUsd),
+    "Campaign caps exceed the shared hosted pilot.",
   );
   requireValue(
     Number.isInteger(config.maxRequests) && config.maxRequests >= 0 && finite(config.maxCostUsd),
@@ -236,7 +313,7 @@ export function prepareComparison(config) {
       maxTaskMs: value.maxTaskMs,
     });
   const comparable = new Set(PRODUCTS.map((product) => equivalence(products[product]))).size === 1;
-  const cells = COMPARISON_TASKS.flatMap((task, taskIndex) =>
+  const cells = tasks.flatMap((task, taskIndex) =>
     Array.from({ length: config.trials }, (_, trial) => {
       // Rotate product order by task and repetition to reduce warm-cache/order bias.
       return PRODUCTS.map((_, offset) => PRODUCTS[(offset + trial + taskIndex) % PRODUCTS.length]).map((product) => ({
@@ -251,13 +328,14 @@ export function prepareComparison(config) {
   );
   const manifest = {
     schemaVersion: COMPARISON_VERSION,
-    fixtureSetSha256: sha256(COMPARISON_TASKS),
+    fixtureSetSha256: sha256(tasks),
+    ...(config.suite === undefined ? {} : { suite: config.suite }),
     trials: config.trials,
     maxRequests: config.maxRequests,
     maxCostUsd: config.maxCostUsd,
-    ...(config.transportProfile === undefined
-      ? {}
-      : { transportProfile: normalizeComparisonTransport(config.transportProfile) }),
+    ...(transportProfile === undefined ? {} : { transportProfile }),
+    ...(pilotBudget === undefined ? {} : { pilotBudget }),
+    ...(localPilotBudget === undefined ? {} : { localPilotBudget }),
     products,
     comparable,
     cells,
@@ -276,13 +354,18 @@ export class ComparisonDispatchBudget {
   #receipts = [];
   #persist;
   #persistenceTail = Promise.resolve();
-  constructor({ maxRequests, maxCostUsd, persist, events = [] }) {
+  constructor({ maxRequests, maxCostUsd, persist, events = [], allowZeroCost = false }) {
     requireValue(
       Number.isInteger(maxRequests) && maxRequests >= 0 && finite(maxCostUsd) && typeof persist === "function",
       "A durable budget sink and explicit caps are required.",
     );
     this.maxRequests = maxRequests;
     this.maxCostUsd = maxCostUsd;
+    requireValue(
+      typeof allowZeroCost === "boolean" && (!allowZeroCost || maxCostUsd === 0),
+      "Zero-cost accounting requires an explicit local zero-dollar budget.",
+    );
+    this.allowZeroCost = allowZeroCost;
     this.#persist = persist;
     requireValue(Array.isArray(events), "Budget recovery requires the complete ordered durable journal.");
     for (const event of events) {
@@ -292,7 +375,7 @@ export class ComparisonDispatchBudget {
           typeof event.cellId === "string" &&
           event.cellId &&
           ["primary", "retry", "child", "unclassified"].includes(event.role) &&
-          finite(event.maximumCostUsd, Number.EPSILON),
+          finite(event.maximumCostUsd, this.allowZeroCost ? 0 : Number.EPSILON),
         "Invalid durable budget entry.",
       );
       const previous = this.#receipts[event.sequence - 1];
@@ -331,8 +414,8 @@ export class ComparisonDispatchBudget {
       typeof cellId === "string" &&
         cellId &&
         ["primary", "retry", "child", "unclassified"].includes(role) &&
-        finite(maximumCostUsd, Number.EPSILON),
-      "Dispatch needs cell, role, and a positive worst-case cost.",
+        finite(maximumCostUsd, this.allowZeroCost ? 0 : Number.EPSILON),
+      "Dispatch needs cell, role, and a positive worst-case cost unless local zero-cost accounting is explicit.",
     );
     requireValue(
       this.#requests < this.maxRequests && this.#reservedUsd + maximumCostUsd <= this.maxCostUsd + 1e-12,
@@ -444,7 +527,7 @@ export function summarizeComparison(manifest, receipts) {
       telemetry.repeatedCorrections === null || telemetry.repeatedCorrections <= receipt.manualInterventions,
       "Repeated corrections cannot exceed manual interventions.",
     );
-    const task = COMPARISON_TASKS.find((value) => value.id === receipt.task);
+    const task = comparisonTasks(manifest).find((value) => value.id === receipt.task);
     if (receipt.outcome === "passed") {
       requireValue(
         receipt.requests > 0 && receipt.costUsd !== null,
@@ -466,6 +549,36 @@ export function summarizeComparison(manifest, receipts) {
       );
     }
     const permissionEvidence = normalizePermissionEvidence(receipt.permissionEvidence);
+    let pilotAccounting;
+    const sharedPolicy = manifest.pilotBudget ?? manifest.localPilotBudget;
+    if (sharedPolicy) {
+      const value = receipt.pilotAccounting;
+      requireValue(
+        value &&
+          value.pilotId === sharedPolicy.pilotId &&
+          value.pilotBudgetSha256 === sha256(sharedPolicy) &&
+          /^[a-f0-9]{64}$/u.test(value.journalSha256 ?? "") &&
+          Number.isSafeInteger(value.requests) &&
+          value.requests >= receipt.requests &&
+          value.requests <= sharedPolicy.maxRequests &&
+          finite(value.committedOrReservedUsd) &&
+          value.committedOrReservedUsd <= sharedPolicy.maxCostUsd + 1e-12 &&
+          Number.isSafeInteger(value.unsettledRequests) &&
+          value.unsettledRequests >= 0 &&
+          value.unsettledRequests <= value.requests,
+        "Pilot receipts require verified shared accounting within the aggregate caps.",
+      );
+      pilotAccounting = Object.fromEntries(
+        [
+          "pilotId",
+          "pilotBudgetSha256",
+          "journalSha256",
+          "requests",
+          "committedOrReservedUsd",
+          "unsettledRequests",
+        ].map((key) => [key, value[key]]),
+      );
+    }
     if (permissionEvidence)
       requireValue(
         Object.entries(permissionEvidence.policy).every(([tool, policy]) =>
@@ -482,6 +595,7 @@ export function summarizeComparison(manifest, receipts) {
       costUsd: receipt.costUsd,
       manualInterventions: receipt.manualInterventions,
       permissionEvidence,
+      ...(pilotAccounting ? { pilotAccounting } : {}),
       ...telemetry,
       ...(receipt.outcome === "passed"
         ? {
@@ -528,9 +642,13 @@ export function summarizeComparison(manifest, receipts) {
     withinBudget,
     requests,
     knownCostUsd,
+    transportKind: manifest.transportProfile?.kind === "local" ? "local" : "hosted",
+    ...(manifest.transportProfile?.kind === "local" ? { localRuntime: manifest.transportProfile.localRuntime } : {}),
+    ...(manifest.pilotBudget ? { pilotBudget: manifest.pilotBudget } : {}),
+    ...(manifest.localPilotBudget ? { localPilotBudget: manifest.localPilotBudget } : {}),
     unknownCostCells: cells.filter((cell) => cell.costUsd === null).length,
     outcomes: PRODUCTS.flatMap((product) =>
-      COMPARISON_TASKS.map((task) =>
+      comparisonTasks(manifest).map((task) =>
         summarizeOutcomes(
           product,
           task.id,
@@ -590,6 +708,17 @@ export function comparisonMarkdown(report) {
     `Pinned manifest: ${report.manifestSha256}`,
     ``,
     `Requests observed: ${report.requests}. Known cost: $${report.knownCostUsd.toFixed(4)}. Cells without cost: ${report.unknownCostCells}.`,
+    report.transportKind === "local"
+      ? "Local inference: USD measures provider charges only (zero); hardware, electricity and operator time are not priced. Missing or unbounded usage remains unknown."
+      : "Hosted inference: USD uses canonical usage and the pinned provider rates.",
+    ...(report.pilotBudget
+      ? [
+          `Shared hosted pilot: ${report.pilotBudget.pilotId}; all baseline, retry, child and retest campaigns share its retained journal and cap.`,
+        ]
+      : []),
+    ...(report.localPilotBudget
+      ? [`Shared local pilot: ${report.localPilotBudget.pilotId}; baseline, retry, child and retest campaigns share the conservative ${report.localPilotBudget.maxRequests}-request policy. Provider dollars remain zero.`]
+      : []),
     ``,
     "Controlled, unsupported, blocked, and unrun cells do not count as live task success.",
     "",

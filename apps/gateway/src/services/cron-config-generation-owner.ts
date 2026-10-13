@@ -1,3 +1,4 @@
+import { bindScheduledCreatorAuthority } from "./scheduled-cron-storage-guards.js";
 import {
   ConflictError,
   NotFoundError,
@@ -5,6 +6,7 @@ import {
   type CronJobAction,
   type CronJobActionConfig,
   type CronJobRecord,
+  type CronJobCreatorAuthorityInput,
 } from "@goatcitadel/contracts";
 import type {
   CronJobRuntimeTelemetryPatch,
@@ -20,6 +22,7 @@ import {
 } from "./config-generation-service.js";
 import {
   computeNextCronRunAt,
+  isScheduledCronAction,
   normalizeCronContextFrom,
   normalizeCronEndAt,
   normalizeCronJobDescription,
@@ -67,11 +70,12 @@ export interface CronConfigGenerationOwnerHooks {
 }
 
 export interface CronSpecMutationOwner {
-  createSpec(spec: CronJobSpecInput, telemetry?: CronJobRuntimeTelemetryPatch): Promise<CronJobRecord>;
+  createSpec(spec: CronJobSpecInput, telemetry?: CronJobRuntimeTelemetryPatch, creatorAuthority?: CronJobCreatorAuthorityInput): Promise<CronJobRecord>;
   updateSpec(
     spec: CronJobSpecInput,
     expectedRevision: number,
     telemetry?: CronJobRuntimeTelemetryPatch,
+    creatorAuthority?: CronJobCreatorAuthorityInput,
   ): Promise<CronJobRecord>;
   deleteSpec(jobId: string, expectedRevision: number): Promise<boolean>;
   reconcileSpec(spec: CronJobSpecInput): Promise<CronJobRecord>;
@@ -81,11 +85,13 @@ export type CronStorageMutation =
   | {
       kind: "create";
       spec: CronJobSpecInput;
+      creatorAuthority?: CronJobCreatorAuthorityInput;
       telemetry?: CronJobRuntimeTelemetryPatch;
     }
   | {
       kind: "update";
       spec: CronJobSpecInput;
+      creatorAuthority?: CronJobCreatorAuthorityInput;
       expectedRevision: number;
       telemetry?: CronJobRuntimeTelemetryPatch;
     }
@@ -116,7 +122,7 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
     private readonly hooks: CronConfigGenerationOwnerHooks = {},
   ) {}
 
-  public async createSpec(spec: CronJobSpecInput, telemetry?: CronJobRuntimeTelemetryPatch): Promise<CronJobRecord> {
+  public async createSpec(spec: CronJobSpecInput, telemetry?: CronJobRuntimeTelemetryPatch, creatorAuthority?: CronJobCreatorAuthorityInput): Promise<CronJobRecord> {
     const desired = projectCanonicalCronSpec(spec);
     return await this.commitMutation<CronJobRecord>(async () => {
       const existing = await this.storage.cronJobs.get(desired.jobId);
@@ -133,7 +139,7 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
         });
       }
       return {
-        mutation: { kind: "create", spec: desired, ...(telemetry ? { telemetry } : {}) },
+        mutation: { kind: "create", spec: desired, ...(telemetry ? { telemetry } : {}), ...(creatorAuthority ? { creatorAuthority } : {}) },
         updateSpecs: (specs) => upsertCanonicalSpec(specs, desired),
       };
     });
@@ -143,6 +149,7 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
     spec: CronJobSpecInput,
     expectedRevision: number,
     telemetry?: CronJobRuntimeTelemetryPatch,
+    creatorAuthority?: CronJobCreatorAuthorityInput,
   ): Promise<CronJobRecord> {
     const desired = projectCanonicalCronSpec(spec);
     return await this.commitMutation<CronJobRecord>(async () => {
@@ -153,9 +160,10 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
           spec: desired,
           expectedRevision,
           ...(telemetry ? { telemetry } : {}),
+          ...(creatorAuthority ? { creatorAuthority } : {}),
         },
         updateSpecs: (specs) => upsertCanonicalSpec(specs, desired),
-        noOpResult: cronJobSpecMatches(current, desired) ? current : undefined,
+        noOpResult: !creatorAuthority && cronJobSpecMatches(current, desired) ? current : undefined,
       };
     });
   }
@@ -181,8 +189,16 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
           updateSpecs: (specs) => upsertCanonicalSpec(specs, desired),
         };
       }
+      // A changed schedule (e.g. a built-in re-zoned on startup) invalidates the
+      // persisted nextRunAt; re-project it as startup reconciliation does.
+      const scheduleChanged = current.schedule !== desired.schedule;
       return {
-        mutation: { kind: "update", spec: desired, expectedRevision: current.revision },
+        mutation: {
+          kind: "update",
+          spec: desired,
+          expectedRevision: current.revision,
+          ...(scheduleChanged ? { telemetry: { nextRunAt: projectNextRunAt(desired) } } : {}),
+        },
         updateSpecs: (specs) => upsertCanonicalSpec(specs, desired),
         noOpResult: cronJobSpecMatches(current, desired) ? current : undefined,
       };
@@ -329,6 +345,7 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
       } else {
         result = await this.reconcileAllSpecs(mutation.specs, mutation.deleteExtraneous);
       }
+      result = await bindScheduledCreatorAuthority(this.storage, mutation, result);
       this.hooks.afterStorageMutation?.(mutation);
       return result;
     });
@@ -350,11 +367,7 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
       const changed = !before || !cronJobSpecMatches(before, spec);
       let next = await this.storage.cronJobs.reconcileSpec(spec);
       if (changed) {
-        next = await this.storage.cronJobs.mergeRuntimeTelemetry(spec.jobId, {
-          nextRunAt: isSelfScheduledAction(spec.action)
-            ? (computeNextCronRunAt(spec.schedule, new Date(), spec.endAt) ?? null)
-            : null,
-        });
+        next = await this.storage.cronJobs.mergeRuntimeTelemetry(spec.jobId, { nextRunAt: projectNextRunAt(spec) });
       }
       saved.push(next);
     }
@@ -520,14 +533,10 @@ function hasTelemetryFields(patch: CronJobRuntimeTelemetryPatch): boolean {
   return Object.keys(patch).length > 0;
 }
 
-function isSelfScheduledAction(action: CronJobAction): boolean {
-  return (
-    action === "task" ||
-    action === "watchdog" ||
-    action === "curator" ||
-    action === "no_agent" ||
-    action === "agent_turn"
-  );
+function projectNextRunAt(spec: CronJobSpecInput): string | null {
+  return isScheduledCronAction(spec.action)
+    ? (computeNextCronRunAt(spec.schedule, new Date(), spec.endAt) ?? null)
+    : null;
 }
 
 function findResourceConflict(error: unknown): ConflictError | undefined {

@@ -6,30 +6,33 @@ import type {
   OpsDesignQualitySeverity,
   OpsDesignQualitySnapshot,
 } from "@goatcitadel/contracts";
+// The calibrated anti-slop table lives with the design detector so Ops evidence and runtime advisories share it.
+import { ANTI_SLOP_PATTERNS, DESIGN_DETECTOR_RULES } from "./design-detector/rules.js";
+import { enumerateSkillRoutes, IMPECCABLE_SKILL_ID, IMPECCABLE_SKILL_NAME } from "./skill-module-routes.js";
 
-const REQUIRED_SKILL_MODULES = [
-  "SKILL.md",
-  "enforcement.md",
-  "audit.md",
-  "components.md",
-  "layout.md",
-  "taste.md",
-  "assets.md",
-  "calibration.md",
-  "examples.md",
-] as const;
+function isRetiringClassicPath(filePath: string): boolean {
+  return /[\\/]features[\\/](?:native-routes|threaded-surface)[\\/]/u.test(filePath);
+}
+
+// Every module any impeccable route can inject, read from the same route table the runtime uses, so a
+// module that vanishes from an install blocks here before a turn fails its exact-byte verification.
+const SKILL_DIR = path.join("skills", "bundled", "impeccable");
+const REQUIRED_SKILL_MODULES: readonly string[] = [
+  ...new Set(
+    enumerateSkillRoutes({ skillId: IMPECCABLE_SKILL_ID, skillName: IMPECCABLE_SKILL_NAME }).flatMap((route) =>
+      route.modules.map((module) => module.relativePath),
+    ),
+  ),
+];
+// GoatCitadel authors this one module itself; the sync script never writes it.
+const LOCAL_SKILL_MODULES = new Set(["reference/artifacts.md"]);
 
 const REQUIRED_SKILL_PHRASES = [
-  "Design Quality V1",
-  "Start",
-  "Iterate",
-  "Polish",
-  "Maintain",
-  "surface intent",
-  "design system/tokens",
-  "craft rules",
-  "Pre-Ship Loop",
-  "five-dimension critique",
+  "Vendored from",
+  "PRODUCT.md",
+  "DESIGN.md",
+  "Core principles",
+  "Not available in this vendored build",
 ] as const;
 
 const REQUIRED_ROUTING_PHRASES = [
@@ -39,9 +42,29 @@ const REQUIRED_ROUTING_PHRASES = [
   "design-system audit",
   "document design",
   "presentation design",
-  "pptx",
-  "artifact",
+  "pptx deck",
+  "html artifact",
 ] as const;
+
+const REQUIRED_PROVENANCE_FILES = ["UPSTREAM.md", "LICENSE", "NOTICE"] as const;
+const UPSTREAM_COMMIT_PATTERN = /Commit:\s*`[0-9a-f]{40}`/u;
+
+// Upstream impeccable ships a launcher that downloads a binary; the vendored prose must never
+// point at it, and no injectable file may name the providers the repo excludes.
+const LAUNCHER_PATTERNS = [
+  { id: "unresolved {{placeholder}}", re: /\{\{/u },
+  // `npx impeccable`, `npx -y impeccable`, `npx --yes impeccable@latest`, `npx -p impeccable impeccable ...`
+  { id: "npx impeccable", re: /\bnpx\b(?:\s+-{1,2}[\w-]+(?:=\S+)?)*\s+impeccable\b/iu },
+  { id: "impeccable launcher verb", re: /\bimpeccable (?:detect|pin|hooks|context|doctor)\b/iu },
+  { id: "~/.impeccable", re: /~\/\.impeccable/u },
+  { id: ".impeccable/ path", re: /\.impeccable\//u },
+  { id: "grok", re: /grok/iu },
+  { id: "xai", re: /\bxai\b/iu },
+  { id: "x.ai", re: /\bx\.ai\b/iu },
+] as const;
+
+const ARTIFACTS_MODULE = "reference/artifacts.md";
+const ARTIFACTS_MODULE_MAX_BYTES = 8 * 1024;
 
 const REQUIRED_PROOF_SCRIPTS = [
   "verify:design:quality",
@@ -60,37 +83,6 @@ const MISSION_CONTROL_RAW_COLOR_BUDGET = 92;
 
 const PLACEHOLDER_PATTERNS = [{ id: "unresolved-placeholder", re: /<PLACEHOLDER|TODO_PLACEHOLDER/iu }] as const;
 
-const ANTI_SLOP_PATTERNS = [
-  {
-    id: "default-indigo",
-    re: /#(?:6366f1|4f46e5|4338ca|3730a3|8b5cf6|7c3aed|a855f7)\b/iu,
-  },
-  {
-    id: "generic-trust-gradient",
-    re: /linear-gradient\([^)]*(?:purple|violet|indigo|#6366f1|#4f46e5|#8b5cf6|#7c3aed|#a855f7|#3b82f6|#06b6d4|cyan|pink)[^)]*\)/iu,
-  },
-  {
-    id: "emoji-as-ui-icon",
-    re: /[✨🚀🎯⚡🔥💡]/u,
-  },
-  {
-    id: "invented-metric",
-    re: /\b(?:10×\s+(?:faster|better|easier)|100×\s+(?:faster|better)|99\.\d+%\s+uptime|zero[- ]downtime|3×\s+more\s+(?:productive|efficient))\b/iu,
-  },
-  {
-    id: "lorem-copy",
-    re: /\blorem\s+ipsum\b/iu,
-  },
-  {
-    id: "feature-one-copy",
-    re: /\bfeature\s+(one|two|three|1|2|3)\b/iu,
-  },
-  {
-    id: "placeholder-copy",
-    re: /\bplaceholder\s+text\b/iu,
-  },
-] as const;
-
 const RAW_COLOR_LITERAL_PATTERNS = [
   { id: "raw-hex-color", re: /#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/u },
   { id: "raw-rgb-color", re: /\brgba?\(/iu },
@@ -103,21 +95,28 @@ type DesignQualityHit = { path: string; pattern: string };
 export function readDesignQualityEvidence(repoRoot: string): OpsDesignQualitySnapshot {
   const root = path.resolve(repoRoot);
   const checks: OpsDesignQualityCheck[] = [];
-  const skillDir = path.join(root, "skills", "bundled", "design-intelligence");
+  const skillDir = path.join(root, SKILL_DIR);
+  const skillOwner = SKILL_DIR.replace(/\\/gu, "/");
   const skillFiles = REQUIRED_SKILL_MODULES.map((file) => path.join(skillDir, file));
 
   const missingModules = REQUIRED_SKILL_MODULES.filter((file) => !fs.existsSync(path.join(skillDir, file)));
   checks.push(
     check({
-      id: "design-intelligence.modules",
-      label: "Design-intelligence module integrity",
+      id: "impeccable.modules",
+      label: "Impeccable module integrity",
       severity: missingModules.length > 0 ? "P0" : "P3",
       status: missingModules.length > 0 ? "blocking" : "passing",
-      owner: "skills/bundled/design-intelligence",
-      evidence: "skills/bundled/design-intelligence",
+      owner: skillOwner,
+      evidence: skillOwner,
       nextAction:
         missingModules.length > 0
-          ? `Restore missing design-intelligence module(s): ${missingModules.join(", ")}.`
+          ? `Restore missing impeccable module(s): ${missingModules
+              .map((file) =>
+                LOCAL_SKILL_MODULES.has(file)
+                  ? `${file} (GoatCitadel-authored, restore from git)`
+                  : `${file} (re-run the sync script)`,
+              )
+              .join(", ")}.`
           : undefined,
     }),
   );
@@ -126,15 +125,15 @@ export function readDesignQualityEvidence(repoRoot: string): OpsDesignQualitySna
   const missingSkillPhrases = REQUIRED_SKILL_PHRASES.filter((phrase) => !includesPhrase(skillText, phrase));
   checks.push(
     check({
-      id: "design-intelligence.lifecycle",
-      label: "Lifecycle, register, and craft guidance",
+      id: "impeccable.lifecycle",
+      label: "Provenance, context, and craft guidance in SKILL.md",
       severity: missingSkillPhrases.length > 0 ? "P1" : "P3",
       status: missingSkillPhrases.length > 0 ? "advisory" : "passing",
-      owner: "skills/bundled/design-intelligence",
-      evidence: "skills/bundled/design-intelligence/SKILL.md",
+      owner: skillOwner,
+      evidence: `${skillOwner}/SKILL.md`,
       nextAction:
         missingSkillPhrases.length > 0
-          ? `Add missing design-quality guidance phrase(s): ${missingSkillPhrases.join(", ")}.`
+          ? `Add missing design guidance phrase(s) through the sync script: ${missingSkillPhrases.join(", ")}.`
           : undefined,
     }),
   );
@@ -145,15 +144,73 @@ export function readDesignQualityEvidence(repoRoot: string): OpsDesignQualitySna
   ];
   checks.push(
     check({
-      id: "design-intelligence.placeholders",
-      label: "No unresolved links or placeholders in design skill",
+      id: "impeccable.placeholders",
+      label: "No unresolved links or placeholders in the design skill",
       severity: unresolvedSkillHits.length > 0 ? "P0" : "P3",
       status: unresolvedSkillHits.length > 0 ? "blocking" : "passing",
-      owner: "skills/bundled/design-intelligence",
-      evidence: unresolvedSkillHits[0]?.path ?? "skills/bundled/design-intelligence",
+      owner: skillOwner,
+      evidence: unresolvedSkillHits[0]?.path ?? skillOwner,
       nextAction:
         unresolvedSkillHits.length > 0
           ? `Resolve design skill link/placeholder hit(s): ${summarizeHits(unresolvedSkillHits)}.`
+          : undefined,
+    }),
+  );
+
+  const missingProvenance = REQUIRED_PROVENANCE_FILES.filter((file) => !fs.existsSync(path.join(skillDir, file)));
+  const upstreamPinned = UPSTREAM_COMMIT_PATTERN.test(readText(path.join(skillDir, "UPSTREAM.md")));
+  const provenanceProblems = [
+    ...missingProvenance.map((file) => `missing ${file}`),
+    ...(upstreamPinned || missingProvenance.includes("UPSTREAM.md") ? [] : ["UPSTREAM.md pins no 40-hex commit"]),
+  ];
+  checks.push(
+    check({
+      id: "impeccable.provenance",
+      label: "Vendored provenance is recorded (UPSTREAM.md, LICENSE, NOTICE)",
+      severity: provenanceProblems.length > 0 ? "P0" : "P3",
+      status: provenanceProblems.length > 0 ? "blocking" : "passing",
+      owner: skillOwner,
+      evidence: `${skillOwner}/UPSTREAM.md`,
+      nextAction:
+        provenanceProblems.length > 0
+          ? `Re-run the impeccable sync script to restore provenance: ${provenanceProblems.join("; ")}.`
+          : undefined,
+    }),
+  );
+
+  // Only SKILL.md and reference/ reach a model; UPSTREAM.md and NOTICE legitimately describe what was stripped.
+  const launcherHits = collectPatternHits(
+    [path.join(skillDir, "SKILL.md"), path.join(skillDir, "reference")],
+    LAUNCHER_PATTERNS,
+    { recursive: true, repoRoot: root },
+  );
+  checks.push(
+    check({
+      id: "impeccable.launcher-strings",
+      label: "No launcher, placeholder, or excluded-provider strings in the injectable files",
+      severity: launcherHits.length > 0 ? "P0" : "P3",
+      status: launcherHits.length > 0 ? "blocking" : "passing",
+      owner: skillOwner,
+      evidence: launcherHits[0]?.path ?? skillOwner,
+      nextAction:
+        launcherHits.length > 0
+          ? `Remove launcher/provider hit(s) via the sync script: ${summarizeHits(launcherHits)}.`
+          : undefined,
+    }),
+  );
+
+  const artifactsBytes = Buffer.byteLength(readText(path.join(skillDir, ARTIFACTS_MODULE)), "utf8");
+  checks.push(
+    check({
+      id: "impeccable.artifacts-budget",
+      label: "Artifacts module stays within its injection budget",
+      severity: artifactsBytes > ARTIFACTS_MODULE_MAX_BYTES ? "P1" : "P3",
+      status: artifactsBytes > ARTIFACTS_MODULE_MAX_BYTES ? "advisory" : "passing",
+      owner: skillOwner,
+      evidence: `${skillOwner}/${ARTIFACTS_MODULE}`,
+      nextAction:
+        artifactsBytes > ARTIFACTS_MODULE_MAX_BYTES
+          ? `Trim ${ARTIFACTS_MODULE} to 8 KiB or less (currently ${artifactsBytes} bytes); it is injected on every deck and document turn.`
           : undefined,
     }),
   );
@@ -215,7 +272,7 @@ export function readDesignQualityEvidence(repoRoot: string): OpsDesignQualitySna
       evidence: "packages/skills/src/routing-hints.generated.ts",
       nextAction:
         missingRoutingPhrases.length > 0
-          ? `Refresh design-intelligence routing hints for: ${missingRoutingPhrases.join(", ")}.`
+          ? `Refresh the impeccable routing hints for: ${missingRoutingPhrases.join(", ")}.`
           : undefined,
     }),
   );
@@ -255,6 +312,34 @@ export function readDesignQualityEvidence(repoRoot: string): OpsDesignQualitySna
       nextAction:
         antiSlopHits.length > 0
           ? `Review token-backed intent for anti-slop hit(s): ${summarizeHits(antiSlopHits)}.`
+          : undefined,
+    }),
+  );
+
+  // Cockpit-only craft-floor advisories (plan D6): counts per rule, informational, never blocking. The
+  // retiring Classic shell is out of scope.
+  const craftFloorHits = collectPatternHits(
+    [
+      path.join(root, "apps", "mission-control-next", "src", "cockpit"),
+      path.join(root, "packages", "mission-control-shared", "src", "components"),
+    ],
+    DESIGN_DETECTOR_RULES,
+    { recursive: true, repoRoot: root, exclude: isRetiringClassicPath },
+  );
+  const craftFloorCounts = [...new Map(craftFloorHits.map((hit) => [hit.pattern, 0]))]
+    .map(([pattern]) => `${pattern}: ${craftFloorHits.filter((hit) => hit.pattern === pattern).length}`)
+    .sort();
+  checks.push(
+    check({
+      id: "mission-control.craft-floor.scan",
+      label: "Craft-floor advisory scan",
+      severity: craftFloorHits.length > 0 ? "P2" : "P3",
+      status: craftFloorHits.length > 0 ? "advisory" : "passing",
+      owner: "mission-control-next",
+      evidence: craftFloorHits[0]?.path ?? "apps/mission-control-next/src/cockpit",
+      nextAction:
+        craftFloorHits.length > 0
+          ? `Informational craft-floor advisories by rule (never blocking): ${craftFloorCounts.join(", ")}.`
           : undefined,
     }),
   );

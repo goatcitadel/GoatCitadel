@@ -3,7 +3,13 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import type { CapabilityCatalogEntry, McpServerRecord } from "@goatcitadel/contracts";
+import {
+  canonicalJsonString,
+  type ChatTurnFeatureReferences,
+  type McpRequesterAdmissionScope,
+  type CapabilityCatalogEntry,
+  type McpServerRecord,
+} from "@goatcitadel/contracts";
 import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import { McpServerStore } from "./mcp-server-store.js";
 import { normalizeMcpPolicy } from "./mcp-server-policy.js";
@@ -18,6 +24,8 @@ import {
 import { buildMcpRequesterScopedTurnContextFromCapabilityProfile } from "./mcp-requester-resolution-service.js";
 import { resolveNativeMcpChatToolBinding } from "./gateway/native-mcp-chat-binding.js";
 import { assertChatCapabilityBindingsCurrent } from "./chat-capability-current-binding.js";
+import { createMcpRequesterAdmissionTurnContext } from "./mcp-requester-admission-context.js";
+import { staticAdmissionDigest } from "./mcp-static-admission.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -220,8 +228,181 @@ it.each(["http", "stdio"] as const)(
     expect(result.ok, result.error).toBe(true);
     expect(result.contentItems).toEqual([{ type: "text", text: "wrote /tmp/mcp/output.json [REDACTED]" }]);
     expect(JSON.stringify(result)).not.toContain(f.env.MCP_STATIC_TOKEN);
+    if (transport === "stdio") {
+      expect(
+        f.options.stdioPool.captureOwnerCloser({
+          sessionId: profile.identity.sessionId,
+          turnId: profile.identity.turnId,
+        })(),
+      ).toBe(1);
+    }
   },
 );
+
+it("restores explicitly selected static MCP from a canonical admission and keeps credentials in the existing owner", async () => {
+  const f = await admissionFixture();
+  await f.admit();
+  const handle = f.handle();
+  f.base.service = new McpStaticChatService(f.base.options);
+  const schemas = await f.base.service.restoreAdmissionSchemas(handle);
+  expect(schemas).toHaveLength(1);
+  expect(schemas[0]?.staticAdmissionBinding?.serverId).toBe("static.with.dots");
+  expect(schemas[0]?.admissionBinding).toBeUndefined();
+  expect(JSON.stringify(f.binding)).not.toContain(f.base.env.MCP_STATIC_TOKEN);
+  expect(JSON.stringify(f.binding)).not.toContain(f.base.url);
+  const binding = await resolveNativeMcpChatToolBinding(
+    f.base.storage,
+    {
+      agentId: "assistant",
+      toolName: "mcp.static.with.dots.echo.value",
+      workspaceId: "default",
+      sessionId: "session",
+      turnId: "turn",
+      policyContext: { authActorId: "actor", authActorSource: "token" },
+    },
+    handle,
+    (context) => f.base.service.restoreAdmissionSchemas(context),
+  );
+  expect(binding?.staticAdmissionBinding).toBeDefined();
+  const result = await f.invoke(async () => {
+    f.base.methods.push("effect-boundary");
+  });
+  expect(result.ok, result.error).toBe(true);
+  expect(f.base.calls).toEqual([{ name: "echo.value", arguments: { value: "reviewed" } }]);
+  expect(f.base.methods.slice(-3)).toEqual(["tools/list", "effect-boundary", "tools/call"]);
+  expect(JSON.stringify(result)).not.toContain(f.base.env.MCP_STATIC_TOKEN);
+});
+
+it("keeps static admission off by default and refuses live drift, forged handles, and changed schemas before invocation", async () => {
+  const f = await admissionFixture();
+  expect(await f.base.service.hasAdmissionSelection("Use mcp.static.with.dots.echo.value")).toBe(true);
+  expect(await f.base.service.hasAdmissionSelection("Read the static.with.dots-extra documentation")).toBe(false);
+  expect(f.base.methods).toEqual([]);
+  expect(f.assertCurrent).not.toHaveBeenCalled();
+  f.enabled = false;
+  expect(await f.discover()).toEqual([]);
+  expect(f.base.methods).toEqual([]);
+  f.enabled = true;
+  expect(
+    await f.base.service.discoverAdmission({ scope: f.scope, content: "Hello", assertCurrent: f.assertCurrent }),
+  ).toEqual([]);
+  await f.admit();
+  const originalHash = f.binding.referenceSha256;
+  for (const drift of ["flag", "claim", "policy", "actor", "hash", "schema", "environment"] as const) {
+    if (drift === "flag") f.enabled = false;
+    if (drift === "claim") f.assertCurrent.mockRejectedValue(new Error("claim lost"));
+    if (drift === "policy") f.base.allowed = false;
+    if (drift === "actor") f.base.revoked = true;
+    if (drift === "hash") f.binding.referenceSha256 = "0".repeat(64);
+    if (drift === "schema") f.base.tool.description = "Changed live schema";
+    if (drift === "environment") f.base.env.MCP_STATIC_TOKEN = "rotated-private-fixture-token";
+    expect((await f.invoke()).ok, drift).toBe(false);
+    expect(f.base.calls, drift).toEqual([]);
+    f.enabled = true;
+    f.assertCurrent.mockResolvedValue(undefined);
+    f.base.allowed = true;
+    f.base.revoked = false;
+    f.binding.referenceSha256 = originalHash;
+    f.base.tool.description = "Echo a fixture value.";
+    f.base.env.MCP_STATIC_TOKEN = "private-static-mcp-fixture-token";
+  }
+  const mark = vi.fn(async () => undefined);
+  const forged = await f.base.service.invoke(
+    {
+      server: await f.base.store.requireServer("static.with.dots"),
+      toolName: "echo.value",
+      mcpRequesterTurnContext: { ...f.handle() } as never,
+    },
+    { effectDispatch: mark },
+  );
+  expect(forged.ok).toBe(false);
+  expect(mark).not.toHaveBeenCalled();
+  await f.base.store.patchServerState(
+    "static.with.dots",
+    { status: "connected" },
+    await f.base.store.requireServer("static.with.dots"),
+  );
+  expect((await f.invoke()).ok).toBe(false);
+  expect(f.base.calls).toEqual([]);
+});
+
+it("rechecks static admission after the awaited effect fence and records uncertain outcome conservatively", async () => {
+  const f = await admissionFixture();
+  await f.admit();
+  const result = await f.invoke(async () => {
+    f.enabled = false;
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    externalOutcome: "unknown_after_send",
+    manualReconciliationRequired: true,
+  });
+  expect(f.base.calls).toEqual([]);
+});
+
+async function admissionFixture() {
+  const base = await fixture();
+  await base.store.patchServerState(
+    "static.with.dots",
+    { status: "connected" },
+    await base.store.requireServer("static.with.dots"),
+  );
+  const scope: McpRequesterAdmissionScope = {
+    admissionId: "admission",
+    sessionIncarnationId: "incarnation",
+    workspaceId: "default",
+    sessionId: "session",
+    turnId: "turn",
+    aggregateRevision: 1,
+    controllerGeneration: 1,
+    materialSha256: "a".repeat(64),
+    actorId: "actor",
+    actorSource: "token",
+  };
+  const f = {
+    base,
+    scope,
+    enabled: true,
+    assertCurrent: vi.fn(async () => undefined),
+    binding: {
+      references: { version: "chat.turn.feature-references.v1" } as ChatTurnFeatureReferences,
+      referenceSha256: "",
+    },
+    discover: () =>
+      base.service.discoverAdmission({
+        scope,
+        content: 'Use MCP server "static.with.dots" and echo.value.',
+        assertCurrent: f.assertCurrent,
+      }),
+    admit: async () => {
+      f.binding.references.selectedStaticMcp = await f.discover();
+      f.binding.referenceSha256 = staticAdmissionDigest(f.binding.references);
+    },
+    handle: () => createMcpRequesterAdmissionTurnContext(scope, f.binding.referenceSha256, f.assertCurrent),
+    invoke: async (effectDispatch = async () => {}) =>
+      base.service.invoke(
+        {
+          server: await base.store.requireServer("static.with.dots"),
+          toolName: "echo.value",
+          arguments: { value: "reviewed" },
+          mcpRequesterTurnContext: f.handle(),
+        },
+        { effectDispatch },
+      ),
+  };
+  base.options.admission = {
+    enabled: async () => f.enabled,
+    assertScopeCurrent: async (actual) => {
+      if (canonicalJsonString(actual) !== canonicalJsonString(scope)) throw new Error("scope changed");
+    },
+    readAdmission: async () => f.binding,
+    assertToolAllowed: async () => {
+      if (!base.allowed) throw new Error("policy denied");
+    },
+  };
+  base.service = new McpStaticChatService(base.options);
+  return f;
+}
 
 async function fixture(options: { transport?: "http" | "stdio" } = {}) {
   const directory = mkdtempSync(path.join(os.tmpdir(), "gc-static-mcp-chat-"));

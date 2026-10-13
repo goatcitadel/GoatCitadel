@@ -10,6 +10,28 @@ import { GatewayService } from "./gateway-service.js";
 // service-level tests stay green because their fixtures set the member
 // directly. This test builds the host through the REAL gateway literal.
 describe("GatewayService.buildChatTurnRuntimeHost", () => {
+  it("forwards fanout into the durable worker host and resolves its aggregate after runtime host construction", async () => {
+    const subagentFanout = { register: vi.fn(() => () => {}) };
+    const stub = {
+      storage: {}, config: {}, turnRuntime: {}, backgroundTasks: new Set(), hooksService: {},
+      llmService: {}, steerService: {}, subagentFanout,
+      improvementService: { listSurfaceRouteOverrideExemplars: vi.fn(() => []) },
+      durableFanout: undefined as undefined | { execute: ReturnType<typeof vi.fn> },
+    };
+    const builders = GatewayService.prototype as unknown as {
+      buildChatTurnRuntimeHost(this: unknown): { durableFanout: { execute(input: unknown): Promise<unknown> } };
+      buildDurableChatTurnWorkflowHost(this: unknown): { subagentFanout: unknown; durableFanout: unknown };
+    };
+    const runtimeHost = builders.buildChatTurnRuntimeHost.call(stub);
+    stub.durableFanout = { execute: vi.fn(async () => ({ status: "waiting" })) };
+    const durableHost = builders.buildDurableChatTurnWorkflowHost.call(stub);
+    expect(durableHost.subagentFanout).toBe(subagentFanout);
+    expect(durableHost.durableFanout).toBe(stub.durableFanout);
+    const input = { parentRunId: "canonical-parent" };
+    await expect(runtimeHost.durableFanout.execute(input)).resolves.toEqual({ status: "waiting" });
+    expect(stub.durableFanout.execute).toHaveBeenCalledWith(input);
+  });
+
   it("exposes the gateway's subagentFanout registry on the composed runtime host (R3-8)", () => {
     const subagentFanout = { register: vi.fn(() => () => {}) };
     const stub = {

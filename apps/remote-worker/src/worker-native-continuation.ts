@@ -1,4 +1,5 @@
 import { canonicalJsonString, normalizeRemoteWorkerNativeContinuation, REMOTE_WORKER_ASSIGNMENT_WORKLOAD_SCHEMA_VERSION,
+  normalizeRemoteWorkerCapabilityBinding, type RemoteWorkerCapabilityBinding,
   type RemoteWorkerNativeContinuation } from "@goatcitadel/contracts";
 import { sha256Utf8, type RouteContext, type LeaseBinding } from "./connected-worker-routes.js";
 import { readWorkload } from "./connected-worker-routes.js";
@@ -20,8 +21,10 @@ function verifyNativeWorkload(workload: Record<string, unknown>, lease: LeaseBin
   if (history && (!native || history.nativeContextSha256 !== remoteWorkerNativeChatContextSha256(native) ||
     history.contextSnapshotSha256 !== workload.contextSnapshotSha256)) throw new Error("Native history is not bound to this workload.");
   const names = ["schemaVersion", "registryWorkspaceId", "assignmentId", "assignmentManifestSha256", "durableRunId", "durableRunVersion",
-    "durableRunPayloadSha256", "capabilityProfileId", "capabilityProfileSha256", "contextSnapshotSha256"];
-  const identity = Object.fromEntries(names.map(name => [name, workload[name]]));
+    "durableRunPayloadSha256", "contextSnapshotSha256"];
+  const identity: Record<string, unknown> = { ...Object.fromEntries(names.map(name => [name, workload[name]])),
+    ...(workload.capabilityProfileId === undefined ? {} : { capabilityProfileId: workload.capabilityProfileId }),
+    ...normalizeRemoteWorkerCapabilityBinding(workload as RemoteWorkerCapabilityBinding) };
   if (identity.schemaVersion !== REMOTE_WORKER_ASSIGNMENT_WORKLOAD_SCHEMA_VERSION ||
       identity.registryWorkspaceId !== lease.registryWorkspaceId || identity.assignmentId !== lease.assignmentId ||
       continuation.assignmentGeneration !== lease.assignmentGeneration ||

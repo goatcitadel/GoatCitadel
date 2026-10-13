@@ -74,7 +74,7 @@ it("fresh SQLite and canonical PostgreSQL shapes retain both descending executio
   assertIndexDirections(db);
   assert.deepEqual(APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_SQLITE_SQL, APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_POSTGRES_SQL);
   const canonical = buildCanonicalPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
-  const forward = buildPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS.filter((migration) => migration.version >= 201));
+  const forward = buildPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS.filter((migration) => migration.version >= 209));
   for (const shape of [canonical, forward]) {
     for (const name of indexNames) {
       assert.deepEqual(shape.indexes.find((index) => index.name === name)?.keys, [
@@ -85,7 +85,7 @@ it("fresh SQLite and canonical PostgreSQL shapes retain both descending executio
 });
 
 for (const previousDirection of ["ASC", "DESC"] as const) {
-  it("upgrades populated v254 " + previousDirection + " indexes through normal startup without changing rows or cursor paging", () => {
+  it("upgrades populated v262 " + previousDirection + " indexes through normal startup without changing rows or cursor paging", () => {
     const dbPath = files.path("approval-linkage-sort");
     const before = files.open({ dbPath });
     const repo = new ApprovalRepository(before);
@@ -102,7 +102,7 @@ for (const previousDirection of ["ASC", "DESC"] as const) {
       before.exec("DROP INDEX idx_approval_execution_run; DROP INDEX idx_approval_execution_durable_run;"
         + "CREATE INDEX idx_approval_execution_run ON approval_execution_linkages(workspace_id, run_id, created_at " + previousDirection + ", approval_id " + previousDirection + ");"
         + "CREATE INDEX idx_approval_execution_durable_run ON approval_execution_linkages(workspace_id, durable_run_id, created_at " + previousDirection + ", approval_id " + previousDirection + ");");
-      before.prepare("DELETE FROM schema_migrations WHERE version = 255").run();
+      before.prepare("DELETE FROM schema_migrations WHERE version = 263").run();
     });
     const rows = snapshotData(before);
     const ledger = before.prepare("SELECT * FROM schema_migrations ORDER BY version").all();
@@ -114,9 +114,9 @@ for (const previousDirection of ["ASC", "DESC"] as const) {
     const upgraded = files.open({ dbPath });
     assertIndexDirections(upgraded);
     assert.deepEqual(snapshotData(upgraded), rows);
-    assert.deepEqual(upgraded.prepare("SELECT * FROM schema_migrations WHERE version <= 254 ORDER BY version").all(), ledger);
+    assert.deepEqual(upgraded.prepare("SELECT * FROM schema_migrations WHERE version <= 262 ORDER BY version").all(), ledger);
     assert.deepEqual(upgraded.prepare("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT IN (?, ?) ORDER BY name").all(...indexNames), objects);
-    assert.equal(upgraded.prepare("SELECT name FROM schema_migrations WHERE version = 255").get<{ name: string }>()?.name, "approval_execution_linkage_index_sort_convergence");
+    assert.equal(upgraded.prepare("SELECT name FROM schema_migrations WHERE version = 263").get<{ name: string }>()?.name, "approval_execution_linkage_index_sort_convergence");
     assert.deepEqual(upgraded.prepare("PRAGMA foreign_key_check").all(), []);
     assertThousandRecordPages(upgraded);
     upgraded.close();

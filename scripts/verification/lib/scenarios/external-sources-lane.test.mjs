@@ -13,6 +13,7 @@ import {
   parseBrowserFlowCounts,
   parseNodeTestCounts,
   parseVitestCounts,
+  readPassedTestCount,
   scanForProductionProofGate,
 } from "./external-sources-lane.mjs";
 
@@ -133,6 +134,16 @@ test("runner count parsers read vitest and node:test summaries", () => {
   assert.equal(parseNodeTestCounts("nothing"), undefined);
 });
 
+test("agentic pass counts recognize Node spec and TAP summaries without counting test labels", () => {
+  assert.equal(readPassedTestCount("ℹ tests 16\nℹ pass 16\nℹ fail 0\nℹ skipped 0\n"), 16);
+  assert.equal(readPassedTestCount("# tests 19\n# pass 16\n# fail 1\n# skipped 2\n"), 16);
+  assert.equal(readPassedTestCount("\u001b[32mℹ pass 16\u001b[0m\nℹ fail 0\n"), 16);
+  assert.equal(readPassedTestCount("✔ passes 16 cases\nℹ tests 16\n"), 0);
+  assert.equal(readPassedTestCount("ℹ pass 16\n"), 0);
+  assert.equal(readPassedTestCount("# pass 0\n# fail 0\n# skipped 16\n"), 0);
+  assert.equal(readPassedTestCount("Tests  154 passed (154)\nTests  3 passed (3)\n"), 157);
+});
+
 test("the browser-flow parser reads the printed combo summary and its guard demands all combos plus real steps", () => {
   assert.deepEqual(
     parseBrowserFlowCounts(
@@ -169,6 +180,25 @@ test("the browser-flow parser reads the printed combo summary and its guard dema
       exitCode: 0,
       countKind: "browser-flow",
       counts: { planned: 4, executed: 4, passed: 3, failed: 1, steps: 40 },
+      requiredPassed: 4,
+    }).status,
+    "failed",
+  );
+  // A planned combo that never executed fails even when the pass floor is met.
+  const unexecuted = deriveCheckStatus({
+    exitCode: 0,
+    countKind: "browser-flow",
+    counts: { planned: 5, executed: 4, passed: 4, failed: 0, steps: 44 },
+    requiredPassed: 4,
+  });
+  assert.equal(unexecuted.status, "failed");
+  assert.ok(unexecuted.failureNote.includes("planned 5 / executed 4 / passed 4"), unexecuted.failureNote);
+  // A plan that drifted from the declared combo count fails until requiredPassed is updated.
+  assert.equal(
+    deriveCheckStatus({
+      exitCode: 0,
+      countKind: "browser-flow",
+      counts: { planned: 5, executed: 5, passed: 5, failed: 0, steps: 55 },
       requiredPassed: 4,
     }).status,
     "failed",

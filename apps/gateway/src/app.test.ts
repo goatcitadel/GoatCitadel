@@ -4,6 +4,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { MISSION_CONTROL_BASELINE_CSP } from "@goatcitadel/policy-engine";
 import { __internal, buildApp } from "./app.js";
 import type { GatewayRuntimeConfig } from "./config.js";
 import { assertDeploymentProfileStartupSafety } from "./deployment-profile-guard.js";
@@ -325,6 +326,10 @@ describe("applyBaselineSecurityHeaders (GWROUTES-001)", () => {
 
     expect(reply.getHeader("Content-Security-Policy")).toBe(__internal.BASELINE_CONTENT_SECURITY_POLICY);
     expect(reply.getHeader("Content-Security-Policy")).toContain("script-src 'self'");
+    // D4: html artifact previews (srcdoc iframes inherit this policy) may embed fonts as data: URIs.
+    expect(reply.getHeader("Content-Security-Policy")).toContain("font-src 'self' data:");
+    // The renderer injects the same policy into offline snapshots, so the two must not drift.
+    expect(__internal.BASELINE_CONTENT_SECURITY_POLICY).toBe(MISSION_CONTROL_BASELINE_CSP);
     expect(reply.getHeader("X-Content-Type-Options")).toBe("nosniff");
     expect(reply.getHeader("X-Frame-Options")).toBe("DENY");
     expect(reply.getHeader("Referrer-Policy")).toBe("strict-origin-when-cross-origin");

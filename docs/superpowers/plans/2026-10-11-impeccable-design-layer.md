@@ -106,22 +106,22 @@ A Gateway `/design` command; editing or deleting design-intelligence files (dele
 
 ## Phase 2: Project context (PRODUCT.md / DESIGN.md, operator-owned)
 
-- [ ] Modify `packages/contracts/src/workspaces.ts` `GuidanceDocType`: add `"product" | "design"`.
-- [ ] Modify `apps/gateway/src/services/guidance-doc-files.ts`: map to `PRODUCT.md` and `DESIGN.md`.
-- [ ] Modify `apps/gateway/src/services/guidance-service.ts`: add both to `WORKSPACE_GUIDANCE_DOC_TYPES`; do not add to `RUNTIME_GUIDANCE_DOC_TYPES` (the 6000-character shared budget must not be spent on design text every turn); exclude from global listing and global writes (D3).
-- [ ] Modify `apps/gateway/src/routes/workspaces.ts`: add both to the workspace zod enum only.
-- [ ] Modify `governed-skill-instruction-service.ts`: when a module route declares `contextDocs`, read the workspace docs; scan them with a distinct guidance-security error (not "skill security"); truncate deterministically to about 6 KiB each with a `truncated` flag; append a "Project design context" section; record `contextDocuments?: [{docType, scope, sha256, bytes, truncated}]` in the receipt.
-- [ ] Modify `packages/contracts/src/chat-capability-profile.ts`: optional receipt field, omitted when empty so earlier frozen profiles stay canonical-JSON-equal.
-- [ ] Brand block: define a small fenced block in DESIGN.md (name, up to six hex colors, up to three font names, optional logo path inside the workspace jail) parsed by a pure helper in `packages/skills`; `attachArtifactDesignSkillArgs` fills `design.brand` from it when the turn has a design receipt and the model supplied none, so `artifact-design.ts` `applyBrandColors`/`resolveTypography` use the workspace brand for decks and documents.
-- [ ] Writing the documents (`init` / `document` commands): the model drafts PRODUCT.md/DESIGN.md as a normal reply; the operator saves it as a generated artifact (existing `createChatGeneratedArtifactFromTurn`); a new explicit operator action "Apply as workspace DESIGN.md / PRODUCT.md" calls `updateWorkspaceGuidance` and records the artifact hash. Add a minimal guidance editor plus apply control as a new cockpit settings section (`apps/mission-control-next/src/cockpit/areas/settings/WorkspaceDesignContextSettings.tsx`, following `AppearanceSettings.tsx` patterns), since no guidance editor UI exists in the cockpit today. No Classic counterpart.
-- [ ] Create root `DESIGN.md` and `PRODUCT.md` for repo coding agents only, seeded from `docs/superpowers/specs/2026-09-27-mission-control-cockpit-design.md`, `docs/superpowers/specs/2026-09-22-goatcitadel-mark-and-icons-design.md`, `docs/review/mission-control-claude-design-convergence-audit.md`, `apps/mission-control-next/src/styles/mission-control-next-tokens.css`, `apps/mission-control-next/src/cockpit/styles/cockpit-tokens.css`, and the AGENTS.md North Star / UI-UX Direction sections; the cockpit follows impeccable's craft floor (D6) and Classic is marked retiring and out of scope. One sentence in AGENTS.md pointing to them.
+- [x] Modify `packages/contracts/src/workspaces.ts` `GuidanceDocType`: add `"product" | "design"`.
+- [x] Modify `apps/gateway/src/services/guidance-doc-files.ts`: map to `PRODUCT.md` and `DESIGN.md`.
+- [x] Modify `apps/gateway/src/services/guidance-service.ts`: add both to `WORKSPACE_GUIDANCE_DOC_TYPES`; do not add to `RUNTIME_GUIDANCE_DOC_TYPES` (the 6000-character shared budget must not be spent on design text every turn); exclude from global listing and global writes (D3).
+- [x] Modify `apps/gateway/src/routes/workspaces.ts`: add both to the workspace zod enum only.
+- [x] Modify `governed-skill-instruction-service.ts`: when a module route declares `contextDocs`, read the workspace docs; scan them with a distinct guidance-security error (not "skill security"); truncate deterministically to about 6 KiB each with a `truncated` flag; append a "Project design context" section; record `contextDocuments?: [{docType, scope, sha256, bytes, truncated}]` in the receipt.
+- [x] Modify `packages/contracts/src/chat-capability-profile.ts`: optional receipt field, omitted when empty so earlier frozen profiles stay canonical-JSON-equal.
+- [x] Brand block: define a small fenced block in DESIGN.md (name, up to six hex colors, up to three font names, optional logo path inside the workspace jail) parsed by a pure helper in `packages/skills`; `attachArtifactDesignSkillArgs` fills `design.brand` from it when the turn has a design receipt and the model supplied none, so `artifact-design.ts` `applyBrandColors`/`resolveTypography` use the workspace brand for decks and documents.
+- [x] Writing the documents (`init` / `document` commands): the model drafts PRODUCT.md/DESIGN.md as a normal reply; the operator saves it as a generated artifact (existing `createChatGeneratedArtifactFromTurn`); a new explicit operator action "Apply as workspace DESIGN.md / PRODUCT.md" calls `updateWorkspaceGuidance` and records the artifact hash. Add a minimal guidance editor plus apply control as a new cockpit settings section (`apps/mission-control-next/src/cockpit/areas/settings/WorkspaceDesignContextSettings.tsx`, following `AppearanceSettings.tsx` patterns), since no guidance editor UI exists in the cockpit today. No Classic counterpart.
+- [x] Create root `DESIGN.md` and `PRODUCT.md` for repo coding agents only, seeded from `docs/superpowers/specs/2026-09-27-mission-control-cockpit-design.md`, `docs/superpowers/specs/2026-09-22-goatcitadel-mark-and-icons-design.md`, `docs/review/mission-control-claude-design-convergence-audit.md`, `apps/mission-control-next/src/styles/mission-control-next-tokens.css`, `apps/mission-control-next/src/cockpit/styles/cockpit-tokens.css`, and the AGENTS.md North Star / UI-UX Direction sections; the cockpit follows impeccable's craft floor (D6) and Classic is marked retiring and out of scope. One sentence in AGENTS.md pointing to them.
 
 ### Tests
 
-- [ ] `guidance-service.test.ts`: workspace-only types; global listing excludes them.
-- [ ] `routes/workspaces.test.ts`: enum.
-- [ ] Receipt test: context hash drift fails closed with a clear message; old receipts unaffected.
-- [ ] Mission Control component test for the apply action.
+- [x] `guidance-service.test.ts`: workspace-only types; global listing excludes them.
+- [x] `routes/workspaces.test.ts`: enum.
+- [x] Receipt test: context hash drift fails closed with a clear message; old receipts unaffected.
+- [x] Mission Control component test for the apply action.
 
 ### Proof
 
@@ -135,16 +135,16 @@ Reading DESIGN.md from a project repository root (later: explicit "import from p
 
 ## Phase 3: Deterministic detector (advisory only)
 
-- [ ] Create `packages/skills/src/design-detector/rules.ts` and `detect.ts`: move `ANTI_SLOP_PATTERNS` from `design-quality.ts` unchanged and import them back (no behavior change); add about ten text-detectable craft-floor rules (gradient text, side-stripe border > 1px, zero-blur offset shadow, default `backdrop-filter` glass, `01`/`02` section markers, emoji icons, kicker/eyebrow class heuristic, invented metrics, placeholder copy, bounce/elastic easing). Each rule: id, severity (always advisory), pointer to the craft-floor section. Attribute ported rules in `NOTICE`. Never claim parity with impeccable's 59-rule engine.
-- [ ] Modify `apps/gateway/src/services/chat-turn-agent-runner.ts` tool-result path (next to the artifact design hook near `attachArtifactDesignSkillArgs`): when the frozen profile holds a design-group receipt and the tool is `fs.write`/`fs.patch` on `.tsx`/`.jsx`/`.css`/`.html`/`.vue`/`.svelte`, add `designAdvisories` to the result from the written content (added lines only for patches; never re-read disk); cap at 8 findings and about 1 KiB; must pass `assertNoToolOutputInjection`.
-- [ ] Modify `apps/gateway/src/services/chat-generated-artifact-service.ts`: run the detector once on HTML generated artifacts and store advisories with the artifact record.
-- [ ] Surface per-turn advisories in `cockpit/areas/chat/ChatTurnDetails.tsx`. Ops Quality stays repo-scope (its posture says it reads repo files only): add one advisory P2 repo check running the shared rules over `apps/mission-control-next/src/cockpit` and `packages/mission-control-shared/src/components`, excluding the Classic directories (`features/native-routes`, `features/threaded-surface`); findings are counts, informational, never blocking.
+- [x] Create `packages/skills/src/design-detector/rules.ts` and `detect.ts`: move `ANTI_SLOP_PATTERNS` from `design-quality.ts` unchanged and import them back (no behavior change); add about ten text-detectable craft-floor rules (gradient text, side-stripe border > 1px, zero-blur offset shadow, default `backdrop-filter` glass, `01`/`02` section markers, emoji icons, kicker/eyebrow class heuristic, invented metrics, placeholder copy, bounce/elastic easing). Each rule: id, severity (always advisory), pointer to the craft-floor section. Attribute ported rules in `NOTICE`. Never claim parity with impeccable's 59-rule engine.
+- [x] Modify `apps/gateway/src/services/chat-turn-agent-runner.ts` tool-result path (next to the artifact design hook near `attachArtifactDesignSkillArgs`): when the frozen profile holds a design-group receipt and the tool is `fs.write`/`fs.patch` on `.tsx`/`.jsx`/`.css`/`.html`/`.vue`/`.svelte`, add `designAdvisories` to the result from the written content (added lines only for patches; never re-read disk); cap at 8 findings and about 1 KiB; must pass `assertNoToolOutputInjection`.
+- [x] Modify `apps/gateway/src/services/chat-generated-artifact-service.ts`: run the detector on HTML generated artifacts and attach the advisories on every read (derived and memoized per content hash, not stored: the artifact table is column-based on both engines; see the Task 20 ruling).
+- [x] Surface per-turn advisories in `cockpit/areas/chat/ChatTurnDetails.tsx`. Ops Quality stays repo-scope (its posture says it reads repo files only): add one advisory P2 repo check running the shared rules over `apps/mission-control-next/src/cockpit` and `packages/mission-control-shared/src/components`, excluding the Classic directories (`features/native-routes`, `features/threaded-surface`); findings are counts, informational, never blocking.
 
 ### Tests
 
-- [ ] `design-detector.test.ts`: one positive and one negative per rule.
-- [ ] Gateway advisory injection test: only with a design receipt; bounded; passes the output-injection assertion.
-- [ ] `design-quality.test.ts`: unchanged behavior plus the new check.
+- [x] `design-detector.test.ts`: one positive and one negative per rule.
+- [x] Gateway advisory injection test: only with a design receipt; bounded; passes the output-injection assertion.
+- [x] `design-quality.test.ts`: unchanged behavior plus the new check.
 
 ### Proof
 
@@ -158,20 +158,20 @@ Blocking writes, auto-fix, contrast checks (need rendering, Phase 4), the impecc
 
 ## Phase 4: Render and look (preview already exists)
 
-- [ ] Create `packages/policy-engine/src/playwright-runtime.ts`: move and export `loadPlaywright` and `launchPlaywrightChromium` (with the existing WebRTC security args) out of `browser-tools.ts`, which then imports them.
-- [ ] Create `packages/policy-engine/src/html-render.ts` with `renderHtmlSnapshot({ html, viewports, outputPath, writeJailRoots, signal })`: `assertWritePathInJail`; HTML size cap (about 512 KiB) and timeout; `javaScriptEnabled: false` to match the preview's `sandbox=""`; `offline: true` and block every route except `data:` and `about:`; inject a CSP `<meta>` equal to the Mission Control baseline so the critique sees what the operator sees; PNG at 1440×900 and 390×844 plus optional `page.pdf()`; missing Chromium returns the existing manual-install diagnostic.
-- [ ] Create gateway `html-artifact-render-service.ts` and route `POST /api/v1/chat/artifacts/:artifactId/render`: workspace-bound, idempotency plugin, rate-limited. PNGs stored as evidence linked to the artifact `contentHash`; the artifact itself is never changed (`1_0_CONTRACT.md` line 42 holds).
-- [ ] Modify `packages/policy-engine/src/document-artifacts.ts` and `tool-registry.ts`: `documents.create` with `format: "html"` accepts an optional full `html` document argument when the turn carries a design receipt; the detector runs on it; the design report records `markup: "model-authored"` instead of the ten-rule template. Without a receipt the existing template path stays.
-- [ ] Critique: an explicit operator action opens a normal Chat turn with `@skill impeccable critique` and the PNGs attached, only when the route model is capability-detected as vision-capable; otherwise a text-only critique labelled "not visually inspected". A follow-up produces a new artifact version; nothing edits in place. This phase also re-vendors a trimmed `critique` reference without the launcher loop.
-- [ ] Cockpit only: "Render" and "Critique render" actions beside the three cockpit `GeneratedArtifactViewer` uses: `cockpit/areas/chat/ChatInspector.tsx`, `cockpit/areas/library/LibraryResourceDetail.tsx`, `cockpit/areas/work/RunArtifacts.tsx`. The Classic consumers (`features/threaded-surface/*`, `features/native-routes/library/LibraryArtifactsSection.tsx`) are left untouched.
-- [ ] D4: verify the preview CSP in both dev (Vite) and packaged shells; document the font limit.
+- [x] Create `packages/policy-engine/src/playwright-runtime.ts`: move and export `loadPlaywright` and `launchPlaywrightChromium` (with the existing WebRTC security args) out of `browser-tools.ts`, which then imports them. (Done 2026-10-12.)
+- [x] Create `packages/policy-engine/src/html-render.ts` with `renderHtmlSnapshot({ html, viewports, outputDir, writeJailRoots, signal, timeoutMs })`: `assertWritePathInJail`; HTML size cap (512 KiB) and timeout; `javaScriptEnabled: false` to match the preview's `sandbox=""`; `offline: true` and block every route except `data:` and `about:`; inject a CSP `<meta>` equal to the Mission Control baseline so the critique sees what the operator sees; PNG at 1440×900 and 390×844 (no `page.pdf()`: not needed by any consumer); missing Chromium returns the existing manual-install diagnostic. Blocked requests are recorded from the page's `requestfailed` events because the injected CSP refuses them before the route layer. (Done 2026-10-12.)
+- [x] Create gateway `html-artifact-render-service.ts` and route `POST /api/v1/chat/generated-artifacts/:artifactId/renders` (`GET` lists): workspace-bound, idempotency markers, rate-limited. PNGs stored as chat attachments named `render-<hash16>-<viewport>.png` with analysis skipped, keyed by the artifact `contentHash`; the artifact itself is never changed (`1_0_CONTRACT.md` line 42 holds). (Done 2026-10-12.)
+- [x] Modify `packages/policy-engine/src/document-artifacts.ts` and `tool-registry.ts`: `documents.create` with `format: "html"` accepts an optional full `html` document argument when the turn carries a design receipt (the runner deletes it otherwise); the Phase 3 runner hook scans it; the design report records `markup: "model-authored"` instead of the template. Without a receipt the existing template path stays. (Done 2026-10-12.)
+- [x] Critique: `POST …/:artifactId/critique` dispatches a normal Chat turn with `@skill impeccable critique`, the artifact as routed context, and the PNGs attached only when the effective provider is capability-detected as vision-capable; otherwise a text-only critique labelled "Render evidence unavailable". A follow-up produces a new artifact version; nothing edits in place. The trimmed `critique` reference is re-vendored without the launcher loop as a single-context routed turn. (Done 2026-10-12.)
+- [x] Cockpit only: "Render" and "Critique render" actions under every cockpit `GeneratedArtifactViewer` (Chat inspector, Library detail, Run artifacts) through a host-provided actions slot (`GeneratedArtifactActionsContext`) filled once in `CockpitApp`, so the three dense area files are not reformatted. The Classic consumers (`features/threaded-surface/*`, `features/native-routes/library/LibraryArtifactsSection.tsx`) provide no slot value and are untouched. (Done 2026-10-12.)
+- [x] D4: baseline policy pinned to `MISSION_CONTROL_BASELINE_CSP` (`font-src 'self' data:`). Packaged shell verified through the gateway header test; the Vite dev shell was verified by config inspection only (`apps/mission-control-next/vite.config.ts` sets no Content-Security-Policy, so the dev preview runs unpoliced), not by a browser check. Font limit and the same-origin caveat (shell assets can load in the preview but not in the offline renders) recorded in `DESIGN.md` and `docs/1_0_CONTRACT.md`. (Done 2026-10-12; narrowed from the original two-shell browser verification.)
 
 ### Tests
 
-- [ ] `html-render.test.ts`: jail rejection, blocked network request, JS disabled, size cap, missing-Chromium diagnostic (model on `browser-tools.manual-chromium.test.ts`).
-- [ ] Route tests: auth, workspace scope, idempotency.
-- [ ] `document-artifacts.test.ts`: raw-HTML path gated on receipt.
-- [ ] Mission Control component test for the actions.
+- [x] `html-render.test.ts`: jail rejection, blocked network request (route layer with a mocked browser; CSP refusal in a real headless render), JS disabled, size cap, missing-Chromium diagnostic.
+- [x] Route tests: workspace scope (400), 409 mapping, 201/202 shapes, idempotency markers; auth comes from the global plugin (not re-tested per route).
+- [x] `document-artifacts.test.ts`: raw-HTML path gated on receipt (runner test strips/keeps `html`).
+- [x] Mission Control component test for the actions (`ArtifactRenderActions.test.tsx`, including the viewer slot).
 
 ### Proof
 
@@ -185,15 +185,15 @@ A new preview component; running JavaScript in renders; replacing `presentations
 
 ## Phase 5: Native renderer craft (impeccable cannot do this)
 
-- [ ] Modify `packages/policy-engine/src/presentation-pptx-renderers.ts`: remove the 0.13-inch accent side stripe and the bold accent `01` slide number; quiet page number; drop the bordered card as the default body container on narrative slides. Update `presentation-pptx-audit.ts`, `presentation-pptx-fallback.ts`, and `scripts/verification/lib/pptx-package-audit.mjs` together (the audit keys on `gc:slide-number` and `gc:layout:`).
-- [ ] Modify `packages/policy-engine/src/presentation-pdf.ts` for the same frame and container changes.
-- [ ] Modify `packages/policy-engine/src/artifact-design.ts`: stop choosing a preset by content regex; default `clean-professional` unless an explicit `preset` or `brand` is supplied; replace `7C3AED` in the `pitch` preset; make `design-skill-applied` report the injected module list from the receipt rather than "planned".
-- [ ] Modify `packages/policy-engine/src/presentation-pptx.ts` and `document-artifacts.ts`: replace the hashed SVG blob with no visual or a typographic treatment when no provider image exists; never ship the blob as a DOCX hero.
-- [ ] PDF font embedding (`pdf-writer.ts`, Helvetica only) is flagged as a separate large item; not bundled here.
+- [x] Modify `packages/policy-engine/src/presentation-pptx-renderers.ts`: remove the 0.13-inch accent side stripe and the bold accent `01` slide number; quiet page number; drop the bordered card as the default body container on narrative slides. Update `presentation-pptx-audit.ts`, `presentation-pptx-fallback.ts`, and `scripts/verification/lib/pptx-package-audit.mjs` together (the audit keys on `gc:slide-number` and `gc:layout:`).
+- [x] Modify `packages/policy-engine/src/presentation-pdf.ts` for the same frame and container changes.
+- [x] Modify `packages/policy-engine/src/artifact-design.ts`: stop choosing a preset by content regex; default `clean-professional` unless an explicit `preset` or `brand` is supplied; replace `7C3AED` in the `pitch` preset; make `design-skill-applied` report the injected module list from the receipt rather than "planned".
+- [x] Modify `packages/policy-engine/src/presentation-pptx.ts` and `document-artifacts.ts`: replace the hashed SVG blob with no visual or a typographic treatment when no provider image exists; never ship the blob as a DOCX hero.
+- [ ] (deferred, unchanged in Phase 5) PDF font embedding (`pdf-writer.ts`, Helvetica only) is flagged as a separate large item; not bundled here.
 
 ### Tests
 
-- [ ] `presentation-pptx.test.ts`, `presentation-pptx-audit.test.ts`, `presentation-pdf.test.ts`, `artifact-design.test.ts`, `document-artifacts.test.ts`, `pptx-package-audit.test.mjs`.
+- [x] `presentation-pptx.test.ts`, `presentation-pptx-audit.test.ts`, `presentation-pdf.test.ts`, `artifact-design.test.ts`, `document-artifacts.hero.test.ts` (new), `tool-executor-tail.coverage.test.ts`, `pptx-package-audit.test.mjs`, `research-artifact-powerpoint.test.mjs`.
 
 ### Proof
 
@@ -207,17 +207,19 @@ DOCX theming beyond the blob removal; PDF font embedding.
 
 ## Phase 6: Docs, contract, evidence
 
-- [ ] `docs/1_0_CONTRACT.md`: one paragraph on the design layer: vendored impeccable prose at a pinned SHA with no launcher or binary; module receipts; the advisory detector is a subset, not impeccable's engine; rendering is evidence, not a quality claim; vision critique is capability-gated. Line 42 stays. Fix line 34 if `$` handling changes.
-- [ ] `docs/CANONICAL_RUNTIME_STATE_MODEL.md`: receipts with `contextDocuments`.
-- [ ] `packages/skills/src/design-quality.ts`: switch `REQUIRED_SKILL_MODULES`, `REQUIRED_SKILL_PHRASES`, and `REQUIRED_ROUTING_PHRASES` to the impeccable module set and routing entry; add impeccable checks (`UPSTREAM.md`, `LICENSE`, `NOTICE` present; no launcher strings; no broken links; `artifacts.md` ≤ 8 KiB).
+- [x] `docs/1_0_CONTRACT.md`: one paragraph on the design layer: vendored impeccable prose at a pinned SHA with no launcher or binary; module receipts; the advisory detector is a subset, not impeccable's engine; rendering is evidence, not a quality claim; vision critique is capability-gated. Line 42 stays. Fix line 34 if `$` handling changes.
+- [x] `docs/CANONICAL_RUNTIME_STATE_MODEL.md`: receipts with `contextDocuments`.
+- [x] `packages/skills/src/design-quality.ts`: switch `REQUIRED_SKILL_MODULES`, `REQUIRED_SKILL_PHRASES`, and `REQUIRED_ROUTING_PHRASES` to the impeccable module set and routing entry; add impeccable checks (`UPSTREAM.md`, `LICENSE`, `NOTICE` present; no launcher strings; no broken links; `artifacts.md` ≤ 8 KiB).
 - [ ] Delete `skills/bundled/design-intelligence/` in a small follow-up PR after D1 has shipped, and remove `bundled:design-intelligence` from `skills/catalog-coverage.json`. Confirm a stale lifecycle row for a skill that no longer loads is tolerated by `listSkills` and the Library skills view on an upgraded install (dual-lineage test).
-- [ ] Cockpit craft-floor alignment (D6): remove the kicker label from the four shared components the cockpit embeds (`packages/mission-control-shared/src/components/CommandPalette.tsx`, `GatewayAccessGate.tsx`, `PageErrorBoundary.tsx`, `chat/GeneratedArtifactViewer.tsx`) where the heading already carries the meaning, and drop the three cockpit CSS hooks (`cockpit/areas/chat/chat-build-editor.css`, `cockpit/styles/cockpit.css`). Classic also renders those four components, so its baselines shift in the same all-or-nothing visual rebaseline; no other Classic file is touched.
-- [ ] Ops Quality UI copy in the cockpit (`cockpit/areas/system/quality/QualityDesign.tsx`) lists the new checks; the Classic `QualityDashboardRoutePage.tsx` is not updated.
-- [ ] README verification table: mention the new checks only if a lane name changes.
+- [x] Cockpit craft-floor alignment (D6): remove the kicker label from the four shared components the cockpit embeds (`packages/mission-control-shared/src/components/CommandPalette.tsx`, `GatewayAccessGate.tsx`, `PageErrorBoundary.tsx`, `chat/GeneratedArtifactViewer.tsx`) where the heading already carries the meaning, and drop the three cockpit CSS hooks (`cockpit/areas/chat/chat-build-editor.css`, `cockpit/styles/cockpit.css`). Classic also renders those four components, so its baselines shift in the same all-or-nothing visual rebaseline; no other Classic file is touched.
+- [x] Ops Quality UI copy in the cockpit (`cockpit/areas/system/quality/QualityDesign.tsx`) lists the new checks; the Classic `QualityDashboardRoutePage.tsx` is not updated.
+- [x] README verification table: mention the new checks only if a lane name changes.
 
 ### Proof
 
 `pnpm docs:check`, `pnpm verify:design:quality`, `pnpm verify:skills:catalog`, `pnpm verify:fast`, `git diff --check`.
+
+Proof results (2026-10-13, branch `feat/impeccable-phase-6`): `docs:check`, `verify:skills:catalog`, and `git diff --check` pass. `verify:design:quality` passes every `impeccable.*` check and exits 1 only on the pre-existing `mission-control.raw-color-budget` (95 raw colours against the 92 budget in `__demo__/chat-demo.css`), which this phase does not touch and leaves open. `verify:fast` passed 22 of 24 lanes; `fast.repo-hygiene` was the GNU-tar-under-Git-Bash false red (green under PowerShell) and `fast.test.gateway.shard3` was the remote-worker restart e2e under full-lane load (green alone). `verify:visual:regression` ran as report only: 554 passed, 62 failed, the same cockpit pages and diff ratios as before this phase; baselines were not updated and that drift stays open.
 
 ---
 
@@ -374,3 +376,338 @@ Steps:
 Steps:
 1. `pnpm typecheck` (root), `pnpm verify:skills:catalog`, `pnpm verify:design:quality`, `pnpm verify:routed-context:snapshots`, `git diff --check`. Expected: pass; record any lane that cannot run locally with its reason.
 2. Tick the Phase 1 boxes in this plan. Commit: `docs(plan): mark impeccable Phase 1 done`.
+
+---
+
+## Phase 2 Task Breakdown (execution order; TDD per task)
+
+Vocabulary used by every task: a **context doc** is a workspace guidance document of type `product` (file `PRODUCT.md`) or `design` (file `DESIGN.md`) under `workspaces/<workspaceId>/`; there is never a global copy (D3). The **brand block** is a fenced code block in DESIGN.md whose info string is `brand`, holding `key: value` lines (`name`, `colors`, `fonts`, `logo`). The **context ceiling** is 6144 bytes per doc. Context docs are injected only through impeccable's module routes, never through `resolveRuntimeGuidance` (its 6000-character budget stays for GOATCITADEL/AGENTS/CLAUDE).
+
+### Task 11: Workspace-only PRODUCT.md and DESIGN.md guidance docs
+
+Files: `packages/contracts/src/workspaces.ts` (`GuidanceDocType` gains `"product" | "design"`), `apps/gateway/src/services/guidance-doc-files.ts` (`product: "PRODUCT.md"`, `design: "DESIGN.md"`), `apps/gateway/src/services/guidance-service.ts` (`WORKSPACE_GUIDANCE_DOC_TYPES` gains both; new `WORKSPACE_ONLY_GUIDANCE_DOC_TYPES = ["product", "design"]`; `listGlobalGuidance` skips them; `updateGlobalGuidance` throws `Global guidance is not supported for <docType>; it is workspace-only.`; `RUNTIME_GUIDANCE_DOC_TYPES` unchanged), `apps/gateway/src/routes/workspaces.ts` (`workspaceDocTypeSchema` gains both; `globalDocTypeSchema` unchanged), tests `guidance-service.test.ts`, `routes/workspaces.test.ts`.
+
+Produces: `GuidanceDocType` includes `product`/`design`; `GET /api/v1/workspaces/:id/guidance` returns them in `workspace`; `PUT /api/v1/workspaces/:id/guidance/design` writes `workspaces/<id>/DESIGN.md`; `PUT /api/v1/guidance/global/design` is a 400 (enum); `GuidanceService.updateGlobalGuidance("design", …)` throws.
+
+Steps:
+1. Tests first: `guidance-service.test.ts` — workspace listing includes `product` and `design` records with `fileName` `PRODUCT.md`/`DESIGN.md`; global listing has no `product`/`design`; `updateGlobalGuidance("design", "x")` rejects with `/workspace-only/`; `resolveRuntimeGuidance` ignores a workspace DESIGN.md (no `DESIGN.md` in `workspaceFilesUsed`). `routes/workspaces.test.ts` — PUT workspace `design` reaches the service with `("default", "design", content)`; PUT global `design` is 400.
+2. Run `pnpm --filter @goatcitadel/gateway exec vitest run src/services/guidance-service.test.ts src/routes/workspaces.test.ts`. Expected: new cases fail.
+3. Implement; `pnpm --filter @goatcitadel/contracts build`; rerun; `pnpm --filter @goatcitadel/gateway typecheck`. Expected: pass.
+4. Commit: `feat(guidance): add workspace-only PRODUCT.md and DESIGN.md guidance docs`.
+
+### Task 12: Brand block parser
+
+Files: `packages/skills/src/design-brand.ts` (new), `design-brand.test.ts` (new), `packages/skills/src/index.ts` (export).
+
+Produces: `parseDesignBrandBlock(markdown: string): DesignBrand | undefined` where `DesignBrand = { name?: string; colors?: string[]; fonts?: string[]; logoPath?: string }` (same shape as policy-engine `ArtifactBrandInput`, which this package must not import). Rules: first fenced block whose info string is exactly `brand` (case-insensitive) wins; lines are `key: value`, unknown keys ignored; `colors` is comma-separated, each normalised to `#rrggbb` (accepts `#rgb`, `#rrggbb`, with or without `#`; invalid entries dropped), at most 6 kept; `fonts` comma-separated, trimmed, non-empty, at most 3; `logo` kept as `logoPath` only when it is a relative path with forward slashes, no `..` segment, no leading `/`, no drive letter, no URL scheme; `name` trimmed, at most 80 chars. Returns `undefined` when there is no block or the block yields no fields. Also exports `DESIGN_BRAND_BLOCK_EXAMPLE` (a 5-line example string used by the settings help text).
+
+Steps:
+1. Test first (RED): full block parses; limits (7 colors → 6, 4 fonts → 3); invalid color dropped; `logo: ../x.svg`, `/abs.svg`, `C:/x.svg`, `https://x` all dropped; no block → undefined; block with only unknown keys → undefined; second `brand` block ignored; a `css` block is not a brand block.
+2. Implement; `pnpm --filter @goatcitadel/skills exec vitest run src/design-brand.test.ts`; typecheck. Expected: pass.
+3. Commit: `feat(skills): parse the DESIGN.md brand block`.
+
+### Task 13: Module routes declare context docs; receipts carry them and fail closed on drift
+
+Files: `packages/skills/src/skill-module-routes.ts` (+test), `packages/contracts/src/chat-capability-profile.ts`, `apps/gateway/src/services/governed-skill-instruction-service.ts` (+test), `apps/gateway/src/services/workspace-skill-context-docs.ts` (new, +test), `apps/gateway/src/services/gateway-service.ts`.
+
+Produces:
+- `SkillModuleResolution.contextDocs?: SkillContextDocType[]` with `SkillContextDocType = "product" | "design"`; every impeccable route declares `["product", "design"]`; other skills declare nothing. `enumerateSkillRoutes` carries the field.
+- Contract: `ChatTurnCapabilityActivatedSkillContextDocument { docType: "product" | "design"; scope: "workspace"; sha256: string; bytes: number; truncated: boolean }` and `ChatTurnCapabilityActivatedSkill.contextDocuments?: …[]` (omitted when empty so earlier frozen profiles stay canonical-JSON-equal).
+- `SkillContextDocReader = (docType) => { exists: boolean; content: string }` (sync). `createWorkspaceSkillContextDocReader(host: GuidanceDocumentHost, workspaceId)` reads `workspaces/<id>/PRODUCT.md|DESIGN.md` with `resolveGuidancePath` + `readFileSync`; a missing file is `{ exists: false, content: "" }`.
+- `buildGovernedActivatedSkillReceipts` takes `contextDocs?: SkillContextDocReader`; `renderGovernedActivatedSkillInstructions` takes the same. `buildReceipt` reads the route's declared docs (freeze) or the frozen receipt's `contextDocuments` doc types (render): for each existing non-blank doc, `sha256` and `bytes` of the full stored content, content cut to the ceiling on a UTF-8 character boundary with `truncated: true` when cut, scanned with `scanPromptwareContent({ source: "memory_context", sourcePath: "workspace-guidance:<docType>" })`; any finding throws `GuidanceSecurityBlockedError` (`failureClass: "guidance_security_blocked"`, `recoveryAction: "review_workspace_guidance"`, message `Workspace <FILE> blocked the turn before provider execution; review it in Settings › Workspaces.`), never `SkillSecurityBlockedError`. The rendered instruction appends `## Project design context: <FILE> (workspace)` sections after the modules, with `[truncated to 6144 bytes]` as the last line when cut; `instructionSha256`/`instructionBytes` cover them. At render time a doc whose `sha256` differs from the frozen receipt throws `Workspace <FILE> changed after this turn's profile froze; send the message again.` before the generic drift check. A frozen receipt without `contextDocuments` never reads docs.
+- `gateway-service.ts`: `resolveActivatedSkills` passes `contextDocs: createWorkspaceSkillContextDocReader(this, input.workspaceId)`; `resolveActivatedSkillInstructions` passes one for `profile.identity.workspaceId`.
+
+Steps:
+1. Tests first: route test — impeccable routes carry `contextDocs: ["product", "design"]`, coding route carries none. Service test (impeccable harness + a reader stub): with DESIGN.md `"# Design\n\n```brand\nname: Acme\n```"` the receipt has `contextDocuments: [{ docType: "design", scope: "workspace", sha256, bytes, truncated: false }]` and the instruction contains `Project design context: DESIGN.md (workspace)`; no docs → `contextDocuments` absent and the receipt canonical-equal to the no-reader receipt; 9000-byte DESIGN.md → `truncated: true`, injected text ≤ 6144 bytes + marker; DESIGN.md containing `ignore all previous instructions` → throws `GuidanceSecurityBlockedError` with `failureClass "guidance_security_blocked"`; render with a reader whose DESIGN.md changed → throws `/changed after this turn's profile froze/`; render of a receipt without `contextDocuments` with a reader that throws if called → renders. Reader test — reads an existing file, reports missing, never escapes `workspaces/<id>/`.
+2. Run the three test files. Expected: new cases fail.
+3. Implement; `pnpm --filter @goatcitadel/contracts build`; rerun with `chat-turn-prep-service.governed-skills.test.ts`; gateway + skills typecheck. Expected: pass.
+4. Commit: `feat(gateway): inject workspace design context into impeccable turns with hashed receipts`.
+
+### Task 14: Workspace brand reaches deck and document tools
+
+Files: `apps/gateway/src/services/chat-turn-agent-runner.ts` (`ChatTurnAgentRunnerInput.workspaceDesignBrand?: ArtifactBrandInput`; `attachArtifactDesignSkillArgs(toolName, args, userContent, workspaceBrand?)` fills `design.brand` when the design is non-plain and the model supplied no brand), `chat-turn-agent-runner.loop24.test.ts`, `apps/gateway/src/services/gateway-service.ts` (where the runner input is built: when the frozen profile has an activated-skill receipt whose `contextDocuments` includes `design`, read DESIGN.md through the reader and `parseDesignBrandBlock` it; pass the result as `workspaceDesignBrand`; no receipt → undefined), a focused gateway test for that helper (`workspace-design-brand.test.ts`, new, pure helper `resolveWorkspaceDesignBrand(profile, reader)`).
+
+Steps:
+1. Tests first: loop24 — a polished `presentations.create` call with no model brand gets `design.brand` equal to the input brand; a model-supplied brand is kept; a plain-format call gets no brand. Helper test — receipt with design context doc + DESIGN.md with a brand block → brand; receipt without context docs → undefined; DESIGN.md without block → undefined.
+2. Run; Expected: fail. Implement; rerun with `pnpm --filter @goatcitadel/gateway typecheck`. Expected: pass.
+3. Commit: `feat(gateway): apply the workspace brand block to governed artifact tools`.
+
+### Task 15: Cockpit settings section for PRODUCT.md and DESIGN.md
+
+Files: `apps/mission-control-next/src/cockpit/areas/settings/WorkspaceDesignContextSettings.tsx` (new), `WorkspaceDesignContextSettings.test.tsx` (new), `settings-controls.ts` (preloadable + `"workspaces"` list), `SettingsArea.tsx` (render under `case "workspaces"` after `WorkspaceSettings`, keyed by `activeWorkspaceId`), `settings-index.ts` (add `design context product design brand DESIGN.md PRODUCT.md` to the `workspaces` keywords). Cockpit only; no Classic counterpart.
+
+Produces: a `<section aria-label="Design context">` with, per doc (`PRODUCT.md`, `DESIGN.md`): a textarea bound to the workspace guidance content from `fetchWorkspaceGuidance(workspaceId)`, a Save button calling `updateWorkspaceGuidance(workspaceId, docType, content)`, a status line (`Saved`, errors); a help block with `DESIGN_BRAND_BLOCK_EXAMPLE` copy inlined as a string constant in the component (the cockpit depends on contracts only, not on `@goatcitadel/skills`); and an "Apply a generated artifact" control: a select listing the workspace's generated artifacts from `fetchChatGeneratedArtifacts({ workspaceId, kind: "document" })` whose `content` is non-empty, with buttons "Apply as DESIGN.md" / "Apply as PRODUCT.md" that save `<!-- applied from generated artifact <artifactId> contentHash <contentHash> -->\n` + artifact content, so the applied hash is recorded in the document itself.
+
+Steps:
+1. Test first (happy-dom; mock `fetchWorkspaceGuidance`, `updateWorkspaceGuidance`, `fetchChatGeneratedArtifacts` from `@goatcitadel/mission-control-shared/api/client`): renders both editors with fetched content; Save sends `("ws-1", "design", edited)`; Apply sends the provenance comment + artifact content and shows `Saved`.
+2. Run `pnpm --filter @goatcitadel/mission-control-next exec vitest run src/cockpit/areas/settings/WorkspaceDesignContextSettings.test.tsx`. Expected: fail (module missing). Implement; rerun; `pnpm --filter @goatcitadel/mission-control-next typecheck`. Expected: pass.
+3. Commit: `feat(cockpit): add workspace design context settings for DESIGN.md and PRODUCT.md`.
+
+### Task 16: Root DESIGN.md and PRODUCT.md for repo coding agents
+
+Files: `DESIGN.md` (new, root), `PRODUCT.md` (new, root), `AGENTS.md` (one sentence under "How Agents Should Work" pointing at both). Seeded from the sources listed in the Phase 2 section; the cockpit follows impeccable's craft floor (D6); Classic is marked retiring and out of scope; no personal paths; DESIGN.md carries a `brand` block with the GoatCitadel token colors and fonts so the parser has a real example.
+
+Steps:
+1. Write both files (DESIGN.md ≤ 12 KiB, PRODUCT.md ≤ 8 KiB). Add the AGENTS.md sentence.
+2. `pnpm --filter @goatcitadel/skills exec vitest run src/design-brand.test.ts` with a case that parses the root DESIGN.md brand block (added test-first in this task); `node scripts/validate-governance-docs.mjs`; `node scripts/verify-repo-hygiene.mjs`. Expected: pass.
+3. Commit: `docs: add DESIGN.md and PRODUCT.md for repo coding agents`.
+
+### Task 17: Proof lanes and plan ticks
+
+Steps:
+1. `pnpm typecheck`, `pnpm docs:check`, `pnpm verify:routed-context:snapshots`, `pnpm verify:runtime:truth`, `pnpm verify:surface:regression`, `git diff --check`. Expected: pass; record any lane that cannot run locally with its reason.
+2. Tick the Phase 2 boxes. Commit: `docs(plan): mark impeccable Phase 2 done`.
+
+---
+
+## Phase 3 Task Breakdown (execution order; TDD per task)
+
+Vocabulary: a **design advisory** is `{ ruleId, line, summary, craftFloorRule? }` produced by the deterministic detector from text alone (never from a rendered page); it carries no excerpt of the scanned content. A **design receipt** is an activated-skill receipt in the frozen capability profile whose skill name is `impeccable` or `design-intelligence`. Advisories are always advisory: nothing in this phase blocks a write, fails a turn, or changes a verification lane's status beyond `advisory`.
+
+### Task 18: Detector rules and the shared anti-slop table
+
+Files: `packages/skills/src/design-detector/rules.ts` (new), `detect.ts` (new), `design-detector.test.ts` (new), `packages/skills/src/design-quality.ts` (import `ANTI_SLOP_PATTERNS` from the detector instead of declaring it), `packages/skills/src/index.ts` (export), `THIRD_PARTY_NOTICES.md` (one line: the regex rules approximate impeccable craft-floor rules by id; they are GoatCitadel-authored and are not impeccable's rule engine; no parity claim).
+
+Produces: `ANTI_SLOP_PATTERNS` (the seven existing `{ id, re }` entries, byte-identical ids and regexes), `DESIGN_DETECTOR_RULES: DesignDetectorRule[]` where `DesignDetectorRule = { id, severity: "advisory", summary, craftFloorRule?: string, re: RegExp }` covering the seven anti-slop ids plus: `gradient-text` (`background-clip: text`, `-webkit-background-clip: text`, `bg-clip-text`), `side-stripe-border` (`border-left|right` ≥ 2px, Tailwind `border-[lr]-[2-9]`), `hard-offset-shadow` (`box-shadow` with non-zero offsets and `0` blur), `glass-by-default` (`backdrop-filter: blur`, `backdrop-blur-`), `numbered-section-marker` (`01 / 02`-style markers), `kicker-eyebrow` (`kicker` or `eyebrow` class or element names), `bounce-easing` (`cubic-bezier` with an overshoot fourth value above 1, `ease-*-back`, `elastic`, `bounce`); `detectDesignAdvisories(text, { maxFindings = 8, maxBytes = 1024 })` returning `DesignAdvisory[]` with 1-based line numbers, first occurrence per rule, sorted by line, truncated to the caps (bytes measured on the JSON of the list). Pointers use the craft-floor comment ids (`skill-ban-gradient-text`, `skill-ban-side-stripe-borders`, `skill-ban-hard-offset-shadow`, `skill-ban-glassmorphism-default`, `skill-ban-numbered-section-markers`, `skill-ban-eyebrow-on-every-section`, `skill-ban-glyph-icons`, `skill-motion-floor`, `skill-copy-design-material`, `skill-reflex-theme-by-habit`).
+
+Steps:
+1. Test first: one positive and one negative per rule (17 rules), caps (9 distinct hits → 8; a 50-rule-hit file stays ≤ 1024 bytes), no excerpt of the input in any advisory, `ANTI_SLOP_PATTERNS` ids equal the seven known ids. Run `pnpm --filter @goatcitadel/skills exec vitest run src/design-detector.test.ts`. Expected: fails (module missing).
+2. Implement; move the table; rerun with `src/design-quality.test.ts`. Expected: pass, design-quality unchanged. Skills typecheck.
+3. Commit: `feat(skills): add the deterministic design advisory detector`.
+
+### Task 19: Runner attaches advisories to design-file writes
+
+Files: `apps/gateway/src/services/chat-turn-agent-runner/design-advisories.ts` (new), `design-advisories.test.ts` (new), `apps/gateway/src/services/chat-turn-agent-runner.ts` (result path after `assertNoToolOutputInjection`), `chat-turn-agent-runner.effect-truth.test.ts` or a new focused runner test.
+
+Produces: `buildToolResultDesignAdvisories({ capabilityProfile, toolName, args }): DesignAdvisory[] | undefined` — `undefined` unless the profile holds a design receipt, the tool is `fs.write` or `fs.patch`, and the path ends in `.tsx .jsx .css .html .vue .svelte`; the scanned text is `args.content` for `fs.write` and `args.newText` for `fs.patch` (never a disk read); `[]` when nothing fires is still attached as `designAdvisories: []`? No: attach only when non-empty. The runner patches the executed tool run's `result` with `designAdvisories` and re-runs `assertNoToolOutputInjection` on the patched result.
+
+Steps:
+1. Tests first: helper — design receipt + `fs.write` of a `.css` with `background-clip: text` → one advisory; no receipt → undefined; `fs.patch` scans `newText` only; `.ts` path → undefined; a hostile `content` never appears in the advisories. Runner — with a frozen profile carrying an impeccable receipt, an executed `fs.write` of `hero.css` containing gradient text yields `toolRun.result.designAdvisories` with `ruleId: "gradient-text"`; the same write without the receipt has no `designAdvisories`. Expected: fail.
+2. Implement; run both tests and `pnpm --filter @goatcitadel/gateway typecheck`. Expected: pass.
+3. Commit: `feat(gateway): attach design advisories to governed UI file writes`.
+
+### Task 20: Generated HTML artifacts carry advisories on read
+
+Files: `packages/contracts/src/chat.ts` (`ChatGeneratedArtifactRecord.designAdvisories?: DesignAdvisory[]`, with `DesignAdvisory` declared in contracts and re-used by the detector), `apps/gateway/src/services/chat-generated-artifact-service.ts` (attach for `kind === "html"` on every read and create response; derived, not persisted), `chat-generated-artifact-service.test.ts`.
+
+Ruling recorded here: advisories are derived on read instead of stored, because the artifact table is column-based on SQLite and PostgreSQL and a new column would need a parity migration for an informational field that must track the current rule set anyway.
+
+Steps:
+1. Test first: an HTML artifact with `backdrop-filter: blur(8px)` lists `glass-by-default`; a markdown artifact has no field. Expected: fail. Implement; rerun; contracts build; gateway typecheck. Expected: pass.
+2. Commit: `feat(gateway): derive design advisories for HTML generated artifacts`.
+
+### Task 21: Cockpit shows per-turn advisories
+
+Files: `apps/mission-control-next/src/cockpit/areas/chat/ChatTurnDetails.tsx`, `ChatTurnDetails.test.tsx` (new). Cockpit only.
+
+Produces: under each tool run that carries `result.designAdvisories`, a `<ul aria-label="Design advisories">` listing `summary` and `line`, prefixed by a one-line "Design advisories (n) · informational" label; nothing renders without the field.
+
+Steps:
+1. Test first (happy-dom): a turn with one executed `fs.write` whose result carries two advisories renders both summaries and the count; a turn without advisories renders no such list. Expected: fail. Implement; rerun; mission-control-next typecheck. Expected: pass.
+2. Commit: `feat(cockpit): show design advisories on tool activity`.
+
+### Task 22: Ops quality craft-floor check
+
+Files: `packages/skills/src/design-quality.ts`, `design-quality.test.ts`.
+
+Produces: check `mission-control.craft-floor.scan` ("Craft-floor advisory scan") over `apps/mission-control-next/src/cockpit` and `packages/mission-control-shared/src/components`, excluding `features/native-routes` and `features/threaded-surface`, using `DESIGN_DETECTOR_RULES`; `P2`/`advisory` when any file hits, else `P3`/`passing`; `nextAction` lists hit counts per rule id; never `blocking`.
+
+Steps:
+1. Test first: fixture with a cockpit file containing `backdrop-blur-md` → advisory; the same text under `features/native-routes` → passing. Expected: fail. Implement; rerun the file; `pnpm verify:design:quality`. Expected: pass with the new check listed.
+2. Commit: `feat(skills): add the craft-floor advisory check to design quality`.
+
+### Task 23: Proof lanes and plan ticks
+
+Steps:
+1. `pnpm typecheck`, `pnpm verify:design:quality`, `pnpm verify:gateway:async-boundary`, `git diff --check`; focused suites for skills, gateway (helper, runner, artifact service), cockpit. Expected: pass; record any lane that cannot run locally with its reason.
+2. Tick the Phase 3 boxes. Commit: `docs(plan): mark impeccable Phase 3 done`.
+
+---
+
+## Phase 4 Task Breakdown (execution order; TDD per task)
+
+Vocabulary: a **render** is a PNG of an `html` generated artifact at one viewport (`desktop` 1440×900 or `phone` 390×844), produced headless with JavaScript off, offline, under the Mission Control baseline CSP. Renders are stored as chat attachments of the artifact's session (file name `render-<first 16 hex of contentHash>-<viewport>.png`, `image/png`, analysis skipped), so the artifact record is never changed and the existing attachment routes serve the bytes. A **critique** is a normal operator turn in the artifact's session whose content is `@skill impeccable critique` plus the artifact title, with the renders attached when the session's route provider is capability-detected as vision-capable, otherwise a text-only critique whose content says `(not visually inspected: the current model has no vision capability)`.
+
+### Task 24: Playwright runtime module
+
+Files: `packages/policy-engine/src/playwright-runtime.ts` (new), `playwright-runtime.test.ts` (new), `browser-tools.ts` (imports instead of defining), `packages/policy-engine/src/index.ts` (export).
+
+Produces: `loadPlaywright()`, `launchPlaywrightChromium(playwright, headless)`, `BROWSER_CHROMIUM_SECURITY_ARGS`, `BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE/MESSAGE`, `isMissingPlaywrightBrowserError`, `browserChromiumManualRequiredError` moved byte-for-byte; `browser-tools.ts` re-exports the two diagnostic constants it exported before.
+
+Steps:
+1. Test first: a mocked `playwright` whose `chromium.launch` rejects with `browserType.launch: executable doesn't exist` makes `launchPlaywrightChromium` throw the manual-install diagnostic; a successful launch passes `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`; an import failure makes `loadPlaywright` throw the same diagnostic. Expected: fail (module missing).
+2. Implement the move; run the new test plus `browser-tools.manual-chromium.test.ts` and `browser-tools-load-failure.coverage.test.ts`; policy-engine typecheck. Expected: pass unchanged.
+3. Commit: `refactor(policy-engine): extract the Playwright runtime from browser tools`.
+
+### Task 25: HTML snapshot renderer
+
+Files: `packages/policy-engine/src/html-render.ts` (new), `html-render.test.ts` (new), `packages/policy-engine/src/index.ts` (export).
+
+Produces: `renderHtmlSnapshot({ html, viewports?, outputDir, writeJailRoots, signal?, timeoutMs? })` → `{ renders: Array<{ viewport, width, height, path, sha256, bytes }>, contentSecurityPolicy }`. Rules: `assertWritePathInJail(outputDir, writeJailRoots)` before any browser work; HTML over `HTML_RENDER_MAX_BYTES` (512 KiB) throws `html_render_too_large`; the page context is `javaScriptEnabled: false`, `offline: true`, and `context.route("**/*", abort)` for every scheme except `data:` and `about:`; a `<meta http-equiv="Content-Security-Policy">` equal to `MISSION_CONTROL_BASELINE_CSP` (exported from this module as the gateway's baseline string with `font-src 'self' data:`, see Task 30) is injected into `<head>`; viewports default to desktop 1440×900 and phone 390×844; `page.setContent` with `waitUntil: "load"` and a 15 s default timeout; missing Chromium surfaces the Task 24 diagnostic unchanged; `signal` aborts between steps.
+
+Steps:
+1. Tests first: jail rejection throws before launching (mock `loadPlaywright` and assert it was not called); size cap throws `html_render_too_large`; missing-Chromium diagnostic propagates from a mocked launch; one real render (Chromium is installed here): an HTML page with an `<img src="https://example.test/x.png">` and `<script>document.title="js"</script>` renders two PNGs under a temp jail root, each starting with the PNG signature, the desktop one 1440 px wide, and the page title stays the authored one (JS ran not), with the blocked request recorded in `renders[].blockedRequests`. Expected: fail.
+2. Implement; run the test; policy-engine typecheck. Expected: pass.
+3. Commit: `feat(policy-engine): render HTML artifacts to offline sandboxed snapshots`.
+
+### Task 26: Gateway render service and route
+
+Files: `apps/gateway/src/services/html-artifact-render-service.ts` (new, +test), `apps/gateway/src/routes/chat.artifact-render.ts` (new, +test), `apps/gateway/src/routes/chat.ts` (register), `apps/gateway/src/services/gateway-route-composition-chat.ts` + `chat-sessions-route-service.ts` (dependency surface), `packages/contracts/src/chat.ts` (`ChatArtifactRenderRecord { artifactId, contentHash, viewport, attachmentId, sha256, width, height, createdAt }` and `ChatArtifactRenderResponse { artifactId, contentHash, renders }`), `packages/mission-control-shared/src/api/chat.ts` (`renderChatGeneratedArtifact(artifactId, workspaceId)`, `listChatArtifactRenders(artifactId, workspaceId)`).
+
+Produces: `POST /api/v1/chat/generated-artifacts/:artifactId/renders` (body `{ workspaceId }`): loads the artifact through `getChatGeneratedArtifact` (workspace-bound), rejects non-`html` kinds and redacted projections with 409, renders into a temp directory inside the workspace write jail, stores each PNG through the chat attachment service with analysis skipped, and returns 201 with the render records; repeated calls for the same `contentHash` return the existing attachments (lookup by session attachments whose file name starts with `render-<hash16>-`) without rendering again. `GET …/renders` returns the stored records. Mutation routes carry `config: { rateLimit: { max: RATE_LIMIT_MUTATION_MAX } }` and the idempotency plugin markers like the other chat mutations.
+
+Steps:
+1. Tests first: route test (mocked services, model `chat.sessions.test.ts`): POST without `workspaceId` is 400; POST for a markdown artifact is 409; POST for an html artifact calls the service with `(artifactId, workspaceId)` and returns 201 with the records; GET returns the list. Service test: stores two attachments named `render-<hash16>-desktop.png` / `-phone.png` with `analysisStatus: "skipped"` and returns them; a second call reuses them (renderer called once). Expected: fail.
+2. Implement; run both tests; gateway typecheck; `pnpm verify:gateway:async-boundary`. Expected: pass.
+3. Commit: `feat(gateway): render HTML generated artifacts to attached PNG evidence`.
+
+### Task 27: Model-authored HTML documents gated on a design receipt
+
+Files: `packages/policy-engine/src/document-artifacts.ts` (+test), `tool-registry.ts` (`documents.create` gains optional `html: { type: "string" }` with a usage hint "only with a governed design receipt"), `artifact-design.ts` (`ArtifactDesignReport.markup?: "template" | "model-authored"` and `designAdvisories?: DesignAdvisory[]`), `apps/gateway/src/services/chat-turn-agent-runner.ts` (`attachArtifactDesignSkillArgs` deletes `args.html` when the turn has no design receipt; the receipt check reuses `hasDesignSkillReceipt` from Phase 3) + loop24 test.
+
+Produces: with `format: "html"` and a string `html` argument that contains `<html` or `<!doctype`, capped at 512 KiB, the document is written verbatim (after `escapeHtml` is NOT applied) and the design report records `markup: "model-authored"` plus the detector's advisories; without `html` the template path runs with `markup: "template"`.
+
+Steps:
+1. Tests first: `document-artifacts.test.ts` — model-authored html is written verbatim and reported; oversize html throws; the template path reports `markup: "template"`. Runner test — `documents.create` args with `html` are stripped without a receipt and kept with one. Expected: fail.
+2. Implement; run policy-engine + gateway tests; typechecks. Expected: pass.
+3. Commit: `feat(artifacts): accept model-authored HTML documents under a design receipt`.
+
+### Task 28: Critique turn and the trimmed critique reference
+
+Files: `apps/gateway/src/services/html-artifact-render-service.ts` (`critiqueArtifact`), `apps/gateway/src/routes/chat.artifact-render.ts` (`POST …/critique`), `scripts/sync-impeccable.mjs` (vendor `reference/critique.md` with the launcher loop, critique-storage, and detect references removed), `skills/bundled/impeccable/reference/critique.md` (+ `UPSTREAM.md`, `NOTICE` regenerated by the script), `packages/skills/src/bundled-skill-lock.generated.ts` (`pnpm update:skills:lock`), `packages/skills/src/skill-module-routes.ts` (`critique` joins `IMPECCABLE_COMMANDS`, loads `main` + `critique`), `routing-hints.generated.ts` (command summary), `packages/mission-control-shared/src/api/chat.ts` (`critiqueChatGeneratedArtifact`).
+
+Produces: `POST /api/v1/chat/generated-artifacts/:artifactId/critique` (body `{ workspaceId }`): ensures renders exist (rendering if needed), resolves the session's effective route and the provider's `capabilities.vision`, and sends an operator turn through the same service the agent-send route uses, with the render attachment ids when vision is available or the text-only marker otherwise; returns 202 with `{ sessionId, turnId, visuallyInspected }`. The upstream clone is re-created at `.tmp/upstream/impeccable` at the pinned SHA before syncing; the sync test gains the critique transforms.
+
+Steps:
+1. Tests first: sync test fixture for `critique.md` (launcher lines and the `impeccable critique-storage` references removed, prose kept); route/service test: vision provider → attachments present and `visuallyInspected: true`; non-vision → no attachments and the marker in the content; route table test: `@skill impeccable critique` → `main` + `critique`. Expected: fail.
+2. Implement; re-vendor; `pnpm update:skills:lock`; run `pnpm verify:skills:catalog`, the gateway tests, skills tests; typechecks. Expected: pass.
+3. Commit: `feat(design): critique rendered HTML artifacts through a governed chat turn`.
+
+### Task 29: Cockpit render and critique actions
+
+Files: `apps/mission-control-next/src/cockpit/ui/ArtifactRenderActions.tsx` (new, +test), `cockpit/areas/chat/ChatInspector.tsx`, `cockpit/areas/library/LibraryResourceDetail.tsx`, `cockpit/areas/work/RunArtifacts.tsx` (render the actions beside each `GeneratedArtifactViewer` for `html` artifacts).
+
+Produces: two buttons, "Render" and "Critique render", a status line, and the rendered PNGs shown as `<img>` from `/api/v1/chat/attachments/<id>/content` with the viewport as alt text; the critique button reports "Critique sent to the conversation" and, when the model has no vision, "(sent without images: the current model has no vision capability)". Non-html artifacts render nothing. Classic shell untouched.
+
+Steps:
+1. Test first (happy-dom, mocked shared API): Render calls the API and shows two images; Critique shows the sent message and the vision marker from the response; a markdown artifact renders no actions. Expected: fail.
+2. Implement; run the test and the three touched areas' existing tests; mission-control-next typecheck. Expected: pass.
+3. Commit: `feat(cockpit): render and critique HTML artifacts from the viewer`.
+
+### Task 30: Preview CSP (D4)
+
+Files: `apps/gateway/src/app.ts` (`font-src 'self' data:`), `apps/gateway/src/app.test.ts` or the CSP test that pins the baseline, `DESIGN.md` (the font sentence), `docs/1_0_CONTRACT.md` (one sentence on the preview policy and the font limit).
+
+Steps:
+1. Test first: the baseline CSP test expects `font-src 'self' data:`. Expected: fail. Implement; rerun; `node scripts/validate-governance-docs.mjs`. Expected: pass.
+2. Record in the ledger how the preview CSP was verified: `srcdoc` iframes inherit the embedding document's policy, so the packaged shell (served by the gateway) applies the baseline and the Vite dev server applies none unless configured; note it in the contract sentence.
+3. Commit: `feat(gateway): allow embedded fonts in the baseline preview policy`.
+
+### Task 31: Proof lanes and plan ticks
+
+Steps:
+1. `pnpm typecheck`, `pnpm verify:gateway:async-boundary`, `pnpm verify:auth:matrix`, `pnpm verify:skills:catalog`, `pnpm verify:surface:regression`, `pnpm verify:visual:regression` (report, do not rebaseline), `git diff --check`; focused suites. A browser proof: render one HTML artifact through the new route and attach the PNG path to the ledger. Expected: pass; record any lane that cannot run locally with its reason.
+2. Tick the Phase 4 boxes. Commit: `docs(plan): mark impeccable Phase 4 done`.
+
+## Phase 5 Task Breakdown (execution order; TDD per task)
+
+Phase 5 is independent of Phases 1–4 and branches from `main`. It changes only `packages/policy-engine` renderers and their tests. Before/after renders of the sample deck (PPTX via PowerPoint PNG export, PDF, DOCX) are the visual proof attached to the PR.
+
+### Task 32: Preset by request only
+
+Files: `packages/policy-engine/src/artifact-design.ts`, `artifact-design.test.ts`, `tool-executor-tail.coverage.test.ts`.
+
+Produces: `resolvePreset` returns the explicit `preset` when supplied, else `clean-professional`; the content regex table is gone. The `pitch` preset uses `0F766E` accent and `99F6E4` border (no `7C3AED`). The `design-skill-applied` validation detail reads "Injected governed impeccable design instructions (<register>, <lifecycle>): <skillId> [<modules>]" from the receipt, never "planned".
+
+Steps:
+1. Test first: a wellness-flavoured title with no preset resolves `clean-professional`; `preset: "wellness"` still resolves `wellness`; the pitch tokens contain no `7C3AED`; the applied detail lists the receipt modules. Expected: fail. Implement; rerun `artifact-design.test.ts` and the tail coverage test (one expectation pinned the regex-chosen preset). Expected: pass.
+2. Commit: `feat(artifact-design): default to clean-professional and report injected modules`.
+
+### Task 33: PPTX frame and containers
+
+Files: `packages/policy-engine/src/presentation-pptx-renderers.ts`, `presentation-pptx-fallback.ts`, `presentation-pptx.test.ts`.
+
+Produces: `drawSlideFrame` draws no 0.13 in accent stripe; `gc:slide-number` is regular weight in `mutedText` at 10 pt (the package audit's semantic font floor for that object; the brief's 9 pt would fail it); `drawImageTextSlide` and `drawStackedListSlide` draw bullets on the background with no roundRect card; two-column and comparison keep their cards; the fallback writer's slide number is regular weight.
+
+Steps:
+1. Test first (recording pptxgenjs mock): no shape with `x: 0, w: 0.13`; one quiet slide number per rendered slide; zero roundRects on image-text/stacked-list slides and at least one on two-column; the fallback zip's slide-number run is not bold. Expected: fail. Implement; rerun `presentation-pptx.test.ts`, `presentation-pptx-audit.test.ts`, `tool-executor-tail.coverage.test.ts`, `scripts/verification/lib/pptx-package-audit.test.mjs`. Expected: pass.
+2. Commit: `feat(pptx): quiet the slide frame and drop the default body card`.
+
+### Task 34: PDF frame and containers
+
+Files: `packages/policy-engine/src/presentation-pdf.ts`, `presentation-pdf.test.ts`.
+
+Produces: no 9.4 pt stripe; the page number is set in the regular face (`/F1`) in `theme.muted`; stacked pages draw bullets on the background (no `55 54 836 382 re B` card); the cover has no three-rectangle motif.
+
+Steps:
+1. Test first (content streams): no ` 9.4 540 re`; regex for a regular-face `(02)` page number and none in `/F2`; no ` 150 110 re`; no stacked card rect; layout names include `image-text`. Expected: fail. Implement; rerun `presentation-pdf.test.ts`. Expected: pass.
+2. Commit: `feat(pdf): quiet the deck frame and drop the default body card`.
+
+### Task 35: No placeholder visuals
+
+Files: `packages/policy-engine/src/presentation-pptx.ts`, `presentation-pptx-renderers.ts`, `presentation-pdf.ts`, `document-artifacts.ts`, `artifact-design.ts`, `tool-executor/artifact-executor.ts`, `tool-registry.ts`, `document-artifacts.hero.test.ts` (new), `presentation-pptx.test.ts`, `tool-executor-tail.coverage.test.ts`, `artifact-design.test.ts`.
+
+Produces: `PresentationSlideVisual.dataUri` is optional; with no provider asset a visual is `{ source: "none", altText }`; `buildAbstractVisualDataUri`, its hash helpers, and the pptx `sharp` import are gone; the PPTX has no file under `ppt/media/` and `usedAssetIds` is `["built-in-shapes-icons"]` with `visualCount: 0`; the DOCX hero `ImageRun`, `buildDocxVisualBuffer`, and its `sharp` import are gone (no `word/media/`); the hero layout spans the slide when it has no image; the asset plan's `renderer-generated-visual` entry reads "configured image provider" and is `skipped` with reason "No provider image was supplied; the artifact ships without placeholder visuals." when unused; residual risks and the asset-specificity findings say the artifact ships without visuals (no "local renderer" claim); the tool hint says the same.
+
+Steps:
+1. Test first: `document-artifacts.hero.test.ts` (DOCX no media; PPTX no media file, built-in asset only, `visualCount` 0; report marks the generated asset skipped with that reason); pptx tests expect `source: "none"` and no `dataUri` without an asset; the tail coverage docx test expects no `word/media/`. Expected: fail. Implement; rerun those files plus `presentation-pdf.test.ts`, `artifact-design.test.ts`, `presentation-pptx-audit.test.ts`, and gateway `chat-turn-agent-runner.loop24.test.ts`; policy-engine typecheck. Expected: pass.
+2. Commit: `feat(artifacts): drop the hashed placeholder visuals`.
+
+### Task 36: After renders and lanes
+
+Steps:
+1. Render the sample deck/PDF/DOCX "after" set with the same script as the "before" set and export the PPTX slides to PNG through PowerPoint. Compare: if a layout reads worse without the placeholder art (an empty panel card, for instance), fix it under TDD and commit it as its own `feat(artifacts)` commit.
+2. `pnpm typecheck`, `pnpm verify:research-artifact:reliability`, `pnpm verify:research-artifact:powerpoint`, `pnpm verify:ux:budgets`, `pnpm verify:visual:regression` (report only; never rebaseline), `pnpm verify:design:quality`, `git diff --check`. Expected: pass; record any lane that is red for a pre-existing reason with the evidence.
+3. Tick the Phase 5 boxes. Commit: `docs(plan): mark impeccable Phase 5 done`.
+
+## Phase 6 Task Breakdown (execution order; TDD per task)
+
+Phase 6 lands in two pull requests: Tasks 37–41 (docs, design-quality checks, craft-floor cleanup, proof) in one, and Task 42 (delete `design-intelligence`) as the small follow-up the plan calls for, once the first has merged and nothing reads that directory any more.
+
+### Task 37: Design-quality checks follow impeccable
+
+Files: `packages/skills/src/design-quality.ts`, `design-quality.test.ts`.
+
+Produces: `readDesignQualityEvidence` reads `skills/bundled/impeccable`. `REQUIRED_SKILL_MODULES` = `SKILL.md`, `reference/craft-floor.md`, `reference/artifacts.md`, `reference/critique.md`, `reference/critique/01-reference-material.md`, `reference/audit.md`, `reference/polish.md` (the modules the routes in `skill-module-routes.ts` load). `REQUIRED_SKILL_PHRASES` = `Vendored from`, `PRODUCT.md`, `DESIGN.md`, `Core principles`, `Not available in this vendored build`. `REQUIRED_ROUTING_PHRASES` = `design quality`, `anti-slop`, `visual polish`, `design-system audit`, `document design`, `presentation design`, `pptx deck`, `html artifact`. Check ids: `impeccable.modules` (P0/blocking when a module is missing), `impeccable.lifecycle` (P1/advisory when a phrase is missing), `impeccable.placeholders` (P0/blocking on a broken local link or placeholder), new `impeccable.provenance` (P0/blocking unless `UPSTREAM.md`, `LICENSE`, and `NOTICE` exist and `UPSTREAM.md` names a 40-hex commit), new `impeccable.launcher-strings` (P0/blocking when any injectable file contains `{{`, `npx impeccable`, `impeccable detect|pin|hooks|context|doctor`, `~/.impeccable`, `.impeccable/`, `grok`, `xai`, or `x.ai`), new `impeccable.artifacts-budget` (P1/advisory when `reference/artifacts.md` exceeds 8 KiB). The routing check's next action names impeccable. Every other check is unchanged.
+
+Steps:
+1. Test first: the fixture builder writes an impeccable tree (SKILL.md with the phrases, the seven modules, `UPSTREAM.md` with `Commit: \`<40 hex>\``, `LICENSE`, `NOTICE`); the complete fixture passes with the three new ids present; a missing `reference/craft-floor.md` blocks `impeccable.modules`; a broken link blocks `impeccable.placeholders`; a missing `NOTICE` blocks `impeccable.provenance`; `npx impeccable` in a module blocks `impeccable.launcher-strings`; a 9 KiB `artifacts.md` makes `impeccable.artifacts-budget` advisory. Expected: fail. Implement; rerun the file; `pnpm verify:design:quality` on the real tree. Expected: pass with the raw-color budget unchanged.
+2. Commit: `feat(skills): point the design-quality checks at impeccable`.
+
+### Task 38: Contract and state model
+
+Files: `docs/1_0_CONTRACT.md`, `docs/CANONICAL_RUNTIME_STATE_MODEL.md`.
+
+Produces: one contract paragraph after the document-editing paragraph: impeccable prose vendored at a pinned commit with no launcher or binary; module receipts name the injected modules and workspace context documents; the runtime design detector is an advisory subset, never impeccable's engine; renders are evidence, not a quality claim; vision critique is capability-gated. Line 34 (`$` alias) is unchanged because `$` handling did not change. The state model's skill section gains one sentence: receipts carry `contextDocuments` (`docType`, `scope`, `sha256`, `bytes`, `truncated`) for the workspace `PRODUCT.md` / `DESIGN.md` a route injected.
+
+Steps:
+1. `pnpm docs:check` before and after. Expected: pass both times (no verbatim-README phrase is touched).
+2. Commit: `docs: describe the impeccable design layer in the contract and state model`.
+
+### Task 39: Cockpit craft-floor alignment (D6)
+
+Files: `packages/mission-control-shared/src/components/CommandPalette.tsx`, `GatewayAccessGate.tsx`, `PageErrorBoundary.tsx`, `chat/GeneratedArtifactViewer.tsx`, `apps/mission-control-next/src/cockpit/areas/chat/chat-build-editor.css`, `apps/mission-control-next/src/cockpit/styles/cockpit.css`, and the tests that assert the removed labels.
+
+Produces: the four kicker `<p>` elements (`Command Center`, the access-gate kicker, `Page unavailable`, `Generated artifact`) are gone where the heading already carries the meaning; the `.cockpit-build-editor .mc-next-panel-kicker`, `.cockpit-chat-documents .mc-next-panel-kicker`, and `.cockpit-chat-documents .generated-artifact-kicker` rules are gone. Classic also renders the four components, so its visual baselines shift in the same all-or-nothing rebaseline; no other Classic file changes.
+
+Steps:
+1. Test first: the component tests assert the kicker text is absent and the heading is present. Expected: fail. Implement; rerun the shared and cockpit test files; `pnpm verify:design:quality` (the kicker-eyebrow advisory count drops). Expected: pass.
+2. Commit: `refactor(ui): drop the kicker labels the headings already carry`.
+
+### Task 40: Ops Quality copy and README
+
+Produces: `QualityDesign.tsx` renders whatever checks the evidence returns, so the new ids appear without a copy change; the README verification table is unchanged because no lane name changed. Both are verified by reading, and recorded in the ledger as rulings if no edit is needed.
+
+### Task 41: Proof lanes and plan ticks
+
+Steps:
+1. `pnpm docs:check`, `pnpm verify:design:quality`, `pnpm verify:skills:catalog`, `pnpm verify:fast` (or its gateway/skills/ui shards when the full lane cannot run locally), `pnpm verify:visual:regression` (report; rebaseline only when every page passes), `git diff --check`. Expected: pass; record any lane that is red for a pre-existing reason with the evidence.
+2. Tick the Phase 6 boxes except the deletion. Commit: `docs(plan): mark impeccable Phase 6 docs and checks done`.
+
+### Task 42: Delete design-intelligence (follow-up PR)
+
+Files: `skills/bundled/design-intelligence/` (delete), `skills/catalog-coverage.json`, `packages/skills/src/bundled-skill-lock.generated.ts` (via `pnpm update:skills:lock`), `packages/skills/src/routing-hints.generated.ts` and `activation.test.ts`, `packages/mission-control-shared/src/components/chat/chat-tool-diagnostics.ts` and its test (copy says "design instructions"), plus a dual-lineage test that a stale `bundled:design-intelligence` lifecycle row is tolerated by `listSkills` and the Library skills view on an upgraded install.
+
+Steps:
+1. Test first: the stale-row test on both the fresh and the upgraded lineage. Expected: fail or not apply; implement; `pnpm verify:skills:catalog`, the skills and gateway skill suites, `pnpm verify:design:quality`. Expected: pass.
+2. Commit: `chore(skills): retire the design-intelligence skill`. Tick the last Phase 6 box.

@@ -28,7 +28,7 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 255,
+        version: 263,
         name: "approval_execution_linkage_index_sort_convergence",
       },
     );
@@ -985,6 +985,15 @@ describe("sqlite schema migrations", () => {
     before.close();
 
     const migrated = tempDbs.open({ dbPath });
+    assert.equal(
+      (migrated.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 258").get() as { count: number }).count,
+      1,
+    );
+    assert.equal(
+      (migrated.prepare("PRAGMA table_info(chat_heartbeat_occurrences)").all() as Array<{ name: string }>)
+        .some((column) => column.name === "feature_reference_sha256"),
+      true,
+    );
     assert.equal(
       (
         migrated
@@ -2033,4 +2042,6 @@ function rewindSessionLifecycleMigration(db: ReturnType<typeof createDatabase>):
   `);
   db.prepare("DELETE FROM schema_migrations WHERE version = 174").run();
   db.prepare("DELETE FROM schema_migrations WHERE version = 173").run();
+  // Recreating the v174 heartbeat owner also rewinds its later feature binding.
+  db.prepare("DELETE FROM schema_migrations WHERE version = 258").run();
 }

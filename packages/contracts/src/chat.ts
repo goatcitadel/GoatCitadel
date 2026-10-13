@@ -235,6 +235,8 @@ export interface ChatGeneratedArtifactRecord {
     redactedPaths: string[];
     canonicalContentHashRefersToStoredArtifact: true;
   };
+  /** Informational design advisories derived from the content on every read of an `html` artifact; never stored. */
+  designAdvisories?: import("./design-advisory.js").DesignAdvisory[];
   createdAt: string;
   updatedAt: string;
 }
@@ -619,8 +621,36 @@ export interface ChatAttachmentRecord {
   thumbnailRelPath?: string;
   ocrText?: string;
   transcriptText?: string;
-  analysisStatus?: "queued" | "running" | "pending" | "ready" | "failed" | "unsupported";
+  /** `skipped` marks evidence uploads (artifact renders) that deliberately bypass media analysis. */
+  analysisStatus?: "queued" | "running" | "pending" | "ready" | "failed" | "unsupported" | "skipped";
   createdAt: string;
+}
+
+/** One rendered viewport of an `html` generated artifact, stored as a chat attachment (PNG). */
+export interface ChatArtifactRenderRecord {
+  artifactId: string;
+  contentHash: string;
+  viewport: string;
+  attachmentId: string;
+  sha256: string;
+  width: number;
+  height: number;
+  createdAt: string;
+}
+
+export interface ChatArtifactRenderResponse {
+  artifactId: string;
+  contentHash: string;
+  renders: ChatArtifactRenderRecord[];
+}
+
+/** A critique turn dispatched into the artifact's session; the report arrives as that turn's reply. */
+export interface ChatArtifactCritiqueResponse {
+  sessionId: string;
+  turnId: string;
+  /** False when the effective provider cannot inspect images, so the critique ran text-only. */
+  visuallyInspected: boolean;
+  renders: ChatArtifactRenderRecord[];
 }
 
 /**
@@ -666,6 +696,13 @@ export interface ChatMessageRecord {
   parentDelegationStepId?: string;
 }
 
+/** One explicitly selected recovery target; absent means fallback is off. */
+export interface ChatProviderFallbackPreference {
+  providerId: string;
+  model: string;
+  allowLocalToCloud: boolean;
+}
+
 export interface ChatSessionPrefsRecord {
   sessionId: string;
   revision: number;
@@ -673,6 +710,7 @@ export interface ChatSessionPrefsRecord {
   planningMode: ChatPlanningMode;
   providerId?: string;
   model?: string;
+  providerFallback?: ChatProviderFallbackPreference;
   imageProviderId?: string;
   imageModel?: string;
   webMode: ChatWebMode;
@@ -709,6 +747,7 @@ export interface ChatSessionPrefsPatch {
   planningMode?: ChatPlanningMode;
   providerId?: string;
   model?: string;
+  providerFallback?: ChatProviderFallbackPreference | null;
   imageProviderId?: string;
   imageModel?: string;
   webMode?: ChatWebMode;
@@ -962,6 +1001,7 @@ export type ChatTurnFailureClass =
   | "approval_required"
   | "interrupted_by_restart"
   | "skill_security_blocked"
+  | "guidance_security_blocked"
   | "unknown";
 
 export type ChatTurnCompletionStatus = "complete" | "truncated" | "interrupted" | "backgrounded";
@@ -984,6 +1024,7 @@ export type ChatTurnRecoveryAction =
   | "approve_pending_step"
   | "switch_to_deep_mode"
   | "review_skill_security"
+  | "review_workspace_guidance"
   | "check_gateway_connection";
 
 export interface ChatTurnFailureRecord {
@@ -999,6 +1040,8 @@ export interface ChatTurnFailureRecord {
 export interface ChatSkillSecurityFailureRecord {
   scannerVersion: string;
   skillIds: string[];
+  /** Workspace guidance files (PRODUCT.md / DESIGN.md) that failed the scan; present for guidance_security_blocked. */
+  guidanceFiles?: string[];
   ruleIds: string[];
   evidenceHashes: string[];
 }
@@ -1129,6 +1172,8 @@ export function getChatTurnRecoveryAction(failureClass: ChatTurnFailureClass): C
       return "retry";
     case "skill_security_blocked":
       return "review_skill_security";
+    case "guidance_security_blocked":
+      return "review_workspace_guidance";
     default:
       return "retry";
   }
@@ -1152,6 +1197,8 @@ export function getChatTurnRecoveryActionLabel(action: ChatTurnRecoveryAction): 
       return "Check the gateway connection";
     case "review_skill_security":
       return "Review skill security";
+    case "review_workspace_guidance":
+      return "Review workspace guidance";
   }
 }
 
@@ -1173,6 +1220,8 @@ export function getChatTurnRecoveryActionSummary(action: ChatTurnRecoveryAction)
       return "Check the gateway or network connection, then retry the turn.";
     case "review_skill_security":
       return "Disable or re-review the named skill, then retry the turn after it passes the current security scan.";
+    case "review_workspace_guidance":
+      return "Edit the workspace PRODUCT.md or DESIGN.md named in the error under Settings › Workspaces › Design context, then send the message again.";
   }
 }
 
@@ -1703,7 +1752,12 @@ export interface ChatDelegationStepRecord {
   runId: string;
   role: string;
   /** Frozen step instructions used to reject replay drift and restore pending work. */
-  instructionSnapshot?: { objective?: string; label?: string; expectedOutput?: string };
+  instructionSnapshot?: {
+    objective?: string;
+    label?: string;
+    expectedOutput?: string;
+    resultSchema?: import("./chat-delegation-result.js").ChatDelegationResultSchema;
+  };
   label?: string;
   status: ChatDelegationStepStatus;
   index: number;
@@ -1761,6 +1815,7 @@ export interface ChatDelegateStepRequest {
   /** Compact operator-facing label retained on the canonical delegation step. */
   label?: string;
   expectedOutput?: string;
+  resultSchema?: import("./chat-delegation-result.js").ChatDelegationResultSchema;
   parallelizable?: boolean;
   dependsOnStepIds?: string[];
 }
@@ -2046,6 +2101,7 @@ export interface RoutingPreflightRequest {
   workspaceSnapshot?: import("./chat-workspace-snapshot.js").ChatWorkspaceSnapshotRequest;
   providerId?: string;
   model?: string;
+  providerFallback?: ChatProviderFallbackPreference | null;
   mode?: ChatMode;
   webMode?: ChatWebMode;
   memoryMode?: ChatMemoryMode;
@@ -2075,6 +2131,7 @@ export interface RoutingDecisionSnapshot {
   effectiveModel?: string;
   selectionSource: RoutingPreflightSelectionSource;
   normalizationReason?: string;
+  providerFallback?: ChatProviderFallbackPreference;
   fallbackPolicy: RoutingPreflightFallbackPolicy;
   fallbackResult: RoutingPreflightFallbackResult;
   runtimeReachability: RoutingPreflightRuntimeReachability;
@@ -2095,6 +2152,7 @@ export interface RoutingPreflightResult {
   effectiveModel?: string;
   selectionSource: RoutingPreflightSelectionSource;
   normalizationReason?: string;
+  providerFallback?: ChatProviderFallbackPreference;
   fallbackPolicy: RoutingPreflightFallbackPolicy;
   fallbackResult: RoutingPreflightFallbackResult;
   runtimeReachability: RoutingPreflightRuntimeReachability;

@@ -299,7 +299,11 @@ jobs:
         if: always()
         run: |
           pnpm verify:artifacts:redaction
-          node scripts/verify-artifact-redaction.mjs artifacts/coverage
+          # A failed merged run prevents coverage collection. Scan the complete
+          # publication root so its failure evidence can still be retained, and
+          # any coverage that was produced is inspected by the same exact gate.
+          # Manifest, coverage and upstream failures remain failing checks.
+          node scripts/verify-artifact-redaction.mjs artifacts
 
       - name: Upload verification artifacts
         if: always() && steps.artifact-redaction.outcome == 'success'

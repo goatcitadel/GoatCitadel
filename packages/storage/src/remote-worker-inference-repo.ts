@@ -4,6 +4,9 @@ import {
   REMOTE_WORKER_INFERENCE_FRAME_SCHEMA_VERSION,
   REMOTE_WORKER_INFERENCE_MAX_OUTPUT_CHARS,
   canonicalJsonString,
+  normalizeRemoteWorkerCapabilityBinding,
+  sameRemoteWorkerCapabilityBinding,
+  type RemoteWorkerCapabilityBinding,
   normalizeRemoteWorkerInferenceApprovalResolutionReceipt,
   normalizeRemoteWorkerInferenceAuthorizedSubmission,
   normalizeRemoteWorkerInferenceBudgetReservation,
@@ -61,7 +64,7 @@ import type { DatabaseClient } from "./db.js";
  * the one-winner dispatch claim.
  */
 
-export interface RemoteWorkerInferenceAdmissionInput {
+export interface RemoteWorkerInferenceAdmissionInput extends RemoteWorkerCapabilityBinding {
   readonly submission: RemoteWorkerInferenceAuthorizedSubmission;
   readonly workerId: string;
   readonly workerGeneration: number;
@@ -71,7 +74,6 @@ export interface RemoteWorkerInferenceAdmissionInput {
   readonly durableRunId: string;
   readonly taskId: string;
   readonly admittedLeaseRevision: number;
-  readonly capabilityProfileSha256: string;
   readonly routedContextSha256: string;
   readonly operationId: string;
   readonly dispatchGeneration: string;
@@ -142,7 +144,7 @@ export interface RemoteWorkerInferenceRequestKey {
   readonly attempt: number;
 }
 
-export interface RemoteWorkerInferenceRequestRecord {
+export interface RemoteWorkerInferenceRequestRecord extends RemoteWorkerCapabilityBinding {
   readonly registryWorkspaceId: string;
   readonly assignmentId: string;
   readonly assignmentGeneration: number;
@@ -162,7 +164,6 @@ export interface RemoteWorkerInferenceRequestRecord {
   readonly inputSha256: string;
   readonly contextSha256: string;
   readonly modelIntentSha256: string;
-  readonly capabilityProfileSha256: string;
   readonly routedContextSha256: string;
   readonly outputTokenCeiling: number;
   readonly reasoningTokenCeiling: number;
@@ -271,6 +272,7 @@ export class RemoteWorkerInferenceRepository {
    * conflict.
    */
   public admitOrReplay(input: RemoteWorkerInferenceAdmissionInput): RemoteWorkerInferenceAdmissionOutcome {
+    const capabilityBinding = normalizeRemoteWorkerCapabilityBinding(input);
     const submission = normalizeRemoteWorkerInferenceAuthorizedSubmission(input.submission);
     const governance = normalizeRemoteWorkerInferenceGovernanceReceipt(input.governance);
     const requestSha256 = remoteWorkerInferenceRequestSha256(input.submission);
@@ -317,7 +319,7 @@ export class RemoteWorkerInferenceRepository {
         input.budgetOperation.turnId !== input.turnId ||
         input.budgetOperation.durableRunId !== input.durableRunId ||
         input.budgetOperation.taskId !== input.taskId ||
-        input.budgetOperation.capabilityProfileSha256 !== input.capabilityProfileSha256 ||
+        !sameRemoteWorkerCapabilityBinding(input.budgetOperation, input) ||
         input.budgetOperation.routedContextSha256 !== input.routedContextSha256 ||
         input.budgetOperation.outputTokenCeiling !==
           Math.min(submission.outputTokenCeiling, governance.outputTokenCeiling) ||
@@ -334,7 +336,8 @@ export class RemoteWorkerInferenceRepository {
     return this.db.transaction("immediate", () => {
       const replay = this.findByIdempotency(submission.registryWorkspaceId, submission.idempotencyKey);
       if (replay) {
-        if (replay.request_sha256 !== requestSha256) {
+        if (replay.request_sha256 !== requestSha256 ||
+          !sameRemoteWorkerCapabilityBinding(mapRequest(replay), capabilityBinding)) {
           throw new RemoteWorkerInferenceConflictError(
             "Remote worker inference request replay does not match the stored canonical bytes.",
           );
@@ -361,7 +364,8 @@ export class RemoteWorkerInferenceRepository {
         inputSha256: submission.inputSha256,
         contextSha256: submission.contextSha256,
         modelIntentSha256: submission.modelIntentSha256,
-        capabilityProfileSha256: assertDigest(input.capabilityProfileSha256, "capabilityProfileSha256"),
+        capabilityProfileSha256: capabilityBinding.capabilityProfileSha256 ?? null,
+        admissionReferenceJson: capabilityBinding.admissionReference ? canonicalJsonString(capabilityBinding.admissionReference) : null,
         routedContextSha256: assertDigest(input.routedContextSha256, "routedContextSha256"),
         outputTokenCeiling: submission.outputTokenCeiling,
         reasoningTokenCeiling: submission.reasoningTokenCeiling,
@@ -575,7 +579,7 @@ export class RemoteWorkerInferenceRepository {
         current.turnId !== input.budgetOperation.turnId ||
         current.durableRunId !== input.budgetOperation.durableRunId ||
         current.taskId !== input.budgetOperation.taskId ||
-        current.capabilityProfileSha256 !== input.budgetOperation.capabilityProfileSha256 ||
+        !sameRemoteWorkerCapabilityBinding(current, input.budgetOperation) ||
         current.routedContextSha256 !== input.budgetOperation.routedContextSha256 ||
         input.budgetOperation.outputTokenCeiling !==
           Math.min(current.outputTokenCeiling, governance.outputTokenCeiling) ||
@@ -1215,7 +1219,7 @@ export class RemoteWorkerInferenceRepository {
          worker_id, worker_generation, execution_workspace_id, session_id, turn_id, durable_run_id, task_id,
          admitted_lease_revision, idempotency_key,
          request_body_json, request_sha256, input_sha256, context_sha256, model_intent_sha256,
-         capability_profile_sha256, routed_context_sha256, output_token_ceiling, reasoning_token_ceiling,
+         capability_profile_sha256, admission_reference_json, routed_context_sha256, output_token_ceiling, reasoning_token_ceiling,
          temperature_milli, operation_id, dispatch_generation, state, governance_decision,
          effective_route_sha256, policy_revision, policy_sha256, approval_receipt_sha256,
          governance_output_token_ceiling, governance_reasoning_token_ceiling, governance_expires_at,
@@ -1226,7 +1230,7 @@ export class RemoteWorkerInferenceRepository {
          @workerId, @workerGeneration, @executionWorkspaceId, @sessionId, @turnId, @durableRunId, @taskId,
          @admittedLeaseRevision, @idempotencyKey,
          @requestBodyJson, @requestSha256, @inputSha256, @contextSha256, @modelIntentSha256,
-         @capabilityProfileSha256, @routedContextSha256, @outputTokenCeiling, @reasoningTokenCeiling,
+         @capabilityProfileSha256, @admissionReferenceJson, @routedContextSha256, @outputTokenCeiling, @reasoningTokenCeiling,
          @temperatureMilli, @operationId, @dispatchGeneration, @state, @governanceDecision,
          @effectiveRouteSha256, @policyRevision, @policySha256, @approvalReceiptSha256,
          @governanceOutputTokenCeiling, @governanceReasoningTokenCeiling, @governanceExpiresAt,
@@ -1257,7 +1261,8 @@ interface RequestRow {
   input_sha256: string;
   context_sha256: string;
   model_intent_sha256: string;
-  capability_profile_sha256: string;
+  capability_profile_sha256: string | null;
+  admission_reference_json: string | null;
   routed_context_sha256: string;
   output_token_ceiling: number | bigint | string;
   reasoning_token_ceiling: number | bigint | string;
@@ -1352,7 +1357,8 @@ function mapRequest(row: RequestRow): RemoteWorkerInferenceRequestRecord {
     inputSha256: row.input_sha256,
     contextSha256: row.context_sha256,
     modelIntentSha256: row.model_intent_sha256,
-    capabilityProfileSha256: row.capability_profile_sha256,
+    ...normalizeRemoteWorkerCapabilityBinding({ capabilityProfileSha256: row.capability_profile_sha256 ?? undefined,
+      admissionReference: row.admission_reference_json ? JSON.parse(row.admission_reference_json) : undefined }),
     routedContextSha256: row.routed_context_sha256,
     outputTokenCeiling: asInt(row.output_token_ceiling),
     reasoningTokenCeiling: asInt(row.reasoning_token_ceiling),

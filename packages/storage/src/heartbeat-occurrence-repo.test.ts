@@ -12,18 +12,56 @@ import {
   HeartbeatOccurrenceRepository,
   type ClaimHeartbeatOccurrenceInput,
   type HeartbeatOccurrenceRecord,
+  type HeartbeatOccurrenceBoundIdentity,
 } from "./heartbeat-occurrence-repo.js";
 import { ChatSessionLifecycleRepository } from "./chat-session-lifecycle-repo.js";
 import { SessionAutonomyPrefsRepository } from "./session-autonomy-prefs-repo.js";
 import { SessionMutationAdmissionRepository } from "./session-mutation-admission-repo.js";
 import { SessionRepository } from "./session-repo.js";
 import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
+import { HEARTBEAT_FEATURE_BINDING_POSTGRES_SQL, upgradeHeartbeatFeatureBindingSchema } from "./heartbeat-feature-binding-schema.js";
 
 const tempDbs = new TempSqliteFiles();
 
 afterEach(() => tempDbs.cleanup());
 
 describe("HeartbeatOccurrenceRepository SQLite", () => {
+  for (const notify of [false, true]) it(`binds feature-owned heartbeats without a retired profile and retains exact terminal evidence (notify ${notify})`, () => {
+    const db = tempDbs.open({ dbPath: ":memory:" });
+    const fixture = createBoundHeartbeatFixture(db, "feature-binding", true);
+    assert.equal(readCount(db, "chat_turn_capability_profiles"), 0);
+    assert.throws(() => fixture.occurrences.markDurableBound({ ...fixture.boundIdentity, capabilityProfileId: "mixed", capabilityProfileHash: sha256("mixed") }));
+    assert.throws(() => fixture.occurrences.markDurableBound({ ...fixture.boundIdentity, featureReferenceSha256: sha256("stale") }));
+    const bound = fixture.markBound();
+    assert.equal(bound.occurrence.featureReferenceSha256, fixture.boundIdentity.featureReferenceSha256);
+    assert.equal(bound.occurrence.capabilityProfileId, undefined);
+    assert.equal(fixture.markBound().disposition, "replayed");
+    assert.throws(() => db.prepare("UPDATE chat_heartbeat_occurrences SET feature_reference_sha256 = ? WHERE occurrence_id = ?")
+      .run(sha256("changed"), fixture.occurrence.occurrenceId), /immutable|transition/iu);
+    settleDurableHeartbeat(fixture, "completed", { notify });
+    assert.equal(fixture.occurrences.markTerminal(fixture.boundIdentity).disposition, "terminal");
+    assert.equal(fixture.occurrences.markTerminal(fixture.boundIdentity).disposition, "replayed");
+    assert.throws(() => db.prepare("DELETE FROM chat_heartbeat_occurrences").run(), /delete|append|immutable/iu);
+    db.close();
+  });
+
+  it("preserves historical heartbeat bytes and terminal/preemption guards during the binding migration", () => {
+    const db = tempDbs.open({ dbPath: ":memory:" });
+    const fixture = createBoundHeartbeatFixture(db, "legacy-migration");
+    fixture.markBound();
+    const before = db.prepare("SELECT * FROM chat_heartbeat_occurrences").all();
+    const guardBefore = db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'chat_heartbeat_occurrences' ORDER BY name").all();
+    // The schema helper only uses the shared synchronous SQLite API.
+    upgradeHeartbeatFeatureBindingSchema(db as unknown as Parameters<typeof upgradeHeartbeatFeatureBindingSchema>[0]);
+    assert.deepEqual(db.prepare("SELECT * FROM chat_heartbeat_occurrences").all(), before);
+    assert.deepEqual(db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'chat_heartbeat_occurrences' ORDER BY name").all(), guardBefore);
+    settleDurableHeartbeat(fixture, "completed");
+    assert.equal(fixture.occurrences.markTerminal(fixture.boundIdentity).disposition, "terminal");
+    assert.match(HEARTBEAT_FEATURE_BINDING_POSTGRES_SQL, /DROP CONSTRAINT gc_hbo_state_shape/u);
+    assert.match(HEARTBEAT_FEATURE_BINDING_POSTGRES_SQL, /heartbeatOccurrence,ownerId/u);
+    assert.doesNotMatch(HEARTBEAT_FEATURE_BINDING_POSTGRES_SQL, /DROP TABLE|UPDATE chat_heartbeat_occurrences/u);
+    db.close();
+  });
   it("claims, consumes cadence, replays exactly, and rolls the callback back atomically", () => {
     const db = tempDbs.open({ dbPath: ":memory:" });
     const fixture = seedHeartbeatSession(db, "atomic");
@@ -660,9 +698,9 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
     db.close();
   });
 
-  it("preempts a durable-bound heartbeat with retained provenance and one atomic clock", () => {
+  for (const featureBinding of [false, true]) it(`preempts a durable-bound heartbeat with retained provenance and one atomic clock (feature binding ${featureBinding})`, () => {
     const db = tempDbs.open({ dbPath: ":memory:" });
-    const fixture = createBoundHeartbeatFixture(db, "operator-bound-preempt");
+    const fixture = createBoundHeartbeatFixture(db, "operator-bound-preempt", featureBinding);
     const bound = fixture.markBound();
     assert.equal(bound.disposition, "created");
     const cadenceBefore = new SessionAutonomyPrefsRepository(db).get(fixture.sessionId);
@@ -679,8 +717,9 @@ describe("HeartbeatOccurrenceRepository SQLite", () => {
     assert.equal(occurrence?.state, "abandoned");
     assert.equal(occurrence?.abandonmentReason, "authority_drift");
     assert.equal(occurrence?.boundDurableRunId, fixture.occurrence.durableRunId);
-    assert.equal(occurrence?.capabilityProfileId, fixture.profileId);
-    assert.equal(occurrence?.capabilityProfileHash, fixture.profileHash);
+    assert.equal(occurrence?.capabilityProfileId, featureBinding ? undefined : fixture.profileId);
+    assert.equal(occurrence?.capabilityProfileHash, featureBinding ? undefined : fixture.profileHash);
+    assert.equal(occurrence?.featureReferenceSha256, fixture.boundIdentity.featureReferenceSha256);
     const heartbeatAdmission = fixture.admissions.require(fixture.occurrence.admissionId);
     assert.equal(heartbeatAdmission.status, "cancelled");
     assert.equal(heartbeatAdmission.terminalAuthorityKind, "authority_superseded");
@@ -1456,12 +1495,22 @@ function createClaimedHeartbeatFixture(db: DatabaseClient, seed: string) {
   return { ...seeded, admissions, occurrences, occurrence: claimed.occurrence };
 }
 
-function createBoundHeartbeatFixture(db: DatabaseClient, seed: string) {
+function createBoundHeartbeatFixture(db: DatabaseClient, seed: string, featureBinding = false) {
   const claimed = createClaimedHeartbeatFixture(db, seed);
   const profileId = `profile-hb-${seed}`;
   const profileHash = sha256(`profile:${seed}`);
   const profileCreatedAt = new Date().toISOString();
-  db.transaction("immediate", () => {
+  let featureReferenceSha256: string | undefined;
+  if (featureBinding) {
+    featureReferenceSha256 = claimed.admissions.bindFeatureReferences({
+      admissionId: claimed.occurrence.admissionId, workspaceId: claimed.workspaceId, sessionId: claimed.sessionId,
+      sessionIncarnationId: claimed.sessionIncarnationId, turnId: claimed.occurrence.turnId,
+      requestRuntimeClaim: { runtimeOwnerId: claimed.occurrence.runtimeOwnerId, leaseRevision: 1 },
+      references: { version: "chat.turn.feature-references.v1", heartbeatOccurrence: {
+        ownerId: claimed.occurrence.occurrenceId, revision: String(claimed.occurrence.aggregateRevision), sha256: claimed.occurrence.claimSha256,
+      } },
+    }).referenceSha256;
+  } else db.transaction("immediate", () => {
     claimed.admissions.bindCapabilityProfile({
       admissionId: claimed.occurrence.admissionId,
       workspaceId: claimed.workspaceId,
@@ -1522,8 +1571,7 @@ function createBoundHeartbeatFixture(db: DatabaseClient, seed: string) {
     turnId: claimed.occurrence.turnId,
     userMessageId: claimed.occurrence.userMessageId,
     assistantMessageId: claimed.occurrence.assistantMessageId,
-    capabilityProfileId: profileId,
-    capabilityProfileHash: profileHash,
+    ...(featureReferenceSha256 ? { featureReferenceSha256 } : { capabilityProfileId: profileId, capabilityProfileHash: profileHash }),
     branchKind: "append",
     threadEventType: "chat_thread_turn_appended",
     request: claimed.request,
@@ -1570,7 +1618,7 @@ function createBoundHeartbeatFixture(db: DatabaseClient, seed: string) {
     turnId: claimed.occurrence.turnId,
     durableRunId: claimed.occurrence.durableRunId,
   };
-  const boundIdentity = { ...exactIdentity, capabilityProfileId: profileId, capabilityProfileHash: profileHash };
+  const boundIdentity: HeartbeatOccurrenceBoundIdentity = { ...exactIdentity, ...(featureReferenceSha256 ? { featureReferenceSha256 } : { capabilityProfileId: profileId, capabilityProfileHash: profileHash }) };
   return {
     ...claimed,
     db,
@@ -1690,7 +1738,7 @@ function writeTerminalRunAndTrace(
       admissionMaterialSha256: fixture.payload.admissionMaterialSha256,
       effectiveRequestMaterialSha256: fixture.payload.effectiveRequestMaterialSha256,
     },
-    capability: {
+    capability: fixture.boundIdentity.featureReferenceSha256 ? null : {
       profileId: fixture.profileId,
       profileHash: fixture.profileHash,
       snapshotId: `snapshot-${fixture.occurrence.occurrenceId}`,
@@ -1704,8 +1752,7 @@ function writeTerminalRunAndTrace(
   const metadata = {
     objective: (fixture.payload.request as { content: string }).content,
     autonomous,
-    capabilityProfileId: fixture.profileId,
-    capabilityProfileHash: fixture.profileHash,
+    ...(fixture.boundIdentity.featureReferenceSha256 ? {} : { capabilityProfileId: fixture.profileId, capabilityProfileHash: fixture.profileHash }),
     autonomousAdmission,
     generalChatPostCommit,
     chatTurnAdmissionHandoff: marker,

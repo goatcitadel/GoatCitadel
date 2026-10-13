@@ -249,7 +249,6 @@ export function CommandPalette({ open, onClose, items }: CommandPaletteProps) {
       >
         <header className="command-palette-head">
           <div>
-            <p className="command-palette-kicker">Command Center</p>
             <h3 id={headingId}>{appCopy.quickActionsButton.replace(" (Ctrl/Cmd+K)", "")}</h3>
           </div>
           <p className="command-palette-hint">Esc to close</p>

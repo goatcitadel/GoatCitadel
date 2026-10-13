@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { isGoatError, type ChatDelegateRequest } from "@goatcitadel/contracts";
+import { isGoatError, readChatDelegationResultSchema, type ChatDelegateRequest } from "@goatcitadel/contracts";
 import { z } from "zod";
 import {
   projectChatDelegateResponseForPublic,
@@ -17,6 +17,10 @@ const delegateStepSchema = z.object({
   stepId: z.string().min(1).optional(),
   index: z.number().int().nonnegative().optional(),
   role: z.string().min(1),
+  resultSchema: z.record(z.string(), z.unknown()).transform((value, ctx) => {
+    try { return readChatDelegationResultSchema(value); }
+    catch { ctx.addIssue({ code: "custom", message: "Unsupported or unbounded delegated result schema." }); return z.NEVER; }
+  }).optional(),
   parallelizable: z.boolean().optional(),
   dependsOnStepIds: z.array(z.string().min(1)).optional(),
 });

@@ -81,6 +81,14 @@ export function normalizeAgentTurnCronActionConfig(rawValue: Record<string, unkn
   const deliverMode = rawAgentTurn.deliverMode === "on_notify" ? "on_notify" : "always";
   const inertInboxFallback = rawAgentTurn.inertInboxFallback === true;
   const createdBy = normalizeAgentTurnCreatedBy(rawAgentTurn.createdBy);
+  const commitment = rawAgentTurn.commitment as CronAgentTurnConfig["commitment"];
+  if (commitment !== undefined && (!commitment || typeof commitment.commitmentId !== "string" ||
+    !commitment.commitmentId.trim() || commitment.commitmentId.length > 256 ||
+    !Number.isSafeInteger(commitment.revision) || commitment.revision < 1 ||
+    !/^[0-9a-f]{64}$/u.test(commitment.materialSha256) ||
+    Object.keys(commitment).some(key => !["commitmentId", "revision", "materialSha256"].includes(key)))) {
+    throw new Error("Invalid canonical commitment occurrence reference.");
+  }
   return {
     agentTurn: {
       prompt: rawAgentTurn.prompt.trim(),
@@ -89,6 +97,7 @@ export function normalizeAgentTurnCronActionConfig(rawValue: Record<string, unkn
       deliverMode,
       ...(inertInboxFallback ? { inertInboxFallback: true } : {}),
       ...(createdBy ? { createdBy } : {}),
+      ...(commitment ? { commitment: { ...commitment } } : {}),
     },
   };
 }

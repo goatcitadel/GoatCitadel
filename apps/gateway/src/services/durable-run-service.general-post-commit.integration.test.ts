@@ -316,7 +316,10 @@ describe("DurableRunService general Chat post-commit integration", () => {
     expect(admission.status).toBe("active");
   });
 
-  it("preserves a dead local worker prefix and releases the exact durable admission before its lease TTL", async () => {
+  it.each(["retained_output", "unrelated_authority_failure"] as const)(
+    "preserves a dead local worker prefix and releases the exact durable admission before its lease TTL (%s)", async (failureKind) => {
+    const interrupted = failureKind === "retained_output";
+    const unrelatedFailure = "Admitted context requires manual authority reconciliation.";
     const harness = createStorageHarness();
     const seeded = seedRunningRetainedPrefix(harness.storage);
     const backgroundTasks = new Set<Promise<void>>();
@@ -345,7 +348,9 @@ describe("DurableRunService general Chat post-commit integration", () => {
         isLocalProcessAlive: vi.fn(() => false),
         workflowRegistry: {
           executeWorkflow,
-          isWorkflowRecoverable: (run) => isDurableWorkflowRecoverable(workflowHost as never, run),
+          isWorkflowRecoverable: (run) => interrupted
+            ? isDurableWorkflowRecoverable(workflowHost as never, run)
+            : Promise.resolve({ recoverable: false, reason: unrelatedFailure }),
           markWorkflowUnrecoverable: (run, reason, context) =>
             markDurableWorkflowUnrecoverable(workflowHost as never, run, reason, context),
         },
@@ -375,7 +380,7 @@ describe("DurableRunService general Chat post-commit integration", () => {
     expect(failedRun).toMatchObject({
       status: "failed",
       leaseOwnerId: undefined,
-      lastError: "Durable Chat output was emitted before interruption and cannot be safely replayed.",
+      lastError: interrupted ? "Durable Chat output was emitted before interruption and cannot be safely replayed." : unrelatedFailure,
       metadata: {
         linkedFinalization: expect.any(Object),
         generalChatPostCommit: expect.objectContaining({ settlementStatus: "completed" }),
@@ -383,17 +388,19 @@ describe("DurableRunService general Chat post-commit integration", () => {
       },
     });
     expect(failedRun.metadata).not.toHaveProperty("waitForEvent");
+    expect(harness.storage.durableRuns.getLatestCheckpointByKind(seeded.runId, "run_failed")?.state.recovery)
+      .toBe(interrupted ? "exited_local_process" : undefined);
     expect(failedRun.metadata).toMatchObject({ operatorNote: "preserve-during-restart-finalization" });
     expect(harness.storage.chatMessages.get(seeded.assistantMessageId)?.content).toBe(seeded.visiblePrefix);
     expect(harness.storage.chatTurnTraces.get(seeded.turnId)).toMatchObject({
       status: "failed",
-      failure: {
-        failureClass: "interrupted_by_restart",
-        recommendedAction: "continue_from_partial",
-      },
+      failure: interrupted ? {
+        failureClass: "interrupted_by_restart", recommendedAction: "continue_from_partial", retryable: true,
+      } : { failureClass: "unknown", message: unrelatedFailure, retryable: false },
       completion: { status: "interrupted" },
       durable: { runId: seeded.runId, status: "failed", checkpointKind: "run_failed" },
     });
+    if (!interrupted) expect(harness.storage.chatTurnTraces.get(seeded.turnId).failure?.recommendedAction).toBeUndefined();
     expect(harness.storage.sessionMutationAdmissions.require(seeded.admissionId)).toMatchObject({
       status: "cancelled",
       terminalAuthorityKind: "durable_terminal",

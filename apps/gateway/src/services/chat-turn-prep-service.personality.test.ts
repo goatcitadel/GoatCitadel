@@ -302,8 +302,11 @@ describe("prepareAgentChatTurn route admission", () => {
       subagentPolicy: "auto_when_useful",
     });
     expect(prepared.capabilityProfile).toBeUndefined();
-    expect(prepared.normalized.subagentPolicy).toBe("off");
-    expect(prepared.prefs.subagentPolicy).toBe("off");
+    // The saved supervised posture remains usable, but an unadmitted automatic
+    // request cannot mint the feature reference required for automatic fanout.
+    expect(prepared.normalized.subagentPolicy).toBe("ask_when_useful");
+    expect(prepared.prefs.subagentPolicy).toBe("ask_when_useful");
+    expect(prepared.featureAdmission?.references.childWork).toBeUndefined();
     expect(harness.host.resolveChatTurnCapabilityProfile).not.toHaveBeenCalled();
     expect(harness.host.createChatCompletion).not.toHaveBeenCalled();
   });
@@ -838,7 +841,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
       memoryMode: "off",
       thinkingLevel: "minimal",
       speedMode: "fast",
-      subagentPolicy: "off",
+      subagentPolicy: "ask_when_useful",
       normalizationProfile: "quick_web",
     });
     expect(prepared.effectiveToolAutonomy).toBe("manual");

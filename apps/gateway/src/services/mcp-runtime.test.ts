@@ -2,7 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import type { McpServerRecord } from "@goatcitadel/contracts";
 import { __internal, collectMcpBrowserFallbackTargets, discoverMcpTools, invokeMcpRuntimeTool } from "./mcp-runtime.js";
 
@@ -479,6 +479,7 @@ rl.on("line", (line) => {
 // responding to the pending tools/call, so the bounded stderr buffer is echoed into
 // the "exited before responding" failure message.
 const MCP_STDERR_OVERFLOW_SCRIPT = String.raw`
+const { writeSync } = require("node:fs");
 const readline = require("node:readline");
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 function reply(id, result) {
@@ -498,9 +499,15 @@ rl.on("line", (line) => {
     const startMarker = "STDERR-BOUND-START-MARKER";
     const padding = "x".repeat(4096);
     const endMarker = "STDERR-BOUND-END-MARKER-SHOULD-BE-TRUNCATED";
-    process.stderr.write(startMarker + padding + endMarker, () => {
-      process.exit(1);
-    });
+    // Write every fixed diagnostic byte before exiting, without depending on
+    // an asynchronous pipe callback being scheduled under runner load.
+    const diagnostics = Buffer.from(startMarker + padding + endMarker);
+    for (let offset = 0; offset < diagnostics.length;) {
+      const written = writeSync(2, diagnostics, offset, diagnostics.length - offset);
+      if (written <= 0) throw new Error("stderr fixture made no write progress");
+      offset += written;
+    }
+    process.exit(1);
   }
 });
 `;
@@ -1610,8 +1617,11 @@ describe("mcp runtime", () => {
 
   it("bounds stderr diagnostics echoed into the exit failure message to MCP_STDERR_MAX_BYTES", async () => {
     const server = createTestServer(MCP_STDERR_OVERFLOW_SCRIPT);
+    const abort = new AbortController();
+    onTestFinished(() => abort.abort());
 
     const result = await invokeMcpRuntimeTool(server, {
+      signal: abort.signal,
       toolName: "browser.navigate",
       arguments: {
         url: "https://example.com/releases",
@@ -1620,6 +1630,7 @@ describe("mcp runtime", () => {
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("exited before responding");
+    expect(result.error).toContain("code=1");
     // Marker written within the first 4 KiB survives the bounded stderr buffer.
     expect(result.error).toContain("STDERR-BOUND-START-MARKER");
     // Marker written past the 4 KiB cap must never appear in the echoed diagnostics.

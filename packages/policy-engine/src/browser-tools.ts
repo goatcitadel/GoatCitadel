@@ -13,6 +13,12 @@ import { createUntrustedContentEnvelope } from "./browser-content-guard.js";
 import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
 import { assertHostAllowed, assertNotPrivateOrReservedHost, fetchAllowlisted } from "./sandbox/network-guard.js";
 import { assertWritePathInJail } from "./sandbox/path-jail.js";
+import {
+  BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE,
+  BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_MESSAGE,
+  launchPlaywrightChromium,
+  loadPlaywright,
+} from "./playwright-runtime.js";
 import { normalizeFirecrawlApiKeyEnvName } from "./safe-env-name.js";
 import {
   executeOfficialResearchSearch,
@@ -138,18 +144,10 @@ type BrowserSessionState = {
 
 type BrowserPageStateMode = "stateless" | "session";
 
-export const BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE = "browser_chromium_manual_install_required" as const;
-export const BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_MESSAGE =
-  'Playwright Chromium is unavailable. Automatic installation is disabled; an operator must install workspace dependencies, run "pnpm --filter @goatcitadel/policy-engine exec playwright install chromium", and retry.' as const;
+export { BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE, BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_MESSAGE };
 
 const browserSessionStates = new Map<string, { state: BrowserSessionState; lastAccess: number }>();
 const MAX_BROWSER_SESSION_STATES = 128;
-const BROWSER_CHROMIUM_SECURITY_ARGS = [
-  // Browser-context proxies do not cover WebRTC's direct UDP candidates.
-  // Refuse non-proxied UDP so hostile pages cannot use STUN/ICE to reach
-  // loopback, LAN, or metadata endpoints outside the guarded SOCKS proxy.
-  "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
-];
 
 export function describeBrowserSessionState(sessionId: string): BrowserSessionStateSummary {
   const entry = browserSessionStates.get(sessionId);
@@ -174,6 +172,12 @@ export function describeBrowserSessionState(sessionId: string): BrowserSessionSt
       httpCredentialsConfigured: Boolean(state.httpCredentials),
     },
   };
+}
+
+/** Browser handles close per operation; this drops only the named session's volatile state. */
+export function forgetBrowserSessionState(sessionId: string): boolean {
+  if (!sessionId.trim()) throw new Error("Browser state cleanup requires an exact session owner.");
+  return browserSessionStates.delete(sessionId);
 }
 
 export function isBrowserToolName(name: string): name is BrowserToolName {
@@ -1690,7 +1694,7 @@ async function withBrowserPage(
   assertAllowedHttpUrl(url);
   assertHostAllowedForConfig(url, config, executionContext);
 
-  const playwright = await loadPlaywright();
+  const playwright = await loadPlaywright<PlaywrightModule>();
   const headless = asBoolean(args.headless, true);
   const timeout = clampInt(args.timeoutMs, 20000, 2000, 120000);
   const waitUntil = parseWaitUntil(args.waitUntil);
@@ -1826,6 +1830,9 @@ async function withBrowserPage(
           : undefined,
         updatedAt: Date.now(),
       };
+      // A terminal child can clear its volatile state while an awaited snapshot
+      // finishes. Never resurrect that state after execution cancellation.
+      throwIfBrowserExecutionAborted(abortSignal);
       storeBrowserSessionState(browserSessionId, nextState);
     }
     return {
@@ -1841,38 +1848,6 @@ async function withBrowserPage(
     await browser.close().catch(() => undefined);
     await egressProxy?.close().catch(() => undefined);
   }
-}
-
-async function loadPlaywright(): Promise<PlaywrightModule> {
-  const moduleName = "playwright";
-  try {
-    const loaded = await import(moduleName);
-    return loaded as PlaywrightModule;
-  } catch (error) {
-    throw browserChromiumManualRequiredError(error);
-  }
-}
-
-async function launchPlaywrightChromium(playwright: PlaywrightModule, headless: boolean): Promise<PlaywrightBrowser> {
-  const launchOptions = { headless, args: [...BROWSER_CHROMIUM_SECURITY_ARGS] };
-  try {
-    return await playwright.chromium.launch(launchOptions);
-  } catch (error) {
-    if (isMissingPlaywrightBrowserError(error)) throw browserChromiumManualRequiredError(error);
-    throw error;
-  }
-}
-
-function isMissingPlaywrightBrowserError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error ?? "");
-  return /browsertype\.launch: executable doesn't exist/i.test(message);
-}
-
-function browserChromiumManualRequiredError(cause: unknown): Error {
-  return new Error(
-    `${BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE}: ${BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_MESSAGE}`,
-    { cause },
-  );
 }
 
 function throwIfBrowserExecutionAborted(signal?: AbortSignal): void {
@@ -2690,7 +2665,7 @@ async function extractHtmlSelectorText(
   }
 
   try {
-    const playwright = await loadPlaywright();
+    const playwright = await loadPlaywright<PlaywrightModule>();
     const browser = await launchPlaywrightChromium(playwright, true);
     try {
       const context = await browser.newContext();

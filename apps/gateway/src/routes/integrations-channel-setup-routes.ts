@@ -122,7 +122,7 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
 
   fastify.get("/api/v1/channels/setup-definitions", async (_request, reply) => {
     return reply.send({
-      items: fastify.services.channelSetup.listChannelSetupDefinitions(),
+      items: await fastify.services.channelSetup.listChannelSetupDefinitions(),
     });
   });
 
@@ -132,7 +132,7 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.channelSetup.getChannelSetupDefinition(params.data.catalogId));
+      return reply.send(await fastify.services.channelSetup.getChannelSetupDefinition(params.data.catalogId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }

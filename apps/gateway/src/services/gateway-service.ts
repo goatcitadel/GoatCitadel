@@ -1,7 +1,41 @@
+import { assertMcpAdmissionToolAllowed } from "./mcp-admission-tool-policy-guard.js";
+import { buildChatRuntimeSkillReceipts } from "./chat-skill-selection-runtime.js";
+import { executeApprovedIntegrationDryRunCommit } from "./approved-integration-dry-run-owner.js";
+import { commitProviderSecretGeneration } from "./provider-secret-generation-owner.js";
+import { resolveChatRuntimeSkillSelection } from "./chat-skill-selection-runtime.js";
+import { createReplayScratchSession, REPLAY_SCRATCH_SESSION_TITLE_PREFIX } from "./chat-replay-session-owner.js";
+import { projectCanonicalNotificationEvent } from "./notification-event-projection.js";
 import {
   composeMcpRequesterScopedRuntime,
+  readLiveRequesterScopedServerSnapshot,
   type McpRequesterScopedComposedRuntime,
 } from "./mcp-requester-runtime-composition.js";
+import {
+  composeMcpRequesterAdmissionRuntime,
+  selectSavedMcpChatAdmission,
+  selectRequesterMcpChatAdmission,
+  type McpRequesterAdmissionConfiguration,
+} from "./mcp-requester-admission-runtime.js";
+import {
+  createMcpRequesterAdmissionTurnContext,
+  readMcpRequesterAdmissionTurnContext,
+  type McpRequesterAdmissionTurnContextHandle,
+} from "./mcp-requester-admission-context.js";
+import { restoreMcpChatAdmissionSchemas } from "./mcp-chat-admission-schemas.js";
+import { assertMcpRequesterAdmissionScopeCurrent } from "./mcp-requester-admission-scope.js";
+import { McpRequesterResolutionError } from "./mcp-requester-resolution.js";
+import {
+  restoreSelectedMeshAdmission,
+  selectCallableMeshChatAdmission,
+} from "./chat-mesh-admission-service.js";
+import { createMeshAdmissionTurnContext, readMeshAdmissionTurnContext } from "./gateway/mesh-chat-binding.js";
+import {
+  resumeAdmittedExternalApprovals,
+  readApprovedRequesterAdmission,
+  readAdmittedExternalTurnContext,
+  type AdmittedExternalTurnContextHandle,
+  RequesterMcpApprovalResumeRequiredError,
+} from "./mcp-requester-admission-approval.js";
 export {
   composeMcpRequesterScopedRuntime,
   type McpRequesterScopedCompositionHost,
@@ -11,6 +45,7 @@ import { verifyProviderConnection, verifyTemporaryProviderCredential } from "./p
 import { resolveSustainedLocalCodingProfile } from "./chat-turn-execution-profile.js";
 import { readChangePlanApprovalDisposition } from "./evolution-control-plane-approval-disposition.js";
 import { composeChatTurnControl, type ChatTurnControlComposition } from "./gateway/chat-turn-control-composition.js";
+import { cleanupDelegatedChildResources } from "./delegated-child-process-cleanup.js";
 /* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
@@ -83,7 +118,18 @@ import { hashSensitiveToken } from "./device-access-helpers.js";
 import { SurfaceRouterService } from "./surface-router-service.js";
 import { buildSurfaceRouterJudge } from "./surface-router-judge.js";
 import { CapabilityScopeResolver, isCapabilityAllowed } from "./capability-scope-resolver.js";
-import { resolveCallableSkillActivation } from "./callable-skill-activation.js";
+import { resolveCallableSkillSelection } from "./callable-skill-activation.js";
+import { ChatCapabilityDiscoveryService } from "./chat-capability-discovery-service.js";
+import {
+  resolveChatFeatureAdmission,
+  renderAdmittedSkillInstructions,
+  type ChatFeatureAdmissionHost,
+} from "./chat-feature-admission-service.js";
+import { assertScheduledChatDispatchCurrent } from "./scheduled-chat-authority.js";
+import {
+  authorizeAdmittedChatProviderFallback,
+  fingerprintChatProviderFallbackRoute,
+} from "./chat-provider-fallback-admission.js";
 import type {
   DatabaseCutoverRequest,
   DatabaseCutoverResponse,
@@ -462,7 +508,7 @@ import {
   InboundChannelTurnTerminalError,
   type InboundChannelDeterministicIdentity,
 } from "./inbound-channel-event-service.js";
-import { CronAutomationService } from "./gateway/cron-automation-service.js";
+import { CronAutomationService, type CronSystemHandlerOutcome } from "./gateway/cron-automation-service.js";
 import {
   runCostReportSchedulerIfDue,
   runMemoryConsolidationSchedulerIfDue,
@@ -541,8 +587,6 @@ import {
   createSettingsRuntimeDependenciesForGateway,
   type GatewayRouteCompositionPort,
 } from "./gateway-route-service-composition.js";
-import { approveDryRun } from "./dry-run-commit-service.js";
-import { invokeIntegrationConnectionAction } from "./integration-action-service.js";
 import { buildGatewayExternalSideEffectReplayJob } from "./external-side-effect-replay-job-service.js";
 import { RealtimeEventService } from "./realtime-event-service.js";
 import { BackupRetentionService } from "./backup-retention-service.js";
@@ -551,10 +595,8 @@ import { ConfigGenerationService, type CompleteUnifiedConfigPayload } from "./co
 import { CronConfigGenerationOwner, projectCanonicalCronSpec } from "./cron-config-generation-owner.js";
 import {
   assertProviderSecretEffectsRestored,
-  prepareProviderSecretMutation,
   reconcileProviderSecretEffects,
   type DeleteProviderSecretInput,
-  type PreparedProviderSecretMutation,
   type ProviderSecretMutationResponse,
   type SaveProviderSecretInput,
 } from "./provider-secret-persistence.js";
@@ -616,6 +658,15 @@ import * as llmCompletionService from "./llm-completion-service.js";
 import * as durableExecutionService from "./durable-execution-service.js";
 import * as chatDurableRunService from "./chat-durable-run-service.js";
 import * as chatRoutedContextService from "./chat-routed-context-service.js";
+import {
+  assertAdmittedExplicitContextCurrent,
+  prepareRoutedContextAdmission,
+  type ExplicitContextPreparationPort,
+  revalidateChatRoutedContextSnapshotAccess,
+  prepareAdmittedExplicitContextRequest,
+} from "./chat-explicit-context-admission.js";
+import { assertChatFeatureBindingCurrent } from "./chat-feature-binding-current.js";
+import { assertHeartbeatChatDispatchCurrent } from "./heartbeat-chat-authority.js";
 import * as chatTurnPrepService from "./chat-turn-prep-service.js";
 import {
   buildPreviewPrefs,
@@ -627,9 +678,11 @@ import {
   type ChatTurnCapabilityProfileResolution,
 } from "./chat-turn-capability-profile-service.js";
 import {
-  buildGovernedActivatedSkillReceipts,
   renderGovernedActivatedSkillInstructions,
+  type SkillContextDocReader,
 } from "./governed-skill-instruction-service.js";
+import { createWorkspaceSkillContextDocReader } from "./workspace-skill-context-docs.js";
+import { resolveWorkspaceDesignBrand } from "./workspace-design-brand.js";
 import { detectDocumentArtifactIntent, detectPresentationArtifactIntent } from "./chat-artifact-intent.js";
 import { prepareApprovedPresentationVisuals } from "./presentation-visual-executor.js";
 import { normalizeAgentInputFromSend } from "./chat-agent-input-normalization.js";
@@ -649,6 +702,7 @@ import { ChatSteerService } from "./chat-steer-service.js";
 import * as chatTurnStreamService from "./chat-turn-stream-service.js";
 import { SubagentFanoutRuntime } from "./chat-subagent-fanout-service.js";
 import { ChatDurableFanoutService } from "./chat-durable-fanout-service.js";
+import { ChatFanoutApprovalResumeRequiredError, resumeChatFanoutApprovals } from "./chat-fanout-approval-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import { createChatTurnRuntimeHost, type ChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
 import { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
@@ -690,6 +744,7 @@ import {
 } from "./remote-worker-chat-approval-resume.js";
 import type { RemoteWorkerApprovedActionInput } from "./remote-worker-effect-runtime.js";
 import { executeApprovedRemoteWorkerAction } from "./remote-worker-approved-action-runtime.js";
+import { resolveRemoteWorkerAdmissionAuthority, selectRemoteWorkerChatAdmission, createRemoteWorkerChatAdmissionAuthorityHost } from "./remote-worker-chat-admission-authority.js";
 import { WorkspacePathBridgeRuntime } from "./workspace-path-bridge-runtime.js";
 import { ChatWorkspaceSnapshotService } from "./chat-workspace-snapshot-service.js";
 import { buildDelegatedFilesystemScopeControl, DelegatedWorkResultService } from "./delegated-work-result-service.js";
@@ -898,10 +953,6 @@ const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
 ] as const;
 const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
 
-export const PRIVATE_BETA_BACKUP_SCHEDULE_LABEL = "30 2 * * * America/Los_Angeles";
-export const MEMORY_FLUSH_DAILY_SCHEDULE_LABEL = "0 3 * * * America/Los_Angeles";
-export const COST_REPORT_HOURLY_SCHEDULE_LABEL = "0 * * * * America/Los_Angeles";
-export const UPDATE_REVIEW_DAILY_SCHEDULE_LABEL = "15 4 * * * America/Los_Angeles";
 /**
  * P2-S1 background-review counter gate. A successful, eligible root turn bumps
  * this counter; the self-improvement review runs (and resets it) once it reaches
@@ -922,7 +973,6 @@ const ORCHESTRATION_WORKTREE_REAP_BOOT_DELAY_MS = 30_000;
 export const DEFAULT_WORKSPACE_ID = "default";
 const SYNTHETIC_PERMISSION_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
 const SYNTHETIC_PERMISSION_PROFILE_MAX_ENTRIES = 500;
-const REPLAY_SCRATCH_SESSION_TITLE_PREFIX = "[Replay scratch]";
 type SessionAutonomyPrefs = SessionAutonomyPrefsRecord;
 
 interface ProactiveTriggerInput {
@@ -990,6 +1040,14 @@ export class GatewayService {
   private readonly commitmentClassifier: CommitmentClassifierService;
   private readonly backgroundReviewService: BackgroundReviewService;
   public readonly turnRuntime: GatewayTurnRuntime;
+  public readonly explicitContextPreparation: ExplicitContextPreparationPort = {
+    prepare: (input) => prepareRoutedContextAdmission({
+      llmService: this.llmService,
+      resolveChatRoutedContextSources: (request) => this.resolveChatRoutedContextSources(request),
+      resolveExplicitContextToolDefinitions: (request) => this.readExplicitContextToolDefinitions(request),
+      bindChatFeatureAdmission: (admission, references) => this.bindImmutableChatFeatureAdmission(admission, references),
+    }, input),
+  };
   private readonly chatTurnControl: ChatTurnControlComposition;
   /**
    * R3-8 `agent.fanout` session registry. The entry/stream turn services
@@ -1038,7 +1096,10 @@ export class GatewayService {
    * itself never exposes resolved values, leases, or registry internals.
    */
   public readonly mcpRequesterScopedRuntime: McpRequesterScopedComposedRuntime;
+  public readonly mcpRequesterAdmissionRuntime: ReturnType<typeof composeMcpRequesterAdmissionRuntime>;
+  private readonly mcpRequesterAdmissionConfiguration?: McpRequesterAdmissionConfiguration;
   private readonly toolInvocationCoordinator: ToolInvocationCoordinatorService;
+  private readonly chatCapabilityDiscovery: ChatCapabilityDiscoveryService;
   private readonly workspacePathBridgeRuntime: WorkspacePathBridgeRuntime;
   private readonly chatWorkspaceSnapshotService: ChatWorkspaceSnapshotService;
   private readonly delegatedWorkResultService: DelegatedWorkResultService;
@@ -1153,8 +1214,10 @@ export class GatewayService {
        * plugins, skills, request bodies, and Mission Control cannot reach it.
        */
       mcpRequesterResolvers?: McpRequesterResolverRegistryInput;
+      mcpRequesterAdmission?: McpRequesterAdmissionConfiguration;
     } = {},
   ) {
+    this.mcpRequesterAdmissionConfiguration = options.mcpRequesterAdmission;
     this.sharedHostLifecycle = options.sharedHostLifecycle ?? new SharedHostLifecycleService({ enabled: false });
     this.config = applyDurableExecutionBaselineToConfig(inputConfig);
     const config = this.config;
@@ -1365,6 +1428,8 @@ export class GatewayService {
       subagentFanout: (request) => this.subagentFanout.execute(request),
       getChatSessionStatus: (sessionId) => this.chatSessionStatusService.getModelProjection(sessionId),
       readToolArtifact: (request) => chatToolArtifactService.readChatToolArtifactForTool(this, request),
+      searchCapabilities: (request) => this.chatCapabilityDiscovery.discover(request),
+      readSkill: (request) => this.chatCapabilityDiscovery.readSkill(request),
       assertOptionalUserInputAvailable: async () => {
         if (!(await this.isFeatureEnabled("chatAsyncClarificationV1Enabled")))
           throw new Error("Optional clarification is disabled.");
@@ -1619,6 +1684,7 @@ export class GatewayService {
       },
       (request) => this.acquireLocalEmbeddingLease(request),
       (input) => this.modelUsageAccounting.prepareDispatch(input),
+      (diagnostics) => log.debug("Memory context composition metrics", diagnostics),
     );
     this.meshService = new MeshService(this.storage, {
       enabled: config.assistant.mesh.enabled,
@@ -1691,6 +1757,67 @@ export class GatewayService {
         this.approvalRuntime.rejectPendingChatTurnApprovals(sessionId, turnId, actorId),
     });
     this.turnRuntime = new GatewayTurnRuntime({
+      restoreRequesterAdmissionSchemas: (handle) => this.restoreNativeAdmissionSchemas(handle),
+      restoreMeshAdmissionSchemas: (handle) => this.restoreMeshAdmissionSchemas(handle),
+      resumeRequesterAdmissionApprovals: (input, handle) => this.resumeRequesterAdmissionApprovals(input, handle),
+      resumeMeshAdmissionApprovals: (input, handle) => this.resumeRequesterAdmissionApprovals(input, handle),
+      resumeFanoutApprovals: (input) =>
+        resumeChatFanoutApprovals(
+          {
+            storage: this.storage,
+            readToolResult: (parentRunId, toolRunId) => this.durableFanout.readToolResult(parentRunId, toolRunId),
+            refreshPolicy: (approvalId) => this.refreshApprovedPendingToolPolicyContext(approvalId),
+            executeApprovedAction: (approvalId, beforeExecute) =>
+              this.policyEngine.executeApprovedAction(approvalId, input.signal, { beforeExecute }),
+          },
+          input,
+        ),
+      prepareExplicitContextRequest: (input, request) => prepareAdmittedExplicitContextRequest(this, input, request),
+      authorizeProviderFallback: (input, request) => authorizeAdmittedChatProviderFallback(this, input, request),
+      assertFeatureReferencesCurrent: async (input) => {
+        await assertChatFeatureBindingCurrent(this.storage, input);
+        const admittedRoute = input.featureAdmission?.references.providerRoute;
+        if (
+          admittedRoute &&
+          fingerprintChatProviderFallbackRoute(this.llmService, admittedRoute.primary, admittedRoute.fallback) !==
+            admittedRoute.fingerprint
+        ) {
+          throw new ConflictError({
+            message: "The admitted provider route configuration changed. Start a fresh Chat turn.",
+          });
+        }
+        await assertHeartbeatChatDispatchCurrent(this.chatFeatureAdmissionHost(), input);
+        await assertAdmittedExplicitContextCurrent(this, input);
+        await assertScheduledChatDispatchCurrent(this.chatFeatureAdmissionHost(), input);
+        await this.durableFanout.assertFeatureDispatchCurrent(input);
+        if (input.featureAdmission?.references.selectedSkills) {
+          if (!input.workspaceId) throw new Error("Admitted skills require a canonical workspace.");
+          await this.resolveAdmittedSkillInstructions(input.featureAdmission.references, input.workspaceId);
+        }
+        const requester = input.featureAdmission?.references.requesterConnections;
+        const staticMcp = input.featureAdmission?.references.selectedStaticMcp;
+        if (requester?.length || staticMcp?.length) {
+          const receipt = requester?.[0] ?? staticMcp?.[0];
+          const fence = input.canonicalWriteFence;
+          if (!receipt || !("scope" in receipt) || !fence)
+            throw new Error("Requester MCP references require a live admission scope.");
+          await this.restoreNativeAdmissionSchemas(
+            createMcpRequesterAdmissionTurnContext(receipt.scope, input.featureAdmission!.referenceSha256, async () => {
+              await fence(() => undefined);
+            }),
+          );
+        }
+        const mesh = input.featureAdmission?.references.selectedMeshCapabilities;
+        if (mesh) {
+          const fence = input.canonicalWriteFence;
+          if (!fence) throw new Error("Mesh references require a live admission claim.");
+          await this.restoreMeshAdmissionSchemas(
+            createMeshAdmissionTurnContext(mesh.scope, input.featureAdmission!.referenceSha256, async () => {
+              await fence(() => undefined);
+            }),
+          );
+        }
+      },
       resolveConfirmedDelegation: (input) => this.chatTurnControl.resolveConfirmedDelegation(input),
       storage: this.storage,
       listToolCatalog: () => this.listToolCatalog(),
@@ -1703,6 +1830,11 @@ export class GatewayService {
       createChatCompletionStream: async (request, attribution) =>
         await this.createChatCompletionStream(request, attribution),
       generateImage: (request, attribution) => this.llmService.generateImage(request, attribution),
+      // Workspace DESIGN.md brand for deck/document tools, only when the frozen profile injected it.
+      resolveWorkspaceDesignBrand: ({ workspaceId, capabilityProfile }) =>
+        workspaceId
+          ? resolveWorkspaceDesignBrand(capabilityProfile, this.createWorkspaceSkillContextDocReader(workspaceId))
+          : undefined,
       invokeTool: async (request, options) => await this.invokeTool(request, options),
       invokeToolWithEffectTruth: async (request, options) => await this.invokeTool(request, options),
       persistToolArtifact: (input) => chatToolArtifactService.persistChatToolArtifact(this, input),
@@ -1728,6 +1860,8 @@ export class GatewayService {
       workspaceFileRootDir: path.resolve(config.rootDir, config.assistant.workspaceDir),
       chatThinkingStreamV1Enabled: async () => await this.isFeatureEnabled("chatThinkingStreamV1Enabled"),
       attachedContextToolsV1Enabled: async () => await this.isFeatureEnabled("attachedContextToolsV1Enabled"),
+      boundedToolExposureV1Enabled: async () => await this.isFeatureEnabled("boundedToolExposureV1Enabled"),
+      observeToolSchemaSelection: (diagnostics) => log.debug("Chat tool schema selection metrics", diagnostics),
       parallelToolExecutionV1Disabled: async () => await this.isFeatureEnabled("parallelToolExecutionV1Disabled"),
       promptContextBudgetReceiptEnabled: () => process.env.GOATCITADEL_DEBUG_PROMPT_CONTEXT_BUDGET_RECEIPTS === "1",
       chatContextBudgetVisibilityV1Enabled: async () =>
@@ -1834,25 +1968,30 @@ export class GatewayService {
         },
         agentTurn: async (input) => await this.runCronAgentTurn(input),
         improvement: async () => {
-          await this.improvementService.runWeeklyImprovementSchedulerIfDue({ force: true, recordCronState: false });
+          const improvement = this.improvementService;
+          return await improvement.runWeeklyImprovementSchedulerIfDue({ force: true, recordCronState: false });
         },
         backup: async () => {
-          await this.runPrivateBetaBackupSchedulerIfDue({ force: true, recordCronState: false });
+          return await this.runPrivateBetaBackupSchedulerIfDue({ force: true, recordCronState: false });
         },
         memoryFlush: async () => {
-          await this.runMemoryFlushSchedulerIfDue({ force: true, recordCronState: false });
+          return await this.runMemoryFlushSchedulerIfDue({ force: true, recordCronState: false });
         },
         memoryConsolidation: async () => {
-          await this.runMemoryConsolidationSchedulerIfDue({ force: true, recordCronState: false });
+          return await this.runMemoryConsolidationSchedulerIfDue({ force: true, recordCronState: false });
         },
         costReport: async () => {
-          await this.runCostReportSchedulerIfDue({ force: true, recordCronState: false });
+          return await this.runCostReportSchedulerIfDue({ force: true, recordCronState: false });
         },
-        updateReview: async () => {
-          await this.runUpdateReviewSchedulerIfDue({ force: true, recordCronState: false });
+        updateReview: async (context) => {
+          return await this.runUpdateReviewSchedulerIfDue({
+            force: true,
+            recordCronState: false,
+            reviewTrigger: context?.trigger,
+          });
         },
         curator: async () => {
-          await this.curatorService.runCuratorWeeklyIfDue({ force: true, recordCronState: false });
+          return await this.curatorService.runCuratorWeeklyIfDue({ force: true, recordCronState: false });
         },
         watchdog: async (job) => await this.runCronWatchdog(job),
         noAgent: (input) => runNoAgentCommand(input),
@@ -1881,6 +2020,7 @@ export class GatewayService {
     this.durableRunService = new DurableRunService(serviceCtx, {
       backgroundTasks: this.backgroundTasks,
       reconcileWaitingChatDelegations: () => this.chatTurnControl.reconcileWaitingDelegations(),
+      reconcileWaitingChatFanouts: () => this.durableFanout.reconcileWaitingParents(),
       reconcileWaitingOrchestrationPhases: () =>
         orchestrationLifecycleService.reconcileWaitingOrchestrationPhases(this),
       reconcileTerminalOrchestrationRuns: () =>
@@ -1978,7 +2118,7 @@ export class GatewayService {
       storage: this.storage,
       sessionControlRuntimeOwner: this.sessionControlRuntimeOwner,
       canEnqueueHeartbeat: async () =>
-        !isNewAutonomousChatTurnAdmissionPaused() &&
+        (await this.isFeatureEnabled("proactiveHeartbeatTurnsV1Enabled")) &&
         !(await this.isFeatureEnabled("autonomyV1Disabled")) &&
         (await this.isFeatureEnabled("durableKernelV1Enabled")),
       enqueuePreclaimedHeartbeat: async (input) => {
@@ -2265,6 +2405,24 @@ export class GatewayService {
     );
     this.chatDelegationService = new ChatDelegationService({
       storage: this.storage,
+      cleanupChildResources: async ({ stepId, childSessionId, childTurnId }) => {
+        const resources = await cleanupDelegatedChildResources(
+          this.storage,
+          {
+            stepId,
+            childSessionId,
+            childTurnId,
+          },
+          undefined,
+          (owner) => this.mcpStdioSessions.captureOwnerCloser(owner)(),
+        );
+        log.debug("Delegated child resource cleanup", {
+          stepId,
+          ...resources,
+          recoveredProcessScope: "recorded_process_only",
+          recoveredDescendants: "unconfirmed",
+        });
+      },
       gatewaySql: this.gatewaySql,
       taskLifecycleService: this.taskLifecycleService,
       getSession: async (sessionId) => await this.getSession(sessionId),
@@ -2373,6 +2531,7 @@ export class GatewayService {
       cancelDurableChatRun: async (runId, cancelledBy) => await this.cancelDurableRun(runId, cancelledBy),
       wakeDurableChatRun: async (runId, event) => await this.wakeDurableRun(runId, event),
       isEnabled: async () => await this.isFeatureEnabled("durableChatFanoutV1Enabled"),
+      isLiveAdmissionEnabled: async () => await this.isFeatureEnabled("chatAutomaticFanoutV1Enabled"),
     });
     // HX-415 slice 7d composition root: build the requester-scoped MCP runtime
     // exactly once, from server-owned ports only. Resolvers come exclusively
@@ -2392,7 +2551,50 @@ export class GatewayService {
       getNetworkAllowlist: () => this.config.toolPolicy.sandbox.networkAllowlist,
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     });
+    this.mcpRequesterAdmissionRuntime = composeMcpRequesterAdmissionRuntime({
+      resolvers: options.mcpRequesterAdmission?.resolvers,
+      enabled: () => this.isFeatureEnabled("chatRequesterMcpV1Enabled"),
+      assertScopeCurrent: async (scope) => {
+        await assertMcpRequesterAdmissionScopeCurrent(this.storage, scope);
+        if ((await this.readMcpRequesterAuthConnectionState(scope)).revoked)
+          throw new McpRequesterResolutionError("connection_generation_revoked");
+      },
+      readAdmission: (scope) => this.storage.sessionMutationAdmissions.findFeatureReferences(scope),
+      ...(options.mcpRequesterAdmission
+        ? {
+            readConnection: async (
+              scope: import("@goatcitadel/contracts").McpRequesterAdmissionScope,
+              connectionId: string,
+            ) => {
+              const current = await options.mcpRequesterAdmission!.readConnection(scope, connectionId);
+              const server = await readLiveRequesterScopedServerSnapshot(
+                { listMcpServers: () => this.readMcpServers() },
+                current.server.serverId,
+              );
+              if (!server || canonicalJsonString(server) !== canonicalJsonString(current.server))
+                throw new McpRequesterResolutionError("resolver_binding_drift");
+              return { ...current, server };
+            },
+          }
+        : {}),
+      assertToolAllowed: (scope, name) => this.assertRequesterAdmissionToolAllowed(scope, name),
+      getNetworkAllowlist: () => this.config.toolPolicy.sandbox.networkAllowlist,
+      recordDiagnostic: (reasonCode) =>
+        this.recordDevDiagnostic({
+          level: "warn",
+          category: "mcp",
+          event: "mcp.requester_admission.unavailable",
+          message: "Requester MCP requires current admission and a configured actor-bound connection resolver.",
+          context: { reasonCode },
+        }),
+    });
     this.mcpStaticChat = new McpStaticChatService({
+      admission: {
+        enabled: () => this.isFeatureEnabled("chatStaticMcpV1Enabled"),
+        assertScopeCurrent: (scope) => assertMcpRequesterAdmissionScopeCurrent(this.storage, scope),
+        readAdmission: (scope) => this.storage.sessionMutationAdmissions.findFeatureReferences(scope),
+        assertToolAllowed: (scope, name) => this.assertRequesterAdmissionToolAllowed(scope, name),
+      },
       registry: {
         readServers: () => this.mcpServerStore.readServers(),
         requireServer: (id) => this.mcpServerStore.requireServer(id),
@@ -2415,6 +2617,13 @@ export class GatewayService {
           message: "Static MCP discovery requires current authority and a valid catalog.",
           context: { serverId, reasonCode },
         }),
+    });
+    this.chatCapabilityDiscovery = new ChatCapabilityDiscoveryService({
+      requireEnabled: () => this.requireFeatureEnabled("boundedToolExposureV1Enabled"),
+      requireSession: (sessionId) => this.requireChatSession(sessionId),
+      listCatalog: (...args) => this.capabilitySystemService.listCatalog(...args),
+      listSkills: (...args) => this.capabilitySystemService.listSkills(...args),
+      listLifecycle: () => this.storage.skillLifecycle.list(),
     });
     this.toolInvocationCoordinator = new ToolInvocationCoordinatorService({
       assertChatToolDispatchAllowed: (request) => this.chatTurnControl.assertToolDispatchAllowed(request),
@@ -2441,7 +2650,9 @@ export class GatewayService {
       policyEngine: this.policyEngine,
       hooksService: this.hooksService,
       resolveNativeMcpChatToolBinding: (request, context) =>
-        resolveNativeMcpChatToolBinding(this.storage, request, context),
+        resolveNativeMcpChatToolBinding(this.storage, request, context, (handle) =>
+          this.restoreNativeAdmissionSchemas(handle),
+        ),
       resolveMeshChatToolBinding: (request, context) =>
         resolveMeshChatToolBinding(this.meshChatBindingDeps(), request, context),
       dispatchMeshCapabilityInvocation: (input, options) =>
@@ -2531,7 +2742,12 @@ export class GatewayService {
       // durable/connector paths — still fail closed `requester_context_missing`
       // inside the provider, one level deeper than before. The static host
       // port above derives retained stdio state from canonical session scope.
-      requesterScopedMcpDispatch: this.mcpRequesterScopedRuntime.requesterScopedMcpDispatch,
+      requesterScopedMcpDispatch: {
+        invoke: (input, dispatchOptions) =>
+          readMcpRequesterAdmissionTurnContext(input.mcpRequesterTurnContext)
+            ? this.mcpRequesterAdmissionRuntime.requesterScopedMcpDispatch.invoke(input, dispatchOptions)
+            : this.mcpRequesterScopedRuntime.requesterScopedMcpDispatch.invoke(input, dispatchOptions),
+      },
       staticMcpChatDispatch: this.mcpStaticChat,
       evaluateAutonomousActivationGrant: (input) =>
         this.capabilitySystemService.evaluateAutonomousActivationGrant(input),
@@ -3496,7 +3712,9 @@ export class GatewayService {
       scheduleBackgroundReviewIfDue: async (input) => await this.scheduleBackgroundReviewIfDue(input),
       steerService: this.steerService,
       subagentFanout: this.subagentFanout,
-      durableFanout: this.durableFanout,
+      // This host is composed before the durable aggregate is constructed.
+      durableFanout: { execute: (input) => this.durableFanout.execute(input) },
+      assertAutomaticFanoutAuthority: (id) => this.assertAutomaticFanoutAuthority(id),
       streamPersistedChatTurnEvents: (sessionId, turnId, options) =>
         this.streamPersistedChatTurnEvents(sessionId, turnId, options),
       triggerChatSessionProactive: async (sessionId, input) => await this.triggerChatSessionProactive(sessionId, input),
@@ -3618,10 +3836,17 @@ export class GatewayService {
     return createCommsHostForGateway(this.getRouteCompositionPort(), integrationChannel);
   }
 
-  private buildDurableChatTurnWorkflowHost(): durableExecutionService.DurableChatTurnWorkflowHost {
+  private buildDurableChatTurnWorkflowHost(): durableExecutionService.DurableChatTurnWorkflowHost &
+    Required<
+      Pick<
+        durableExecutionService.DurableChatTurnWorkflowHost,
+        "subagentFanout" | "durableFanout" | "revalidateChatRoutedContextSnapshot" | "assertAutomaticFanoutAuthority"
+      >
+    > {
     return {
       config: this.config,
       storage: this.storage,
+      revalidateChatRoutedContextSnapshot: (snapshot) => this.revalidateChatRoutedContextSnapshot(snapshot),
       durableRunService: this.durableRunService,
       resolveRemoteWorkerChatExecution: async (run, prepared) =>
         new RemoteWorkerChatPlacementService({
@@ -3633,6 +3858,9 @@ export class GatewayService {
       backgroundTasks: this.backgroundTasks,
       turnRuntime: this.turnRuntime,
       steerService: this.steerService,
+      subagentFanout: this.subagentFanout,
+      durableFanout: this.durableFanout,
+      assertAutomaticFanoutAuthority: (id) => this.assertAutomaticFanoutAuthority(id),
       resolvePreparedTurnOrchestration: (prepared) => this.resolvePreparedTurnOrchestration(prepared),
       createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
@@ -5632,24 +5860,34 @@ export class GatewayService {
     };
   }
 
-  private async runPrivateBetaBackupSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runPrivateBetaBackupSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runPrivateBetaBackupSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runPrivateBetaBackupSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
-  private async runMemoryConsolidationSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runMemoryConsolidationSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runMemoryConsolidationSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runMemoryConsolidationSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
-  private async runMemoryFlushSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runMemoryFlushSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runMemoryFlushSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runMemoryFlushSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
-  private async runCostReportSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runCostReportSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runCostReportSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runCostReportSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
-  private async runUpdateReviewSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runUpdateReviewSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runUpdateReviewSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runUpdateReviewSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
   public async hasRunningTurn(sessionId: string): Promise<boolean> {
@@ -7217,6 +7455,7 @@ export class GatewayService {
       mutationLifecycle?: import("./chat-turn-types.js").ChatStreamMutationLifecycle;
       capabilityProfileId?: string;
       capabilityProfileHash?: string;
+      featureReferenceSha256?: string;
       capabilityProfileContent?: string;
       skipProviderPreparation?: boolean;
       turnAdmission?: import("./chat-turn-types.js").ActiveTurnAdmission;
@@ -7301,19 +7540,11 @@ export class GatewayService {
           return { configured: Boolean(provider.hasApiKey), local };
         },
         classifyWorkPassport: (workspaceId, content) => this.workPassportService.classify(workspaceId, content),
-        resolveActivatedSkills: async ({ content, trustedSkills }) =>
-          buildGovernedActivatedSkillReceipts({
-            content,
-            decision: await this.resolveSkillActivationForRuntime({ text: content }, false, input.workspaceId),
-            trustedSkills,
-            lifecycleRows: await this.storage.skillLifecycle.list(),
-            // Same detectors that decide whether presentations.create / documents.create are exposed,
-            // so the design skill's artifacts route and the tool surface agree on the turn's intent.
-            artifactIntent: {
-              presentation: detectPresentationArtifactIntent(content),
-              document: detectDocumentArtifactIntent(content),
-            },
-          }),
+        resolveActivatedSkills: ({ content, trustedSkills }) => buildChatRuntimeSkillReceipts({
+          resolveSkills: (text, workspaceId) => this.resolveSkillActivationForRuntime({ text }, false, workspaceId),
+          listLifecycle: () => this.storage.skillLifecycle.list(),
+          contextDocs: (workspaceId) => this.createWorkspaceSkillContextDocReader(workspaceId),
+        }, { content, trustedSkills, workspaceId: input.workspaceId }),
       },
       {
         sessionId: input.sessionId,
@@ -7418,7 +7649,136 @@ export class GatewayService {
       profile,
       loadedSkills,
       lifecycleRows: await this.storage.skillLifecycle.list(),
+      contextDocs: this.createWorkspaceSkillContextDocReader(profile.identity.workspaceId),
     });
+  }
+
+  private chatFeatureAdmissionHost(): ChatFeatureAdmissionHost {
+    return {
+      storage: this.storage,
+      listToolNames: () => this.listToolCatalog().map((tool) => tool.toolName),
+      assertTurnAdmissionWrite: (admission) => this.assertTurnAdmissionWrite(admission),
+      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
+      getSkillSelectionMode: async () => (await this.getSkillActivationPolicy()).selectionMode ?? "legacy",
+      resolveSkills: (content, workspaceId) =>
+        this.resolveSkillActivationForRuntime({ text: content }, false, workspaceId),
+      listCallable: (workspaceId) => this.capabilitySystemService.listCatalog("callable", "ALL", workspaceId),
+      listLifecycle: () => this.storage.skillLifecycle.list(),
+      contextDocs: (workspaceId) => this.createWorkspaceSkillContextDocReader(workspaceId),
+      listLoadedSkills: (workspaceId) => this.capabilitySystemService.listSkills("ALL", workspaceId),
+      getModelContextWindow: (providerId, model) => this.llmService.getModelContextWindow(providerId, model),
+      routeFingerprint: (primary, fallback) => fingerprintChatProviderFallbackRoute(this.llmService, primary, fallback),
+      resolveRemotePlacement: (input) => this.selectRemoteWorkerAdmission(input),
+      resolveStaticMcpConnections: (input) => selectSavedMcpChatAdmission({
+        staticChat: this.mcpStaticChat,
+        assertTurnAdmissionWrite: (admission) => this.assertTurnAdmissionWrite(admission),
+        recordDevDiagnostic: (diagnostic) => this.recordDevDiagnostic(diagnostic),
+      }, input),
+      resolveRequesterConnections: (input) => selectRequesterMcpChatAdmission({
+        configuration: this.mcpRequesterAdmissionConfiguration,
+        runtime: this.mcpRequesterAdmissionRuntime,
+        assertTurnAdmissionWrite: (admission) => this.assertTurnAdmissionWrite(admission),
+        recordDevDiagnostic: (diagnostic) => this.recordDevDiagnostic(diagnostic),
+      }, input),
+      resolveMeshCapabilities: (input) => selectCallableMeshChatAdmission({
+        assertTurnAdmissionWrite: (admission) => this.assertTurnAdmissionWrite(admission),
+        listCallable: (workspaceId) => this.capabilitySystemService.listCatalog("callable", "ALL", workspaceId),
+        resolveSchemas: (request) => resolveMeshChatToolSchemas(this.meshChatBindingDeps(), request),
+        prepareToolAccessEvaluation: (request) => this.prepareToolAccessEvaluation(request),
+        inspectSchemaAccess: (request, schema) => this.policyEngine.inspectAccess(request, { meshToolBinding: schema.policyBinding }),
+      }, input),
+    };
+  }
+
+  private selectRemoteWorkerAdmission(
+    input: Parameters<NonNullable<ChatFeatureAdmissionHost["resolveRemotePlacement"]>>[0],
+  ) {
+    return selectRemoteWorkerChatAdmission({
+      enabled: remoteWorkerAssignmentRuntimeActivated,
+      storage: this.storage,
+      assertTurnAdmissionWrite: (admission) => this.assertTurnAdmissionWrite(admission),
+      getChatSessionPrefs: (sessionId) => this.getChatSessionPrefs(sessionId),
+      resolveToolPolicyContext: (request) => this.resolveToolPolicyContext(request),
+      resolveCapabilityToolSchema: (request) => this.turnRuntime.resolveCapabilityToolSchema(request),
+      listCallable: (workspaceId) => this.capabilitySystemService.listCatalog("callable", "ALL", workspaceId),
+      resolveMeshToolSchemas: (request) => resolveMeshChatToolSchemas(this.meshChatBindingDeps(), request),
+      getToolCallBeforeInterposition: (workspaceId) => this.hooksService.getToolCallBeforeInterposition(workspaceId),
+      resolveRuntimeOwnerBinding: (toolName) => this.pluginToolOverrideService.resolveRuntimeOwnerBinding(toolName),
+    }, input);
+  }
+
+  private restoreNativeAdmissionSchemas(handle: McpRequesterAdmissionTurnContextHandle) {
+    return restoreMcpChatAdmissionSchemas(
+      {
+        readAdmission: (scope) => this.storage.sessionMutationAdmissions.findFeatureReferences(scope),
+        restoreRequester: (context) => this.mcpRequesterAdmissionRuntime.restoreSchemas(context),
+        restoreStatic: (context) => this.mcpStaticChat.restoreAdmissionSchemas(context),
+      },
+      handle,
+    );
+  }
+
+  private async assertRequesterAdmissionToolAllowed(
+    scope: import("@goatcitadel/contracts").McpRequesterAdmissionScope,
+    canonicalName: string,
+  ): Promise<void> {
+    return assertMcpAdmissionToolAllowed({
+      readMcpServers: () => this.readMcpServers(),
+      assertMcpServerInCapabilityScope: (request) => this.assertMcpServerInCapabilityScope(request),
+      prepareToolAccessEvaluation: (request) => this.prepareToolAccessEvaluation(request),
+      inspectAccess: (request, options) => this.policyEngine.inspectAccess(request, options),
+      recordDevDiagnostic: (diagnostic) => this.recordDevDiagnostic(diagnostic),
+    }, scope, canonicalName);
+  }
+
+  public resolveChatFeatureAdmission(
+    input: Parameters<NonNullable<chatTurnPrepService.ChatTurnPrepHost["resolveChatFeatureAdmission"]>>[0],
+  ) {
+    return resolveChatFeatureAdmission(this.chatFeatureAdmissionHost(), input);
+  }
+
+  public async assertAutomaticFanoutAuthority(invocationId: string) {
+    await this.durableFanout.assertInvocationAuthority(invocationId);
+  }
+
+  public resolveAdmittedSkillInstructions(
+    references: import("@goatcitadel/contracts").ChatTurnFeatureReferences,
+    workspaceId: string,
+  ) {
+    return renderAdmittedSkillInstructions(this.chatFeatureAdmissionHost(), references, workspaceId);
+  }
+
+  private async readExplicitContextToolDefinitions(
+    input: import("./chat-turn-agent-runner.js").ChatTurnAgentRunnerInput,
+  ) {
+    return (await this.turnRuntime.resolveCapabilityToolSchema(input)).tools;
+  }
+
+  public async revalidateChatRoutedContextSnapshot(
+    snapshot: import("@goatcitadel/contracts").ChatRoutedContextSnapshotRecord,
+  ) {
+    await revalidateChatRoutedContextSnapshotAccess(this, snapshot);
+  }
+
+  private async bindImmutableChatFeatureAdmission(
+    admission: import("./chat-turn-types.js").ActiveTurnAdmission,
+    references: import("@goatcitadel/contracts").ChatTurnFeatureReferences,
+  ) {
+    await this.assertTurnAdmissionWrite(admission);
+    return this.storage.sessionMutationAdmissions.bindFeatureReferences({
+      ...admission.identity,
+      ...(admission.requestClaim ? { requestRuntimeClaim: admission.requestClaim } : {}),
+      ...(admission.durableClaim ? { durableClaim: admission.durableClaim } : {}),
+      references,
+    });
+  }
+
+  /** Workspace PRODUCT.md / DESIGN.md reader for governed skill routes that declare context docs (never global). */
+  private createWorkspaceSkillContextDocReader(workspaceId: string): SkillContextDocReader {
+    return createWorkspaceSkillContextDocReader(
+      { config: this.config, normalizeWorkspaceId: (value) => this.normalizeWorkspaceId(value) },
+      workspaceId,
+    );
   }
 
   public resolveChatTurnEffectiveRoute(sessionId: string, request: ChatSendMessageRequest) {
@@ -7844,159 +8204,13 @@ export class GatewayService {
     }
   }
 
-  private async createReplayScratchSession(
-    sourceSessionId: string,
-    sourceTurnId: string,
-  ): Promise<{ sessionId: string; sourceTurnId: string }> {
-    const sourceSession = await this.requireChatSession(sourceSessionId);
-    const sourceMeta = await this.storage.chatSessionMeta.ensure(
-      sourceSessionId,
-      undefined,
-      sourceSession.workspaceId ?? DEFAULT_WORKSPACE_ID,
-    );
-    const sourcePrefs = await this.storage.chatSessionPrefs.ensure(sourceSessionId);
-    const sourceAutonomy = await this.storage.sessionAutonomyPrefs.ensure(sourceSessionId);
-    const sourceProjectId = (await this.storage.chatSessionProjects.get(sourceSessionId))?.projectId;
-    const sourceState = await this.loadChatTurnSessionState(sourceSessionId);
-    const scratchSession = await this.createChatSession({
-      workspaceId: this.normalizeWorkspaceId(sourceMeta.workspaceId),
-      projectId: sourceProjectId,
-      mode: sourcePrefs.mode,
-      title: `${REPLAY_SCRATCH_SESSION_TITLE_PREFIX} ${sourceSession.title?.trim() || sourceTurnId.slice(0, 8)}`,
-    });
-
-    await this.storage.chatSessionPrefs.patch(scratchSession.sessionId, {
-      mode: sourcePrefs.mode,
-      planningMode: sourcePrefs.planningMode,
-      providerId: sourcePrefs.providerId,
-      model: sourcePrefs.model,
-      imageProviderId: sourcePrefs.imageProviderId,
-      imageModel: sourcePrefs.imageModel,
-      webMode: sourcePrefs.webMode,
-      memoryMode: sourcePrefs.memoryMode,
-      thinkingLevel: sourcePrefs.thinkingLevel,
-      toolAutonomy: sourcePrefs.toolAutonomy,
-      visionFallbackModel: sourcePrefs.visionFallbackModel,
-      orchestrationEnabled: sourcePrefs.orchestrationEnabled,
-      orchestrationIntensity: sourcePrefs.orchestrationIntensity,
-      orchestrationVisibility: sourcePrefs.orchestrationVisibility,
-      orchestrationProviderPreference: sourcePrefs.orchestrationProviderPreference,
-      orchestrationReviewDepth: sourcePrefs.orchestrationReviewDepth,
-      orchestrationParallelism: sourcePrefs.orchestrationParallelism,
-      codeAutoApply: sourcePrefs.codeAutoApply,
-    });
-    await this.storage.sessionAutonomyPrefs.patch(scratchSession.sessionId, {
-      proactiveMode: sourceAutonomy.proactiveMode,
-      maxActionsPerHour: sourceAutonomy.maxActionsPerHour,
-      maxActionsPerTurn: sourceAutonomy.maxActionsPerTurn,
-      cooldownSeconds: sourceAutonomy.cooldownSeconds,
-      retrievalMode: sourceAutonomy.retrievalMode,
-      reflectionMode: sourceAutonomy.reflectionMode,
-    });
-    await this.inheritDelegatedSessionToolGrants(sourceSessionId, scratchSession.sessionId);
-
-    const cloned = await this.cloneChatTurnPathIntoSession({
-      sourceSessionId,
-      sourceTurnId,
-      targetSessionId: scratchSession.sessionId,
-      sourceState,
-    });
-    await this.storage.chatSessionBranchState.setActiveLeaf(scratchSession.sessionId, cloned.sourceTurnId);
-    return {
-      sessionId: scratchSession.sessionId,
-      sourceTurnId: cloned.sourceTurnId,
-    };
-  }
-
-  private async cloneChatTurnPathIntoSession(input: {
-    sourceSessionId: string;
-    sourceTurnId: string;
-    targetSessionId: string;
-    sourceState: Awaited<ReturnType<GatewayService["loadChatTurnSessionState"]>>;
-  }): Promise<{ sourceTurnId: string }> {
-    const pathTurnIds = buildSelectedPathTurnIds(input.sourceState.turnLineageById, input.sourceTurnId);
-    if (pathTurnIds.length === 0) {
-      throw new Error(`Chat turn ${input.sourceTurnId} not found in session ${input.sourceSessionId}`);
-    }
-
-    const turnIdMap = new Map<string, string>();
-    const messageCopies: ChatMessageRecord[] = [];
-    const traceCopies: Array<Parameters<Storage["chatTurnTraces"]["create"]>[0]> = [];
-
-    for (const pathTurnId of pathTurnIds) {
-      const trace = input.sourceState.tracesById.get(pathTurnId);
-      if (!trace) {
-        throw new Error(`Chat turn ${pathTurnId} not found in source session ${input.sourceSessionId}`);
-      }
-      const userMessage = input.sourceState.messagesById.get(trace.userMessageId);
-      if (!userMessage) {
-        throw new Error(`User message ${trace.userMessageId} not found for turn ${pathTurnId}`);
-      }
-
-      const clonedTurnId = randomUUID();
-      const clonedUserMessageId = randomUUID();
-      let clonedAssistantMessageId: string | undefined;
-      turnIdMap.set(pathTurnId, clonedTurnId);
-      messageCopies.push({
-        ...userMessage,
-        messageId: clonedUserMessageId,
-        sessionId: input.targetSessionId,
-      });
-
-      if (trace.assistantMessageId) {
-        const assistantMessage = input.sourceState.messagesById.get(trace.assistantMessageId);
-        if (assistantMessage) {
-          clonedAssistantMessageId = `assistant-${randomUUID()}`;
-          messageCopies.push({
-            ...assistantMessage,
-            messageId: clonedAssistantMessageId,
-            sessionId: input.targetSessionId,
-          });
-        }
-      }
-
-      traceCopies.push({
-        turnId: clonedTurnId,
-        sessionId: input.targetSessionId,
-        userMessageId: clonedUserMessageId,
-        parentTurnId: trace.parentTurnId ? turnIdMap.get(trace.parentTurnId) : undefined,
-        branchKind: trace.branchKind,
-        sourceTurnId: trace.sourceTurnId ? turnIdMap.get(trace.sourceTurnId) : undefined,
-        assistantMessageId: clonedAssistantMessageId,
-        status: trace.status,
-        mode: trace.mode,
-        model: trace.model,
-        webMode: trace.webMode,
-        memoryMode: trace.memoryMode,
-        thinkingLevel: trace.thinkingLevel,
-        effectiveToolAutonomy: trace.effectiveToolAutonomy,
-        routing: trace.routing,
-        retrieval: trace.retrieval,
-        reflection: trace.reflection,
-        proactive: trace.proactive,
-        completion: trace.completion,
-        durable: trace.durable,
-        orchestration: trace.orchestration,
-        guidance: trace.guidance,
-        citations: trace.citations,
-        capabilityUpgradeSuggestions: trace.capabilityUpgradeSuggestions,
-        specialistCandidateSuggestions: trace.specialistCandidateSuggestions,
-        failure: trace.failure,
-        startedAt: trace.startedAt,
-        finishedAt: trace.finishedAt,
-      });
-    }
-
-    await this.storage.chatMessages.upsertMany(messageCopies);
-    for (const traceCopy of traceCopies) {
-      await this.storage.chatTurnTraces.create(traceCopy);
-    }
-
-    const clonedSourceTurnId = turnIdMap.get(input.sourceTurnId);
-    if (!clonedSourceTurnId) {
-      throw new Error(`Failed to clone replay source turn ${input.sourceTurnId}`);
-    }
-    return { sourceTurnId: clonedSourceTurnId };
+  private async createReplayScratchSession(sourceSessionId: string, sourceTurnId: string) {
+    return createReplayScratchSession({
+      storage: this.storage, requireChatSession: (id) => this.requireChatSession(id),
+      loadChatTurnSessionState: (id) => this.loadChatTurnSessionState(id), createChatSession: (input) => this.createChatSession(input),
+      inheritDelegatedSessionToolGrants: (source, target) => this.inheritDelegatedSessionToolGrants(source, target),
+      normalizeWorkspaceId: (id) => this.normalizeWorkspaceId(id),
+    }, sourceSessionId, sourceTurnId);
   }
 
   public async collectCapabilityUpgradeSuggestions(input: {
@@ -8374,6 +8588,7 @@ export class GatewayService {
       assistantMessageId: prepared.assistantMessageId,
       capabilityProfileId: prepared.capabilityProfile?.profileId,
       capabilityProfileHash: prepared.capabilityProfile?.hashes.profileHash,
+      ...(prepared.featureAdmission ? { featureReferenceSha256: prepared.featureAdmission.referenceSha256 } : {}),
       branchKind: prepared.branchKind,
       parentTurnId: prepared.parentTurnId,
       sourceTurnId: prepared.sourceTurnId,
@@ -8486,13 +8701,23 @@ export class GatewayService {
   }
 
   private async runCommitmentSweep(): Promise<void> {
-    if (isNewAutonomousChatTurnAdmissionPaused()) return;
+    if (
+      !(await this.isFeatureEnabled("commitmentScheduledTurnsV1Enabled")) ||
+      (await this.isFeatureEnabled("autonomyV1Disabled")) ||
+      !(await this.isDurableChatExecutionEnabled())
+    )
+      return;
     await runCommitmentSweep(this.chatAutonomousTurnDeps());
   }
 
   private async runHeartbeatSweep(): Promise<void> {
     await this.heartbeatOccurrenceService.recoverAll();
-    if (isNewAutonomousChatTurnAdmissionPaused()) return;
+    if (
+      !(await this.isFeatureEnabled("proactiveHeartbeatTurnsV1Enabled")) ||
+      (await this.isFeatureEnabled("autonomyV1Disabled")) ||
+      !(await this.isFeatureEnabled("durableKernelV1Enabled"))
+    )
+      return;
     await runHeartbeatSweep(this.chatAutonomousTurnDeps());
   }
 
@@ -8918,6 +9143,7 @@ export class GatewayService {
       coordinator: this.toolInvocationCoordinator,
       executeApprovedAction: (input) => this.executeApprovedRemoteWorkerAction(input),
       createMcpRequesterTurnContext: (profile) => buildMcpRequesterScopedTurnContextFromCapabilityProfile(profile),
+      restoreRequesterAdmissionSchemas: (handle) => this.restoreNativeAdmissionSchemas(handle),
       createMeshTurnContext: createMeshChatTurnContext,
       resolveMeshChatToolBinding: (request, context) =>
         resolveMeshChatToolBinding(this.meshChatBindingDeps(), request, context),
@@ -8947,6 +9173,25 @@ export class GatewayService {
   private remoteWorkerChatAuthorityDependencies(): RemoteWorkerChatAuthorityDependencies {
     return {
       storage: this.storage,
+      resolveAdmissionAuthority: (input) =>
+        resolveRemoteWorkerAdmissionAuthority(
+          createRemoteWorkerChatAdmissionAuthorityHost({
+            storage: this.storage,
+            llmService: this.llmService,
+            enabled: async () => remoteWorkerAssignmentRuntimeActivated() && await this.isFeatureEnabled("chatRemotePlacementV1Enabled"),
+            resolveToolPolicyContext: (request) => this.resolveToolPolicyContext(request),
+            revalidateChatRoutedContextSnapshot: (snapshot) => this.revalidateChatRoutedContextSnapshot(snapshot),
+            resolveAdmittedSkillInstructions: (features, workspaceId) => this.resolveAdmittedSkillInstructions(features, workspaceId),
+            restoreNativeAdmissionSchemas: (handle) => this.restoreNativeAdmissionSchemas(handle),
+            restoreMeshAdmissionSchemas: (handle) => this.restoreMeshAdmissionSchemas(handle),
+            getToolCallBeforeInterposition: (workspaceId) => this.hooksService.getToolCallBeforeInterposition(workspaceId),
+            listToolCatalog: () => this.listToolCatalog(),
+            listCallable: (workspaceId) => this.capabilitySystemService.listCatalog("callable", "ALL", workspaceId),
+            resolveRuntimeOwnerBinding: (toolName) => this.pluginToolOverrideService.resolveRuntimeOwnerBinding(toolName),
+            inspectToolAccess: (request, options) => this.inspectToolAccess(request, options),
+          }),
+          input,
+        ),
       revalidateRequesterTool: (profile, canonicalName) => this.revalidateNativeMcpChatTool(profile, canonicalName),
       revalidateMeshTool: (profile, canonicalName) => this.revalidateMeshChatTool(profile, canonicalName),
       listCallableCapabilities: (workspaceId) =>
@@ -8980,6 +9225,8 @@ export class GatewayService {
     return executeApprovedRemoteWorkerAction(
       {
         storage: this.storage,
+        restoreRequesterAdmissionSchemas: (handle) => this.restoreNativeAdmissionSchemas(handle),
+        restoreMeshAdmissionSchemas: (handle) => this.restoreMeshAdmissionSchemas(handle),
         activations: this.meshCapabilityActivationService,
         coordinator: this.toolInvocationCoordinator,
         policyEngine: this.policyEngine,
@@ -9012,6 +9259,9 @@ export class GatewayService {
       return undefined;
     }
     const pending = await this.storage.pendingApprovalActions.find(approvalId);
+    if (pending?.actionType === "tool.invoke" && pending.request.toolName === "agent.fanout") {
+      throw new ChatFanoutApprovalResumeRequiredError();
+    }
     if (pending?.actionType === "integration.dry_run_commit") {
       return await this.executeApprovedIntegrationDryRunCommit(approvalId, pending);
     }
@@ -9029,104 +9279,55 @@ export class GatewayService {
    * approved preview byte-for-byte. Ward effects are re-evaluated on replay, so a
    * deny that landed after the preview still wins over the approval.
    */
-  private async executeApprovedIntegrationDryRunCommit(
-    approvalId: string,
-    pending: PendingApprovalAction,
-  ): Promise<ToolInvokeResult | undefined> {
-    const request = pending.request;
-    const dryRunId = readRecordString(request, "dryRunId");
-    const connectionId = readRecordString(request, "connectionId");
-    const actionId = readRecordString(request, "actionId");
-    const invokeRequest = isRecord(request.invokeRequest) ? request.invokeRequest : {};
-    const finish = async (result: ToolInvokeResult): Promise<ToolInvokeResult> => {
-      await this.storage.pendingApprovalActions.markResolved(
-        approvalId,
-        result.outcome === "executed" ? "executed" : "failed",
-        toolInvokeResultRecord(result),
-      );
-      await this.storage.approvalEvents.append({
-        approvalId,
-        eventType: "approved_action_executed",
-        actorId: "system",
-        payload: {
-          actionType: "integration.dry_run_commit",
-          outcome: result.outcome,
-          policyReason: result.policyReason,
-          dryRunId,
-          connectionId,
-          actionId,
-        },
-      });
-      return result;
-    };
-    if (!dryRunId || !connectionId || !actionId) {
-      return finish({
-        outcome: "blocked",
-        policyReason:
-          "Approved dry-run commit is missing its linkage (dryRunId/connectionId/actionId); nothing was executed.",
-        auditEventId: randomUUID(),
-      });
-    }
-    let approvedBy = "operator";
-    try {
-      approvedBy = (await this.storage.approvals.get(approvalId)).resolvedBy ?? "operator";
-    } catch {
-      // Keep the fallback actor; the commit still verifies against the approved hash.
-    }
-    await approveDryRun(this.storage.dryRunCommits, dryRunId, {
-      approvedBy,
-      approvedAt: new Date().toISOString(),
-    });
-    try {
-      const idempotencyKey = readRecordString(invokeRequest, "idempotencyKey");
-      const actionResult = await invokeIntegrationConnectionAction(
-        buildIntegrationActionHostForGateway(this.getRouteCompositionPort()),
-        connectionId,
-        actionId,
-        {
-          input: isRecord(invokeRequest.input) ? invokeRequest.input : {},
-          ...(idempotencyKey ? { idempotencyKey } : {}),
-        },
-        { dryRunCommit: { dryRunId, approvedBy } },
-      );
-      return finish({
-        outcome: actionResult.status === "executed" ? "executed" : "blocked",
-        policyReason: actionResult.message,
-        auditEventId: randomUUID(),
-        result: {
-          connectionId,
-          actionId,
-          dryRunId,
-          status: actionResult.status,
-          ...(actionResult.blockedReason ? { blockedReason: actionResult.blockedReason } : {}),
-          ...(actionResult.output ? { output: actionResult.output } : {}),
-        },
-      });
-    } catch (error) {
-      return finish({
-        outcome: "blocked",
-        policyReason:
-          error instanceof Error ? error.message : "Approved dry-run commit failed before reaching the boundary.",
-        auditEventId: randomUUID(),
-      });
-    }
+  private async executeApprovedIntegrationDryRunCommit(approvalId: string, pending: PendingApprovalAction) {
+    return executeApprovedIntegrationDryRunCommit({
+      storage: this.storage,
+      actionHost: buildIntegrationActionHostForGateway(this.getRouteCompositionPort()),
+    }, approvalId, pending);
   }
 
   private async executeApprovedExternalRuntimePendingAction(
     approvalId: string,
     pending: PendingApprovalAction,
     signal?: AbortSignal,
+    admissionHandle?: AdmittedExternalTurnContextHandle,
   ): Promise<ToolInvokeResult | undefined> {
     const approvedRequest = toToolInvokeRequest(pending.request, signal);
     const approvedProfile = await readApprovedExternalChatProfile(this.storage, approvalId, approvedRequest);
+    if (
+      !approvedProfile &&
+      (isNativeMcpToolName(approvedRequest.toolName) || isMeshChatToolName(approvedRequest.toolName))
+    ) {
+      const admitted = await readApprovedRequesterAdmission(this.storage, approvalId, approvedRequest);
+      if (admitted) {
+        if (!admissionHandle) throw new RequesterMcpApprovalResumeRequiredError();
+        const context = readAdmittedExternalTurnContext(admissionHandle);
+        if (
+          !context ||
+          context.referenceSha256 !== admitted.referenceSha256 ||
+          canonicalJsonString(context.scope) !== canonicalJsonString(admitted.scope)
+        ) {
+          throw new Error("Approved requester MCP no longer matches the resumed Chat admission.");
+        }
+        await context.assertCurrent();
+      } else if (admissionHandle) throw new Error("Requester MCP approval has no matching canonical Chat admission.");
+    }
     const meshTurnContext =
-      approvedProfile && isMeshChatToolName(approvedRequest.toolName)
+      (readMeshAdmissionTurnContext(
+        admissionHandle as import("./gateway/mesh-chat-binding.js").MeshChatTurnContextHandle | undefined,
+      )
+        ? (admissionHandle as import("./gateway/mesh-chat-binding.js").MeshChatTurnContextHandle)
+        : undefined) ??
+      (approvedProfile && isMeshChatToolName(approvedRequest.toolName)
         ? createMeshChatTurnContext(approvedProfile)
-        : undefined;
+        : undefined);
     const mcpRequesterTurnContext =
-      approvedProfile && !meshTurnContext
+      (readMcpRequesterAdmissionTurnContext(admissionHandle)
+        ? (admissionHandle as McpRequesterAdmissionTurnContextHandle)
+        : undefined) ??
+      (approvedProfile && !meshTurnContext
         ? buildMcpRequesterScopedTurnContextFromCapabilityProfile(approvedProfile)
-        : undefined;
+        : undefined);
     const beforeExecute = await this.toolInvocationCoordinator.prepareApprovedBuiltinBeforeExecute(approvedRequest, {
       invocationId: `approved-builtin:${approvalId}`,
       ...(signal ? { signal } : {}),
@@ -9143,7 +9344,9 @@ export class GatewayService {
             markExternalCallStarted: markStarted,
           }),
         resolveNativeMcpChatToolBinding: (request) =>
-          resolveNativeMcpChatToolBinding(this.storage, request, mcpRequesterTurnContext),
+          resolveNativeMcpChatToolBinding(this.storage, request, mcpRequesterTurnContext, (handle) =>
+            this.restoreNativeAdmissionSchemas(handle),
+          ),
         executeApprovedAction: (id, abortSignal, options) =>
           this.policyEngine.executeApprovedAction(id, abortSignal, {
             ...options,
@@ -9170,6 +9373,18 @@ export class GatewayService {
       pending,
       signal,
     );
+  }
+
+  private resumeRequesterAdmissionApprovals(
+    input: import("./chat-turn-agent-runner.js").ChatTurnAgentRunnerInput,
+    handle: AdmittedExternalTurnContextHandle,
+  ): Promise<void> {
+    return resumeAdmittedExternalApprovals({
+      storage: this.storage,
+      refreshPolicy: (approvalId) => this.refreshApprovedPendingToolPolicyContext(approvalId),
+      executePending: (approvalId, pending, signal, context) =>
+        this.executeApprovedExternalRuntimePendingAction(approvalId, pending, signal, context),
+    }, input, handle);
   }
 
   private async refreshApprovedPendingToolPolicyContext(approvalId: string): Promise<void> {
@@ -9333,7 +9548,30 @@ export class GatewayService {
 
   /** The storage and activation owners every mesh Chat binding resolves against. */
   private meshChatBindingDeps() {
-    return { storage: this.storage, activations: this.meshCapabilityActivationService };
+    return {
+      storage: this.storage,
+      activations: this.meshCapabilityActivationService,
+      restoreAdmissionSchemas: (handle: import("./gateway/mesh-chat-binding.js").MeshChatTurnContextHandle) =>
+        this.restoreMeshAdmissionSchemas(handle),
+    };
+  }
+
+  private restoreMeshAdmissionSchemas(handle: import("./gateway/mesh-chat-binding.js").MeshChatTurnContextHandle) {
+    return restoreSelectedMeshAdmission(
+      {
+        storage: this.storage,
+        activations: this.meshCapabilityActivationService,
+        enabled: () => this.isFeatureEnabled("chatMeshCapabilitiesV1Enabled"),
+        assertScopeCurrent: async (scope) => {
+          await assertMcpRequesterAdmissionScopeCurrent(this.storage, scope);
+          if ((await this.readMcpRequesterAuthConnectionState(scope)).revoked)
+            throw new Error("Mesh admission actor was revoked.");
+        },
+        readAdmission: (scope) => this.storage.sessionMutationAdmissions.findFeatureReferences(scope),
+        listCallable: (workspaceId) => this.capabilitySystemService.listCatalog("callable", "ALL", workspaceId),
+      },
+      handle,
+    );
   }
 
   public async evaluateToolAccess(
@@ -9341,13 +9579,14 @@ export class GatewayService {
     options: Pick<ToolInvocationRuntimeOptions, "mcpRequesterTurnContext" | "meshTurnContext"> = {},
   ): Promise<ToolAccessEvaluateResponse> {
     const request = await this.prepareToolAccessEvaluation(input);
-    const mesh = await resolveMeshChatToolBinding(
-      { storage: this.storage, activations: this.meshCapabilityActivationService },
-      request,
-      options.meshTurnContext,
-    );
+    const mesh = await resolveMeshChatToolBinding(this.meshChatBindingDeps(), request, options.meshTurnContext);
     if (mesh) return this.policyEngine.evaluateAccess(request, { meshToolBinding: mesh.schema.policyBinding });
-    const binding = await resolveNativeMcpChatToolBinding(this.storage, request, options.mcpRequesterTurnContext);
+    const binding = await resolveNativeMcpChatToolBinding(
+      this.storage,
+      request,
+      options.mcpRequesterTurnContext,
+      (handle) => this.restoreNativeAdmissionSchemas(handle),
+    );
     return binding
       ? this.policyEngine.evaluateAccess(request, { mcpToolBinding: binding.policyBinding })
       : this.policyEngine.evaluateAccess(request);
@@ -9375,13 +9614,14 @@ export class GatewayService {
         meshToolBinding: options.meshCatalogPolicyBinding,
       });
     }
-    const mesh = await resolveMeshChatToolBinding(
-      { storage: this.storage, activations: this.meshCapabilityActivationService },
-      request,
-      options.meshTurnContext,
-    );
+    const mesh = await resolveMeshChatToolBinding(this.meshChatBindingDeps(), request, options.meshTurnContext);
     if (mesh) return this.policyEngine.inspectAccess(request, { meshToolBinding: mesh.schema.policyBinding });
-    const binding = await resolveNativeMcpChatToolBinding(this.storage, request, options.mcpRequesterTurnContext);
+    const binding = await resolveNativeMcpChatToolBinding(
+      this.storage,
+      request,
+      options.mcpRequesterTurnContext,
+      (handle) => this.restoreNativeAdmissionSchemas(handle),
+    );
     return binding
       ? this.policyEngine.inspectAccess(request, { mcpToolBinding: binding.policyBinding })
       : this.policyEngine.inspectAccess(request);
@@ -10464,77 +10704,10 @@ export class GatewayService {
   }
 
   private async resolveSkillActivationForRuntime(input: SkillResolveInput, recordUsage: boolean, workspaceId?: string) {
-    const policy = await this.getSkillActivationPolicy();
-    const base = resolveCallableSkillActivation({
-      request: input,
-      loadedSkills: await this.capabilitySystemService.listSkills("ALL", workspaceId),
-      inspectableCatalog: await this.capabilitySystemService.listCatalog("inspectable", "ALL", workspaceId),
-      callableCatalog: await this.capabilitySystemService.listCatalog("callable", "ALL", workspaceId),
-    });
-    const stateMap = await this.skillStateService.readSkillStates();
-    const selected: Array<
-      SkillListItem & {
-        confidence: number;
-        requiresConfirmation: boolean;
-      }
-    > = [];
-    const suppressed: Array<{
-      skill: string;
-      state: SkillRuntimeState;
-      confidence: number;
-      reason: string;
-    }> = [];
-
-    for (const skill of base.selected) {
-      const reasons = base.reasons[skill.name] ?? [];
-      const isExplicit = reasons.includes("explicit");
-      const stateRecord = stateMap.get(skill.skillId);
-      const state: SkillRuntimeState = stateRecord?.state ?? "enabled";
-      const confidence = computeSkillActivationConfidence(reasons, isExplicit);
-
-      if (state === "disabled") {
-        suppressed.push({
-          skill: skill.name,
-          state,
-          confidence,
-          reason: "skill_disabled",
-        });
-        continue;
-      }
-
-      if (state === "sleep" && !isExplicit && confidence < policy.guardedAutoThreshold) {
-        suppressed.push({
-          skill: skill.name,
-          state,
-          confidence,
-          reason: "below_guarded_auto_threshold",
-        });
-        continue;
-      }
-
-      const requiresConfirmation =
-        state === "sleep" && policy.requireFirstUseConfirmation && !isExplicit && !stateRecord?.firstAutoApprovedAt;
-
-      selected.push({
-        ...skill,
-        revision:
-          stateRecord?.revision ??
-          (await this.storage.skillAggregateRevisions.ensure("runtime_skill", skill.skillId)).revision,
-        state,
-        confidence,
-        requiresConfirmation,
-      });
-    }
-
-    if (recordUsage) {
-      await this.skillStateService.recordSkillUsage(selected.map((skill) => skill.skillId));
-    }
-
-    return {
-      ...base,
-      selected,
-      suppressed,
-    };
+    return resolveChatRuntimeSkillSelection({
+      getSkillActivationPolicy: () => this.getSkillActivationPolicy(),
+      capabilitySystemService: this.capabilitySystemService, skillStateService: this.skillStateService, storage: this.storage,
+    }, input, recordUsage, workspaceId);
   }
 
   public async listMemoryFiles(relativeDir = "memory"): Promise<MemoryFileEntry[]> {
@@ -10588,109 +10761,10 @@ export class GatewayService {
   private async commitProviderSecretMutation(
     input: (SaveProviderSecretInput & { operation: "set" }) | (DeleteProviderSecretInput & { operation: "delete" }),
   ): Promise<ProviderSecretMutationResponse> {
-    type ProviderSecretRuntimeState = {
-      config: GatewayRuntimeConfig;
-      llm: LlmConfigFile;
-      runtimeLlm: LlmConfigFile;
-      prepared?: PreparedProviderSecretMutation;
-    };
-    const previousConfig = structuredClone(this.config);
-    const previousRuntimeLlm = this.llmService.snapshotRuntimeConfigForPersistence();
-    let appliedStatus: Omit<ProviderSecretMutationResponse, "revision"> | undefined;
-    let preparedMutation: PreparedProviderSecretMutation | undefined;
-
-    const commit = await this.configGenerationService.commit<ProviderSecretRuntimeState>({
-      expectedRevision: input.expectedRevision,
-      requireExpectedRevision: true,
-      previousRuntime: {
-        config: previousConfig,
-        llm: this.llmService.exportConfigFile(),
-        runtimeLlm: previousRuntimeLlm,
-      },
-      buildCandidate: async () => {
-        const prepared = prepareProviderSecretMutation({
-          operation: input.operation,
-          providerId: input.providerId,
-          ...(input.operation === "set" ? { apiKey: input.apiKey, envVar: input.envVar } : {}),
-          storage: input.storage,
-          rootDir: this.config.rootDir,
-          llmService: this.llmService,
-        });
-        preparedMutation = prepared;
-        const llm = this.llmService.exportConfigFile();
-        const runtimeLlm = this.llmService.snapshotRuntimeConfigForPersistence();
-        if (prepared.apiKeyEnv) {
-          const provider = llm.providers.find((entry) => entry.providerId === prepared.providerId);
-          const runtimeProvider = runtimeLlm.providers.find((entry) => entry.providerId === prepared.providerId);
-          if (!provider || !runtimeProvider) {
-            throw new ValidationError({ message: `Unknown LLM provider: ${prepared.providerId}` });
-          }
-          provider.apiKeyEnv = prepared.apiKeyEnv;
-          runtimeProvider.apiKeyEnv = prepared.apiKeyEnv;
-        }
-        const runtimeProvider = runtimeLlm.providers.find((entry) => entry.providerId === prepared.providerId);
-        if (!runtimeProvider) {
-          throw new ValidationError({ message: `Unknown LLM provider: ${prepared.providerId}` });
-        }
-        runtimeProvider.apiKey = undefined;
-        const config = structuredClone(this.config);
-        config.llm = structuredClone(llm);
-        return {
-          runtime: { config, llm, runtimeLlm, prepared },
-          payload: await this.buildUnifiedConfigPayloadForRuntime(config, llm, await this.readFeatureFlags()),
-        };
-      },
-      captureRuntimeOwnerRecoveryIntent: (candidate) => ({
-        version: 1,
-        providerSecretEffects: candidate.prepared?.effects ?? [],
-      }),
-      apply: (candidate) => {
-        if (!candidate.prepared) {
-          throw new Error("Provider secret candidate is missing its prepared owner transition.");
-        }
-        candidate.prepared.apply();
-        // The inline value is cleared only after its selected external owner
-        // has been written and verified. Replacing the provider snapshot then
-        // makes live runtime/config agree with the secret-free canonical file.
-        this.llmService.replaceRuntimeConfig(candidate.runtimeLlm);
-        replaceMutableConfigValue(this.config.llm, candidate.llm);
-        const status = this.llmService.getProviderSecretStatus(candidate.prepared.providerId, {
-          useCache: false,
-        });
-        appliedStatus = {
-          providerId: status.providerId,
-          hasSecret: status.hasApiKey,
-          source: status.apiKeySource,
-        };
-      },
-      restore: async (previous) => {
-        const errors: unknown[] = [];
-        // The prepared mutation owns exact keychain/env/inline compensation.
-        // It is captured inside buildCandidate after the CAS fence, so stale
-        // clients never read or mutate secret owners. Attempt every owner even
-        // if one reverse step fails so a config-owner fault cannot strand an
-        // otherwise-restorable credential effect.
-        for (const restoreOwner of [
-          () => preparedMutation?.restore(),
-          () => this.llmService.replaceRuntimeConfig(previous.runtimeLlm),
-          () => replaceMutableConfigValue(this.config.llm, previous.config.llm),
-        ]) {
-          try {
-            await restoreOwner();
-          } catch (error) {
-            errors.push(error);
-          }
-        }
-        if (errors.length > 0) {
-          throw new AggregateError(errors, "Provider secret owner compensation did not fully complete.");
-        }
-      },
-    });
-
-    if (!appliedStatus) {
-      throw new Error("Provider secret generation committed without applying its runtime owner.");
-    }
-    return { revision: commit.revision, ...appliedStatus };
+    return commitProviderSecretGeneration({
+      config: this.config, llmService: this.llmService, configGenerationService: this.configGenerationService,
+      buildPayload: async (config, llm) => this.buildUnifiedConfigPayloadForRuntime(config, llm, await this.readFeatureFlags()),
+    }, input);
   }
 
   public getPersonalityCatalog() {
@@ -12381,85 +12455,8 @@ export class GatewayService {
       });
   }
 
-  private async projectNotificationEvent(event: RealtimeEvent): Promise<
-    | {
-        workspaceId: string;
-        input: Omit<NotifyRequest, "targetIds"> & { source: string; eventId: string };
-      }
-    | undefined
-  > {
-    const type = typeof event.payload.type === "string" ? event.payload.type : "";
-    if (event.eventType === "chat_thread_updated" && type === "chat_thread_turn_appended") {
-      const sessionId = typeof event.payload.sessionId === "string" ? event.payload.sessionId : undefined;
-      const turnId = typeof event.payload.turnId === "string" ? event.payload.turnId : undefined;
-      if (!sessionId || !turnId) return undefined;
-      let trace: ChatTurnTraceRecord;
-      try {
-        trace = await this.storage.chatTurnTraces.get(turnId);
-      } catch {
-        return undefined;
-      }
-      const eventType =
-        trace.status === "waiting_for_approval"
-          ? "approval.requested"
-          : trace.status === "waiting_for_user_input"
-            ? "user_input.requested"
-            : trace.status === "failed" && trace.failure?.failureClass === "tool_blocked"
-              ? "turn.blocked"
-              : trace.status === "failed"
-                ? "turn.failed"
-                : trace.status === "completed" || trace.status === "partial"
-                  ? "turn.completed"
-                  : undefined;
-      if (!eventType) return undefined;
-      const titleByType = {
-        "approval.requested": "Approval requested",
-        "user_input.requested": "Input requested",
-        "turn.blocked": "Chat turn blocked",
-        "turn.failed": "Chat turn failed",
-        "turn.completed": "Chat turn completed",
-      } as const;
-      return {
-        workspaceId: (await this.storage.chatSessionMeta.get(sessionId))?.workspaceId ?? DEFAULT_WORKSPACE_ID,
-        input: {
-          eventId: `notification:${event.eventId}`,
-          eventType,
-          sessionId,
-          turnId,
-          title: titleByType[eventType],
-          message:
-            trace.failure?.message ??
-            (await this.storage.chatSessionMeta.get(sessionId))?.title ??
-            "A GoatCitadel Chat turn changed state.",
-          source: "chat.turn",
-        },
-      };
-    }
-    if (
-      event.eventType === "cron_job_run" &&
-      (type === "cron_agent_turn_completed" || type === "cron_agent_turn_terminal")
-    ) {
-      const status = typeof event.payload.status === "string" ? event.payload.status : "failed";
-      const eventType = status === "completed" ? "scheduled_turn.completed" : "scheduled_turn.failed";
-      const jobId = typeof event.payload.jobId === "string" ? event.payload.jobId : undefined;
-      const sessionId = jobId
-        ? (await this.storage.cronJobs.get(jobId))?.actionConfig?.agentTurn?.sessionId
-        : undefined;
-      return {
-        workspaceId: sessionId
-          ? ((await this.storage.chatSessionMeta.get(sessionId))?.workspaceId ?? DEFAULT_WORKSPACE_ID)
-          : DEFAULT_WORKSPACE_ID,
-        input: {
-          eventId: `notification:${event.eventId}`,
-          eventType,
-          ...(sessionId ? { sessionId } : {}),
-          title: status === "completed" ? "Scheduled agent turn completed" : "Scheduled agent turn failed",
-          message: `Scheduled run ${String(event.payload.runId ?? "unknown")} settled as ${status}.`,
-          source: "scheduled.agent_turn",
-        },
-      };
-    }
-    return undefined;
+  private async projectNotificationEvent(event: RealtimeEvent) {
+    return projectCanonicalNotificationEvent({ storage: this.storage }, event);
   }
 
   private async requestNotificationFromTool(sessionId: string, input: NotifyRequest): Promise<Record<string, unknown>> {
@@ -13063,19 +13060,6 @@ export function findPlanPhase(plan: OrchestrationPlan, phaseId: string) {
     }
   }
   return undefined;
-}
-
-function computeSkillActivationConfidence(reasons: string[], isExplicit: boolean): number {
-  if (isExplicit) {
-    return 1;
-  }
-  if (reasons.includes("keyword")) {
-    return 0.84;
-  }
-  if (reasons.includes("dependency")) {
-    return 0.68;
-  }
-  return 0.5;
 }
 
 function dedupeStrings(values: readonly string[]): string[] {

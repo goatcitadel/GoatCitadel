@@ -16,11 +16,70 @@ describe("artifact design brief selection", () => {
     });
 
     expect(plan.mode).toBe("polished");
-    expect(plan.preset).toBe("wellness");
+    // Content words never pick a look; the default is the calm clean-professional preset.
+    expect(plan.preset).toBe("clean-professional");
     expect(plan.visualLevel).toBe("polished");
     expect(plan.assetPolicy).toBe("generated-first");
     expect(plan.layouts.map((layout) => layout.name)).toContain("hero");
     expect(plan.assetPlan.some((asset) => asset.type === "generated" && asset.status === "planned")).toBe(true);
+  });
+
+  it("chooses a preset only when the request names one, recolored by a brand when given", () => {
+    const walking = { kind: "presentation" as const, format: "pptx", title: "Benefits of Daily Walking" };
+    expect(createArtifactDesignPlan({ ...walking, design: { preset: "wellness" } }).preset).toBe("wellness");
+    expect(createArtifactDesignPlan({ ...walking, title: "Investor pitch for growth" }).preset).toBe(
+      "clean-professional",
+    );
+    const branded = createArtifactDesignPlan({ ...walking, design: { brand: { colors: ["#123456"] } } });
+    expect(branded.preset).toBe("clean-professional");
+    expect(branded.tokens.accent).toBe("123456");
+  });
+
+  it("keeps every preset token off the anti-slop indigo and violet list", () => {
+    const antiSlop = new Set(["6366F1", "4F46E5", "4338CA", "3730A3", "8B5CF6", "7C3AED", "A855F7"]);
+    for (const preset of [
+      "clean-professional",
+      "education",
+      "wellness",
+      "pitch",
+      "technical-report",
+      "cyberpunk-ops",
+    ] as const) {
+      const plan = createArtifactDesignPlan({
+        kind: "presentation",
+        format: "pptx",
+        title: "Deck",
+        design: { preset },
+      });
+      for (const [name, value] of Object.entries(plan.tokens)) {
+        expect(antiSlop.has(value.toUpperCase()), `${preset}.${name} = ${value}`).toBe(false);
+      }
+    }
+  });
+
+  it("reports the injected skill modules by name on design-skill-applied", () => {
+    const plan = createArtifactDesignPlan({ kind: "presentation", format: "pptx", title: "Quarterly Pitch" });
+    const report = buildArtifactDesignReport(plan, {
+      localPath: "deck.pptx",
+      designQuality: {
+        runtimeInstructions: {
+          status: "injected",
+          skills: [
+            {
+              skillId: "bundled:impeccable",
+              treeSha256: "1".repeat(64),
+              instructionSha256: "2".repeat(64),
+              modules: ["main", "craft-floor", "artifacts"],
+            },
+          ],
+        },
+      },
+    });
+
+    const check = report.validation.find((item) => item.id === "design-skill-applied");
+    expect(check?.status).toBe("passed");
+    expect(check?.detail).toContain("bundled:impeccable [main, craft-floor, artifacts]");
+    expect(check?.detail).not.toContain("planned");
   });
 
   it("keeps raw data artifacts minimal", () => {
@@ -193,7 +252,8 @@ describe("artifact design brief selection", () => {
             id: "asset-specificity",
             severity: "P2",
             dimension: "Visual Coherence",
-            message: "Presentation used local renderer-only visuals.",
+            message:
+              "No provider image was supplied, so the deck carries no provider imagery; charts and tables are unaffected.",
             repaired: false,
           },
         ],
@@ -203,6 +263,51 @@ describe("artifact design brief selection", () => {
     expect(report.designQuality?.status).toBe("warning");
     expect(report.validation.find((check) => check.id === "asset-specificity")?.status).toBe("warning");
     expect(report.validation.find((check) => check.id === "artifact-audit")?.status).toBe("warning");
-    expect(report.residualRisks).toContain("Presentation used local renderer-only visuals.");
+    expect(report.residualRisks).toContain(
+      "No provider image was supplied, so the deck carries no provider imagery; charts and tables are unaffected.",
+    );
+  });
+});
+
+describe("provider image skip reasons", () => {
+  const plan = createArtifactDesignPlan({ kind: "presentation", format: "pptx", title: "Daily Walking" });
+
+  it("says a provider image was supplied but not embedded when the layout dropped it", () => {
+    const report = buildArtifactDesignReport(plan, {
+      localPath: "deck.pptx",
+      usedAssetIds: ["built-in-shapes-icons"],
+      providerVisualSupplied: true,
+    });
+
+    const generated = report.skippedAssets.find((asset) => asset.id === "renderer-generated-visual");
+    expect(generated?.reason).toMatch(/supplied but/iu);
+    // The renderer may also have failed to decode the bytes; the reason must not blame the layout alone.
+    expect(generated?.reason).toMatch(/decode/iu);
+    expect(generated?.reason).not.toMatch(/no provider image was supplied/iu);
+    // A remote provider's image is not "generated locally".
+    expect(generated?.license ?? "").not.toMatch(/locally/iu);
+    expect(report.residualRisks.join("\n")).toMatch(/supplied but/iu);
+    expect(report.residualRisks.join("\n")).not.toMatch(/without visuals/iu);
+  });
+
+  it("keeps the skipped-image reason when the caller also supplies render warnings", () => {
+    const report = buildArtifactDesignReport(plan, {
+      localPath: "deck.pptx",
+      usedAssetIds: ["built-in-shapes-icons"],
+      providerVisualSupplied: true,
+      residualRisks: ["Renderer warning: one slide title was shortened."],
+    });
+
+    expect(report.residualRisks).toContain("Renderer warning: one slide title was shortened.");
+    expect(report.residualRisks.join("\n")).toMatch(/supplied but/iu);
+  });
+
+  it("says no provider image was supplied without claiming the artifact has no visuals", () => {
+    const report = buildArtifactDesignReport(plan, { localPath: "deck.pptx", usedAssetIds: ["built-in-shapes-icons"] });
+
+    const generated = report.skippedAssets.find((asset) => asset.id === "renderer-generated-visual");
+    expect(generated?.reason).toMatch(/no provider image was supplied/iu);
+    expect(generated?.description).not.toMatch(/renderer-produced|abstract/iu);
+    expect(report.residualRisks.join("\n")).not.toMatch(/without visuals/iu);
   });
 });

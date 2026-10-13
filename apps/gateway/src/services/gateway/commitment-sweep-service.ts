@@ -162,10 +162,4 @@ function clampHour(value: number): number {
  * the agent proactively reaching out, so the restricted turn produces a natural
  * check-in message that F1's delivery convention routes to the user.
  */
-export function buildCommitmentCheckInPrompt(suggestedText: string): string {
-  return (
-    "This is a scheduled, self-initiated follow-up check-in you committed to earlier. " +
-    "Send the user a brief, friendly check-in. Suggested intent:\n\n" +
-    suggestedText
-  );
-}
+export { buildCommitmentCheckInPrompt } from "@goatcitadel/contracts";

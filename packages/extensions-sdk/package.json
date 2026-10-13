@@ -6,6 +6,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "goatcitadel-extension-preflight": "./dist/author-preflight-cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

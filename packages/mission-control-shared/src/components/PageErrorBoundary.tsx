@@ -61,7 +61,6 @@ export class PageErrorBoundary extends Component<PageErrorBoundaryProps, PageErr
       return (
         <section className="shell-page-error" role="alert" aria-live="assertive">
           <div className="shell-page-error-card">
-            <p className="shell-page-error-kicker">Page unavailable</p>
             <h3>{this.props.pageLabel} hit a render failure.</h3>
             <p>Retry this surface or return to Chat while Mission Control recovers.</p>
             <div className="shell-page-error-actions">

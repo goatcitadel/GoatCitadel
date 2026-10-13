@@ -365,6 +365,7 @@ describe("remote worker existing provider integration", () => {
     expect(result).toMatchObject({ terminalState: "completed", chunks: ["4"], transportAttempts: 1 });
     expect(fetch).toHaveBeenCalledOnce();
     expect(h.authority).toHaveBeenCalledOnce();
+    expect(h.authority).toHaveBeenCalledWith(h.request, h.request.resolution);
     expect(h.attempts()).toHaveLength(1);
     expect(result.usageEventIds).toEqual(h.attempts().map((a) => a.eventId));
     expect(h.attempts()[0]).toMatchObject({ costUsd: expect.any(Number) });

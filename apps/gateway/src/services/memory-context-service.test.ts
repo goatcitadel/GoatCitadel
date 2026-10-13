@@ -68,6 +68,97 @@ afterEach(async () => {
 });
 
 describe("MemoryContextService", () => {
+  it("shares identical in-flight embeddings while keeping source reads and diagnostics request-local", async () => {
+    const held = holdEmbeddingCalls(1);
+    const observations = vi.fn();
+    const firstObservation = vi.fn();
+    const secondObservation = vi.fn();
+    const service = new MemoryContextService(
+      createStorage() as never, createLlmService() as never, createConfig(await createWorkspaceRoot()) as never,
+      vi.fn(), undefined, undefined, observations,
+    );
+    const input = { scope: "chat" as const, sessionId: "session-1", prompt: "Recall private Alpha gateway diagnostics and release evidence." };
+    const first = service.compose(input, { turnId: "turn-1" }, firstObservation);
+    const second = service.compose(input, { turnId: "turn-1" }, secondObservation);
+    try {
+      await vi.waitFor(() => expect(generateEmbedding).toHaveBeenCalledTimes(1));
+      held.release();
+      await Promise.all([first, second]);
+      expect(generateEmbedding).toHaveBeenCalledTimes(1);
+      expect(firstObservation).toHaveBeenCalledOnce();
+      expect(secondObservation).toHaveBeenCalledOnce();
+      expect(firstObservation.mock.calls[0]![0].embeddingCacheStatus).toBe("miss");
+      expect(secondObservation.mock.calls[0]![0].embeddingCacheStatus).toBe("shared");
+      expect(observations.mock.calls.map(([diagnostics]) => diagnostics.embeddingCacheStatus).sort()).toEqual(["miss", "shared"]);
+      for (const [diagnostics] of observations.mock.calls) {
+        expect(diagnostics.outcome).toBe("completed");
+        expect(Object.values(diagnostics.timings).every((value) => typeof value === "number" && value >= 0)).toBe(true);
+        expect(JSON.stringify(diagnostics)).not.toContain(input.prompt);
+        expect(Object.isFrozen(diagnostics.timings)).toBe(true);
+      }
+    } finally { held.release(); }
+  });
+
+  it("partitions in-flight work by usage lineage and bypasses it for force refresh", async () => {
+    const held = holdEmbeddingCalls(4);
+    const service = new MemoryContextService(
+      createStorage() as never, createLlmService() as never, createConfig(await createWorkspaceRoot()) as never, vi.fn(),
+    );
+    const input = { scope: "chat" as const, prompt: "Recall Alpha gateway diagnostics and release evidence." };
+    const requests = [
+      service.compose(input, { turnId: "turn-1" }),
+      service.compose(input, { turnId: "turn-2" }),
+      service.compose({ ...input, forceRefresh: true }, { turnId: "turn-1" }),
+      service.compose({ ...input, citadelId: "different-citadel" }, { turnId: "turn-1" }),
+    ];
+    try {
+      await vi.waitFor(() => expect(generateEmbedding).toHaveBeenCalledTimes(4));
+      held.release();
+      await Promise.all(requests);
+    } finally { held.release(); }
+  });
+
+  it("cancels one retrieval waiter without cancelling a shared provider attempt", async () => {
+    const held = holdEmbeddingCalls(1);
+    const service = new MemoryContextService(
+      createStorage() as never, createLlmService() as never, createConfig(await createWorkspaceRoot()) as never, vi.fn(),
+    );
+    const controller = new AbortController();
+    const input = { scope: "chat" as const, prompt: "Recall Alpha gateway diagnostics and release evidence." };
+    const first = service.compose({ ...input, signal: controller.signal });
+    const firstRejected = expect(first).rejects.toThrow("cancel first retrieval");
+    const second = service.compose(input);
+    try {
+      await vi.waitFor(() => expect(generateEmbedding).toHaveBeenCalledTimes(1));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      controller.abort(new Error("cancel first retrieval"));
+      await firstRejected;
+      expect(held.signals[0]?.aborted).toBe(false);
+      held.release();
+      await second;
+      expect(generateEmbedding).toHaveBeenCalledTimes(1);
+    } finally { held.release(); }
+  });
+
+  it("aborts the provider after its last waiter leaves and admits a fresh retrieval", async () => {
+    const held = holdEmbeddingCalls(1);
+    const service = new MemoryContextService(
+      createStorage() as never, createLlmService() as never, createConfig(await createWorkspaceRoot()) as never, vi.fn(),
+    );
+    const controller = new AbortController();
+    const input = { scope: "chat" as const, prompt: "Recall Alpha gateway diagnostics and release evidence." };
+    const pending = service.compose({ ...input, signal: controller.signal });
+    const rejected = expect(pending).rejects.toThrow("cancel final retrieval");
+    try {
+      await vi.waitFor(() => expect(generateEmbedding).toHaveBeenCalledTimes(1));
+      controller.abort(new Error("cancel final retrieval"));
+      await rejected;
+      expect(held.signals[0]?.aborted).toBe(true);
+      await service.compose(input);
+      expect(generateEmbedding).toHaveBeenCalledTimes(2);
+    } finally { held.release(); }
+  });
+
   it("reuses query embeddings while observing source deletion and explicit refresh", async () => {
     const rootDir = await createWorkspaceRoot();
     const memoryDir = path.join(rootDir, "workspace", "memory");
@@ -1684,6 +1775,21 @@ describe("MemoryContextService", () => {
     });
   });
 });
+
+function holdEmbeddingCalls(count: number) {
+  const original = vi.mocked(generateEmbedding).getMockImplementation()!;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const signals: Array<AbortSignal | undefined> = [];
+  for (let index = 0; index < count; index += 1) {
+    vi.mocked(generateEmbedding).mockImplementationOnce(async (...args) => {
+      signals.push(args[3]?.signal);
+      await gate;
+      return original(...args);
+    });
+  }
+  return { release, signals };
+}
 
 async function createWorkspaceRoot(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-memory-context-"));

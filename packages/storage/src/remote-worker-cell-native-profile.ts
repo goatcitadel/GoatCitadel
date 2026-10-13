@@ -1,6 +1,7 @@
 import {
   REMOTE_WORKER_CELL_PROFILE_V2_SCHEMA_VERSION, REMOTE_WORKER_CELL_PROVISIONING_JOURNAL_RESERVED_BYTES,
   normalizeRemoteWorkerCellCapacityReservation, normalizeRemoteWorkerCellProfile, remoteWorkerCellCanonicalSha256,
+  normalizeRemoteWorkerCapabilityBinding,
   type RemoteWorkerBootstrapRecord, type RemoteWorkerCellCapacityReservation,
   type RemoteWorkerGenerationRecord, type ResolvedRemoteWorkerAssignmentAuthority,
 } from "@goatcitadel/contracts";
@@ -59,7 +60,7 @@ export function buildRemoteWorkerNativeCellProfile(
     logicalRootSha256: remoteWorkerCellCanonicalSha256({ schemaVersion: "goatcitadel.native-cell-root.v1",
       executionWorkspaceId: manifest.executionWorkspaceId, parentIdentityHex, cellName }),
     assignmentManifestSha256: assignment.manifestSha256, pathJailSha256: manifest.pathJailSha256,
-    capabilityProfileSha256: manifest.capabilityProfileSha256, contextSnapshotSha256: manifest.contextSnapshotSha256,
+    ...normalizeRemoteWorkerCapabilityBinding(manifest), contextSnapshotSha256: manifest.contextSnapshotSha256,
     toolEffectPostureSha256: manifest.toolEffectPostureSha256, runtimeAttestationSha256: worker.installedTreeAttestationSha256,
     launcherAttestationSha256: remoteWorkerCellCanonicalSha256({ schemaVersion: "goatcitadel.native-cell-launcher-attestation.v1",
       runtimeManifestSha256: worker.runtimeManifestSha256, installedTreeAttestationSha256: worker.installedTreeAttestationSha256,

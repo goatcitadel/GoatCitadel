@@ -1391,6 +1391,30 @@ describe("MissionThreadedControllerHost", () => {
     expect(hookInput).toMatchObject({ workspaceId: "workspace-1", sessionId: null });
   });
 
+  it("reaches current context and supervised delegation owners only when the Gateway reports effective availability", async () => {
+    const data = useChatSessionDataMock();
+    useChatSessionDataMock.mockReturnValue({ ...data, projects: { items: [{ ...selectedProject, workspaceId: "workspace-1" }] }, settings: { ...data.settings,
+      chatFeatureAvailability: { explicitContext: true, supervisedDelegation: true } } });
+    const external = buildExternalSourceAttachmentsState({ supported: true, canMutate: true, selectedAttachmentIds: ["attachment-1"] });
+    useExternalSourceAttachmentsMock.mockReturnValue(external);
+    await renderHost(); await selectDefaultSession();
+    const actions = useChatContextActionsMock.mock.results.at(-1)?.value as any;
+    await act(async () => {
+      latestSurfaceInput?.activeSessionSurfaceProps?.onDraftChange("Use the source");
+      latestSurfaceInput?.activeSessionSurfaceProps?.externalSourceControls?.onToggleSelect("attachment-2");
+      await latestSurfaceInput?.contextDockProps?.onSuggestDelegation();
+      await latestSurfaceInput?.contextDockProps?.onAcceptDelegation();
+      await latestSurfaceInput?.activeSessionSurfaceProps?.onAcceptDelegation();
+      await latestSurfaceInput?.contextDockProps?.onRunCodeDelegation("review");
+    });
+    expect(external.toggleSelection).toHaveBeenCalledWith("attachment-2");
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.externalSourceControls?.contextInclusionEnabled).toBe(true);
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.profileDependentAdmissionBlockReason).toBeUndefined();
+    expect(actions.handleSuggestDelegation).toHaveBeenCalledOnce();
+    expect(actions.handleAcceptDelegation).toHaveBeenCalledTimes(2);
+    expect(actions.handleRunCodeDelegation).toHaveBeenCalledWith("review");
+  });
+
   it("rejects malformed, foreign, traversing, duplicate, and oversized hydrated attachment references", () => {
     const attachment = createStoredAttachment();
     expect(

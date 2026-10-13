@@ -4,6 +4,7 @@ import {
   extractExplicitSkillCommand,
   IMPECCABLE_BUDGET_BYTES,
   IMPECCABLE_COMMANDS,
+  IMPECCABLE_CRITIQUE_BUDGET_BYTES,
   IMPECCABLE_MODULE_MAX_BYTES,
   resolveSkillModules,
 } from "./skill-module-routes.js";
@@ -104,6 +105,23 @@ describe("resolveSkillModules", () => {
   });
 });
 
+describe("bundled skill identity", () => {
+  it("routes by canonical skill id, so a non-bundled skill named like a bundled one gets only its main module", () => {
+    const ordinary = resolveSkillModules({ skillId: "bundled:coding", skillName: "coding", text: "Polish this page." });
+    for (const lookalike of [
+      { skillId: "workspace:impeccable", skillName: "impeccable" },
+      { skillId: "imported:design-intelligence", skillName: "design-intelligence" },
+    ]) {
+      const resolution = resolveSkillModules({ ...lookalike, text: "Create a slide deck and polish this page." });
+      expect(resolution).toEqual(ordinary);
+      expect(resolution.contextDocs).toBeUndefined();
+      expect(enumerateSkillRoutes(lookalike)).toEqual(
+        enumerateSkillRoutes({ skillId: "bundled:coding", skillName: "coding" }),
+      );
+    }
+  });
+});
+
 describe("extractExplicitSkillCommand", () => {
   it("returns the command word that follows an explicit mention, case-insensitively", () => {
     expect(extractExplicitSkillCommand("@skill Impeccable Polish the hero", "impeccable", IMPECCABLE_COMMANDS)).toBe(
@@ -138,7 +156,20 @@ describe("enumerateSkillRoutes", () => {
       "reference/craft-floor.md",
       "reference/polish.md",
     ]);
-    expect(routes.every((route) => route.budgetBytes === IMPECCABLE_BUDGET_BYTES)).toBe(true);
+    // critique evaluates and never edits UI, so it loads no craft floor; its reference is split by
+    // section, and the scoring guide, cognitive-load checklist, and personas live in the part.
+    const critique = routes.find((route) => route.routeId === "command:critique");
+    expect(critique?.modules.map((m) => m.relativePath)).toEqual([
+      "SKILL.md",
+      "reference/critique.md",
+      "reference/critique/01-reference-material.md",
+    ]);
+    expect(critique?.budgetBytes).toBe(IMPECCABLE_CRITIQUE_BUDGET_BYTES);
+    expect(
+      routes
+        .filter((route) => route.routeId !== "command:critique")
+        .every((route) => route.budgetBytes === IMPECCABLE_BUDGET_BYTES),
+    ).toBe(true);
   });
 
   it("lists the main and presentation routes for design-intelligence and only main otherwise", () => {
@@ -146,5 +177,19 @@ describe("enumerateSkillRoutes", () => {
     expect(
       enumerateSkillRoutes({ skillId: "bundled:coding", skillName: "coding" }).map((route) => route.routeId),
     ).toEqual(["main"]);
+  });
+
+  it("declares the workspace context docs on every impeccable route and on no other skill", () => {
+    expect(enumerateSkillRoutes(impeccable).every((route) => route.contextDocs?.join(",") === "product,design")).toBe(
+      true,
+    );
+    expect(resolveSkillModules({ ...impeccable, text: "Polish this page." }).contextDocs).toEqual([
+      "product",
+      "design",
+    ]);
+    expect(resolveSkillModules({ ...designIntelligence, text: "Polish this page." }).contextDocs).toBeUndefined();
+    expect(
+      resolveSkillModules({ skillId: "bundled:coding", skillName: "coding", text: "Fix the bug." }).contextDocs,
+    ).toBeUndefined();
   });
 });

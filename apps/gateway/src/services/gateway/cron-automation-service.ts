@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- Cron automation keeps scheduling, run lookup, failure metadata, and operator actions co-located while gateway ownership is still centralized. */
 import { observeActiveCronAgentRun, reconcileCompletedCronChannelDelivery } from "./cron-channel-reconciliation.js";
+import { requireClaimedCommitmentOccurrence } from "../scheduled-cron-storage-guards.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   isCronRunTerminalStatus,
@@ -72,7 +73,7 @@ interface CronReviewRow {
 export interface CronRunSnapshot {
   runId: string;
   jobId: string;
-  status: "ok" | "failed" | "unknown";
+  status: "ok" | "failed" | "skipped" | "unknown";
   /** Present only for a retained canonical occurrence; legacy telemetry cannot supply it. */
   canonical?: Pick<
     CronRunRecord,
@@ -141,6 +142,28 @@ export interface CronRunResult {
   childDurableStatus?: string;
   childTurnId?: string;
   profilePosture?: string;
+  /** Present when the handler ran but reported it did no work (e.g. a flag-gated system job). */
+  skipReason?: string;
+}
+
+/**
+ * What a system cron handler actually did. `void` counts as `completed` for
+ * handlers without a skip path. A `skipped` outcome settles the run cleanly
+ * (no failure backoff) but records `result: "skipped"` wherever the run is
+ * surfaced, so Ops never reports work that did not happen. A `completed`
+ * outcome with `partial` did some work before being stopped; it is recorded
+ * as `result: "partial"` with its reason rather than as a full success.
+ */
+export type CronSystemHandlerOutcome =
+  | { status: "completed"; summary?: Record<string, unknown>; partial?: { reason: string } }
+  | { status: "skipped"; reason: string; detail?: Record<string, unknown> };
+
+/** Why an inline cron run happened, as recorded in review items. */
+export type CronRunTrigger = "scheduled_run" | "manual_run" | "force_run";
+
+/** Passed to system handlers, whose schedulers always run forced and cannot tell a sweep from Run now. */
+export interface CronSystemRunContext {
+  trigger: CronRunTrigger;
 }
 
 export interface CronDueRunItem {
@@ -192,13 +215,13 @@ export interface CronAutomationServiceDeps {
       job: CronJobRecord,
       context?: { contextFrom?: string; contextOutput?: string },
     ) => Promise<{ taskId?: string } | void>;
-    improvement: () => Promise<void>;
-    backup: () => Promise<void>;
-    memoryFlush: () => Promise<void>;
-    memoryConsolidation: () => Promise<void>;
-    costReport: () => Promise<void>;
-    updateReview: () => Promise<void>;
-    curator: () => Promise<void>;
+    improvement: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
+    backup: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
+    memoryFlush: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
+    memoryConsolidation: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
+    costReport: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
+    updateReview: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
+    curator: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
     watchdog: (job: CronJobRecord) => Promise<CronWatchdogRunResult>;
     noAgent: (input: {
       command: string;
@@ -239,7 +262,7 @@ export class CronAutomationService {
     actionConfig?: unknown;
     workdir?: string;
     contextFrom?: string;
-  }): Promise<CronJobRecord> {
+  }, creatorAuthority?: import("@goatcitadel/contracts").CronJobCreatorAuthorityInput): Promise<CronJobRecord> {
     const jobId = normalizeCronJobId(input.jobId);
     if (await this.deps.storage.cronJobs.get(jobId)) {
       throw new Error(`Cron job already exists: ${jobId}`);
@@ -266,7 +289,7 @@ export class CronAutomationService {
     }
     const saved = await this.deps.specOwner.createSpec(job, {
       nextRunAt: job.nextRunAt ?? null,
-    });
+    }, job.action === "agent_turn" && job.actionConfig?.agentTurn?.createdBy?.permissionProfileId ? creatorAuthority : undefined);
     await this.deps.publishRealtime("system", "cron", {
       type: "cron_job_created",
       jobId: saved.jobId,
@@ -292,6 +315,7 @@ export class CronAutomationService {
       contextFrom?: string | null;
     },
     expectedRevision: number,
+    creatorAuthority?: import("@goatcitadel/contracts").CronJobCreatorAuthorityInput,
   ): Promise<CronJobRecord> {
     const current = await this.getCronJob(jobId);
     const action = input.action !== undefined ? normalizeCronJobAction(input.action) : current.action;
@@ -319,7 +343,7 @@ export class CronAutomationService {
     }
     const saved = await this.deps.specOwner.updateSpec(updated, expectedRevision, {
       nextRunAt: updated.nextRunAt ?? null,
-    });
+    }, input.actionConfig !== undefined && updated.action === "agent_turn" && updated.actionConfig?.agentTurn?.createdBy?.permissionProfileId ? creatorAuthority : undefined);
     await this.deps.publishRealtime("system", "cron", {
       type: "cron_job_updated",
       jobId: saved.jobId,
@@ -454,47 +478,21 @@ export class CronAutomationService {
               watchdogReviewRecorded = true;
             }
           }
-        } else if (job.action === "improvement") {
-          await this.deps.runHandlers.improvement();
+        } else if (isSystemHandlerAction(job.action)) {
+          const outcome = await this.deps.runHandlers[SYSTEM_HANDLER_BY_ACTION[job.action]]({
+            trigger: cronRunTrigger(force, options.reason),
+          });
           const finishedAt = new Date().toISOString();
-          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
-          runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
-        } else if (job.action === "backup") {
-          await this.deps.runHandlers.backup();
-          const finishedAt = new Date().toISOString();
-          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
-          runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
-        } else if (job.action === "memory_flush") {
-          await this.deps.runHandlers.memoryFlush();
-          const finishedAt = new Date().toISOString();
-          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
-          runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
-        } else if (job.action === "memory_consolidation") {
-          await this.deps.runHandlers.memoryConsolidation();
-          const finishedAt = new Date().toISOString();
-          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
-          runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
-        } else if (job.action === "cost_report") {
-          await this.deps.runHandlers.costReport();
-          const finishedAt = new Date().toISOString();
-          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
-          runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
-        } else if (job.action === "update_review") {
-          await this.deps.runHandlers.updateReview();
-          const finishedAt = new Date().toISOString();
-          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
-          runSummary = { ...runSummary, action: job.action, nextRunAt: saved.nextRunAt, force, reason: options.reason };
-        } else if (job.action === "curator") {
-          await this.deps.runHandlers.curator();
-          const finishedAt = new Date().toISOString();
-          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
-          runSummary = {
-            ...runSummary,
-            action: job.action,
-            nextRunAt: saved.nextRunAt,
-            force,
-            reason: options.reason,
-          };
+          const outputSummary = summarizeSystemHandlerOutcome(outcome, job.action, force, options.reason);
+          // Written on every path so a later run never inherits a stale skip or partial output.
+          const saved = await this.recordCronRunSuccess(
+            job,
+            runId,
+            finishedAt,
+            JSON.stringify(outputSummary),
+            outcome?.status === "skipped" ? "skipped" : "ok",
+          );
+          runSummary = { ...outputSummary, nextRunAt: saved.nextRunAt };
         } else if (job.action === "no_agent") {
           runSummary = await runNoAgentCronJob({
             job,
@@ -537,22 +535,24 @@ export class CronAutomationService {
           job.action !== "watchdog" &&
           !watchdogReviewRecorded
         ) {
+          const trigger = cronRunTrigger(force, options.reason);
           await this.recordCronReviewItem({
             jobId: normalizedJobId,
             runId,
             severity: "low",
             status: "resolved",
             summary: {
-              trigger: force ? "force_run" : "manual_run",
+              trigger,
               ...runSummary,
             },
-            diff: { type: "manual_run", changed: false },
+            diff: { type: trigger === "scheduled_run" ? "scheduled_run" : "manual_run", changed: false },
           });
         }
         const evidenceEnvelopeId = await this.finalizeCronRunEvidenceOnSuccess(normalizedJobId, runId, runSummary);
+        const skipReason = runSummary.result === "skipped" ? readString(runSummary.skipReason) : undefined;
         const terminal = await this.deps.storage.cronRuns.terminalize(token, {
           status: "completed",
-          outcome: { result: "ok", action: job.action },
+          outcome: canonicalCronOutcomeFromRunSummary(runSummary, job.action),
           ...(evidenceEnvelopeId ? { evidenceEnvelopeId } : {}),
         });
         if (!terminal) throw new Error(`Canonical cron run ${runId} lost ownership before success settlement.`);
@@ -562,6 +562,7 @@ export class CronAutomationService {
           runId,
           status: "ok",
           ...(force ? { force: true } : {}),
+          ...(skipReason ? { skipReason } : {}),
           ...childRun,
         };
       } catch (error) {
@@ -582,6 +583,12 @@ export class CronAutomationService {
     } finally {
       if (lifecycleAdmission?.admitted) lifecycleAdmission.reservation.release();
     }
+  }
+
+  /** Internal maintenance entry: only resume an occurrence already atomically claimed by its commitment owner. */
+  public async processCommitmentOccurrence(runId: string): Promise<CronRunResult> {
+    const run = await requireClaimedCommitmentOccurrence(this.deps, runId);
+    return await this.processCanonicalAgentTurnCronRun(run);
   }
 
   private async beginCanonicalInlineCronRun(
@@ -941,13 +948,22 @@ export class CronAutomationService {
   }
 
   private async reconcileCompletedChannelDelivery(
-    current: CronRunRecord, child: DurableRunRecord, deliveryRun: DurableRunRecord,
+    current: CronRunRecord,
+    child: DurableRunRecord,
+    deliveryRun: DurableRunRecord,
   ): Promise<CronRunResult> {
-    return reconcileCompletedCronChannelDelivery(this.deps, {
-      settle: (run, status, details) => this.settleCanonicalAgentTurnCronRun(run, status, details),
-      project: (run) => this.toCanonicalCronRunResult(run),
-      childOutcome: () => buildCanonicalChildOutcome(current, child),
-    }, current, child, deliveryRun, toCronRunExecutionToken(current));
+    return reconcileCompletedCronChannelDelivery(
+      this.deps,
+      {
+        settle: (run, status, details) => this.settleCanonicalAgentTurnCronRun(run, status, details),
+        project: (run) => this.toCanonicalCronRunResult(run),
+        childOutcome: () => buildCanonicalChildOutcome(current, child),
+      },
+      current,
+      child,
+      deliveryRun,
+      toCronRunExecutionToken(current),
+    );
   }
 
   private async settleCanonicalAgentTurnCronRun(
@@ -1135,8 +1151,9 @@ export class CronAutomationService {
       if (job.activeRunId) {
         try {
           // Observe attached children even when paused, without new admission.
-          const current = await observeActiveCronAgentRun(this.deps, job.activeRunId,
-            (active) => this.processCanonicalAgentTurnCronRun(active));
+          const current = await observeActiveCronAgentRun(this.deps, job.activeRunId, (active) =>
+            this.processCanonicalAgentTurnCronRun(active),
+          );
           if (current && isCronRunTerminalStatus(current.status)) {
             summary.settledCount += 1;
             const failed = current.status !== "completed";
@@ -1252,7 +1269,9 @@ export class CronAutomationService {
         status: !isCronRunTerminalStatus(canonical.status)
           ? "unknown"
           : canonical.status === "completed"
-            ? "ok"
+            ? canonical.outcome?.result === "skipped"
+              ? "skipped"
+              : "ok"
             : "failed",
         finishedAt: canonical.settledAt,
         output:
@@ -1445,13 +1464,20 @@ export class CronAutomationService {
     };
   }
 
-  private async recordCronRunSuccess(job: CronJobRecord, runId: string, finishedAt: string): Promise<CronJobRecord> {
+  private async recordCronRunSuccess(
+    job: CronJobRecord,
+    runId: string,
+    finishedAt: string,
+    lastRunOutput?: string,
+    lastRunStatus: "ok" | "skipped" = "ok",
+  ): Promise<CronJobRecord> {
     const saved = await this.deps.storage.cronJobs.mergeRuntimeTelemetry(
       job.jobId,
       {
         lastRunAt: finishedAt,
         lastRunId: runId,
-        lastRunStatus: "ok",
+        lastRunStatus,
+        ...(lastRunOutput !== undefined ? { lastRunOutput } : {}),
         lastRunEvidenceEnvelopeId: null,
         lastFailureAt: null,
         lastFailure: null,
@@ -1742,6 +1768,70 @@ function hasAmbiguousExternalDeliveryOutcome(
   ].some((marker) => evidence.includes(marker));
 }
 
+/** Built-in maintenance actions whose handler reports a {@link CronSystemHandlerOutcome}. */
+const SYSTEM_HANDLER_BY_ACTION = {
+  improvement: "improvement",
+  backup: "backup",
+  memory_flush: "memoryFlush",
+  memory_consolidation: "memoryConsolidation",
+  cost_report: "costReport",
+  update_review: "updateReview",
+  curator: "curator",
+} as const satisfies Partial<Record<CronJobRecord["action"], keyof CronAutomationServiceDeps["runHandlers"]>>;
+
+function cronRunTrigger(force: boolean, reason: string | undefined): CronRunTrigger {
+  if (force) return "force_run";
+  return reason === "scheduled_due" ? "scheduled_run" : "manual_run";
+}
+
+function isSystemHandlerAction(action: CronJobRecord["action"]): action is keyof typeof SYSTEM_HANDLER_BY_ACTION {
+  return Object.hasOwn(SYSTEM_HANDLER_BY_ACTION, action);
+}
+
+/**
+ * Folds a system handler outcome into the run summary that becomes
+ * `lastRunOutput`, the review item, and the evidence hash. `void` is a plain
+ * completed run.
+ */
+function summarizeSystemHandlerOutcome(
+  outcome: CronSystemHandlerOutcome | void,
+  action: CronJobRecord["action"],
+  force: boolean,
+  reason: string | undefined,
+): Record<string, unknown> {
+  if (outcome?.status === "skipped") {
+    return {
+      result: "skipped",
+      action,
+      skipReason: outcome.reason,
+      ...(outcome.detail ? { skipDetail: outcome.detail } : {}),
+      force,
+      reason,
+    };
+  }
+  const completed = outcome?.status === "completed" ? outcome : undefined;
+  return {
+    result: completed?.partial ? "partial" : "ok",
+    action,
+    ...(completed?.partial ? { partialReason: completed.partial.reason } : {}),
+    ...(completed?.summary ? { handlerSummary: completed.summary } : {}),
+    force,
+    reason,
+  };
+}
+
+/** Canonical cron-run outcome for a cleanly settled inline run. */
+function canonicalCronOutcomeFromRunSummary(
+  runSummary: Record<string, unknown>,
+  action: CronJobRecord["action"],
+): Record<string, unknown> {
+  const skipReason = runSummary.result === "skipped" ? readString(runSummary.skipReason) : undefined;
+  if (skipReason) return { result: "skipped", action, skipReason };
+  const partialReason = runSummary.result === "partial" ? readString(runSummary.partialReason) : undefined;
+  if (partialReason) return { result: "partial", action, partialReason };
+  return { result: "ok", action };
+}
+
 function readCronReviewWarning(summary: Record<string, unknown>): string | undefined {
   if (summary.cronReviewWarning !== true) {
     return undefined;
@@ -1816,11 +1906,22 @@ function normalizeWatchdogCheckId(value: unknown): CronWatchdogCheckId {
   return "runtime_health";
 }
 
-function isScheduledCronAction(action: CronJobRecord["action"]): boolean {
+/**
+ * Actions whose due cadence is owned by runDueTaskCronJobs (and so carry a
+ * projected nextRunAt). The built-in maintenance handlers run their system
+ * schedulers forced, so this sweep is their only scheduled dispatcher.
+ * `improvement` is excluded: ImprovementService runs its own weekly scheduler.
+ */
+export function isScheduledCronAction(action: CronJobRecord["action"]): boolean {
   return (
     action === "task" ||
     action === "watchdog" ||
     action === "curator" ||
+    action === "backup" ||
+    action === "memory_flush" ||
+    action === "memory_consolidation" ||
+    action === "cost_report" ||
+    action === "update_review" ||
     action === "no_agent" ||
     action === "agent_turn"
   );

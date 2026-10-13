@@ -87,6 +87,50 @@ const ARTIFACT_DESTINATION_ARG_SCHEMA = {
 
 const BUILTIN_TOOLS: ToolDefinition[] = [
   {
+    name: "capabilities.search",
+    category: "knowledge",
+    riskLevel: "safe",
+    requiresApproval: false,
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: false,
+    description:
+      "Find currently callable tools or skills by task. Results are discovery only; tool execution still requires current policy and approvals.",
+    pack: "core",
+    recommendedContexts: ["chat"],
+    argSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", minLength: 1, maxLength: 512 },
+        limit: { type: "integer", minimum: 1, maximum: 5 },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "skills.read",
+    category: "knowledge",
+    riskLevel: "safe",
+    requiresApproval: false,
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: false,
+    description:
+      "Read an exact, verified instruction file from a currently callable trusted skill. Defaults to SKILL.md; reading grants no tool permissions and executes no scripts.",
+    pack: "core",
+    recommendedContexts: ["chat"],
+    argSchema: {
+      type: "object",
+      properties: {
+        skillId: { type: "string", minLength: 1, maxLength: 256 },
+        relativePath: { type: "string", minLength: 1, maxLength: 512 },
+      },
+      required: ["skillId"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "tool_artifact.read",
     category: "research",
     riskLevel: "safe",
@@ -852,6 +896,11 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
               },
               label: { type: "string", description: "Short display label for the subtask." },
               expectedOutput: { type: "string", description: "What the subtask should hand back." },
+              resultSchema: {
+                type: "object",
+                description:
+                  "Optional bounded JSON Schema for the final child JSON result. Supported types: object, array, string, number, integer, boolean, null. Objects require properties and additionalProperties:false; arrays require maxItems<=128 and items; strings require maxLength<=8192. No refs, patterns or schema combinators.",
+              },
             },
             required: ["objective"],
           },
@@ -1856,6 +1905,11 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
           },
         },
         rows: { type: "array" },
+        html: {
+          type: "string",
+          description:
+            "Optional complete HTML document (<!doctype html> … </html>) written verbatim for format html, at most 512 KiB. Honored only with a governed design receipt (impeccable or design-intelligence); otherwise the renderer template is used.",
+        },
         design: ARTIFACT_DESIGN_ARG_SCHEMA,
         destination: ARTIFACT_DESTINATION_ARG_SCHEMA,
       },
@@ -1886,6 +1940,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       "Use design.mode minimal or plain for raw data, logs, JSON, CSV, code, or explicitly plain outputs.",
       "For non-plain DOCX, PDF, HTML, reports, briefs, and handouts, set design.skillId to impeccable so Design Quality V1 is reflected in the artifact design report.",
       "Keep renderer provenance in the design report rather than visible document body copy unless the user explicitly asks for an evidence appendix.",
+      "For format html under a design receipt, you may author the whole page yourself in the html argument; the design report records markup: model-authored and the artifact can be rendered to PNG evidence from Chat.",
     ],
   },
   {
@@ -2123,7 +2178,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       "Do not satisfy a requested PowerPoint by returning markdown-only slide text unless this tool is unavailable or blocked.",
       "Use design.mode polished or design.preset when the user asks for a visually appealing deck.",
       "Set design.skillId to impeccable for non-plain decks so Design Quality V1 checks asset specificity, layout integrity, and placeholder/provenance cleanup.",
-      "Prefer provider-generated visuals with provenance when available; otherwise the design report must disclose local-renderer fallback visuals.",
+      "Prefer provider-generated visuals with provenance when available; without one the deck ships with no placeholder imagery and the design report marks the generated visual as skipped.",
       "For research decks, provide canonical sources, complete research metadata, rich cited bullets, and semantic matrix/chart slides; source appendix slides are generated automatically.",
       "presentations.create does not accept model-authored presenter notes. Trusted direct-render callers may supply human-authored notes; renderer, model, prompt, layout, and provenance diagnostics belong only in the returned design report and render manifest.",
     ],

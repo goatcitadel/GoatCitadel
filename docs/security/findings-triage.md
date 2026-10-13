@@ -1,6 +1,6 @@
 # GitHub Security Findings — Triage Reference
 
-Last updated: 2026-08-04
+Last updated: 2026-10-12
 
 This document explains how to triage the recurring categories of GitHub Security findings against this repo and how to fix them **once** without rediscovering the same root cause every time. New AI agents (Claude, Codex, Copilot review bots) and human contributors should read this before opening a PR that touches rate-limit configuration, stream pipeline error handling, Dependabot alerts, the secret-scanning allowlist, or the synthetic-token fixtures used by the secret-redaction tests.
 
@@ -39,10 +39,13 @@ The gateway registers `@fastify/rate-limit` with `global: false` and uses an `on
 
 | Bucket | Default `max` / minute | Triggers when… |
 |---|---:|---|
-| `auth` | 60 | URL matches the auth-route classifier |
-| `mutation` | 180 | Method is POST/PUT/PATCH/DELETE |
-| `sse` | 45 | Route is an SSE stream |
-| `general` | 500 | Everything else (typically GET) |
+| `sse` | 45 | URL contains `/events/stream` or `/dev/diagnostics/stream` (checked first, any method) |
+| `auth` | 60 | URL starts with `/api/v1/auth` or `/api/v1/secrets` |
+| `webhook_ingress` | 500 | POST to a signed inbound integration webhook route (`isSignedInboundWebhookRoute`) |
+| `general` | 500 | Any other GET/HEAD/OPTIONS route |
+| `mutation` | 180 | Everything else (POST/PUT/PATCH/DELETE) |
+
+`classifyRateLimitBucket` in `app.ts` evaluates the rows in this order, so URL rules win over the HTTP method.
 
 The hook also wraps any explicit per-route `max` with `Math.min(explicitMax, bucketDefault)`, so an explicit value equal to the bucket default is a behavioural no-op.
 
@@ -72,7 +75,7 @@ Module-level constants live at the top of each route file. Existing examples:
 - [`apps/gateway/src/routes/tasks.ts`](../../apps/gateway/src/routes/tasks.ts) — `KANBAN_MUTATION_RATE_LIMIT_MAX = 180`
 - [`apps/gateway/src/routes/auth.ts`](../../apps/gateway/src/routes/auth.ts), [`admin.ts`](../../apps/gateway/src/routes/admin.ts), [`integrations-slack-oauth-routes.ts`](../../apps/gateway/src/routes/integrations-slack-oauth-routes.ts) — same pattern, file-local constants
 
-Pick the constant whose value equals the bucket default for the method (mutation→180 for POST/PUT/PATCH/DELETE; general→500 for GET). Do not invent lower values without an explicit security reason; the `Math.min` in `app.ts` will silently tighten the cap and may surprise callers.
+Pick the constant whose value equals the default of the route's bucket, as classified by the table above, not by HTTP method alone: sse→45 for SSE stream routes, auth→60, webhook_ingress→500, general→500 for other GET routes, mutation→180 for other mutating routes. Do not invent lower values without an explicit security reason; the `Math.min` in `app.ts` will silently tighten the cap and may surprise callers.
 
 ### Special case: routes that use a shared options helper
 
@@ -213,6 +216,7 @@ Do not report "no quality findings" on the strength of an empty `code-scanning/a
 | `js/comparison-between-incompatible-types` | Reliability | **First decide which of two cases you have.** (a) The check is *load-bearing* and the alert is a narrowing-order artifact — put the `=== null` / `!== undefined` test **before** the `typeof x === "object"` guard so the compared operand is still unnarrowed (`canonical-json.ts`). (b) The check is genuinely *unreachable* because an earlier `return`/`break` already excluded that value — delete it and comment the invariant (`mcp-requester-resolution.ts`, `remote-worker-native-tls-listener.ts`). Reordering a case-(b) site only moves the alert; the rule refires with a different message ("cannot be of type null" rather than "is of type object … compared to null"). Read the whole function before choosing. |
 | `js/superfluous-trailing-arguments` | Reliability | Do **not** delete the argument at the call site. `FastifyPluginAsync` declares two *required* parameters, so `routes(fastify as never)` fails typecheck with TS2554. Fix the plugin instead: declare the ignored second parameter as `_opts` (allowed by the `argsIgnorePattern: "^_"` rule in `eslint.config.js`). |
 | `js/missing-await` | Reliability | Inspect the use before awaiting. For an in-flight promise identity guard, awaiting either operand would compare a resolved value with the stored promise and break cleanup. Store the promise in an entry object, await its `promise`, and compare entry identity in `finally` (`chat-delegation-service.ts`). |
+| `js/trivial-conditional` | Reliability | Check whether the flagged guard re-reads a closure flag after an `await`. CodeQL does not model another continuation (for example a `finally` block) flipping the flag while this one is suspended, so a load-bearing re-check looks constant. Do **not** delete it. Move the check into a small local closure such as `assertActive()` and call that at each re-check (`remote-worker-tool-model-budget-runtime.ts`, findings #2119 and #2120, covered by the `tool_returned_during_authority` and `tool_returned_during_budget` scenarios in `llm-service.usage-accounting.test.ts`). |
 
 Applied examples live in [`apps/gateway/src/services/chat-message-history-service.ts`](../../apps/gateway/src/services/chat-message-history-service.ts),
 [`packages/contracts/src/canonical-json.ts`](../../packages/contracts/src/canonical-json.ts),
@@ -282,6 +286,41 @@ that post-merge wave as completed from a pre-merge PR.
 
 Confirm a suggestion by reading the implementation it describes — and, for test findings, by
 running the test — before opening the offered pull request.
+
+### 2026-10-11 AI queue snapshot
+
+The authenticated AI view reported seven findings in five files after the 2026-10-11 default-branch pushes. Each premise was checked against the source before acting:
+
+| Reported | Disposition and evidence |
+|---|---|
+| `apps/gateway/src/services/curator-service.ts` — the durable curator tick always records `triggerMode: "scheduled"` | Accepted. The tick payload contract allows `"manual"`, so the executor now forwards `payload.triggerMode`. Latent today because nothing enqueues `curator.tick` runs; a focused test covers the manual case. |
+| `apps/mission-control-next/src/cockpit/areas/work/WorkRunDetail.tsx` — a recorded cost of `0` renders as "Unknown" | Accepted. `buildProviderUsage` leaves `totals.costUsd` undefined when no turn reports cost, so `0` is a real recorded value. Non-negative finite totals now render as `$0.00+`; a regression test covers it. |
+| `scripts/verification/lib/scenarios/external-sources-lane.mjs` — the browser-flow check only enforces a minimum pass count | Accepted. A `5 planned / 4 executed / 4 passed` summary passed. The check now also requires planned, executed, and passed to equal `requiredPassed` when the browser summary reports them. |
+| `docs/security/findings-triage.md` — the rate-limit constant instruction omits the `sse` bucket | Accepted and widened: the bucket table also lacked `webhook_ingress` and the URL-first classification order. |
+| `apps/mission-control-next/src/cockpit/areas/chat/ChatArea.tsx` (three findings) — callback-identity cleanups emit a spurious `false` / `undefined` | Rejected as false positives. Both callbacks are React state setters (`setWorkbenchRequested` in `MissionThreadedControllerHost`, `setVisibleSessionId` in `CockpitApp`), whose identity is stable for the component lifetime, so the cleanup-then-reapply sequence never runs. The third finding is the union of the first two. Revisit only if a non-stable callback is ever passed. |
+
+### 2026-10-12 AI queue snapshot
+
+The authenticated AI view reported six findings in four files after the late 2026-10-11 default-branch pushes. Each premise was checked against the source before acting:
+
+| Reported | Disposition and evidence |
+|---|---|
+| `scripts/verification/agentic-proof.mjs` — `arg.split("=", 2)` truncates inline values containing `=` | Accepted. `--output=proofs/run=latest.json` parsed as `proofs/run`. The shared `parseCliArgs` in `scripts/verification/lib/shared.mjs` had the same defect; it now splits at the first `=` only (unit-tested), and `agentic-proof.mjs` delegates to it. |
+| `apps/gateway/src/services/chat-turn-agent-runner/presentation-research-evidence.ts` — competitor aliases built from single words and truncated acronyms are over-broad | Accepted. `textMatchesAliases` matches by substring, so word aliases such as `piece` and `unlimited` and the three-letter truncation let generic text satisfy cross-competitor coverage. Those derived aliases were removed; a regression test proves a generic snippet no longer covers One Piece or Star Wars: Unlimited. |
+| `apps/gateway/src/services/curator-service.ts` — `maybeRunIdleCurator` can still reject from its catch block | Accepted. The method documents that it never throws, but awaited `publishRealtime` (typed `Promise<unknown>`) inside the catch. The failure publication is now best-effort; a test covers a rejecting publisher. |
+| `apps/gateway/src/services/chat-turn-agent-runner/presentation-research-evidence.ts` — independent source roles are model-declared | Concern acknowledged; offered diff rejected. Roles are declared by the model, though every source must already be present in canonical tool evidence and registered competitor domains cannot count as independent. The generated fix rejects every independent, retailer, marketplace, financial, and event source, which would block all research decks. A real fix needs a server-side domain classification design. |
+| `apps/gateway/src/services/curator-service.ts` — the weekly dedup read/run/write can race between scheduler workers | Rejected. The only caller (the system cron handler) passes `force: true`, which skips that cursor, and scheduled cron runs are deduplicated per occurrence by `(jobId, admissionKey "scheduled:<occurrence>")` in `cron-run-repo.ts`. |
+| `apps/gateway/src/services/gateway/cron-automation-service.ts` — `hour12: false` emits `24` at midnight | Rejected as not reproducible on the supported runtime. Node 24 resolves `hourCycle` to `h23` and formats midnight as `00` in UTC, America/Los_Angeles, and Europe/London. `hourCycle: "h23"` would be optional hardening for older engines. |
+
+### 2026-10-12 AI queue snapshot (afternoon)
+
+After the 2026-10-12 morning pushes the AI view reported four findings in four files; three were read and checked against the source (the browser view froze before the fourth, `packages/skills/src/skill-module-routes.ts`, could be opened):
+
+| Reported | Disposition and evidence |
+|---|---|
+| `apps/gateway/src/services/workspace-design-brand.ts` — the brand is read from the live DESIGN.md without checking the frozen context-document hash | Accepted with a different fix. The frozen profile already records the design document's `sha256` and `bytes` in `contextDocuments`; `resolveWorkspaceDesignBrand` now hashes the live content the same way the governed render does and omits the brand on any mismatch. The offered diff read a nonexistent `contextDocumentReceipts` field. A regression test covers a DESIGN.md edited after the profile froze. Cosmetic only: the brand never widens authority. |
+| `apps/mission-control-next/src/cockpit/areas/settings/WorkspaceDesignContextSettings.tsx` — list `kind: "document"` artifacts instead of `"markdown"` | Rejected. `ChatGeneratedArtifactKind` is `markdown \| html \| mermaid \| code \| text`; `"document"` is not a valid kind, so the offered change would fail typecheck. DESIGN.md content is markdown. |
+| `apps/gateway/src/services/gateway/cron-automation-service.ts` — `hour12: false` emits `24` at midnight | Repeat of the earlier 2026-10-12 finding; still rejected as not reproducible on Node 24. |
 
 ### There is no way to dismiss an AI finding
 

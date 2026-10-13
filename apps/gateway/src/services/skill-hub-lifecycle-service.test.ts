@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   APPROVAL_EXPIRY_ACTOR_ID,
   canonicalJsonString,
@@ -18,7 +19,11 @@ import {
   type SkillHubSnapshotCreateInput,
 } from "@goatcitadel/storage";
 import { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
-import { SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
+import { NodeSkillHubArtifactFilesystem, SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
+import {
+  NodeSkillHubWindowsSecurity,
+  PowerShellSkillHubWindowsSecurityProtocol,
+} from "./skill-hub-windows-security.js";
 import {
   buildSkillHubLifecycleApprovalInput,
   materializeApprovedSkillHubIntent,
@@ -47,12 +52,46 @@ interface AddSnapshotInput {
   audit?: SkillHubSnapshotCreateInput["audit"];
 }
 
-const harnesses: Harness[] = [];
+const harnesses: Array<{ rootDir: string; storage?: Storage }> = [];
+
+// Per-file fixtures. Every harness used to replay the full SQLite migration
+// registry (24-36s per database on a loaded Windows host) and to construct
+// filesystem ports whose PowerShell ACL worker exits after 100ms idle, so each
+// case respawned powershell.exe many times; a stalled process launch blocked the
+// test worker for 12+ minutes. Migrate once and copy the file into each harness
+// root (Storage still runs `migrate` and the schema-shape check against the copy,
+// finding every version applied), and share one real Node filesystem whose
+// Windows ACL/reparse worker stays up for the whole file.
+let migratedDbTemplatePath: string | undefined;
+let windowsSecurityProtocol: PowerShellSkillHubWindowsSecurityProtocol | undefined;
+let sharedFilesystem: NodeSkillHubArtifactFilesystem;
+
+beforeAll(async () => {
+  windowsSecurityProtocol =
+    process.platform === "win32"
+      ? new PowerShellSkillHubWindowsSecurityProtocol({ idleShutdownMs: Number.POSITIVE_INFINITY })
+      : undefined;
+  sharedFilesystem = new NodeSkillHubArtifactFilesystem(
+    windowsSecurityProtocol ? { windowsSecurity: new NodeSkillHubWindowsSecurity(windowsSecurityProtocol) } : {},
+  );
+  const templateDir = await fs.mkdtemp(path.join(os.tmpdir(), "gc-skill-hub-lifecycle-schema-"));
+  migratedDbTemplatePath = path.join(templateDir, "gateway.sqlite");
+  new Storage({
+    dbPath: migratedDbTemplatePath,
+    transcriptsDir: path.join(templateDir, "transcripts"),
+    auditDir: path.join(templateDir, "audit"),
+  }).close();
+}, 120_000); // One full migration replay, inherently slow on a loaded host.
+
+afterAll(async () => {
+  windowsSecurityProtocol?.dispose();
+  if (migratedDbTemplatePath) await fs.rm(path.dirname(migratedDbTemplatePath), { recursive: true, force: true });
+});
 
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const harness of harnesses.splice(0)) {
-    harness.storage.close();
+    harness.storage?.close();
     await fs.rm(harness.rootDir, { recursive: true, force: true });
   }
 });
@@ -146,7 +185,7 @@ describe("SkillHubLifecycleService", () => {
     });
     expect(replay.replayed).toBe(true);
     expect(replay.settlement.operationId).toBe(intent.operationId);
-  });
+  }, 60_000); // Migrated SQLite plus approval/CAS hashing uses the full lifecycle fixture budget.
 
   it("recovers idempotently after a crash following runtime projection", async () => {
     const harness = await createHarness();
@@ -216,7 +255,7 @@ describe("SkillHubLifecycleService", () => {
       boundaryCrossed: true,
     });
     expect(harness.storage.skillLifecycle.find("extra:demo")).toBeUndefined();
-  });
+  }, 60_000); // Includes installation, activation, atomic projection and tamper settlement.
 
   it("stages immutable update and rollback candidates before separately approved activations", async () => {
     const harness = await createHarness();
@@ -689,11 +728,18 @@ describe("SkillHubLifecycleService", () => {
 
 async function createHarness(): Promise<Harness> {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "gc-skill-hub-lifecycle-"));
+  // Register cleanup before asynchronous setup: a timeout must not transfer an
+  // untracked database or late setup result into the next test's ownership.
+  const owned: (typeof harnesses)[number] = { rootDir };
+  harnesses.push(owned);
+  const dbPath = path.join(rootDir, "gateway.sqlite");
+  await fs.copyFile(migratedDbTemplatePath!, dbPath, fsConstants.COPYFILE_EXCL);
   const storage = new Storage({
-    dbPath: path.join(rootDir, "gateway.sqlite"),
+    dbPath,
     transcriptsDir: path.join(rootDir, "transcripts"),
     auditDir: path.join(rootDir, "audit"),
   });
+  owned.storage = storage;
   const sourceDir = path.join(rootDir, "source");
   await fs.mkdir(sourceDir, { recursive: true });
   await fs.writeFile(
@@ -701,7 +747,9 @@ async function createHarness(): Promise<Harness> {
     "---\nname: demo\ndescription: Demo\nmetadata:\n  version: 1.0.0\n  keywords: [demo]\n---\n\nUse the demo skill.\n",
     "utf8",
   );
-  const artifactStore = new SkillHubArtifactStore(path.join(rootDir, "data", "skill-hub", "artifacts"));
+  const artifactStore = new SkillHubArtifactStore(path.join(rootDir, "data", "skill-hub", "artifacts"), {
+    filesystem: sharedFilesystem,
+  });
   const observed = await captureManifest(sourceDir);
   const published = await artifactStore.publishFromDirectory({
     sourceDir,
@@ -729,7 +777,6 @@ async function createHarness(): Promise<Harness> {
     treeSha256: observed.treeSha256,
   };
   harness.lifecycle = lifecycleFor(harness);
-  harnesses.push(harness);
   return harness;
 }
 
@@ -744,6 +791,7 @@ function lifecycleFor(
     skillsExtraRoot: "skills/extra",
     artifactStore: harness.artifactStore,
     storage: harness.asyncStorage,
+    filesystem: sharedFilesystem,
     afterRuntimeProjection,
     beforeFilesystemMutation,
   });

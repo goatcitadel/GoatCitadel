@@ -50,12 +50,13 @@ const note = (workspaceId: string): NoteRecord => ({
 });
 let current: ReturnType<typeof useChatDocuments>;
 let renderer: ReactTestRenderer | undefined;
-function Harness({ workspaceId = "one", sessionId = "one" }: { workspaceId?: string; sessionId?: string }) {
+function Harness({ workspaceId = "one", sessionId = "one", explicitContextEnabled = false }: { workspaceId?: string; sessionId?: string; explicitContextEnabled?: boolean }) {
   current = useChatDocuments({
     workspaceId,
     selectedSession: session(sessionId, workspaceId),
     selectedSessionId: sessionId,
     documentEditingEnabled: true,
+    explicitContextEnabled,
     artifacts: [],
     setUiError,
     setActiveGeneratedArtifact,
@@ -82,6 +83,20 @@ afterEach(async () => {
 });
 
 describe("Chat document owner extraction", () => {
+  it("only adds explicit context when enabled, deduplicates palette inclusion, and permits clearing after revocation", async () => {
+    await act(async () => { renderer = create(<Harness />); });
+    const ref = { kind: "personal_note" as const, ref: "note-one", label: "Saved note" };
+    await act(async () => { current.documents?.onToggleInclude(ref); current.includeDocumentContext(ref); });
+    expect(current.pendingDocumentContextRefs).toEqual([]);
+    await act(async () => renderer?.update(<Harness explicitContextEnabled />));
+    expect(current.documents?.contextInclusionEnabled).toBe(true);
+    await act(async () => { current.includeDocumentContext(ref); current.includeDocumentContext(ref); });
+    expect(current.pendingDocumentContextRefs).toEqual([ref]);
+    await act(async () => renderer?.update(<Harness />));
+    expect(current.pendingDocumentContextRefs).toEqual([ref]);
+    await act(async () => current.documents?.onToggleInclude(ref));
+    expect(current.pendingDocumentContextRefs).toEqual([]);
+  });
   it("keeps refresh identity on unrelated renders and sends the note revision to its owner", async () => {
     await act(async () => {
       renderer = create(<Harness />);

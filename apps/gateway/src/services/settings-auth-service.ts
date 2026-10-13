@@ -15,6 +15,7 @@
 
 import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
+import { projectChatFeatureAvailability } from "./chat-feature-availability.js";
 import { normalizeFirecrawlApiKeyEnvName } from "@goatcitadel/policy-engine";
 import {
   APPROVAL_EXPIRY_ACTOR_ID,
@@ -188,6 +189,9 @@ export interface SettingsAuthRuntimeDependencies {
 export async function getSettings(deps: SettingsRuntimeDependencies): Promise<RuntimeSettings> {
   const features = await deps.readFeatureFlags();
   return {
+    chatFeatureAvailability: projectChatFeatureAvailability(
+      deps.config.assistant.durable ?? { enabled: false, executionEnabled: false }, features,
+    ),
     revision: deps.readSettingsRevision?.() ?? 1,
     environment: deps.config.assistant.environment,
     deploymentProfile: deps.config.assistant.deploymentProfile,

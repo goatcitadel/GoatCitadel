@@ -347,13 +347,12 @@ describe("HeartbeatOccurrenceService", () => {
     await expect(service.recoverAll()).rejects.toBe(enqueueFailure);
   });
 
-  it("validates and resumes a bound canonical run before terminal settlement", async () => {
+  it.each([false, true])("validates and resumes a bound canonical run before terminal settlement (feature binding %s)", async (featureBinding) => {
     const plan = buildHeartbeatOccurrencePlan(CLAIM_INPUT);
     const occurrence = buildOccurrence(plan, {
       state: "durable_bound",
       boundDurableRunId: "hbr_child_1",
-      capabilityProfileId: "profile-1",
-      capabilityProfileHash: "9".repeat(64),
+      ...(featureBinding ? { featureReferenceSha256: "8".repeat(64) } : { capabilityProfileId: "profile-1", capabilityProfileHash: "9".repeat(64) }),
     });
     const order: string[] = [];
     const markDurableBound = vi.fn(() => {
@@ -379,6 +378,8 @@ describe("HeartbeatOccurrenceService", () => {
 
     await expect(service.recoverAll()).resolves.toMatchObject({ scanned: 1, terminal: 1 });
     expect(order).toEqual(["validate-bound", "recover-run-finalizers", "settle-occurrence"]);
+    expect(markDurableBound).toHaveBeenCalledWith(expect.objectContaining(featureBinding
+      ? { featureReferenceSha256: "8".repeat(64) } : { capabilityProfileId: "profile-1" }));
   });
 
   it("treats operator preemption between bound replay validation and run recovery as closed", async () => {

@@ -1,21 +1,19 @@
+import { readHistoricalStaticMcpBinding, assertHistoricalStaticMcpScope, isConnectedStaticServer, scopeFromHook } from "./mcp-static-profile-authority.js";
+import { McpStaticChatAdmissionService } from "./mcp-static-chat-admission-service.js";
 import {
   canonicalJsonString,
-  resolveMcpServerConnectionMode,
   type CapabilityCatalogEntry,
   type ChatTurnCapabilityProfileRecord,
   type McpInvokeRequest,
   type McpRequesterScopeHashInput,
   type McpServerRecord,
+  type ChatTurnFeatureReferences,
+  type McpRequesterAdmissionScope,
 } from "@goatcitadel/contracts";
 import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
-import {
-  verifyChatTurnCapabilityCatalogBinding,
-  verifyChatTurnCapabilityProfile,
-  type AsyncStorage,
-} from "@goatcitadel/storage";
+import { type AsyncStorage } from "@goatcitadel/storage";
 import { createStaticMcpCallAuthority } from "./mcp-static-call-authority.js";
 import {
-  assertStaticMcpToolBindingIntegrity,
   createStaticMcpCatalogSnapshot,
   staticMcpProviderDefinition,
   type StaticMcpCatalogSnapshot,
@@ -26,7 +24,7 @@ import {
   type McpStaticEnvironmentHandle,
   type McpStaticEnvironmentService,
 } from "./mcp-static-environment-service.js";
-import { GATEWAY_OWNED_MCP_SERVER_IDS, type McpServerStore } from "./mcp-server-store.js";
+import { type McpServerStore } from "./mcp-server-store.js";
 import {
   discoverStaticMcpToolsList,
   invokeMcpRuntimeTool,
@@ -48,8 +46,13 @@ import {
   matchesMcpRequesterScopedTurnContextProfile,
   readMcpRequesterScopedTurnContext,
   type McpRequesterScopedCatalogDiscoveryHookInput,
-  type McpRequesterScopedTurnContextHandle,
 } from "./mcp-requester-resolution-service.js";
+import {
+  readMcpRequesterAdmissionTurnContext,
+  type McpChatTurnContextHandle,
+  type McpRequesterAdmissionTurnContextHandle,
+} from "./mcp-requester-admission-context.js";
+import { type NativeMcpChatToolSchema } from "./gateway/native-mcp-chat-catalog.js";
 import type { McpStdioSessionPool } from "./mcp-stdio-session-pool.js";
 
 export interface StaticMcpChatDispatchInput {
@@ -57,7 +60,7 @@ export interface StaticMcpChatDispatchInput {
   toolName: string;
   arguments?: Record<string, unknown>;
   signal?: AbortSignal;
-  mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle;
+  mcpRequesterTurnContext?: McpChatTurnContextHandle;
 }
 export interface StaticMcpChatDispatchPort {
   invoke(
@@ -80,6 +83,14 @@ export interface McpStaticChatServiceOptions {
   packageRoot: string;
   stdioPool: McpStdioSessionPool<StdioClient>;
   onDiscoveryUnavailable?(serverId: string, reasonCode: string): void;
+  admission?: {
+    enabled(): Promise<boolean>;
+    assertScopeCurrent(scope: McpRequesterAdmissionScope): Promise<void>;
+    readAdmission(
+      scope: McpRequesterAdmissionScope,
+    ): Promise<{ references: ChatTurnFeatureReferences; referenceSha256: string } | undefined>;
+    assertToolAllowed(scope: McpRequesterAdmissionScope, canonicalName: string): Promise<void>;
+  };
 }
 
 interface CapturedCatalog {
@@ -95,7 +106,25 @@ const STATIC_MCP_MINIMUM_LITERAL_SECRET_LENGTH = 12;
 /** Static named tools share Chat scope, policy and durable effects; connection material stays private. */
 export class McpStaticChatService implements StaticMcpChatDispatchPort {
   private readonly captured = new WeakMap<StaticMcpCatalogSnapshot, CapturedCatalog>();
-  public constructor(private readonly options: McpStaticChatServiceOptions) {}
+  private readonly admissionService: McpStaticChatAdmissionService;
+  public constructor(private readonly options: McpStaticChatServiceOptions) {
+    this.admissionService = new McpStaticChatAdmissionService(options, {
+      connection: (server, refresh) => this.connection(server, refresh),
+      normalize: (server, raw, guard) => this.normalize(server, raw, guard),
+    });
+  }
+
+  public hasAdmissionSelection(content: string): Promise<boolean> {
+    return this.admissionService.hasAdmissionSelection(content);
+  }
+
+  public discoverAdmission(input: Parameters<McpStaticChatAdmissionService["discoverAdmission"]>[0]) {
+    return this.admissionService.discoverAdmission(input);
+  }
+
+  public restoreAdmissionSchemas(handle: McpRequesterAdmissionTurnContextHandle): Promise<NativeMcpChatToolSchema[]> {
+    return this.admissionService.restoreAdmissionSchemas(handle);
+  }
 
   public async discover(hook: McpRequesterScopedCatalogDiscoveryHookInput): Promise<StaticMcpCatalogSnapshot[]> {
     const scope = scopeFromHook(hook);
@@ -184,12 +213,20 @@ export class McpStaticChatService implements StaticMcpChatDispatchPort {
     const timer = setTimeout(() => controller.abort(), 25_000);
     timer.unref();
     try {
+      const admission = readMcpRequesterAdmissionTurnContext(input.mcpRequesterTurnContext);
       const context = readMcpRequesterScopedTurnContext(input.mcpRequesterTurnContext);
-      if (!context) throw unavailable();
-      const profile = await this.options.storage.chatTurnCapabilityProfiles.get(context.profileId);
-      if (!matchesMcpRequesterScopedTurnContextProfile(input.mcpRequesterTurnContext, profile)) throw unavailable();
+      if (!context && !admission) throw unavailable();
+      const profile = context
+        ? await this.options.storage.chatTurnCapabilityProfiles.get(context.profileId)
+        : undefined;
+      if (profile && !matchesMcpRequesterScopedTurnContextProfile(input.mcpRequesterTurnContext, profile))
+        throw unavailable();
       const canonicalName = `mcp.${input.server.serverId}.${input.toolName}`;
-      const frozen = await this.frozen(profile, canonicalName);
+      const readCurrent = () =>
+        admission
+          ? this.admissionService.admittedCall(input.mcpRequesterTurnContext, canonicalName)
+          : this.frozen(profile!, canonicalName);
+      const frozen = await readCurrent();
       if (input.server.configurationBindingId !== frozen.binding.configurationBindingId) throw unavailable();
       const connection = await this.connection(frozen.server, false);
       guard = connection.guard;
@@ -208,14 +245,14 @@ export class McpStaticChatService implements StaticMcpChatDispatchPort {
             throw unavailable();
         },
         beforeDispatch: async () => {
-          await this.frozen(profile, canonicalName);
+          await readCurrent();
           await assertMcpStaticEnvironmentCurrent(connection.environment, connection.server);
           signal.throwIfAborted();
           await options.effectDispatch();
           dispatched = true;
           // The durable effect marker awaits storage; recheck authority after
           // that await so a concurrent revoke cannot reach tools/call.
-          await this.frozen(profile, canonicalName);
+          await readCurrent();
           await assertMcpStaticEnvironmentCurrent(connection.environment, connection.server);
           signal.throwIfAborted();
         },
@@ -235,12 +272,18 @@ export class McpStaticChatService implements StaticMcpChatDispatchPort {
           },
           stdioSession: {
             pool: this.options.stdioPool,
+            resourceOwner: {
+              sessionId: frozen.scope.sessionId,
+              turnId: admission?.scope.turnId ?? profile!.identity.turnId,
+            },
             scopeKey: canonicalJsonString({
               workspaceId: frozen.scope.workspaceId,
               sessionId: frozen.scope.sessionId,
+              turnId: admission?.scope.turnId ?? profile!.identity.turnId,
               actorId: frozen.scope.authActorId,
               actorSource: frozen.scope.authActorSource,
-              permission: profile.governance.permission,
+              permission: profile?.governance.permission,
+              ...(admission ? { admissionReferenceSha256: admission.referenceSha256 } : {}),
             }),
           },
         },
@@ -292,53 +335,11 @@ export class McpStaticChatService implements StaticMcpChatDispatchPort {
   }
 
   private async frozen(profile: ChatTurnCapabilityProfileRecord, canonicalName: string) {
-    const stored = await this.options.storage.chatTurnCapabilityProfiles.get(profile.profileId);
-    verifyChatTurnCapabilityProfile(stored);
-    if (
-      stored.hashes.profileHash !== profile.hashes.profileHash ||
-      canonicalJsonString(stored.identity) !== canonicalJsonString(profile.identity)
-    )
-      throw unavailable();
-    const catalog = await this.options.storage.capabilityCatalogSnapshots.get(stored.catalog.snapshotId);
-    verifyChatTurnCapabilityCatalogBinding(stored, catalog);
-    const selected = stored.selection.tools.filter((tool) => tool.canonicalName === canonicalName);
-    const tool = selected.length === 1 ? selected[0] : undefined;
-    const binding = tool?.mcpStaticBinding;
-    if (!binding || !tool) throw unavailable();
-    assertStaticMcpToolBindingIntegrity(binding);
-    const scope = scopeFromProfile(stored);
-    await this.assertScope(scope, binding.serverId);
-    const live = await this.options.listCallableCapabilities(scope.workspaceId);
-    const shared = catalog.callableEntries.find((entry) => entry.kind === "tool" && entry.toolName === "mcp.invoke");
-    if (
-      !shared ||
-      !live.some((entry) => entry.callable && canonicalJsonString(entry) === canonicalJsonString(shared)) ||
-      live.some((entry) => entry.toolName === canonicalName || entry.capabilityId === `tool:${canonicalName}`)
-    )
-      throw unavailable();
-    const server = await this.options.registry.requireServer(binding.serverId);
-    if (
-      !isConnectedStaticServer(server) ||
-      server.configurationBindingId !== binding.configurationBindingId ||
-      server.transport !== binding.transport
-    )
-      throw unavailable();
-    return { server, binding, tool, scope };
+    return readHistoricalStaticMcpBinding(this.options, profile, canonicalName);
   }
 
   private async assertScope(scope: McpRequesterScopeHashInput, serverId: string): Promise<void> {
-    await this.options.assertMcpServerInScope({
-      serverId,
-      toolName: "__profile_discovery__",
-      agentId: "assistant",
-      workspaceId: scope.workspaceId,
-      sessionId: scope.sessionId,
-    });
-    if (
-      (await this.options.readAuthConnectionState({ actorId: scope.authActorId, actorSource: scope.authActorSource }))
-        .revoked
-    )
-      throw unavailable();
+    return assertHistoricalStaticMcpScope(this.options, scope, serverId);
   }
 
   private async connection(original: McpServerRecord, allowRefreshedConfiguration: boolean) {
@@ -397,15 +398,6 @@ export class McpStaticChatService implements StaticMcpChatDispatchPort {
   }
 }
 
-function isConnectedStaticServer(server: McpServerRecord): boolean {
-  return (
-    !GATEWAY_OWNED_MCP_SERVER_IDS.has(server.serverId) &&
-    resolveMcpServerConnectionMode(server) === "static" &&
-    server.enabled &&
-    server.status === "connected" &&
-    Boolean(server.configurationBindingId)
-  );
-}
 function configurationMaterial(server: McpServerRecord): unknown {
   const value = { ...server };
   for (const key of [
@@ -420,26 +412,6 @@ function configurationMaterial(server: McpServerRecord): unknown {
   ] as const)
     delete value[key];
   return JSON.parse(JSON.stringify(value)) as unknown;
-}
-function scopeFromHook(hook: McpRequesterScopedCatalogDiscoveryHookInput): McpRequesterScopeHashInput {
-  if (!hook.authActorId || !["token", "basic", "loopback", "device", "companion"].includes(hook.authActorSource ?? ""))
-    throw unavailable();
-  return {
-    profileId: hook.profileId,
-    turnId: hook.turnId,
-    sessionId: hook.sessionId,
-    workspaceId: hook.workspaceId,
-    authActorId: hook.authActorId,
-    authActorSource: hook.authActorSource as McpRequesterScopeHashInput["authActorSource"],
-  };
-}
-function scopeFromProfile(profile: ChatTurnCapabilityProfileRecord): McpRequesterScopeHashInput {
-  return scopeFromHook({
-    profileId: profile.profileId,
-    ...profile.identity,
-    catalogSnapshotId: profile.catalog.snapshotId,
-    callableCatalogSha256: profile.catalog.callableHash,
-  });
 }
 function unavailable(): Error {
   return new Error("Static MCP authority is no longer current.");

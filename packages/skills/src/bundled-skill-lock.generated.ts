@@ -1,0 +1,112 @@
+// GENERATED FILE - do not edit by hand.
+// Regenerate with `pnpm update:skills:lock`. `pnpm verify:skills:catalog` fails while this lock
+// drifts from the skill trees under skills/bundled.
+import type { BundledSkillLockEntry } from "./bundled-skill-lock.js";
+
+export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
+  {
+    skillId: "bundled:agentic-skill-architect",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "31b22bc8503f456b04016369093754fbe277a366053f23374254481679e59f57",
+    fileCount: 1,
+    totalBytes: 7496,
+  },
+  {
+    skillId: "bundled:coding",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "c0ebdd82fc2a473b63b0a7d75051f6595f0ddbf244369ae9034f2db91b48da32",
+    fileCount: 1,
+    totalBytes: 2607,
+  },
+  {
+    skillId: "bundled:design-intelligence",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "5ca490bc2fa662bb4ffc55ab171c97fc4351df4a3d06cb4b2833eadb7e026aa8",
+    fileCount: 10,
+    totalBytes: 129280,
+  },
+  {
+    skillId: "bundled:documentation",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "3de5983a2e713e0fe84e7fda483bf4b9aedb0c8b01775e34477bb1944bf0cf35",
+    fileCount: 1,
+    totalBytes: 571,
+  },
+  {
+    skillId: "bundled:goatcitadel-native-safe-self-improvement",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "2a572c9a274ca8818c2dc0c3db47cbd8360f133a2ca9d99432de9fc773efc342",
+    fileCount: 20,
+    totalBytes: 22840,
+  },
+  {
+    skillId: "bundled:impeccable",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "a3ad069670e9705316d38a961d3e60384967a67a0648c5cdf71c051e75fc8411",
+    fileCount: 32,
+    totalBytes: 231565,
+  },
+  {
+    skillId: "bundled:mcp-vetter",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "679fb12a228d031ae86fec90236045d525ec3fb46e32c274223b578e74015c94",
+    fileCount: 1,
+    totalBytes: 3208,
+  },
+  {
+    skillId: "bundled:n8n-workflow-architect",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "a7c5db0b01abc0702545f7741f19a6aa80dcf765966d976627d7cfec6d7fe629",
+    fileCount: 7,
+    totalBytes: 14989,
+  },
+  {
+    skillId: "bundled:opencode",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "11d3aca3533b04b92112db75cb14f7f54d71ae0b23cc15497250bc97ecbadfed",
+    fileCount: 1,
+    totalBytes: 4922,
+  },
+  {
+    skillId: "bundled:operations",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "4c9bf1007e04b27f62724472617f6c4b1ec5b13098af1b2a7364454297a47a26",
+    fileCount: 1,
+    totalBytes: 2917,
+  },
+  {
+    skillId: "bundled:personal-assistant",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "ea5d5b1bae97517c7e7d70b4722b0d44299b30d30970495a73f69498feac1401",
+    fileCount: 1,
+    totalBytes: 2817,
+  },
+  {
+    skillId: "bundled:planning",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "a8b06bff7612c0be1f12c2cb3eb802a9d0ad4ca5d440ea0fb93b97bf4568cdb4",
+    fileCount: 1,
+    totalBytes: 566,
+  },
+  {
+    skillId: "bundled:qa",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "77f4a0b28c37095e6f699cc610816f098e28a7acc8a780994861ee845f207dbc",
+    fileCount: 1,
+    totalBytes: 562,
+  },
+  {
+    skillId: "bundled:research",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "3bce6c0144921762e4d22edb47cfeb2f3fa2d4b9fd8eb4c2824fab52dbe5ff0f",
+    fileCount: 1,
+    totalBytes: 595,
+  },
+  {
+    skillId: "bundled:sendclaw",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "b49799b238a9579636672f9ea750504676781e8d99a5230496af955606c92663",
+    fileCount: 2,
+    totalBytes: 9852,
+  },
+];

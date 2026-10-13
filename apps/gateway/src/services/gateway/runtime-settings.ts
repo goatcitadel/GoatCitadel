@@ -9,6 +9,7 @@ import type {
 } from "@goatcitadel/contracts";
 
 export interface RuntimeSettings {
+  chatFeatureAvailability?: import("../chat-feature-availability.js").ChatFeatureAvailability;
   /** Monotonic optimistic-concurrency token. Clients must treat it as opaque. */
   revision: number;
   environment: string;
@@ -145,6 +146,19 @@ export interface RuntimeSettings {
     subagentFanoutV1Disabled?: boolean;
     /** Default-off Chat-native durable agent.fanout aggregate. */
     durableChatFanoutV1Enabled?: boolean;
+    chatProviderFallbackV1Enabled?: boolean;
+    chatSkillInstructionsV1Enabled?: boolean;
+    boundedToolExposureV1Enabled?: boolean;
+    scheduledChatTurnsV1Enabled?: boolean;
+    chatExplicitContextV1Enabled?: boolean;
+    chatAutomaticFanoutV1Enabled?: boolean;
+    chatDelegationControlsV1Enabled?: boolean;
+    proactiveHeartbeatTurnsV1Enabled?: boolean;
+    commitmentScheduledTurnsV1Enabled?: boolean;
+    chatMeshCapabilitiesV1Enabled?: boolean;
+    chatRemotePlacementV1Enabled?: boolean;
+    chatRequesterMcpV1Enabled?: boolean;
+    chatStaticMcpV1Enabled?: boolean;
     /** Gateway-owned governed Change Plan authority. */
     evolutionControlPlaneV1Enabled?: boolean;
     /** Default-on only after the Evolution Control Plane rollout. */

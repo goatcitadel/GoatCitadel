@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, realpath } from "node:fs/promises";
 import path from "node:path";
-import { COMPARISON_TASKS, normalizeComparisonTransport, sha256, summarizeComparison } from "./agent-comparison.mjs";
-import { openComparisonJournal } from "./agent-comparison-journal.mjs";
+import { comparisonTasks, normalizeComparisonTransport, sha256, summarizeComparison } from "./agent-comparison.mjs";
+import { openComparisonJournal, openComparisonPilotJournal } from "./agent-comparison-journal.mjs";
 import { createComparisonProviderProxy, validateComparisonProviderProfile } from "./agent-comparison-provider.mjs";
+import { createAcceptanceFaultControls } from "./agent-comparison-acceptance-faults.mjs";
+import { FEATURE_ACCEPTANCE_SUITE } from "./agent-comparison-acceptance-fixtures.mjs";
 
 const SESSION_VERSION = "goatcitadel.agent-comparison.supervised.v1";
 
@@ -29,18 +31,22 @@ export async function startComparisonSession({
   const cell = manifest.cells.find((item) => cellId(item) === options.cellId);
   if (!cell) throw new Error("The supervised session must select one declared campaign cell.");
   const configured = manifest.products[cell.product];
+  const local = manifest.transportProfile?.kind === "local";
   if (checkout?.revision !== configured.revision || checkout.clean !== true)
     throw new Error("The product checkout must be clean and match its pinned revision before dispatch.");
-  if (manifest.maxRequests <= 0 || manifest.maxCostUsd <= 0)
+  if (manifest.maxRequests <= 0 || (!local && manifest.maxCostUsd <= 0))
     throw new Error("Zero caps allow preparation only. Explicit positive request and dollar caps are required.");
-  if (!upstreamApiKey || /[\r\n]/u.test(upstreamApiKey))
+  if (
+    ((!local || options.apiKeyEnv !== undefined) && !upstreamApiKey) ||
+    (upstreamApiKey !== undefined && (typeof upstreamApiKey !== "string" || /[\r\n]/u.test(upstreamApiKey)))
+  )
     throw new Error("The named provider credential is unavailable.");
   const parent = await ordinaryDirectory(campaignDirectory);
   const destination = path.resolve(outputDirectory);
   const normalizePath = (value) => (process.platform === "win32" ? value.toLowerCase() : value);
   if (normalizePath(path.dirname(destination)) !== normalizePath(parent))
     throw new Error("Use a new cell directory immediately under the canonical campaign directory.");
-  const task = COMPARISON_TASKS.find((item) => item.id === cell.task);
+  const task = comparisonTasks(manifest).find((item) => item.id === cell.task);
   const binding = {
     executionId: randomUUID(),
     manifestSha256: manifest.manifestSha256,
@@ -52,22 +58,27 @@ export async function startComparisonSession({
   const profile = {
     ...configured,
     outputField: options.outputField,
-    pricing: options.pricing,
+    ...(local ? { transportKind: "local", localRuntime: options.localRuntime } : { pricing: options.pricing }),
   };
   validateComparisonProviderProfile(profile);
   const transport = normalizeComparisonTransport({
     upstreamUrl: options.upstreamUrl,
     outputField: options.outputField,
-    pricing: options.pricing,
+    ...(options.kind === "local"
+      ? { kind: "local", localRuntime: options.localRuntime }
+      : { pricing: options.pricing }),
   });
   if (!manifest.transportProfile || sha256(transport) !== sha256(manifest.transportProfile))
     throw new Error("Every supervised cell must use the campaign's pinned endpoint, output field, and pricing.");
   let journal;
+  let pilotJournal;
   let proxy;
+  let acceptanceFaults;
   let timer;
   let finishPromise;
   const references = [];
   const startedAt = new Date().toISOString();
+  const deadlineAt = Date.parse(startedAt) + profile.maxTaskMs;
   const started = performance.now();
   let resolveFinished;
   const finished = new Promise((resolve) => {
@@ -76,6 +87,10 @@ export async function startComparisonSession({
   try {
     // Acquire the campaign lock before creating an invocation. A second process
     // cannot fork the cap by choosing another cell or output directory.
+    if (manifest.pilotBudget || manifest.localPilotBudget)
+      pilotJournal = await openComparisonPilotJournal(manifest.pilotBudget ?? manifest.localPilotBudget, {
+        local: Boolean(manifest.localPilotBudget),
+      });
     journal = await openComparisonJournal({ directory: parent, manifest });
     if (journal.budget.snapshot().receipts.some((item) => item.cellId === options.cellId))
       throw new Error(
@@ -109,13 +124,37 @@ export async function startComparisonSession({
       // review; publishing all phase fixtures here would leak the held-out task.
       initialFixtureFiles: Object.keys(task.files),
     });
+    if (manifest.suite === FEATURE_ACCEPTANCE_SUITE && cell.task === "provider_recovery") {
+      let faultSequence = 0;
+      acceptanceFaults = await createAcceptanceFaultControls({
+        cellId: options.cellId,
+        deadlineAt: Date.now() + Math.max(1, profile.maxTaskMs - (performance.now() - started)),
+        persistReceipt: async (receipt) => {
+          const relative = `controlled-transport-${++faultSequence}.json`;
+          const bytes = Buffer.from(JSON.stringify({ ...receipt, ...binding }, null, 2) + "\n");
+          await writeNew(path.join(evidence, relative), bytes);
+          references.push({ path: relative, sha256: sha256(bytes) });
+        },
+      });
+    }
     proxy = await createComparisonProviderProxy({
-      budget: journal.budget,
+      budget: pilotJournal
+        ? {
+            dispatch: (request, transport) =>
+              journal.budget.dispatch(request, (reservation) =>
+                pilotJournal.budget.dispatch(
+                  { ...request, cellId: `${manifest.manifestSha256}:${request.cellId}` },
+                  () => transport(reservation),
+                ),
+              ),
+          }
+        : journal.budget,
       cellId: options.cellId,
       profile,
       upstreamUrl: options.upstreamUrl,
       upstreamApiKey,
       ...(fetchUpstream ? { fetchUpstream } : {}),
+      ...(acceptanceFaults ? { acceptanceFaults } : {}),
       persistReceipt: async (receipt) => {
         const relative = `provider-attempt-${String(receipt.budgetSequence).padStart(6, "0")}.json`;
         const bytes = Buffer.from(JSON.stringify({ ...receipt, ...binding }, null, 2) + "\n");
@@ -137,22 +176,27 @@ export async function startComparisonSession({
       outputField: profile.outputField,
       expiresAfterMs: profile.maxTaskMs,
     });
-    timer = setTimeout(() => {
-      void finish("deadline");
-    }, profile.maxTaskMs);
+    timer = setTimeout(
+      () => {
+        void finish("deadline");
+      },
+      Math.max(1, profile.maxTaskMs - (performance.now() - started)),
+    );
     return {
       binding,
       workspace,
       evidence,
       connectionFile: path.join(destination, "provider-connection.json"),
       promptFile: path.join(destination, "prompt.txt"),
+      deadlineAt,
       finished,
+      ...(acceptanceFaults ? { acceptanceFaults } : {}),
       close: () => finish("operator_stop"),
     };
   } catch (error) {
     clearTimeout(timer);
-    await proxy?.close();
-    await journal?.close();
+    await Promise.allSettled([proxy?.close(), acceptanceFaults?.close()]);
+    await Promise.all([journal?.close(), pilotJournal?.close()]);
     throw error;
   }
 
@@ -162,7 +206,7 @@ export async function startComparisonSession({
       clearTimeout(timer);
       // Abort and drain exact owned attempts before closing the journal. Unknown
       // provider outcomes retain their reservation rather than becoming free.
-      await proxy.close();
+      await Promise.all([proxy.close(), acceptanceFaults?.close()]);
       const snapshot = journal.snapshot();
       const calls = journal.budget.snapshot().receipts.filter((item) => item.cellId === options.cellId);
       let result;
@@ -179,15 +223,16 @@ export async function startComparisonSession({
           nativeReceipts: references,
           requests: calls.length,
           costUsd: unknown ? null : calls.reduce((total, item) => total + item.costUsd, 0),
-          costKind: unknown ? "unavailable" : "usage_with_pinned_rates",
+          costKind: unknown ? "unavailable" : local ? "local_no_provider_charge" : "usage_with_pinned_rates",
           // Operator/model self-report cannot make a task pass here. The task's
           // independent verifier and native configuration review run separately.
           taskOutcome: "unverified",
         };
         await writeJson(path.join(destination, "journal-export.json"), snapshot);
+        if (pilotJournal) await writeJson(path.join(destination, "pilot-budget-export.json"), pilotJournal.snapshot());
         await writeJson(path.join(destination, "evidence", "session-finish.json"), result);
       } finally {
-        await journal.close();
+        await Promise.all([journal.close(), pilotJournal?.close()]);
       }
       return result;
     })();
@@ -249,6 +294,8 @@ function validateOptions(options) {
           "upstreamUrl",
           "outputField",
           "pricing",
+          "kind",
+          "localRuntime",
           "nativeApprovalGateway",
           "nativeInteractiveCli",
           "nativeSkillWorkflow",
@@ -256,7 +303,9 @@ function validateOptions(options) {
     ) ||
     typeof options.cellId !== "string" ||
     !path.isAbsolute(options.checkoutRoot ?? "") ||
-    !/^[A-Z][A-Z0-9_]{2,127}$/u.test(options.apiKeyEnv ?? "") ||
+    (options.kind !== undefined && options.kind !== "local") ||
+    (!(options.kind === "local" && options.apiKeyEnv === undefined) &&
+      !/^[A-Z][A-Z0-9_]{2,127}$/u.test(options.apiKeyEnv ?? "")) ||
     !["max_tokens", "max_completion_tokens"].includes(options.outputField) ||
     (options.nativeApprovalGateway !== undefined && typeof options.nativeApprovalGateway !== "boolean") ||
     (options.nativeApprovalGateway === true && !["openclaw", "goatcitadel"].includes(options.cellId.split(":")[0])) ||

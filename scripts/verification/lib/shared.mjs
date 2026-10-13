@@ -780,7 +780,10 @@ export function parseCliArgs(argv) {
       positional.push(item);
       continue;
     }
-    const [rawKey, inlineValue] = item.split("=", 2);
+    // Split at the first "=" only: split("=", 2) drops everything after a second "=".
+    const equalsIndex = item.indexOf("=");
+    const rawKey = equalsIndex === -1 ? item : item.slice(0, equalsIndex);
+    const inlineValue = equalsIndex === -1 ? undefined : item.slice(equalsIndex + 1);
     const key = rawKey.slice(2);
     if (inlineValue !== undefined) {
       options[key] = inlineValue;

@@ -1844,6 +1844,406 @@
       "maxHostCallbacks": 0,
       "reason": "Operator-approved scope exception (2026-10-08) for C0 gate reconciliation of the optional Chat clarification owner added in 588d9787b, absent from the pinned baseline inventory. The existing-owner regressions from f9bf998e5, 588d9787b, 2e349bbdd and 9acbd936b are fixed by consolidation in the same change. Binds an optional clarification prompt to the exact admitted operator durable Chat turn, then registers or projects it through the session-mutation admission repository. Four reads: the run lookup and exact admission check in the shared binder, plus one admission call each to register and project. No original baseline-owner limit changes.",
       "evidence": "Measured 4 dependency accesses and 0 host callbacks through an explicitly typed AsyncStorage parameter (no alias blind spot); it was the only regression left in the 2026-10-08 architecture-metrics run. Focused suites pass: optional-input, async clarification, route-runtime, durable-execution and failed-partial recovery, GatewayService close/deferred-init/delegation facades (408 tests); capability-system 109/109 alone; all 47 agent-runner files (548 tests); durable general post-commit integration 17/17 with a raised timeout. Gateway typecheck passes."
+    },
+    {
+      "planStep": "C2",
+      "path": "apps/gateway/src/services/chat-capability-discovery-service.ts",
+      "maxHostCallbacks": 6,
+      "maxDependencyMemberAccesses": 6,
+      "reason": "Reviewed new read-only Chat discovery owner extracted from Gateway. Requires the enabled feature and canonical session workspace before current callable catalog or governed skill-content reads. No execution, activation, database write, transaction or approval owner is introduced. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "2026-10-12: explicit narrow port measures six host/dependency accesses (discovery-owner-metrics.json). Focused discovery, governed content and Gateway host suites pass 25 tests; requester composition passes all 19 tests on an isolated rerun at the original timeout. The initial timed-out requester test is retained. This registration does not close remaining architecture regressions."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/chat-feature-dispatch-authority.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 8,
+      "reason": "Reviewed new network dispatch guard adapter. Composes fallback outside admitted feature and explicit-context guards, preserves original transport arguments, receiver, attribution and cancellation scope, and refuses absent guard support. It mints no durable authority or provider route. Original baseline and existing-owner limits remain unchanged.",
+      "evidence": "docs/testing/FEATURE_QUALITY_EXECUTION.md: 124 dispatch/fallback/completion tests pass, including receiver, argument, missing-guard and deferred-stream revocation checks. requester-resume-metrics.json confirms raw callbacks0/dependencies8. Runtime-truth checkpoint passes4/4; live trials remain deferred."
+    },
+    {
+      "planStep": "C5",
+      "path": "apps/gateway/src/services/remote-worker-chat-admission-authority.ts",
+      "maxHostCallbacks": 34,
+      "maxDependencyMemberAccesses": 38,
+      "reason": "Reviewed new admission-reference worker evidence adapter and pure selection/effect decisions. Reads exact canonical run and admission evidence, then invokes current policy, feature and selected-tool owners under the existing assignment claim. Retained history never creates a dispatch handle. No worker execution, storage or approval owner is replaced. Original baseline and existing-owner limits remain unchanged.",
+      "evidence": "docs/testing/FEATURE_QUALITY_EXECUTION.md: selection and authority composition now move from Gateway into this same owner, retaining both admission fences and exact policy/mesh/tool-owner evidence. remote-composition-tests.log passes81 tests, Gateway typecheck passes, and native-selection-metrics.json measures34 callbacks/38 dependencies. Gateway decreases further to13590 lines before the canonical scan. Physical two-machine acceptance remains explicitly deferred."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/chat-explicit-context-admission.ts",
+      "maxHostCallbacks": 29,
+      "maxDependencyMemberAccesses": 29,
+      "reason": "Reviewed new explicit-context admission and dispatch guard owner. Verifies canonical durable identity, immutable admitted bytes and source visibility under the existing live write fence. Current source revalidation and admission-bound replay validation move verbatim from the source resolver and durable executor into this same owner. Historical frozen-profile replay remains in the durable executor; no new storage, transaction or execution owner is introduced. Original baseline and existing-owner limits remain unchanged.",
+      "evidence": "architecture-guard-tests.log passes175 tests with13 skips; durable-context-guard-tests.log passes147 tests. Context composition also moves here through a typed internal preparation port, keeping historical callback hosts compatible. context-preparation-tests.log passes89 with13 skips, and the actual owned-port path passes within9 current cases/13 historical skips in context-preparation-port-tests.log. Gateway typecheck passes; owner measures29/29, preparation returns to55/58 and two Gateway fa\u00e7ade methods become private. No original cap changes."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/chat-provider-fallback-authority.ts",
+      "maxHostCallbacks": 1,
+      "maxDependencyMemberAccesses": 1,
+      "reason": "Reviewed new process-local fallback authorization and current-provider configuration adapter. Reads the existing provider configuration owner uncached immediately before preparing the same one-attempt dispatch guard, preserving receiver, original deadline, local-to-cloud consent and live authority checks. No route, budget, transaction or provider owner is replaced. Original baseline and existing-owner limits remain unchanged.",
+      "evidence": "current-fallback-tests.log passes125 authority/admission/completion/dispatch tests with zero skips; Gateway typecheck passes. native-selection-metrics.json measures1/1; completion returns to its original51/51 limits."
+    },
+    {
+      "planStep": "C3",
+      "path": "apps/gateway/src/services/mcp-requester-admission-runtime.ts",
+      "maxHostCallbacks": 25,
+      "maxDependencyMemberAccesses": 25,
+      "reason": "Reviewed new requester admission adapter over existing MCP resolution and execution owners. Restores exact selected schemas through current actor, scope, generation and network checks; saved/requester nomination moves from Gateway into this same owner. Missing actor authority, duplicate selections and oversized selection fail before discovery. It creates no competing MCP execution or credential store. Original baseline and existing-owner limits remain unchanged.",
+      "evidence": "native-selection-metrics.json measures25/25. Prior requester scope and Gateway composition proof is retained in FEATURE_QUALITY_EXECUTION.md; native-selection-tests.log and native-selection-typecheck-final.log record focused selection closure independently. Live trials remain deferred."
+    },
+    {
+      "planStep": "C6",
+      "path": "apps/gateway/src/services/chat-mesh-admission-service.ts",
+      "maxHostCallbacks": 10,
+      "maxDependencyMemberAccesses": 12,
+      "reason": "Selected mesh schema restoration and exact live dispatch actor/turn/reference checks share the existing current policy and publication owners; historical frozen binding remains separate. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/chat-feature-admission-service.ts",
+      "maxHostCallbacks": 37,
+      "maxDependencyMemberAccesses": 37,
+      "reason": "Reviewed integration adapter for current main and feature-quality completion. Preserves existing policy, exact-byte skill routing, workspace-only context, lifecycle transaction, audit and post-commit owners. Original architecture baseline and all existing-owner caps remain unchanged.",
+      "evidence": "Feature-quality merge validation records focused skill, requester, lifecycle and artifact tests, wrapped Gateway typecheck and a fresh named architecture gate. Imported type/Pick scanner blind spots are conservatively capped. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/chat-feature-binding-current.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 3,
+      "reason": "Reviewed new read-only current feature-binding guard. Under the existing canonical fence, compares the exact durable turn and retained admission hash before dispatch. Reads only durableRuns and sessionMutationAdmissions; it does not issue an execution handle. Original baseline and existing-owner caps remain unchanged.",
+      "evidence": "requester-resume-owner-tests.log passes42 owner/schema/current-binding tests; runtime-truth checkpoint passes4/4. Full architecture snapshot measures0/3."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/chat-provider-fallback-admission.ts",
+      "maxHostCallbacks": 13,
+      "maxDependencyMemberAccesses": 13,
+      "reason": "Reviewed new admission adapter for one explicitly configured fallback. Rechecks canonical actor/run, current permissions, provider configuration, deadline, output cap and consent under the existing write fence before issuing the process-local route handle. Ambiguous external effects suppress fallback. It replaces no routing, policy, usage or budget owner. Original baseline and existing-owner caps remain unchanged.",
+      "evidence": "current-fallback-tests.log passes125 authority/admission/completion/dispatch checks and Gateway typecheck passes. Full architecture snapshot measures13/13. Live hosted/local fallback quality remains deferred."
+    },
+    {
+      "planStep": "C3",
+      "path": "apps/gateway/src/services/chat-fanout-approval-service.ts",
+      "maxHostCallbacks": 16,
+      "maxDependencyMemberAccesses": 16,
+      "reason": "The approval effect worker yields to its durable Chat parent; only the resumed live owner launches children. Current receipt materialization and original approval transactions remain authoritative. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C3",
+      "path": "apps/gateway/src/services/chat-fanout-wait-evidence.ts",
+      "maxHostCallbacks": 2,
+      "maxDependencyMemberAccesses": 7,
+      "reason": "Reviewed new persisted fanout completion/wait evidence reader. Correlates canonical parent, child watchers and committed tool results; current stream completion projection moves here from the stream owner. It never grants dispatch or synthesizes readiness from UI state. Original baseline and existing-owner caps remain unchanged.",
+      "evidence": "evidence-owner-tests.log passes110 tests including stream/delegation and requester rerun, with Gateway typecheck passing. evidence-owner-metrics.json measures2/7 and restores stream owner to91/92. Prior durable recovery checkpoint remains separately retained."
+    },
+    {
+      "planStep": "C4",
+      "path": "apps/gateway/src/services/heartbeat-chat-authority.ts",
+      "maxHostCallbacks": 8,
+      "maxDependencyMemberAccesses": 8,
+      "reason": "Reviewed new heartbeat admission-reference guard over the existing occurrence and durable owners. Requires exact system actor, claimed occurrence, frozen request/policy hashes and live dispatch fence. Restoration stays disabled by default; operator turns and occurrence settlement remain with existing owners. Original baseline and existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md retains proactive, durable recovery and governance checkpoints with failed prior receipts preserved. Full architecture snapshot measures8/8. Live scheduled model work remains deferred."
+    },
+    {
+      "planStep": "C4",
+      "path": "apps/gateway/src/services/scheduled-chat-authority.ts",
+      "maxHostCallbacks": 13,
+      "maxDependencyMemberAccesses": 13,
+      "reason": "Reviewed new scheduled occurrence admission-reference guard. Rechecks the exact canonical cron occurrence, creator authority, immutable action, restricted permission intersection and current durable fence. It creates no scheduler, delivery owner or missed-occurrence backlog. Original baseline and existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md retains scheduled creator-authority storage parity and recovery/governance proof. Full architecture snapshot measures13/13. Live scheduled model and physical worker acceptance remain deferred."
+    },
+    {
+      "planStep": "C2",
+      "path": "apps/gateway/src/services/llm-prompt-diagnostics.ts",
+      "maxHostCallbacks": 1,
+      "maxDependencyMemberAccesses": 1,
+      "reason": "Reviewed new secret-free normalized prompt/schema measurement helper. Emits only hashes, bounded system block hashes, byte/token estimates and timings through the existing diagnostic owner. It retains no prompt text and creates no metric or evidence store. Original baseline and existing-owner caps remain unchanged.",
+      "evidence": "architecture-guard-tests.log passes175 tests with13 explicit skips, including prompt diagnostics and completion; current-fallback-tests.log passes125 more focused caller checks. Full architecture snapshot measures1/1."
+    },
+    {
+      "planStep": "C3",
+      "path": "apps/gateway/src/services/mcp-chat-admission-schemas.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 3,
+      "reason": "Reviewed new requester/static selected-schema composition adapter. Requires a live opaque admission context, exact retained reference hash and unique canonical/model tool identities. Each existing connection owner rechecks its own live generation, scope and credential custody; composition cannot grant execution. Original baseline and existing-owner caps remain unchanged.",
+      "evidence": "requester-resume-owner-tests.log passes42 approval/schema/current-binding tests; requester and static Gateway integration files pass in native-selection-tests.log apart from the separately corrected assertion. Full architecture snapshot measures0/3."
+    },
+    {
+      "planStep": "C3",
+      "path": "apps/gateway/src/services/mcp-requester-admission-scope.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 4,
+      "reason": "Reviewed new canonical requester scope read guard. Checks the exact actor, session incarnation, admission revision, controller and durable binding. A retained row cannot recreate a live request or durable execution claim. Original baseline and existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md retains requester scope15 scenarios/18 checks plus separate real PostgreSQL proof. Full architecture snapshot measures0/4; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C2",
+      "path": "apps/gateway/src/services/chat-routed-context-inspection.ts",
+      "maxHostCallbacks": 9,
+      "maxDependencyMemberAccesses": 9,
+      "reason": "Reviewed new read-only routed-context inspection owner. Checks exact actor/workspace/durable admission identity before immutable snapshot metadata or bytes, while retaining historical profile inspection. It issues no current dispatch handle and introduces no context store. Original baseline and existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md retains eight routed-context scenarios, separate real PostgreSQL proof and requester actor isolation. durable-context-guard-tests.log passes147 current/historical replay tests. Full architecture snapshot measures9/9."
+    },
+    {
+      "planStep": "C5",
+      "path": "apps/gateway/src/services/channel-setup-evidence-service.ts",
+      "maxHostCallbacks": 20,
+      "maxDependencyMemberAccesses": 20,
+      "reason": "Reviewed new retained channel setup evidence owner. Restores only exact revision/signature/current proof, binds cleanup acknowledgement and projects fresh activation evidence while existing connection commit owns persistence. Read-only recovery does not rerun probes or update drafts. Original baseline and existing-owner caps remain unchanged.",
+      "evidence": "evidence-owner-tests.log passes110 focused tests with zero skips and Gateway typecheck passes. evidence-owner-metrics.json measures20/20 and channel setup returns below its original56/61 caps at55/60. The named guided channel checkpoint passes14 scenarios."
+    },
+    {
+      "planStep": "C5",
+      "path": "apps/gateway/src/services/channel-setup-journey-service.ts",
+      "maxHostCallbacks": 14,
+      "maxDependencyMemberAccesses": 14,
+      "reason": "Reviewed new channel setup journey projection. Reports saved, activated, sent, admitted inbound and linked reply as distinct proof states. Correlates actual current connection revision, canonical ingress/delivery receipts and retained live setup evidence, then rechecks revision before return. It adds no delivery or integration authority. Original baseline and existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md retains the guided channel lane14 passing scenarios and actual setup/recovery receipts. Full architecture snapshot measures14/14; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C5",
+      "path": "apps/gateway/src/services/channel-setup-telegram-discovery.ts",
+      "maxHostCallbacks": 10,
+      "maxDependencyMemberAccesses": 10,
+      "reason": "Reviewed new bounded target discovery adapter for the existing Telegram channel. Requires reviewed draft/current revision and secret custody, uses the existing diagnostics egress owner, bounds response and target history, preserves an active webhook and reports polling conflict. No new channel integration or autonomous delivery authority is introduced. Original baseline and existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md retains guided channel lane14 passing scenarios, including governed discovery behavior. Full architecture snapshot measures10/10; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C5",
+      "path": "apps/gateway/src/services/mcp-server-test-evidence.ts",
+      "maxHostCallbacks": 12,
+      "maxDependencyMemberAccesses": 12,
+      "reason": "Reviewed new read-only bounded MCP sample-task evidence projection. Requires exact requester actor/workspace and matches current server/schema revisions to canonical durable, tool, approval and side-effect receipts. Missing/pruned evidence stays unverified; stale proof cannot become a successful current test. Existing MCP and approval owners retain execution authority. Original baseline and existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md retains actual browser approval/durable resume with one MCP call and stale revision refusal, plus requester-scope proof. Full architecture snapshot measures12/12; Gateway typecheck passes."
+    },
+    {
+      "planStep": "C3",
+      "path": "apps/gateway/src/services/chat-fanout-admission-authority.ts",
+      "maxHostCallbacks": 21,
+      "maxDependencyMemberAccesses": 23,
+      "reason": "Reviewed extraction of current fanout admission/project/grant guards and shared pure binding helpers. Reservation, child dispatch, aggregate mutation, cancellation, settlement and wake remain in ChatDurableFanoutService. The guard requires existing canonical request/durable/session control authority and never creates a lease. Original baseline and existing-owner caps remain unchanged.",
+      "evidence": "fanout-authority-tests-final.log passes57 focused fanout/approval/delegation tests and Gateway typecheck passes. fanout-authority-metrics-final.json measures21/21 and restores durable fanout from53/53 to its original32/32 cap. Two active-project repository accesses through the storage alias are recorded conservatively in the dependency cap23 rather than claimed absent."
+    },
+    {
+      "planStep": "C3",
+      "path": "apps/gateway/src/services/mcp-requester-admission-approval.ts",
+      "maxHostCallbacks": 8,
+      "maxDependencyMemberAccesses": 22,
+      "reason": "Reviewed new admitted external approval evidence/materialization owner with resume loop extracted from Gateway. Rechecks the real durable handle and canonical references, refreshes current policy before execution, and reads settled receipts without re-executing effects. Existing transaction and post-approval execution ownership are preserved. Original baseline and existing-owner limits remain unchanged.",
+      "evidence": "requester-resume-owner-tests.log:42 owner/schema/current-binding tests pass, including four resume tests for settled-effect reuse and revocation before/after policy refresh. Gateway typecheck passes. Raw metrics8/8; fourteen existing ApprovalStorage-alias repository/transaction accesses are not counted by the single-file scanner, so the dependency cap conservatively records22 inspected accesses. Gateway source decreases13924 to13876 lines. No aggregate architecture pass is claimed."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/provider-secret-generation-owner.ts",
+      "maxHostCallbacks": 15,
+      "maxDependencyMemberAccesses": 15,
+      "reason": "Provider-secret candidate preparation, runtime application and exact compensation remain inside the existing ConfigGenerationService commit and recovery-intent boundary. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C2",
+      "path": "apps/gateway/src/services/chat-skill-selection-runtime.ts",
+      "maxHostCallbacks": 10,
+      "maxDependencyMemberAccesses": 10,
+      "reason": "Reviewed integration adapter for current main and feature-quality completion. Preserves existing policy, exact-byte skill routing, workspace-only context, lifecycle transaction, audit and post-commit owners. Original architecture baseline and all existing-owner caps remain unchanged.",
+      "evidence": "Feature-quality merge validation records focused skill, requester, lifecycle and artifact tests, wrapped Gateway typecheck and a fresh named architecture gate. Imported type/Pick scanner blind spots are conservatively capped. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/chat-replay-session-owner.ts",
+      "maxHostCallbacks": 14,
+      "maxDependencyMemberAccesses": 14,
+      "reason": "Replay scratch session copying uses the existing session repositories and grant inheritance; it neither creates execution authority nor changes effect receipts. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C4",
+      "path": "apps/gateway/src/services/notification-event-projection.ts",
+      "maxHostCallbacks": 5,
+      "maxDependencyMemberAccesses": 5,
+      "reason": "Notification projection reads canonical Chat and cron state without retrying execution or taking delivery ownership. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/approved-integration-dry-run-owner.ts",
+      "maxHostCallbacks": 5,
+      "maxDependencyMemberAccesses": 5,
+      "reason": "Approved integration replay retains pending-action/event receipts and calls the same integration action host, hash and side-effect owners. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C6",
+      "path": "apps/gateway/src/services/remote-worker-live-admission-guard.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 5,
+      "reason": "Live worker references enter the Gateway admission resolver; offers recheck the exact durable claim before reservation. Historical profile decoding remains in its original owner. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C6",
+      "path": "apps/gateway/src/services/remote-worker-execution-authority-guard.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 1,
+      "reason": "Native installation and execution re-read protected assignment and workload authority after live admission resolution; original policy inspectors and dispatch owners remain unchanged. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C6",
+      "path": "apps/gateway/src/services/remote-worker-external-tool-binding.ts",
+      "maxHostCallbacks": 5,
+      "maxDependencyMemberAccesses": 5,
+      "reason": "Native MCP and mesh worker bindings restore server-owned schemas and current actor scope before the existing approval and effect owners. Indexed imported types hide the five inspected accesses from the dependency scanner; the cap records them conservatively. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C4",
+      "path": "apps/gateway/src/services/scheduled-cron-storage-guards.ts",
+      "maxHostCallbacks": 1,
+      "maxDependencyMemberAccesses": 2,
+      "reason": "Creator authority binding remains inside the existing generation transaction; commitment recovery requires its previously claimed canonical occurrence and cannot create a missed occurrence. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C5",
+      "path": "apps/gateway/src/services/mcp-static-chat-admission-service.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 22,
+      "reason": "Static admission owns explicit bounded selection, retained schema receipts, revocation and scope checks. Connection/environment credential custody and dispatch remain in McpStaticChatService. Imported Pick types obscure option reads; the cap records all 22 inspected option and transport accesses conservatively. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/mcp-static-profile-authority.ts",
+      "maxHostCallbacks": 6,
+      "maxDependencyMemberAccesses": 6,
+      "reason": "Historical immutable static profile/catalog decoding and live scope checks remain distinct from new admission and preserve exact server-generation checks. Imported Pick types obscure six inspected host accesses; they are retained in the dependency cap. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C5",
+      "path": "apps/gateway/src/services/channel-probe-result.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 1,
+      "reason": "Shared pure probe result projection and bounded JSON parsing were moved verbatim; no credential, network, activation or delivery authority is introduced. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C5",
+      "path": "apps/gateway/src/services/ntfy-channel-live-probes.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 9,
+      "reason": "Existing ntfy probe adapter is separated from the multi-channel dispatcher, retaining bounded reads, credential redaction and ambiguous-send/manual-reconciliation semantics. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C2",
+      "path": "apps/gateway/src/services/chat-tool-artifact-reader.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 1,
+      "reason": "Read-only artifact tool validation remains bounded by session/workspace scope and the existing artifact path jail and public redaction owner. Persistence stays in the original service. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C5",
+      "path": "apps/gateway/src/services/discord-connection-diagnostics.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 11,
+      "reason": "Existing Discord credential/runtime/destination diagnostics use the original governed webhook callback and network owner. No channel or dispatch authority is added. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C3",
+      "path": "apps/gateway/src/services/chat-provider-fallback-preview.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 1,
+      "reason": "Fallback preview checks the default-off feature flag, exact operator-selected target/model and local-to-cloud consent. Preview never issues runtime route authorization. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C5",
+      "path": "apps/gateway/src/services/integration-setup-guidance-port.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 3,
+      "reason": "Optional versioned author guidance annotates only existing operator setup fields; malformed metadata remains inspectable and cannot mint secret inputs or runtime authority. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C3",
+      "path": "apps/gateway/src/services/chat-turn-feature-runtime.ts",
+      "maxHostCallbacks": 20,
+      "maxDependencyMemberAccesses": 20,
+      "reason": "Reviewed integration adapter for current main and feature-quality completion. Preserves existing policy, exact-byte skill routing, workspace-only context, lifecycle transaction, audit and post-commit owners. Original architecture baseline and all existing-owner caps remain unchanged.",
+      "evidence": "Feature-quality merge validation records focused skill, requester, lifecycle and artifact tests, wrapped Gateway typecheck and a fresh named architecture gate. Imported type/Pick scanner blind spots are conservatively capped. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C4",
+      "path": "apps/gateway/src/services/autonomous-chat-replay-authority.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 13,
+      "reason": "Exact autonomous replay validation retains deterministic identities, canonical mutation admissions, immutable profile or occurrence lineage, terminal output and finalizer receipts. It uses original durable/repository owners and creates no competing run store. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C4",
+      "path": "apps/gateway/src/services/autonomous-chat-occurrence-guards.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 3,
+      "reason": "Scheduled and heartbeat occurrence guard composition retains current feature reads and live tool names through the existing autonomous runtime ports. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C5",
+      "path": "apps/gateway/src/services/channel-oauth-staging-service.ts",
+      "maxHostCallbacks": 4,
+      "maxDependencyMemberAccesses": 40,
+      "reason": "Inherited new owner absent the original inventory is now explicitly reviewed. Signed expiring OAuth state, actor/workspace/draft revisions, keychain-only staging, cleanup and governed adoption remain intact; composing installation identity retains diagnostics egress and secret custody. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C5",
+      "path": "apps/gateway/src/services/nextcloud-talk-live-probes.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 10,
+      "reason": "Inherited new Nextcloud probe owner absent the original inventory is reviewed with configured-input/network preflight. Signed bounded room sends preserve ambiguous outcomes and require explicit operator testing; no new integration is introduced. Original baseline and all existing-owner caps remain unchanged.",
+      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/workspace-skill-context-docs.ts",
+      "maxHostCallbacks": 1,
+      "maxDependencyMemberAccesses": 1,
+      "reason": "Reviewed integration adapter for current main and feature-quality completion. Preserves existing policy, exact-byte skill routing, workspace-only context, lifecycle transaction, audit and post-commit owners. Original architecture baseline and all existing-owner caps remain unchanged.",
+      "evidence": "Feature-quality merge validation records focused skill, requester, lifecycle and artifact tests, wrapped Gateway typecheck and a fresh named architecture gate. Imported type/Pick scanner blind spots are conservatively capped. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/release-bound-skill-retrust-owner.ts",
+      "maxHostCallbacks": 5,
+      "maxDependencyMemberAccesses": 5,
+      "reason": "Reviewed integration adapter for current main and feature-quality completion. Preserves existing policy, exact-byte skill routing, workspace-only context, lifecycle transaction, audit and post-commit owners. Original architecture baseline and all existing-owner caps remain unchanged.",
+      "evidence": "Feature-quality merge validation records focused skill, requester, lifecycle and artifact tests, wrapped Gateway typecheck and a fresh named architecture gate. Imported type/Pick scanner blind spots are conservatively capped. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/skill-hub-lifecycle-filesystem-composition.ts",
+      "maxHostCallbacks": 2,
+      "maxDependencyMemberAccesses": 2,
+      "reason": "Reviewed integration adapter for current main and feature-quality completion. Preserves existing policy, exact-byte skill routing, workspace-only context, lifecycle transaction, audit and post-commit owners. Original architecture baseline and all existing-owner caps remain unchanged.",
+      "evidence": "Feature-quality merge validation records focused skill, requester, lifecycle and artifact tests, wrapped Gateway typecheck and a fresh named architecture gate. Imported type/Pick scanner blind spots are conservatively capped. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/mcp-admission-tool-policy-guard.ts",
+      "maxHostCallbacks": 5,
+      "maxDependencyMemberAccesses": 5,
+      "reason": "Reviewed integration adapter for current main and feature-quality completion. Preserves existing policy, exact-byte skill routing, workspace-only context, lifecycle transaction, audit and post-commit owners. Original architecture baseline and all existing-owner caps remain unchanged.",
+      "evidence": "Feature-quality merge validation records focused skill, requester, lifecycle and artifact tests, wrapped Gateway typecheck and a fresh named architecture gate. Imported type/Pick scanner blind spots are conservatively capped. Live model trials and two-machine acceptance remain deferred."
     }
   ]
 }

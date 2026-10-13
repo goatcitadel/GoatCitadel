@@ -33,7 +33,7 @@ describe("channel setup routes", () => {
   });
 
   it("returns a channel setup definition", async () => {
-    const getChannelSetupDefinition = vi.fn(() => ({
+    const getChannelSetupDefinition = vi.fn(async () => ({
       catalog: { catalogId: "channel.discord", label: "Discord" },
       wizard: { steps: [] },
     }));
@@ -58,7 +58,7 @@ describe("channel setup routes", () => {
   });
 
   it("lists available channel setup definitions", async () => {
-    const listChannelSetupDefinitions = vi.fn(() => [
+    const listChannelSetupDefinitions = vi.fn(async () => [
       {
         catalog: { catalogId: "channel.discord", label: "Discord" },
         wizard: { steps: [] },

@@ -24,6 +24,7 @@ import {
   BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_MESSAGE,
   describeBrowserSessionState,
   executeBrowserTool,
+  forgetBrowserSessionState,
   isBrowserToolName,
 } from "./browser-tools.js";
 
@@ -2652,6 +2653,33 @@ describe("browser tools coverage sweep", () => {
         httpCredentialsConfigured: false,
       },
     });
+  });
+
+  it("does not resurrect a settled child's browser state when cancellation races the final snapshot", async () => {
+    const config = createConfig(tempRoot);
+    const controller = new AbortController();
+    const sessionId = "settled-child-browser-snapshot";
+    const execution = { sessionId, signal: controller.signal };
+    await executeBrowserTool("browser.context.configure", { locale: "en-US" }, config, execution);
+    const browser = createPlaywrightStub();
+    const originalContext = browser.newContext;
+    const close = vi.fn(async () => undefined);
+    browser.close = close;
+    browser.newContext = async (options) => {
+      const context = await originalContext(options);
+      context.storageState = async () => {
+        controller.abort();
+        forgetBrowserSessionState(sessionId);
+        return { cookies: [], origins: [] };
+      };
+      return context;
+    };
+    mocked.launch.mockResolvedValueOnce(browser as never);
+    await expect(executeBrowserTool("browser.interact", {
+      url: "https://example.com/settlement", steps: [{ action: "wait", timeoutMs: 100 }],
+    }, config, execution)).rejects.toThrow();
+    expect(describeBrowserSessionState(sessionId).availability).toBe("not_available");
+    expect(close).toHaveBeenCalled();
   });
 
   it("closes the browser from the abort handler when a signal aborts after launch", async () => {

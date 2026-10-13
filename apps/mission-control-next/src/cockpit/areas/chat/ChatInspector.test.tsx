@@ -123,15 +123,15 @@ describe("conversation inspector", () => {
     expect(container.textContent).not.toContain("Recorded review details");
   });
 
-  it("separates recorded turn context from current settings and scopes source inspection", async () => {
+  it.each(["verified", "admission_verified"] as const)("separates recorded turn context and scopes %s source inspection", async (status) => {
     const input = fixture();
     const turn = input.activeSessionSurfaceProps!.thread!.turns[0]!;
     turn.trace.sessionId = "session-1";
     turn.trace.turnId = "turn-1";
     turn.trace.memoryMode = "on";
     turn.trace.webMode = "auto";
-    turn.trace.capabilityProfileId = "profile-1";
-    turn.trace.capabilityProfileHash = "profile-hash-1";
+    turn.trace.capabilityProfileId = status === "verified" ? "profile-1" : undefined;
+    turn.trace.capabilityProfileHash = status === "verified" ? "profile-hash-1" : undefined;
     turn.trace.guidance = { workspaceId: "workspace-1", globalFilesUsed: ["global.md"], workspaceFilesUsed: ["workspace.md"], truncated: false };
     turn.trace.routing = {
       promptContextBudget: { tokenEstimates: { total: 780 } },
@@ -141,8 +141,8 @@ describe("conversation inspector", () => {
     input.contextDockProps!.selectedTurn = turn;
     input.contextDockProps!.prefs = { memoryMode: "off" } as never;
     input.contextDockProps!.capabilityProfileInspection = {
-      status: "verified", profile: {} as never, mismatchFields: [],
-      expectedProfileId: "profile-1", expectedProfileHash: "profile-hash-1",
+      status, profile: status === "verified" ? {} as never : null, mismatchFields: [],
+      expectedProfileId: turn.trace.capabilityProfileId, expectedProfileHash: turn.trace.capabilityProfileHash,
       routedContext: {
         snapshotId: "snapshot-1", snapshotHash: "abcdef0123456789", sourceRequestHash: "request-hash", contentHash: "content-hash",
         includedCount: 1, truncatedCount: 0, omittedCount: 0,
@@ -175,6 +175,19 @@ describe("conversation inspector", () => {
     Object.assign(input.contextDockProps!.prefs as object, { planningMode: "auto", webMode: "off" });
     await act(async () => root.render(<ChatInspector input={input} initialTab="thread" />));
     expect(container.textContent).toContain("Session control for session-1");
+    expect(container.querySelector('[aria-label="Conversation execution settings"]')).not.toBeNull();
+  });
+
+  it("hides execution mutations for historical or mismatched conversation selections", async () => {
+    const input = fixture();
+    Object.assign(input.contextDockProps!.prefs as object, { planningMode: "auto", webMode: "off" });
+    input.activeSessionSurfaceProps!.historicalReadOnly = true;
+    await act(async () => root.render(<ChatInspector input={input} initialTab="thread" />));
+    expect(container.querySelector('[aria-label="Conversation execution settings"]')).toBeNull();
+    input.activeSessionSurfaceProps!.historicalReadOnly = false;
+    input.contextDockProps!.selectedSessionId = "another-session";
+    await act(async () => root.render(<ChatInspector input={input} initialTab="thread" />));
+    expect(container.querySelector('[aria-label="Conversation execution settings"]')).toBeNull();
   });
 
   it("shows next-turn context in a selected conversation with no turns yet", async () => {

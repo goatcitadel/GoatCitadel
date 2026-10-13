@@ -3,18 +3,23 @@ import type { CronJobRecord, CronRunRecord, DurableRunStatus } from "@goatcitade
 import type { Storage } from "@goatcitadel/storage";
 import {
   computeNextCronRunAt,
+  COST_REPORT_HOURLY_JOB_ID,
   CronAutomationService,
   EXPERIMENTAL_NO_AGENT_CRON_ENV,
   type CronAutomationServiceDeps,
   didCronJobRunInCurrentWindow,
+  IMPROVEMENT_WEEKLY_JOB_ID,
   isCronJobActive,
   isExplicitCronJobDueNow,
+  MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
+  MEMORY_FLUSH_DAILY_JOB_ID,
   normalizeCronEndAt,
   normalizeCronJobDescription,
   normalizeCronJobId,
   normalizeCronJobName,
   normalizeCronSchedule,
   parseSimpleCronSchedule,
+  PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./cron-automation-service.js";
 import { createTestCronSpecOwner } from "./cron-spec-owner.test-utils.js";
@@ -614,9 +619,7 @@ describe("cron schedule helpers", () => {
 
   it("applies the end time to the whole-minute occurrence", () => {
     const from = new Date("2026-09-12T08:42:39.704Z");
-    expect(computeNextCronRunAt("43 8 * * * UTC", from, "2026-09-12T08:43:00.000Z")).toBe(
-      "2026-09-12T08:43:00.000Z",
-    );
+    expect(computeNextCronRunAt("43 8 * * * UTC", from, "2026-09-12T08:43:00.000Z")).toBe("2026-09-12T08:43:00.000Z");
     expect(computeNextCronRunAt("43 8 * * * UTC", from, "2026-09-12T08:42:59.999Z")).toBeUndefined();
   });
 
@@ -1070,6 +1073,171 @@ describe("CronAutomationService job behavior", () => {
     });
   });
 
+  it.each([
+    ["improvement", "improvement"],
+    ["backup", "backup"],
+    ["memory_flush", "memoryFlush"],
+    ["memory_consolidation", "memoryConsolidation"],
+    ["cost_report", "costReport"],
+    ["update_review", "updateReview"],
+    ["curator", "curator"],
+  ] as const)("records a skipped %s system handler as skipped, not as success", async (action, handlerName) => {
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const handler = vi.fn(async () => ({ status: "skipped" as const, reason: "job_disabled" }));
+    const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { [handlerName]: handler } });
+    cronJobs.upsert(buildTaskJob({ jobId: `${action.replaceAll("_", "-")}-job`, action }));
+
+    const result = await service.runCronJobNow(`${action.replaceAll("_", "-")}-job`);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: "ok", skipReason: "job_disabled" });
+    expect(cronRuns.get(result.runId)?.outcome).toEqual({ result: "skipped", action, skipReason: "job_disabled" });
+    const saved = cronJobs.get(`${action.replaceAll("_", "-")}-job`);
+    expect(saved?.lastRunStatus).toBe("skipped");
+    expect(saved?.failureCount).toBe(0);
+    expect(JSON.parse(saved?.lastRunOutput ?? "{}")).toMatchObject({ result: "skipped", skipReason: "job_disabled" });
+  });
+
+  it("records a completed system handler summary in the run output", async () => {
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const backup = vi.fn(async () => ({
+      status: "completed" as const,
+      summary: { type: "private_beta_daily_backup", backupId: "backup-1", bytes: 42 },
+    }));
+    const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { backup } });
+    cronJobs.upsert(buildTaskJob({ jobId: "backup-job", action: "backup" }));
+
+    const result = await service.runCronJobNow("backup-job");
+
+    expect(cronRuns.get(result.runId)?.outcome).toEqual({ result: "ok", action: "backup" });
+    const saved = cronJobs.get("backup-job");
+    expect(saved?.lastRunStatus).toBe("ok");
+    expect(JSON.parse(saved?.lastRunOutput ?? "{}")).toMatchObject({
+      result: "ok",
+      handlerSummary: { backupId: "backup-1", bytes: 42 },
+    });
+  });
+
+  it("records a flag-gated memory consolidation skip truthfully without entering failure backoff", async () => {
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const memoryConsolidation = vi.fn(async () => ({
+      status: "skipped" as const,
+      reason: "memory_consolidation_flags_disabled",
+      detail: { memoryConsolidationV1Enabled: false, memoryLifecycleAdminV1Enabled: true },
+    }));
+    const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { memoryConsolidation } });
+    cronJobs.upsert(
+      buildTaskJob({
+        jobId: "memory-consolidation-weekly",
+        action: "memory_consolidation",
+        failureCount: 2,
+        backoffUntil: "2000-01-01T00:00:00.000Z",
+      }),
+    );
+
+    const result = await service.runCronJobNow("memory-consolidation-weekly");
+
+    expect(memoryConsolidation).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: "ok", skipReason: "memory_consolidation_flags_disabled" });
+    expect(cronRuns.get(result.runId)).toMatchObject({
+      status: "completed",
+      outcome: {
+        result: "skipped",
+        action: "memory_consolidation",
+        skipReason: "memory_consolidation_flags_disabled",
+      },
+    });
+    const saved = cronJobs.get("memory-consolidation-weekly");
+    expect(saved?.lastRunId).toBe(result.runId);
+    expect(saved?.lastRunStatus).toBe("skipped");
+    expect(saved?.failureCount).toBe(0);
+    expect(saved?.backoffUntil).toBeUndefined();
+    expect(saved?.lastFailure).toBeUndefined();
+    expect(JSON.parse(saved?.lastRunOutput ?? "{}")).toMatchObject({
+      result: "skipped",
+      skipReason: "memory_consolidation_flags_disabled",
+      skipDetail: { memoryConsolidationV1Enabled: false, memoryLifecycleAdminV1Enabled: true },
+    });
+    const reviewSummaries = [...db.review.values()].map((row) => JSON.parse(row.summary_json));
+    expect(reviewSummaries).toEqual([
+      expect.objectContaining({ result: "skipped", skipReason: "memory_consolidation_flags_disabled" }),
+    ]);
+    expect(await service.findCronRunById(result.runId)).toMatchObject({
+      status: "skipped",
+      output: expect.stringContaining('"result":"skipped"'),
+    });
+  });
+
+  it("records a completed memory consolidation with its summary and clears a prior skip output", async () => {
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const memoryConsolidation = vi
+      .fn<CronAutomationServiceDeps["runHandlers"]["memoryConsolidation"]>()
+      .mockResolvedValueOnce({ status: "skipped", reason: "autonomy_kill_switch" })
+      .mockResolvedValueOnce({ status: "completed", summary: { status: "completed", proposed: 3 } });
+    const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { memoryConsolidation } });
+    cronJobs.upsert(buildTaskJob({ jobId: "memory-consolidation-weekly", action: "memory_consolidation" }));
+
+    const skipped = await service.runCronJobNow("memory-consolidation-weekly");
+    const completed = await service.runCronJobNow("memory-consolidation-weekly");
+
+    expect(skipped.skipReason).toBe("autonomy_kill_switch");
+    expect(completed).not.toHaveProperty("skipReason");
+    expect(cronRuns.get(completed.runId)?.outcome).toEqual({ result: "ok", action: "memory_consolidation" });
+    const output = JSON.parse(cronJobs.get("memory-consolidation-weekly")?.lastRunOutput ?? "{}");
+    expect(output).toMatchObject({ result: "ok", handlerSummary: { status: "completed", proposed: 3 } });
+    expect(output).not.toHaveProperty("skipReason");
+  });
+
+  it("records a kill-switch-interrupted consolidation as a partial run, not a skip or full success", async () => {
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const memoryConsolidation = vi.fn(async () => ({
+      status: "completed" as const,
+      summary: { status: "skipped_kill_switch", sessionsSampled: 1, proposed: 2 },
+      partial: { reason: "autonomy_kill_switch" },
+    }));
+    const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { memoryConsolidation } });
+    cronJobs.upsert(buildTaskJob({ jobId: "memory-consolidation-weekly", action: "memory_consolidation" }));
+
+    const result = await service.runCronJobNow("memory-consolidation-weekly");
+
+    expect(result).not.toHaveProperty("skipReason");
+    expect(cronRuns.get(result.runId)?.outcome).toEqual({
+      result: "partial",
+      action: "memory_consolidation",
+      partialReason: "autonomy_kill_switch",
+    });
+    const saved = cronJobs.get("memory-consolidation-weekly");
+    expect(saved?.lastRunStatus).toBe("ok");
+    expect(JSON.parse(saved?.lastRunOutput ?? "{}")).toMatchObject({
+      result: "partial",
+      partialReason: "autonomy_kill_switch",
+      handlerSummary: { sessionsSampled: 1, proposed: 2 },
+    });
+  });
+
+  it("treats a void memory consolidation handler as a completed run", async () => {
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const service = createService(db, vi.fn(), { cronJobs, cronRuns });
+    cronJobs.upsert(buildTaskJob({ jobId: "memory-consolidation-weekly", action: "memory_consolidation" }));
+
+    const result = await service.runCronJobNow("memory-consolidation-weekly");
+
+    expect(result).not.toHaveProperty("skipReason");
+    expect(cronRuns.get(result.runId)?.outcome).toEqual({ result: "ok", action: "memory_consolidation" });
+  });
+
   it("records watchdog review items only when the configured threshold is met", async () => {
     const db = new FakeDb();
     const cronJobs = new FakeCronJobs();
@@ -1224,6 +1392,285 @@ function makeServiceWithNoAgent(opts: {
   };
   return new CronAutomationService(deps);
 }
+
+interface SystemCronJobCase {
+  action: CronJobRecord["action"];
+  handler: "backup" | "memoryFlush" | "memoryConsolidation" | "costReport" | "updateReview";
+  jobId: string;
+  schedule: string;
+  windowStart: string;
+  /** A sweep after the five-minute due window closes, before the next occurrence. */
+  afterWindow: string;
+  nextWindowStart: string;
+}
+
+// 2026-05-17 is a Sunday.
+const SYSTEM_CRON_JOB_CASES: SystemCronJobCase[] = [
+  {
+    action: "backup",
+    handler: "backup",
+    jobId: PRIVATE_BETA_BACKUP_JOB_ID,
+    schedule: "30 2 * * * UTC",
+    windowStart: "2026-05-17T02:30:00.000Z",
+    afterWindow: "2026-05-17T02:35:00.000Z",
+    nextWindowStart: "2026-05-18T02:30:00.000Z",
+  },
+  {
+    action: "memory_flush",
+    handler: "memoryFlush",
+    jobId: MEMORY_FLUSH_DAILY_JOB_ID,
+    schedule: "0 3 * * * UTC",
+    windowStart: "2026-05-17T03:00:00.000Z",
+    afterWindow: "2026-05-17T03:05:00.000Z",
+    nextWindowStart: "2026-05-18T03:00:00.000Z",
+  },
+  {
+    action: "memory_consolidation",
+    handler: "memoryConsolidation",
+    jobId: MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
+    schedule: "30 2 * * 0 UTC",
+    windowStart: "2026-05-17T02:30:00.000Z",
+    // Same clock window on Monday is not a Sunday occurrence.
+    afterWindow: "2026-05-18T02:31:00.000Z",
+    nextWindowStart: "2026-05-24T02:30:00.000Z",
+  },
+  {
+    action: "cost_report",
+    handler: "costReport",
+    jobId: COST_REPORT_HOURLY_JOB_ID,
+    schedule: "0 * * * * UTC",
+    windowStart: "2026-05-17T12:00:00.000Z",
+    afterWindow: "2026-05-17T12:05:00.000Z",
+    nextWindowStart: "2026-05-17T13:00:00.000Z",
+  },
+  {
+    action: "update_review",
+    handler: "updateReview",
+    jobId: UPDATE_REVIEW_DAILY_JOB_ID,
+    schedule: "15 4 * * * UTC",
+    windowStart: "2026-05-17T04:15:00.000Z",
+    afterWindow: "2026-05-17T04:20:00.000Z",
+    nextWindowStart: "2026-05-18T04:15:00.000Z",
+  },
+];
+
+describe("system maintenance cron jobs on the due sweep", () => {
+  it.each(SYSTEM_CRON_JOB_CASES)(
+    "fires $action once per due window and dedups repeat sweeps",
+    async ({ action, handler, jobId, schedule, windowStart, afterWindow, nextWindowStart }) => {
+      vi.useFakeTimers();
+      const db = new FakeDb();
+      const cronJobs = new FakeCronJobs();
+      const cronRuns = new FakeCronRuns(cronJobs);
+      const effect = vi.fn(async () => {});
+      const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { [handler]: effect } });
+      cronJobs.upsert(buildTaskJob({ jobId, action, schedule }));
+      const start = Date.parse(windowStart);
+      const sweeps: Array<[at: Date, expectedEffects: number]> = [
+        [new Date(start - 60_000), 0],
+        [new Date(start), 1],
+        [new Date(start), 1],
+        [new Date(start + 4 * 60_000), 1],
+        [new Date(afterWindow), 1],
+        [new Date(Date.parse(nextWindowStart) + 60_000), 2],
+      ];
+
+      const effectsAfterEachSweep: number[] = [];
+      try {
+        for (const [at] of sweeps) {
+          vi.setSystemTime(at);
+          await service.runDueTaskCronJobs(at);
+          effectsAfterEachSweep.push(effect.mock.calls.length);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+
+      expect(effectsAfterEachSweep).toEqual(sweeps.map(([, expectedEffects]) => expectedEffects));
+      expect(cronRuns.list()).toMatchObject([
+        {
+          jobId,
+          trigger: "scheduled_due",
+          scheduledFor: windowStart,
+          admissionKey: `scheduled:${windowStart}`,
+          status: "completed",
+        },
+        {
+          jobId,
+          trigger: "scheduled_due",
+          scheduledFor: nextWindowStart,
+          admissionKey: `scheduled:${nextWindowStart}`,
+          status: "completed",
+        },
+      ]);
+      expect(cronJobs.get(jobId)).toMatchObject({ lastRunStatus: "ok", failureCount: 0 });
+      expect(cronJobs.get(jobId)?.nextRunAt).toBeDefined();
+    },
+  );
+
+  it.each(SYSTEM_CRON_JOB_CASES)(
+    "admits one $action effect and one canonical run under overlapping same-tick sweeps",
+    async ({ action, handler, jobId, schedule, windowStart }) => {
+      vi.useFakeTimers();
+      const now = new Date(windowStart);
+      vi.setSystemTime(now);
+      const db = new FakeDb();
+      const cronJobs = new FakeCronJobs();
+      const cronRuns = new FakeCronRuns(cronJobs);
+      let releaseEffect: (() => void) | undefined;
+      const effectGate = new Promise<void>((resolve) => {
+        releaseEffect = resolve;
+      });
+      const effect = vi.fn(() => effectGate);
+      const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { [handler]: effect } });
+      cronJobs.upsert(buildTaskJob({ jobId, action, schedule }));
+
+      try {
+        const firstSweep = service.runDueTaskCronJobs(now);
+        await vi.waitFor(() => expect(effect).toHaveBeenCalledTimes(1));
+        await service.runDueTaskCronJobs(now);
+        // A later tick inside the same window, while the first effect is still running.
+        await service.runDueTaskCronJobs(new Date(now.getTime() + 30_000));
+        releaseEffect?.();
+        await firstSweep;
+      } finally {
+        vi.useRealTimers();
+      }
+
+      expect(effect).toHaveBeenCalledTimes(1);
+      expect(cronRuns.list()).toMatchObject([{ jobId, trigger: "scheduled_due", status: "completed" }]);
+    },
+  );
+
+  it("records swept system runs as scheduled, not operator-initiated, in the review queue", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-05-17T02:31:00.000Z");
+    vi.setSystemTime(now);
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const service = createService(db, vi.fn(), { cronJobs, isFeatureEnabled: true });
+    cronJobs.upsert(buildTaskJob({ jobId: PRIVATE_BETA_BACKUP_JOB_ID, action: "backup", schedule: "30 2 * * * UTC" }));
+
+    try {
+      await service.runDueTaskCronJobs(now);
+      await service.runCronJobNow(PRIVATE_BETA_BACKUP_JOB_ID, { force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const reviews = [...db.review.values()].map((row) => ({
+      trigger: (JSON.parse(row.summary_json) as { trigger?: string }).trigger,
+      diffType: (JSON.parse(row.diff_json ?? "{}") as { type?: string }).type,
+    }));
+    expect(reviews).toEqual([
+      { trigger: "scheduled_run", diffType: "scheduled_run" },
+      { trigger: "force_run", diffType: "manual_run" },
+    ]);
+  });
+
+  it("tells system handlers whether a run was scheduled, manual, or forced", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-05-17T04:16:00.000Z");
+    vi.setSystemTime(now);
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const updateReview = vi.fn(async (_context?: unknown) => {});
+    const service = createService(db, vi.fn(), { cronJobs, handlers: { updateReview } });
+    cronJobs.upsert(
+      buildTaskJob({ jobId: UPDATE_REVIEW_DAILY_JOB_ID, action: "update_review", schedule: "15 4 * * * UTC" }),
+    );
+
+    try {
+      await service.runDueTaskCronJobs(now);
+      await service.runCronJobNow(UPDATE_REVIEW_DAILY_JOB_ID);
+      await service.runCronJobNow(UPDATE_REVIEW_DAILY_JOB_ID, { force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(updateReview.mock.calls.map(([context]) => context)).toEqual([
+      { trigger: "scheduled_run" },
+      { trigger: "manual_run" },
+      { trigger: "force_run" },
+    ]);
+  });
+
+  it("leaves the seeded-disabled consolidation job unswept until an operator enables it", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-05-17T02:31:00.000Z");
+    vi.setSystemTime(now);
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const memoryConsolidation = vi.fn(async () => {});
+    const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { memoryConsolidation } });
+    cronJobs.upsert(
+      buildTaskJob({
+        jobId: MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
+        action: "memory_consolidation",
+        schedule: "30 2 * * 0 UTC",
+        enabled: false,
+      }),
+    );
+
+    try {
+      await service.runDueTaskCronJobs(now);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(memoryConsolidation).not.toHaveBeenCalled();
+    expect(cronRuns.list()).toEqual([]);
+  });
+
+  it("leaves the weekly improvement job to ImprovementService's own scheduler", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-05-17T02:31:00.000Z");
+    vi.setSystemTime(now);
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const cronRuns = new FakeCronRuns(cronJobs);
+    const improvement = vi.fn(async () => {});
+    const service = createService(db, vi.fn(), { cronJobs, cronRuns, handlers: { improvement } });
+    cronJobs.upsert(
+      buildTaskJob({ jobId: IMPROVEMENT_WEEKLY_JOB_ID, action: "improvement", schedule: "30 2 * * 0 UTC" }),
+    );
+
+    try {
+      await service.runDueTaskCronJobs(now);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(improvement).not.toHaveBeenCalled();
+    expect(cronRuns.list()).toEqual([]);
+  });
+
+  it("projects the next due occurrence when an operator re-enables a system job", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-17T12:00:00.000Z"));
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const service = createService(db, vi.fn(), { cronJobs });
+    cronJobs.upsert(
+      buildTaskJob({
+        jobId: PRIVATE_BETA_BACKUP_JOB_ID,
+        action: "backup",
+        schedule: "30 2 * * * UTC",
+        enabled: false,
+      }),
+    );
+
+    let resumed: CronJobRecord;
+    try {
+      resumed = await service.setCronJobEnabled(PRIVATE_BETA_BACKUP_JOB_ID, true, 1);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(resumed).toMatchObject({ enabled: true, nextRunAt: "2026-05-18T02:30:00.000Z" });
+  });
+});
 
 describe("createCronJob workdir + contextFrom", () => {
   it("stores workdir and contextFrom on the persisted record", async () => {

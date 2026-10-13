@@ -7,6 +7,8 @@ import {
   ValidationError,
   GOVERNED_REMEDIATION_RESUME_TEXT,
   readGovernedRemediationResumeReference,
+  readChatTurnFeatureReferences,
+  type ChatTurnFeatureReferences,
   type GovernedRemediationResumeReference,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
@@ -316,6 +318,11 @@ export interface BindTurnCapabilityProfileInput extends AssertActiveTurnWriteInp
   profileId: string;
   profileHash: string;
   createdAt: string;
+}
+
+export interface ChatTurnFeatureReferenceBinding {
+  references: ChatTurnFeatureReferences;
+  referenceSha256: string;
 }
 
 export interface TurnCapabilityProfileIncarnationBindingRecord {
@@ -2775,6 +2782,48 @@ export class SessionMutationAdmissionRepository {
     } catch (error) {
       throw normalizeAdmissionWriteError(error);
     }
+  }
+
+  /** Bind only selected feature evidence under the existing exact admission lease. */
+  public bindFeatureReferences(
+    input: AssertActiveTurnWriteInput & { references: ChatTurnFeatureReferences },
+  ): ChatTurnFeatureReferenceBinding {
+    const references = readChatTurnFeatureReferences(input.references);
+    const referencesJson = canonicalJsonString(references);
+    const referenceSha256 = createHash("sha256").update(referencesJson).digest("hex");
+    return this.db.transaction("immediate", () => {
+      this.assertActiveTurnWrite(input);
+      const existing = this.findFeatureReferences(input);
+      if (existing) {
+        if (existing.referenceSha256 !== referenceSha256) {
+          throw admissionConflict("SESSION_MUTATION_FEATURE_REFERENCE_CONFLICT", "Admitted feature references cannot change.");
+        }
+        return existing;
+      }
+      this.db.prepare(`INSERT INTO chat_turn_feature_references (
+        admission_id, reference_sha256, references_json
+      ) VALUES (@admissionId, @referenceSha256, @referencesJson)`).run({
+        admissionId: input.admissionId, referenceSha256, referencesJson,
+      });
+      return { references, referenceSha256 };
+    });
+  }
+
+  /** Historical read does not reopen authority. Dispatch must still assert its live lease. */
+  public findFeatureReferences(input: TurnWriteAdmissionIdentity): ChatTurnFeatureReferenceBinding | undefined {
+    const normalized = normalizeTurnWriteIdentity(input);
+    this.assertTurnWriteIdentity(this.requireRow(normalized.admissionId, false), normalized);
+    const row = this.db.prepare(`SELECT reference_sha256, references_json FROM chat_turn_feature_references
+      WHERE admission_id = @admissionId`).get<{ reference_sha256: string; references_json: string }>({
+      admissionId: normalized.admissionId,
+    });
+    if (!row) return undefined;
+    const references = readChatTurnFeatureReferences(JSON.parse(row.references_json) as unknown);
+    const referenceSha256 = createHash("sha256").update(canonicalJsonString(references)).digest("hex");
+    if (referenceSha256 !== row.reference_sha256) {
+      throw admissionConflict("SESSION_MUTATION_FEATURE_REFERENCE_CORRUPT", "Admitted feature references failed integrity verification.");
+    }
+    return { references, referenceSha256 };
   }
 
   /**
@@ -5680,6 +5729,32 @@ export class SessionMutationAdmissionRepository {
     const checkpointHeartbeatReceipt = readExactHeartbeatDecisionReceipt(checkpointState.heartbeatDecisionReceipt);
     const metadataHeartbeatRawOutput = metadata.heartbeatDecisionRawOutput;
     const checkpointHeartbeatRawOutput = checkpointState.heartbeatDecisionRawOutput;
+    let heartbeatFeatureBinding = false;
+    if (heartbeatOccurrenceId && payload.featureReferenceSha256 !== undefined) {
+      const feature = this.db.prepare(`SELECT feature.references_json, feature.reference_sha256,
+          occurrence.claim_sha256, occurrence.aggregate_revision
+        FROM chat_heartbeat_occurrences occurrence
+        JOIN chat_turn_feature_references feature ON feature.admission_id = occurrence.admission_id
+        WHERE occurrence.occurrence_id = @occurrenceId AND occurrence.admission_id = @admissionId
+          AND occurrence.workspace_id = @workspaceId AND occurrence.session_id = @sessionId
+          AND occurrence.session_incarnation_id = @sessionIncarnationId AND occurrence.turn_id = @turnId
+          AND occurrence.durable_run_id = @runId AND occurrence.feature_reference_sha256 = @referenceSha256
+          AND feature.reference_sha256 = @referenceSha256
+          AND occurrence.state IN ('durable_bound', 'terminal')`).get<{
+            references_json: string; reference_sha256: string; claim_sha256: string; aggregate_revision: number;
+          }>({ occurrenceId: heartbeatOccurrenceId, admissionId: payload.admissionId as string,
+            workspaceId: payload.workspaceId as string, sessionId: payload.sessionId as string,
+            sessionIncarnationId: payload.sessionIncarnationId as string, turnId: payload.turnId as string,
+            runId: run.run_id, referenceSha256: payload.featureReferenceSha256 as string });
+      if (feature) {
+        const references = readChatTurnFeatureReferences(parseJsonObject(feature.references_json));
+        heartbeatFeatureBinding = sha256(canonicalJsonString(references)) === feature.reference_sha256 &&
+          canonicalJsonString(references.heartbeatOccurrence) === canonicalJsonString({ ownerId: heartbeatOccurrenceId,
+            revision: String(feature.aggregate_revision), sha256: feature.claim_sha256 });
+      }
+      if (!heartbeatFeatureBinding) throw admissionConflict("SESSION_MUTATION_HEARTBEAT_DECISION_CONFLICT",
+        "Heartbeat terminal runtime authority lost its exact occurrence feature binding.");
+    }
     if (heartbeatOccurrenceId && !isExactSilentHeartbeatEligibility(authority.material.postCommitEligibility)) {
       throw admissionConflict(
         "SESSION_MUTATION_HEARTBEAT_DECISION_CONFLICT",
@@ -5688,7 +5763,7 @@ export class SessionMutationAdmissionRepository {
     }
     if (
       heartbeatOccurrenceId &&
-      !readExactHeartbeatAutonomousAdmissionSeal(metadata.autonomousAdmission, payload, metadata, run.run_id)
+      !readExactHeartbeatAutonomousAdmissionSeal(metadata.autonomousAdmission, payload, metadata, run.run_id, heartbeatFeatureBinding)
     ) {
       throw admissionConflict(
         "SESSION_MUTATION_HEARTBEAT_DECISION_CONFLICT",
@@ -8405,6 +8480,7 @@ function readExactHeartbeatAutonomousAdmissionSeal(
   payload: Record<string, unknown>,
   metadata: Record<string, unknown>,
   runId: string,
+  verifiedHeartbeatFeatureBinding = false,
 ): boolean {
   const seal = readJsonObject(value);
   const material = seal ? readJsonObject(seal.material) : undefined;
@@ -8431,7 +8507,7 @@ function readExactHeartbeatAutonomousAdmissionSeal(
     !identity ||
     !autonomous ||
     !admission ||
-    !capability ||
+    (!capability && !(verifiedHeartbeatFeatureBinding && material.capability === null)) ||
     !request ||
     !requestActor ||
     !hasExactKeys(seal, ["material", "materialSha256"]) ||
@@ -8479,12 +8555,13 @@ function readExactHeartbeatAutonomousAdmissionSeal(
     admission.workspaceId !== payload.workspaceId ||
     admission.admissionMaterialSha256 !== payload.admissionMaterialSha256 ||
     admission.effectiveRequestMaterialSha256 !== payload.effectiveRequestMaterialSha256 ||
-    !hasExactKeys(capability, ["profileHash", "profileId", "snapshotId"]) ||
-    capability.profileId !== payload.capabilityProfileId ||
-    capability.profileHash !== payload.capabilityProfileHash ||
-    capability.profileId !== metadata.capabilityProfileId ||
-    capability.profileHash !== metadata.capabilityProfileHash ||
-    !isNonEmptyRuntimeString(capability.snapshotId) ||
+    (verifiedHeartbeatFeatureBinding
+      ? material.capability !== null || payload.capabilityProfileId !== undefined || payload.capabilityProfileHash !== undefined ||
+        metadata.capabilityProfileId !== undefined || metadata.capabilityProfileHash !== undefined
+      : !capability || !hasExactKeys(capability, ["profileHash", "profileId", "snapshotId"]) ||
+        capability.profileId !== payload.capabilityProfileId || capability.profileHash !== payload.capabilityProfileHash ||
+        capability.profileId !== metadata.capabilityProfileId || capability.profileHash !== metadata.capabilityProfileHash ||
+        !isNonEmptyRuntimeString(capability.snapshotId)) ||
     material.cronAdmission !== null ||
     !isSha256Digest(seal.materialSha256) ||
     seal.materialSha256 !== sha256(canonicalJsonString(material))
