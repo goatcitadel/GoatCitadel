@@ -9,7 +9,7 @@
 
 | Vendored path | Upstream path | Upstream sha256 (LF-normalized) | Vendored sha256 | Notes |
 | --- | --- | --- | --- | --- |
-| SKILL.md | skill/SKILL.src.md | 78573ef57390d37ece0366e2746b1dda6a20e2a74352a0abc2e6d05518e87d47 | a0a9bd202630fb9794eb2eccc40ff47b4e623520350b0fdfde8c4ebd68827c8c | transformed |
+| SKILL.md | skill/SKILL.src.md | 78573ef57390d37ece0366e2746b1dda6a20e2a74352a0abc2e6d05518e87d47 | d39e26f5d96eccefcc9e093c3141be1440de616fe931cf69e8b43ddf05af577f | transformed |
 | LICENSE | LICENSE | 02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812 | 02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812 | copied |
 | reference/craft-floor.md | skill/reference/craft-floor.md | db4dfe2f0b316a94026b89e8cb3c9026042e661ca156dfae747a733e1ab500ed | db4dfe2f0b316a94026b89e8cb3c9026042e661ca156dfae747a733e1ab500ed | transformed |
 | reference/mode-persuade.md | skill/reference/mode-persuade.md | b3f8b39cbf89392b62c07298361fb2a7e8e0b4ef13bbb38bac974ccd8fd835fd | 7370702a7f1dcf503cb8ec352d920178259c6b6086e8af5359189e0218818143 | transformed |
@@ -20,7 +20,9 @@
 | reference/init.md | skill/reference/init.md | 72a41672b391085738ded0ab3cf8235866dab15fc931f9e2b43c914c3ece915f | 3d163965c18faad40e3d3a79fbd73e7bb5284d63ccf9eecf796239c69f292a2e | transformed |
 | reference/document.md | skill/reference/document.md | aca6d5ea0770131b8f97a3feb68e1bd3cc536b1ef2e7d05bb0c2c1c9c96c68d3 | df7aaf57b4e31c2d55f140bddaf70430698fe9b56afffb63fcf62af8dddff661 | transformed |
 | reference/extract.md | skill/reference/extract.md | da8a999c4b16fee5ddd2f532a74ffab50ef26085311eeb6461689acb8e22c5ea | e6396675e16a05972e8999bbe49891a7ebc06e4bb004b17bd282bd89bfeb8bda | transformed |
-| reference/audit.md | skill/reference/audit.md | d2aa90f30ba7a0082d242ab69a2a9d46298abb5f36b43308fe7e3c36fa9a9056 | 07b0408f1975c873174fc9ac8878a4ea57cf25f9424b0d09ca9169631d60e16a | transformed |
+| reference/critique.md | skill/reference/critique.md | 8d2cdf4f583a0caf7685620069069354b4fb81582fb63c349783298454140a0e | 440ca34da8f676474bcd252098c7f29dd2fab59884b051cebf6f54c5ad6da64b | transformed; split index (1 parts) |
+| reference/critique/01-reference-material.md | skill/reference/critique.md | 8d2cdf4f583a0caf7685620069069354b4fb81582fb63c349783298454140a0e | c199b1eb8a466eaac4381f28c1f42cf5483e2fa1ec615ef8e3392c8dfb1c9143 | transformed; part 1 of 1 |
+| reference/audit.md | skill/reference/audit.md | d2aa90f30ba7a0082d242ab69a2a9d46298abb5f36b43308fe7e3c36fa9a9056 | 2c6c2a3e1753cc96aa291525f361722baaa12a03e2407291621a9a8846d54e46 | transformed |
 | reference/polish.md | skill/reference/polish.md | c504e12ea076fd1a57b8c9ece79fbb532c54226b2b6298c5c62fa889ae1dd34d | bca5507ae00574b1d12c010af4695538089a595e79ae942a3062b97cd7ffb4f0 | transformed |
 | reference/bolder.md | skill/reference/bolder.md | a4e4d986f74ef5f3c8218dfcfd5b04fe103b47182cf1e16aeb979e5703d5cd87 | d5f4e2ac2b4572a01f3b8496ae866edc8957e8da1766cc7710f1a76c57a41ef4 | transformed |
 | reference/quieter.md | skill/reference/quieter.md | daf4438c4cdfba62d8e663567f6a23cc3f6471ba5dea67994aa6b312e8f7d721 | 4fcdfcc6d6ca52b282211f7a33d17dd2ed21ce9583164417a8d1b160be64e2d1 | transformed |
@@ -39,7 +41,6 @@
 
 ## Excluded upstream files
 
-- skill/reference/critique.md: launcher-driven (critique-storage, detect loop); Phase 4 re-vendors a trimmed version with the render step
 - skill/reference/new-work.md: launcher-driven (concept-seed rolls, surface-brief, build-phase gates)
 - skill/reference/component-review.md: launcher-driven (component-review, comp-spec)
 - skill/reference/visualize.md: launcher-driven comp pipeline that needs image generation and build-phase state
@@ -60,19 +61,20 @@
 
 ## Transforms applied
 
-- SKILL.md frontmatter keeps name and description; argument-hint, user-invocable, allowed-tools, and license are dropped; metadata (version, tags, keywords) is added; the description no longer claims live browser iteration or the critique command.
+- SKILL.md frontmatter keeps name and description; argument-hint, user-invocable, allowed-tools, and license are dropped; metadata (version, tags, keywords) is added; the description no longer claims live browser iteration.
 - new-work (the upstream visual-world workshop) is not vendored: SKILL.md, init.md, document.md, shape.md, and bolder.md sentences that routed through it now ask the operator (user_input.request) to choose and commit the visual world in DESIGN.md; remaining links to it are marked as not vendored.
 - document.md: sentences that pointed at the removed design.json sidecar now point at DESIGN.md prose and the schemaVersion paragraph is removed; any other surviving sidecar mention fails the guard so a re-sync must add a rewrite rather than ship it.
 - An Apache License 2.0 section 4(b) modification notice follows the SKILL.md frontmatter.
 - The SKILL.md Setup section is replaced: no launcher runs; context comes from the workspace PRODUCT.md and DESIGN.md.
 - SKILL.md routing: inline no-argument rule, workflow-questions bullet removed, launcher context clauses rewritten, deprecated craft alias removed.
-- SKILL.md Commands table: craft, critique, live, and generate rows removed; native-platform suffixes removed; an availability note added.
+- SKILL.md Commands table: craft, live, and generate rows removed; native-platform suffixes removed; an availability note added.
 - Pin, Hooks, Doctor, drift-repair, and post-init launcher paragraphs removed.
 - Mode references: the concept-seed clause becomes plain prose.
 - init.md: the PRODUCT.md path sentence points at the workspace context and the live-mode workflow-defaults step is removed; polish.md: the launcher context sentence is rewritten; audit.md: the bundled-detector sentence points at runtime design advisories; document.md: the sidecar mention in the seed-mode wrap-up is removed.
 - document.md: the .impeccable/design.json sidecar section is removed.
 - Sections about live mode are removed at any heading level.
-- Fenced code blocks that only invoke the launcher are removed together with a lead-in line ending in a colon; any other line invoking the launcher, a launcher artifact such as snapshot_file, an .impeccable/ path, a native-platform reference, or an unavailable command (live, generate, critique, craft) is removed.
+- Fenced code blocks that only invoke the launcher are removed together with a lead-in line ending in a colon; any other line invoking the launcher, a launcher artifact such as snapshot_file, an .impeccable/ path, a native-platform reference, or an unavailable command (live, generate, craft) is removed.
+- critique.md: Codex-only harness blocks (<codex>…</codex>) are removed; the launcher slug and ignore-list steps, the detector and browser-overlay evidence, the sub-agent gate, and the snapshot-persistence section are removed or rewritten so the critique runs as a single-context routed turn over GoatCitadel's render evidence (attached offline PNG snapshots plus runtime design advisories).
 - Placeholders: {{command_prefix}} becomes `@skill impeccable`, upstream `/impeccable <command>` syntax becomes `@skill impeccable <command>`, {{ask_instruction}} becomes the user_input.request phrasing, {{available_commands}} becomes the vendored command list.
 - Links to references that are not vendored become plain text marked as not vendored.
 - Line endings normalized to LF, trailing whitespace trimmed, runs of blank lines collapsed, single trailing newline.

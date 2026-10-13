@@ -84,6 +84,10 @@
   min-height: 12rem;
 }
 
+.generated-artifact-actions {
+  margin-top: 0.75rem;
+}
+
 .generated-artifact-code-block {
   margin: 0;
   max-height: 24rem;

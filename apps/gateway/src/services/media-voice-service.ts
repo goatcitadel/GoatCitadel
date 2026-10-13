@@ -633,7 +633,12 @@ export class MediaVoiceService {
       extractPreview: record.extractPreview,
       ocrText: record.ocrText,
       transcriptText: record.transcriptText,
-      analysisStatus: record.analysisStatus === "pending" ? "queued" : (record.analysisStatus ?? "queued"),
+      analysisStatus:
+        record.analysisStatus === "pending"
+          ? "queued"
+          : record.analysisStatus === "skipped"
+            ? "unsupported"
+            : (record.analysisStatus ?? "queued"),
     };
   }
 

@@ -4,6 +4,7 @@ import {
   extractExplicitSkillCommand,
   IMPECCABLE_BUDGET_BYTES,
   IMPECCABLE_COMMANDS,
+  IMPECCABLE_CRITIQUE_BUDGET_BYTES,
   IMPECCABLE_MODULE_MAX_BYTES,
   resolveSkillModules,
 } from "./skill-module-routes.js";
@@ -155,7 +156,20 @@ describe("enumerateSkillRoutes", () => {
       "reference/craft-floor.md",
       "reference/polish.md",
     ]);
-    expect(routes.every((route) => route.budgetBytes === IMPECCABLE_BUDGET_BYTES)).toBe(true);
+    // critique evaluates and never edits UI, so it loads no craft floor; its reference is split by
+    // section, and the scoring guide, cognitive-load checklist, and personas live in the part.
+    const critique = routes.find((route) => route.routeId === "command:critique");
+    expect(critique?.modules.map((m) => m.relativePath)).toEqual([
+      "SKILL.md",
+      "reference/critique.md",
+      "reference/critique/01-reference-material.md",
+    ]);
+    expect(critique?.budgetBytes).toBe(IMPECCABLE_CRITIQUE_BUDGET_BYTES);
+    expect(
+      routes
+        .filter((route) => route.routeId !== "command:critique")
+        .every((route) => route.budgetBytes === IMPECCABLE_BUDGET_BYTES),
+    ).toBe(true);
   });
 
   it("lists the main and presentation routes for design-intelligence and only main otherwise", () => {

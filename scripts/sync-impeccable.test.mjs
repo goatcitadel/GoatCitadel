@@ -25,6 +25,7 @@ const VENDORED = [
   "init",
   "document",
   "extract",
+  "critique",
   "audit",
   "polish",
   "bolder",
@@ -44,7 +45,166 @@ const VENDORED = [
 ];
 
 const COMMAND_LIST =
-  "shape, init, document, extract, audit, polish, bolder, quieter, distill, harden, onboard, animate, colorize, typeset, layout, delight, overdrive, clarify, adapt, optimize";
+  "shape, init, document, extract, critique, audit, polish, bolder, quieter, distill, harden, onboard, animate, colorize, typeset, layout, delight, overdrive, clarify, adapt, optimize";
+
+// Condensed upstream critique.md: every anchor the critique transforms require, the launcher
+// loop, a Codex-only block, and the snapshot-persistence section that must not survive.
+const CRITIQUE_FIXTURE = [
+  "### Purpose",
+  "",
+  "Resolve one stable target, run two independent assessments, synthesize a design critique, persist a snapshot, and ask the user what to improve next. The chat response is the primary deliverable; the snapshot is an archive of that run.",
+  "",
+  "### Hard Invariants",
+  "",
+  "- Assessment A (design review) and Assessment B (detector/browser evidence) are both required.",
+  '- Assessment A and B MUST run as two isolated sub-agents whenever a sub-agent/Task tool is exposed. Running them inline in this context is "possible" but is NOT permitted; it is a degraded run. Inline is allowed ONLY when no sub-agent tool exists (or the user declined, on harnesses that ask).',
+  "- If you degrade for any reason, the report's first line MUST be a banner: `⚠️ DEGRADED: single-context (<reason>)`. A silent degraded critique is a failed critique.",
+  "- Assessment A must finish before detector findings enter the parent synthesis context. Detector output is deterministic, but it still anchors judgment.",
+  "- A skipped detector is a failed critique run unless `impeccable detect` is missing or crashes after a real attempt.",
+  "- Viewable targets require browser inspection when available.",
+  "- Any local server started only for critique visualization must run in the background, have a recorded stop method, and be stopped before final reporting unless the user asks to keep it.",
+  "- Do not claim a user-visible overlay exists unless script injection succeeded and the detector ran in the page.",
+  "- The question is the LAST thing in the response.",
+  "",
+  "### Setup",
+  "",
+  "1. **Resolve the target** to a concrete file path or URL.",
+  "2. **Confirm the target slugs cleanly**:",
+  "   ```bash",
+  '   {{scripts_path}}/impeccable critique-storage slug "<resolved-path-or-url>"',
+  "   ```",
+  "   Every later command also accepts the resolved target directly and derives the same slug internally; never hand-write a slug. If this exits non-zero, skip persistence and trend for this run, but continue the critique.",
+  "3. **Read `.impeccable/critique/ignore.md`** if it exists. Drop matching findings silently.",
+  "",
+  "### Assessment Orchestration",
+  "",
+  "Delegate Assessment A and Assessment B to separate sub-agents. They must not see each other's output. Do not show findings to the user until synthesis.",
+  "",
+  "Sub-agent gate (all harnesses):",
+  "- Unless a harness-specific gate below overrides this, spawn A and B as two isolated, parallel sub-agents whenever a sub-agent/Task tool is exposed.",
+  '- "Unavailable" means exactly one thing: no sub-agent/Task tool is exposed in this session.',
+  "- If and only if sub-agents are unavailable, fall back sequentially.",
+  "- Whichever path you take, declare it in the report header (see Report header provenance).",
+  "",
+  "<codex>",
+  "Codex sub-agent gate (overrides the default above):",
+  "- If `spawn_agent` is exposed, ask exactly once.",
+  "</codex>",
+  "",
+  "If browser automation is available, each assessment creates its own new tab. Never reuse an existing tab, even if it is already at the right URL.",
+  "",
+  "### Assessment A: Design Review",
+  "",
+  "Read relevant source files and visually inspect the live page when browser automation is available. Think like a design director.",
+  "",
+  "- **Design specificity**: Is the visual language grounded in this product? Make this judgment before seeing detector output.",
+  "",
+  "Return: design-specificity verdict, heuristic scores, and provocative questions.",
+  "",
+  "### Assessment B: Detector + Browser Evidence",
+  "",
+  "Run the bundled detector and browser visualization evidence. Assessment B is mandatory and must remain isolated from Assessment A until both are complete.",
+  "",
+  "CLI scan:",
+  "```bash",
+  "{{scripts_path}}/impeccable detect --json [target]",
+  "```",
+  "",
+  "- Pass markup files/directories as `[target]`; do not pass CSS-only files.",
+  "- For URLs, skip CLI scan and use browser visualization.",
+  "- For very large trees (500+ scannable files), narrow scope or ask.",
+  "- Exit code 0 = clean; 2 = findings.",
+  "- If the detector entrypoint is missing or fails to load, report deterministic scan unavailable and continue with browser/manual review.",
+  "",
+  "Browser visualization is required for a viewable target when browser automation is available. Use a localhost dev/static URL for local files; avoid `file://` unless the available browser explicitly supports this workflow. Overlay flow:",
+  "",
+  "1. Create a fresh tab and navigate.",
+  "2. Preflight mutable injection by setting `document.title` and appending a `<script>` tag.",
+  "3. If mutation is unavailable, skip live server, browser presentation, and injection; report fallback signal.",
+  "4. If mutation is available, start `{{scripts_path}}/impeccable live-server --background`, then stop the live server.",
+  "5. For multi-view targets, inject on 3-5 representative pages.",
+  "",
+  "Return: CLI findings JSON/counts, browser console findings if applicable, false positives, and skipped/failed browser steps with concrete reasons.",
+  "",
+  "After Assessment B returns usable CLI findings, reuse them. Do not rerun `impeccable detect` in the parent.",
+  "",
+  "### Generate Combined Critique Report",
+  "",
+  "Synthesize both assessments into a single report, noting where the LLM review and detector agree, where the detector caught issues the LLM missed, and where detector findings are false positives.",
+  "",
+  "The chat response is the primary user-facing deliverable. Present the full structured critique below in chat; do not replace it with a summary and a link. The persisted snapshot is an archive of that run.",
+  "",
+  "#### Report header provenance",
+  "",
+  "The report's first line MUST declare how the assessments were run, so a degraded run is never silent:",
+  "- Dual-agent: `Method: dual-agent (A: <agent-id> · B: <agent-id>)`",
+  "- Degraded: `⚠️ DEGRADED: single-context (<reason, e.g. no sub-agent tool exposed>)`",
+  "",
+  "#### Design Health Score",
+  "",
+  "**Mode applicability**: heuristics 7 and 10 may be scored `n/a`, and renormalize the total so the rating band stays proportional. The persisted snapshot must record the applicable maximum and which heuristics were scored n/a.",
+  "",
+  "#### Design Specificity Verdict",
+  "",
+  "**Deterministic scan**: Summarize what the automated detector found, with counts and file locations. Note any additional issues the detector caught that you missed, and flag any false positives.",
+  "",
+  "**Visual overlays** (if injection succeeded): Tell the user that overlays are now visible in the **[Human]** tab in their browser, highlighting the detected issues. Summarize what the console output reported. If browser visualization was attempted but injection failed, say that no reliable user-visible overlay is available and report the fallback signal instead.",
+  "",
+  "#### Priority Issues",
+  "",
+  "- **Suggested command**: Which command could address this (from: {{available_commands}})",
+  "",
+  "#### Persona Red Flags",
+  "",
+  "Auto-select 2-3 personas most relevant to this interface type (use the selection table in the reference). If `{{config_file}}` contains a `## Design Context` section from `impeccable init`, also generate 1-2 project-specific personas from the audience/brand info.",
+  "",
+  "### Deliver the Report",
+  "",
+  "Write the full report into the chat response now, before any persistence work. This is the deliverable; everything below it is bookkeeping.",
+  "",
+  "Do this first because the alternative is the most common way this command fails: the report gets composed once, straight into the persistence heredoc.",
+  "",
+  "Persistence is not the end of the run. After it, the response continues with the trend line and the close.",
+  "",
+  "### Persist the Snapshot",
+  "",
+  "Once the report above is finalized, write it to `.impeccable/critique/` so the user can refer back, and so `{{command_prefix}}impeccable polish` can pick up the priority issues without a copy-paste.",
+  "",
+  "1. **Write the body to a temp file** so you can pipe it to the helper.",
+  "",
+  "   <codex>",
+  "   Codex: exclude Run Notes from the temp body file.",
+  "   </codex>",
+  "",
+  "2. **Pass the structured metadata**:",
+  "   ```bash",
+  '   {{scripts_path}}/impeccable critique-storage write "<resolved target>" <body-file>',
+  "   ```",
+  "",
+  "### Ask the User",
+  "",
+  "**After presenting findings**, use targeted questions based on what was actually found. {{ask_instruction}} These answers will shape the action plan.",
+  "",
+  "### Recommended Actions",
+  "",
+  "- Only recommend commands from: {{available_commands}}",
+  "- End with `{{command_prefix}}impeccable polish` as the final step if any fixes were recommended",
+  "",
+  "> Re-run `{{command_prefix}}impeccable critique` after fixes to see your score improve.",
+  "",
+  "---",
+  "",
+  "## Reference Material",
+  "",
+  "### Persona-Based Design Testing",
+  "",
+  "#### Project-Specific Personas",
+  "",
+  "If `{{config_file}}` contains a `## Design Context` section (generated by `impeccable init`), derive 1–2 additional personas from the audience and brand information:",
+  "",
+  "- Audience-specific persona.",
+  "",
+].join("\n");
 
 // Trimmed copy of the real upstream SKILL.src.md shapes the transforms anchor on.
 const SKILL_SRC = [
@@ -214,10 +374,10 @@ const REFERENCES = {
     "",
   ].join("\n"),
   harden: "# Harden\r\n\r\nTrailing spaces here.   \r\nAnd here.\t\r\n",
+  critique: CRITIQUE_FIXTURE,
 };
 
 const EXCLUDED_FIXTURE = {
-  critique: "# Critique\n\nRun `npx impeccable detect` and trust Grok Build.\n",
   "new-work": "# New work\n\n`{{scripts_path}}/impeccable concept-seed --scope surface`\n",
   "audit.native": "# Audit native\n",
 };
@@ -352,7 +512,7 @@ test("vendors only the allowlisted references and the license", () => {
   for (const name of VENDORED) {
     assert.ok(files.includes(`reference/${name}.md`), `missing reference/${name}.md`);
   }
-  for (const excluded of ["critique", "new-work", "audit.native"]) {
+  for (const excluded of ["new-work", "audit.native"]) {
     assert.ok(!files.includes(`reference/${excluded}.md`), `vendored excluded reference/${excluded}.md`);
   }
   assert.ok(!files.some((file) => file.startsWith("agents/")), "agents must not be vendored in Phase 0");
@@ -393,17 +553,23 @@ test("drops launcher-only Commands rows, strips native suffixes, and lists unava
   const outDir = makeOut();
   runSync(makeUpstream(), outDir);
   const skill = read(outDir, "SKILL.md");
-  for (const row of ["| `craft [feature]`", "| `critique [target]`", "| `live`", "| `generate [n]"]) {
+  for (const row of ["| `craft [feature]`", "| `live`", "| `generate [n]"]) {
     assert.ok(!skill.includes(row), `row still present: ${row}`);
   }
   assert.ok(skill.includes("| `shape [feature]` | Build |"));
+  assert.ok(
+    skill.includes(
+      "| `critique [target]` | Evaluate | UX design review with heuristic scoring | [reference/critique.md](reference/critique.md) |",
+    ),
+  );
   assert.ok(
     skill.includes(
       "| `audit [target]` | Evaluate | Technical quality checks (a11y, perf, responsive) | [reference/audit.md](reference/audit.md) |",
     ),
   );
   assert.ok(!skill.includes("native:"));
-  assert.ok(skill.includes("Not available in this vendored build: `craft`, `critique`, `live`, `generate`"));
+  assert.ok(skill.includes("Not available in this vendored build: `craft`, `live`, `generate`"));
+  assert.ok(skill.includes("Use `critique`, `audit`, and `polish` for review passes."));
 });
 
 test("rewrites routing bullets without routing.md or launcher context", () => {
@@ -559,8 +725,7 @@ test("rewrites sidecar and new-work routing into operator-facing instructions an
   const skill = read(outDir, "SKILL.md");
   const description = skill.split("\n").find((line) => line.startsWith("description: "));
   assert.ok(!description.includes("live browser"));
-  assert.ok(!description.includes("critique,"));
-  assert.ok(description.includes("design, redesign, shape, audit, polish,"));
+  assert.ok(description.includes("design, redesign, shape, critique, audit, polish,"));
   assert.ok(skill.includes("choose a replacement world with the operator and replace DESIGN.md"));
   assert.ok(skill.includes("the evidence decides whether to preserve, expand, or replace the incumbent world"));
   assert.ok(skill.includes("`new-work` (the visual-world workshop) is not vendored either"));
@@ -616,6 +781,56 @@ test("rewrites sidecar and new-work routing into operator-facing instructions an
   assert.ok(
     read(outDir, "reference/bolder.md").includes("(the new-work workshop is not vendored in this GoatCitadel build)"),
   );
+});
+
+test("vendors a trimmed critique reference built on render evidence instead of the launcher loop", () => {
+  const outDir = makeOut();
+  runSync(makeUpstream(), outDir);
+  const critique = read(outDir, "reference/critique.md");
+  for (const kept of [
+    "### Assessment B: Render Evidence",
+    "Method: single-context (routed-context critique)",
+    "desktop (1440×900) and phone (390×844)",
+    "**Runtime advisories**:",
+    "**Render evidence** (when snapshots were attached)",
+    "Read the artifact markup from the routed context",
+    "If the workspace PRODUCT.md or DESIGN.md names the audience or brand, derive",
+    "`@skill impeccable polish`",
+    "`@skill impeccable critique`",
+    "### Ask the User",
+    `(from: ${COMMAND_LIST})`,
+  ]) {
+    assert.ok(critique.includes(kept), `critique lost: ${kept}`);
+  }
+  for (const gone of [
+    "critique-storage",
+    "impeccable detect",
+    "live-server",
+    "<codex>",
+    "</codex>",
+    "### Persist the Snapshot",
+    "sub-agent",
+    "Sub-agent gate",
+    "DEGRADED",
+    "overlay",
+    "Dual-agent",
+    "persisted snapshot",
+    "persist a snapshot",
+    "Persistence is not the end",
+    "Do this first because",
+    "browser automation",
+    "Pass markup files",
+    "Create a fresh tab",
+    ".impeccable/",
+    "{{",
+    "detector",
+  ]) {
+    assert.ok(!critique.includes(gone), `critique still contains: ${gone}`);
+  }
+  const upstreamDoc = read(outDir, "UPSTREAM.md");
+  assert.ok(upstreamDoc.includes("| reference/critique.md | skill/reference/critique.md |"));
+  assert.ok(!upstreamDoc.includes("- skill/reference/critique.md:"));
+  assert.ok(upstreamDoc.includes("critique.md: Codex-only"));
 });
 
 test("refuses to vendor into a directory that is not an impeccable skill directory", () => {

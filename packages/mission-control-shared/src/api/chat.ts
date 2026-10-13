@@ -1,6 +1,8 @@
 /* eslint-disable max-lines -- Chat API helpers intentionally centralize chat surface transport contracts and request wiring. */
 import type {
   ChatAttachmentPreviewResponse,
+  ChatArtifactCritiqueResponse,
+  ChatArtifactRenderResponse,
   ChatAttachmentRecord,
   ChatCancelTurnResponse,
   ChatChangePlanRecord,
@@ -191,6 +193,12 @@ export interface ChatToolArtifactResponse {
 export interface ChatGeneratedArtifactsResponse {
   items: ChatGeneratedArtifactRecord[];
 }
+
+export type {
+  ChatArtifactCritiqueResponse,
+  ChatArtifactRenderRecord,
+  ChatArtifactRenderResponse,
+} from "@goatcitadel/contracts";
 
 export interface ChatGeneratedArtifactResponse {
   item: ChatGeneratedArtifactRecord;
@@ -853,6 +861,38 @@ export async function fetchChatGeneratedArtifact(
   }
   return request<ChatGeneratedArtifactResponse>(
     `/api/v1/chat/generated-artifacts/${encodeURIComponent(artifactId)}?${query.toString()}`,
+  );
+}
+
+/** Render an `html` generated artifact to offline PNG evidence (idempotent per content hash). */
+export async function renderChatGeneratedArtifact(
+  artifactId: string,
+  workspaceId: string,
+): Promise<ChatArtifactRenderResponse> {
+  return request<ChatArtifactRenderResponse>(
+    `/api/v1/chat/generated-artifacts/${encodeURIComponent(artifactId)}/renders`,
+    { method: "POST", body: JSON.stringify({ workspaceId }) },
+  );
+}
+
+/** Dispatch an `@skill impeccable critique` turn for an html artifact; the report arrives as that turn's reply. */
+export async function critiqueChatGeneratedArtifact(
+  artifactId: string,
+  workspaceId: string,
+): Promise<ChatArtifactCritiqueResponse> {
+  return request<ChatArtifactCritiqueResponse>(
+    `/api/v1/chat/generated-artifacts/${encodeURIComponent(artifactId)}/critique`,
+    { method: "POST", body: JSON.stringify({ workspaceId }) },
+  );
+}
+
+export async function listChatArtifactRenders(
+  artifactId: string,
+  workspaceId: string,
+): Promise<ChatArtifactRenderResponse> {
+  const query = new URLSearchParams({ workspaceId });
+  return request<ChatArtifactRenderResponse>(
+    `/api/v1/chat/generated-artifacts/${encodeURIComponent(artifactId)}/renders?${query.toString()}`,
   );
 }
 

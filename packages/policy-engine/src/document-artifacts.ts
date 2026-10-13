@@ -31,14 +31,25 @@ export interface DocumentArtifactInput {
   rows?: Array<Record<string, unknown> | unknown[]>;
   createdAt?: Date;
   design?: ArtifactDesignPlan;
+  /**
+   * A complete HTML document authored by the model (only honored for the `html` format, only when
+   * the gateway admitted it under a design receipt). Written verbatim: nothing is escaped.
+   */
+  html?: string;
 }
+
+export type DocumentArtifactMarkup = "template" | "model-authored";
 
 export interface DocumentArtifactOutput {
   data: Buffer | string;
   extension: string;
   mimeType: string;
   binary: boolean;
+  /** Whether the bytes came from the fixed renderer template or from model-authored markup. */
+  markup: DocumentArtifactMarkup;
 }
+
+export const MODEL_AUTHORED_HTML_MAX_BYTES = 512 * 1024;
 
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -65,14 +76,18 @@ export async function createDocumentArtifact(
   format: DocumentArtifactFormat,
   input: DocumentArtifactInput,
 ): Promise<DocumentArtifactOutput> {
-  const output = FORMAT_OUTPUTS[format];
+  const output = { ...FORMAT_OUTPUTS[format], markup: "template" as const };
   switch (format) {
     case "markdown":
       return { ...output, data: buildMarkdown(input) };
     case "txt":
       return { ...output, data: buildPlainText(input) };
-    case "html":
-      return { ...output, data: buildHtml(input) };
+    case "html": {
+      const modelAuthored = resolveModelAuthoredHtml(input.html);
+      return modelAuthored === undefined
+        ? { ...output, data: buildHtml(input) }
+        : { ...output, data: modelAuthored, markup: "model-authored" };
+    }
     case "json":
       return { ...output, data: JSON.stringify(toJsonDocument(input), null, 2) };
     case "csv":
@@ -86,6 +101,24 @@ export async function createDocumentArtifact(
 
 export function documentArtifactExtension(format: DocumentArtifactFormat): string {
   return FORMAT_OUTPUTS[format].extension;
+}
+
+/**
+ * The model's HTML when it is a whole document (`<html` or `<!doctype`) within the size cap;
+ * undefined for a fragment or nothing, so the template path runs. Oversize input is an error
+ * rather than a silent fallback: the caller asked for specific markup and must learn it was refused.
+ */
+function resolveModelAuthoredHtml(html: string | undefined): string | undefined {
+  if (typeof html !== "string") return undefined;
+  const trimmed = html.trim();
+  if (!/<html[\s>]|<!doctype\s/iu.test(trimmed)) return undefined;
+  const bytes = Buffer.byteLength(html, "utf8");
+  if (bytes > MODEL_AUTHORED_HTML_MAX_BYTES) {
+    throw new Error(
+      `model_authored_html_too_large: the html argument is ${bytes} bytes; the limit is ${MODEL_AUTHORED_HTML_MAX_BYTES} bytes.`,
+    );
+  }
+  return html;
 }
 
 function buildMarkdown(input: DocumentArtifactInput): string {

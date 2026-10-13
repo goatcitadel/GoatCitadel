@@ -98,7 +98,7 @@ For each issue, document:
 - **Impact**: How it affects users
 - **WCAG/Standard**: Which standard it violates (if applicable)
 - **Recommendation**: How to fix it
-- **Suggested command**: Which command to use (prefer: shape, init, document, extract, audit, polish, bolder, quieter, distill, harden, onboard, animate, colorize, typeset, layout, delight, overdrive, clarify, adapt, optimize)
+- **Suggested command**: Which command to use (prefer: shape, init, document, extract, critique, audit, polish, bolder, quieter, distill, harden, onboard, animate, colorize, typeset, layout, delight, overdrive, clarify, adapt, optimize)
 
 ### Patterns & Systemic Issues
 
@@ -117,7 +117,7 @@ List recommended commands in priority order (P0 first, then P1, then P2):
 1. **[P?] `@skill impeccable command-name`**: Brief description (specific context from audit findings)
 2. **[P?] `@skill impeccable command-name`**: Brief description (specific context)
 
-**Rules**: Only recommend commands from: shape, init, document, extract, audit, polish, bolder, quieter, distill, harden, onboard, animate, colorize, typeset, layout, delight, overdrive, clarify, adapt, optimize. Map findings to the most appropriate command. End with `@skill impeccable polish` as the final step if any fixes were recommended.
+**Rules**: Only recommend commands from: shape, init, document, extract, critique, audit, polish, bolder, quieter, distill, harden, onboard, animate, colorize, typeset, layout, delight, overdrive, clarify, adapt, optimize. Map findings to the most appropriate command. End with `@skill impeccable polish` as the final step if any fixes were recommended.
 
 After presenting the summary, tell the user:
 
