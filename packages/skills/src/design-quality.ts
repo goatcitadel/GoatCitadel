@@ -13,29 +13,24 @@ function isRetiringClassicPath(filePath: string): boolean {
   return /[\\/]features[\\/](?:native-routes|threaded-surface)[\\/]/u.test(filePath);
 }
 
+// The vendored impeccable modules the skill routes inject (see packages/skills/src/skill-module-routes.ts).
+const SKILL_DIR = path.join("skills", "bundled", "impeccable");
 const REQUIRED_SKILL_MODULES = [
   "SKILL.md",
-  "enforcement.md",
-  "audit.md",
-  "components.md",
-  "layout.md",
-  "taste.md",
-  "assets.md",
-  "calibration.md",
-  "examples.md",
+  "reference/craft-floor.md",
+  "reference/artifacts.md",
+  "reference/critique.md",
+  "reference/critique/01-reference-material.md",
+  "reference/audit.md",
+  "reference/polish.md",
 ] as const;
 
 const REQUIRED_SKILL_PHRASES = [
-  "Design Quality V1",
-  "Start",
-  "Iterate",
-  "Polish",
-  "Maintain",
-  "surface intent",
-  "design system/tokens",
-  "craft rules",
-  "Pre-Ship Loop",
-  "five-dimension critique",
+  "Vendored from",
+  "PRODUCT.md",
+  "DESIGN.md",
+  "Core principles",
+  "Not available in this vendored build",
 ] as const;
 
 const REQUIRED_ROUTING_PHRASES = [
@@ -45,9 +40,28 @@ const REQUIRED_ROUTING_PHRASES = [
   "design-system audit",
   "document design",
   "presentation design",
-  "pptx",
-  "artifact",
+  "pptx deck",
+  "html artifact",
 ] as const;
+
+const REQUIRED_PROVENANCE_FILES = ["UPSTREAM.md", "LICENSE", "NOTICE"] as const;
+const UPSTREAM_COMMIT_PATTERN = /Commit:\s*`[0-9a-f]{40}`/u;
+
+// Upstream impeccable ships a launcher that downloads a binary; the vendored prose must never
+// point at it, and no injectable file may name the providers the repo excludes.
+const LAUNCHER_PATTERNS = [
+  { id: "unresolved {{placeholder}}", re: /\{\{/u },
+  { id: "npx impeccable", re: /npx impeccable/iu },
+  { id: "impeccable launcher verb", re: /\bimpeccable (?:detect|pin|hooks|context|doctor)\b/iu },
+  { id: "~/.impeccable", re: /~\/\.impeccable/u },
+  { id: ".impeccable/ path", re: /\.impeccable\//u },
+  { id: "grok", re: /grok/iu },
+  { id: "xai", re: /\bxai\b/iu },
+  { id: "x.ai", re: /\bx\.ai\b/iu },
+] as const;
+
+const ARTIFACTS_MODULE = "reference/artifacts.md";
+const ARTIFACTS_MODULE_MAX_BYTES = 8 * 1024;
 
 const REQUIRED_PROOF_SCRIPTS = [
   "verify:design:quality",
@@ -78,21 +92,22 @@ type DesignQualityHit = { path: string; pattern: string };
 export function readDesignQualityEvidence(repoRoot: string): OpsDesignQualitySnapshot {
   const root = path.resolve(repoRoot);
   const checks: OpsDesignQualityCheck[] = [];
-  const skillDir = path.join(root, "skills", "bundled", "design-intelligence");
+  const skillDir = path.join(root, SKILL_DIR);
+  const skillOwner = SKILL_DIR.replace(/\\/gu, "/");
   const skillFiles = REQUIRED_SKILL_MODULES.map((file) => path.join(skillDir, file));
 
   const missingModules = REQUIRED_SKILL_MODULES.filter((file) => !fs.existsSync(path.join(skillDir, file)));
   checks.push(
     check({
-      id: "design-intelligence.modules",
-      label: "Design-intelligence module integrity",
+      id: "impeccable.modules",
+      label: "Impeccable module integrity",
       severity: missingModules.length > 0 ? "P0" : "P3",
       status: missingModules.length > 0 ? "blocking" : "passing",
-      owner: "skills/bundled/design-intelligence",
-      evidence: "skills/bundled/design-intelligence",
+      owner: skillOwner,
+      evidence: skillOwner,
       nextAction:
         missingModules.length > 0
-          ? `Restore missing design-intelligence module(s): ${missingModules.join(", ")}.`
+          ? `Restore missing impeccable module(s) with the sync script: ${missingModules.join(", ")}.`
           : undefined,
     }),
   );
@@ -101,15 +116,15 @@ export function readDesignQualityEvidence(repoRoot: string): OpsDesignQualitySna
   const missingSkillPhrases = REQUIRED_SKILL_PHRASES.filter((phrase) => !includesPhrase(skillText, phrase));
   checks.push(
     check({
-      id: "design-intelligence.lifecycle",
-      label: "Lifecycle, register, and craft guidance",
+      id: "impeccable.lifecycle",
+      label: "Provenance, context, and craft guidance in SKILL.md",
       severity: missingSkillPhrases.length > 0 ? "P1" : "P3",
       status: missingSkillPhrases.length > 0 ? "advisory" : "passing",
-      owner: "skills/bundled/design-intelligence",
-      evidence: "skills/bundled/design-intelligence/SKILL.md",
+      owner: skillOwner,
+      evidence: `${skillOwner}/SKILL.md`,
       nextAction:
         missingSkillPhrases.length > 0
-          ? `Add missing design-quality guidance phrase(s): ${missingSkillPhrases.join(", ")}.`
+          ? `Add missing design guidance phrase(s) through the sync script: ${missingSkillPhrases.join(", ")}.`
           : undefined,
     }),
   );
@@ -120,15 +135,73 @@ export function readDesignQualityEvidence(repoRoot: string): OpsDesignQualitySna
   ];
   checks.push(
     check({
-      id: "design-intelligence.placeholders",
-      label: "No unresolved links or placeholders in design skill",
+      id: "impeccable.placeholders",
+      label: "No unresolved links or placeholders in the design skill",
       severity: unresolvedSkillHits.length > 0 ? "P0" : "P3",
       status: unresolvedSkillHits.length > 0 ? "blocking" : "passing",
-      owner: "skills/bundled/design-intelligence",
-      evidence: unresolvedSkillHits[0]?.path ?? "skills/bundled/design-intelligence",
+      owner: skillOwner,
+      evidence: unresolvedSkillHits[0]?.path ?? skillOwner,
       nextAction:
         unresolvedSkillHits.length > 0
           ? `Resolve design skill link/placeholder hit(s): ${summarizeHits(unresolvedSkillHits)}.`
+          : undefined,
+    }),
+  );
+
+  const missingProvenance = REQUIRED_PROVENANCE_FILES.filter((file) => !fs.existsSync(path.join(skillDir, file)));
+  const upstreamPinned = UPSTREAM_COMMIT_PATTERN.test(readText(path.join(skillDir, "UPSTREAM.md")));
+  const provenanceProblems = [
+    ...missingProvenance.map((file) => `missing ${file}`),
+    ...(upstreamPinned || missingProvenance.includes("UPSTREAM.md") ? [] : ["UPSTREAM.md pins no 40-hex commit"]),
+  ];
+  checks.push(
+    check({
+      id: "impeccable.provenance",
+      label: "Vendored provenance is recorded (UPSTREAM.md, LICENSE, NOTICE)",
+      severity: provenanceProblems.length > 0 ? "P0" : "P3",
+      status: provenanceProblems.length > 0 ? "blocking" : "passing",
+      owner: skillOwner,
+      evidence: `${skillOwner}/UPSTREAM.md`,
+      nextAction:
+        provenanceProblems.length > 0
+          ? `Re-run the impeccable sync script to restore provenance: ${provenanceProblems.join("; ")}.`
+          : undefined,
+    }),
+  );
+
+  // Only SKILL.md and reference/ reach a model; UPSTREAM.md and NOTICE legitimately describe what was stripped.
+  const launcherHits = collectPatternHits(
+    [path.join(skillDir, "SKILL.md"), path.join(skillDir, "reference")],
+    LAUNCHER_PATTERNS,
+    { recursive: true, repoRoot: root },
+  );
+  checks.push(
+    check({
+      id: "impeccable.launcher-strings",
+      label: "No launcher, placeholder, or excluded-provider strings in the injectable files",
+      severity: launcherHits.length > 0 ? "P0" : "P3",
+      status: launcherHits.length > 0 ? "blocking" : "passing",
+      owner: skillOwner,
+      evidence: launcherHits[0]?.path ?? skillOwner,
+      nextAction:
+        launcherHits.length > 0
+          ? `Remove launcher/provider hit(s) via the sync script: ${summarizeHits(launcherHits)}.`
+          : undefined,
+    }),
+  );
+
+  const artifactsBytes = Buffer.byteLength(readText(path.join(skillDir, ARTIFACTS_MODULE)), "utf8");
+  checks.push(
+    check({
+      id: "impeccable.artifacts-budget",
+      label: "Artifacts module stays within its injection budget",
+      severity: artifactsBytes > ARTIFACTS_MODULE_MAX_BYTES ? "P1" : "P3",
+      status: artifactsBytes > ARTIFACTS_MODULE_MAX_BYTES ? "advisory" : "passing",
+      owner: skillOwner,
+      evidence: `${skillOwner}/${ARTIFACTS_MODULE}`,
+      nextAction:
+        artifactsBytes > ARTIFACTS_MODULE_MAX_BYTES
+          ? `Trim ${ARTIFACTS_MODULE} to 8 KiB or less (currently ${artifactsBytes} bytes); it is injected on every deck and document turn.`
           : undefined,
     }),
   );
@@ -190,7 +263,7 @@ export function readDesignQualityEvidence(repoRoot: string): OpsDesignQualitySna
       evidence: "packages/skills/src/routing-hints.generated.ts",
       nextAction:
         missingRoutingPhrases.length > 0
-          ? `Refresh design-intelligence routing hints for: ${missingRoutingPhrases.join(", ")}.`
+          ? `Refresh the impeccable routing hints for: ${missingRoutingPhrases.join(", ")}.`
           : undefined,
     }),
   );
