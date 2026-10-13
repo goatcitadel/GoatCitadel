@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Heartbeat occurrence authority and cross-dialect fencing stay co-located for this checkpoint. */
 import { createHash } from "node:crypto";
-import { canonicalJsonString, ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { canonicalJsonString, ConflictError, NotFoundError, ValidationError, readChatTurnFeatureReferences } from "@goatcitadel/contracts";
 import { assertSynchronousTransactionResult, type DatabaseClient } from "./db.js";
 import {
   SessionMutationAdmissionRepository,
@@ -64,6 +64,7 @@ export interface HeartbeatOccurrenceRecord extends HeartbeatOccurrenceChildIdent
   abandonmentReason?: HeartbeatOccurrenceAbandonReason;
   capabilityProfileId?: string;
   capabilityProfileHash?: string;
+  featureReferenceSha256?: string;
 }
 
 export interface HeartbeatOccurrenceRecoveryCursor {
@@ -137,8 +138,9 @@ export interface HeartbeatOccurrenceExactIdentity {
 }
 
 export interface HeartbeatOccurrenceBoundIdentity extends HeartbeatOccurrenceExactIdentity {
-  capabilityProfileId: string;
-  capabilityProfileHash: string;
+  capabilityProfileId?: string;
+  capabilityProfileHash?: string;
+  featureReferenceSha256?: string;
 }
 
 export interface MarkHeartbeatOccurrenceDurableBoundOutcome {
@@ -430,14 +432,16 @@ export class HeartbeatOccurrenceRepository {
            SET state = 'durable_bound', durable_run_id = @durableRunId,
                capability_profile_id = @capabilityProfileId,
                capability_profile_hash = @capabilityProfileHash,
+               feature_reference_sha256 = @featureReferenceSha256,
                durable_bound_at = @updatedAt, updated_at = @updatedAt, revision = revision + 1
            WHERE occurrence_id = @occurrenceId AND state = 'admitted' AND revision = @revision`,
         )
         .run({
           occurrenceId: normalized.occurrenceId,
           durableRunId: normalized.durableRunId,
-          capabilityProfileId: normalized.capabilityProfileId,
-          capabilityProfileHash: normalized.capabilityProfileHash,
+          capabilityProfileId: normalized.capabilityProfileId ?? null,
+          capabilityProfileHash: normalized.capabilityProfileHash ?? null,
+          featureReferenceSha256: normalized.featureReferenceSha256 ?? null,
           updatedAt: databaseNow,
           revision: asPositiveInteger(row.revision),
         });
@@ -708,14 +712,16 @@ export class HeartbeatOccurrenceRepository {
     });
     const evidence = this.db
       .prepare(
-        `SELECT binding.durable_run_id, profile_binding.profile_id, profile_binding.profile_hash,
+        `SELECT binding.durable_run_id,
+                ${input.featureReferenceSha256 ? "feature_binding.references_json, feature_binding.reference_sha256," : "profile_binding.profile_id, profile_binding.profile_hash,"}
                 admission.status AS admission_status, admission.material_sha256,
                 admission.request_sha256 AS admission_request_sha256,
                 run.status AS run_status, run.workflow_key, run.payload_json,
                 trace.user_message_id, trace.assistant_message_id, trace.session_id AS trace_session_id
          FROM chat_turn_mutation_admission_durable_bindings binding
-         JOIN chat_turn_capability_profile_incarnation_bindings profile_binding
-           ON profile_binding.turn_id = binding.turn_id
+         ${input.featureReferenceSha256
+           ? "JOIN chat_turn_feature_references feature_binding ON feature_binding.admission_id = binding.admission_id"
+           : "JOIN chat_turn_capability_profile_incarnation_bindings profile_binding ON profile_binding.turn_id = binding.turn_id"}
          JOIN chat_session_mutation_admissions admission ON admission.admission_id = binding.admission_id
          JOIN durable_runs run ON run.run_id = binding.durable_run_id
          JOIN chat_turn_traces trace ON trace.turn_id = binding.turn_id
@@ -723,13 +729,16 @@ export class HeartbeatOccurrenceRepository {
            AND binding.workspace_id = @workspaceId AND binding.session_id = @sessionId
            AND binding.session_incarnation_id = @sessionIncarnationId
            AND binding.durable_run_id = @durableRunId
-           AND profile_binding.profile_id = @capabilityProfileId
-           AND profile_binding.profile_hash = @capabilityProfileHash${this.db.dialect === "postgres" ? " FOR UPDATE OF binding, profile_binding, admission, run, trace" : ""}`,
+           ${input.featureReferenceSha256 ? "AND feature_binding.reference_sha256 = @featureReferenceSha256"
+             : "AND profile_binding.profile_id = @capabilityProfileId AND profile_binding.profile_hash = @capabilityProfileHash"}
+           ${this.db.dialect === "postgres" ? ` FOR UPDATE OF binding, ${input.featureReferenceSha256 ? "feature_binding" : "profile_binding"}, admission, run, trace` : ""}`,
       )
       .get<{
         durable_run_id: string;
         profile_id: string;
         profile_hash: string;
+        references_json?: string;
+        reference_sha256?: string;
         admission_status: string;
         material_sha256: string;
         admission_request_sha256: string;
@@ -746,9 +755,17 @@ export class HeartbeatOccurrenceRepository {
         sessionId: input.sessionId,
         sessionIncarnationId: input.sessionIncarnationId,
         durableRunId: input.durableRunId,
-        capabilityProfileId: input.capabilityProfileId,
-        capabilityProfileHash: input.capabilityProfileHash,
+        ...(input.featureReferenceSha256 ? { featureReferenceSha256: input.featureReferenceSha256 }
+          : { capabilityProfileId: input.capabilityProfileId!, capabilityProfileHash: input.capabilityProfileHash! }),
       });
+    if (input.featureReferenceSha256) {
+      const references = readChatTurnFeatureReferences(evidence?.references_json ? parseObject(evidence.references_json) : undefined);
+      if (sha256(canonicalJsonString(references)) !== input.featureReferenceSha256 ||
+        canonicalJsonString(references.heartbeatOccurrence) !== canonicalJsonString({ ownerId: row.occurrence_id,
+          revision: String(row.aggregate_revision), sha256: row.claim_sha256 })) {
+        throw occurrenceConflict("Heartbeat feature references do not match the immutable occurrence claim.");
+      }
+    }
     const payload = evidence ? parseObject(evidence.payload_json) : undefined;
     const requestActor = payload ? parseUnknownObject(payload.requestActor) : undefined;
     const persistedTranscriptMessage = this.db
@@ -788,6 +805,7 @@ export class HeartbeatOccurrenceRepository {
       payload.assistantMessageId !== row.assistant_message_id ||
       payload.capabilityProfileId !== input.capabilityProfileId ||
       payload.capabilityProfileHash !== input.capabilityProfileHash ||
+      payload.featureReferenceSha256 !== input.featureReferenceSha256 ||
       !requestActor ||
       canonicalJsonString(Object.keys(requestActor).sort()) !== canonicalJsonString(["actorId", "actorKind"]) ||
       requestActor.actorKind !== "system" ||
@@ -891,6 +909,7 @@ interface HeartbeatOccurrenceRow {
   durable_run_id: string | null;
   capability_profile_id: string | null;
   capability_profile_hash: string | null;
+  feature_reference_sha256: string | null;
   state: HeartbeatOccurrenceState;
   revision: number | bigint | string;
   claimed_at: string;
@@ -960,10 +979,15 @@ function normalizeExactIdentity(input: HeartbeatOccurrenceExactIdentity): Heartb
 }
 
 function normalizeBoundIdentity(input: HeartbeatOccurrenceBoundIdentity): HeartbeatOccurrenceBoundIdentity {
+  const historical = Boolean(input.capabilityProfileId && input.capabilityProfileHash);
+  if (historical === Boolean(input.featureReferenceSha256) || Boolean(input.capabilityProfileId) !== Boolean(input.capabilityProfileHash)) {
+    throw occurrenceConflict("Heartbeat requires exactly one complete profile or feature binding.");
+  }
   return {
     ...normalizeExactIdentity(input),
-    capabilityProfileId: identifier(input.capabilityProfileId, "capabilityProfileId"),
-    capabilityProfileHash: digest(input.capabilityProfileHash, "capabilityProfileHash"),
+    ...(historical ? { capabilityProfileId: identifier(input.capabilityProfileId!, "capabilityProfileId"),
+      capabilityProfileHash: digest(input.capabilityProfileHash!, "capabilityProfileHash") }
+      : { featureReferenceSha256: digest(input.featureReferenceSha256!, "featureReferenceSha256") }),
   };
 }
 
@@ -991,8 +1015,9 @@ function assertExactIdentity(row: HeartbeatOccurrenceRow, input: HeartbeatOccurr
 function assertBoundIdentity(row: HeartbeatOccurrenceRow, input: HeartbeatOccurrenceBoundIdentity): void {
   if (
     row.durable_run_id !== input.durableRunId ||
-    row.capability_profile_id !== input.capabilityProfileId ||
-    row.capability_profile_hash !== input.capabilityProfileHash
+    (row.capability_profile_id ?? undefined) !== input.capabilityProfileId ||
+    (row.capability_profile_hash ?? undefined) !== input.capabilityProfileHash ||
+    (row.feature_reference_sha256 ?? undefined) !== input.featureReferenceSha256
   ) {
     throw occurrenceConflict("Heartbeat durable binding identity conflicts.");
   }
@@ -1032,6 +1057,7 @@ function mapRow(row: HeartbeatOccurrenceRow): HeartbeatOccurrenceRecord {
     ...(row.durable_run_id ? { boundDurableRunId: row.durable_run_id } : {}),
     ...(row.capability_profile_id ? { capabilityProfileId: row.capability_profile_id } : {}),
     ...(row.capability_profile_hash ? { capabilityProfileHash: row.capability_profile_hash } : {}),
+    ...(row.feature_reference_sha256 ? { featureReferenceSha256: row.feature_reference_sha256 } : {}),
     state: row.state,
     revision: asPositiveInteger(row.revision),
     claimedAt: row.claimed_at,

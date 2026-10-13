@@ -613,8 +613,7 @@ function assertHeartbeatOccurrencePlan(occurrence: HeartbeatOccurrenceRecord, pl
 
 function toBoundIdentity(occurrence: HeartbeatOccurrenceRecord): HeartbeatOccurrenceBoundIdentity {
   if (
-    !occurrence.capabilityProfileId ||
-    !occurrence.capabilityProfileHash ||
+    (!occurrence.featureReferenceSha256 && (!occurrence.capabilityProfileId || !occurrence.capabilityProfileHash)) ||
     occurrence.boundDurableRunId !== occurrence.durableRunId
   ) {
     throw new Error("Durable-bound heartbeat occurrence is missing its exact profile or run identity.");
@@ -629,6 +628,7 @@ function toBoundIdentity(occurrence: HeartbeatOccurrenceRecord): HeartbeatOccurr
     durableRunId: occurrence.durableRunId,
     capabilityProfileId: occurrence.capabilityProfileId,
     capabilityProfileHash: occurrence.capabilityProfileHash,
+    featureReferenceSha256: occurrence.featureReferenceSha256,
   };
 }
 

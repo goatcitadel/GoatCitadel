@@ -3,6 +3,8 @@ import { sha256Hex } from "./sha256.js";
 import type { ChatCompletionMessage } from "./llm.js";
 import type { RemoteWorkerInferenceMessage } from "./remote-worker-inference.js";
 import { readDurableChatTurnExecutionPayloadAuthority } from "./durable-chat-turn-payload.js";
+import { normalizeRemoteWorkerCapabilityBinding, remoteWorkerCapabilityBindingForTurn, sameRemoteWorkerCapabilityBinding,
+  type RemoteWorkerCapabilityBinding } from "./remote-worker-capability-binding.js";
 
 export const REMOTE_WORKER_CHAT_CONTEXT_SCHEMA_VERSION = "goatcitadel.remote-worker-chat-context.v1" as const;
 export const REMOTE_WORKER_CHAT_CONTEXT_MAX_BYTES = 384 * 1024;
@@ -15,7 +17,7 @@ export class RemoteWorkerChatContextLimitError extends TypeError {}
  * worker. Retains history, guidance, activated skills and routed context. Later
  * QMD memory and hook augmentation remain completion-owner work; this record
  * must not be presented as evidence that those later stages executed. */
-export interface RemoteWorkerChatContextMaterial {
+export interface RemoteWorkerChatContextMaterial extends RemoteWorkerCapabilityBinding {
   readonly schemaVersion: typeof REMOTE_WORKER_CHAT_CONTEXT_SCHEMA_VERSION;
   readonly durableRunId: string;
   readonly admissionId: string;
@@ -24,8 +26,7 @@ export interface RemoteWorkerChatContextMaterial {
   readonly sessionId: string;
   readonly turnId: string;
   readonly requestMaterialSha256: string;
-  readonly capabilityProfileId: string;
-  readonly capabilityProfileSha256: string;
+  readonly capabilityProfileId?: string;
   readonly routedContextSnapshotId?: string;
   readonly routedContextSnapshotSha256?: string;
   readonly messages: readonly Readonly<ChatCompletionMessage>[];
@@ -58,8 +59,7 @@ export function sealRemoteWorkerChatContextForTurn(
     durableRunId,
     payload,
   });
-  if (!authority || !authority.capabilityProfileId || !authority.capabilityProfileHash)
-    throw new TypeError("Remote Chat context requires an admitted capability profile.");
+  if (!authority) throw new TypeError("Remote Chat context requires an admitted turn.");
   return sealRemoteWorkerChatContext({
     schemaVersion: REMOTE_WORKER_CHAT_CONTEXT_SCHEMA_VERSION,
     durableRunId,
@@ -69,8 +69,8 @@ export function sealRemoteWorkerChatContextForTurn(
     sessionId: authority.sessionId,
     turnId: authority.turnId,
     requestMaterialSha256: authority.effectiveRequestMaterialSha256,
-    capabilityProfileId: authority.capabilityProfileId,
-    capabilityProfileSha256: authority.capabilityProfileHash,
+    ...remoteWorkerCapabilityBindingForTurn(authority),
+    ...(authority.capabilityProfileId ? { capabilityProfileId: authority.capabilityProfileId } : {}),
     ...(authority.routedContextSnapshotId
       ? {
           routedContextSnapshotId: authority.routedContextSnapshotId,
@@ -96,6 +96,7 @@ export function sealRemoteWorkerChatContext(input: RemoteWorkerChatContextMateri
     "requestMaterialSha256",
     "capabilityProfileId",
     "capabilityProfileSha256",
+    "admissionReference",
     "routedContextSnapshotId",
     "routedContextSnapshotSha256",
     "messages",
@@ -112,10 +113,13 @@ export function sealRemoteWorkerChatContext(input: RemoteWorkerChatContextMateri
     "workspaceId",
     "sessionId",
     "turnId",
-    "capabilityProfileId",
   ])
     identifier(row[key]);
-  for (const hash of [input.requestMaterialSha256, input.capabilityProfileSha256]) digest(hash);
+  normalizeRemoteWorkerCapabilityBinding(input);
+  if ((input.capabilityProfileId === undefined) !== (input.capabilityProfileSha256 === undefined))
+    throw new TypeError("Remote Chat capability profile binding is incomplete.");
+  if (input.capabilityProfileId !== undefined) identifier(input.capabilityProfileId);
+  digest(input.requestMaterialSha256);
   if ((input.routedContextSnapshotId === undefined) !== (input.routedContextSnapshotSha256 === undefined))
     throw new TypeError("Remote Chat routed-context binding is incomplete.");
   if (input.routedContextSnapshotId !== undefined) {
@@ -201,7 +205,7 @@ export function verifyRemoteWorkerChatContextBinding(
     authority.turnId !== snapshot.turnId ||
     authority.effectiveRequestMaterialSha256 !== snapshot.requestMaterialSha256 ||
     authority.capabilityProfileId !== snapshot.capabilityProfileId ||
-    authority.capabilityProfileHash !== snapshot.capabilityProfileSha256 ||
+    !sameRemoteWorkerCapabilityBinding(remoteWorkerCapabilityBindingForTurn(authority), snapshot) ||
     authority.routedContextSnapshotId !== snapshot.routedContextSnapshotId ||
     authority.routedContextSnapshotHash !== snapshot.routedContextSnapshotSha256
   )

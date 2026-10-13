@@ -65,6 +65,7 @@ export interface ThreadedPersonalityPresence {
  * actions disabled while chips and per-turn selection stay live.
  */
 export interface ThreadedExternalSourceControls {
+  contextInclusionEnabled?: boolean;
   /** Live read-only attachments (content-free records; no transcript bytes). */
   attachments: readonly ExternalSessionAttachmentRecord[];
   /** Server-filtered verified applied items eligible to attach to this session. */
@@ -121,6 +122,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   contextSelection: ThreadedContextSelectionState | null;
   delegationRun: ActiveChatDelegationRun | null;
   delegationSuggestion: ChatDelegationSuggestionRecord | null;
+  supervisedDelegationAvailable?: boolean;
   notices: ChatThreadNotice[];
   sessionStatusPanel?: {
     open: boolean;

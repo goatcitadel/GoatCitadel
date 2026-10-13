@@ -712,6 +712,7 @@ export class DurableRunService {
       /** Runs inside the cancellation transaction, after the Chat trace is fenced. */
       onChatTurnCancelled?: (sessionId: string, turnId: string, actorId: string) => Promise<void>;
       reconcileWaitingChatDelegations?: () => Promise<void>;
+      reconcileWaitingChatFanouts?: () => Promise<void>;
       /** Wakes orchestration runs parked on a phase child that has already settled. */
       reconcileWaitingOrchestrationPhases?: () => Promise<void>;
       /** Settles active orchestration runs whose linked durable run already ended. */
@@ -3153,6 +3154,7 @@ export class DurableRunService {
       heartbeatOccurrenceId?: unknown;
       capabilityProfileId?: unknown;
       capabilityProfileHash?: unknown;
+      featureReferenceSha256?: unknown;
     };
     if (payload.heartbeatOccurrenceId === undefined) return;
     const occurrences = (this.ctx.storage as Partial<Storage>).heartbeatOccurrences;
@@ -3160,13 +3162,15 @@ export class DurableRunService {
       if (process.env.NODE_ENV === "test") return;
       throw new Error("Heartbeat occurrence repository is unavailable during terminal Chat handoff.");
     }
+    const featureBound = typeof payload.featureReferenceSha256 === "string" && /^[a-f0-9]{64}$/u.test(payload.featureReferenceSha256) &&
+      payload.capabilityProfileId === undefined && payload.capabilityProfileHash === undefined;
+    const profileBound = payload.featureReferenceSha256 === undefined &&
+      typeof payload.capabilityProfileId === "string" && Boolean(payload.capabilityProfileId.trim()) &&
+      typeof payload.capabilityProfileHash === "string" && /^[a-f0-9]{64}$/u.test(payload.capabilityProfileHash);
     if (
       typeof payload.heartbeatOccurrenceId !== "string" ||
       !payload.heartbeatOccurrenceId.trim() ||
-      typeof payload.capabilityProfileId !== "string" ||
-      !payload.capabilityProfileId.trim() ||
-      typeof payload.capabilityProfileHash !== "string" ||
-      !payload.capabilityProfileHash.trim()
+      (!featureBound && !profileBound)
     ) {
       throw new Error(`System heartbeat ${run.runId} has no exact occurrence settlement identity.`);
     }
@@ -3178,8 +3182,8 @@ export class DurableRunService {
       admissionId: admission.admissionId,
       turnId: admission.turnId,
       durableRunId: run.runId,
-      capabilityProfileId: payload.capabilityProfileId,
-      capabilityProfileHash: payload.capabilityProfileHash,
+      ...(featureBound ? { featureReferenceSha256: payload.featureReferenceSha256 as string }
+        : { capabilityProfileId: payload.capabilityProfileId as string, capabilityProfileHash: payload.capabilityProfileHash as string }),
     });
     if (settlement.disposition === "still_bound") {
       throw new Error(`System heartbeat ${run.runId} terminal handoff did not settle its occurrence.`);
@@ -4389,7 +4393,11 @@ export class DurableRunService {
             observed,
             recoverability.reason ?? "Run could not be recovered after its local worker process exited.",
             recoveryObservedAt,
-            { kind: "exited_local_process", leaseOwnerId: observed.leaseOwnerId! },
+            {
+              kind: "exited_local_process",
+              leaseOwnerId: observed.leaseOwnerId!,
+              ...(recoverability.interrupted ? { interrupted: true as const } : {}),
+            },
           );
           continue;
         }
@@ -4433,6 +4441,11 @@ export class DurableRunService {
 
   private async reconcileDurableChildWatchers(): Promise<void> {
     try {
+      await this.deps?.reconcileWaitingChatFanouts?.();
+    } catch (error) {
+      this.resolveLogger().warn({ error: boundedRecoveryError(error) }, "durable fanout wake reconciliation deferred");
+    }
+    try {
       await this.ctx.storage.durableChildWatchers.catchUpAttached({
         watcherLimit: 100,
         eventLimitPerWatcher: 100,
@@ -4475,7 +4488,7 @@ export class DurableRunService {
     observed: DurableRunRecord,
     reason: string,
     recoveryObservedAt: string,
-    recovery: { kind: "expired" } | { kind: "exited_local_process"; leaseOwnerId: string },
+    recovery: { kind: "expired" } | { kind: "exited_local_process"; leaseOwnerId: string; interrupted?: true },
   ): Promise<DurableRunRecord | undefined> {
     const safeReason = redactRawRemoteApprovalBearerText(reason);
     let transitioned = false;
@@ -4521,6 +4534,7 @@ export class DurableRunService {
       let checkpointState: Record<string, unknown> = {
         workflowKey: current.workflowKey,
         error: safeReason,
+        ...(recovery.kind === "exited_local_process" && recovery.interrupted ? { recovery: recovery.kind } : {}),
       };
       const payload = current.payload as { version?: unknown; sessionId?: unknown; turnId?: unknown } | undefined;
       if (
@@ -4682,7 +4696,7 @@ export class DurableRunService {
     if (!claim) {
       return;
     }
-    await this.verifyLinkedFinalizationAuthority(claim.run, claim.pending);
+    const interruptedByRestart = await this.verifyLinkedFinalizationAuthority(claim.run, claim.pending);
     const finalizationAbort = new AbortController();
     const claimHeartbeat = setInterval(
       () => {
@@ -4722,6 +4736,7 @@ export class DurableRunService {
         this.deps.workflowRegistry.markWorkflowUnrecoverable(claim.run, claim.pending.reason, {
           finalizationId: claim.pending.finalizationId,
           signal: finalizationAbort.signal,
+          ...(interruptedByRestart ? { interruptedByRestart: true as const } : {}),
         }),
         aborted,
       ]);
@@ -4786,14 +4801,14 @@ export class DurableRunService {
   private async verifyLinkedFinalizationAuthority(
     run: DurableRunRecord,
     pending: LinkedFinalizationPending,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const payload = run.payload as { version?: unknown; turnId?: unknown } | undefined;
     const authorityValue = run.metadata?.[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY];
     if (run.workflowKey !== "chat.turn.execute" || payload?.version !== "chat.turn.execute.v2") {
       if (authorityValue !== undefined) {
         throw new Error(`Durable linked finalization ${run.runId} carries unauthorized runtime authority.`);
       }
-      return;
+      return false;
     }
     await this.requireExactParentTurnAdmission(run, { requireActive: false });
     if (run.metadata?.autonomousAdmission !== undefined) await this.verifyCanonicalAutonomousChatAdmission(run);
@@ -4828,6 +4843,7 @@ export class DurableRunService {
       throw new Error(`Durable linked finalization ${run.runId} has no authority-anchored failure checkpoint.`);
     }
     verifyCheckpointAnchoredChatTurnRuntimeAuthority(run.metadata, checkpoint.state);
+    return checkpoint.state.recovery === "exited_local_process";
   }
 
   private async claimPendingLinkedFinalization(

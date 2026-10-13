@@ -3,16 +3,17 @@ import {
   REMOTE_WORKER_BUDGET_OWNER_ID,
   REMOTE_WORKER_INFERENCE_GOVERNANCE_SCHEMA_VERSION,
   canonicalJsonString,
+  normalizeRemoteWorkerCapabilityBinding,
+  sameRemoteWorkerCapabilityBinding,
   remoteWorkerInferenceCanonicalSha256,
   remoteWorkerInferenceEffectiveRouteSha256,
   remoteWorkerChatInferenceStepIndex,
-  type ChatTurnCapabilityProfileRecord,
   type RemoteWorkerInferenceGovernanceReceipt,
   type RemoteWorkerInferenceAuthorizedSubmission,
 } from "@goatcitadel/contracts";
 import { createHash } from "node:crypto";
 import type { AsyncStorage, RemoteWorkerInferenceRequestRecord } from "@goatcitadel/storage";
-import { resolveRemoteWorkerChatProfile, type RemoteWorkerChatAuthorityDependencies } from "./remote-worker-chat-authority.js";
+import { resolveRemoteWorkerChatAuthority, type RemoteWorkerChatAuthorityDependencies, type RemoteWorkerChatEvidence } from "./remote-worker-chat-authority.js";
 import { buildRemoteWorkerChatSequenceContext, readCanonicalWorkerChatInput } from "./remote-worker-chat-output-service.js";
 import type { LlmService } from "./llm-service.js";
 import { RemoteWorkerInferenceLlmServiceAdapter } from "./remote-worker-inference-llm-service-adapter.js";
@@ -69,16 +70,24 @@ export class RemoteWorkerInferenceRuntime {
     const fence = input.protectedAuthority;
     if (!fence) throw new Error("Worker inference requires protected native admission authority.");
     const { storage, llm } = this.dependencies;
+    const executionRefs = new WeakMap<Execution, ExecutionRef>();
     const load = async (ref: ExecutionRef) => {
       const execution = await storage.remoteWorkerAssignments.resolveActiveChatExecution(ref, fence);
       if (execution.workload.nativeContinuation && !execution.workload.nativeChatContext)
         throw new Error("Native continuation must finish through its canonical owner before Chat inference.");
+      executionRefs.set(execution, ref);
       return execution;
     };
-    const readProfile = async (execution: Execution) =>
-      (await resolveRemoteWorkerChatProfile(this.dependencies, execution)).profile;
-    const selectRoute = async (execution: Execution, profile: ChatTurnCapabilityProfileRecord) => {
-      const { effectiveProviderId, effectiveModel } = profile.selection;
+    const readEvidence = async (execution: Execution) =>
+      (await resolveRemoteWorkerChatAuthority(this.dependencies, execution, async () => {
+        const ref = executionRefs.get(execution);
+        if (!ref) throw new Error("Worker capability evidence lacks its protected execution handle.");
+        const current = await load(ref);
+        if (current.workload.workloadSha256 !== execution.workload.workloadSha256)
+          throw new Error("Worker capability evidence changed during its protected execution.");
+      })).evidence;
+    const selectRoute = async (execution: Execution, evidence: RemoteWorkerChatEvidence) => {
+      const { providerId: effectiveProviderId, model: effectiveModel } = evidence.route;
       if (!effectiveProviderId || !effectiveModel) throw new Error("Worker inference has no admitted provider route.");
       const resolution = await llm.resolveDispatchRoute(effectiveProviderId, effectiveModel);
       if (
@@ -96,17 +105,17 @@ export class RemoteWorkerInferenceRuntime {
     ) => {
       const execution = await load(authority);
       assertBinding(authority, execution);
-      const profile = await readProfile(execution);
-      await assertCanonicalInput(storage, execution, profile, submission);
-      const resolution = await selectRoute(execution, profile);
+      const evidence = await readEvidence(execution);
+      await assertCanonicalInput(storage, execution, evidence, submission);
+      const resolution = await selectRoute(execution, evidence);
       const governance: RemoteWorkerInferenceGovernanceReceipt = {
         schemaVersion: REMOTE_WORKER_INFERENCE_GOVERNANCE_SCHEMA_VERSION,
         decision: "allowed",
         policyRevision: 1,
         policySha256: remoteWorkerInferenceCanonicalSha256({
           version: 1,
-          profile: profile.hashes.profileHash,
-          permission: profile.governance.permission,
+          ...(evidence.binding.admissionReference ? { admissionReference: evidence.binding.admissionReference } : { profile: evidence.binding.capabilityProfileSha256 }),
+          permission: evidence.permission,
           manifest: execution.authority.assignment.manifestSha256,
         }),
         effectiveRouteSha256: remoteWorkerInferenceEffectiveRouteSha256(routeReceiptFor(resolution)),
@@ -137,14 +146,16 @@ export class RemoteWorkerInferenceRuntime {
         createGovernedChatCompletion(this.dependencies.completionHost, request, attribution, guard),
       budgets: storage.remoteWorkerBudgets,
       usage: storage.modelUsageEvents,
-      assertAuthorityCurrent: async (request) => {
+      assertAuthorityCurrent: async (request, actualRoute) => {
         const { record, execution } = await readOperationExecution(
           request.attribution.operationId!,
           request.attribution.dispatchGeneration!,
         );
-        const profile = await readProfile(execution);
-        await assertCanonicalInput(storage, execution, profile, { ...record, messages: request.messages });
-        const resolution = await selectRoute(execution, profile);
+        const evidence = await readEvidence(execution);
+        await assertCanonicalInput(storage, execution, evidence, { ...record, messages: request.messages });
+        const resolution = await selectRoute(execution, evidence);
+        if (evidence.binding.admissionReference && canonicalJsonString(actualRoute) !== canonicalJsonString(resolution))
+          throw new Error("Worker admission does not authorize this related provider route.");
         if (
           canonicalJsonString(resolution) !== canonicalJsonString(request.resolution) ||
           remoteWorkerInferenceEffectiveRouteSha256(routeReceiptFor(resolution)) !== record.effectiveRouteSha256
@@ -179,7 +190,7 @@ export class RemoteWorkerInferenceRuntime {
         resolve: async ({ authority }) => {
           const execution = await load(authority);
           assertBinding(authority, execution);
-          return await selectRoute(execution, await readProfile(execution));
+          return await selectRoute(execution, await readEvidence(execution));
         },
       },
       budget: {
@@ -206,16 +217,16 @@ export class RemoteWorkerInferenceRuntime {
                 request.attribution.operationId!,
                 request.attribution.dispatchGeneration!,
               );
-              const profile = await readProfile(execution);
+              const evidence = await readEvidence(execution);
               return await adapter.dispatch({
                 ...request,
                 signal,
-                tools: profile.selection.tools.map((tool) => tool.providerDefinition),
+                tools: evidence.tools.map((tool) => tool.providerDefinition),
                 memory: {
-                  enabled: profile.selection.memory.mode !== "off",
-                  mode: profile.selection.memory.mode === "off" ? "off" : "qmd",
-                  sessionId: profile.identity.sessionId,
-                  turnId: profile.identity.turnId,
+                  enabled: evidence.memoryMode !== "off",
+                  mode: evidence.memoryMode === "off" ? "off" : "qmd",
+                  sessionId: evidence.identity.sessionId,
+                  turnId: evidence.identity.turnId,
                   runId: request.attribution.durableRunId,
                   taskId: request.attribution.taskId,
                 },
@@ -248,7 +259,7 @@ function authorityOf(execution: Execution): RemoteWorkerInferenceResolvedAuthori
     durableRunId: manifest.durableRunId,
     taskId: manifest.taskId,
     leaseRevision: lease.leaseRevision,
-    capabilityProfileSha256: manifest.capabilityProfileSha256,
+    ...normalizeRemoteWorkerCapabilityBinding(manifest),
     routedContextSha256: manifest.contextSnapshotSha256,
     capabilityClaims: ["worker_runtime", "gateway_inference"],
   };
@@ -275,11 +286,11 @@ function assertOperationBinding(record: RemoteWorkerInferenceRequestRecord, exec
     "turnId",
     "durableRunId",
     "taskId",
-    "capabilityProfileSha256",
     "routedContextSha256",
   ] as const) {
     if (record[field] !== current[field]) throw new Error("Worker inference operation authority changed.");
   }
+  if (!sameRemoteWorkerCapabilityBinding(record, current)) throw new Error("Worker inference capability authority changed.");
   if (!record.admittedLeaseRevision || current.leaseRevision < record.admittedLeaseRevision)
     throw new Error("Worker inference lease revision moved backwards.");
 }
@@ -287,19 +298,19 @@ function assertOperationBinding(record: RemoteWorkerInferenceRequestRecord, exec
 async function assertCanonicalInput(
   storage: RuntimeStorage,
   execution: Execution,
-  profile: ChatTurnCapabilityProfileRecord,
+  evidence: RemoteWorkerChatEvidence,
   submission: Pick<RemoteWorkerInferenceAuthorizedSubmission,
     "registryWorkspaceId" | "assignmentId" | "assignmentGeneration" | "inferenceRequestId" | "attempt" |
     "idempotencyKey" | "messages" | "inputSha256" | "contextSha256" | "modelIntentSha256">,
 ): Promise<void> {
   const request = execution.workload.payload.request as Record<string, unknown> | undefined;
   const content = request?.content;
-  const sequence = buildRemoteWorkerChatSequenceContext(storage, profile, execution);
+  const sequence = buildRemoteWorkerChatSequenceContext(storage, evidence, execution);
   const messages = await readCanonicalWorkerChatInput(storage.remoteWorkerInference, submission,
     remoteWorkerChatInferenceStepIndex({ ...submission, continuationSha256: sequence.continuationSha256 }), sequence);
   if (
     typeof content !== "string" ||
-    remoteWorkerInferenceCanonicalSha256(content) !== profile.selection.contentHash ||
+    remoteWorkerInferenceCanonicalSha256(content) !== evidence.contentHash ||
     canonicalJsonString(submission.messages) !== canonicalJsonString(messages) ||
     remoteWorkerInferenceCanonicalSha256(submission.messages) !== submission.inputSha256 ||
     submission.contextSha256 !== execution.workload.contextSnapshotSha256 ||

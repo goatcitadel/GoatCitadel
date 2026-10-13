@@ -10,7 +10,11 @@ import { buildStableDelegationTurnIdentity } from "../../src/services/chat-deleg
 import type { LocalDelegationTurnAuthorityInput } from "../../src/services/chat-local-delegation-authority.js";
 
 /** Test-only canonical repository fixture; the public-route proof is separate. */
-export async function seedLocalDelegationAuthority(storage: AsyncStorage): Promise<{
+export async function seedLocalDelegationAuthority(storage: AsyncStorage, options: {
+  parentSubagentPolicy?: ChatSendMessageRequest["subagentPolicy"];
+  childRole?: string;
+  prepareParent?: (admission: ActiveTurnAdmission) => Promise<Record<string, unknown>>;
+} = {}): Promise<{
   input: LocalDelegationTurnAuthorityInput;
   parentAdmission: ActiveTurnAdmission;
   dispatchToken: string;
@@ -30,7 +34,7 @@ export async function seedLocalDelegationAuthority(storage: AsyncStorage): Promi
     await storage.chatSessionMeta.ensure(sessionId, now, "default");
   }
   const actor = { operatorId: "operator", authActorId: "operator", authActorSource: "token" as const };
-  const parentRequest: ChatSendMessageRequest = { content: "Parent", mode: "chat", subagentPolicy: "off", ...actor };
+  const parentRequest: ChatSendMessageRequest = { content: "Parent", mode: "chat", subagentPolicy: options.parentSubagentPolicy ?? "off", ...actor };
   const parentAdmission = await service.admitOperatorChatTurn({
     sessionId: "local-parent-session",
     turnId: "local-parent-turn",
@@ -40,10 +44,11 @@ export async function seedLocalDelegationAuthority(storage: AsyncStorage): Promi
     idempotencyKey: "parent-admit",
     correlationId: "parent-admit",
   });
+  const featurePayload = await options.prepareParent?.(parentAdmission);
   await storage.durableRuns.createRun({
     runId: "local-parent-run",
     workflowKey: "chat.turn.execute",
-    payload: localDelegationPayload(parentAdmission, "local-parent-user", "local-parent-assistant", "local-parent-run"),
+    payload: { ...localDelegationPayload(parentAdmission, "local-parent-user", "local-parent-assistant", "local-parent-run"), ...featurePayload },
   });
   await service.bindDurableRun(parentAdmission, "local-parent-run");
   await storage.tasks.create(
@@ -68,7 +73,7 @@ export async function seedLocalDelegationAuthority(storage: AsyncStorage): Promi
     sessionId: "local-parent-session",
     taskId: "local-task",
     objective: "One reviewed child",
-    roles: ["researcher"],
+    roles: [options.childRole ?? "researcher"],
     mode: "sequential",
     status: "running",
     citations: [],
@@ -81,7 +86,7 @@ export async function seedLocalDelegationAuthority(storage: AsyncStorage): Promi
   await storage.chatDelegationSteps.create({
     stepId,
     runId: "local-delegation",
-    role: "researcher",
+    role: options.childRole ?? "researcher",
     index: 0,
     status: "pending",
     instructionSnapshot: { objective: "One reviewed child" },

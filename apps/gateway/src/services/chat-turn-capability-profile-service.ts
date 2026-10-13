@@ -822,7 +822,7 @@ export function buildChatTurnCapabilityProfileSourceScope(
   };
 }
 
-function buildTrustedSkillSnapshot(
+export function buildTrustedSkillSnapshot(
   callableEntries: CapabilityCatalogEntry[],
   lifecycleRows: Awaited<ReturnType<CapabilityProfileStorage["skillLifecycle"]["list"]>>,
 ): ChatTurnCapabilityProfileRecord["selection"]["trustedSkills"] {

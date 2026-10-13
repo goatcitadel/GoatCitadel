@@ -10,6 +10,7 @@ import {
   type CandidateSkillDetailRecord, type ChangePlanRecord,
 } from "@goatcitadel/contracts";
 import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
+import { parseSkillMarkdown } from "@goatcitadel/skills";
 import { buildApp } from "./app.js";
 import { startFakeOpenAiCompatibleServer } from "./test/fake-openai-server.js";
 import { WorkflowSkillCaptureService } from "./services/workflow-skill-capture-service.js";
@@ -27,12 +28,14 @@ afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 describe("workflow capture through current authenticated public Chat", { timeout: 180_000 }, () => {
   it.each(["token", "basic", "loopback"] as const)("binds %s author through profile-free native streaming and rejects altered evidence", async mode => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "gc-capture-author-"));
+    const revisedMarkdown = markdown.replaceAll("report the observed result", "report the revised second-version result");
+    let draftMarkdown = markdown;
     const provider = await startFakeOpenAiCompatibleServer(request => {
       if (request.path === "/v1/models") return { body: { data: [{ id: "fake-chat", object: "model" }] } };
       if (request.path !== "/v1/chat/completions") return { status: 404 };
       const body = request.body as { messages?: { content?: unknown }[]; stream?: boolean };
       const content = JSON.stringify(body.messages).includes(WORKFLOW_SKILL_CAPTURE_MARKER)
-        ? markdown : "Read the supplied work item, check the result, and report discrepancies.";
+        ? draftMarkdown : "Read the supplied work item, check the result, and report discrepancies.";
       if (!body.stream) return { body: { model: "fake-chat", choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }] } };
       return { sseFrames: [JSON.stringify({ model: "fake-chat", choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: "stop" }] }), "[DONE]"] };
     });
@@ -64,6 +67,7 @@ describe("workflow capture through current authenticated public Chat", { timeout
         GOATCITADEL_AUTH_BASIC_USERNAME: "capture-test", GOATCITADEL_AUTH_BASIC_PASSWORD: "test-only-passphrase",
         GOATCITADEL_DATABASE_DRIVER: "sqlite", GOATCITADEL_RATE_LIMIT_ENABLED: "false",
         GOATCITADEL_FEATURE_EVOLUTION_CONTROL_PLANE_V1_ENABLED: "true",
+        GOATCITADEL_FEATURE_CHAT_SKILL_INSTRUCTIONS_V1_ENABLED: "true",
       })) vi.stubEnv(key, value);
       const authorization = mode === "basic" ? `Basic ${Buffer.from("capture-test:test-only-passphrase").toString("base64")}` : `Bearer ${TOKEN}`;
       let sequence = 0;
@@ -180,11 +184,80 @@ describe("workflow capture through current authenticated public Chat", { timeout
       expect(immutableVersion.originatingRunId).toBeUndefined();
       storage.close(); storage = undefined;
       app = await buildApp();
-      const { approvals, planIds } = await proveCapturedLifecycle(app, headers, result, workspaceId);
+      const reuseTurns: Array<{ turnId: string; runId: string; sessionId: string; active: boolean }> = [];
+      const proveFreshReuse = async (phase: "promote" | "promote_revision" | "rollback" | "revoke", runtimeSkillId: string) => {
+        const active = phase !== "revoke";
+        const fresh = await app!.inject({ method: "POST", url: "/api/v1/chat/sessions", headers: headers(),
+          payload: { title: `Capture reuse ${phase}`, workspaceId } });
+        expect(fresh.statusCode, fresh.body).toBe(201);
+        const freshSessionId = fresh.json().sessionId as string;
+        expect(freshSessionId).not.toBe(sessionId);
+        const freshUrl = `/api/v1/chat/sessions/${freshSessionId}`;
+        const suffix = runtimeSkillId.slice("extra:reviewed-".length);
+        const content = `@skill inspect-work-item-${suffix} Inspect a new work item for the ${phase} verification.`;
+        const preflight = await app!.inject({ method: "POST", url: `${freshUrl}/route-preflight`, headers: headers(),
+          payload: { action: "send", content, subagentPolicy: "off" } });
+        expect(preflight.statusCode, preflight.body).toBe(200);
+        const { decision, blockedReason } = preflight.json() as RoutingPreflightResult;
+        expect(blockedReason).toBeUndefined();
+        const firstRequest = provider.requests.length;
+        const response = await app!.inject({ method: "POST", url: `${freshUrl}/agent-send/stream`, headers: headers(), payload: {
+          content, subagentPolicy: "off", providerId: decision.effectiveProviderId, model: decision.effectiveModel, routeDecision: decision,
+        } });
+        expect(response.statusCode, response.body.slice(0, 2000)).toBe(200);
+        const thread = await app!.inject({ method: "GET", url: `${freshUrl}/thread`, headers: headers() });
+        expect(thread.statusCode, thread.body).toBe(200);
+        const turn = (thread.json() as ChatThreadResponse).turns.at(-1)!.trace;
+        expect(turn.status).toBe("completed");
+        expect(turn.capabilityProfileId).toBeUndefined();
+        expect(turn.durable?.runId).toBeTruthy();
+        const requests = provider.requests.slice(firstRequest).filter(request => request.path === "/v1/chat/completions");
+        expect(requests.length).toBeGreaterThan(0);
+        const instructionBody = parseSkillMarkdown(phase === "promote_revision" ? revisedMarkdown : markdown).body;
+        const injected = requests.some(request => ((request.body as { messages?: Array<{ role?: string; content?: unknown }> }).messages ?? [])
+          .some(message => message.role === "system" && typeof message.content === "string" && message.content.includes(instructionBody)));
+        expect(injected).toBe(active);
+        const otherBody = parseSkillMarkdown(phase === "promote_revision" ? markdown : revisedMarkdown).body;
+        expect(requests.some(request => JSON.stringify(request.body).includes(JSON.stringify(otherBody).slice(1, -1)))).toBe(false);
+        reuseTurns.push({ turnId: turn.turnId, runId: turn.durable!.runId, sessionId: freshSessionId, active });
+      };
+      let revisionResult: WorkflowSkillCaptureResult | undefined;
+      const captureRevision = async () => {
+        const detail = await app!.inject({ method: "GET", url: `/api/v1/capabilities/candidates/${result.candidateId}`, headers: headers() });
+        expect(detail.statusCode, detail.body).toBe(200);
+        const prepared = await app!.inject({ method: "POST", url: `${url}/skill-captures/prepare`, headers: headers(), payload: {
+          sourceTurnId: source.turnId, targetCandidateId: result.candidateId, expectedRevision: detail.json().revision,
+          guidance: "Revise the reusable workflow with the updated report wording.",
+        } });
+        expect(prepared.statusCode, prepared.body).toBe(200);
+        draftMarkdown = revisedMarkdown;
+        const revisionDraft = await send(prepared.json().prompt);
+        const staged = await app!.inject({ method: "POST", url: `${url}/skill-captures/stage`, headers: headers(), payload: {
+          draftTurnId: revisionDraft.turnId, reviewedContentSha256: sha256Hex(revisedMarkdown),
+        } });
+        expect(staged.statusCode, staged.body).toBe(200);
+        revisionResult = staged.json() as WorkflowSkillCaptureResult;
+        expect(revisionResult.candidateId).toBe(result.candidateId);
+        expect(revisionResult.versionId).not.toBe(result.versionId);
+        expect(revisionResult.activationPerformed).toBe(false);
+        return revisionResult;
+      };
+      const { approvals, planIds } = await proveCapturedLifecycle(app, headers, result, workspaceId,
+        mode === "token" ? proveFreshReuse : undefined, mode === "token" ? captureRevision : undefined);
       await app.close(); app = undefined;
       storage = new Storage({ dbPath: configRead.dbPath, transcriptsDir: path.join(root, "transcripts-read"), auditDir: path.join(root, "audit-read") });
       const finalVersion = storage.candidateSkillVersions.get(result.versionId);
+      for (const reuse of reuseTurns) {
+        const run = storage.durableRuns.getRun(reuse.runId);
+        const authority = run.payload as unknown as DurableChatTurnExecutionPayloadAuthority;
+        const feature = storage.sessionMutationAdmissions.findFeatureReferences({ admissionId: authority.admissionId,
+          sessionIncarnationId: authority.sessionIncarnationId, workspaceId, sessionId: reuse.sessionId, turnId: reuse.turnId });
+        const receipts = feature?.references.selectedSkills?.activatedSkills ?? [];
+        expect(receipts.some(receipt => receipt.skillId === `extra:reviewed-${sha256Hex(result.candidateId).slice(0, 12)}`)).toBe(reuse.active);
+        if (reuse.active) expect(authority.featureReferenceSha256).toBe(feature!.referenceSha256);
+      }
       expect(finalVersion).toEqual({ ...immutableVersion, lifecycleState: "revoked", updatedAt: finalVersion.updatedAt });
+      if (revisionResult) expect(storage.candidateSkillVersions.get(revisionResult.versionId).lifecycleState).toBe("deprecated");
       for (const artifact of [finalVersion.manifestArtifact, finalVersion.instructionArtifact, finalVersion.proofArtifact]) {
         expect(createHash("sha256").update(await fs.readFile(path.resolve(root, artifact.relPath))).digest("hex")).toBe(artifact.sha256);
       }
@@ -200,7 +273,7 @@ describe("workflow capture through current authenticated public Chat", { timeout
         expect(effects[0]).toMatchObject({ status: "completed", targetId: result.candidateId,
           payload: { action, candidateId: result.candidateId, requestSha256: binding.requestSha256 } });
       }
-      expect(storage.approvals.list().filter(approval => approval.kind === "capability.lifecycle")).toHaveLength(2);
+      expect(storage.approvals.list().filter(approval => approval.kind === "capability.lifecycle")).toHaveLength(mode === "token" ? 4 : 2);
     } finally {
       storage?.close();
       await app?.close();
@@ -211,15 +284,16 @@ describe("workflow capture through current authenticated public Chat", { timeout
 });
 
 // Mirrors mission-control-next candidate-approval-continuation.ts requireCandidateApproval.
-function clientDerivedLifecycleBinding(plan: ChangePlanRecord, reviewed: CandidateSkillDetailRecord, action: "promote" | "revoke") {
+function clientDerivedLifecycleBinding(plan: ChangePlanRecord, reviewed: CandidateSkillDetailRecord, action: "promote" | "rollback" | "revoke") {
   const sha = (value: unknown) => createHash("sha256").update(canonicalJsonString(value)).digest("hex");
   const request = plan.request as { versionId?: string };
   const versionId = request.versionId ?? reviewed.latestVersion?.versionId;
   const version = reviewed.versions.find(item => item.versionId === versionId)!;
-  const expectedAction = action === "promote" ? "candidate_promoted" : "candidate_revoked";
+  const expectedAction = action === "promote" ? "candidate_promoted" : action === "rollback" ? "candidate_rolled_back" : "candidate_revoked";
   const mutation = action === "promote"
     ? { candidateId: reviewed.candidateId, versionId }
-    : { candidateId: reviewed.candidateId, selectedVersionId: versionId, targetVersionIds: version.lifecycleState === "revoked" ? [] : [versionId] };
+    : action === "rollback" ? { candidateId: reviewed.candidateId, targetVersionId: versionId }
+      : { candidateId: reviewed.candidateId, selectedVersionId: versionId, targetVersionIds: version.lifecycleState === "revoked" ? [] : [versionId] };
   const versions = [...reviewed.versions].sort((a, b) => a.versionId < b.versionId ? -1 : a.versionId > b.versionId ? 1 : 0)
     .map(item => ({ versionId: item.versionId, lifecycleState: item.lifecycleState, updatedAt: item.updatedAt }));
   return {
@@ -243,7 +317,10 @@ async function proveCapturedLifecycle(
   headers: () => Record<string, string>,
   captured: WorkflowSkillCaptureResult,
   workspaceId: string,
+  proveFreshReuse?: (phase: "promote" | "promote_revision" | "rollback" | "revoke", runtimeSkillId: string) => Promise<void>,
+  captureRevision?: () => Promise<WorkflowSkillCaptureResult>,
 ) {
+  const runtimeSkillId = `extra:reviewed-${sha256Hex(captured.candidateId).slice(0, 12)}`;
   const candidateUrl = `/api/v1/capabilities/candidates/${captured.candidateId}`;
   const readDetail = async () => {
     const response = await app.inject({ method: "GET", url: candidateUrl, headers: headers() });
@@ -265,9 +342,13 @@ async function proveCapturedLifecycle(
   expect(foreignReview.statusCode).toBe(409);
   const approvals: Array<readonly [string, string]> = [];
   const planIds: string[] = [];
-  for (const action of ["promote", "rollback", "revoke"] as const) {
+  const phases = captureRevision ? ["promote", "promote_revision", "rollback", "revoke"] as const : ["promote", "rollback", "revoke"] as const;
+  for (const phase of phases) {
+    const selectedCapture = phase === "promote_revision" ? await captureRevision!() : captured;
+    const action = phase === "promote_revision" ? "promote" : phase;
     const detail = await readDetail();
-    const selection = action === "rollback" ? { targetVersionId: captured.versionId } : { versionId: captured.versionId };
+    const selectedVersion = detail.versions.find(version => version.versionId === selectedCapture.versionId)!;
+    const selection = action === "rollback" ? { targetVersionId: selectedCapture.versionId } : { versionId: selectedCapture.versionId };
     const requested = await app.inject({ method: "POST", url: `${candidateUrl}/${action}`, headers: headers(), payload: { expectedRevision: detail.revision, ...selection } });
     expect(requested.statusCode, requested.body).toBe(202);
     const planId = (requested.json().changePlan as ChangePlanRecord).planId;
@@ -278,9 +359,9 @@ async function proveCapturedLifecycle(
     const plan = currentPlan.json() as ChangePlanRecord;
     planIds.push(plan.planId);
     expect(plan).toMatchObject({ status: "awaiting_input", risk: "danger", origin: { workspaceId },
-      request: { kind: "capability_candidate", proposalId: captured.proposalId, versionId: captured.versionId },
+      request: { kind: "capability_candidate", versionId: selectedCapture.versionId },
       target: { resourceId: captured.candidateId, expectedRevision: detail.revision,
-        expectedHash: detail.latestVersion!.wrapperManifestHash ?? detail.latestVersion!.manifestArtifact.sha256 },
+        expectedHash: selectedVersion.wrapperManifestHash ?? selectedVersion.manifestArtifact.sha256 },
       requiredAction: { kind: "artifact_review" } });
     expect((await readDetail()).revision).toBe(detail.revision);
     const foreign = await app.inject({ method: "GET", url: `${planUrl}?workspaceId=default`, headers: headers() });
@@ -298,17 +379,19 @@ async function proveCapturedLifecycle(
     } });
     expect(confirmed.statusCode, confirmed.body).toBe(200);
     const waiting = confirmed.json() as ChangePlanRecord;
-    if (action === "rollback") {
+    if (action === "rollback" && !captureRevision) {
       // One already-active version is the canonical owner's no-op, not a new approval/effect.
       expect(waiting.status, JSON.stringify(waiting.result)).toBe("completed");
       expect(waiting.approvalRefs).toEqual([]);
       expect((await readDetail()).revision).toBe(detail.revision);
+      await proveFreshReuse?.(action, runtimeSkillId);
       continue;
     }
     expect(waiting.status).toBe("awaiting_approval");
     expect(waiting.approvalRefs).toHaveLength(1);
     if (action === "promote") await assertNotCallable();
-    expect((await readDetail()).latestVersion!.lifecycleState).toBe(action === "promote" ? "candidate" : "approved");
+    expect((await readDetail()).versions.find(version => version.versionId === selectedCapture.versionId)!.lifecycleState)
+      .toBe(action === "promote" ? "candidate" : action === "rollback" ? "deprecated" : "approved");
     const approvalId = waiting.approvalRefs[0]!;
     // The native Inbox and Library approval bar read the canonical approval in the
     // plan's origin workspace: it must be readable there and nowhere else.
@@ -326,7 +409,8 @@ async function proveCapturedLifecycle(
     const approved = await app.inject({ method: "POST", url: `/api/v1/approvals/${approvalId}/resolve`, headers: headers(), payload: { decision: "approve" } });
     expect(approved.statusCode, approved.body).toBe(200);
     await vi.waitFor(async () => {
-      expect((await readDetail()).latestVersion!.lifecycleState).toBe(action === "promote" ? "approved" : "revoked");
+      expect((await readDetail()).versions.find(version => version.versionId === selectedCapture.versionId)!.lifecycleState)
+        .toBe(action === "revoke" ? "revoked" : "approved");
     }, { timeout: 20_000, interval: 100 });
     // This owner resumes through the current approval action after observing its effect.
     const resumed = await app.inject({ method: "POST", url: `${planUrl}/responses`, headers: headers(), payload: {
@@ -337,11 +421,11 @@ async function proveCapturedLifecycle(
     expect(resumed.json().status).toBe("completed");
     const applied = await readDetail();
     expect(applied.revision).toBe(detail.revision + 1);
-    expect(applied.latestVersion!.lifecycleState).toBe(action === "promote" ? "approved" : "revoked");
+    expect(applied.versions.find(version => version.versionId === selectedCapture.versionId)!.lifecycleState).toBe(action === "revoke" ? "revoked" : "approved");
+    if (action !== "revoke") expect(applied.activeVersion?.versionId).toBe(selectedCapture.versionId);
     expect(applied.activationBlocked).toBe(action === "revoke");
     if (action === "revoke") await assertNotCallable();
     // Approved instruction reuse is the projected runtime skill, not the candidate entry.
-    const runtimeSkillId = `extra:reviewed-${createHash("sha256").update(captured.candidateId).digest("hex").slice(0, 12)}`;
     const callableIn = async (scope: string) => {
       const response = await app.inject({ method: "GET", url: `/api/v1/capabilities/catalog?scope=callable&workspaceId=${scope}`, headers: headers() });
       expect(response.statusCode, response.body).toBe(200);
@@ -355,7 +439,8 @@ async function proveCapturedLifecycle(
     }
     expect(await callableIn("default")).toEqual([]);
     if (action === "revoke") expect(await callableIn(workspaceId)).toEqual([]);
-    approvals.push([approvalId, action === "promote" ? "candidate_promoted" : "candidate_revoked"]);
+    await proveFreshReuse?.(phase, runtimeSkillId);
+    approvals.push([approvalId, action === "promote" ? "candidate_promoted" : action === "rollback" ? "candidate_rolled_back" : "candidate_revoked"]);
   }
   return { approvals, planIds };
 }

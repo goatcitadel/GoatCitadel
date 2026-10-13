@@ -17,6 +17,8 @@ import {
   hasApprovedToolPreDispatchEvidence,
 } from "./approved-tool-boundary-evidence.js";
 import { RemoteWorkerApprovalResumeRequiredError } from "./remote-worker-approved-action-guard.js";
+import { RequesterMcpApprovalResumeRequiredError } from "./mcp-requester-admission-approval.js";
+import { yieldFanoutApprovalEffect } from "./chat-fanout-approval-service.js";
 import {
   StaleDelegationScopeResumeError,
   UnverifiableDelegationInstructionsError,
@@ -2960,6 +2962,13 @@ export class ApprovalEffectsService {
       try {
         executedAction = await this.deps.executeApprovedPendingAction(effect.approvalId, signal);
       } catch (error) {
+        if (await yieldFanoutApprovalEffect(this.ctx, error, effect, this.workerId, pendingAction.actionType)) return;
+        if (error instanceof RequesterMcpApprovalResumeRequiredError) {
+          await this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+            result: { reason: "requester_mcp_resume_required", actionType: pendingAction.actionType, resolutionStatus: "pending" },
+          });
+          return;
+        }
         if (!(error instanceof RemoteWorkerApprovalResumeRequiredError)) throw error;
         let handoffError: unknown = error;
         if (this.deps.prepareRemoteWorkerApprovalHandoff) {

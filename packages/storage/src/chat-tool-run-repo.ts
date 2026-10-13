@@ -227,6 +227,16 @@ export class ChatToolRunRepository {
     return rows.map(mapRow);
   }
 
+  /** Uses the existing turn/started_at index; the ID breaks timestamp ties. */
+  public listByTurnPage(turnId: string, after?: { startedAt: string; toolRunId: string }, limit = 32): ChatToolRunRecord[] {
+    const bounded = Number.isSafeInteger(limit) ? Math.max(1, Math.min(32, limit)) : 32;
+    return toChatToolRunRows(this.db.prepare(`
+      SELECT * FROM chat_tool_runs WHERE turn_id = ?
+        AND (started_at > ? OR (started_at = ? AND tool_run_id > ?))
+      ORDER BY started_at ASC, tool_run_id ASC LIMIT ?
+    `).all(turnId, after?.startedAt ?? "", after?.startedAt ?? "", after?.toolRunId ?? "", bounded)).map(mapRow);
+  }
+
   public listBySession(sessionId: string, limit = 200): ChatToolRunRecord[] {
     const rows = toChatToolRunRows(
       this.listBySessionStmt.all({

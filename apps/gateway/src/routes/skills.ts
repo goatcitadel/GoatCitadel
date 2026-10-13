@@ -83,6 +83,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     expectedRevision: z.number().int().positive(),
     guardedAutoThreshold: z.number().min(0).max(1).optional(),
     requireFirstUseConfirmation: z.boolean().optional(),
+    selectionMode: z.enum(["legacy", "shadow", "ranked"]).optional(),
   });
 
   const sourceQuerySchema = z.object({

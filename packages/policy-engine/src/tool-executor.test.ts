@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { AsyncStorage, Storage } from "@goatcitadel/storage";
+import { cleanupRecoveredBackgroundProcess } from "./tool-executor/background-process-identity.js";
 
 const mocked = vi.hoisted(() => ({
   isBrowserToolName: vi.fn<(name: string) => boolean>(),
@@ -1113,6 +1114,38 @@ describe("executeTool", () => {
     });
     expect(typeof result.pid).toBe("number");
   });
+
+  it.runIf(process.platform === "win32")(
+    "returns a retained exact Windows process identity from the real background executor",
+    async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const owner = { sessionId: "background-identity-session", turnId: "background-identity-turn" };
+      const result = await executeTool(
+        {
+          toolName: "shell.exec_background",
+          ...owner,
+          agentId: "agent",
+          args: { command: `"${process.execPath}" -e "setInterval(() => {}, 1000)"` },
+        },
+        policyConfig,
+        storageStub,
+      );
+      let terminated = false;
+      try {
+        expect(result).toMatchObject({
+          started: true,
+          restartCleanup: "identity_bound_process_only",
+          processIdentity: { ...owner, pid: result.pid, platform: "win32", version: "background-process.identity.v1" },
+        });
+        const retained = JSON.parse(JSON.stringify(result));
+        expect(await cleanupRecoveredBackgroundProcess(retained.processIdentity, owner)).toBe("terminated");
+        terminated = true;
+      } finally {
+        if (!terminated && typeof result.pid === "number") killBackgroundProcess(result.pid);
+      }
+    },
+    45_000,
+  );
 
   it("runs shell commands from the provided cwd", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);

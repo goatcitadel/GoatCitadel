@@ -140,6 +140,12 @@ export function ChatCapabilityProfileRunDetail({ inspection }: { inspection?: Ch
   if (!inspection || inspection.status === "idle") {
     return null;
   }
+  if (inspection.status === "admission_verified" && inspection.routedContext) {
+    return <section className="mc-next-context-card" aria-label="Admitted routed context" data-integrity-status="admission_verified">
+      <h4>Recorded context</h4><p>{inspection.message}</p>
+      <RoutedContextReceipt routedContext={inspection.routedContext} />
+    </section>;
+  }
   if (inspection.status !== "verified" || !inspection.profile) {
     const tone = inspection.status === "legacy_missing" || inspection.status === "not_found" ? "muted" : "warning";
     return (
@@ -158,7 +164,7 @@ export function ChatCapabilityProfileRunDetail({ inspection }: { inspection?: Ch
           </StatusChip>
         </div>
         <p role={inspection.status === "invalid" || inspection.status === "forbidden" ? "alert" : "status"}>
-          {inspection.status === "loading" ? "Checking the scoped persisted profile…" : inspection.message}
+          {inspection.status === "loading" ? inspection.message ?? "Checking the scoped persisted profile…" : inspection.message}
         </p>
         {inspection.mismatchFields.length > 0 ? (
           <p className="mc-next-capability-profile-warning">

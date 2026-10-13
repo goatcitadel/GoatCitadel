@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 253,
+      "expectedCount": 261,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 253,
+      "expectedLastVersion": 261,
       "migrations": [
         {
           "version": 1,
@@ -1779,15 +1779,71 @@
           "groupName": "canonical",
           "definitionSha256": "d410aadc035b84d3d0788746097b057d48828885c23b8b317ba59ec1968f9e31",
           "implementationSha256": "2a635d59c99a74af243dff379ebbff6576d8b14c014c6a3009ad53fdb595e045"
+        },
+        {
+          "version": 254,
+          "name": "chat_provider_fallback_preference",
+          "groupName": "canonical",
+          "definitionSha256": "893fa42b203a73db5f49112c07aaefbaa24ea1acee0416cab5ce59cc0389ea38",
+          "implementationSha256": "00a4c6f31b3885e931df0a8f97ca51ba022b717121d5e410d4c73d713023b4ce"
+        },
+        {
+          "version": 255,
+          "name": "chat_turn_feature_references",
+          "groupName": "canonical",
+          "definitionSha256": "f22c40281b52de796e97d88b4bf8e651e76d1b2f7b83569408d617aecbfa4f3c",
+          "implementationSha256": "ba18b91838aa289bd115bae1159f9966c28f8aaced44d7132c70701aa8516841"
+        },
+        {
+          "version": 256,
+          "name": "chat_fanout_parent_admission",
+          "groupName": "canonical",
+          "definitionSha256": "1c089c60cab0372a63e190223ccf2810b021ffa1af6ca3e7c2df6dbaddaf401c",
+          "implementationSha256": "891bb3dd49b5084925a3d485855dcf4e1782bc4f30fd42a21dab4d4e54e1cf1c"
+        },
+        {
+          "version": 257,
+          "name": "chat_routed_context_admission",
+          "groupName": "canonical",
+          "definitionSha256": "36c81bbc6aafd0b90f6ba5c22ca5fc05aec9943b87725eca89d536080cf09f66",
+          "implementationSha256": "2883946d93effda5708b3d67ed0fe1561e4eff51fd4541cacfb29a7a68f08e82"
+        },
+        {
+          "version": 258,
+          "name": "heartbeat_feature_binding",
+          "groupName": "canonical",
+          "definitionSha256": "657e1351933c08b291615762e8391edabe6385ada16955fb9b278368ffeb2103",
+          "implementationSha256": "6df3117e2c120edb0474b374c523da8a441b911f534f02cd1c498838db1a66fc"
+        },
+        {
+          "version": 259,
+          "name": "commitment_occurrence_authority",
+          "groupName": "canonical",
+          "definitionSha256": "a44dbefb7fe71e9ba1ea34f20cf582683709dd9949232b15c2ed3d2f3cc72a31",
+          "implementationSha256": "7cbbbc0e04a2ac199426e5c504799283af57b99ad5a1347728c09a90c10e979e"
+        },
+        {
+          "version": 260,
+          "name": "remote_worker_admission_binding",
+          "groupName": "canonical",
+          "definitionSha256": "3e3ae6a3d453f76e00d755bc8ed0fb0767aebb3d8091e1c0a1f70f6693e407e9",
+          "implementationSha256": "afb6940b0602de92e43ef7e0c77f4518fdb60eb6b585caed460d06d26eed7bc4"
+        },
+        {
+          "version": 261,
+          "name": "cron_creator_authority",
+          "groupName": "canonical",
+          "definitionSha256": "7e92db607feadd444b8c17ea82b41aa39e414930fb4f1c09d664a30eb50d6578",
+          "implementationSha256": "d1f4c235f36535769bb0c1cfb3ec8c32ee7483a926436e4cd0aa109a9c13feda"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 200,
+      "expectedCount": 208,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 200,
+      "expectedLastVersion": 208,
       "migrations": [
         {
           "version": 1,
@@ -2992,6 +3048,54 @@
           "name": "channel_guided_setup_schema_shape_convergence",
           "definitionSha256": "39dee48e176c9243e52e67d06a042223f98a36bf7ec68385c9d945a5074cd17f",
           "runtimeIntegritySha256": "d16c868ca1d7e8eb98a9b19c8eecbaf141a89816637834f9a2db368ab03c7c69"
+        },
+        {
+          "version": 201,
+          "name": "chat_provider_fallback_preference",
+          "definitionSha256": "05707fe10bd61088683d4eb8b028b4876c870ccfbfa3f2e4313e0b3e6d31a9a3",
+          "sqlPayloadSha256": "5509358e000bf05b1700cdee2e685020930f5a5ffaf5f90ea5d93b3e0ed63bf8"
+        },
+        {
+          "version": 202,
+          "name": "chat_turn_feature_references",
+          "definitionSha256": "0e2d34c43e0fc618c3d00da83ada3c038616251280f8932487465da6fdf3f714",
+          "sqlPayloadSha256": "00a9250189ce8000b791f464923e81f04a08f735160f1589324a26cb9771997b"
+        },
+        {
+          "version": 203,
+          "name": "chat_fanout_parent_admission",
+          "definitionSha256": "b8b6e5c5e7836fd7a7fcce8c30d12faf34df5871c608aed23ccbaa1e158e9d61",
+          "sqlPayloadSha256": "e1443d128a3800654d1e79d97b3438cc4d58925add8baeef3610421b8b5596b2"
+        },
+        {
+          "version": 204,
+          "name": "chat_routed_context_admission",
+          "definitionSha256": "e39cd63bf666bf749ed26bbab1c61f5f9537d883183986e4ab54b6766e006e2d",
+          "runtimeIntegritySha256": "11c476e940fd183e48a9d725616aa4e70b09ac5f9464c37f63a5ac796adfa8a7"
+        },
+        {
+          "version": 205,
+          "name": "heartbeat_feature_binding",
+          "definitionSha256": "ddb98068170de8cad1ff11e3f13b3b34aa85c713fe3d7d53c96a5ddd9366cbfc",
+          "runtimeIntegritySha256": "4e649fce221f5b344f56f793f44a732c8e743465b2734c49129b0d9349200fa0"
+        },
+        {
+          "version": 206,
+          "name": "commitment_occurrence_authority",
+          "definitionSha256": "e4adf466c410c698d818624ba3089122b9efc0edc41db5d1ea5c6f140562557b",
+          "runtimeIntegritySha256": "df1c3a9fd7c178e1c39c3ae03d4ff29917b7b318722a490868db4be9c0d09053"
+        },
+        {
+          "version": 207,
+          "name": "remote_worker_admission_binding",
+          "definitionSha256": "0d2b613fb69ea67db76895fb28e3606b6fb20b3adcf9d6022c686581be36f9ff",
+          "runtimeIntegritySha256": "d6aeb0370eee651a2cf9e92d6e68bde2a069a2f89dbdc1818229830a0e4fc9e8"
+        },
+        {
+          "version": 208,
+          "name": "cron_creator_authority",
+          "definitionSha256": "dac71022ffe1280a5b204764e6485a7a9d3e1a4425f24911234e6c0be479c31c",
+          "sqlPayloadSha256": "abfbb2bd7f7f7dcb48757850ec094ae1a92f79fee2191724ea52dce82f2342d6"
         }
       ]
     }

@@ -1,6 +1,6 @@
 # GoatCitadel Master Completion Program
 
-Last updated: 2026-09-13
+Last updated: 2026-10-11
 
 Status: canonical aggregate execution ledger
 
@@ -62,6 +62,158 @@ change:
    contract requires the real boundary.
 
 ## Program ledger
+
+### Feature quality and runtime completion (2026-10-11)
+
+The approved implementation sequence extends C0-C6 and preserves the historical
+receipts below. The current checkout baseline is
+`997e682752d939b415ee71523794197a37d4d4d3`. New restoration switches start disabled;
+an upgrade does not grant capabilities, change provider consent, or replay missed
+scheduled work. Source changes, deterministic proof, and live acceptance are
+separate gates. The working capability inventory, slice results, and remaining
+acceptance are in [Feature quality execution](testing/FEATURE_QUALITY_EXECUTION.md).
+
+The 2026-10-12 validation checkpoint passes the full requester-scope lane,
+memory truth with responsive/accessibility proof, 267 comparison conformance
+tests, canonical UI typechecks, async-boundary checks, docs and whitespace.
+Architecture metrics fail against the unchanged guard; exact-base differential
+shows both inherited debt and newly added Gateway/service coupling. That remains
+an implementation acceptance gap. OpenClaw/Hermes comparative fault controls,
+hosted/local live trials and physical remote acceptance also remain open.
+The subsequent pure remote-admission extraction reduces Gateway from 14,025 to
+13,960 lines; coupling counts remain unchanged and the architecture guard still
+fails. Gateway typecheck, 39 admission/sequence tests and four offer tests pass.
+Offer fixture setup is separately bounded; its execution timeout is unchanged.
+The fresh async boundary, governance documentation and whitespace checks pass.
+Detailed current and failed receipts remain in the working acceptance record.
+The shared schema selector also deduplicates identical candidates and refuses
+conflicting bindings. Six focused assertions, Gateway typecheck and 34 caller
+assertions pass; worker-termination warnings remain explicitly recorded. The
+refreshed local preflight still has no executable configured model; no inference
+or provider spend occurred. Async-boundary, documentation and whitespace pass.
+No phase is promoted to complete by these controlled results.
+
+The subsequent shared completion-dispatch adapter passes 124 focused tests,
+Gateway typecheck and runtime truth (four scenarios, zero skips). It preserves
+fallback/admission/context guard composition and deferred-stream revocation.
+An initial browser-observer timing failure remains retained; the corrected
+observer passes seven tests and the real browser rerun without changing recovered
+run/reply assertions. Completion-owner host accesses fall from 61 to 53, while
+the final explicitly measured dispatch port has eight dependency accesses; aggregate
+architecture debt is not claimed closed. Fresh model-list probes find no pinnable
+local model. Source gaps and external acceptance remain open in the detailed ledger.
+
+On 2026-10-12, the user explicitly deferred live hosted/local comparative trials
+and physical two-machine acceptance after the configuration request. Their
+historical gates and budgets remain retained for later execution; these unrun
+cells are not passes. Local implementation and deterministic validation remain
+in scope. Architecture remediation remains a source acceptance gap, not closed
+by the deferral.
+
+The subsequent pure fanout result projection extraction passes 31 focused tests,
+867 pre/post differential cases and locked Gateway typecheck. Immediate and
+recovered result shaping share the same helper; execution and persistence owners
+are unchanged. The durable owner drops 84 lines, with unchanged 53 host and
+dependency accesses. This does not close the architecture coupling gate.
+
+The read-only Chat discovery owner now replaces the corresponding Gateway logic,
+with canonical workspace/current callable-catalog checks and six explicitly
+measured callbacks. Its new-owner cap is registered without altering any
+original baseline or existing-owner limit. All 44 distinct focused tests have
+passing evidence, including 19 requester-MCP tests rerun alone at their original
+deadline; the initial timeout remains failed evidence. Gateway typecheck passes.
+The full architecture gate remains failed (Gateway 13,924/13,132 lines and
+311/309 public methods, plus remaining coupling regressions).
+
+Both foreign product adapters now expose pinned fallback/MCP configuration
+bindings, backed by real controlled lost-response transport observations and
+66 passing harness/allowance checks. Subsequent normal native launch integration
+and evidence readers are implemented: 49 binding/supervisor checks, eight launch
+checks and four complete recovery-phase checks pass. Both products retain the
+full 30-second controlled lost-response window. Exact public native receipts
+remain the only evidence source: OpenClaw RPC route evidence is not relabeled as
+Chat-visible proof, Hermes custom billing cannot identify its fallback alias,
+and neither reader invents canonical reconciliation. Recovery cells are runnable;
+unchanged acceptance predicates remain unverified where these metrics are absent.
+These results do not lift the user's live-trial or physical-machine deferral.
+
+Requester/static/mesh approval resume now lives in the existing admission-approval
+owner, retaining current policy refresh, execution and canonical transaction
+ownership. Forty-two focused tests and locked Gateway typecheck pass. Gateway
+decreases from 13,924 to 13,876 lines. New-owner registrations separately account
+for dispatch, remote authority and approval resume, including storage-alias
+accesses missed by the single-file counter. Existing-owner limits and the original
+baseline are unchanged; the architecture gate remains open.
+
+Remote selection subsequently moves into that existing remote owner with an
+explicit typed contract and both admission fences. Gateway decreases another
+91 lines to 13,785. All 112 distinct approval/remote/Gateway adapter tests have
+passing evidence after one corrected test-fixture rerun; the original failed run
+is retained. Context access revalidation moves into its admission owner, restoring
+the source resolver's original coupling limit. Redundant fanout adapters are
+removed, and common stream diagnostic fields are consolidated with 300 matching
+differential cases. Guard checks pass 175 tests with 13 skips, and Gateway
+typecheck passes. The full comparison/allowance family passes 289 tests with
+zero skips; live and physical acceptance remain deferred. Architecture closure
+still requires its final measured gate.
+
+Subsequent remote composition, MCP/mesh selection and persisted evidence
+extractions bring Gateway to 13,590 lines. Remote caller tests pass81, fallback
+checks pass125, durable context replay checks pass147 and evidence-owner checks
+pass110. Two new fixture/assertion failures remain retained alongside successful
+reruns. Current context, durable execution, stream, completion and channel setup
+owners are within their original coupling limits. Fanout's admission/project/grant
+guards now have a narrow owner; the durable service retains reservation, launch,
+cancellation, settlement and wake, returns to32/32 accesses and passes57 focused
+tests with Gateway typecheck. New-owner registrations retain measured budgets
+and documented storage-alias blind spots; original baseline and existing-owner
+caps are unchanged. The full architecture gate is still not closed, and live
+model/two-machine acceptance remains explicitly deferred.
+
+Explicit-context composition subsequently moves into its admission owner via a
+typed internal preparation port. Two Gateway implementation methods become
+private, and preparation returns to its original55/58 coupling cap. Preparation
+and replay checks pass89 with13 explicit skips; the actual owned-port path passes
+within9 current cases, with13 historical skips. Gateway typecheck passes. The
+context owner measures29/29; Gateway size remains above its original limit and
+other dependency regressions still require the named architecture gate.
+
+The current named scan is `2026-10-13T00-41-33-960Z-architecture-metrics-0193a060`
+and **passes**: Gateway measures13,111/13,132 lines and309/309 public methods,
+with **zero regressions**. All20 dependency-access regressions are resolved
+through typed owner/guard extractions and reviewed new-owner registrations;
+the original baseline and every existing-owner limit remain unchanged. Runtime
+validation has322 distinct passing executed cases;20 historical skips remain
+unrun. Locked Gateway typecheck and allowance14/14 pass; async boundary
+passes16 tests/1,203 production files. The prior failed receipts remain retained
+in `FEATURE_QUALITY_EXECUTION.md`, which records the corrected fixtures and
+import-cycle failure rather than promoting those failed runs.
+
+Native launch integration and OpenClaw/Hermes public recovery-evidence readers
+remain implemented with controlled proof. Live model trials and physical
+two-machine acceptance remain deferred; this architecture closure does not
+promote those product claims. No release, installation, publication or
+production-data change was performed.
+
+| Phase | Existing tranche | Scope | Status | Closure gate |
+|---|---|---|---|---|
+| 0 | C0/C6 | Current entry-point inventory, local comparison transport, aggregate evaluation accounting and baseline | `in_progress` | Reproducible secret-free baseline; controlled/live results separate |
+| 1 | C0/C1/C3 | Versioned feature admission references, live authority checks and effect reconciliation | `in_progress` | Public admission, cancellation, approval/resume, revocation and restart proof |
+| 2 | C1/C2/C6 | Ranked skills, governed instruction reuse, bounded tool schemas and memory quality | `in_progress` | Explicit selection preserved; fresh Chat reuse; labeled hosted/local outcomes |
+| 3 | C1/C3 | Configured fallback, explicit context, governed delegation and Code Mode | `in_progress` | Fresh Chat workflows, mixed children, cancellation and restart recovery |
+| 4 | C1/C4 | Scheduled Chat and proactive work with independent delivery retry | `in_progress` | Tool-using schedules, duplicate/restart/revocation/approval/delivery-failure proof |
+| 5 | C3/C4 | Guided MCP setup, requester identity receipts and extension author preflight | `in_progress` | Fresh workspace setup through governed Chat task and recovery |
+| 6 | C5 | Admission-bound remote placement and existing trusted-code hardening | `in_progress` | Fresh two-machine acceptance; external gaps stay explicit |
+
+Evaluation targets are 45 hosted and 45 local comparative trials. The separate
+[workflow acceptance suite](testing/FEATURE_QUALITY_COMPARISON_ACCEPTANCE.md)
+adds 36 cells per track and shares the same aggregate ceilings. Hosted work
+shares an aggregate $25 / 450-request ceiling including baselines, retries,
+children and retests. Each trial retains a ten-minute deadline, 4,096 output-token
+ceiling and a common supported context limit capped at 64k. Local inference has
+zero provider-dollar cost without removing request/token/deadline limits. No
+unrun, controlled or unsupported case establishes comparative parity. Physical
+remote acceptance does not block independently completed local improvements.
 
 ### Active comparison-improvement sequence (2026-09-08)
 

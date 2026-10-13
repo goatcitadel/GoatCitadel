@@ -276,6 +276,7 @@ function composeEntryExtras(
   | "reconcileTerminalChatAdmission"
   | "subagentFanout"
   | "durableFanout"
+  | "assertAutomaticFanoutAuthority"
 > {
   return {
     agentSendChatMessage: (sessionId, input, options) => source.agentSendChatMessage(sessionId, input, options),
@@ -305,6 +306,9 @@ function composeEntryExtras(
     get durableFanout() {
       return source.durableFanout;
     },
+    assertAutomaticFanoutAuthority: source.assertAutomaticFanoutAuthority
+      ? (id) => source.assertAutomaticFanoutAuthority!(id)
+      : undefined,
   };
 }
 

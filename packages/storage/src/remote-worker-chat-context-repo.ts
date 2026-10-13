@@ -5,6 +5,7 @@ import {
   readDurableChatTurnExecutionPayloadAuthority,
   sealRemoteWorkerChatContext,
   verifyRemoteWorkerChatContext,
+  sameRemoteWorkerCapabilityBinding,
   type ChatCompletionMessage,
   type RemoteWorkerChatContextSnapshot,
 } from "@goatcitadel/contracts";
@@ -17,6 +18,7 @@ import {
   type RequestRuntimeLeaseClaim,
 } from "./session-mutation-admission-repo.js";
 import { RoutedContextSnapshotRepository } from "./routed-context-snapshot-repo.js";
+import { readRemoteWorkerAdmissionFeatureBinding } from "./remote-worker-chat-admission-reference.js";
 
 export interface FreezeRemoteWorkerChatContextInput {
   readonly durableRunId: string;
@@ -40,8 +42,7 @@ export class RemoteWorkerChatContextRepository {
         durableRunId: run.runId,
         payload: run.payload,
       });
-      if (!payload || !payload.capabilityProfileId || !payload.capabilityProfileHash)
-        throw conflict("Remote Chat context requires an admitted capability profile.");
+      if (!payload) throw conflict("Remote Chat context requires an exact admitted turn.");
       if (input.durableClaim && input.durableClaim.durableRunId !== run.runId)
         throw conflict("Remote Chat context durable claim differs from its run.");
       const admission = new SessionMutationAdmissionRepository(this.db).assertActiveTurnWrite({
@@ -56,17 +57,22 @@ export class RemoteWorkerChatContextRepository {
       }).admission;
       if (
         admission.materialSha256 !== payload.admissionMaterialSha256 ||
-        admission.actorId !== payload.requestActor.actorId
+        admission.aggregateRevision !== payload.admissionAggregateRevision ||
+        admission.controllerGeneration !== payload.admissionControllerGeneration ||
+        admission.actorId !== payload.requestActor.actorId ||
+        admission.actorKind !== payload.requestActor.actorKind
       )
         throw conflict("Remote Chat context admission identity changed.");
-      const profile = new ChatTurnCapabilityProfileRepository(this.db).findByRun(run.runId);
+      const featureBinding = payload.featureReferenceSha256 && !payload.capabilityProfileId
+        ? readRemoteWorkerAdmissionFeatureBinding(this.db, payload) : undefined;
+      const profile = featureBinding ? undefined : new ChatTurnCapabilityProfileRepository(this.db).findByRun(run.runId);
       if (
-        !profile ||
+        !featureBinding && (!profile ||
         profile.profileId !== payload.capabilityProfileId ||
         profile.hashes.profileHash !== payload.capabilityProfileHash ||
         profile.identity.workspaceId !== payload.workspaceId ||
         profile.identity.sessionId !== payload.sessionId ||
-        profile.identity.turnId !== payload.turnId
+        profile.identity.turnId !== payload.turnId)
       )
         throw conflict("Remote Chat context capability profile changed.");
       if (payload.routedContextSnapshotId) {
@@ -76,8 +82,15 @@ export class RemoteWorkerChatContextRepository {
           routed.turnId !== payload.turnId ||
           routed.sessionId !== payload.sessionId ||
           routed.workspaceId !== payload.workspaceId ||
-          routed.capabilityProfileId !== profile.profileId ||
-          routed.capabilityProfileHash !== profile.hashes.profileHash ||
+          (featureBinding ? (
+            !routed.admissionBinding || routed.capabilityProfileId !== undefined ||
+            routed.admissionBinding.admissionId !== payload.admissionId ||
+            routed.admissionBinding.sessionIncarnationId !== payload.sessionIncarnationId ||
+            routed.admissionBinding.materialSha256 !== payload.admissionMaterialSha256 ||
+            routed.admissionBinding.aggregateRevision !== payload.admissionAggregateRevision ||
+            routed.admissionBinding.controllerGeneration !== payload.admissionControllerGeneration
+          ) : (routed.capabilityProfileId !== profile!.profileId ||
+            routed.capabilityProfileHash !== profile!.hashes.profileHash)) ||
           (routed.contextText &&
             !input.messages.some(
               (message) =>
@@ -109,8 +122,9 @@ export class RemoteWorkerChatContextRepository {
         sessionId: payload.sessionId,
         turnId: payload.turnId,
         requestMaterialSha256: payload.effectiveRequestMaterialSha256,
-        capabilityProfileId: profile.profileId,
-        capabilityProfileSha256: profile.hashes.profileHash,
+        ...(featureBinding ? featureBinding.binding : {
+          capabilityProfileId: profile!.profileId, capabilityProfileSha256: profile!.hashes.profileHash,
+        }),
         ...(payload.routedContextSnapshotId
           ? {
               routedContextSnapshotId: payload.routedContextSnapshotId,
@@ -130,16 +144,17 @@ export class RemoteWorkerChatContextRepository {
       this.db
         .prepare(
           `INSERT INTO remote_worker_chat_contexts
-        (durable_run_id, workspace_id, session_id, turn_id, capability_profile_id, capability_profile_sha256, context_sha256, context_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (durable_run_id, workspace_id, session_id, turn_id, capability_profile_id, capability_profile_sha256, admission_reference_json, context_sha256, context_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           run.runId,
           snapshot.workspaceId,
           snapshot.sessionId,
           snapshot.turnId,
-          snapshot.capabilityProfileId,
-          snapshot.capabilityProfileSha256,
+          snapshot.capabilityProfileId ?? null,
+          snapshot.capabilityProfileSha256 ?? null,
+          snapshot.admissionReference ? canonicalJsonString(snapshot.admissionReference) : null,
           snapshot.contextSha256,
           canonicalJsonString(snapshot),
           runs.readDatabaseNow(),
@@ -152,14 +167,15 @@ export class RemoteWorkerChatContextRepository {
     const row = this.db
       .prepare(
         `SELECT workspace_id, session_id, turn_id, capability_profile_id, capability_profile_sha256,
-      context_sha256, context_json FROM remote_worker_chat_contexts WHERE durable_run_id = ?`,
+      admission_reference_json, context_sha256, context_json FROM remote_worker_chat_contexts WHERE durable_run_id = ?`,
       )
       .get<{
         workspace_id: string;
         session_id: string;
         turn_id: string;
-        capability_profile_id: string;
-        capability_profile_sha256: string;
+        capability_profile_id: string | null;
+        capability_profile_sha256: string | null;
+        admission_reference_json: string | null;
         context_sha256: string;
         context_json: string;
       }>(durableRunId);
@@ -170,8 +186,9 @@ export class RemoteWorkerChatContextRepository {
       snapshot.workspaceId !== row.workspace_id ||
       snapshot.sessionId !== row.session_id ||
       snapshot.turnId !== row.turn_id ||
-      snapshot.capabilityProfileId !== row.capability_profile_id ||
-      snapshot.capabilityProfileSha256 !== row.capability_profile_sha256 ||
+      snapshot.capabilityProfileId !== (row.capability_profile_id ?? undefined) ||
+      !sameRemoteWorkerCapabilityBinding(snapshot, { capabilityProfileSha256: row.capability_profile_sha256 ?? undefined,
+        admissionReference: row.admission_reference_json ? JSON.parse(row.admission_reference_json) : undefined }) ||
       snapshot.contextSha256 !== row.context_sha256
     )
       throw conflict("Remote Chat context storage binding changed.");

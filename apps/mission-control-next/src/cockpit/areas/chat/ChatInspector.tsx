@@ -11,6 +11,7 @@ import { StatusBadge } from "../../ui/StatusBadge";
 import { ChatBackgroundTasks } from "./ChatBackgroundTasks";
 import { SessionControlManager } from "./SessionControlManager";
 import { recordedCostLabel } from "./recorded-cost";
+import { ChatFeatureSettings } from "./ChatFeatureSettings";
 
 type ChatInspectorTab = "run" | "turn" | "sources" | "context" | "files" | "thread" | "background";
 
@@ -75,7 +76,7 @@ export function ChatInspector({ input, targetTurnId, initialTab = "run" }: { inp
     openedArtifact.sessionId === dock?.selectedSessionId ? openedArtifact : null;
   const contextInspection = selectedTurn && dock?.selectedTurn?.turnId === selectedTurn.turnId &&
     dock.selectedSessionId === selectedTurn.trace.sessionId &&
-    dock.capabilityProfileInspection.status === "verified" &&
+    (dock.capabilityProfileInspection.status === "verified" || dock.capabilityProfileInspection.status === "admission_verified") &&
     dock.capabilityProfileInspection.expectedProfileId === selectedTurn.trace.capabilityProfileId &&
     dock.capabilityProfileInspection.expectedProfileHash === selectedTurn.trace.capabilityProfileHash
     ? dock.capabilityProfileInspection.routedContext : undefined;
@@ -189,6 +190,8 @@ export function ChatInspector({ input, targetTurnId, initialTab = "run" }: { inp
         <label className="block">Tags<input className="block w-full rounded-md border border-line bg-canvas p-2" value={dock.tagsValue} onChange={(event) => dock.onTagsValueChange(event.target.value)} placeholder="Comma-separated tags" /></label>
         <button type="submit" disabled={Boolean(dock.sessionControlPending)} className="rounded-md border border-line px-3 py-2 text-accent">Save organization</button>
       </form> : null}<p className="text-fg-muted">Use the model and effort controls under the composer to change the next message.</p>
+        {dock && currentContextMatchesSession && !active.historicalReadOnly
+          ? <ChatFeatureSettings key={dock.selectedSessionId} dock={dock} /> : null}
         {dock?.selectedSessionId ? <SessionControlManager key={dock.selectedSessionId} sessionId={dock.selectedSessionId} /> : null}</div> : null}
       {tab === "background" ? <ChatBackgroundTasks input={input} turnId={selectedTurn?.turnId} /> : null}
     </section>

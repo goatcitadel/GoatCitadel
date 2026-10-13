@@ -17,8 +17,10 @@ import { ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import {
   ToolInvocationCoordinatorService,
+  type RequesterScopedMcpDispatchInput,
   type ToolInvocationCoordinatorHost,
 } from "./tool-invocation-coordinator-service.js";
+import { createMcpRequesterAdmissionTurnContext } from "./mcp-requester-admission-context.js";
 import { resolveNativeMcpChatToolBinding } from "./gateway/native-mcp-chat-binding.js";
 import { ChatTurnAgentRunner } from "./chat-turn-agent-runner.js";
 import { assertChatCapabilityBindingsCurrent } from "./chat-capability-current-binding.js";
@@ -1283,17 +1285,68 @@ describe("GatewayService HX-415 constructor wiring", () => {
       const config = await loadGatewayConfig(tempRoot);
       gateway = new GatewayService(config);
 
-      // 1. The composed runtime exists and its dispatch port is the EXACT
-      //    object handed to the tool-invocation coordinator host.
+      // 1. The coordinator routes private handle variants to their existing
+      //    authority owners, preserving the input, effect fence and result.
       expect(gateway.mcpRequesterScopedRuntime).toBeDefined();
       const coordinatorHost = (
         gateway as unknown as {
-          toolInvocationCoordinator: { host: { requesterScopedMcpDispatch?: unknown } };
+          toolInvocationCoordinator: { host: Pick<ToolInvocationCoordinatorHost, "requesterScopedMcpDispatch"> };
         }
       ).toolInvocationCoordinator.host;
-      expect(coordinatorHost.requesterScopedMcpDispatch).toBe(
-        gateway.mcpRequesterScopedRuntime.requesterScopedMcpDispatch,
+      const dispatch = coordinatorHost.requesterScopedMcpDispatch!;
+      expect(dispatch).toBeDefined();
+      const historicalDispatch = vi.spyOn(gateway.mcpRequesterScopedRuntime.requesterScopedMcpDispatch, "invoke");
+      const admissionDispatch = vi.spyOn(gateway.mcpRequesterAdmissionRuntime.requesterScopedMcpDispatch, "invoke");
+      const effectDispatch = vi.fn(async () => undefined);
+      const dispatchOptions = { effectDispatch };
+      const assertCurrent = vi.fn(async () => undefined);
+      const admissionContext = createMcpRequesterAdmissionTurnContext(
+        {
+          admissionId: "admission-1",
+          sessionIncarnationId: "incarnation-1",
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          aggregateRevision: 1,
+          controllerGeneration: 1,
+          materialSha256: "a".repeat(64),
+          actorId: "operator-1",
+          actorSource: "token",
+        },
+        "b".repeat(64),
+        assertCurrent,
       );
+      const baseInput = { server: requesterScopedServerRecord(), toolName: "search", arguments: { query: "notes" } };
+      // Real delegates reject absent or copied handles before the effect fence.
+      for (const context of [undefined, { ...admissionContext }]) {
+        const input: RequesterScopedMcpDispatchInput = { ...baseInput, mcpRequesterTurnContext: context };
+        await expect(dispatch.invoke(input, dispatchOptions)).resolves.toMatchObject({
+          ok: false,
+          failurePhase: "pre_dispatch",
+        });
+        expect(historicalDispatch).toHaveBeenLastCalledWith(input, dispatchOptions);
+      }
+      expect(admissionDispatch).not.toHaveBeenCalled();
+      expect(effectDispatch).not.toHaveBeenCalled();
+      expect(assertCurrent).not.toHaveBeenCalled();
+      historicalDispatch.mockClear();
+
+      const historicalContext = buildMcpRequesterScopedTurnContextFromCapabilityProfile(profileRecordFor("operator-a"));
+      expect(historicalContext).toBeDefined();
+      const historicalInput = { ...baseInput, mcpRequesterTurnContext: historicalContext };
+      const historicalResult = { ok: true, output: { delegate: "historical" } };
+      historicalDispatch.mockResolvedValueOnce(historicalResult);
+      await expect(dispatch.invoke(historicalInput, dispatchOptions)).resolves.toBe(historicalResult);
+      expect(historicalDispatch).toHaveBeenCalledExactlyOnceWith(historicalInput, dispatchOptions);
+      expect(admissionDispatch).not.toHaveBeenCalled();
+
+      const admissionInput = { ...baseInput, mcpRequesterTurnContext: admissionContext };
+      const admissionResult = { ok: true, output: { delegate: "admission" } };
+      admissionDispatch.mockResolvedValueOnce(admissionResult);
+      await expect(dispatch.invoke(admissionInput, dispatchOptions)).resolves.toBe(admissionResult);
+      expect(admissionDispatch).toHaveBeenCalledExactlyOnceWith(admissionInput, dispatchOptions);
+      expect(historicalDispatch).toHaveBeenCalledTimes(1);
+      expect(effectDispatch).not.toHaveBeenCalled();
 
       // 2. The capability-profile deps receive a freeze hook that delegates to
       //    the SAME composed runtime (behavioral identity via spy).

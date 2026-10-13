@@ -11,6 +11,7 @@ import type {
   ChatOrchestrationReviewDepth,
   ChatOrchestrationVisibility,
   ChatPlanningMode,
+  ChatProviderFallbackPreference,
   ChatSessionPrefsRecord,
   ChatSpeedMode,
   ChatSubagentPolicy,
@@ -25,6 +26,7 @@ interface ChatSessionPrefsRow {
   planning_mode: ChatPlanningMode;
   provider_id: string | null;
   model: string | null;
+  provider_fallback_json: string | null;
   image_provider_id: string | null;
   image_model: string | null;
   web_mode: ChatWebMode;
@@ -50,6 +52,7 @@ export interface ChatSessionPrefsPatchInput {
   planningMode?: ChatPlanningMode;
   providerId?: string;
   model?: string;
+  providerFallback?: ChatProviderFallbackPreference | null;
   imageProviderId?: string;
   imageModel?: string;
   webMode?: ChatWebMode;
@@ -116,13 +119,13 @@ export class ChatSessionPrefsRepository {
     `);
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_session_prefs (
-        session_id, mode, planning_mode, provider_id, model, image_provider_id, image_model,
+        session_id, mode, planning_mode, provider_id, model, provider_fallback_json, image_provider_id, image_model,
         web_mode, memory_mode, thinking_level, speed_mode, subagent_policy,
         tool_autonomy, vision_fallback_model, orchestration_enabled, orchestration_intensity,
         orchestration_visibility, orchestration_provider_preference, orchestration_review_depth,
         orchestration_parallelism, code_auto_apply, created_at, updated_at
       ) VALUES (
-        @sessionId, @mode, @planningMode, @providerId, @model, @imageProviderId, @imageModel,
+        @sessionId, @mode, @planningMode, @providerId, @model, @providerFallbackJson, @imageProviderId, @imageModel,
         @webMode, @memoryMode, @thinkingLevel, @speedMode, @subagentPolicy,
         @toolAutonomy, @visionFallbackModel, @orchestrationEnabled, @orchestrationIntensity,
         @orchestrationVisibility, @orchestrationProviderPreference, @orchestrationReviewDepth,
@@ -133,6 +136,7 @@ export class ChatSessionPrefsRepository {
         planning_mode = excluded.planning_mode,
         provider_id = excluded.provider_id,
         model = excluded.model,
+        provider_fallback_json = excluded.provider_fallback_json,
         image_provider_id = excluded.image_provider_id,
         image_model = excluded.image_model,
         web_mode = excluded.web_mode,
@@ -203,6 +207,7 @@ export class ChatSessionPrefsRepository {
       planningMode: DEFAULT_PREFS.planningMode,
       providerId: modelDefaults.providerId ? normalizeOptional(modelDefaults.providerId) : null,
       model: modelDefaults.model ? normalizeOptional(modelDefaults.model) : null,
+      providerFallbackJson: null,
       imageProviderId: null,
       imageModel: null,
       webMode: DEFAULT_PREFS.webMode,
@@ -275,6 +280,7 @@ export class ChatSessionPrefsRepository {
       mode: "chat",
       planningMode: input.planningMode ?? current.planningMode,
       providerId: nextProviderId,
+      providerFallbackJson: encodeProviderFallback(input.providerFallback === undefined ? current.providerFallback : input.providerFallback),
       model:
         input.model !== undefined ? normalizeOptional(input.model) : providerChanged ? null : (current.model ?? null),
       imageProviderId: nextImageProviderId,
@@ -325,6 +331,7 @@ export class ChatSessionPrefsRepository {
       planningMode: DEFAULT_PREFS.planningMode,
       providerId: null,
       model: null,
+      providerFallbackJson: null,
       imageProviderId: null,
       imageModel: null,
       webMode: DEFAULT_PREFS.webMode,
@@ -364,6 +371,7 @@ function mapRow(row: ChatSessionPrefsRow): ChatSessionPrefsRecord {
     planningMode: row.planning_mode,
     providerId: row.provider_id ?? undefined,
     model: row.model ?? undefined,
+    providerFallback: decodeProviderFallback(row.provider_fallback_json),
     imageProviderId: row.image_provider_id ?? undefined,
     imageModel: row.image_model ?? undefined,
     webMode: row.web_mode,
@@ -390,6 +398,32 @@ function normalizeOptional(value: string): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+// Stored preferences express consent and a target, never runtime authority.
+// Malformed persisted data fails closed instead of widening fallback routing.
+function decodeProviderFallback(value: string | null | undefined): ChatProviderFallbackPreference | undefined {
+  if (value == null) return undefined;
+  return validateProviderFallback(JSON.parse(value) as unknown);
+}
+
+function encodeProviderFallback(value: ChatProviderFallbackPreference | null | undefined): string | null {
+  return value == null ? null : JSON.stringify(validateProviderFallback(value));
+}
+
+function validateProviderFallback(value: unknown): ChatProviderFallbackPreference {
+  if (!isRecord(value) || typeof value.providerId !== "string" || typeof value.model !== "string" ||
+    typeof value.allowLocalToCloud !== "boolean" ||
+    Object.keys(value).some((key) => !["providerId", "model", "allowLocalToCloud"].includes(key))) {
+    throw new TypeError("Invalid Chat provider fallback preference");
+  }
+  const providerId = value.providerId.trim();
+  const model = value.model.trim();
+  if (!providerId || providerId.length > 200 || !model || model.length > 300 ||
+    [...providerId + model].some((character) => character.charCodeAt(0) < 32)) {
+    throw new TypeError("Invalid Chat provider fallback target");
+  }
+  return { providerId, model, allowLocalToCloud: value.allowLocalToCloud };
+}
+
 function withRevision(record: ChatSessionPrefsRecord, revision: number): RevisionedChatSessionPrefsRecord {
   return { ...record, revision };
 }
@@ -400,6 +434,7 @@ function isSemanticNoop(
     planningMode: ChatPlanningMode;
     providerId: string | null;
     model: string | null;
+    providerFallbackJson: string | null;
     imageProviderId: string | null;
     imageModel: string | null;
     webMode: ChatWebMode;
@@ -422,6 +457,7 @@ function isSemanticNoop(
     next.planningMode === current.planningMode &&
     next.providerId === (current.providerId ?? null) &&
     next.model === (current.model ?? null) &&
+    next.providerFallbackJson === encodeProviderFallback(current.providerFallback) &&
     next.imageProviderId === (current.imageProviderId ?? null) &&
     next.imageModel === (current.imageModel ?? null) &&
     next.webMode === current.webMode &&

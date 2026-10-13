@@ -1,4 +1,5 @@
 import { canonicalJsonString } from "./canonical-json.js";
+import { normalizeRemoteWorkerCapabilityBinding, type RemoteWorkerCapabilityBinding } from "./remote-worker-capability-binding.js";
 
 /**
  * HX-505 remote-worker execution-cell contract (production-dark).
@@ -263,7 +264,7 @@ export function normalizeRemoteWorkerCellCapacityReservation(
 
 // --- Immutable server-owned profile -----------------------------------------
 
-export interface RemoteWorkerCellProfile {
+export interface RemoteWorkerCellProfile extends RemoteWorkerCapabilityBinding {
   readonly schemaVersion:
     | typeof REMOTE_WORKER_CELL_PROFILE_SCHEMA_VERSION
     | typeof REMOTE_WORKER_CELL_PROFILE_V2_SCHEMA_VERSION;
@@ -277,7 +278,6 @@ export interface RemoteWorkerCellProfile {
   readonly logicalRootSha256: string;
   readonly assignmentManifestSha256: string;
   readonly pathJailSha256: string;
-  readonly capabilityProfileSha256: string;
   readonly contextSnapshotSha256: string;
   readonly toolEffectPostureSha256: string;
   readonly runtimeAttestationSha256: string;
@@ -302,6 +302,7 @@ const PROFILE_KEYS = [
   "assignmentManifestSha256",
   "pathJailSha256",
   "capabilityProfileSha256",
+  "admissionReference",
   "contextSnapshotSha256",
   "toolEffectPostureSha256",
   "runtimeAttestationSha256",
@@ -315,7 +316,7 @@ const PROFILE_KEYS = [
 
 export function normalizeRemoteWorkerCellProfile(input: RemoteWorkerCellProfile): RemoteWorkerCellProfile {
   assertRecord(input, "cell profile");
-  assertExactKeys(input, [...PROFILE_KEYS], "cell profile");
+  assertExactKeys(input, [...PROFILE_KEYS], "cell profile", ["capabilityProfileSha256", "admissionReference"]);
   if (
     input.schemaVersion !== REMOTE_WORKER_CELL_PROFILE_SCHEMA_VERSION &&
     input.schemaVersion !== REMOTE_WORKER_CELL_PROFILE_V2_SCHEMA_VERSION
@@ -342,7 +343,7 @@ export function normalizeRemoteWorkerCellProfile(input: RemoteWorkerCellProfile)
     logicalRootSha256: digest(input.logicalRootSha256, "logicalRootSha256"),
     assignmentManifestSha256: digest(input.assignmentManifestSha256, "assignmentManifestSha256"),
     pathJailSha256: digest(input.pathJailSha256, "pathJailSha256"),
-    capabilityProfileSha256: digest(input.capabilityProfileSha256, "capabilityProfileSha256"),
+    ...normalizeRemoteWorkerCapabilityBinding(input),
     contextSnapshotSha256: digest(input.contextSnapshotSha256, "contextSnapshotSha256"),
     toolEffectPostureSha256: digest(input.toolEffectPostureSha256, "toolEffectPostureSha256"),
     runtimeAttestationSha256: digest(input.runtimeAttestationSha256, "runtimeAttestationSha256"),

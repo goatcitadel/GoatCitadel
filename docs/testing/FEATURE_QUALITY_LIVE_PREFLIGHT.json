@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "feature-quality.live-preflight.v1",
+  "observedDate": "2026-10-11",
+  "sourceBaseRevision": "997e682752d939b415ee71523794197a37d4d4d3",
+  "candidateState": "uncommitted implementation; not release evidence",
+  "hosted": {
+    "status": "incomplete",
+    "activeProviderId": "openai-codex",
+    "activeModel": "gpt-6.1-sol",
+    "activeApiStyle": "openai-codex-responses",
+    "comparisonProxyApiStyle": "openai-chat-completions",
+    "compatibleConfiguredOpenAiProvider": {
+      "apiStyle": "openai-responses",
+      "defaultModel": "gpt-5.4-mini",
+      "environmentKeyReferenceConfigured": true,
+      "referencedProcessEnvironmentKeyPresent": false,
+      "inlineCredentialPresent": false
+    },
+    "credentialVaultInspected": false,
+    "reason": "Active OAuth Responses route is not supported by the current comparison proxy. No alternate provider or model was substituted; no credential was exported.",
+    "targetTrials": 45,
+    "executedTrials": 0,
+    "providerRequests": 0,
+    "providerDollarsSpent": 0,
+    "aggregateMaximumRequests": 450,
+    "aggregateMaximumDollars": 25
+  },
+  "local": {
+    "status": "incomplete",
+    "configuredLlamaCppModel": "gemma-4-local",
+    "llamaCppLoopbackPort": 8080,
+    "llamaCppListenerPresent": false,
+    "ollamaLoopbackPort": 11434,
+    "ollamaTagsProbeSucceeded": true,
+    "ollamaInstalledModelCount": 0,
+    "modelStartedOrDownloaded": false,
+    "hardware": {
+      "cpu": "12th Gen Intel Core i9-12900K",
+      "physicalCores": 16,
+      "logicalProcessors": 24,
+      "physicalMemoryBytes": 68459020288,
+      "gpu": "NVIDIA GeForce RTX 3080",
+      "gpuMemoryBytes": null
+    },
+    "quantization": null,
+    "modelDigest": null,
+    "reason": "No configured local inference model was available to pin and execute. Hardware metadata alone is not model acceptance.",
+    "targetTrials": 45,
+    "executedTrials": 0,
+    "providerRequests": 0,
+    "providerDollarsSpent": 0,
+    "aggregateMaximumRequests": 450
+  },
+  "trialLimits": {
+    "deadlineMilliseconds": 600000,
+    "maximumOutputTokens": 4096,
+    "maximumCommonContextTokens": 64000,
+    "pinnedCommonContextTokens": null
+  },
+  "evidenceBoundary": "Read-only configuration metadata, local listener inventory and Ollama model listing. No model inference, comparative baseline, candidate trial, cache measurement or task-quality result was produced."
+}

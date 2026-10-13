@@ -9,6 +9,7 @@ import { RemoteWorkerAssignmentRepository, type RemoteWorkerAssignmentProtectedC
 import { RemoteWorkerEffectRepository } from "./remote-worker-effect-repo.js";
 import { ModelUsageEventRepository } from "./model-usage-event-repo.js";
 import { ChatTurnCapabilityProfileRepository } from "./chat-turn-capability-profile-repo.js";
+import { readRemoteWorkerAdmissionFeatureBinding } from "./remote-worker-chat-admission-reference.js";
 
 export interface RemoteWorkerToolBudgetKey {
   registryWorkspaceId: string;
@@ -62,14 +63,15 @@ export class RemoteWorkerToolBudgetOwner {
       if (this.effects.findSettlement(input.registryWorkspaceId, input.assignmentId, input.assignmentGeneration, input.intentId))
         throw new Error("Completed worker tools cannot authorize new model spending.");
       const { manifest } = execution.authority.assignment;
-      const profile = new ChatTurnCapabilityProfileRepository(this.db).get(execution.workload.capabilityProfileId);
-      if (!manifest.requiredCapabilityClasses.includes("governed_tool") ||
-        profile.hashes.profileHash !== manifest.capabilityProfileSha256 ||
-        !profile.selection.tools.some((tool) => tool.canonicalName === intent.effectSelector && tool.runtimeOwner && tool.effectPotential))
-        throw new Error("Worker tool spending is outside the admitted capability profile.");
       const payload = readDurableChatTurnExecutionPayloadAuthority({ workflowKey: "chat.turn.execute",
         durableRunId: manifest.durableRunId, payload: execution.workload.payload });
       if (!payload) throw new Error("Worker tool spending requires canonical Chat admission.");
+      const admitted = execution.workload.admissionReference ? readRemoteWorkerAdmissionFeatureBinding(this.db, payload) : undefined;
+      const profile = execution.workload.capabilityProfileId ? new ChatTurnCapabilityProfileRepository(this.db).get(execution.workload.capabilityProfileId) : undefined;
+      if (!manifest.requiredCapabilityClasses.includes("governed_tool") ||
+        (!admitted && (!profile || profile.hashes.profileHash !== manifest.capabilityProfileSha256)) ||
+        !(admitted?.placement.selectedTools ?? profile!.selection.tools).some((tool) => tool.canonicalName === intent.effectSelector && tool.runtimeOwner && tool.effectPotential))
+        throw new Error("Worker tool spending is outside the admitted capability profile.");
       const authority: UsageAuthority = { workspaceId: manifest.executionWorkspaceId, sessionId: manifest.sessionId,
         turnId: manifest.turnId, durableRunId: manifest.durableRunId, taskId: manifest.taskId,
         workerId: execution.authority.generation.workerId, contextIntentHash: execution.workload.contextSnapshotSha256,

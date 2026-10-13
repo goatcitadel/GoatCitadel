@@ -528,6 +528,20 @@ function signCompanionRequest(input: {
 }
 
 describe("settings-auth-service durable settings", () => {
+  it("includes live Chat feature availability through the shared public Settings owner", async () => {
+    const host = buildHost();
+    host.config.assistant.durable = { ...host.config.assistant.durable, enabled: true, executionEnabled: true };
+    await host.updateFeatureFlags({ chatExplicitContextV1Enabled: true, chatProviderFallbackV1Enabled: true });
+    expect((await getSettings(host)).chatFeatureAvailability).toMatchObject({
+      durableExecution: true, explicitContext: true, providerFallback: true, automaticFanout: false,
+    });
+    host.config.assistant.durable.executionEnabled = false;
+    expect((await getSettings(host)).chatFeatureAvailability).toEqual({
+      durableExecution: false, explicitContext: false, providerFallback: false,
+      automaticFanout: false, supervisedDelegation: false, staticMcp: false,
+    });
+  });
+
   it("rejects attempts to disable the durable kernel through updateSettings", async () => {
     const host = buildHost();
     host.updateFeatureFlags = vi.fn(async () => {

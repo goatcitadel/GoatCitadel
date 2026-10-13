@@ -77,6 +77,7 @@ export interface ChatContextDockPanelsProps {
   activeGeneratedArtifact?: ChatGeneratedArtifactRecord | null;
   documents?: {
     enabled: boolean;
+    contextInclusionEnabled?: boolean;
     loading: boolean;
     notes: NoteRecord[];
     artifacts: ChatGeneratedArtifactRecord[];
@@ -128,6 +129,9 @@ export interface ChatContextDockPanelsProps {
     grant?: AutonomousActivationGrantRecord;
     unavailableReason?: string;
   };
+  supervisedDelegationAvailable?: boolean;
+  codingDelegationAvailable?: boolean;
+  providerFallbackAvailable?: boolean;
   loadModelsForProvider: (providerId: string, options?: { force?: boolean }) => Promise<string[]>;
   getCachedModels: (providerId: string) => string[];
   resolveProviderModelSelection: (input: {

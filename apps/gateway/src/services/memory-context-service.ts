@@ -6,12 +6,11 @@ import {
   type MemoryContextAccessReceipt,
   type MemoryContextAssemblyReport,
   type MemoryContextComposeRequest,
+  type MemoryContextCompositionDiagnostics,
   type MemoryContextPack,
   type MemoryQmdStatsResponse,
   type MemoryRelationScope,
-  type MemoryRetrievalMatchSignals,
   type MemoryRetrievalStatusResponse,
-  type MemoryRetrievalStrategy,
 } from "@goatcitadel/contracts";
 import {
   buildCacheKey,
@@ -52,23 +51,39 @@ import {
 } from "./utility-model-usage-attribution.js";
 import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
 import { runBoundedUtilityModelCall } from "./utility-model-call.js";
-import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
+import { isAuthoritativeModelUsageAccountingError, logger } from "@goatcitadel/gateway-core";
 import {
   resolveMemoryContextAccessReceipt,
   resolveTrustedMemoryUsageWorkspaceId,
 } from "./memory-context-access-policy.js";
 import {
   calculateSavings,
+  extractMemoryEmbedding,
+  extractMemoryRetrievalHints,
   isMemoryContextAbort,
   parseDistillerResponse,
+  projectMemoryRetrievalStatus,
   reserveMemoryContextBudget,
+  resolveMemoryRelationScope,
   throwIfMemoryContextAborted,
+  toCandidateMap,
   truncate,
 } from "./memory-context-utils.js";
 
 const DEFAULT_MEMORY_WORKSPACE_ID = "default";
 
+export type { MemoryContextCompositionDiagnostics } from "@goatcitadel/contracts";
+
+interface QueryEmbeddingResult { embedding?: number[]; providerIsReal: boolean }
+interface PendingQueryEmbedding {
+  controller: AbortController;
+  promise: Promise<QueryEmbeddingResult>;
+  waiters: number;
+  settled: boolean;
+}
+
 export class MemoryContextService {
+  private readonly pendingQueryEmbeddings = new Map<string, PendingQueryEmbedding>();
   private readonly queryEmbeddingCache = new Map<
     string,
     {
@@ -84,18 +99,51 @@ export class MemoryContextService {
     private readonly publishRealtime: (eventType: string, payload: Record<string, unknown>) => Promise<unknown>,
     private readonly acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease,
     private readonly prepareEmbeddingUsageDispatch?: PrepareEmbeddingUsageDispatch,
+    private readonly observeComposition?: (diagnostics: Readonly<MemoryContextCompositionDiagnostics>) => void,
   ) {}
   public async compose(
     input: MemoryContextComposeRequest,
     usageLineage?: TrustedUtilityModelUsageLineage,
+    observeComposition?: (diagnostics: Readonly<MemoryContextCompositionDiagnostics>) => void,
   ): Promise<MemoryContextPack> {
-    const pack = await this.composeInternal(input, usageLineage);
-    return this.degradeUnsafeMemoryContext(input, pack);
+    const startedAt = performance.now();
+    const diagnostics: MemoryContextCompositionDiagnostics = {
+      outcome: "failed", embeddingCacheStatus: "skipped", embeddingProviderIsReal: false,
+      contextCacheStatus: "not_checked",
+      timings: { totalMs: 0, accessMs: 0, embeddingMs: 0, sourceReadMs: 0, rankingMs: 0, contextCacheMs: 0, distillationMs: 0 },
+    };
+    try {
+      const pack = await this.composeInternal(input, usageLineage, diagnostics);
+      const result = await this.degradeUnsafeMemoryContext(input, pack);
+      diagnostics.outcome = "completed";
+      diagnostics.contextStatus = result.quality.status;
+      diagnostics.availableCandidateCount = result.quality.assembly?.availableCandidateCount;
+      diagnostics.selectedCandidateCount = result.quality.assembly?.selectedCandidateCount;
+      diagnostics.citationsCount = result.citations.length;
+      diagnostics.originalTokenEstimate = result.originalTokenEstimate;
+      diagnostics.retainedTokenEstimate = result.distilledTokenEstimate;
+      return result;
+    } catch (error) {
+      diagnostics.outcome = input.signal?.aborted ? "aborted" : "failed";
+      throw error;
+    } finally {
+      diagnostics.timings.totalMs = elapsedMs(startedAt);
+      for (const observer of [this.observeComposition, observeComposition]) {
+        try {
+          // Observation is request-local and deliberately excludes prompts,
+          // source text, file paths, access fingerprints, and provider endpoints.
+          observer?.(Object.freeze({ ...diagnostics, timings: Object.freeze({ ...diagnostics.timings }) }));
+        } catch {
+          logger.warn("Memory context diagnostics observer failed");
+        }
+      }
+    }
   }
 
   private async composeInternal(
     input: MemoryContextComposeRequest,
-    usageLineage?: TrustedUtilityModelUsageLineage,
+    usageLineage: TrustedUtilityModelUsageLineage | undefined,
+    diagnostics: MemoryContextCompositionDiagnostics,
   ): Promise<MemoryContextPack> {
     throwIfMemoryContextAborted(input.signal);
     const startedAt = Date.now();
@@ -103,18 +151,24 @@ export class MemoryContextService {
     const qmd = memoryConfig.qmd;
     const maxContextTokens = reserveMemoryContextBudget(input.maxContextTokens ?? qmd.maxContextTokens);
     const prompt = input.prompt.trim();
-    const accessReceipt = await resolveMemoryContextAccessReceipt(this.storage, input.sessionId);
+    const accessStarted = performance.now();
+    const accessReceipt = await resolveMemoryContextAccessReceipt(this.storage, input.sessionId)
+      .finally(() => { diagnostics.timings.accessMs = elapsedMs(accessStarted); });
     const relationScope = accessReceipt.mode === "session_only" ? "self" : resolveMemoryRelationScope(input);
     const shouldShortCircuit = !memoryConfig.enabled || !qmd.enabled || prompt.length < qmd.minPromptChars;
     // Generate a query embedding for the prompt when the caller did not supply one,
     // so semantic-vector ranking can engage. Skipped on the short-circuit path
     // (disabled/short prompt never ranks, so the legacy behavior is preserved).
+    const embeddingStarted = performance.now();
     const resolvedQueryEmbedding = shouldShortCircuit
       ? {
           embedding: input.queryEmbedding,
           providerIsReal: currentEmbeddingProfile().provider !== "pseudo",
         }
-      : await this.resolveQueryEmbedding(input, prompt, accessReceipt.fingerprint, usageLineage);
+      : await this.resolveQueryEmbedding(input, prompt, accessReceipt.fingerprint, usageLineage, diagnostics)
+        .finally(() => { diagnostics.timings.embeddingMs = elapsedMs(embeddingStarted); });
+    diagnostics.timings.embeddingMs = elapsedMs(embeddingStarted);
+    diagnostics.embeddingProviderIsReal = resolvedQueryEmbedding.providerIsReal;
     const queryEmbedding = resolvedQueryEmbedding.embedding;
     const queryHash = buildQueryHash(prompt, queryEmbedding);
     if (shouldShortCircuit) {
@@ -175,8 +229,11 @@ export class MemoryContextService {
       return enrichedFallback;
     }
 
-    const sources = await this.collectSources(input, accessReceipt);
+    const sourceStarted = performance.now();
+    const sources = await this.collectSources(input, accessReceipt)
+      .finally(() => { diagnostics.timings.sourceReadMs = elapsedMs(sourceStarted); });
     throwIfMemoryContextAborted(input.signal);
+    const rankingStarted = performance.now();
     const availableCandidates = rankMemoryCandidates(
       prompt,
       collectMemoryCandidates(sources, {
@@ -199,6 +256,7 @@ export class MemoryContextService {
     });
     const candidates = selectedCandidates.candidates;
     const assembly = selectedCandidates.assembly;
+    diagnostics.timings.rankingMs = elapsedMs(rankingStarted);
 
     const sourcesHash = buildSourcesHash(candidates);
     const cacheKey = buildCacheKey({
@@ -216,6 +274,7 @@ export class MemoryContextService {
     });
 
     if (!input.forceRefresh) {
+      const cacheStarted = performance.now();
       const cached = await this.storage.memoryContexts.findFreshByCacheKey({
         cacheKey,
         scope: input.scope,
@@ -224,6 +283,8 @@ export class MemoryContextService {
         runId: input.runId,
         phaseId: input.phaseId,
       });
+      diagnostics.timings.contextCacheMs = elapsedMs(cacheStarted);
+      diagnostics.contextCacheStatus = cached ? "hit" : "miss";
       if (cached) {
         const enrichedCached = refreshMemoryPackAssembly(enrichMemoryPack(cached, relationScope, new Map()), assembly);
         await this.storage.memoryQmdRuns.append({
@@ -249,6 +310,8 @@ export class MemoryContextService {
         });
         return enrichedCached;
       }
+    } else {
+      diagnostics.contextCacheStatus = "refresh";
     }
 
     const originalTokenEstimate = assembly.availableTokenEstimate;
@@ -322,6 +385,7 @@ export class MemoryContextService {
           contextSnapshotId: cacheKey,
         },
       });
+      const distillationStarted = performance.now();
       const response = await runBoundedUtilityModelCall({
         timeoutMs: qmd.distiller.timeoutMs,
         timeoutMessage: "memory distiller timed out",
@@ -353,7 +417,7 @@ export class MemoryContextService {
             },
             attribution,
           ),
-      });
+      }).finally(() => { diagnostics.timings.distillationMs = elapsedMs(distillationStarted); });
       throwIfMemoryContextAborted(input.signal);
 
       const parsed = parseDistillerResponse(response);
@@ -536,25 +600,9 @@ export class MemoryContextService {
     const recentRuns = await this.storage.memoryQmdRuns.list(20);
     const from = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
     const stats = await this.storage.memoryQmdRuns.stats(from, checkedAt);
-    const retrievalStrategies = collectRecentRetrievalStrategies(recentContexts);
-    const retrievalMode = resolveMemoryRetrievalMode(enabled, retrievalStrategies);
-    const rerankMode = resolveMemoryRerankMode(enabled, retrievalStrategies);
-    const lastError = recentRuns.find((run) => run.errorText?.trim())?.errorText;
-    const lastRefresh = recentRuns[0]?.createdAt ?? recentContexts[0]?.createdAt;
-    const fallbackMode = resolveMemoryFallbackMode(
-      enabled,
-      recentRuns[0]?.errorText,
-      recentContexts[0]?.quality.reason,
-    );
-    return {
+    return projectMemoryRetrievalStatus({
       checkedAt,
       enabled,
-      retrievalMode,
-      rerankAvailable: rerankMode !== "none",
-      rerankMode,
-      fallbackMode,
-      lastRefresh,
-      lastError,
       qmd: {
         enabled: qmd.enabled,
         applyToChat: qmd.applyToChat,
@@ -565,15 +613,10 @@ export class MemoryContextService {
         distillerModel: qmd.distiller.model,
         distillerTimeoutMs: qmd.distiller.timeoutMs,
       },
-      recent: {
-        totalRuns: stats.totalRuns,
-        generatedRuns: stats.generatedRuns,
-        cacheHitRuns: stats.cacheHitRuns,
-        fallbackRuns: stats.fallbackRuns,
-        failedRuns: stats.failedRuns,
-        retrievalStrategies,
-      },
-    };
+      recentContexts,
+      recentRuns,
+      stats,
+    });
   }
 
   /**
@@ -589,8 +632,10 @@ export class MemoryContextService {
     prompt: string,
     accessFingerprint: string,
     usageLineage?: TrustedUtilityModelUsageLineage,
+    diagnostics?: MemoryContextCompositionDiagnostics,
   ): Promise<{ embedding?: number[]; providerIsReal: boolean }> {
     if (input.queryEmbedding && input.queryEmbedding.length > 0) {
+      if (diagnostics) diagnostics.embeddingCacheStatus = "supplied";
       return {
         embedding: input.queryEmbedding,
         providerIsReal: currentEmbeddingProfile().provider !== "pseudo",
@@ -610,6 +655,7 @@ export class MemoryContextService {
           profile,
           endpoint: process.env.GOATCITADEL_EMBEDDINGS_URL,
           scope: input.scope,
+          citadelId: input.citadelId,
           workspaceId: input.workspaceId,
           workspace: input.workspace,
           sessionId: input.sessionId,
@@ -627,9 +673,82 @@ export class MemoryContextService {
     const cached = this.queryEmbeddingCache.get(cacheKey);
     if (!input.forceRefresh && cached) {
       throwIfMemoryContextAborted(input.signal);
+      if (diagnostics) diagnostics.embeddingCacheStatus = "hit";
       return { embedding: [...cached.embedding], providerIsReal: cached.providerIsReal };
     }
     this.queryEmbeddingCache.delete(cacheKey);
+    if (diagnostics) diagnostics.embeddingCacheStatus = input.forceRefresh ? "refresh" : "miss";
+    // A shared network attempt must have one exact accounting lineage. Cache
+    // reuse itself is free, but an in-flight call cannot borrow another turn's
+    // provider reservation or dispatch attribution.
+    const pendingKey = createHash("sha256").update(JSON.stringify({
+      cacheKey, lineage: Object.entries(usageLineage ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+    })).digest("hex");
+    const existing = input.forceRefresh ? undefined : this.pendingQueryEmbeddings.get(pendingKey);
+    if (existing && !existing.controller.signal.aborted) {
+      if (diagnostics) diagnostics.embeddingCacheStatus = "shared";
+      return this.waitForQueryEmbedding(pendingKey, existing, input.signal);
+    }
+    // Force refresh owns its dispatch and cancellation. At the bounded map
+    // limit, continue safely without retaining another single-flight entry.
+    if (input.forceRefresh || this.pendingQueryEmbeddings.size >= 128) {
+      return this.generateQueryEmbedding(input, prompt, profile, cacheKey, usageLineage);
+    }
+    const controller = new AbortController();
+    const pending: PendingQueryEmbedding = {
+      controller, waiters: 0, settled: false,
+      promise: this.generateQueryEmbedding({ ...input, signal: controller.signal }, prompt, profile, cacheKey, usageLineage)
+        .finally(() => {
+          pending.settled = true;
+          if (this.pendingQueryEmbeddings.get(pendingKey) === pending) this.pendingQueryEmbeddings.delete(pendingKey);
+        }),
+    };
+    this.pendingQueryEmbeddings.set(pendingKey, pending);
+    return this.waitForQueryEmbedding(pendingKey, pending, input.signal);
+  }
+
+  private waitForQueryEmbedding(
+    pendingKey: string,
+    pending: PendingQueryEmbedding,
+    signal?: AbortSignal,
+  ): Promise<QueryEmbeddingResult> {
+    pending.waiters += 1;
+    return new Promise((resolve, reject) => {
+      let finished = false;
+      const release = () => {
+        if (finished) return false;
+        finished = true;
+        signal?.removeEventListener("abort", onAbort);
+        pending.waiters -= 1;
+        if (pending.waiters === 0 && !pending.settled) {
+          if (this.pendingQueryEmbeddings.get(pendingKey) === pending) this.pendingQueryEmbeddings.delete(pendingKey);
+          pending.controller.abort(new Error("memory embedding has no remaining retrieval waiters"));
+        }
+        return true;
+      };
+      const onAbort = () => {
+        if (!release()) return;
+        try { throwIfMemoryContextAborted(signal); } catch (error) { reject(error); }
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      pending.promise.then(
+        (result) => {
+          if (release()) resolve({ ...result, ...(result.embedding ? { embedding: [...result.embedding] } : {}) });
+        },
+        (error) => { if (release()) reject(error); },
+      );
+      if (signal?.aborted) onAbort();
+    });
+  }
+
+  private async generateQueryEmbedding(
+    input: MemoryContextComposeRequest,
+    prompt: string,
+    profile: ReturnType<typeof currentEmbeddingProfile>,
+    cacheKey: string,
+    usageLineage?: TrustedUtilityModelUsageLineage,
+  ): Promise<QueryEmbeddingResult> {
+    throwIfMemoryContextAborted(input.signal);
     try {
       const generated = await generateEmbedding(prompt, undefined, undefined, {
         purpose: "embedding_query",
@@ -839,118 +958,9 @@ export class MemoryContextService {
   }
 }
 
-function collectRecentRetrievalStrategies(recentContexts: MemoryContextPack[]): MemoryRetrievalStrategy[] {
-  const strategies = new Set<MemoryRetrievalStrategy>();
-  for (const context of recentContexts) {
-    for (const citation of context.citations) {
-      const strategy = citation.provenance?.retrievalStrategy;
-      if (strategy) {
-        strategies.add(strategy);
-      }
-    }
-  }
-  return [...strategies].sort();
-}
 
-function resolveMemoryRetrievalMode(
-  enabled: boolean,
-  retrievalStrategies: MemoryRetrievalStrategy[],
-): MemoryRetrievalStatusResponse["retrievalMode"] {
-  if (!enabled) {
-    return "disabled";
-  }
-  if (retrievalStrategies.includes("hybrid_rank")) {
-    return "hybrid_rank";
-  }
-  if (retrievalStrategies.includes("semantic_vector")) {
-    return "semantic_vector";
-  }
-  if (retrievalStrategies.includes("semantic_hints")) {
-    return "semantic_hints";
-  }
-  if (retrievalStrategies.includes("lexical_recency")) {
-    return "lexical_recency";
-  }
-  // Honest default: with no observed semantic/hybrid strategy (e.g. the default
-  // pseudo provider, which no longer contributes an embedding score), report
-  // lexical_recency rather than implying a hybrid rerank that didn't happen.
-  return "lexical_recency";
-}
-
-function resolveMemoryRerankMode(
-  enabled: boolean,
-  retrievalStrategies: MemoryRetrievalStrategy[],
-): MemoryRetrievalStatusResponse["rerankMode"] {
-  if (!enabled) {
-    return "none";
-  }
-  return retrievalStrategies.includes("hybrid_rank") ? "hybrid_rank" : "none";
-}
-
-function resolveMemoryFallbackMode(
-  enabled: boolean,
-  latestRunError: string | undefined,
-  latestQualityReason: string | undefined,
-): MemoryRetrievalStatusResponse["fallbackMode"] {
-  if (!enabled) {
-    return "disabled";
-  }
-  const reason = latestRunError ?? latestQualityReason ?? "";
-  if (/qmd_disabled|prompt_too_short/i.test(reason)) {
-    return "short_prompt_or_disabled";
-  }
-  if (/no_candidates/i.test(reason)) {
-    return "no_candidates";
-  }
-  if (reason.trim()) {
-    return "distiller_fallback";
-  }
-  return "available";
-}
-
-function toCandidateMap(
-  candidates: Array<{
-    candidateId: string;
-    sourceType: "transcript" | "file" | "memory_item";
-    timestamp?: string;
-    rankScore?: number;
-    rankSignals?: MemoryRetrievalMatchSignals;
-  }>,
-) {
-  return new Map(candidates.map((candidate) => [candidate.candidateId, candidate] as const));
-}
-
-function extractMemoryRetrievalHints(metadata: Record<string, unknown>): string[] | undefined {
-  const hints = new Set<string>();
-  for (const key of ["retrievalHints", "semanticTerms", "tags", "aliases", "keywords"]) {
-    for (const value of readStringList(metadata[key])) {
-      hints.add(value);
-    }
-  }
-  return hints.size > 0 ? [...hints] : undefined;
-}
-
-function extractMemoryEmbedding(metadata: Record<string, unknown>): number[] | undefined {
-  for (const key of ["embedding", "contentEmbedding", "semanticEmbedding"]) {
-    const value = metadata[key];
-    if (Array.isArray(value) && value.length > 0 && value.every((item) => Number.isFinite(item))) {
-      return value.map((item) => Number(item));
-    }
-  }
-  return undefined;
-}
-
-function readStringList(value: unknown): string[] {
-  if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean);
+function elapsedMs(startedAt: number): number {
+  return Math.max(0, Math.round((performance.now() - startedAt) * 1000) / 1000);
 }
 
 function refreshMemoryPackAssembly(pack: MemoryContextPack, assembly: MemoryContextAssemblyReport): MemoryContextPack {
@@ -962,19 +972,6 @@ function refreshMemoryPackAssembly(pack: MemoryContextPack, assembly: MemoryCont
       assembly,
     },
   };
-}
-
-function resolveMemoryRelationScope(input: MemoryContextComposeRequest): MemoryRelationScope {
-  if (input.relationScope) {
-    return input.relationScope;
-  }
-  if (input.phaseId || input.runId) {
-    return "project";
-  }
-  if (input.taskId) {
-    return "peer";
-  }
-  return "self";
 }
 
 // Finding 1: never return undefined — an undefined workspaceId makes

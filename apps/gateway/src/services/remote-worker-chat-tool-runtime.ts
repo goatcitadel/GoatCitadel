@@ -2,6 +2,7 @@ import {
   normalizeRemoteWorkerChatToolSubmission,
   remoteWorkerChatInferenceStepIndex,
   remoteWorkerInferenceCanonicalSha256,
+  sameRemoteWorkerCapabilityBinding,
   type RemoteWorkerChatToolResult,
   type RemoteWorkerChatToolSubmission,
 } from "@goatcitadel/contracts";
@@ -12,7 +13,7 @@ import {
   readCanonicalWorkerInferenceOutput,
 } from "./remote-worker-chat-output-service.js";
 import {
-  resolveRemoteWorkerChatProfile,
+  resolveRemoteWorkerChatAuthority,
   type RemoteWorkerChatAuthorityDependencies,
 } from "./remote-worker-chat-authority.js";
 import { modelToolIntentKey, readCanonicalWorkerModelToolResult } from "./remote-worker-chat-tool-result.js";
@@ -60,22 +61,28 @@ export class RemoteWorkerChatToolRuntime {
       );
       if (!execution.authority.assignment.manifest.requiredCapabilityClasses.includes("governed_tool"))
         throw new Error("Worker assignment does not admit governed tools.");
-      const { profile } = await resolveRemoteWorkerChatProfile(this.dependencies, execution);
+      const { evidence } = await resolveRemoteWorkerChatAuthority(this.dependencies, execution, async () => {
+        const current = await storage.remoteWorkerAssignments.resolveActiveChatExecution(
+          continuingToolResult ? { registryWorkspaceId: key.registryWorkspaceId, assignmentId: key.assignmentId,
+            assignmentGeneration: key.assignmentGeneration, continuingToolResult } : fence, fence.protectedAuthority!);
+        if (current.workload.workloadSha256 !== execution.workload.workloadSha256)
+          throw new Error("Worker model tool capability authority changed.");
+      });
       const output = await readCanonicalWorkerInferenceOutput(
         storage.remoteWorkerInference,
         key,
         await storage.remoteWorkerInference.getRequest(key),
       );
       const { record } = output;
-      const sequence = buildRemoteWorkerChatSequenceContext(storage, profile, execution);
+      const sequence = buildRemoteWorkerChatSequenceContext(storage, evidence, execution);
       const messages = await readCanonicalWorkerChatInput(storage.remoteWorkerInference, record,
         remoteWorkerChatInferenceStepIndex({ ...record, continuationSha256: sequence.continuationSha256 }), sequence);
       if (
-        record.executionWorkspaceId !== profile.identity.workspaceId ||
-        record.sessionId !== profile.identity.sessionId ||
-        record.turnId !== profile.identity.turnId ||
-        record.durableRunId !== profile.identity.durableRunId ||
-        record.capabilityProfileSha256 !== profile.hashes.profileHash ||
+        record.executionWorkspaceId !== evidence.identity.workspaceId ||
+        record.sessionId !== evidence.identity.sessionId ||
+        record.turnId !== evidence.identity.turnId ||
+        record.durableRunId !== evidence.identity.durableRunId ||
+        !sameRemoteWorkerCapabilityBinding(record, evidence.binding) ||
         record.inputSha256 !== remoteWorkerInferenceCanonicalSha256(messages) ||
         record.contextSha256 !== execution.workload.contextSnapshotSha256 ||
         record.taskId !== execution.authority.assignment.manifest.taskId ||
@@ -89,20 +96,20 @@ export class RemoteWorkerChatToolRuntime {
         throw new Error("Worker model tool call identity repeats an earlier step.");
       const call = output.toolCalls?.[submission.callIndex];
       if (!call) throw new Error("Worker model tool selection is not a retained provider request.");
-      const selected = profile.selection.tools.find((tool) => tool.modelName === call.modelToolName);
+      const selected = evidence.tools.find((tool) => tool.modelName === call.modelToolName);
       if (
         !selected ||
-        !profile.selection.modelNameAllowMap.some(
+        !evidence.tools.some(
           (binding) => binding.modelName === call.modelToolName && binding.canonicalName === selected.canonicalName,
         )
       )
         throw new Error("Worker model tool selection is outside its frozen allow map.");
-      return { execution, profile, record, call, selected, calls: output.toolCalls! };
+      return { execution, evidence, record, call, selected, calls: output.toolCalls! };
     };
     const admitted = await check();
     // Ordering is canonical: a later call cannot skip an unresolved earlier one.
     for (const call of admitted.calls.slice(0, submission.callIndex)) {
-      const previous = await readCanonicalWorkerModelToolResult(storage, admitted.record, admitted.profile, call);
+      const previous = await readCanonicalWorkerModelToolResult(storage, admitted.record, admitted.evidence, call);
       if (previous?.status !== "completed") throw new Error("An earlier worker model tool call is unresolved.");
     }
     const intentKey = modelToolIntentKey(admitted.record, admitted.call);
@@ -135,7 +142,7 @@ export class RemoteWorkerChatToolRuntime {
     });
     // Replaying an immutable effect receipt does not bypass current authority.
     await check(resultReadFence);
-    const result = await readCanonicalWorkerModelToolResult(storage, admitted.record, admitted.profile, admitted.call);
+    const result = await readCanonicalWorkerModelToolResult(storage, admitted.record, admitted.evidence, admitted.call);
     if (!result) throw new Error("Worker tool result is unavailable for continuation.");
     return {
       ...result,

@@ -11,12 +11,14 @@ import {
   remoteWorkerChatInferenceIdentity,
   remoteWorkerChatInferenceMessages,
   appendRemoteWorkerChatToolResults,
+  sameRemoteWorkerCapabilityBinding,
   type ChatTurnCapabilityProfileRecord,
   type RemoteWorkerChatWorkflowScope,
   type RemoteWorkerInferenceMessage,
   type RemoteWorkerInferenceToolCall,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage, RemoteWorkerInferenceRequestRecord } from "@goatcitadel/storage";
+import { remoteWorkerChatEvidence, type RemoteWorkerChatEvidence } from "./remote-worker-chat-authority.js";
 import { appendRemoteWorkerNativeChatContext, normalizeRemoteWorkerNativeChatContext, remoteWorkerNativeChatContextSha256,
   canonicalJsonString, removeRemoteWorkerNativeChatContext, type RemoteWorkerNativeChatContext } from "@goatcitadel/contracts";
 import { readRemoteWorkerNativeChatHistory } from "./remote-worker-native-chat-history.js";
@@ -26,7 +28,8 @@ import {
 } from "./remote-worker-chat-tool-result.js";
 
 export interface RemoteWorkerChatSequenceContext {
-  readonly profile: ChatTurnCapabilityProfileRecord;
+  readonly profile?: ChatTurnCapabilityProfileRecord;
+  readonly evidence?: RemoteWorkerChatEvidence;
   readonly baseMessages: readonly RemoteWorkerInferenceMessage[];
   readonly contextSha256: string;
   readonly taskId: string;
@@ -59,7 +62,7 @@ async function prepareNativeSequenceHistory(inference: InferenceReader, scope: R
 
 export function buildRemoteWorkerChatSequenceContext(
   toolStorage: RemoteWorkerChatToolResultStorage,
-  profile: ChatTurnCapabilityProfileRecord,
+  authority: ChatTurnCapabilityProfileRecord | RemoteWorkerChatEvidence,
   execution: Awaited<ReturnType<AsyncStorage["remoteWorkerAssignments"]["resolveActiveChatExecution"]>>,
 ): RemoteWorkerChatSequenceContext {
   if (execution.workload.nativeContinuation && !execution.workload.nativeChatContext)
@@ -72,7 +75,8 @@ export function buildRemoteWorkerChatSequenceContext(
   const baseMessages: readonly RemoteWorkerInferenceMessage[] = execution.workload.chatContext
     ? remoteWorkerChatInferenceMessages(execution.workload.chatContext) : [{ role: "user", text: content }];
   return {
-    profile,
+    evidence: remoteWorkerChatEvidence(authority),
+    ...("binding" in authority ? {} : { profile: authority }),
     toolStorage,
     baseMessages: native ? appendRemoteWorkerNativeChatContext(baseMessages, native) : baseMessages,
     ...(native ? { continuationSha256: remoteWorkerNativeChatContextSha256(native), nativeContext: native } : {}),
@@ -146,6 +150,7 @@ async function readSequenceStep(
     await inference.getRequestByIdempotency(scope.registryWorkspaceId, identity.idempotencyKey),
   );
   const { record } = result;
+  const evidence = context ? readRemoteWorkerSequenceEvidence(context) : undefined;
   if (
     context &&
     (record.inferenceRequestId !== identity.inferenceRequestId ||
@@ -154,11 +159,11 @@ async function readSequenceStep(
       record.inputSha256 !== digest(messages) ||
       record.contextSha256 !== context.contextSha256 ||
       record.routedContextSha256 !== context.contextSha256 ||
-      record.capabilityProfileSha256 !== context.profile.hashes.profileHash ||
-      record.executionWorkspaceId !== context.profile.identity.workspaceId ||
-      record.sessionId !== context.profile.identity.sessionId ||
-      record.turnId !== context.profile.identity.turnId ||
-      record.durableRunId !== context.profile.identity.durableRunId ||
+      !sameRemoteWorkerCapabilityBinding(record, evidence!.binding) ||
+      record.executionWorkspaceId !== evidence!.identity.workspaceId ||
+      record.sessionId !== evidence!.identity.sessionId ||
+      record.turnId !== evidence!.identity.turnId ||
+      record.durableRunId !== evidence!.identity.durableRunId ||
       record.taskId !== context.taskId ||
       record.workerId !== context.workerId ||
       record.workerGeneration !== context.workerGeneration)
@@ -175,12 +180,18 @@ async function continueSequence(
   if (!output.toolCalls) throw new Error("A completed worker answer cannot authorize another model step.");
   const results = [];
   for (const call of output.toolCalls) {
-    const result = await readCanonicalWorkerModelToolResult(context.toolStorage, output.record, context.profile, call);
+    const result = await readCanonicalWorkerModelToolResult(context.toolStorage, output.record, readRemoteWorkerSequenceEvidence(context), call);
     if (result?.status !== "completed") throw new Error("Worker Chat continuation has unresolved tools.");
     results.push({ ...result, callId: call.callId, modelToolName: call.modelToolName });
   }
   return { messages: appendRemoteWorkerChatToolResults(messages, { text: output.text, toolCalls: output.toolCalls }, results),
     toolIntentIds: results.map((result) => result.intentId) };
+}
+
+export function readRemoteWorkerSequenceEvidence(context: RemoteWorkerChatSequenceContext): RemoteWorkerChatEvidence {
+  if (context.evidence) return context.evidence;
+  if (context.profile) return remoteWorkerChatEvidence(context.profile);
+  throw new Error("Remote worker sequence has no capability authority evidence.");
 }
 
 /** Retained provider output is a request to the tool owner, never execution evidence. */

@@ -1,10 +1,28 @@
 import { buildToolsListParams, authorizeStaticMcpToolCall } from "./mcp-static-transport-authorization.js";
 export { discoverStaticMcpToolsList } from "./mcp-static-transport-authorization.js";
-import { withHttpMcpClient, readHttpJsonRpcEnvelope, MCP_STREAMABLE_HTTP_PROTOCOL_VERSION, MCP_HTTP_RESPONSE_BODY_MAX_BYTES, MCP_HTTP_RESPONSE_READ_TIMEOUT_MS } from "./mcp-http-transport.js";
-import { withStdioMcpClient, attachChildOutputErrorHandlers, attachChildStdinErrorHandler, createMcpChildStreamError, isChildStdinWritable, resolveSpawnCommand, resolveSpawnSpec, terminateChild, writeToChildStdin, MCP_TERMINATE_GRACE_MS, type StdioClient } from "./mcp-stdio-transport.js";
+import {
+  withHttpMcpClient,
+  readHttpJsonRpcEnvelope,
+  MCP_STREAMABLE_HTTP_PROTOCOL_VERSION,
+  MCP_HTTP_RESPONSE_BODY_MAX_BYTES,
+  MCP_HTTP_RESPONSE_READ_TIMEOUT_MS,
+} from "./mcp-http-transport.js";
+import {
+  withStdioMcpClient,
+  attachChildOutputErrorHandlers,
+  attachChildStdinErrorHandler,
+  createMcpChildStreamError,
+  isChildStdinWritable,
+  resolveSpawnCommand,
+  resolveSpawnSpec,
+  terminateChild,
+  writeToChildStdin,
+  MCP_TERMINATE_GRACE_MS,
+  type StdioClient,
+} from "./mcp-stdio-transport.js";
 export type { StdioClient } from "./mcp-stdio-transport.js";
 /* eslint-disable max-lines -- MCP invocation, requester-scoped dispatch and result normalization remain coordinated here; transport and static authorization have dedicated owners. */
-import type { McpStdioSessionPool } from "./mcp-stdio-session-pool.js";
+import type { McpStdioSessionPool, McpStdioResourceOwner } from "./mcp-stdio-session-pool.js";
 import {
   redactSecretText,
   resolveMcpServerConnectionMode,
@@ -14,23 +32,17 @@ import {
   type McpToolRecord,
   type ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
-import {
-  createIsolatedGuardedDispatcher,
-  fetchAllowlistedOnce,
-} from "@goatcitadel/policy-engine";
+import { createIsolatedGuardedDispatcher, fetchAllowlistedOnce } from "@goatcitadel/policy-engine";
 import { McpRequesterResolutionError, type McpRequesterResolutionReasonCode } from "./mcp-requester-resolution.js";
 import type {
   McpFreshToolsListRevalidationInput,
   McpProfileDiscoveryResolutionAttempt,
   McpToolCallResolutionAttempt,
 } from "./mcp-requester-resolution-service.js";
-import {
-  type McpStaticEnvironmentHandle,
-} from "./mcp-static-environment-service.js";
+import { type McpStaticEnvironmentHandle } from "./mcp-static-environment-service.js";
 import { type StaticMcpCallAuthority } from "./mcp-static-call-authority.js";
 
 import { prepareStaticEnvironment } from "./mcp-transport-credentials.js";
-
 
 const DEFAULT_STDIO_TIMEOUT_MS = 25000;
 const PLAYWRIGHT_SERVER_PATTERN = /\b(playwright)\b/i;
@@ -53,7 +65,7 @@ export interface McpRuntimeTransportOptions {
   /** Gateway-owned storage for byte-pinned tool packages. */
   packageRoot?: string;
   /** Gateway-only scope; absent for discovery and unscoped/direct invocations. */
-  stdioSession?: { pool: McpStdioSessionPool<StdioClient>; scopeKey: string };
+  stdioSession?: { pool: McpStdioSessionPool<StdioClient>; scopeKey: string; resourceOwner?: McpStdioResourceOwner };
   networkAllowlist?: string[];
   oauthAccessTokenResolver?: (server: McpServerRecord) => Promise<string | undefined> | string | undefined;
   staticEnvironmentResolver?: (server: McpServerRecord) => Promise<McpStaticEnvironmentHandle>;
@@ -118,10 +130,17 @@ export async function discoverMcpTools(
   if (server.transport !== "stdio" || !server.command?.trim()) {
     return [];
   }
-  return withStdioMcpClient(server, timeoutMs, async (client) => {
-    const response = await client.request("tools/list", listParams);
-    return normalizeDiscoveredTools(server, response);
-  }, undefined, undefined, options);
+  return withStdioMcpClient(
+    server,
+    timeoutMs,
+    async (client) => {
+      const response = await client.request("tools/list", listParams);
+      return normalizeDiscoveredTools(server, response);
+    },
+    undefined,
+    undefined,
+    options,
+  );
 }
 
 export async function invokeMcpRuntimeTool(

@@ -45,6 +45,7 @@ export interface DurableChatTurnExecutionPayloadAuthority extends Readonly<Recor
   readonly assistantMessageId: string;
   readonly capabilityProfileId?: string;
   readonly capabilityProfileHash?: string;
+  readonly featureReferenceSha256?: string;
   readonly routedContextSnapshotId?: string;
   readonly routedContextSnapshotHash?: string;
   readonly branchKind: string;
@@ -103,6 +104,7 @@ export function readDurableChatTurnExecutionPayloadAuthority(
       return undefined;
     }
     if (
+      (payload.featureReferenceSha256 !== undefined && !sha256(payload.featureReferenceSha256)) ||
       (payload.capabilityProfileId !== undefined && typeof payload.capabilityProfileId !== "string") ||
       (payload.capabilityProfileHash !== undefined && typeof payload.capabilityProfileHash !== "string") ||
       Boolean(payload.capabilityProfileId) !== Boolean(payload.capabilityProfileHash) ||
@@ -111,7 +113,7 @@ export function readDurableChatTurnExecutionPayloadAuthority(
         (!nonEmptyString(payload.routedContextSnapshotId) || payload.routedContextSnapshotId.length > 256)) ||
       (payload.routedContextSnapshotHash !== undefined && !sha256(payload.routedContextSnapshotHash)) ||
       Boolean(payload.routedContextSnapshotId) !== Boolean(payload.routedContextSnapshotHash) ||
-      (Boolean(payload.routedContextSnapshotId) && !payload.capabilityProfileId)
+      (Boolean(payload.routedContextSnapshotId) && !payload.capabilityProfileId && !payload.featureReferenceSha256)
     ) {
       return undefined;
     }

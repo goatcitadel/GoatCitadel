@@ -40,6 +40,7 @@ export async function runSkillLearningLane(context, _options, deps) {
           "three distinct clean sessions cause exactly one eligibility transition; later or same-session evidence links without creating another version",
           "staged artifacts are immutable, inactive, governed-lineage candidates with an inspectable proposal and Journey event",
           "learning never writes durable memory and never directly activates a callable skill",
+          "reviewed skill instructions enter fresh admitted Chat only while exact content and lifecycle remain current; revocation removes fresh reuse",
           "artifact writes and replay reads reject managed-root, parent, directory, and file symlink substitution",
           "Code Mode candidate writes include governed workspace, exact source fingerprint, and creating-actor lineage",
           "Library repositories retain candidate, evidence-link, proposal, and Journey inspection truth while Chat returns one canonical result",
@@ -91,7 +92,7 @@ export async function runSkillLearningLane(context, _options, deps) {
     },
     {
       id: "skill-learning.gateway",
-      title: "Explicit Chat learning, history workshop, immutable artifacts, and replay guards",
+      title: "Explicit Chat learning, governed fresh-session reuse, ranked selection, immutable artifacts, and replay guards",
       subsystem: "gateway",
       args: [
         "--filter",
@@ -101,6 +102,10 @@ export async function runSkillLearningLane(context, _options, deps) {
         "run",
         "src/services/skill-learning-service.test.ts",
         "src/services/chat-command-service.runtime.test.ts",
+        "src/services/callable-skill-selection-evaluation.test.ts",
+        "src/services/governed-skill-instruction-service.test.ts",
+        "src/services/chat-feature-admission-service.test.ts",
+        "src/workflow-skill-capture.integration.test.ts",
       ],
     },
     {

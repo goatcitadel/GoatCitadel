@@ -54,7 +54,7 @@ type Input = {
     "effectiveToolAutonomy" | "selectedTurnRecovery" | "selectedTurn"
   >;
   providerRouting: Pick<ReturnType<typeof useChatProviderRoutingController>, "commandIndex" | "setCommandIndex">;
-  sessionData: Pick<ReturnType<typeof useChatSessionData>, "threadKnowledgeAttachments" | "prefs">;
+  sessionData: Pick<ReturnType<typeof useChatSessionData>, "threadKnowledgeAttachments" | "prefs" | "settings">;
   contextActions: Pick<
     ReturnType<typeof useChatContextActions>,
     "continueActiveExplorerInBackground" | "rehydrateBackgroundExplorerReport"
@@ -192,6 +192,7 @@ export function createChatComposerContextProps({
     externalSourceControls:
       externalSourceAttachments.supported === true
         ? {
+            contextInclusionEnabled: sessionData.settings?.chatFeatureAvailability?.explicitContext === true && !editingTurnId,
             attachments: externalSourceAttachments.attachments,
             candidates: externalSourceAttachments.candidates,
             candidatesSupported: externalSourceAttachments.candidatesSupported,
@@ -201,8 +202,8 @@ export function createChatComposerContextProps({
             canMutate: externalSourceAttachments.canMutate && !historicalModeActive,
             error: externalSourceAttachments.error,
             onToggleSelect: (attachmentId) => {
-              if (!blockHistoricalMutation() && externalSourceAttachments.selectedAttachmentIds.includes(attachmentId)) {
-                // New turns use live capabilities; only clearing retained intent is available.
+              if (!blockHistoricalMutation() && (externalSourceAttachments.selectedAttachmentIds.includes(attachmentId) ||
+                (sessionData.settings?.chatFeatureAvailability?.explicitContext === true && !editingTurnId && externalSourceAttachments.canMutate))) {
                 toggleSelection(attachmentId);
               }
             },

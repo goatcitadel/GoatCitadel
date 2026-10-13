@@ -92,6 +92,45 @@ describe("dashboard cron routes", () => {
     expect(response.json()).toMatchObject({ revision: 1 });
   });
 
+  it("binds public scheduled creators to auth and rejects forged or internal occurrence authority", async () => {
+    const createCronJob = vi.fn(async (input: unknown) => input);
+    const updateCronJob = vi.fn(async (_jobId: string, input: unknown) => input);
+    app = Fastify();
+    app.addHook("preHandler", async request => { request.authActorId = "operator-real"; });
+    app.decorate("services", { cron: { createCronJob, updateCronJob } } as never);
+    await app.register(dashboardRoutes);
+    const agentTurn = { prompt: "Read a work item", createdBy: { permissionProfileId: "operator-profile" } };
+    const good = await app.inject({ method: "POST", url: "/api/v1/cron/jobs", payload: {
+      jobId: "governed-read", name: "Governed read", action: "agent_turn", schedule: "0 12 * * * UTC", actionConfig: { agentTurn },
+    } });
+    expect(good.statusCode, good.body).toBe(201);
+    expect(createCronJob).toHaveBeenCalledWith(expect.objectContaining({ actionConfig: { agentTurn: {
+      prompt: agentTurn.prompt, createdBy: { operatorId: "operator-real", authActorId: "operator-real", depth: 0, permissionProfileId: "operator-profile" },
+    } } }), { actorId: "operator-real", source: "authenticated_operator" });
+    for (const forged of [
+      { ...agentTurn, createdBy: { ...agentTurn.createdBy, operatorId: "foreign" } },
+      { ...agentTurn, createdBy: { ...agentTurn.createdBy, authActorId: "foreign" } },
+      { ...agentTurn, createdBy: { ...agentTurn.createdBy, createdByJobId: "foreign", depth: 1 } },
+      { ...agentTurn, commitment: { commitmentId: "foreign", revision: 1, materialSha256: "a".repeat(64) } },
+      { ...agentTurn, creatorAuthority: { version: "cron.creator-authority.v1", actorId: "operator-real" } },
+    ]) {
+      const response = await app.inject({ method: "PATCH", url: "/api/v1/cron/jobs/governed-read",
+        payload: { expectedRevision: 1, actionConfig: { agentTurn: forged } } });
+      expect(response.statusCode, response.body).toBeGreaterThanOrEqual(400);
+      const creation = await app.inject({ method: "POST", url: "/api/v1/cron/jobs", payload: {
+        jobId: "forged-read", name: "Forged read", action: "agent_turn", schedule: "0 12 * * * UTC", actionConfig: { agentTurn: forged },
+      } });
+      expect(creation.statusCode, creation.body).toBeGreaterThanOrEqual(400);
+    }
+    expect(createCronJob).toHaveBeenCalledTimes(1);
+    expect(updateCronJob).not.toHaveBeenCalled();
+    const historical = await app.inject({ method: "PATCH", url: "/api/v1/cron/jobs/governed-read",
+      payload: { expectedRevision: 1, name: "Renamed" } });
+    expect(historical.statusCode, historical.body).toBe(200);
+    expect(updateCronJob).toHaveBeenCalledWith("governed-read", { name: "Renamed" }, 1,
+      { actorId: "operator-real", source: "authenticated_operator" });
+  });
+
   it("rejects runtime telemetry in public create and update mutations", async () => {
     const createCronJob = vi.fn();
     const updateCronJob = vi.fn();

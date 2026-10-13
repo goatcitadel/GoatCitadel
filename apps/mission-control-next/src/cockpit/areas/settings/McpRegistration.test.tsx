@@ -12,7 +12,7 @@ import { __resetMcpServerMutationsForTests } from "../../../features/native-rout
 import { __resetMcpCreationForTests } from "../../../features/native-routes/settings/mcp-create-mutation";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetFormDirtyRegistryForTests } from "../../../features/native-routes/library/use-form-dirty";
-const api = vi.hoisted(() => ({ fetchMcpServer: vi.fn(), fetchMcpServers: vi.fn(), fetchMcpTemplates: vi.fn(), createMcpServer: vi.fn(), deleteMcpServer: vi.fn(), fetchMcpTools: vi.fn(), fetchMcpRemotePreview: vi.fn() }));
+const api = vi.hoisted(() => ({ fetchSettings: vi.fn(), fetchMcpServer: vi.fn(), fetchMcpServers: vi.fn(), fetchMcpTemplates: vi.fn(), createMcpServer: vi.fn(), deleteMcpServer: vi.fn(), fetchMcpTools: vi.fn(), fetchMcpRemotePreview: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({ ...(await original<object>()), ...api }));
 vi.mock("../../ui/Dialog", () => ({ Dialog: ({ open, title, children }: ComponentProps<typeof Dialog>) => open ? <section aria-label={title}>{children}</section> : null }));
 vi.mock("../../ui/Sheet", () => ({ Sheet: ({ open, title, children }: ComponentProps<typeof Sheet>) => open ? <section aria-label={title}>{children}</section> : null }));
@@ -31,6 +31,7 @@ async function render(workspaceId = "workspace") {
 beforeEach(() => {
   vi.resetAllMocks(); __resetMcpServerMutationsForTests(); __resetMcpCreationForTests(); __resetSessionDraftsForTests(); __resetFormDirtyRegistryForTests();
   records = [fixture()];
+  api.fetchSettings.mockResolvedValue({ chatFeatureAvailability: { staticMcp: false } });
   api.fetchMcpServers.mockImplementation(async () => ({ items: structuredClone(records) }));
   api.fetchMcpServer.mockImplementation(async (id: string) => {
     const server = records.find((item) => item.serverId === id);

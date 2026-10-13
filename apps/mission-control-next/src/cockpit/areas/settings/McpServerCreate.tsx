@@ -15,7 +15,7 @@ import { McpCreateFields } from "./McpCreateFields";
 import { McpCreateReview } from "./McpCreateReview";
 import { McpOutcomeCheck } from "../../../features/native-routes/settings/McpOutcomeCheck";
 
-export function McpServerCreate({ workspaceId, onClose }: { workspaceId: string; onClose: () => void }) {
+export function McpServerCreate({ workspaceId, onClose, onInspect }: { workspaceId: string; onClose: () => void; onInspect?: (serverId: string) => void }) {
   const client = useQueryClient(),
     leave = useDraftLeave();
   const [reviewed, setReviewed] = useState<McpCreateInput | null>(null),
@@ -66,9 +66,10 @@ export function McpServerCreate({ workspaceId, onClose }: { workspaceId: string;
           {control.mutation.message ? <p role="status">{control.mutation.message}</p> : null}
           <McpOutcomeCheck target={{ kind: "create" }} buttonComponent={Button} />
           {created ? (
-            <p role="status">
-              Saved server ID: <code className="break-all font-mono">{created.serverId}</code>
-            </p>
+            <div className="space-y-2">
+              <p role="status">Saved server ID: <code className="break-all font-mono">{created.serverId}</code></p>
+              {onInspect ? <Button size="sm" onClick={() => leave.request(() => onInspect(created.serverId), [control.draft.key])}>Continue to connection review</Button> : null}
+            </div>
           ) : null}
           {!reviewed ? (
             <>

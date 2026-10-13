@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { providerFallbackPreferenceSchema } from "./chat.provider-fallback-schema.js";
 import { rejectUnboundChatPolicyScope, sessionParamsSchema } from "./chat.shared.js";
 import { sendRouteError } from "./_error-handler.js";
 
@@ -23,6 +24,7 @@ const prefsPatchSchema = z.object({
   imageProviderId: z.string().optional(),
   imageModel: z.string().optional(),
   visionFallbackModel: z.string().optional(),
+  providerFallback: providerFallbackPreferenceSchema.nullable().optional(),
   orchestrationEnabled: z.boolean().optional(),
   orchestrationIntensity: z.enum(["minimal", "balanced", "deep"]).optional(),
   orchestrationVisibility: z.enum(["hidden", "summarized", "expandable", "explicit"]).optional(),

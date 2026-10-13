@@ -1,12 +1,22 @@
-import type { ChatTurnCapabilityProfileRecord, DesignAdvisory } from "@goatcitadel/contracts";
+import type {
+  ChatTurnCapabilityProfileRecord,
+  ChatTurnFeatureReferences,
+  DesignAdvisory,
+} from "@goatcitadel/contracts";
 import { DESIGN_ADVISORY_MAX_BYTES, detectDesignAdvisories } from "@goatcitadel/skills";
 
 const DESIGN_SKILL_NAMES = new Set(["impeccable", "design-intelligence"]);
 const UI_FILE_EXTENSION = /\.(?:tsx|jsx|css|html|vue|svelte)$/iu;
 
-/** True when the frozen profile admitted a design skill's instructions into this turn. */
-export function hasDesignSkillReceipt(profile: ChatTurnCapabilityProfileRecord | undefined): boolean {
-  return (profile?.selection.activatedSkills ?? []).some((skill) =>
+/** Informational selection evidence only; fresh admissions supersede historical profile receipts. */
+export function hasDesignSkillReceipt(
+  profile: ChatTurnCapabilityProfileRecord | undefined,
+  featureReferences?: ChatTurnFeatureReferences,
+): boolean {
+  const activatedSkills = featureReferences
+    ? (featureReferences.selectedSkills?.activatedSkills ?? [])
+    : (profile?.selection.activatedSkills ?? []);
+  return activatedSkills.some((skill) =>
     DESIGN_SKILL_NAMES.has(skill.skillId.slice(skill.skillId.lastIndexOf(":") + 1).toLowerCase()),
   );
 }
@@ -19,10 +29,11 @@ export function hasDesignSkillReceipt(profile: ChatTurnCapabilityProfileRecord |
  */
 export function buildToolResultDesignAdvisories(input: {
   capabilityProfile: ChatTurnCapabilityProfileRecord | undefined;
+  featureReferences?: ChatTurnFeatureReferences;
   toolName: string;
   args: Record<string, unknown> | undefined;
 }): DesignAdvisory[] | undefined {
-  if (!hasDesignSkillReceipt(input.capabilityProfile)) return undefined;
+  if (!hasDesignSkillReceipt(input.capabilityProfile, input.featureReferences)) return undefined;
   const path = typeof input.args?.path === "string" ? input.args.path : "";
   if (!UI_FILE_EXTENSION.test(path)) return undefined;
   const scope: DesignAdvisory["scope"] =

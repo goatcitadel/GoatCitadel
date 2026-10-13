@@ -5,6 +5,7 @@ import { composeChatTurnControl, type ChatTurnControlCompositionHost } from "./c
 
 const assertChatTurnToolUseOpen = vi.hoisted(() => vi.fn(async () => {}));
 const preserveCancelledChatTurnOutput = vi.hoisted(() => vi.fn(async () => {}));
+const reconcileDelegatedChildProcessCleanup = vi.hoisted(() => vi.fn(async () => {}));
 const delegation = vi.hoisted(() => ({
   resolveConfirmedDelegation: vi.fn(async () => undefined),
   reconcileConfirmedDelegationChild: vi.fn(async () => {}),
@@ -14,6 +15,7 @@ const delegation = vi.hoisted(() => ({
 vi.mock("../chat-turn-control.js", () => ({ assertChatTurnToolUseOpen }));
 vi.mock("../chat-turn-interruption-recovery-service.js", () => ({ preserveCancelledChatTurnOutput }));
 vi.mock("../chat-confirmed-delegation-service.js", () => delegation);
+vi.mock("../delegated-child-process-cleanup.js", () => ({ reconcileDelegatedChildProcessCleanup }));
 
 function fixture(parentPayload: Record<string, unknown> = { sessionId: "session-1", turnId: "parent-turn" }) {
   const calls: string[] = [];
@@ -79,6 +81,7 @@ describe("composeChatTurnControl", () => {
 
     await control.reconcileWaitingDelegations();
     expect(delegation.reconcileWaitingConfirmedDelegations).toHaveBeenCalledWith(host);
+    expect(reconcileDelegatedChildProcessCleanup).toHaveBeenCalledWith(storage);
 
     const child = { durableRunId: "run", childSessionId: "s", childTurnId: "t", parentDelegationStepId: "step" };
     await control.reconcileDelegationChild(child as Parameters<typeof control.reconcileDelegationChild>[0]);
@@ -86,5 +89,13 @@ describe("composeChatTurnControl", () => {
 
     await control.readParentProfile("step");
     expect(delegation.readConfirmedDelegationParentProfile).toHaveBeenCalledWith(storage, "step");
+  });
+
+  it("still discovers terminal child cleanup when waiting delegation reconciliation fails", async () => {
+    const { control, storage } = fixture();
+    const failure = new Error("waiting delegation unavailable");
+    delegation.reconcileWaitingConfirmedDelegations.mockRejectedValueOnce(failure);
+    await expect(control.reconcileWaitingDelegations()).rejects.toBe(failure);
+    expect(reconcileDelegatedChildProcessCleanup).toHaveBeenCalledWith(storage);
   });
 });

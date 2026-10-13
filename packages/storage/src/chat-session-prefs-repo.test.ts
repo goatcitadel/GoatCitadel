@@ -17,6 +17,37 @@ function createRepo(...sessionIds: string[]): ChatSessionPrefsRepository {
 }
 
 describe("ChatSessionPrefsRepository", () => {
+  it("keeps fallback off until configured, preserves it on unrelated edits, and disables it explicitly", () => {
+    const repo = createRepo("fallback-session");
+    const initial = repo.ensure("fallback-session");
+    assert.equal(initial.providerFallback, undefined);
+    const target = { providerId: "openai", model: "test-model", allowLocalToCloud: false };
+    const saved = repo.patchWithRevision("fallback-session", { providerFallback: target }, initial.revision);
+    assert.deepEqual(repo.get("fallback-session")?.providerFallback, target);
+    const edited = repo.patchWithRevision("fallback-session", { memoryMode: "off" }, saved.revision);
+    assert.deepEqual(edited.providerFallback, target);
+    assert.throws(() => repo.patchWithRevision("fallback-session", { providerFallback: null }, initial.revision));
+    assert.deepEqual(repo.get("fallback-session")?.providerFallback, target);
+    const disabled = repo.patchWithRevision("fallback-session", { providerFallback: null }, edited.revision);
+    assert.equal(disabled.providerFallback, undefined);
+  });
+
+  it("rejects malformed fallback preferences without granting or persisting consent", () => {
+    const repo = createRepo("fallback-session");
+    const initial = repo.ensure("fallback-session");
+    for (const preference of [
+      { providerId: "", model: "test", allowLocalToCloud: true },
+      { providerId: "cloud", model: "test" },
+      { providerId: "cloud", model: "test", allowLocalToCloud: true, runtimeAuthority: true },
+    ]) {
+      assert.throws(() => repo.patchWithRevision("fallback-session", {
+        providerFallback: preference as never,
+      }, initial.revision));
+      assert.equal(repo.get("fallback-session")?.revision, initial.revision);
+      assert.equal(repo.get("fallback-session")?.providerFallback, undefined);
+    }
+  });
+
   it("returns defaults when ensuring a missing row", () => {
     const repo = createRepo("sess-1");
     const prefs = repo.ensure("sess-1");

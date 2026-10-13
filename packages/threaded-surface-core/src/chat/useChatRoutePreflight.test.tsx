@@ -213,7 +213,10 @@ describe("useChatRoutePreflight", () => {
       "session-1",
       {
         action: "send",
+        turnId: undefined,
         content: "queued content",
+        workspaceSnapshot: undefined,
+        providerFallback: null,
         prefsOverride: {
           mode: "chat",
           providerId: "openai-codex",
@@ -383,7 +386,14 @@ describe("useChatRoutePreflight", () => {
     );
     expect(preflightChatRoute).toHaveBeenCalledWith(
       "display-session",
-      { action: "edit", turnId: "turn-1", prefsOverride: undefined },
+      {
+        action: "edit",
+        turnId: "turn-1",
+        content: undefined,
+        workspaceSnapshot: undefined,
+        providerFallback: null,
+        prefsOverride: undefined,
+      },
       { originSurface: undefined },
     );
   });

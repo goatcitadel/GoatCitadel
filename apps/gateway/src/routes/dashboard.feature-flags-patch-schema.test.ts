@@ -56,6 +56,19 @@ const EXPECTED_PATCH_TOGGLEABLE: Record<keyof FeatureFlagsConfig, true> = {
 describe("settings PATCH schema feature-flag coverage (Phase 3.2)", () => {
   const featuresShape = updateSettingsSchema.shape.features.unwrap().shape;
 
+  it("retains the independent default-off restoration switches through settings PATCH", () => {
+    const features = {
+      chatSkillInstructionsV1Enabled: true, boundedToolExposureV1Enabled: true,
+      chatProviderFallbackV1Enabled: true, chatExplicitContextV1Enabled: true,
+      chatDelegationControlsV1Enabled: true, chatAutomaticFanoutV1Enabled: true,
+      scheduledChatTurnsV1Enabled: true, proactiveHeartbeatTurnsV1Enabled: true,
+      commitmentScheduledTurnsV1Enabled: true, chatRequesterMcpV1Enabled: true,
+      chatStaticMcpV1Enabled: true, chatMeshCapabilitiesV1Enabled: true,
+      chatRemotePlacementV1Enabled: true,
+    };
+    expect(updateSettingsSchema.parse({ expectedRevision: 1, features }).features).toEqual(features);
+  });
+
   it("accepts every FeatureFlagsConfig key (none silently dropped)", () => {
     const missing = (Object.keys(EXPECTED_PATCH_TOGGLEABLE) as Array<keyof FeatureFlagsConfig>).filter(
       (key) => !(key in featuresShape),

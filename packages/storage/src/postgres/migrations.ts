@@ -1,4 +1,8 @@
 import { CHANNEL_GUIDED_SETUP_POSTGRES_SQL } from "../channel-guided-setup-schema.js";
+import { CHAT_ROUTED_CONTEXT_ADMISSION_POSTGRES_SQL } from "../chat-routed-context-admission-schema.js";
+import { HEARTBEAT_FEATURE_BINDING_POSTGRES_SQL } from "../heartbeat-feature-binding-schema.js";
+import { COMMITMENT_OCCURRENCE_POSTGRES_SQL } from "../commitment-occurrence-schema.js";
+import { REMOTE_WORKER_ADMISSION_BINDING_POSTGRES_SQL } from "../remote-worker-admission-binding-schema.js";
 import { GOVERNED_REMEDIATION_PARENT_RESERVATION_POSTGRES_SQL } from "../governed-remediation-parent-reservation-schema.js";
 import { GOVERNED_REMEDIATION_RESUME_VERSION_POSTGRES_SQL } from "../governed-remediation-resume-version.js";
 import { GOVERNED_REMEDIATION_PARENT_RESOLUTION_POSTGRES_SQL } from "../governed-remediation-parent-resolution-schema.js";
@@ -15075,6 +15079,62 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     sql: POSTGRES_SCHEMA_CONVERGENCE_V200_SQL,
     integritySha256: "d16c868ca1d7e8eb98a9b19c8eecbaf141a89816637834f9a2db368ab03c7c69",
   },
+  {
+    version: 201,
+    name: "chat_provider_fallback_preference",
+    sql: `ALTER TABLE chat_session_prefs ADD COLUMN IF NOT EXISTS provider_fallback_json TEXT;`,
+  },
+  {
+    version: 202,
+    name: "chat_turn_feature_references",
+    sql: `
+      CREATE TABLE IF NOT EXISTS chat_turn_feature_references (
+        admission_id TEXT PRIMARY KEY REFERENCES chat_session_mutation_admissions(admission_id),
+        reference_sha256 TEXT NOT NULL CHECK(length(reference_sha256) = 64),
+        references_json TEXT NOT NULL CHECK(jsonb_typeof(references_json::jsonb) = 'object')
+      );
+      CREATE OR REPLACE FUNCTION gc_chat_turn_feature_references_immutable() RETURNS trigger AS $$
+      BEGIN RAISE EXCEPTION 'Chat feature references are immutable' USING ERRCODE = '23514'; END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS chat_turn_feature_references_immutable ON chat_turn_feature_references;
+      CREATE TRIGGER chat_turn_feature_references_immutable BEFORE UPDATE OR DELETE ON chat_turn_feature_references
+        FOR EACH ROW EXECUTE FUNCTION gc_chat_turn_feature_references_immutable();
+    `,
+  },
+  {
+    version: 203,
+    name: "chat_fanout_parent_admission",
+    sql: `
+      ALTER TABLE chat_fanout_invocations ADD COLUMN IF NOT EXISTS parent_admission_json TEXT CHECK(parent_admission_json IS NULL OR jsonb_typeof(parent_admission_json::jsonb) = 'object');
+      CREATE OR REPLACE FUNCTION gc_chat_fanout_parent_admission_immutable() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.parent_admission_json IS DISTINCT FROM OLD.parent_admission_json THEN
+          RAISE EXCEPTION 'Fanout parent admission is immutable' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+      DROP TRIGGER IF EXISTS chat_fanout_parent_admission_immutable ON chat_fanout_invocations;
+      CREATE TRIGGER chat_fanout_parent_admission_immutable BEFORE UPDATE OF parent_admission_json ON chat_fanout_invocations
+        FOR EACH ROW EXECUTE FUNCTION gc_chat_fanout_parent_admission_immutable();
+    `,
+  },
+  { version: 204, name: "chat_routed_context_admission", sql: CHAT_ROUTED_CONTEXT_ADMISSION_POSTGRES_SQL,
+    integritySha256: "11c476e940fd183e48a9d725616aa4e70b09ac5f9464c37f63a5ac796adfa8a7" },
+  { version: 205, name: "heartbeat_feature_binding", sql: HEARTBEAT_FEATURE_BINDING_POSTGRES_SQL,
+    integritySha256: "4e649fce221f5b344f56f793f44a732c8e743465b2734c49129b0d9349200fa0" },
+  { version: 206, name: "commitment_occurrence_authority", sql: COMMITMENT_OCCURRENCE_POSTGRES_SQL,
+    integritySha256: "df1c3a9fd7c178e1c39c3ae03d4ff29917b7b318722a490868db4be9c0d09053" },
+  { version: 207, name: "remote_worker_admission_binding", sql: REMOTE_WORKER_ADMISSION_BINDING_POSTGRES_SQL,
+    integritySha256: "d6aeb0370eee651a2cf9e92d6e68bde2a069a2f89dbdc1818229830a0e4fc9e8" },
+  { version: 208, name: "cron_creator_authority", sql: `
+      ALTER TABLE cron_jobs ADD COLUMN IF NOT EXISTS creator_authority_json TEXT;
+      ALTER TABLE cron_jobs DROP CONSTRAINT IF EXISTS gc_cron_creator_authority_shape;
+      ALTER TABLE cron_jobs ADD CONSTRAINT gc_cron_creator_authority_shape CHECK (
+        creator_authority_json IS NULL OR (length(creator_authority_json) <= 4096
+          AND COALESCE(creator_authority_json::jsonb ->> 'version' = 'cron.creator-authority.v1', FALSE))
+      );
+  ` },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

@@ -3,6 +3,9 @@ import {
   REMOTE_WORKER_INFERENCE_EFFECTIVE_ROUTE_SCHEMA_VERSION,
   authorizeRemoteWorkerInferenceRequestSubmission,
   canonicalJsonString,
+  normalizeRemoteWorkerCapabilityBinding,
+  sameRemoteWorkerCapabilityBinding,
+  type RemoteWorkerCapabilityBinding,
   normalizeRemoteWorkerInferenceApprovalResolutionReceipt,
   normalizeRemoteWorkerInferenceBudgetReservation,
   normalizeRemoteWorkerInferenceEffectiveRouteReceipt,
@@ -73,7 +76,7 @@ export type RemoteWorkerInferenceRepositoryPort = AwaitableOwnerMethods<
   RemoteWorkerInferenceRepositoryMethod
 >;
 
-export interface RemoteWorkerInferenceResolvedAuthority {
+export interface RemoteWorkerInferenceResolvedAuthority extends RemoteWorkerCapabilityBinding {
   readonly registryWorkspaceId: string;
   readonly executionWorkspaceId: string;
   readonly assignmentId: string;
@@ -85,7 +88,6 @@ export interface RemoteWorkerInferenceResolvedAuthority {
   readonly durableRunId: string;
   readonly taskId: string;
   readonly leaseRevision: number;
-  readonly capabilityProfileSha256: string;
   readonly routedContextSha256: string;
   /** Authenticated server-resolved capability truth; never copied from request input. */
   readonly capabilityClaims: readonly string[];
@@ -767,7 +769,7 @@ export class RemoteWorkerInferenceService {
       turnId: authority.turnId,
       durableRunId: authority.durableRunId,
       taskId: authority.taskId,
-      capabilityProfileSha256: authority.capabilityProfileSha256,
+      ...normalizeRemoteWorkerCapabilityBinding(authority),
       routedContextSha256: authority.routedContextSha256,
       outputTokenCeiling: Math.min(submission.outputTokenCeiling, governance.outputTokenCeiling),
       reasoningTokenCeiling: Math.min(submission.reasoningTokenCeiling, governance.reasoningTokenCeiling),
@@ -1001,7 +1003,7 @@ export class RemoteWorkerInferenceService {
       authority.durableRunId !== request.durableRunId ||
       authority.taskId !== request.taskId ||
       authority.leaseRevision < request.admittedLeaseRevision ||
-      authority.capabilityProfileSha256 !== request.capabilityProfileSha256 ||
+      !sameRemoteWorkerCapabilityBinding(authority, request) ||
       authority.routedContextSha256 !== request.routedContextSha256
     ) {
       throw new RemoteWorkerInferenceAccessError(`Remote worker inference stored authority drifted at ${phase}.`);
@@ -1086,7 +1088,7 @@ function authorityAdmission(authority: RemoteWorkerInferenceResolvedAuthority) {
     durableRunId: authority.durableRunId,
     taskId: authority.taskId,
     admittedLeaseRevision: authority.leaseRevision,
-    capabilityProfileSha256: authority.capabilityProfileSha256,
+    ...normalizeRemoteWorkerCapabilityBinding(authority),
     routedContextSha256: authority.routedContextSha256,
   } as const;
 }

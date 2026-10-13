@@ -6,6 +6,8 @@ import {
   type McpRequesterResolutionBinding,
   type McpRequesterScopeHashInput,
   type McpStaticToolBinding,
+  type McpRequesterAdmissionConnection,
+  type McpStaticAdmissionConnection,
 } from "@goatcitadel/contracts";
 import { createMcpToolPolicyBinding, type McpToolPolicyBinding } from "@goatcitadel/policy-engine";
 import {
@@ -17,8 +19,14 @@ import type {
   McpRequesterScopedCatalogDiscoveryHookInput,
   McpRequesterScopedCatalogFreezeHookInput,
 } from "../mcp-requester-resolution-service.js";
-import { assertStaticMcpCatalogSnapshot, bindStaticMcpCatalogTool, staticMcpProviderDefinition,
-  type StaticMcpCatalogSnapshot } from "../mcp-static-catalog.js";
+import {
+  assertStaticMcpCatalogSnapshot,
+  bindStaticMcpCatalogTool,
+  staticMcpProviderDefinition,
+  type StaticMcpCatalogSnapshot,
+} from "../mcp-static-catalog.js";
+import { assertMcpRequesterAdmissionConnection } from "../mcp-requester-admission-authority.js";
+import { assertStaticMcpAdmissionReceipt } from "../mcp-static-admission.js";
 
 export interface NativeMcpChatCatalogCandidate {
   readonly serverId: string;
@@ -35,6 +43,8 @@ export interface NativeMcpChatToolSchema {
   readonly candidate: NativeMcpChatCatalogCandidate;
   readonly requesterBinding?: McpRequesterResolutionBinding;
   readonly staticBinding?: McpStaticToolBinding;
+  readonly admissionBinding?: McpRequesterAdmissionConnection;
+  readonly staticAdmissionBinding?: McpStaticAdmissionConnection;
   readonly policyBinding: McpToolPolicyBinding;
 }
 
@@ -167,18 +177,99 @@ export function assertNativeMcpChatToolSchema(schema: NativeMcpChatToolSchema): 
   if (!schemas.has(schema)) throw new Error("Native MCP schema is not server-owned");
 }
 
+/** Canonical admission receipt projection. Invocation still re-reads current admission, policy and connection state. */
+export function bindNativeAdmissionMcpChatToolSchema(
+  candidate: NativeMcpChatCatalogCandidate,
+  receipt: McpRequesterAdmissionConnection,
+): NativeMcpChatToolSchema {
+  if (!candidates.has(candidate) || candidate.staticCatalog)
+    throw new Error("Requester MCP candidate is not server-owned.");
+  const binding = assertMcpRequesterAdmissionConnection(receipt);
+  const tool = binding.selectedTools.find((item) => item.canonicalToolName === candidate.tool.canonicalToolName);
+  if (
+    !tool ||
+    binding.serverId !== candidate.serverId ||
+    tool.toolDefinitionSha256 !== candidate.tool.toolDefinitionSha256
+  ) {
+    throw new Error("Requester MCP admission schema changed.");
+  }
+  const schema: NativeMcpChatToolSchema = Object.freeze({
+    canonicalName: tool.canonicalToolName,
+    modelName: tool.modelName,
+    candidate,
+    admissionBinding: binding,
+    providerDefinition: Object.freeze({
+      type: "function",
+      function: Object.freeze({
+        name: tool.modelName,
+        ...(tool.description ? { description: tool.description } : {}),
+        parameters: tool.inputSchema,
+      }),
+    }),
+    policyBinding: createMcpToolPolicyBinding({
+      canonicalName: tool.canonicalToolName,
+      serverId: binding.serverId,
+      nativeToolName: tool.rawRemoteToolName,
+    }),
+  });
+  schemas.add(schema);
+  return schema;
+}
+
 export function bindNativeStaticMcpChatToolSchema(
   candidate: NativeMcpChatCatalogCandidate,
   scope: McpRequesterScopeHashInput,
   catalog: { snapshotId: string; callableHash: string },
 ): NativeMcpChatToolSchema {
-  if (!candidates.has(candidate) || !candidate.staticCatalog) throw new Error("Static MCP candidate is not server-owned.");
+  if (!candidates.has(candidate) || !candidate.staticCatalog)
+    throw new Error("Static MCP candidate is not server-owned.");
   const providerDefinition = staticMcpProviderDefinition(candidate.staticCatalog, candidate.tool);
-  const schema = Object.freeze({ canonicalName: candidate.tool.canonicalToolName,
-    modelName: providerDefinition.function.name, providerDefinition, candidate,
+  const schema = Object.freeze({
+    canonicalName: candidate.tool.canonicalToolName,
+    modelName: providerDefinition.function.name,
+    providerDefinition,
+    candidate,
     staticBinding: bindStaticMcpCatalogTool(candidate.staticCatalog, candidate.tool, scope, catalog),
-    policyBinding: createMcpToolPolicyBinding({ canonicalName: candidate.tool.canonicalToolName,
-      serverId: candidate.serverId, nativeToolName: candidate.tool.rawRemoteToolName }) });
+    policyBinding: createMcpToolPolicyBinding({
+      canonicalName: candidate.tool.canonicalToolName,
+      serverId: candidate.serverId,
+      nativeToolName: candidate.tool.rawRemoteToolName,
+    }),
+  });
+  schemas.add(schema);
+  return schema;
+}
+
+export function bindNativeStaticAdmissionMcpChatToolSchema(
+  candidate: NativeMcpChatCatalogCandidate,
+  receipt: McpStaticAdmissionConnection,
+): NativeMcpChatToolSchema {
+  if (!candidates.has(candidate) || !candidate.staticCatalog)
+    throw new Error("Static MCP candidate is not server-owned.");
+  const binding = assertStaticMcpAdmissionReceipt(receipt);
+  const tool = binding.selectedTools.find((item) => item.canonicalToolName === candidate.tool.canonicalToolName);
+  const definition = staticMcpProviderDefinition(candidate.staticCatalog, candidate.tool);
+  if (
+    !tool ||
+    binding.serverId !== candidate.serverId ||
+    binding.configurationBindingId !== candidate.staticCatalog.configurationBindingId ||
+    tool.toolDefinitionSha256 !== candidate.tool.toolDefinitionSha256 ||
+    tool.modelName !== definition.function.name
+  ) {
+    throw new Error("Static MCP admission schema changed.");
+  }
+  const schema: NativeMcpChatToolSchema = Object.freeze({
+    canonicalName: tool.canonicalToolName,
+    modelName: tool.modelName,
+    providerDefinition: definition,
+    candidate,
+    staticAdmissionBinding: binding,
+    policyBinding: createMcpToolPolicyBinding({
+      canonicalName: tool.canonicalToolName,
+      serverId: binding.serverId,
+      nativeToolName: tool.rawRemoteToolName,
+    }),
+  });
   schemas.add(schema);
   return schema;
 }

@@ -40,6 +40,13 @@ function preparedFake(): PreparedAgentChatTurn {
 }
 
 describe("parseSubagentFanoutSubtasks", () => {
+  it("preserves a bounded result schema and rejects unsupported schemas before dispatch", () => {
+    const resultSchema = { type: "object", properties: { answer: { type: "string", maxLength: 100 } }, required: ["answer"], additionalProperties: false };
+    expect(parseSubagentFanoutSubtasks({ subtasks: [{ objective: "Answer", resultSchema }] }))
+      .toEqual({ ok: true, subtasks: [{ objective: "Answer", resultSchema }] });
+    expect(parseSubagentFanoutSubtasks({ subtasks: [{ objective: "Answer", resultSchema: { type: "string", pattern: "(a+)+$" } }] }))
+      .toMatchObject({ ok: false });
+  });
   it("accepts exactly one through three bounded subtask records", () => {
     const parsed = parseSubagentFanoutSubtasks({
       subtasks: [

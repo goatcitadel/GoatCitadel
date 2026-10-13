@@ -8,6 +8,7 @@ import {
   type RoutingPreflightResult,
 } from "@goatcitadel/contracts";
 import { z } from "zod";
+import { providerFallbackPreferenceSchema } from "./chat.provider-fallback-schema.js";
 import { routedContextRefsSchema } from "./chat.routed-context-schema.js";
 import {
   projectChatContextManifestForPublic,
@@ -277,6 +278,7 @@ const sendMessageSchema = z.object({
       subagentPolicy: z.enum(["off", "ask_when_useful", "auto_when_useful"]).optional(),
       toolAutonomy: z.enum(["safe_auto", "manual"]).optional(),
       visionFallbackModel: z.string().optional(),
+      providerFallback: providerFallbackPreferenceSchema.nullable().optional(),
       orchestrationEnabled: z.boolean().optional(),
       orchestrationIntensity: z.enum(["minimal", "balanced", "deep"]).optional(),
       orchestrationVisibility: z.enum(["hidden", "summarized", "expandable", "explicit"]).optional(),
@@ -325,6 +327,7 @@ const routePreflightSchema = z.object({
   workspaceSnapshot: workspaceSnapshotRequestSchema.optional(),
   providerId: z.string().optional(),
   model: z.string().optional(),
+  providerFallback: providerFallbackPreferenceSchema.nullable().optional(),
   mode: chatOnlyModeSchema.optional(),
   webMode: z.enum(["auto", "off", "quick", "deep"]).optional(),
   memoryMode: z.enum(["auto", "on", "off"]).optional(),
@@ -708,6 +711,17 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
+  });
+
+  fastify.get("/api/v1/chat/sessions/:sessionId/turns/:turnId/routed-context", async (request, reply) => {
+    const params = turnParamsSchema.safeParse(request.params);
+    const query = capabilityProfileQuerySchema.safeParse(request.query ?? {});
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid routed context scope." });
+    try {
+      return reply.send(await fastify.services.chatMessages.getChatTurnRoutedContext(params.data.sessionId, params.data.turnId, {
+        workspaceId: query.data.workspaceId, operatorId: request.authActorId,
+      }));
+    } catch (error) { return sendChatWriteError(reply, error); }
   });
 
   fastify.get("/api/v1/chat/sessions/:sessionId/turns/:turnId/capability-profile", async (request, reply) => {

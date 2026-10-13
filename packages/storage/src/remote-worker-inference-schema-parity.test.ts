@@ -107,7 +107,7 @@ const TABLE_COLUMNS = {
 } as const;
 
 describe("HX-503 remote worker inference schema parity", () => {
-  it("keeps final SQLite 177+196 and PostgreSQL 119+139 columns paired", () => {
+  it("keeps historical inference columns paired with the SQLite 260 and PostgreSQL 207 authority addition", () => {
     assert.equal(
       postgres119Sql.match(/CREATE TABLE IF NOT EXISTS remote_worker_inference_/gu)?.length,
       2,
@@ -115,7 +115,10 @@ describe("HX-503 remote worker inference schema parity", () => {
     );
     for (const [table, columns] of Object.entries(TABLE_COLUMNS)) {
       assert.match(postgres119Sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`, "u"));
-      assert.deepEqual(tableColumns(db, table), [...columns], `${table} SQLite columns drifted`);
+      const headColumns = table === "remote_worker_inference_requests"
+        ? columns.flatMap(column => column === "capability_profile_sha256" ? ["admission_reference_json", column] : [column])
+        : [...columns];
+      assert.deepEqual(tableColumns(db, table), headColumns, `${table} SQLite columns drifted`);
       for (const column of columns) {
         if (column === "legacy_budget_reservation_marker") {
           assert.match(postgres139Sql, /RENAME COLUMN budget_reservation_id TO legacy_budget_reservation_marker/u);
@@ -129,6 +132,8 @@ describe("HX-503 remote worker inference schema parity", () => {
       }
       assert.equal(columns[0], "registry_workspace_id", `${table} must prefix identity with registry workspace`);
     }
+    assert.match(POSTGRES_MIGRATIONS.find(migration => migration.version === 207)?.sql ?? "",
+      /ALTER TABLE remote_worker_inference_requests ADD COLUMN IF NOT EXISTS admission_reference_json TEXT/u);
   });
 
   it("never stores a raw assignment lease or a provider credential in either dialect", () => {

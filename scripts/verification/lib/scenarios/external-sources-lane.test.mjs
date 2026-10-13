@@ -13,6 +13,7 @@ import {
   parseBrowserFlowCounts,
   parseNodeTestCounts,
   parseVitestCounts,
+  readPassedTestCount,
   scanForProductionProofGate,
 } from "./external-sources-lane.mjs";
 
@@ -131,6 +132,16 @@ test("runner count parsers read vitest and node:test summaries", () => {
     skipped: 1,
   });
   assert.equal(parseNodeTestCounts("nothing"), undefined);
+});
+
+test("agentic pass counts recognize Node spec and TAP summaries without counting test labels", () => {
+  assert.equal(readPassedTestCount("ℹ tests 16\nℹ pass 16\nℹ fail 0\nℹ skipped 0\n"), 16);
+  assert.equal(readPassedTestCount("# tests 19\n# pass 16\n# fail 1\n# skipped 2\n"), 16);
+  assert.equal(readPassedTestCount("\u001b[32mℹ pass 16\u001b[0m\nℹ fail 0\n"), 16);
+  assert.equal(readPassedTestCount("✔ passes 16 cases\nℹ tests 16\n"), 0);
+  assert.equal(readPassedTestCount("ℹ pass 16\n"), 0);
+  assert.equal(readPassedTestCount("# pass 0\n# fail 0\n# skipped 16\n"), 0);
+  assert.equal(readPassedTestCount("Tests  154 passed (154)\nTests  3 passed (3)\n"), 157);
 });
 
 test("the browser-flow parser reads the printed combo summary and its guard demands all combos plus real steps", () => {

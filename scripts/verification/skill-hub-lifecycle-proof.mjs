@@ -34,6 +34,7 @@ const checks = [
   },
   {
     label: "SQLite artifact, snapshot, immutable intent, settlement, and migration parity",
+    env: { GOATCITADEL_SQLITE_SCHEMA_TEMPLATE: "0" },
     args: [
       ...pnpmPrefix,
       "--filter",
@@ -45,6 +46,7 @@ const checks = [
       "src/skill-hub-artifact-repo.test.ts",
       "src/skill-hub-operation-repo.test.ts",
       "src/skill-hub-lifecycle-schema-parity.test.ts",
+      "src/sqlite-schema-template.test.ts",
       "src/postgres-migration-integrity.test.ts",
     ],
   },
@@ -59,6 +61,9 @@ const checks = [
   {
     label:
       "Gateway production admission, callable-catalog, operator API, revocation hydration, and approved lifecycle runtime proof",
+    // The storage group above still applies fresh migrations and proves the
+    // existing schema-only template preserves isolation. Reuse it only here.
+    env: { GOATCITADEL_SQLITE_SCHEMA_TEMPLATE: "1" },
     args: [
       ...pnpmPrefix,
       "--filter",
@@ -67,6 +72,7 @@ const checks = [
       "vitest",
       "run",
       "--reporter=dot",
+      "--maxWorkers=1",
       "src/services/callable-skill-activation.test.ts",
       "src/services/capability-system-service.loop32.test.ts",
       "src/services/skill-import-service.test.ts",
@@ -164,7 +170,7 @@ try {
     const checkStartedAt = Date.now();
     const result = spawnSync(pnpm, check.args, {
       cwd: repoRoot,
-      env: process.env,
+      env: { ...process.env, ...check.env },
       encoding: "utf8",
       stdio: "inherit",
       windowsHide: true,
@@ -174,6 +180,7 @@ try {
       status: result.status === 0 ? "passed" : "failed",
       exitCode: result.status,
       durationMs: Date.now() - checkStartedAt,
+      ...(check.env ? { sqliteSchemaTemplate: check.env.GOATCITADEL_SQLITE_SCHEMA_TEMPLATE === "1" } : {}),
     });
     if (result.error) throw result.error;
     if (result.status !== 0) {

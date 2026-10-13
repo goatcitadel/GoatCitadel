@@ -84,7 +84,7 @@ function isMcpRequesterScopeActorSourceValue(value: unknown): value is McpReques
  * incomplete resolver configuration. A server flipped to static/disabled
  * mid-flight therefore reads as drift on the next `assertCurrent`.
  */
-async function readLiveRequesterScopedServerSnapshot(
+export async function readLiveRequesterScopedServerSnapshot(
   host: Pick<McpRequesterScopedCompositionHost, "listMcpServers">,
   serverId: string,
 ): Promise<McpRequesterScopedServerSnapshot | undefined> {

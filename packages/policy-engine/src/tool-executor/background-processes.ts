@@ -20,6 +20,7 @@ interface BackgroundProcessEntry {
   cwd?: string;
   child: ChildProcess;
   startedAt: number;
+  owner?: Readonly<{ sessionId: string; turnId?: string }>;
 }
 
 // Module-level registry of detached background shell processes so the session/
@@ -41,12 +42,12 @@ export function terminateShellProcessTree(
   });
 }
 
-export function registerBackgroundProcess(child: ChildProcess, command: string, cwd?: string): void {
+export function registerBackgroundProcess(child: ChildProcess, command: string, cwd?: string, owner?: { sessionId: string; turnId?: string }): void {
   const pid = child.pid;
   if (typeof pid !== "number") {
     return;
   }
-  backgroundProcesses.set(pid, { pid, command, cwd, child, startedAt: Date.now() });
+  backgroundProcesses.set(pid, { pid, command, cwd, child, startedAt: Date.now(), ...(owner ? { owner: Object.freeze({ ...owner }) } : {}) });
   // Drop the registry entry once the job exits on its own so the map does
   // not accumulate stale, already-dead pids.
   child.once("exit", () => {
@@ -90,4 +91,13 @@ export function killAllBackgroundProcesses(): number {
     }
   }
   return killed;
+}
+
+/** Requests termination only for processes created by this exact admitted turn. */
+export function killTurnBackgroundProcesses(owner: { sessionId: string; turnId: string }): number {
+  if (!owner.sessionId.trim() || !owner.turnId.trim()) throw new Error("Background process cleanup requires an exact turn owner.");
+  const pids = [...backgroundProcesses.values()]
+    .filter((entry) => entry.owner?.sessionId === owner.sessionId && entry.owner.turnId === owner.turnId)
+    .map((entry) => entry.pid);
+  return pids.reduce((count, pid) => count + (killBackgroundProcess(pid) ? 1 : 0), 0);
 }

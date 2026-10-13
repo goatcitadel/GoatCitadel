@@ -610,6 +610,15 @@ export function buildCanonicalPostgresSchemaShapeManifest(
   if (migrations.some(isCanonicalSchemaAuthorityV2Migration)) {
     manifest = applyCanonicalSchemaAuthorityV2Postconditions(manifest);
   }
+  if (migrations.some((migration) => isCanonicalMigration(migration, 204, "chat_routed_context_admission"))) {
+    // Migration 204 replaces the historical v2-only check inside dynamic DDL.
+    // The new named v3 authority-union check remains in the parsed manifest.
+    // Do not reintroduce the old check from migration 140's postconditions.
+    manifest = { ...manifest, tables: manifest.tables.map((table) => table.name === "chat_routed_context_snapshots"
+      ? { ...table, constraints: table.constraints.filter((constraint) =>
+          constraint.name !== "chat_routed_context_snapshots_schema_version_v2_check") }
+      : table) };
+  }
   return manifest;
 }
 

@@ -7,6 +7,7 @@ import {
   type ToolAccessEvaluateRequest,
   type ToolInvokeRequest,
   type McpStaticToolBinding,
+  type McpStaticAdmissionConnection,
 } from "@goatcitadel/contracts";
 import {
   createMcpToolPolicyBinding,
@@ -16,16 +17,20 @@ import {
 import { verifyChatTurnCapabilityProfile, type AsyncStorage } from "@goatcitadel/storage";
 import { assertStaticMcpToolBindingIntegrity } from "../mcp-static-catalog.js";
 import { assertMcpRequesterResolutionBindingIntegrity } from "../mcp-requester-resolution.js";
+import { readMcpRequesterScopedTurnContext } from "../mcp-requester-resolution-service.js";
 import {
-  readMcpRequesterScopedTurnContext,
-  type McpRequesterScopedTurnContextHandle,
-} from "../mcp-requester-resolution-service.js";
+  readMcpRequesterAdmissionTurnContext,
+  type McpChatTurnContextHandle,
+  type McpRequesterAdmissionTurnContextHandle,
+} from "../mcp-requester-admission-context.js";
+import { assertNativeMcpChatToolSchema, type NativeMcpChatToolSchema } from "./native-mcp-chat-catalog.js";
 
 export interface NativeMcpChatToolBinding {
   readonly serverId: string;
   readonly nativeToolName: string;
   readonly policyBinding: McpToolPolicyBinding;
   readonly staticBinding?: McpStaticToolBinding;
+  readonly staticAdmissionBinding?: McpStaticAdmissionConnection;
 }
 
 export function isNativeMcpToolName(toolName: string): boolean {
@@ -45,9 +50,34 @@ function invalidBinding(): never {
 export async function resolveNativeMcpChatToolBinding(
   storage: Pick<AsyncStorage, "chatTurnCapabilityProfiles">,
   request: ToolAccessEvaluateRequest & Partial<Pick<ToolInvokeRequest, "turnId">>,
-  handle: McpRequesterScopedTurnContextHandle | undefined,
+  handle: McpChatTurnContextHandle | undefined,
+  restoreAdmissionSchemas?: (handle: McpRequesterAdmissionTurnContextHandle) => Promise<NativeMcpChatToolSchema[]>,
 ): Promise<NativeMcpChatToolBinding | undefined> {
   if (!isNativeMcpToolName(request.toolName)) return undefined;
+  const admission = readMcpRequesterAdmissionTurnContext(handle);
+  if (admission) {
+    const scope = admission.scope;
+    if (
+      !restoreAdmissionSchemas ||
+      request.sessionId !== scope.sessionId ||
+      request.workspaceId !== scope.workspaceId ||
+      request.policyContext?.authActorId !== scope.actorId ||
+      request.policyContext.authActorSource !== scope.actorSource ||
+      (request.turnId !== undefined && request.turnId !== scope.turnId)
+    )
+      invalidBinding();
+    const schemas = await restoreAdmissionSchemas(handle as McpRequesterAdmissionTurnContextHandle);
+    const selected = schemas.filter((schema) => schema.canonicalName === request.toolName);
+    const schema = selected.length === 1 ? selected[0] : undefined;
+    if (!schema || Boolean(schema.admissionBinding) === Boolean(schema.staticAdmissionBinding)) invalidBinding();
+    assertNativeMcpChatToolSchema(schema);
+    return Object.freeze({
+      serverId: schema.candidate.serverId,
+      nativeToolName: schema.candidate.tool.rawRemoteToolName,
+      policyBinding: schema.policyBinding,
+      ...(schema.staticAdmissionBinding ? { staticAdmissionBinding: schema.staticAdmissionBinding } : {}),
+    });
+  }
   const context = readMcpRequesterScopedTurnContext(handle);
   if (
     !context ||
@@ -86,15 +116,34 @@ export async function resolveNativeMcpChatToolBinding(
     try {
       verifyChatTurnCapabilityProfile(profile);
       assertStaticMcpToolBindingIntegrity(staticBinding);
-    } catch { invalidBinding(); }
-    const scopeHash = createHash("sha256").update(canonicalJsonString(mcpStaticToolScopeHashMaterial({
-      profileId: profile.profileId, turnId: identity.turnId, sessionId: identity.sessionId, workspaceId: identity.workspaceId,
-      authActorId: context.actorId, authActorSource: context.actorSource,
-    }))).digest("hex");
+    } catch {
+      invalidBinding();
+    }
+    const scopeHash = createHash("sha256")
+      .update(
+        canonicalJsonString(
+          mcpStaticToolScopeHashMaterial({
+            profileId: profile.profileId,
+            turnId: identity.turnId,
+            sessionId: identity.sessionId,
+            workspaceId: identity.workspaceId,
+            authActorId: context.actorId,
+            authActorSource: context.actorSource,
+          }),
+        ),
+      )
+      .digest("hex");
     if (staticBinding.profileScopeSha256 !== scopeHash || staticBinding.toolName !== request.toolName) invalidBinding();
-    return Object.freeze({ serverId: staticBinding.serverId, nativeToolName: staticBinding.nativeToolName, staticBinding,
-      policyBinding: createMcpToolPolicyBinding({ canonicalName: request.toolName, serverId: staticBinding.serverId,
-        nativeToolName: staticBinding.nativeToolName }) });
+    return Object.freeze({
+      serverId: staticBinding.serverId,
+      nativeToolName: staticBinding.nativeToolName,
+      staticBinding,
+      policyBinding: createMcpToolPolicyBinding({
+        canonicalName: request.toolName,
+        serverId: staticBinding.serverId,
+        nativeToolName: staticBinding.nativeToolName,
+      }),
+    });
   }
   const binding = selected.length === 1 ? selected[0]?.mcpRequesterResolution : undefined;
   if (!binding) invalidBinding();

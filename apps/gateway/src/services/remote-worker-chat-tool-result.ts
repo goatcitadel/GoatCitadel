@@ -6,6 +6,7 @@ import {
 } from "@goatcitadel/contracts";
 import type { AsyncStorage, RemoteWorkerInferenceRequestRecord } from "@goatcitadel/storage";
 import { buildPersistedToolContinuationResult, serializeToolResultForModel } from "./chat-tool-result-projection.js";
+import { remoteWorkerChatEvidence, type RemoteWorkerChatEvidence } from "./remote-worker-chat-authority.js";
 
 export type RemoteWorkerChatToolResultStorage = Pick<AsyncStorage, "remoteWorkerEffects" | "chatToolRuns" | "approvals">;
 
@@ -14,7 +15,7 @@ export type RemoteWorkerChatToolResultStorage = Pick<AsyncStorage, "remoteWorker
 export async function readCanonicalWorkerModelToolResult(
   storage: RemoteWorkerChatToolResultStorage,
   record: RemoteWorkerInferenceRequestRecord,
-  profile: ChatTurnCapabilityProfileRecord,
+  authority: ChatTurnCapabilityProfileRecord | RemoteWorkerChatEvidence,
   call: RemoteWorkerInferenceToolCall,
 ) {
   const intents = await storage.remoteWorkerEffects.listIntents(
@@ -24,7 +25,7 @@ export async function readCanonicalWorkerModelToolResult(
   );
   const intent = intents.find((entry) => entry.workerIdempotencyKey === modelToolIntentKey(record, call));
   if (!intent) return undefined;
-  const selected = profile.selection.tools.find((tool) => tool.modelName === call.modelToolName);
+  const selected = remoteWorkerChatEvidence(authority).tools.find((tool) => tool.modelName === call.modelToolName);
   if (
     !selected ||
     intent.effectSelector !== selected.canonicalName ||

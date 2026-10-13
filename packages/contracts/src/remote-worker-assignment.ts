@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- Assignment, lease, replay, and event-chain invariants intentionally share one audited contract boundary. */
 import { canonicalJsonString } from "./canonical-json.js";
+import { normalizeRemoteWorkerCapabilityBinding, type RemoteWorkerCapabilityBinding } from "./remote-worker-capability-binding.js";
 import {
   REMOTE_WORKER_CAPABILITY_CLASSES,
   REMOTE_WORKER_PROTOCOL_VERSION,
@@ -51,7 +52,7 @@ export interface RemoteWorkerAssignmentParentContext {
   readonly turnId?: string;
 }
 
-export interface RemoteWorkerAssignmentManifest {
+export interface RemoteWorkerAssignmentManifest extends RemoteWorkerCapabilityBinding {
   readonly schemaVersion: typeof REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION;
   readonly protocolVersion: typeof REMOTE_WORKER_PROTOCOL_VERSION;
   readonly registryWorkspaceId: string;
@@ -60,7 +61,6 @@ export interface RemoteWorkerAssignmentManifest {
   readonly taskId: string;
   readonly sessionId?: string;
   readonly turnId?: string;
-  readonly capabilityProfileSha256: string;
   readonly contextSnapshotSha256: string;
   readonly toolEffectPostureSha256: string;
   readonly pathJailSha256: string;
@@ -419,6 +419,7 @@ export function normalizeRemoteWorkerAssignmentManifest(
       "sessionId",
       "turnId",
       "capabilityProfileSha256",
+      "admissionReference",
       "contextSnapshotSha256",
       "toolEffectPostureSha256",
       "pathJailSha256",
@@ -434,7 +435,7 @@ export function normalizeRemoteWorkerAssignmentManifest(
       "maxArtifactBytes",
     ],
     "assignment manifest",
-    ["sessionId", "turnId"],
+    ["sessionId", "turnId", "capabilityProfileSha256", "admissionReference"],
   );
   if (input.schemaVersion !== REMOTE_WORKER_ASSIGNMENT_MANIFEST_SCHEMA_VERSION) {
     throw new TypeError("Remote worker assignment manifest schema version is unsupported.");
@@ -481,7 +482,7 @@ export function normalizeRemoteWorkerAssignmentManifest(
           sessionId: identifier(input.sessionId, "sessionId"),
           turnId: identifier(input.turnId!, "turnId"),
         }),
-    capabilityProfileSha256: digest(input.capabilityProfileSha256, "capabilityProfileSha256"),
+    ...normalizeRemoteWorkerCapabilityBinding(input),
     contextSnapshotSha256: digest(input.contextSnapshotSha256, "contextSnapshotSha256"),
     toolEffectPostureSha256: digest(input.toolEffectPostureSha256, "toolEffectPostureSha256"),
     pathJailSha256: digest(input.pathJailSha256, "pathJailSha256"),

@@ -1,3 +1,4 @@
+import { applyReleaseBoundSkillRetrust } from "./release-bound-skill-retrust-owner.js";
 /* eslint-disable max-lines */
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
@@ -68,14 +69,12 @@ import {
   classifyToolEffectPotential,
   ConflictError,
   NotFoundError,
-  redactSecretText,
   redactStructuredSecrets,
   SemanticValidationError,
   ValidationError,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import {
-  BUNDLED_SKILL_LOCK_VERSION,
   resolveBundledSkillLockEntry,
   type BundledSkillLockEntry,
 } from "@goatcitadel/skills";
@@ -534,7 +533,7 @@ export class CapabilitySystemService {
       if (retrust) {
         // The loaded tree is exactly what the release lock vouches for: the hash change is the
         // release shipping new bytes, not tampering.
-        return await this.applyReleaseBoundSkillRetrust(skill, existing, projected, retrust);
+        return await applyReleaseBoundSkillRetrust(this.options, skill, existing, projected, retrust);
       }
       if (!integrityMatches) {
         projected.lifecycleState = "candidate";
@@ -575,111 +574,6 @@ export class CapabilitySystemService {
       return existing;
     }
     return await this.options.storage.skillLifecycle.upsert(projected);
-  }
-
-  /**
-   * Apply a release-bound re-trust: write-ahead audit receipt, re-read the row to make sure
-   * nothing changed it meanwhile, commit the re-bound row, then emit the live signal. A receipt
-   * that cannot be written fails closed for this skill only (non-callable, with the reason on the
-   * row) so one audit failure does not hide the rest of the catalog.
-   */
-  private async applyReleaseBoundSkillRetrust(
-    skill: LoadedSkill,
-    existing: SkillLifecycleRecord,
-    projected: SkillLifecycleRecord,
-    retrust: ReleaseBoundSkillRetrust,
-  ): Promise<SkillLifecycleRecord> {
-    const previous = existing.provenance?.contentIntegrity;
-    const current = retrust.lockEntry;
-    try {
-      await this.options.storage.audit.append(
-        "approvals",
-        {
-          event: "skill_lifecycle.release_retrusted",
-          schemaVersion: SKILL_LIFECYCLE_RETRUST_AUDIT_VERSION,
-          skillId: skill.skillId,
-          source: skill.source,
-          category: projected.category,
-          actorId: BUNDLED_SKILL_RELEASE_LOCK_ACTOR_ID,
-          previousLifecycleState: existing.lifecycleState,
-          lifecycleState: projected.lifecycleState,
-          previousTrustLabel: existing.trustLabel,
-          trustLabel: projected.trustLabel,
-          previousContentIntegrity: previous
-            ? {
-                manifestVersion: previous.manifestVersion,
-                treeSha256: previous.treeSha256,
-                fileCount: previous.fileCount,
-                totalBytes: previous.totalBytes,
-                verified: previous.verified,
-              }
-            : null,
-          contentIntegrity: {
-            manifestVersion: current.manifestVersion,
-            treeSha256: current.treeSha256,
-            fileCount: current.fileCount,
-            totalBytes: current.totalBytes,
-            verified: true,
-          },
-          lockVersion: BUNDLED_SKILL_LOCK_VERSION,
-          lockEntry: { ...current },
-          occurredAt: projected.updatedAt,
-        },
-        {
-          // One receipt per distinct transition of a distinct stored row; concurrent duplicates
-          // of the same transition collapse, while A->B->A cycles keep their own receipts.
-          deliveryId: `skill-lifecycle-release-retrust:${skill.skillId}:${previous?.treeSha256 ?? "none"}:${current.treeSha256}:${existing.updatedAt}`,
-        },
-      );
-    } catch (error) {
-      const reason = redactSecretText(error instanceof Error ? error.message : String(error)).value.slice(0, 160);
-      const demoted = await this.commitSkillLifecycleIfUnchanged(existing, {
-        ...projected,
-        lifecycleState: "candidate",
-        trustLabel: EXACT_BYTE_REVIEW_TRUST_LABEL,
-        reviewWarning: `Release lock matched this skill tree but the re-trust audit receipt could not be written (${reason}); the skill stays non-callable until the receipt succeeds.`,
-      });
-      return demoted.record;
-    }
-    const committed = await this.commitSkillLifecycleIfUnchanged(existing, projected);
-    if (committed.changed) {
-      // Another writer owns the newer row; its truth wins and the next read re-evaluates from it.
-      return committed.record;
-    }
-    const stored = committed.record;
-    try {
-      await this.options.publishRealtime("skill_lifecycle_retrusted", "capabilities", {
-        skillId: skill.skillId,
-        source: skill.source,
-        previousLifecycleState: existing.lifecycleState,
-        lifecycleState: stored.lifecycleState,
-        previousTreeSha256: previous?.treeSha256,
-        treeSha256: current.treeSha256,
-        lockVersion: BUNDLED_SKILL_LOCK_VERSION,
-      });
-    } catch (realtimeError) {
-      void realtimeError;
-      // The lifecycle row and its audit receipt are canonical; realtime is an advisory projection.
-    }
-    return stored;
-  }
-
-  /**
-   * Compare-and-swap for a skill lifecycle row inside one immediate transaction: the re-read and
-   * the upsert cannot be interleaved with another lifecycle writer, so a row revoked or otherwise
-   * changed since `existing` was read is never overwritten by a stale projection.
-   */
-  private async commitSkillLifecycleIfUnchanged(
-    existing: SkillLifecycleRecord,
-    record: SkillLifecycleRecord,
-  ): Promise<{ changed: boolean; record: SkillLifecycleRecord }> {
-    return await this.options.storage.runImmediateTransaction(async () => {
-      const latest = await this.options.storage.skillLifecycle.find(existing.skillId);
-      if (!latest || latest.lifecycleState !== existing.lifecycleState || latest.updatedAt !== existing.updatedAt) {
-        return { changed: true, record: latest ?? existing };
-      }
-      return { changed: false, record: await this.options.storage.skillLifecycle.upsert(record) };
-    });
   }
 
   public async listCatalog(
@@ -5178,9 +5072,6 @@ function skillLifecycleExactIntegrityMatches(existing: SkillLifecycleRecord, pro
 
 /** Trust label shared by every exact-byte demotion of a non-imported skill row. */
 const EXACT_BYTE_REVIEW_TRUST_LABEL = "Exact-byte review required";
-const SKILL_LIFECYCLE_RETRUST_AUDIT_VERSION = "goatcitadel.skill-lifecycle-retrust-audit.v1" as const;
-/** Distinct from the fail-safe disable/revoke authority: this actor only ever restores release truth. */
-const BUNDLED_SKILL_RELEASE_LOCK_ACTOR_ID = "system:bundled-skill-release-lock" as const;
 
 interface ReleaseBoundSkillRetrust {
   lockEntry: BundledSkillLockEntry;

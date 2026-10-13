@@ -16,6 +16,7 @@ const artifactCritiqueTasks = new Set<Promise<unknown>>();
 const artifactCritiqueLog = logger.child("html-artifact-critique");
 import * as chatMessageRouteRuntime from "./chat-message-route-runtime.js";
 import * as chatSessionService from "./chat-session-service.js";
+import { inspectAdmittedChatRoutedContext } from "./chat-routed-context-inspection.js";
 import { assertCallerPolicyScopeBound } from "./chat-policy-scope-service.js";
 import {
   buildWorkspaceExplorerReport,
@@ -532,6 +533,8 @@ export function composeChatRouteDependencies(
       }),
     getChatThread: (sessionId, options) =>
       chatMessageRouteRuntime.getChatThread(chatMessageRouteRuntimeHost, sessionId, options),
+    getChatTurnRoutedContext: (sessionId: string, turnId: string, options?: { workspaceId?: string; operatorId?: string }) =>
+      inspectAdmittedChatRoutedContext(gateway, sessionId, turnId, options),
     getChatTurnCapabilityProfile: (
       sessionId: string,
       turnId: string,

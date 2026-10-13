@@ -87,6 +87,7 @@ import type {
   ChatStreamChunk,
   ChatThreadResponse,
   ChatTurnCapabilityProfileEnvelope,
+  ChatRoutedContextInspectionEnvelope,
   ChatUserInputPromptAnswerRequest,
   ChatUserInputPromptAnswerResponse,
   ChatSecureConfigurationSubmitRequest,
@@ -1118,6 +1119,16 @@ export async function fetchChatTurnCapabilityProfile(
   const suffix = query.size > 0 ? `?${query.toString()}` : "";
   return request<ChatTurnCapabilityProfileEnvelope>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/capability-profile${suffix}`,
+  );
+}
+
+export async function fetchChatTurnRoutedContext(
+  sessionId: string, turnId: string, workspaceId?: string,
+): Promise<ChatRoutedContextInspectionEnvelope> {
+  const query = new URLSearchParams();
+  if (workspaceId?.trim()) query.set("workspaceId", workspaceId.trim());
+  return request<ChatRoutedContextInspectionEnvelope>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/routed-context${query.size ? `?${query}` : ""}`,
   );
 }
 

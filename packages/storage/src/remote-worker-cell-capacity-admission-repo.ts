@@ -4,6 +4,7 @@ import {
   normalizeRemoteWorkerCellCapacityInventory,
   accountRemoteWorkerCellCapacityInventory,
   canonicalJsonString,
+  sameRemoteWorkerCapabilityBinding,
   type RemoteWorkerCellCapacityInventory,
   type RemoteWorkerCellCapacityInventoryBinding,
   type RemoteWorkerCellCapacityAccounting,
@@ -273,14 +274,15 @@ export class RemoteWorkerCellCapacityAdmissionRepository {
   private lockActiveCell(input: RemoteWorkerCellCapacityAuthority): RemoteWorkerCellRecord {
     const active = this.assertAssignment(input);
     const bindings = this.db.prepare(`SELECT assignment_manifest_sha256, path_jail_sha256,
-      capability_profile_sha256, context_snapshot_sha256, tool_effect_posture_sha256
+      capability_profile_sha256, admission_reference_json, context_snapshot_sha256, tool_effect_posture_sha256
       FROM remote_worker_cells WHERE ${WHERE}${this.db.dialect === "postgres" ? " FOR UPDATE" : ""}`)
-      .get<{ assignment_manifest_sha256: string; path_jail_sha256: string; capability_profile_sha256: string;
+      .get<{ assignment_manifest_sha256: string; path_jail_sha256: string; capability_profile_sha256: string | null; admission_reference_json: string | null;
         context_snapshot_sha256: string; tool_effect_posture_sha256: string }>(keyOf(input));
     const cell = this.cells.getCell(input);
     if (!cell || !bindings || cell.workerId !== active.generation.workerId || cell.workerGeneration !== active.generation.workerGeneration ||
         bindings.assignment_manifest_sha256 !== active.assignment.manifestSha256 || bindings.path_jail_sha256 !== active.assignment.manifest.pathJailSha256 ||
-        bindings.capability_profile_sha256 !== active.assignment.manifest.capabilityProfileSha256 ||
+        !sameRemoteWorkerCapabilityBinding({ capabilityProfileSha256: bindings.capability_profile_sha256 ?? undefined,
+          admissionReference: bindings.admission_reference_json ? JSON.parse(bindings.admission_reference_json) : undefined }, active.assignment.manifest) ||
         bindings.context_snapshot_sha256 !== active.assignment.manifest.contextSnapshotSha256 ||
         bindings.tool_effect_posture_sha256 !== active.assignment.manifest.toolEffectPostureSha256) {
       throw conflict("Cell capacity admission requires its canonical assignment profile.");

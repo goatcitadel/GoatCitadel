@@ -19,6 +19,7 @@ import type {
   McpServerTemplateRecord,
   McpTemplateDiscoveryResult,
   McpToolRecord,
+  McpServerTestEvidence,
 } from "@goatcitadel/contracts";
 import { request } from "./client-core.js";
 
@@ -28,6 +29,11 @@ export async function fetchMcpServers(): Promise<{ items: McpServerRecord[] }> {
 
 export async function fetchMcpServer(serverId: string): Promise<McpServerRecord> {
   return request<McpServerRecord>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}`, { cache: "no-store" });
+}
+
+export async function fetchMcpServerTestEvidence(serverId: string, workspaceId: string): Promise<McpServerTestEvidence> {
+  const query = new URLSearchParams({ workspaceId });
+  return request<McpServerTestEvidence>(`/api/v1/mcp/servers/${encodeURIComponent(serverId)}/test-evidence?${query}`, { cache: "no-store" });
 }
 
 export async function fetchMcpTemplates(): Promise<{ items: Array<McpServerTemplateRecord & { installed: boolean }> }> {

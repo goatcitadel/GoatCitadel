@@ -27,7 +27,8 @@ export interface ChatFanoutInvocationRecord {
   status: ChatFanoutInvocationStatus;
   childCount: number;
   /** Immutable, bounded child plan used only to reconstruct a crashed aggregate. */
-  subtasks: Array<{ objective: string; label?: string; expectedOutput?: string }>;
+  subtasks: Array<{ objective: string; label?: string; expectedOutput?: string;
+    resultSchema?: import("./chat-delegation-result.js").ChatDelegationResultSchema }>;
   grantId: string;
   reservedActivations: number;
   reservedBudgetUsd: number;
@@ -37,6 +38,13 @@ export interface ChatFanoutInvocationRecord {
   capabilityProfileHash?: string;
   /** Frozen, secret-free policy profile digest. */
   policyProfileHash?: string;
+  /** Exact parent admission evidence for live-capability fanout; historical rows omit it. */
+  parentAdmission?: {
+    admissionId: string;
+    sessionIncarnationId: string;
+    materialSha256: string;
+    featureReferenceSha256: string;
+  };
   /** Frozen binding of the active project identity/revision. */
   projectBindingHash: string;
   /** Frozen authority binding; recovery still rechecks live grant status. */
