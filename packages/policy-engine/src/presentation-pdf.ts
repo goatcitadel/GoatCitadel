@@ -226,10 +226,14 @@ async function embedVisuals(
 function drawSlideFrame(context: SlideContext, deckTitle: string): void {
   const { page, theme, index } = context;
   page.rect(0, 0, PAGE_W, PAGE_H, theme.background);
-  page.rect(0, 0, 9.4, PAGE_H, theme.accent);
+  // No accent side stripe (decoration, not hierarchy); the page number is wayfinding, set quietly.
   page.line(37, 500, 908, 500, mixPdfColors(theme.background, theme.border, 0.6), 1);
   const number = String(index + 1).padStart(2, "0");
-  page.text(908 - measureWinAnsi(number, "bold", 10), 516, number, { font: "bold", size: 10, color: theme.accent });
+  page.text(908 - measureWinAnsi(number, "regular", 10), 516, number, {
+    font: "regular",
+    size: 10,
+    color: theme.muted,
+  });
   if (index > 0) {
     const footer = truncateWinAnsi(toWinAnsiBytes(deckTitle), "regular", 10, 600);
     page.text(37, 516, footer, { font: "regular", size: 10, color: theme.muted });
@@ -300,12 +304,8 @@ function drawCover(context: SlideContext): void {
   }
   if (image) {
     drawImage(context, { x: 580, y: 52, w: 331, h: 410 });
-    return;
   }
-  // Geometric motif stands in for a cover visual when none was provided.
-  page.rect(700, 330, 150, 110, mixPdfColors(theme.surface, theme.accent, 0.85));
-  page.rect(760, 280, 110, 90, mixPdfColors(theme.surface, theme.accent2, 0.8));
-  page.rect(820, 360, 60, 60, mixPdfColors(theme.surface, theme.accent3, 0.85));
+  // Without a provider image the cover is typographic: title, rule, and subtitle carry it.
 }
 
 function drawContentTitle(context: SlideContext): void {
@@ -325,7 +325,7 @@ function drawContentTitle(context: SlideContext): void {
 
 function drawStacked(context: SlideContext): void {
   drawContentTitle(context);
-  const { page, theme, image } = context;
+  const { image } = context;
   const cardWidth = image ? 508 : 836;
   const imageLeft = Boolean(image && context.index % 2 === 0);
   const imageWidth = 836 - cardWidth - 18;
@@ -335,7 +335,8 @@ function drawStacked(context: SlideContext): void {
     w: cardWidth,
     h: BODY_BOTTOM - BODY_TOP,
   };
-  page.rect(card.x, card.y, card.w, card.h, theme.surface, { color: theme.border, width: 0.75 });
+  // Narrative bullets sit on the background; the bordered card was a default container, not a
+  // grouping, so only the geometry survives (the image split still uses it).
   drawBullets(
     context,
     context.slide.bullets.map((bullet) => bulletRuns(bullet, context.sources)),

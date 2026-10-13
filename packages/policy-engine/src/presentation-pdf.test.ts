@@ -250,6 +250,52 @@ describe("createPresentationPdf", () => {
     expect(result.manifest.visualCount).toBe(0);
   });
 
+  it("draws a quiet frame, a plain cover, and no body card on stacked pages", async () => {
+    const slides: PresentationSlide[] = [
+      { title: "Daily Walking", bullets: ["Why thirty minutes a day matters"] },
+      {
+        title: "Morning versus evening",
+        bullets: [
+          "Morning: daylight anchors the circadian rhythm and protects the habit from the day's surprises",
+          "Evening: eases digestion and winds down screen time, but competes with family and fatigue",
+          "Either works; the consistent slot wins",
+          "Pick the slot you can keep on a bad day, not the ideal one",
+        ],
+      },
+      {
+        title: "A four-week plan",
+        bullets: [
+          "Week 1: ten minutes after lunch, every day",
+          "Week 2: add a second ten-minute walk after dinner",
+          "Week 3: merge into one twenty-five-minute route",
+          "Week 4: thirty minutes with one hill or set of stairs",
+          "Track only the days you walked, never the pace",
+        ],
+      },
+    ];
+
+    const result = await createPresentationPdf({
+      title: "Daily Walking",
+      slides,
+      sources: [],
+      design: designFor("Daily Walking", slides),
+    });
+
+    const streams = contentStreams(result.buffer);
+    const all = streams.join("\n");
+    // No 9.4 pt accent stripe down the left edge of any page.
+    expect(all).not.toContain(" 9.4 540 re");
+    // The page number is set in the regular face, never the bold accent.
+    expect(all).toMatch(/BT \/F1 10 Tf [\d.]+ [\d.]+ [\d.]+ rg [\d.]+ [\d.]+ Td \(02\) Tj ET/u);
+    expect(all).not.toMatch(/BT \/F2 10 Tf [^\n]*\(02\) Tj ET/u);
+    // The cover carries title, rule, and subtitle only: no three-rectangle motif.
+    expect(all).not.toContain(" 150 110 re");
+    // A stacked (narrative) page draws bullets on the background, not inside the full-width card.
+    expect(all).not.toContain("55 54 836 382 re B");
+    expect(all).toContain("(Either works; the consistent slot wins)");
+    expect(result.layoutNames).toContain("image-text");
+  });
+
   it("keeps every bullet on a matrix slide that has no table data", async () => {
     const bullets = ["First venue closes at 7 PM.", "Second venue closes at 9 PM.", "Third venue stays open late."];
     const slides: PresentationSlide[] = [{ title: "Venues", archetype: "matrix", bullets }];
