@@ -3,9 +3,7 @@ import { mapProbeStepsToChecks, parseJsonRecord, parseJsonValue, inferFailureCat
 /* eslint-disable max-lines -- Live probe coverage stays in one file so probe heuristics and result shaping remain traceable together. */
 import { randomUUID } from "node:crypto";
 import {
-  redactSecretText,
   type ChannelProbeReport,
-  type ChannelSetupFailureCategory,
   type ConnectorDiagnosticReport,
   type DiscordRuntimeMode,
   type DiscordRuntimeStatus,

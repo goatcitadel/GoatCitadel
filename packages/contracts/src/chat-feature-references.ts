@@ -4,7 +4,7 @@ const identifier = z
   .string()
   .min(1)
   .max(512)
-  .regex(/^[^\u0000-\u001f]+$/u);
+  .refine((value) => [...value].every((character) => character.charCodeAt(0) >= 32));
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const routeTarget = z.object({ providerId: identifier, model: identifier }).strict();
 const ownerReference = z.object({ ownerId: identifier, revision: identifier, sha256: digest }).strict();

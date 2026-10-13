@@ -16,6 +16,7 @@ type Props = Pick<
 >;
 
 export function ChatProviderFallbackSettings(props: Props) {
+  const { loadModelsForProvider } = props;
   const saved = props.prefs?.providerFallback;
   const [providerId, setProviderId] = useState(saved?.providerId ?? "");
   const [model, setModel] = useState(saved?.model ?? "");
@@ -34,9 +35,8 @@ export function ChatProviderFallbackSettings(props: Props) {
   useEffect(() => {
     let current = true;
     setModels([]);
-    if (providerId && props.loadModelsForProvider) {
-      void props
-        .loadModelsForProvider(providerId)
+    if (providerId && loadModelsForProvider) {
+      void loadModelsForProvider(providerId)
         .then((next) => {
           if (current) setModels(next);
         })
@@ -48,7 +48,7 @@ export function ChatProviderFallbackSettings(props: Props) {
     return () => {
       current = false;
     };
-  }, [providerId, props.loadModelsForProvider]);
+  }, [providerId, loadModelsForProvider]);
   const changed =
     providerId !== (saved?.providerId ?? "") ||
     model.trim() !== (saved?.model ?? "") ||

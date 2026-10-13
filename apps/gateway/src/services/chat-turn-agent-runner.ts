@@ -1,7 +1,10 @@
 import { createChatWorkspaceDesignBrandResolver } from "./chat-turn-feature-runtime.js";
 import { filterFeatureContextToolSchema, bindFeatureContextRequest, assertFeatureTurnExternalDispatch,
   buildFeatureMcpTurnContext, buildFeatureMeshTurnContext, restoreFeatureTurnToolSchemas, resumeFeatureTurnApprovals } from "./chat-turn-feature-runtime.js";
-import { createMcpRequesterAdmissionTurnContext, type McpChatTurnContextHandle, type McpRequesterAdmissionTurnContextHandle } from "./mcp-requester-admission-context.js";
+import {
+  type McpChatTurnContextHandle,
+  type McpRequesterAdmissionTurnContextHandle,
+} from "./mcp-requester-admission-context.js";
 import {
   attachChatProviderFallbackAuthorization,
   markChatProviderFallbackRequired,
@@ -33,14 +36,13 @@ import {
 } from "./chat-turn-control.js";
 import { isExplicitLocalMcpTask } from "./chat-local-mcp-intent.js";
 import { discoveredToolNamesFromResult } from "./callable-capability-discovery.js";
-import { bindChatFeatureDispatchCheck } from "./chat-feature-dispatch-authority.js";
 import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
 import { claimDelegatedResultCorrection, resolveAdmittedDelegatedResultContract } from "./chat-delegated-result-contract.js";
 import { selectBoundedProviderSchemas, type ToolSchemaSelectionDiagnostics } from "./chat-tool-schema-budget.js";
 import { assertChatCapabilityBindingsCurrent } from "./chat-capability-current-binding.js";
 import { assertNativeMcpChatToolSchema, type NativeMcpChatToolSchema } from "./gateway/native-mcp-chat-catalog.js";
 import { assertMeshChatToolSchema, type MeshChatToolSchema } from "./gateway/mesh-chat-catalog.js";
-import { createMeshChatTurnContext, createMeshAdmissionTurnContext, type MeshChatTurnContextHandle } from "./gateway/mesh-chat-binding.js";
+import { type MeshChatTurnContextHandle } from "./gateway/mesh-chat-binding.js";
 import type {
   CapabilityCatalogEntry,
   ChatCitationRecord,
@@ -118,9 +120,6 @@ import {
 } from "../orchestration/live-data-detect.js";
 import { extractExplicitWebUrl } from "../orchestration/web-url-detect.js";
 import type { McpBrowserFallbackTarget } from "./mcp-runtime.js";
-import {
-  buildMcpRequesterScopedTurnContextFromCapabilityProfile,
-} from "./mcp-requester-resolution-service.js";
 import {
   looksLikePromptLabPromptPackMarkdownImportPrompt,
   looksLikePromptLabPromptPackOperatorSurfacePrompt,

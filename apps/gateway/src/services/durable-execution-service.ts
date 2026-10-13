@@ -285,7 +285,12 @@ type HookDeliveryWorkflowPayload = {
   entityId: string;
 };
 
-type DurableWorkflowRecoverability = { recoverable: boolean; reason?: string };
+type DurableWorkflowRecoverability = {
+  recoverable: boolean;
+  reason?: string;
+  /** Canonical output or tool evidence prevents replay; unrelated authority errors omit this hint. */
+  interrupted?: true;
+};
 
 export interface DurableWorkflowExecutionContext {
   signal?: AbortSignal;
@@ -302,6 +307,8 @@ export interface GeneralChatPostCommitEffectExecutionContext extends DurableWork
 export interface DurableWorkflowFinalizationContext {
   finalizationId: string;
   signal: AbortSignal;
+  /** Diagnostic provenance from the verified dead-owner failure checkpoint. */
+  interruptedByRestart?: true;
 }
 
 export interface DurableWorkflowExecutor {
@@ -3458,7 +3465,7 @@ export async function executeAutonomousChatPostCommit(
 async function isDurableChatTurnRecoverable(
   host: DurableChatTurnWorkflowHost,
   run: DurableRunRecord,
-): Promise<{ recoverable: boolean; reason?: string }> {
+): Promise<DurableWorkflowRecoverability> {
   const payload = parseDurableChatTurnPayload(run);
   if (!payload) {
     return {
@@ -3480,6 +3487,7 @@ async function isDurableChatTurnRecoverable(
     return {
       recoverable: false,
       reason: "Durable Chat output was emitted before interruption and cannot be safely replayed.",
+      interrupted: true,
     };
   }
   if (!trace) {
@@ -3506,6 +3514,7 @@ async function isDurableChatTurnRecoverable(
     return {
       recoverable: false,
       reason: "Assistant output was persisted while the Chat turn trace was still active.",
+      interrupted: true,
     };
   }
   const toolRuns = await host.storage.chatToolRuns.listByTurn(payload.turnId);
@@ -3516,6 +3525,7 @@ async function isDurableChatTurnRecoverable(
     return {
       recoverable: false,
       reason: "Durable chat run was interrupted after tool execution began and cannot be safely replayed.",
+      interrupted: true,
     };
   }
   return { recoverable: true };
@@ -3817,9 +3827,10 @@ async function markDurableChatTurnUnrecoverable(
   }
   const systemHeartbeat = Boolean(readExactSystemHeartbeatExecutionIdentity(run, payload));
   const executionFailure: ChatTurnFailureRecord = {
-    failureClass: "unknown",
+    failureClass: context?.interruptedByRestart ? "interrupted_by_restart" : "unknown",
     message: redactStructuredSecrets(reason).value.slice(0, 2000),
-    retryable: false,
+    retryable: Boolean(context?.interruptedByRestart),
+    ...(context?.interruptedByRestart ? { recommendedAction: "retry" as const } : {}),
   };
   const durableFailure = {
     runId: run.runId,
@@ -3834,7 +3845,13 @@ async function markDurableChatTurnUnrecoverable(
           host.publishRealtime(eventType, source, payload, options),
         recordDevDiagnostic: (input) => host.recordDevDiagnostic(input),
       },
-      { runId: run.runId, turnId: payload.turnId, failure: executionFailure },
+      {
+        runId: run.runId,
+        turnId: payload.turnId,
+        // Prefix recovery chooses continue_from_partial for a confirmed dead
+        // owner. A known execution failure keeps its original classification.
+        ...(context?.interruptedByRestart ? {} : { failure: executionFailure }),
+      },
     );
   }
   await host.storage.runImmediateTransaction(async () => {

@@ -418,8 +418,6 @@ export async function prepareRoutedContextAdmission(
     effectiveToolAutonomy,
     options,
   } = state;
-  let routedContextSnapshot: ChatRoutedContextSnapshotRecord;
-
   if ((!capabilityProfile && !featureAdmission?.references.providerRoute) || !effectiveProviderRoute) {
     throw new ConflictError({ message: "Routed context requires server-owned capability resolution." });
   }
@@ -476,7 +474,7 @@ export async function prepareRoutedContextAdmission(
     baseContextTools && effectiveToolAutonomy !== "manual"
       ? projectMcpAdmissionContextBudgetTools(baseContextTools, featureAdmission?.references)
       : baseContextTools;
-  routedContextSnapshot = buildChatRoutedContextSnapshot({
+  const routedContextSnapshot: ChatRoutedContextSnapshotRecord = buildChatRoutedContextSnapshot({
     resolved: resolvedSources,
     turnId,
     sessionId,

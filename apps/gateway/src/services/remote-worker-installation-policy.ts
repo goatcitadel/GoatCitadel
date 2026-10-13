@@ -1,7 +1,10 @@
 import { canonicalJsonString, normalizeRemoteWorkerRuntimeInstallRequest, remoteWorkerRuntimeInstallRequestSha256,
   type ToolAccessEvaluateRequest, type ToolAccessEvaluateResponse } from "@goatcitadel/contracts";
 import { snapshotRemoteWorkerCellCapacityAuthority, type AsyncStorage } from "@goatcitadel/storage";
-import { resolveRemoteWorkerChatAuthority, remoteWorkerChatEvidenceMaterial, type RemoteWorkerChatAuthorityDependencies } from "./remote-worker-chat-authority.js";
+import {
+  remoteWorkerChatEvidenceMaterial,
+  type RemoteWorkerChatAuthorityDependencies,
+} from "./remote-worker-chat-authority.js";
 import type { RemoteWorkerInstallationPolicy } from "./remote-worker-installation-capacity-owner.js";
 import { revalidateRemoteWorkerExecutionAuthority } from "./remote-worker-execution-authority-guard.js";
 

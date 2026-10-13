@@ -21,7 +21,6 @@ import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import { ChatTurnToolUseClosedError } from "./chat-turn-control.js";
 import { CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE } from "./chat-fanout-admission-reference.js";
 import { assertFanoutInitialSelection } from "./chat-fanout-admission-authority.js";
-import type { ActiveTurnAdmission } from "./chat-turn-types.js";
 import { hasDurableFanoutWaitingEvidence } from "./chat-fanout-wait-evidence.js";
 import { mapDelegationStatus, projectDelegationResult, projectCanonicalResult } from "./chat-fanout-result-projection.js";
 

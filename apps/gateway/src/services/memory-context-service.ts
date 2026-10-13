@@ -10,9 +10,7 @@ import {
   type MemoryContextPack,
   type MemoryQmdStatsResponse,
   type MemoryRelationScope,
-  type MemoryRetrievalMatchSignals,
   type MemoryRetrievalStatusResponse,
-  type MemoryRetrievalStrategy,
 } from "@goatcitadel/contracts";
 import {
   buildCacheKey,
@@ -60,10 +58,15 @@ import {
 } from "./memory-context-access-policy.js";
 import {
   calculateSavings,
+  extractMemoryEmbedding,
+  extractMemoryRetrievalHints,
   isMemoryContextAbort,
   parseDistillerResponse,
+  projectMemoryRetrievalStatus,
   reserveMemoryContextBudget,
+  resolveMemoryRelationScope,
   throwIfMemoryContextAborted,
+  toCandidateMap,
   truncate,
 } from "./memory-context-utils.js";
 
@@ -597,25 +600,9 @@ export class MemoryContextService {
     const recentRuns = await this.storage.memoryQmdRuns.list(20);
     const from = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
     const stats = await this.storage.memoryQmdRuns.stats(from, checkedAt);
-    const retrievalStrategies = collectRecentRetrievalStrategies(recentContexts);
-    const retrievalMode = resolveMemoryRetrievalMode(enabled, retrievalStrategies);
-    const rerankMode = resolveMemoryRerankMode(enabled, retrievalStrategies);
-    const lastError = recentRuns.find((run) => run.errorText?.trim())?.errorText;
-    const lastRefresh = recentRuns[0]?.createdAt ?? recentContexts[0]?.createdAt;
-    const fallbackMode = resolveMemoryFallbackMode(
-      enabled,
-      recentRuns[0]?.errorText,
-      recentContexts[0]?.quality.reason,
-    );
-    return {
+    return projectMemoryRetrievalStatus({
       checkedAt,
       enabled,
-      retrievalMode,
-      rerankAvailable: rerankMode !== "none",
-      rerankMode,
-      fallbackMode,
-      lastRefresh,
-      lastError,
       qmd: {
         enabled: qmd.enabled,
         applyToChat: qmd.applyToChat,
@@ -626,15 +613,10 @@ export class MemoryContextService {
         distillerModel: qmd.distiller.model,
         distillerTimeoutMs: qmd.distiller.timeoutMs,
       },
-      recent: {
-        totalRuns: stats.totalRuns,
-        generatedRuns: stats.generatedRuns,
-        cacheHitRuns: stats.cacheHitRuns,
-        fallbackRuns: stats.fallbackRuns,
-        failedRuns: stats.failedRuns,
-        retrievalStrategies,
-      },
-    };
+      recentContexts,
+      recentRuns,
+      stats,
+    });
   }
 
   /**
@@ -976,122 +958,9 @@ export class MemoryContextService {
   }
 }
 
+
 function elapsedMs(startedAt: number): number {
   return Math.max(0, Math.round((performance.now() - startedAt) * 1000) / 1000);
-}
-
-function collectRecentRetrievalStrategies(recentContexts: MemoryContextPack[]): MemoryRetrievalStrategy[] {
-  const strategies = new Set<MemoryRetrievalStrategy>();
-  for (const context of recentContexts) {
-    for (const citation of context.citations) {
-      const strategy = citation.provenance?.retrievalStrategy;
-      if (strategy) {
-        strategies.add(strategy);
-      }
-    }
-  }
-  return [...strategies].sort();
-}
-
-function resolveMemoryRetrievalMode(
-  enabled: boolean,
-  retrievalStrategies: MemoryRetrievalStrategy[],
-): MemoryRetrievalStatusResponse["retrievalMode"] {
-  if (!enabled) {
-    return "disabled";
-  }
-  if (retrievalStrategies.includes("hybrid_rank")) {
-    return "hybrid_rank";
-  }
-  if (retrievalStrategies.includes("semantic_vector")) {
-    return "semantic_vector";
-  }
-  if (retrievalStrategies.includes("semantic_hints")) {
-    return "semantic_hints";
-  }
-  if (retrievalStrategies.includes("lexical_recency")) {
-    return "lexical_recency";
-  }
-  // Honest default: with no observed semantic/hybrid strategy (e.g. the default
-  // pseudo provider, which no longer contributes an embedding score), report
-  // lexical_recency rather than implying a hybrid rerank that didn't happen.
-  return "lexical_recency";
-}
-
-function resolveMemoryRerankMode(
-  enabled: boolean,
-  retrievalStrategies: MemoryRetrievalStrategy[],
-): MemoryRetrievalStatusResponse["rerankMode"] {
-  if (!enabled) {
-    return "none";
-  }
-  return retrievalStrategies.includes("hybrid_rank") ? "hybrid_rank" : "none";
-}
-
-function resolveMemoryFallbackMode(
-  enabled: boolean,
-  latestRunError: string | undefined,
-  latestQualityReason: string | undefined,
-): MemoryRetrievalStatusResponse["fallbackMode"] {
-  if (!enabled) {
-    return "disabled";
-  }
-  const reason = latestRunError ?? latestQualityReason ?? "";
-  if (/qmd_disabled|prompt_too_short/i.test(reason)) {
-    return "short_prompt_or_disabled";
-  }
-  if (/no_candidates/i.test(reason)) {
-    return "no_candidates";
-  }
-  if (reason.trim()) {
-    return "distiller_fallback";
-  }
-  return "available";
-}
-
-function toCandidateMap(
-  candidates: Array<{
-    candidateId: string;
-    sourceType: "transcript" | "file" | "memory_item";
-    timestamp?: string;
-    rankScore?: number;
-    rankSignals?: MemoryRetrievalMatchSignals;
-  }>,
-) {
-  return new Map(candidates.map((candidate) => [candidate.candidateId, candidate] as const));
-}
-
-function extractMemoryRetrievalHints(metadata: Record<string, unknown>): string[] | undefined {
-  const hints = new Set<string>();
-  for (const key of ["retrievalHints", "semanticTerms", "tags", "aliases", "keywords"]) {
-    for (const value of readStringList(metadata[key])) {
-      hints.add(value);
-    }
-  }
-  return hints.size > 0 ? [...hints] : undefined;
-}
-
-function extractMemoryEmbedding(metadata: Record<string, unknown>): number[] | undefined {
-  for (const key of ["embedding", "contentEmbedding", "semanticEmbedding"]) {
-    const value = metadata[key];
-    if (Array.isArray(value) && value.length > 0 && value.every((item) => Number.isFinite(item))) {
-      return value.map((item) => Number(item));
-    }
-  }
-  return undefined;
-}
-
-function readStringList(value: unknown): string[] {
-  if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean);
 }
 
 function refreshMemoryPackAssembly(pack: MemoryContextPack, assembly: MemoryContextAssemblyReport): MemoryContextPack {
@@ -1103,19 +972,6 @@ function refreshMemoryPackAssembly(pack: MemoryContextPack, assembly: MemoryCont
       assembly,
     },
   };
-}
-
-function resolveMemoryRelationScope(input: MemoryContextComposeRequest): MemoryRelationScope {
-  if (input.relationScope) {
-    return input.relationScope;
-  }
-  if (input.phaseId || input.runId) {
-    return "project";
-  }
-  if (input.taskId) {
-    return "peer";
-  }
-  return "self";
 }
 
 // Finding 1: never return undefined — an undefined workspaceId makes

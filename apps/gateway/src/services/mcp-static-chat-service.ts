@@ -2,26 +2,18 @@ import { readHistoricalStaticMcpBinding, assertHistoricalStaticMcpScope, isConne
 import { McpStaticChatAdmissionService } from "./mcp-static-chat-admission-service.js";
 import {
   canonicalJsonString,
-  resolveMcpServerConnectionMode,
   type CapabilityCatalogEntry,
   type ChatTurnCapabilityProfileRecord,
   type McpInvokeRequest,
   type McpRequesterScopeHashInput,
   type McpServerRecord,
-  readChatTurnFeatureReferences,
   type ChatTurnFeatureReferences,
   type McpRequesterAdmissionScope,
-  type McpStaticAdmissionConnection,
 } from "@goatcitadel/contracts";
 import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
-import {
-  verifyChatTurnCapabilityCatalogBinding,
-  verifyChatTurnCapabilityProfile,
-  type AsyncStorage,
-} from "@goatcitadel/storage";
+import { type AsyncStorage } from "@goatcitadel/storage";
 import { createStaticMcpCallAuthority } from "./mcp-static-call-authority.js";
 import {
-  assertStaticMcpToolBindingIntegrity,
   createStaticMcpCatalogSnapshot,
   staticMcpProviderDefinition,
   type StaticMcpCatalogSnapshot,
@@ -32,7 +24,7 @@ import {
   type McpStaticEnvironmentHandle,
   type McpStaticEnvironmentService,
 } from "./mcp-static-environment-service.js";
-import { GATEWAY_OWNED_MCP_SERVER_IDS, type McpServerStore } from "./mcp-server-store.js";
+import { type McpServerStore } from "./mcp-server-store.js";
 import {
   discoverStaticMcpToolsList,
   invokeMcpRuntimeTool,
@@ -60,19 +52,8 @@ import {
   type McpChatTurnContextHandle,
   type McpRequesterAdmissionTurnContextHandle,
 } from "./mcp-requester-admission-context.js";
-import {
-  assertStaticMcpAdmissionReceipt,
-  assertStaticMcpAdmissionServer,
-  buildStaticMcpAdmissionReceipt,
-  staticAdmissionDigest,
-} from "./mcp-static-admission.js";
-import {
-  bindNativeStaticAdmissionMcpChatToolSchema,
-  collectNativeMcpChatCatalogCandidates,
-  type NativeMcpChatToolSchema,
-} from "./gateway/native-mcp-chat-catalog.js";
+import { type NativeMcpChatToolSchema } from "./gateway/native-mcp-chat-catalog.js";
 import type { McpStdioSessionPool } from "./mcp-stdio-session-pool.js";
-import { hasExplicitMcpIdentifier, selectExplicitStaticMcpServers } from "./mcp-static-selection.js";
 
 export interface StaticMcpChatDispatchInput {
   server: McpServerRecord;

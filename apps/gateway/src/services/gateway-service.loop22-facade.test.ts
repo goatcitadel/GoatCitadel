@@ -303,15 +303,17 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
           order.push("recover");
         }),
       },
-      isFeatureEnabled: vi.fn(() => {
-        order.push("advisory-sweep");
-        return true;
+      isFeatureEnabled: vi.fn((flag: string) => {
+        order.push(`feature:${flag}`);
+        return false;
       }),
+      chatAutonomousTurnDeps: vi.fn(),
     });
 
     await (GatewayService.prototype as any).runHeartbeatSweep.call(gateway);
 
-    expect(order).toEqual(["recover"]);
+    expect(order).toEqual(["recover", "feature:proactiveHeartbeatTurnsV1Enabled"]);
+    expect(gateway.chatAutonomousTurnDeps).not.toHaveBeenCalled();
   });
 
   it("reconciles a committed cron generation before clearing the startup marker", async () => {

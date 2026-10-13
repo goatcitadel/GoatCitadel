@@ -1,6 +1,4 @@
 import { createChannelSetupGuidancePort, createIntegrationFormGuidancePort } from "./integration-setup-guidance-port.js";
-import { createHash } from "node:crypto";
-import path from "node:path";
 import { createChannelOAuthStagingService } from "./channel-oauth-staging-service.js";
 import type {
   ExternalSideEffectRunListQuery,
@@ -29,7 +27,6 @@ import {
 } from "./comms-service.js";
 import {
   INTEGRATION_CATALOG,
-  getIntegrationFormSchema,
   resolveIntegrationCatalogMaturity,
   resolveIntegrationCatalogRuntimeAvailability,
 } from "./integration-catalog.js";

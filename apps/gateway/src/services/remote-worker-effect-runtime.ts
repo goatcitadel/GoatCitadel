@@ -30,7 +30,7 @@ import { createMeshAdmissionTurnContext } from "./gateway/mesh-chat-binding.js";
 import type { NativeMcpChatToolSchema } from "./gateway/native-mcp-chat-catalog.js";
 import type { McpRequesterAdmissionTurnContextHandle } from "./mcp-requester-admission-context.js";
 import { toolInvokeResultFromPendingAction } from "./approved-external-runtime-side-effect-service.js";
-import { isNativeMcpToolName, resolveNativeMcpChatToolBinding } from "./gateway/native-mcp-chat-binding.js";
+import { isNativeMcpToolName } from "./gateway/native-mcp-chat-binding.js";
 import type { MeshChatTurnContextHandle } from "./gateway/mesh-chat-binding.js";
 import type { MeshChatDispatchPort } from "./gateway/mesh-chat-dispatch.js";
 import { resolveRemoteWorkerNativeBinding } from "./remote-worker-external-tool-binding.js";

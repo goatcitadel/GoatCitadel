@@ -9,7 +9,6 @@ import type {
   IntegrationConnection,
 } from "@goatcitadel/contracts";
 import {
-  runDiscordBotLiveChecks,
   runIMessageBridgeLiveChecks,
   runLineBotLiveChecks,
   runMattermostBotLiveChecks,

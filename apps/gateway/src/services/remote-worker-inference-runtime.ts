@@ -8,7 +8,6 @@ import {
   remoteWorkerInferenceCanonicalSha256,
   remoteWorkerInferenceEffectiveRouteSha256,
   remoteWorkerChatInferenceStepIndex,
-  type ChatTurnCapabilityProfileRecord,
   type RemoteWorkerInferenceGovernanceReceipt,
   type RemoteWorkerInferenceAuthorizedSubmission,
 } from "@goatcitadel/contracts";

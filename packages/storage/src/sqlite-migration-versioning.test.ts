@@ -986,6 +986,15 @@ describe("sqlite schema migrations", () => {
 
     const migrated = tempDbs.open({ dbPath });
     assert.equal(
+      (migrated.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 258").get() as { count: number }).count,
+      1,
+    );
+    assert.equal(
+      (migrated.prepare("PRAGMA table_info(chat_heartbeat_occurrences)").all() as Array<{ name: string }>)
+        .some((column) => column.name === "feature_reference_sha256"),
+      true,
+    );
+    assert.equal(
       (
         migrated
           .prepare("SELECT lifecycle_intent_id FROM chat_session_meta WHERE session_id = 'legacy-session'")
@@ -2033,4 +2042,6 @@ function rewindSessionLifecycleMigration(db: ReturnType<typeof createDatabase>):
   `);
   db.prepare("DELETE FROM schema_migrations WHERE version = 174").run();
   db.prepare("DELETE FROM schema_migrations WHERE version = 173").run();
+  // Recreating the v174 heartbeat owner also rewinds its later feature binding.
+  db.prepare("DELETE FROM schema_migrations WHERE version = 258").run();
 }

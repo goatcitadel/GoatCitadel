@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import type { DatabaseClient } from "./db.js";
-import { __sqliteInternals, createDatabase } from "./sqlite.js";
+import { __sqliteInternals } from "./sqlite.js";
+import { runSqliteMigrations } from "./sqlite/migration-registry.js";
 
-const clients: DatabaseClient[] = [];
+const clients: DatabaseSync[] = [];
 
 afterEach(() => {
   for (const client of clients.splice(0)) client.close();
@@ -13,6 +13,7 @@ afterEach(() => {
 describe("SQLite 196 remote-worker inference budget authority correction", () => {
   it("keeps fresh and 177->196 upgrade shapes identical while quarantining legacy rows", () => {
     const upgraded = new DatabaseSync(":memory:");
+    clients.push(upgraded);
     upgraded.exec(`
       PRAGMA foreign_keys = ON;
       CREATE TABLE remote_worker_assignment_generations (
@@ -103,19 +104,29 @@ describe("SQLite 196 remote-worker inference budget authority correction", () =>
       /v2 authority evidence is immutable/u,
     );
 
-    const fresh = createDatabase({ dbPath: ":memory:" });
+    // Compare the same reviewed historical stage. Later admission migrations
+    // intentionally add columns and replace guards on the current owner.
+    const fresh = new DatabaseSync(":memory:");
     clients.push(fresh);
+    fresh.exec("PRAGMA foreign_keys = ON");
+    runSqliteMigrations(
+      fresh,
+      Array.from({ length: 196 }, (_, index) => ({
+        version: index + 1,
+        name: __sqliteInternals.getSchemaMigrationNameForTest(index + 1),
+        up: (db: DatabaseSync) => __sqliteInternals.applySchemaMigrationForTest(index + 1, db),
+      })),
+    );
     assert.deepEqual(tableInfo(upgraded), tableInfo(fresh));
     assert.deepEqual(ownedSchema(upgraded), ownedSchema(fresh));
-    upgraded.close();
   });
 });
 
-function tableInfo(db: DatabaseSync | DatabaseClient): unknown[] {
+function tableInfo(db: DatabaseSync): unknown[] {
   return db.prepare("PRAGMA table_info(remote_worker_inference_requests)").all() as unknown[];
 }
 
-function ownedSchema(db: DatabaseSync | DatabaseClient): unknown[] {
+function ownedSchema(db: DatabaseSync): unknown[] {
   return db
     .prepare(
       `SELECT type, name, tbl_name, sql

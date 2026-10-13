@@ -3,7 +3,12 @@ import { assertOwnedAutonomousDurableReplay, assertOwnedCronChatDurableRun,
 import { createAutonomousOccurrenceAuthorityHost } from "./autonomous-chat-occurrence-guards.js";
 /* eslint-disable max-lines -- Autonomous admission and recovery stay co-located while the runtime contract is being frozen. */
 import { createHash, randomUUID } from "node:crypto";
-import { canonicalJsonString, ConflictError, hasCurrentCronCreatorAuthority, isDurableRunTerminal, NotFoundError } from "@goatcitadel/contracts";
+import {
+  canonicalJsonString,
+  ConflictError,
+  hasCurrentCronCreatorAuthority,
+  NotFoundError,
+} from "@goatcitadel/contracts";
 import type {
   ChatTurnTraceRecord,
   ChatSendMessageRequest,
@@ -18,8 +23,6 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   sealChatTurnCapabilityProfile,
-  verifyChatTurnCapabilityCatalogBinding,
-  verifyChatTurnCapabilityProfile,
   type HeartbeatOccurrenceRecord,
   type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
@@ -58,35 +61,15 @@ import type { CronAutomationService } from "./gateway/cron-automation-service.js
 import type { SessionControlRuntimeOwner } from "./session-control-runtime-owner.js";
 import type { ActiveTurnAdmission } from "./chat-turn-types.js";
 import {
-  CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY,
   buildAutonomousChatAdmissionMetadataMaterial,
-  hashChatTurnRuntimeAuthorityValue,
-  readAutonomousChatAdmissionMetadataSeal,
-  readChatTurnRuntimeAuthoritySeal,
-  readExactAutonomousChatPostCommitPendingMarker,
-  readExactAutonomousChatPostCommitSettlement,
-  readExactChatTurnAdmissionHandoff,
-  readExactGeneralChatPostCommitPendingMarker,
-  readExactGeneralChatPostCommitSettlement,
-  readExactLinkedFinalizationPendingMarker,
-  readExactLinkedFinalizationSettlement,
   sealAutonomousChatAdmissionMetadata,
-  verifyAutonomousChatAdmissionRunMetadata,
-  verifyCheckpointAnchoredChatTurnRuntimeAuthority,
   type AutonomousChatChildIdentity,
   type CanonicalCronChatAdmissionIdentity,
-  type ChatTurnRuntimeAuthoritySealV1,
 } from "./chat-durable-runtime-authority.js";
-import { DURABLE_RETRY_POLICY_DEFAULT, assertDurableRetryPolicyMatchesRun } from "./durable-retry-policy.js";
 import { assertScheduledConfigMatches, assertScheduledOccurrenceCurrent, buildCronChatAdmissionIdentity,
   buildScheduledOccurrenceReference, readCurrentScheduledOccurrence } from "./scheduled-chat-authority.js";
 export { buildCronChatAdmissionIdentity } from "./scheduled-chat-authority.js";
 import { assertHeartbeatOccurrenceCurrent, buildHeartbeatOccurrenceReference } from "./heartbeat-chat-authority.js";
-import {
-  computeEffectiveChatTurnRequestMaterialSha256,
-  computeFrozenChatTurnAdmissionMaterialSha256,
-  freezeChatTurnExecutionRequest,
-} from "./session-control-service.js";
 
 /**
  * Autonomous chat-turn execution (B8b extraction): the cron `agent_turn`

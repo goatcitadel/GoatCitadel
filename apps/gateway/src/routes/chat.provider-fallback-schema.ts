@@ -8,13 +8,13 @@ export const providerFallbackPreferenceSchema = z
       .trim()
       .min(1)
       .max(200)
-      .regex(/^[^\u0000-\u001f]+$/u),
+      .refine((value) => [...value].every((character) => character.charCodeAt(0) >= 32)),
     model: z
       .string()
       .trim()
       .min(1)
       .max(300)
-      .regex(/^[^\u0000-\u001f]+$/u),
+      .refine((value) => [...value].every((character) => character.charCodeAt(0) >= 32)),
     allowLocalToCloud: z.boolean(),
   })
   .strict();

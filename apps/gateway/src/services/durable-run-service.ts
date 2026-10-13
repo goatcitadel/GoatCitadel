@@ -4393,7 +4393,11 @@ export class DurableRunService {
             observed,
             recoverability.reason ?? "Run could not be recovered after its local worker process exited.",
             recoveryObservedAt,
-            { kind: "exited_local_process", leaseOwnerId: observed.leaseOwnerId! },
+            {
+              kind: "exited_local_process",
+              leaseOwnerId: observed.leaseOwnerId!,
+              ...(recoverability.interrupted ? { interrupted: true as const } : {}),
+            },
           );
           continue;
         }
@@ -4484,7 +4488,7 @@ export class DurableRunService {
     observed: DurableRunRecord,
     reason: string,
     recoveryObservedAt: string,
-    recovery: { kind: "expired" } | { kind: "exited_local_process"; leaseOwnerId: string },
+    recovery: { kind: "expired" } | { kind: "exited_local_process"; leaseOwnerId: string; interrupted?: true },
   ): Promise<DurableRunRecord | undefined> {
     const safeReason = redactRawRemoteApprovalBearerText(reason);
     let transitioned = false;
@@ -4530,6 +4534,7 @@ export class DurableRunService {
       let checkpointState: Record<string, unknown> = {
         workflowKey: current.workflowKey,
         error: safeReason,
+        ...(recovery.kind === "exited_local_process" && recovery.interrupted ? { recovery: recovery.kind } : {}),
       };
       const payload = current.payload as { version?: unknown; sessionId?: unknown; turnId?: unknown } | undefined;
       if (
@@ -4691,7 +4696,7 @@ export class DurableRunService {
     if (!claim) {
       return;
     }
-    await this.verifyLinkedFinalizationAuthority(claim.run, claim.pending);
+    const interruptedByRestart = await this.verifyLinkedFinalizationAuthority(claim.run, claim.pending);
     const finalizationAbort = new AbortController();
     const claimHeartbeat = setInterval(
       () => {
@@ -4731,6 +4736,7 @@ export class DurableRunService {
         this.deps.workflowRegistry.markWorkflowUnrecoverable(claim.run, claim.pending.reason, {
           finalizationId: claim.pending.finalizationId,
           signal: finalizationAbort.signal,
+          ...(interruptedByRestart ? { interruptedByRestart: true as const } : {}),
         }),
         aborted,
       ]);
@@ -4795,14 +4801,14 @@ export class DurableRunService {
   private async verifyLinkedFinalizationAuthority(
     run: DurableRunRecord,
     pending: LinkedFinalizationPending,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const payload = run.payload as { version?: unknown; turnId?: unknown } | undefined;
     const authorityValue = run.metadata?.[CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY];
     if (run.workflowKey !== "chat.turn.execute" || payload?.version !== "chat.turn.execute.v2") {
       if (authorityValue !== undefined) {
         throw new Error(`Durable linked finalization ${run.runId} carries unauthorized runtime authority.`);
       }
-      return;
+      return false;
     }
     await this.requireExactParentTurnAdmission(run, { requireActive: false });
     if (run.metadata?.autonomousAdmission !== undefined) await this.verifyCanonicalAutonomousChatAdmission(run);
@@ -4837,6 +4843,7 @@ export class DurableRunService {
       throw new Error(`Durable linked finalization ${run.runId} has no authority-anchored failure checkpoint.`);
     }
     verifyCheckpointAnchoredChatTurnRuntimeAuthority(run.metadata, checkpoint.state);
+    return checkpoint.state.recovery === "exited_local_process";
   }
 
   private async claimPendingLinkedFinalization(

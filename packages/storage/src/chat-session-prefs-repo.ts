@@ -417,7 +417,8 @@ function validateProviderFallback(value: unknown): ChatProviderFallbackPreferenc
   }
   const providerId = value.providerId.trim();
   const model = value.model.trim();
-  if (!providerId || providerId.length > 200 || !model || model.length > 300 || /[\u0000-\u001f]/u.test(providerId + model)) {
+  if (!providerId || providerId.length > 200 || !model || model.length > 300 ||
+    [...providerId + model].some((character) => character.charCodeAt(0) < 32)) {
     throw new TypeError("Invalid Chat provider fallback target");
   }
   return { providerId, model, allowLocalToCloud: value.allowLocalToCloud };

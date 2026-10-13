@@ -1,63 +1,20 @@
-/* eslint-disable max-lines -- Autonomous admission and recovery stay co-located while the runtime contract is being frozen. */
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   canonicalJsonString,
-  ConflictError,
-  hasCurrentCronCreatorAuthority,
   isDurableRunTerminal,
-  NotFoundError,
 } from "@goatcitadel/contracts";
 import type {
   ChatTurnTraceRecord,
   ChatSendMessageRequest,
   CronAgentTurnConfig,
-  CronJobRecord,
-  CronRunExecutionToken,
   DurableRunRecord,
-  PermissionProfileRecord,
-  TaskRecord,
-  ToolPolicyActorContext,
-  ChatTurnFeatureReferences,
 } from "@goatcitadel/contracts";
 import {
-  sealChatTurnCapabilityProfile,
   verifyChatTurnCapabilityCatalogBinding,
   verifyChatTurnCapabilityProfile,
-  type HeartbeatOccurrenceRecord,
-  type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import type { AgentTurnCronRunOutcome } from "./gateway/cron-agent-turn-support.js";
-import {
-  type AutonomousTurnKind,
-  buildAutonomousTurnContext,
-  HEARTBEAT_PERMISSION_PROFILE_ID,
-  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
-} from "./gateway/autonomous-turn-policy.js";
-import { runCommitmentSweep as runCommitmentSweepCore } from "./gateway/commitment-sweep-service.js";
-import {
-  buildScheduledCreatorIntersectionProfile,
-  permissionProfileAppliesToCreator,
-} from "./gateway/scheduled-profile-intersection.js";
-import {
-  DEFAULT_HEARTBEAT_IDLE_FLOOR_SECONDS,
-  HEARTBEAT_SYSTEM_PROMPT,
-  type HeartbeatDatabaseAdmissionOutcome,
-  runHeartbeatTick,
-} from "./gateway/heartbeat-service.js";
-import {
-  buildScheduleCreateActionConfig,
-  isScheduledTurnContext,
-  parseScheduleManageArgs,
-  resolveScheduleCreatorKey,
-  summarizeScheduleJob,
-  validateScheduleCreate,
-} from "./gateway/schedule-tool-support.js";
-import * as chatDurableRunService from "./chat-durable-run-service.js";
-import * as chatTurnPrepService from "./chat-turn-prep-service.js";
-import type { PreparedAgentChatTurn, SystemHeartbeatTurnPrepPosture } from "./chat-turn-prep-service.js";
-import type { CronAutomationService } from "./gateway/cron-automation-service.js";
-import type { SessionControlRuntimeOwner } from "./session-control-runtime-owner.js";
-import type { ActiveTurnAdmission } from "./chat-turn-types.js";
+import { type AutonomousTurnKind } from "./gateway/autonomous-turn-policy.js";
 import {
   CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY,
   buildAutonomousChatAdmissionMetadataMaterial,
@@ -75,19 +32,12 @@ import {
   verifyAutonomousChatAdmissionRunMetadata,
   verifyCheckpointAnchoredChatTurnRuntimeAuthority,
   type AutonomousChatChildIdentity,
-  type CanonicalCronChatAdmissionIdentity,
   type ChatTurnRuntimeAuthoritySealV1,
 } from "./chat-durable-runtime-authority.js";
 import { DURABLE_RETRY_POLICY_DEFAULT, assertDurableRetryPolicyMatchesRun } from "./durable-retry-policy.js";
-import {
-  assertScheduledConfigMatches,
-  assertScheduledOccurrenceCurrent,
-  buildCronChatAdmissionIdentity,
-  buildScheduledOccurrenceReference,
-  readCurrentScheduledOccurrence,
-} from "./scheduled-chat-authority.js";
+import { buildScheduledOccurrenceReference } from "./scheduled-chat-authority.js";
 export { buildCronChatAdmissionIdentity } from "./scheduled-chat-authority.js";
-import { assertHeartbeatOccurrenceCurrent, buildHeartbeatOccurrenceReference } from "./heartbeat-chat-authority.js";
+import { buildHeartbeatOccurrenceReference } from "./heartbeat-chat-authority.js";
 import {
   computeEffectiveChatTurnRequestMaterialSha256,
   computeFrozenChatTurnAdmissionMaterialSha256,

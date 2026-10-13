@@ -22,12 +22,8 @@ import {
   type McpRequesterAdmissionTurnContextHandle,
 } from "./mcp-requester-admission-context.js";
 import { restoreMcpChatAdmissionSchemas } from "./mcp-chat-admission-schemas.js";
-import {
-  assertMcpRequesterAdmissionScopeCurrent,
-  requesterScopeFromActiveAdmission,
-} from "./mcp-requester-admission-scope.js";
+import { assertMcpRequesterAdmissionScopeCurrent } from "./mcp-requester-admission-scope.js";
 import { McpRequesterResolutionError } from "./mcp-requester-resolution.js";
-import { createMcpToolPolicyBinding } from "@goatcitadel/policy-engine";
 import {
   restoreSelectedMeshAdmission,
   selectCallableMeshChatAdmission,

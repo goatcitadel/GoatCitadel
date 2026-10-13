@@ -378,7 +378,14 @@ describe("RemoteWorkerCellRepository (SQLite)", () => {
       __sqliteInternals.applySchemaMigrationForTest(178, legacy);
       const expected = new Map<string, Record<string, unknown>[]>();
       for (const table of ["remote_worker_cells", "remote_worker_cell_evidence"]) {
-        const rows = s.db.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[];
+        const rows = (s.db.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[]).map((row) => {
+          if (table !== "remote_worker_cells") return row;
+          // Admission references arrive at v260, after the v178->v206 path
+          // under test. This fixture must retain historical profile authority.
+          assert.equal(row.admission_reference_json, null);
+          const { admission_reference_json: _admissionReference, ...historical } = row;
+          return Object.assign(Object.create(null) as Record<string, unknown>, historical);
+        });
         expected.set(table, rows);
         for (const row of rows) {
           const columns = Object.keys(row).filter((column) => column !== "native_platform_json");

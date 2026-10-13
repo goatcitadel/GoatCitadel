@@ -953,7 +953,7 @@ describe("coverage tooling", () => {
       fs.readFileSync(path.join(scriptsDir, "verification", "stage-fast-part.sh"), "utf8"),
       /node scripts\/verify-artifact-redaction\.mjs "\$out"/,
     );
-    assert.match(workflow, /node scripts\/verify-artifact-redaction\.mjs artifacts\/coverage/);
+    assert.match(workflow, /node scripts\/verify-artifact-redaction\.mjs artifacts\s*$/mu);
     assert.match(workflow, /artifacts\/coverage\/coverage-summary\.json/);
     assert.match(workflow, /artifacts\/coverage\/coverage-summary\.md/);
     assert.match(workflow, /if-no-files-found:\s*error/);

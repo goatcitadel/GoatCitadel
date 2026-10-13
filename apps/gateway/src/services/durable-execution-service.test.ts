@@ -4195,6 +4195,7 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable Chat output was emitted before interruption and cannot be safely replayed.",
+      interrupted: true,
     });
 
     host.storage.chatTurnTraces.get.mockReturnValueOnce({
@@ -4219,6 +4220,7 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable Chat output was emitted before interruption and cannot be safely replayed.",
+      interrupted: true,
     });
 
     host.storage.chatTurnTraces.get.mockReturnValueOnce({
@@ -4243,6 +4245,7 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable Chat output was emitted before interruption and cannot be safely replayed.",
+      interrupted: true,
     });
 
     host.storage.chatTurnTraces.get.mockReturnValueOnce({
@@ -4260,6 +4263,7 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Assistant output was persisted while the Chat turn trace was still active.",
+      interrupted: true,
     });
 
     host.storage.chatTurnTraces.get.mockReturnValueOnce({
@@ -4294,6 +4298,7 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(await isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
       reason: "Durable chat run was interrupted after tool execution began and cannot be safely replayed.",
+      interrupted: true,
     });
 
     const settledConfigurationRun: DurableRunRecord = {
@@ -4363,6 +4368,7 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(await isDurableWorkflowRecoverable(host as never, settledConfigurationRun)).toEqual({
       recoverable: false,
       reason: "Durable chat run was interrupted after tool execution began and cannot be safely replayed.",
+      interrupted: true,
     });
   });
 

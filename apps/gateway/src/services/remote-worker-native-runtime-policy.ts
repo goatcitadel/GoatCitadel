@@ -2,7 +2,10 @@ import { canonicalJsonString, normalizeRemoteWorkerRuntimeResultExpectation, typ
 import { snapshotRemoteWorkerRuntimeRequestPreparation, snapshotRemoteWorkerCellCapacityInventoryAdmission, type AsyncStorage, type RemoteWorkerRuntimeRequestPreparationInput,
   type RemoteWorkerRuntimeAdmissionInput, type RemoteWorkerRuntimeAdmissionResult, type NativePolicyReservationLookup } from "@goatcitadel/storage";
 import { normalizeWindowsRuntimeDispatch } from "@goatcitadel/contracts/remote-worker-runtime-node";
-import { resolveRemoteWorkerChatAuthority, remoteWorkerChatEvidenceMaterial, type RemoteWorkerChatAuthorityDependencies } from "./remote-worker-chat-authority.js";
+import {
+  remoteWorkerChatEvidenceMaterial,
+  type RemoteWorkerChatAuthorityDependencies,
+} from "./remote-worker-chat-authority.js";
 import { revalidateRemoteWorkerExecutionAuthority } from "./remote-worker-execution-authority-guard.js";
 export interface RemoteWorkerNativeRuntimePolicyPort {
   authorize(input: RemoteWorkerRuntimeRequestPreparationInput & { signal?: AbortSignal }): Promise<void>;

@@ -20,6 +20,43 @@ test("artifact redaction gate fails closed when the exact artifact root is missi
   await assert.rejects(assertArtifactRedactionGate(root), /gate root does not exist/u);
 });
 
+test("fast CI scans failed verification evidence without requiring an unproduced coverage directory", async () => {
+  const workflow = await fs.readFile(new URL("../.github/workflows/verification-fast.yml", import.meta.url), "utf8");
+  const redactionStep = workflow.match(/- name: Verify artifact redaction[\s\S]*?(?=\n      - name:)/u)?.[0] ?? "";
+  const scanRoot = redactionStep.match(/node scripts\/verify-artifact-redaction\.mjs ([^\s]+)\s*$/mu)?.[1];
+  assert.equal(scanRoot, "artifacts");
+  assert.match(redactionStep, /if: always\(\)/u);
+
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-redaction-fast-failure-"));
+  const root = path.join(workspace, scanRoot);
+  const failedManifest = path.join(root, "verification", "merged", "manifest.json");
+  try {
+    await fs.mkdir(path.dirname(failedManifest), { recursive: true });
+    await fs.writeFile(failedManifest, JSON.stringify({ status: "failed", counts: { failed: 1 } }), "utf8");
+    await assert.rejects(assertArtifactRedactionGate(path.join(root, "coverage")), /gate root does not exist/u);
+    assert.equal((await assertArtifactRedactionGate(root)).findings, 0);
+    assert.equal(JSON.parse(await fs.readFile(failedManifest, "utf8")).status, "failed");
+
+    await fs.mkdir(path.join(root, "coverage"));
+    await fs.writeFile(
+      path.join(root, "coverage", "coverage-summary.json"),
+      JSON.stringify({ apiKey: "provider-coverage-secret-value-1234567890" }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(root, "verification", "merged", "request.log"),
+      "Authorization: Bearer sk-verification-secret-value-1234567890",
+      "utf8",
+    );
+    const findings = await findArtifactRedactionFindings(root);
+    assert.ok(findings.some((finding) => finding.file === "coverage/coverage-summary.json"));
+    assert.ok(findings.some((finding) => finding.file === "verification/merged/request.log"));
+    await assert.rejects(assertArtifactRedactionGate(root), /artifact redaction found/u);
+  } finally {
+    await fs.rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("artifact redaction gate rejects a file in place of the exact artifact root", async () => {
   const root = path.join(os.tmpdir(), `goatcitadel-redaction-gate-file-${Date.now()}`);
   await fs.writeFile(root, "not a directory", "utf8");

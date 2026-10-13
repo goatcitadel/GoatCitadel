@@ -31,7 +31,6 @@ import {
   renderChatRoutedContextEntries,
   sealChatRoutedContextSnapshot,
   verifyChatRoutedContextSnapshot,
-  type AsyncStorage,
 } from "@goatcitadel/storage";
 
 export const CHAT_ROUTED_CONTEXT_MAX_SOURCE_BYTES = 256 * 1024;

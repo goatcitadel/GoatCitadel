@@ -7,21 +7,23 @@ const xor = `(capability_profile_sha256 IS NOT NULL AND admission_reference_json
 const contextPair = `(capability_profile_id IS NULL) = (capability_profile_sha256 IS NULL)`;
 
 /** Rebuild only the three owners and their FK dependents, preserving all retained bytes and guards. */
+// Migration v260 locks callback tokens too; retain its original optional-parenthesis spelling.
+// prettier-ignore
 export function upgradeRemoteWorkerAdmissionBindingSchema(db: Pick<DatabaseSync, "exec" | "prepare">): void {
   const objects = db
     .prepare("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'")
     .all() as unknown as Array<{ type: string; name: string; tbl_name: string; sql: string }>;
-  const tables = objects.filter((row) => row.type === "table");
-  if (owners.every((owner) => !tables.some((table) => table.name === owner))) return;
-  if (owners.some((owner) => !tables.some((table) => table.name === owner)))
+  const tables = objects.filter(row => row.type === "table");
+  if (owners.every(owner => !tables.some(table => table.name === owner))) return;
+  if (owners.some(owner => !tables.some(table => table.name === owner)))
     throw new Error("Remote admission migration requires all three canonical owners.");
   const dependencies = new Map(
-    tables.map((table) => [
+    tables.map(table => [
       table.name,
       new Set(
         (db.prepare(`PRAGMA foreign_key_list(${quote(table.name)})`).all() as unknown as Array<{ table: string }>)
-          .map((row) => row.table)
-          .filter((name) => name !== table.name),
+          .map(row => row.table)
+          .filter(name => name !== table.name),
       ),
     ]),
   );
@@ -29,7 +31,7 @@ export function upgradeRemoteWorkerAdmissionBindingSchema(db: Pick<DatabaseSync,
   for (let changed = true; changed; ) {
     changed = false;
     for (const [table, parents] of dependencies)
-      if (!closure.has(table) && [...parents].some((parent) => closure.has(parent))) {
+      if (!closure.has(table) && [...parents].some(parent => closure.has(parent))) {
         closure.add(table);
         changed = true;
       }
@@ -37,7 +39,7 @@ export function upgradeRemoteWorkerAdmissionBindingSchema(db: Pick<DatabaseSync,
   const ordered: string[] = [];
   const pending = new Set(closure);
   while (pending.size) {
-    const ready = [...pending].filter((name) => ![...dependencies.get(name)!].some((parent) => pending.has(parent)));
+    const ready = [...pending].filter(name => ![...dependencies.get(name)!].some(parent => pending.has(parent)));
     if (!ready.length) throw new Error("Remote admission migration found a cyclic dependency.");
     for (const name of ready) {
       ordered.push(name);
@@ -46,17 +48,17 @@ export function upgradeRemoteWorkerAdmissionBindingSchema(db: Pick<DatabaseSync,
   }
   const copies = new Map(ordered.map((name, index) => [name, `remote_admission_copy_${index}`]));
   const columns = new Map(
-    ordered.map((name) => [
+    ordered.map(name => [
       name,
       (db.prepare(`PRAGMA table_info(${quote(name)})`).all() as unknown as Array<{ name: string }>).map(
-        (row) => row.name,
+        row => row.name,
       ),
     ]),
   );
   for (const name of ordered) db.exec(`CREATE TEMP TABLE ${quote(copies.get(name)!)} AS SELECT * FROM ${quote(name)};`);
   for (const name of [...ordered].reverse()) db.exec(`DROP TABLE ${quote(name)};`);
   for (const name of ordered) {
-    let sql = tables.find((table) => table.name === name)!.sql;
+    let sql = tables.find(table => table.name === name)!.sql;
     if ((owners as readonly string[]).includes(name)) {
       const pattern = /\bcapability_profile_sha256\s+TEXT\s+NOT NULL/u;
       if (!pattern.test(sql))
@@ -82,7 +84,7 @@ export function upgradeRemoteWorkerAdmissionBindingSchema(db: Pick<DatabaseSync,
     const names = columns.get(name)!.map(quote).join(", ");
     db.exec(`INSERT INTO ${quote(name)} (${names}) SELECT ${names} FROM ${quote(copies.get(name)!)};`);
   }
-  for (const object of objects.filter((row) => row.type !== "table" && closure.has(row.tbl_name))) db.exec(object.sql);
+  for (const object of objects.filter(row => row.type !== "table" && closure.has(row.tbl_name))) db.exec(object.sql);
   for (const owner of owners)
     db.exec(`CREATE TRIGGER ${quote(`${owner}_admission_reference_immutable`)}
     BEFORE UPDATE OF admission_reference_json ON ${quote(owner)}
