@@ -8,22 +8,24 @@ import type {
 } from "@goatcitadel/contracts";
 // The calibrated anti-slop table lives with the design detector so Ops evidence and runtime advisories share it.
 import { ANTI_SLOP_PATTERNS, DESIGN_DETECTOR_RULES } from "./design-detector/rules.js";
+import { enumerateSkillRoutes, IMPECCABLE_SKILL_ID, IMPECCABLE_SKILL_NAME } from "./skill-module-routes.js";
 
 function isRetiringClassicPath(filePath: string): boolean {
   return /[\\/]features[\\/](?:native-routes|threaded-surface)[\\/]/u.test(filePath);
 }
 
-// The vendored impeccable modules the skill routes inject (see packages/skills/src/skill-module-routes.ts).
+// Every module any impeccable route can inject, read from the same route table the runtime uses, so a
+// module that vanishes from an install blocks here before a turn fails its exact-byte verification.
 const SKILL_DIR = path.join("skills", "bundled", "impeccable");
-const REQUIRED_SKILL_MODULES = [
-  "SKILL.md",
-  "reference/craft-floor.md",
-  "reference/artifacts.md",
-  "reference/critique.md",
-  "reference/critique/01-reference-material.md",
-  "reference/audit.md",
-  "reference/polish.md",
-] as const;
+const REQUIRED_SKILL_MODULES: readonly string[] = [
+  ...new Set(
+    enumerateSkillRoutes({ skillId: IMPECCABLE_SKILL_ID, skillName: IMPECCABLE_SKILL_NAME }).flatMap((route) =>
+      route.modules.map((module) => module.relativePath),
+    ),
+  ),
+];
+// GoatCitadel authors this one module itself; the sync script never writes it.
+const LOCAL_SKILL_MODULES = new Set(["reference/artifacts.md"]);
 
 const REQUIRED_SKILL_PHRASES = [
   "Vendored from",
@@ -107,7 +109,13 @@ export function readDesignQualityEvidence(repoRoot: string): OpsDesignQualitySna
       evidence: skillOwner,
       nextAction:
         missingModules.length > 0
-          ? `Restore missing impeccable module(s) with the sync script: ${missingModules.join(", ")}.`
+          ? `Restore missing impeccable module(s): ${missingModules
+              .map((file) =>
+                LOCAL_SKILL_MODULES.has(file)
+                  ? `${file} (GoatCitadel-authored, restore from git)`
+                  : `${file} (re-run the sync script)`,
+              )
+              .join(", ")}.`
           : undefined,
     }),
   );

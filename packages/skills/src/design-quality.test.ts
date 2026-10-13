@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { hasBlockingDesignQualityFindings, readDesignQualityEvidence } from "./design-quality.js";
+import { enumerateSkillRoutes, IMPECCABLE_SKILL_ID, IMPECCABLE_SKILL_NAME } from "./skill-module-routes.js";
 
 const tempRoots: string[] = [];
 
@@ -45,6 +46,15 @@ describe("design-quality evidence", () => {
       ]),
     );
     expect(hasBlockingDesignQualityFindings(snapshot)).toBe(true);
+  });
+
+  it("requires every module a skill route injects, not only the hand-picked ones", async () => {
+    const root = await createFixture({ omitSkillModule: "reference/bolder.md" });
+
+    const check = readDesignQualityEvidence(root).checks.find((item) => item.id === "impeccable.modules");
+
+    expect(check).toMatchObject({ severity: "P0", status: "blocking" });
+    expect(check?.nextAction).toContain("reference/bolder.md");
   });
 
   it("blocks unresolved local links in the impeccable skill", async () => {
@@ -132,14 +142,16 @@ describe("design-quality evidence", () => {
   });
 });
 
+// Every module any impeccable route injects, read from the same route table the runtime uses.
 const IMPECCABLE_MODULES: Array<[string, string]> = [
-  ["reference/craft-floor.md", "# Craft floor\nNo kicker labels; no glass by default."],
-  ["reference/artifacts.md", "# Artifacts\nDeck and document structure."],
-  ["reference/critique.md", "# Critique\nTwo assessments, one report."],
-  ["reference/critique/01-reference-material.md", "# Reference material\nHeuristics."],
-  ["reference/audit.md", "# Audit\nAccessibility pass."],
-  ["reference/polish.md", "# Polish\nFinal pass."],
-];
+  ...new Set(
+    enumerateSkillRoutes({ skillId: IMPECCABLE_SKILL_ID, skillName: IMPECCABLE_SKILL_NAME }).flatMap((route) =>
+      route.modules.map((module) => module.relativePath),
+    ),
+  ),
+]
+  .filter((relativePath) => relativePath !== "SKILL.md")
+  .map((relativePath) => [relativePath, `# ${path.basename(relativePath, ".md")}\nModule text.`]);
 
 async function createFixture(
   options: {
@@ -183,6 +195,7 @@ async function createFixture(
       file === "reference/artifacts.md" && options.artifactsBytes
         ? `${content}\n${"x".repeat(options.artifactsBytes)}`
         : content;
+    await fs.mkdir(path.dirname(path.join(skillDir, file)), { recursive: true });
     await fs.writeFile(path.join(skillDir, file), body, "utf8");
   }
   const provenance: Array<[string, string]> = [
