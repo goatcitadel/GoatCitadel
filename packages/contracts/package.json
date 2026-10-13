@@ -26,6 +26,10 @@
     "./startup-reads": {
       "types": "./dist/gateway-startup-reads.d.ts",
       "default": "./dist/gateway-startup-reads.js"
+    },
+    "./external-source-chat": {
+      "types": "./dist/external-source-chat.d.ts",
+      "default": "./dist/external-source-chat.js"
     }
   },
   "repository": {

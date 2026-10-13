@@ -16,7 +16,7 @@ const apiMocks = vi.hoisted(() => ({
   isExternalSourceCapabilityAbsent: (error: unknown) => (error as { status?: number } | null)?.status === 404,
 }));
 
-vi.mock("@goatcitadel/mission-control-shared/api/external-sources", () => apiMocks);
+vi.mock("@goatcitadel/mission-control-shared/api/external-source-chat", () => apiMocks);
 
 const timestamp = "2026-07-14T08:00:00.000Z";
 const hash = (value: string): string => value.repeat(64).slice(0, 64);

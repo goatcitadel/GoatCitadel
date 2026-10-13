@@ -17,7 +17,7 @@ import {
   fetchExternalSourceAttachmentCandidates,
   isExternalSourceCapabilityAbsent,
   requestExternalSourceKnowledgeSnapshot,
-} from "@goatcitadel/mission-control-shared/api/external-sources";
+} from "@goatcitadel/mission-control-shared/api/external-source-chat";
 
 /**
  * HX-407 C3/C4b Chat-side external-source attachment state.

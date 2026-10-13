@@ -6,6 +6,7 @@ import { defineConfig, loadEnv, type Plugin, type ResolvedConfig, type ViteDevSe
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { resolveMonacoAssetPath } from "./config/monaco-assets.js";
+import { findLazyOnlyCockpitIcons, usesAutomaticCockpitPlacement, type CockpitBootModuleGraph } from "./config/cockpit-vendor-ownership.js";
 
 // Vitest 4 trimmed the built-in `exclude` down to node_modules/.git only, so the
 // compiled `dist/**/*.test.js` files this app emits would otherwise be collected and
@@ -223,10 +224,17 @@ export function readDevResetId(command: string, rootDir: string = repoRoot): str
 /** Group retained static Cockpit dependencies; dynamic destinations keep their own chunks. */
 export function createCockpitBootChunkSelector() {
   let bootModules: Set<string> | undefined;
-  return (id: string, graph?: {
-    getModuleIds: () => IterableIterator<string>;
-    getModuleInfo: (id: string) => { isIncluded: boolean | null; importedIds: readonly string[] } | null;
-  }): string | undefined => {
+  let lazyOnlyIcons: Set<string> | undefined;
+  return (id: string, graph?: CockpitBootModuleGraph): string | undefined => {
+    const normalizedId = id.replaceAll("\\", "/");
+    // A discarded contract barrel can reach modules retained only by lazy destinations.
+    // Let Rollup place those modules; actual imports still preserve their validation.
+    if (/\/packages\/contracts\/(?:dist|src)\/(?:remote-worker-[^/]+|secret-redaction|channel-sanitizer|durable-child-watcher-bounds|change-plan|external-sources)\.[jt]s$/.test(normalizedId)) return undefined;
+    // These primitives belong to Gallery, Library and Settings; actual imports still determine loading.
+    if (/\/node_modules\/@radix-ui\/react-(?:tooltip|tabs)\//.test(normalizedId)) return undefined;
+    // Library transport stays at its actual destination; the eager Chat leaf remains grouped.
+    if (/\/packages\/mission-control-shared\/(?:dist|src)\/api\/external-sources\.[jt]s$/.test(normalizedId)) return undefined;
+    if (usesAutomaticCockpitPlacement(id)) return undefined;
     if (graph) {
       if (!bootModules) {
         bootModules = new Set<string>();
@@ -247,7 +255,9 @@ export function createCockpitBootChunkSelector() {
         }
         // Shared preference/reset helpers must not make main.tsx initialize a shell before storage reset.
         for (const moduleId of initialModules) bootModules.delete(moduleId);
+        lazyOnlyIcons = findLazyOnlyCockpitIcons(graph, bootModules);
       }
+      if (lazyOnlyIcons?.has(id)) return undefined;
       if (bootModules.has(id)) {
         const normalized = id.replaceAll("\\", "/");
         // Keep the existing per-chunk cap; partition along the current one-way ownership dependencies.

@@ -8,6 +8,9 @@ import {
   type ExternalSourceRecord,
 } from "@goatcitadel/contracts";
 import * as externalSources from "./external-sources";
+import * as chatExternalSources from "./external-source-chat";
+import * as externalSourceContracts from "@goatcitadel/contracts";
+import * as chatExternalSourceContracts from "@goatcitadel/contracts/external-source-chat";
 import { ApiRequestError } from "./http-internal";
 
 const apiMocks = vi.hoisted(() => ({ request: vi.fn() }));
@@ -584,5 +587,18 @@ describe("external-sources Chat client", () => {
     });
     expect(externalSources.isExternalSourceCapabilityAbsent(denied)).toBe(false);
     expect(externalSources.isExternalSourceCapabilityAbsent(new Error("network"))).toBe(false);
+  });
+});
+
+describe("external-source eager owner compatibility", () => {
+  it("preserves the exact Chat API functions through the existing facade", () => {
+    for (const name of ["isExternalSourceCapabilityAbsent","fetchExternalSessionAttachments","fetchExternalSourceAttachmentCandidates","attachExternalSourceToSession","detachExternalSourceAttachment","requestExternalSourceKnowledgeSnapshot"] as const) {
+      expect(chatExternalSources[name]).toBe(externalSources[name]);
+    }
+  });
+  it("preserves the exact mandatory validators, consequence and bounds through the contract facade", () => {
+    for (const name of ["EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_CONSEQUENCE","assertExternalSessionAttachment","assertExternalSourceAttachmentCandidate","assertExternalSourceAttachmentCandidateListResponse","assertExternalSourceKnowledgeSnapshotApprovalPayload","normalizeExternalSessionAttachInput","normalizeExternalSessionDetachInput","normalizeExternalSourceKnowledgeSnapshotRequestInput","EXTERNAL_SOURCE_LIMITS","EXTERNAL_SOURCE_SCHEMA_VERSION","EXTERNAL_SOURCE_SESSION_INCARNATION_MAX_LENGTH"] as const) {
+      expect(chatExternalSourceContracts[name]).toBe(externalSourceContracts[name]);
+    }
   });
 });

@@ -197,3 +197,72 @@ it("groups retained static Cockpit modules without assigning dynamic destination
   expect(select("optional-workbench", graph)).toBeUndefined();
   expect(createCockpitBootChunkSelector()("optional-workbench", graph)).toBeUndefined();
 });
+
+it.each(["remote-worker-ops", "remote-worker-runtime-read", "remote-worker-inference", "secret-redaction", "channel-sanitizer", "durable-child-watcher-bounds", "change-plan"])("keeps %s at its actual lazy destination despite a discarded contract barrel", (name) => {
+  const optional = "C:/repo/packages/contracts/dist/" + name + ".js";
+  const required = "C:/repo/packages/contracts/dist/session-control.js";
+  const modules = new Map([
+    ["C:/repo/src/cockpit-entry.tsx", { isIncluded: true, importedIds: ["barrel"] }],
+    ["barrel", { isIncluded: false, importedIds: [optional, required] }],
+    [optional, { isIncluded: true, importedIds: [] }],
+    [required, { isIncluded: true, importedIds: [] }],
+  ]);
+  const graph = { getModuleIds: () => modules.keys(), getModuleInfo: (id: string) => modules.get(id) ?? null };
+  const select = createCockpitBootChunkSelector();
+  expect(select(optional, graph)).toBeUndefined();
+  expect(select(required, graph)).toBe("cockpit-foundation");
+  expect(select(optional.replaceAll("/", "\\"), graph)).toBeUndefined();
+});
+
+it.each(["tooltip", "tabs"])("leaves lazy-only Radix %s placement to actual imports and keeps native menu ownership", name => {
+  const optional = "C:/repo/node_modules/@radix-ui/react-" + name + "/dist/index.mjs";
+  const menu = "C:/repo/node_modules/@radix-ui/react-menu/dist/index.mjs";
+  const modules = new Map([
+    ["C:/repo/src/cockpit-entry.tsx", { isIncluded: true, importedIds: ["radix-barrel"] }],
+    ["radix-barrel", { isIncluded: false, importedIds: [optional, menu] }],
+    [optional, { isIncluded: true, importedIds: [] }],
+    [menu, { isIncluded: true, importedIds: [] }],
+  ]);
+  const graph = { getModuleIds: () => modules.keys(), getModuleInfo: (id: string) => modules.get(id) ?? null };
+  const select = createCockpitBootChunkSelector();
+  expect(select(optional, graph)).toBeUndefined();
+  expect(select(optional.replaceAll("/", "\\"), graph)).toBeUndefined();
+  expect(select(menu, graph)).toBe("cockpit-runtime");
+  expect(createCockpitBootChunkSelector()(optional)).toBeUndefined();
+});
+
+it("leaves confirmed destination owners to Rollup while keeping mandatory Native controls and regular queries grouped", () => {
+  const prefix = "C:/repo/apps/mission-control-next/src/features/native-routes/primitives/";
+  const automatic = ["C:/repo/packages/contracts/dist/ops-board.js", "C:/repo/packages/mission-control-shared/dist/api/memory.js", prefix + "ErrorState.tsx", "C:/repo/node_modules/@tanstack/query-core/build/modern/infiniteQueryObserver.js"];
+  const mandatory = [prefix + "NativeButton.tsx", prefix + "EmptyState.tsx", prefix + "StatusChip.tsx", "C:/repo/node_modules/@tanstack/react-query/build/modern/useQuery.js", "C:/repo/node_modules/@tanstack/query-core/build/modern/queryObserver.js"];
+  const modules = new Map<string, { isIncluded: boolean; importedIds: string[] }>([
+    ["C:/repo/src/cockpit-entry.tsx", { isIncluded: true, importedIds: ["discarded-barrel"] }],
+    ["discarded-barrel", { isIncluded: false, importedIds: [...automatic, ...mandatory] }],
+    ...[...automatic, ...mandatory].map(id => [id, { isIncluded: true, importedIds: [] }] as [string, { isIncluded: boolean; importedIds: string[] }]),
+  ]);
+  const graph = { getModuleIds: () => modules.keys(), getModuleInfo: (id: string) => modules.get(id) ?? null };
+  const select = createCockpitBootChunkSelector();
+  for (const id of automatic) {
+    expect(select(id, graph)).toBeUndefined();
+    expect(createCockpitBootChunkSelector()(id)).toBeUndefined();
+  }
+  for (const id of mandatory) expect(select(id, graph)).toBe(id.includes("/node_modules/") ? "cockpit-runtime" : "cockpit-entry");
+});
+
+it.each(["src", "dist"])("keeps optional external-source owners at their destination and mandatory %s Chat validation grouped", directory => {
+  const prefix = "C:/repo/packages/";
+  const optional = [prefix + "contracts/" + directory + "/external-sources.js", prefix + "mission-control-shared/" + directory + "/api/external-sources.js"];
+  const mandatory = [prefix + "contracts/" + directory + "/external-source-chat.js", prefix + "contracts/" + directory + "/external-source-validation.js", prefix + "mission-control-shared/" + directory + "/api/external-source-chat.js"];
+  const modules = new Map<string, { isIncluded: boolean; importedIds: string[] }>([
+    ["C:/repo/src/cockpit-entry.tsx", { isIncluded: true, importedIds: ["discarded-barrel", ...mandatory] }],
+    ["discarded-barrel", { isIncluded: false, importedIds: optional }],
+    ...[...optional, ...mandatory].map(id => [id, { isIncluded: true, importedIds: [] }] as [string, { isIncluded: boolean; importedIds: string[] }]),
+  ]);
+  const graph = { getModuleIds: () => modules.keys(), getModuleInfo: (id: string) => modules.get(id) ?? null };
+  const select = createCockpitBootChunkSelector();
+  for (const id of optional) {
+    expect(select(id, graph)).toBeUndefined();
+    expect(select(id.replaceAll("/", "\\"), graph)).toBeUndefined();
+  }
+  for (const id of mandatory) expect(select(id, graph)).toBe("cockpit-foundation");
+});
