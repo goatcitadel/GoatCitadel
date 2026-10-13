@@ -28,8 +28,8 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 253,
-        name: "purge_credential_route_idempotency_payload_hashes",
+        version: 255,
+        name: "approval_execution_linkage_index_sort_convergence",
       },
     );
     db.close();

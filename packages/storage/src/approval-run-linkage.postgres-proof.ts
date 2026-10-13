@@ -5,11 +5,37 @@ import assert from "node:assert/strict";
 import { createRemoteWorkerPostgresTestScope } from "./remote-worker-test-fixtures.js";
 import { ApprovalRepository } from "./approval-repo.js";
 import { APPROVAL_EXECUTION_LINKAGE_POSTGRES_SQL } from "./approval-execution-linkage-migration.js";
+import { PostgresDatabaseClient } from "./postgres/client.js";
+import { runPostgresMigrations } from "./postgres/migrator.js";
 const connectionString=process.env.GOATCITADEL_TEST_POSTGRES_URL;
 test("PostgreSQL canonical execution linkage migrates, backfills, indexes and pages without workspace scans",async(t)=>{
  assert.ok(connectionString,"Run against a disposable loopback PostgreSQL database; missing evidence must fail this proof");
  const scope=await createRemoteWorkerPostgresTestScope(connectionString,"cockpit_approval_linkage");
  try {
+  const migrationUrl = new URL(connectionString);
+  migrationUrl.searchParams.set("options", "-csearch_path=" + scope.schemaName);
+  const migrationClient = new PostgresDatabaseClient({
+   connectionString: migrationUrl.toString(),
+   database: decodeURIComponent(migrationUrl.pathname.replace(/^\//u, "")) || "postgres",
+  }, { pool: scope.scopedPool });
+  const assertDirections = async () => {
+   const indexes = (await scope.scopedPool.query(
+    "SELECT relation.relname AS name, ARRAY[pg_catalog.pg_get_indexdef(relation.oid, 1, true), pg_catalog.pg_get_indexdef(relation.oid, 2, true), pg_catalog.pg_get_indexdef(relation.oid, 3, true), pg_catalog.pg_get_indexdef(relation.oid, 4, true)] AS keys, ARRAY[pg_catalog.pg_index_column_has_property(relation.oid::pg_catalog.regclass, 1, 'desc'), pg_catalog.pg_index_column_has_property(relation.oid::pg_catalog.regclass, 2, 'desc'), pg_catalog.pg_index_column_has_property(relation.oid::pg_catalog.regclass, 3, 'desc'), pg_catalog.pg_index_column_has_property(relation.oid::pg_catalog.regclass, 4, 'desc')] AS descending FROM pg_catalog.pg_class relation JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace WHERE namespace.nspname = current_schema() AND relation.relname = ANY($1::text[]) ORDER BY relation.relname",
+    [["idx_approval_execution_run", "idx_approval_execution_durable_run"]],
+   )).rows;
+   assert.equal(indexes.length, 2);
+   for (const index of indexes) {
+    assert.deepEqual((index.keys as string[]).map((key) => key.toLowerCase()), [
+     "workspace_id", index.name === "idx_approval_execution_run" ? "run_id" : "durable_run_id", "created_at", "approval_id",
+    ]);
+    assert.deepEqual(index.descending, [false, false, true, true]);
+   }
+  };
+  await t.test("fresh PostgreSQL startup and a repeated startup retain both descending indexes", async () => {
+   await assertDirections();
+   assert.deepEqual((await runPostgresMigrations(migrationClient)).appliedVersions, []);
+   await assertDirections();
+  });
   const repo=new ApprovalRepository(scope.db);
   const create=(workspaceId:string,runId:string,sessionId="session")=>repo.create({kind:"tool.invoke",riskLevel:"safe",payload:{},preview:{},linkage:{workspaceId,runId,sessionId}});
   const old=create("one","run"), legacy=create("one","run"), foreign=create("two","run");
@@ -29,6 +55,66 @@ test("PostgreSQL canonical execution linkage migrates, backfills, indexes and pa
   assert.equal(repo.listByRunLinkage({workspaceId:"one",runId:"run",sessionId:"session"}).items.some(item=>item.approvalId===legacy.approvalId),true);
   const plan=await scope.scopedPool.query("SET enable_seqscan=off; EXPLAIN SELECT approval_id FROM approval_execution_linkages WHERE workspace_id='one' AND run_id='run' UNION SELECT approval_id FROM approval_execution_linkages WHERE workspace_id='one' AND durable_run_id='run'");
   const details=JSON.stringify(plan);assert.match(details,/idx_approval_execution_run/);assert.match(details,/idx_approval_execution_durable_run/);
+
+  await t.test("1000 linked records preserve scoped cursor order across historical ASC and DESC upgrades", async () => {
+   scope.db.transaction("immediate", () => {
+    for (let index = 0; index < 1_000; index++) {
+     const linkage = index % 3 === 0 ? { runId: "paging-run", durableRunId: "paging-run" }
+      : index % 2 === 0 ? { runId: "paging-run" } : { durableRunId: "paging-run" };
+     const row = repo.create({ kind: "tool.invoke", riskLevel: "safe", payload: {}, preview: {}, linkage: { workspaceId: "one", sessionId: "paging-session", ...linkage } });
+     scope.db.prepare("UPDATE approvals SET created_at = ? WHERE approval_id = ?")
+      .run(new Date(1_700_000_000_000 + Math.floor(index / 3)).toISOString(), row.approvalId);
+    }
+    create("foreign", "paging-run", "paging-session");
+    create("one", "paging-run", "foreign-session");
+   });
+   const expected = scope.db.prepare("SELECT approval_id FROM approval_execution_linkages WHERE workspace_id = ? AND (run_id = ? OR durable_run_id = ?) AND session_id = ? ORDER BY created_at DESC, approval_id DESC")
+    .all<{ approval_id: string }>("one", "paging-run", "paging-run", "paging-session").map((row) => row.approval_id);
+   assert.equal(expected.length, 1_000);
+   const assertPages = () => {
+    const actual: string[] = [];
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+     const page = repo.listByRunLinkage({ workspaceId: "one", runId: "paging-run", sessionId: "paging-session", limit: 100, cursor });
+     assert.equal(page.items.length, 100);
+     actual.push(...page.items.map((item) => item.approvalId));
+     cursor = page.nextCursor;
+     if (cursor) { assert.equal(cursors.has(cursor), false); cursors.add(cursor); }
+     assert.ok(actual.length <= 1_000, "cursor traversal must not duplicate or leak scoped records");
+    } while (cursor);
+    assert.deepEqual(actual, expected);
+    assert.equal(new Set(actual).size, 1_000);
+   };
+   assertPages();
+   for (const previousDirection of ["ASC", "DESC"] as const) {
+    scope.db.transaction("immediate", () => {
+     scope.db.exec("DROP INDEX idx_approval_execution_run; DROP INDEX idx_approval_execution_durable_run;"
+      + "CREATE INDEX idx_approval_execution_run ON approval_execution_linkages(workspace_id, run_id, created_at " + previousDirection + ", approval_id " + previousDirection + ");"
+      + "CREATE INDEX idx_approval_execution_durable_run ON approval_execution_linkages(workspace_id, durable_run_id, created_at " + previousDirection + ", approval_id " + previousDirection + ");");
+     scope.db.prepare("DELETE FROM schema_migrations WHERE version = 202").run();
+    });
+    const retained = {
+     approvals: scope.db.prepare("SELECT * FROM approvals ORDER BY approval_id").all(),
+     linkages: scope.db.prepare("SELECT * FROM approval_execution_linkages ORDER BY approval_id").all(),
+     ledger: scope.db.prepare("SELECT * FROM schema_migrations ORDER BY version").all(),
+     objects: (await scope.scopedPool.query("SELECT relation.relname, relation.relkind, relation.oid::text FROM pg_catalog.pg_class relation JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace WHERE namespace.nspname = current_schema() AND relation.relname NOT IN ('idx_approval_execution_run', 'idx_approval_execution_durable_run') ORDER BY relation.relname")).rows,
+    };
+    assertPages();
+    const migrated = await runPostgresMigrations(migrationClient);
+    assert.deepEqual(migrated.appliedVersions, [202]);
+    assert.equal(migrated.latestVersion, 202);
+    await assertDirections();
+    assert.deepEqual(scope.db.prepare("SELECT * FROM approvals ORDER BY approval_id").all(), retained.approvals);
+    assert.deepEqual(scope.db.prepare("SELECT * FROM approval_execution_linkages ORDER BY approval_id").all(), retained.linkages);
+    assert.deepEqual(scope.db.prepare("SELECT * FROM schema_migrations WHERE version <= 201 ORDER BY version").all(), retained.ledger);
+    assert.deepEqual((await scope.scopedPool.query("SELECT relation.relname, relation.relkind, relation.oid::text FROM pg_catalog.pg_class relation JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace WHERE namespace.nspname = current_schema() AND relation.relname NOT IN ('idx_approval_execution_run', 'idx_approval_execution_durable_run') ORDER BY relation.relname")).rows, retained.objects);
+    assertPages();
+    assert.deepEqual((await runPostgresMigrations(migrationClient)).appliedVersions, []);
+    await assertDirections();
+    assertPages();
+   }
+  });
 
   await t.test("credential-route hash purge preserves keys, claims, status and unrelated records", async () => {
    const migration=POSTGRES_MIGRATIONS.find(item=>item.name==="purge_credential_route_idempotency_payload_hashes");

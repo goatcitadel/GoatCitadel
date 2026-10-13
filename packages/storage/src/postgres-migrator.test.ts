@@ -867,13 +867,37 @@ describe("Postgres migration ledger compatibility", () => {
 
   it("models one canonical final shape after bootstrap replacement and dynamic catalog normalization", () => {
     const manifest = buildCanonicalPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
-    // Reviewed committed registry through v199 (v198 adds channel_setup_evidence and channel_oauth_attempts: +2 tables, +32 columns, +6 indexes (4 explicit plus 2 unique-constraint backing indexes); v199 is data-only); keep independent drift tripwires.
-    assert.equal(manifest.tables.length, 366);
+    // Reviewed registry through v202: v201 adds one table, six columns, and
+    // two explicit indexes; v202 converges their sort direction without rows.
+    // Keep independent drift tripwires for the complete current shape.
+    assert.equal(manifest.tables.length, 367);
     assert.equal(
       manifest.tables.reduce((count, table) => count + table.columns.length, 0),
-      5_057,
+      5_063,
     );
-    assert.equal(manifest.indexes.length, 764);
+    assert.equal(manifest.indexes.length, 766);
+    assert.deepEqual(
+      manifest.tables.find((table) => table.name === "approval_execution_linkages")?.columns.map((column) => column.name),
+      ["approval_id", "workspace_id", "run_id", "durable_run_id", "session_id", "created_at"],
+    );
+    // The forward repair converges bootstrap and upgraded index directions.
+    assert.deepEqual(manifest.indexes.find((index) => index.name === "idx_approval_execution_run")?.keys, [
+      "workspace_id", "run_id", "created_at desc", "approval_id desc",
+    ]);
+    assert.deepEqual(manifest.indexes.find((index) => index.name === "idx_approval_execution_durable_run")?.keys, [
+      "workspace_id", "durable_run_id", "created_at desc", "approval_id desc",
+    ]);
+    // Validate the forward migration's descending order independently; the
+    // schema-shape normalizer preserves DESC and must not discard this proof.
+    const linkageMigration = POSTGRES_MIGRATIONS.find((migration) => migration.name === "approval_execution_linkage_index");
+    assert.ok(linkageMigration);
+    const linkageManifest = buildPostgresSchemaShapeManifest([linkageMigration]);
+    assert.deepEqual(linkageManifest.indexes.find((index) => index.name === "idx_approval_execution_run")?.keys, [
+      "workspace_id", "run_id", "created_at desc", "approval_id desc",
+    ]);
+    assert.deepEqual(linkageManifest.indexes.find((index) => index.name === "idx_approval_execution_durable_run")?.keys, [
+      "workspace_id", "durable_run_id", "created_at desc", "approval_id desc",
+    ]);
     assert.deepEqual(manifest.indexes.find((index) => index.name === "idx_memory_items_enumeration")?.keys, [
       "updated_at desc",
       "item_id desc",
@@ -1027,8 +1051,8 @@ describe("Postgres migration ledger compatibility", () => {
 
   it("covers every canonical IF NOT EXISTS table and index and fails closed on catalog issues", () => {
     const manifest = buildPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
-    assert.equal(manifest.tables.length, 366);
-    assert.equal(manifest.indexes.length, 781);
+    assert.equal(manifest.tables.length, 367);
+    assert.equal(manifest.indexes.length, 783);
     assert.equal(
       manifest.tables.every((table) => table.columns.length > 0),
       true,

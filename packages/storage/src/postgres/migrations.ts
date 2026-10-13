@@ -1,4 +1,5 @@
 import { APPROVAL_EXECUTION_LINKAGE_POSTGRES_SQL } from "../approval-execution-linkage-migration.js";
+import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_POSTGRES_SQL } from "../approval-execution-linkage-index-repair.js";
 import { CHANNEL_GUIDED_SETUP_POSTGRES_SQL } from "../channel-guided-setup-schema.js";
 import { GOVERNED_REMEDIATION_PARENT_RESERVATION_POSTGRES_SQL } from "../governed-remediation-parent-reservation-schema.js";
 import { GOVERNED_REMEDIATION_RESUME_VERSION_POSTGRES_SQL } from "../governed-remediation-resume-version.js";
@@ -15077,6 +15078,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     integritySha256: "d16c868ca1d7e8eb98a9b19c8eecbaf141a89816637834f9a2db368ab03c7c69",
   },
   { version: 201, name: "approval_execution_linkage_index", sql: APPROVAL_EXECUTION_LINKAGE_POSTGRES_SQL, integritySha256: "f9bd51adefcc6f27142334b99af3d291bcef33d802005d5d7e6b16960e7b709d" },
+  { version: 202, name: "approval_execution_linkage_index_sort_convergence", sql: APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_POSTGRES_SQL, integritySha256: "fd9d22a3cccbb824e727517aabe5987a00fdd1936a7c3dd276724cbef47543b8" },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

@@ -1,4 +1,5 @@
 import { APPROVAL_EXECUTION_LINKAGE_SQLITE_SQL } from "./approval-execution-linkage-migration.js";
+import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_SQLITE_SQL } from "./approval-execution-linkage-index-repair.js";
 import { createChannelGuidedSetupSchema } from "./channel-guided-setup-schema.js";
 import { createGovernedRemediationParentReservationSchema } from "./governed-remediation-parent-reservation-schema.js";
 import { upgradeGovernedRemediationResumeVersion } from "./governed-remediation-resume-version.js";
@@ -7370,6 +7371,7 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         up: purgeCredentialRouteIdempotencyPayloadHashes,
       },
       { version: 254, name: "approval_execution_linkage_index", up: (db) => db.exec(APPROVAL_EXECUTION_LINKAGE_SQLITE_SQL) },
+      { version: 255, name: "approval_execution_linkage_index_sort_convergence", up: (db) => db.exec(APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_SQLITE_SQL) },
     ],
   },
 ];

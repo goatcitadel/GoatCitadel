@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 254,
+      "expectedCount": 255,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 254,
+      "expectedLastVersion": 255,
       "migrations": [
         {
           "version": 1,
@@ -1786,15 +1786,22 @@
           "groupName": "canonical",
           "definitionSha256": "46a2f9be744d6142c87ac3e902dba340972ffc05804856896f41e2909105a8cb",
           "implementationSha256": "818818d0779041185a1e6c7be934eb12f25c7127bc814d76c15d71ac21ca9294"
+        },
+        {
+          "version": 255,
+          "name": "approval_execution_linkage_index_sort_convergence",
+          "groupName": "canonical",
+          "definitionSha256": "4be8ff6587c451bfe3389eb5a0d41c8f3a053d30e3325714221f43a4ad791b95",
+          "implementationSha256": "3818d368076d5f099fce34bda200be2df6981c5c1c5bde5a4cfbd1fc7121146e"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 201,
+      "expectedCount": 202,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 201,
+      "expectedLastVersion": 202,
       "migrations": [
         {
           "version": 1,
@@ -3005,6 +3012,12 @@
           "name": "approval_execution_linkage_index",
           "definitionSha256": "2b23765959c6f51e054fd5ab24dbf65150fbff8ae00799bff08ced15cb89f792",
           "runtimeIntegritySha256": "f9bd51adefcc6f27142334b99af3d291bcef33d802005d5d7e6b16960e7b709d"
+        },
+        {
+          "version": 202,
+          "name": "approval_execution_linkage_index_sort_convergence",
+          "definitionSha256": "7bfdd85dd6ed927180ea3b3503d2083dce94ba5acba43a7e28587108fe33328e",
+          "runtimeIntegritySha256": "fd9d22a3cccbb824e727517aabe5987a00fdd1936a7c3dd276724cbef47543b8"
         }
       ]
     }
