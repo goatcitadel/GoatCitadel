@@ -232,3 +232,4 @@ export * from "./channel-oauth.js";
 
 export * from "./channel-setup-operations.js";
 export * from "./chat-feature-references.js";
+export * from "./design-advisory.js";

@@ -235,6 +235,8 @@ export interface ChatGeneratedArtifactRecord {
     redactedPaths: string[];
     canonicalContentHashRefersToStoredArtifact: true;
   };
+  /** Informational design advisories derived from the content on every read of an `html` artifact; never stored. */
+  designAdvisories?: import("./design-advisory.js").DesignAdvisory[];
   createdAt: string;
   updatedAt: string;
 }

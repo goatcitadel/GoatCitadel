@@ -44,12 +44,15 @@ const realPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
 describe("PowerShellSkillHubWindowsSecurityProtocol cancellation", () => {
   beforeEach(() => {
     workers.length = 0;
-    // The worker only runs on Windows; the spawned process is a fake, so pin the platform for this test.
+    // The worker only runs on Windows; the spawned process is a fake, so pin the platform and the
+    // SystemRoot it resolves powershell.exe from (unset on Linux CI, where it threw before spawning).
     Object.defineProperty(process, "platform", { value: "win32" });
+    vi.stubEnv("SystemRoot", "C:\\Windows");
   });
 
   afterEach(() => {
     Object.defineProperty(process, "platform", realPlatform);
+    vi.unstubAllEnvs();
   });
 
   it("cancels only the aborted request and keeps the shared worker serving the others", async () => {
@@ -58,8 +61,8 @@ describe("PowerShellSkillHubWindowsSecurityProtocol cancellation", () => {
     const cancelled = new AbortController();
     const first = protocol.request("attributes", target, "file", cancelled.signal);
     const second = protocol.request("acl", target, "file", new AbortController().signal);
+    await vi.waitFor(() => expect(workers[0]?.requestLines).toHaveLength(2));
     const worker = workers[0]!;
-    await vi.waitFor(() => expect(worker.requestLines).toHaveLength(2));
 
     cancelled.abort();
     await expect(first).rejects.toEqual(new SkillHubWindowsSecurityError("cancelled"));

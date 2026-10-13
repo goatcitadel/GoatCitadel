@@ -6,6 +6,36 @@ This is the working acceptance record for the approved sequence in
 
 ## Current acceptance checkpoint
 
+### Origin reconciliation and Inbox fix, 2026-10-12
+
+Publication now includes reconciliation with `origin/main` at `0d16ac715`,
+retaining both upstream commits and the previously completed feature snapshot.
+The Inbox follow-on notification test replaces fixed sleeps with observable
+fetch/render synchronization. The owner also distinguishes changed access,
+execution and approval-wait identities even when their statuses match. Its
+focused settlement/recovery suite passes 17 tests; the synchronized pre-fix
+identity cases failed and are retained as evidence. Only the two explicitly
+assigned Inbox files are included from the primary checkout's existing edits;
+other edits remain separately backed up and uncommitted.
+
+Upstream design advisories now also recognize fresh Chat's admitted skill
+receipts while retaining historical profile behavior. These annotations remain
+informational and do not grant execution authority. Gateway and UI typechecks,
+33 focused upstream integration tests, async-boundary and docs checks passed.
+The final fresh-admission advisory suite passes 18 tests, including policy
+denial, canonical-fence revocation, stream consistency and harness neutrality.
+The origin reconciliation architecture receipt is
+`artifacts/verification/2026-10-13T01-34-08-608Z-architecture-metrics-86aa0d42`:
+Gateway 13,107/13,132 lines, 309/309 public methods, zero regressions with original
+limits unchanged. Final publication validation is retained under
+`output/feature-quality/origin-reconcile-*` and `inbox-publication-*`.
+The final architecture receipt after both fixes also passes at
+`artifacts/verification/2026-10-13T01-38-28-782Z-architecture-metrics-2ec5c573`;
+`publish-final-*` retains the final wrapped Gateway typecheck and docs checks.
+Live hosted/local model trials and physical two-machine acceptance remain
+explicitly deferred. Publication does not enable restoration switches,
+activate candidates, run missed schedules, install or deploy a release.
+
 ### Main integration checkpoint, 2026-10-12
 
 The completed feature snapshot was committed as `edb34df37` and reconciled with

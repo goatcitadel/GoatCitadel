@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
@@ -8,7 +9,15 @@ import { Button } from "../../ui/Button";
 import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 
-export function ApprovalSettlement({ approval, workspaceId }: { approval: ApprovalRequest; workspaceId: string }) {
+export function ApprovalSettlement({
+  approval,
+  workspaceId,
+  onFollowOnChange,
+}: {
+  approval: ApprovalRequest;
+  workspaceId: string;
+  onFollowOnChange?: () => void;
+}) {
   const access = useProjectAccess(workspaceId);
   const query = useQuery({
     queryKey: ["approval-settlement", workspaceId, approval.approvalId, access.identity],
@@ -26,6 +35,25 @@ export function ApprovalSettlement({ approval, workspaceId }: { approval: Approv
     },
   });
   const state = query.data;
+  const onFollowOnChangeRef = useRef(onFollowOnChange);
+  onFollowOnChangeRef.current = onFollowOnChange;
+  const followOnKey = state
+    ? JSON.stringify([
+        workspaceId,
+        approval.approvalId,
+        access.identity,
+        state.replay.approval.status,
+        state.replay.effects.map((effect) => [effect.effectId, effect.status]),
+        [state.run?.runId, state.run?.status],
+        [state.wait?.runId, state.wait?.status],
+      ])
+    : undefined;
+  useEffect(() => {
+    // Slow approval effects can settle long after the decision callback. Let
+    // Chat re-read its canonical thread/queue when this polling owner sees a
+    // changed outcome, without refreshing on every identical poll/render.
+    if (followOnKey) onFollowOnChangeRef.current?.();
+  }, [followOnKey]);
   const run = state?.run;
   const settled = state?.replay.approval ?? approval;
   const resolution = approvalResolutionLine(settled);

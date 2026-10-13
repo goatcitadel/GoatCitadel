@@ -157,6 +157,42 @@ async function createFixture(
   return root;
 }
 
+describe("craft-floor advisory scan", () => {
+  it("reports cockpit and shared-component hits as an advisory with per-rule counts", async () => {
+    const root = await createFixture();
+    const cockpitDir = path.join(root, "apps", "mission-control-next", "src", "cockpit", "areas", "work");
+    await fs.mkdir(cockpitDir, { recursive: true });
+    await fs.writeFile(
+      path.join(cockpitDir, "Panel.tsx"),
+      'export const Panel = () => <div className="backdrop-blur-md"><p className="eyebrow">Work</p></div>;\n',
+      "utf8",
+    );
+
+    const snapshot = readDesignQualityEvidence(root);
+    const check = snapshot.checks.find((item) => item.id === "mission-control.craft-floor.scan");
+
+    expect(snapshot.summary.blockingCount).toBe(0);
+    expect(check).toMatchObject({ severity: "P2", status: "advisory", owner: "mission-control-next" });
+    expect(check?.nextAction).toContain("glass-by-default: 1");
+    expect(check?.nextAction).toContain("kicker-eyebrow: 1");
+  });
+
+  it("ignores the retiring Classic shell and passes a clean cockpit", async () => {
+    const root = await createFixture();
+    const classicDir = path.join(root, "apps", "mission-control-next", "src", "features", "native-routes", "work");
+    await fs.mkdir(classicDir, { recursive: true });
+    await fs.writeFile(
+      path.join(classicDir, "Legacy.tsx"),
+      'export const Legacy = () => <div className="backdrop-blur-md" />;\n',
+      "utf8",
+    );
+
+    const check = readDesignQualityEvidence(root).checks.find((item) => item.id === "mission-control.craft-floor.scan");
+
+    expect(check).toMatchObject({ severity: "P3", status: "passing" });
+  });
+});
+
 describe("raw-color budget token sources", () => {
   const palette = Array.from(
     { length: 100 },

@@ -188,6 +188,7 @@ import {
   extractProviderFailureRecord,
   extractSkillSecurityFailureRecord,
 } from "./chat-turn-agent-runner/failure-records.js";
+import { buildToolResultDesignAdvisories } from "./chat-turn-agent-runner/design-advisories.js";
 import {
   analyzePresentationContentQuality,
   buildWorkspaceFileDownloadHref,
@@ -7084,6 +7085,40 @@ export class ChatTurnAgentRunner {
         if (res.chunk?.type === "tool_result") {
           res.chunk.toolRun = updated;
         }
+      }
+    }
+    if (
+      res.record.status === "executed" &&
+      res.record.result &&
+      // Prompt-pack harness turns stay neutral: the runner curates nothing the model sees there.
+      input.input.normalizationProfile !== "prompt_pack_harness"
+    ) {
+      // Informational design advisories for governed UI file writes: computed from the text the tool
+      // wrote (never re-read from disk), only when the turn admitted a design skill. The
+      // model sees them in the tool result by design (self-correction); they are best-effort and can
+      // never fail a turn whose tool already executed.
+      try {
+        const designAdvisories = buildToolResultDesignAdvisories({
+          capabilityProfile: input.input.capabilityProfile,
+          featureReferences: input.input.featureAdmission?.references,
+          toolName: res.record.toolName,
+          args: res.record.args,
+        });
+        if (designAdvisories) {
+          const result = { ...res.record.result, designAdvisories };
+          assertNoToolOutputInjection(result);
+          const updated = await this.patchToolRun(input.input, res.record.toolRunId, { result });
+          res.record = updated;
+          if (res.chunk?.type === "tool_result") {
+            res.chunk.toolRun = updated;
+          }
+        }
+      } catch (error) {
+        log.warn("design advisories skipped", {
+          toolRunId: res.record.toolRunId,
+          toolName: res.record.toolName,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
     if (res.record.status === "executed" && res.record.toolName === "user_input.request") {
