@@ -500,12 +500,6 @@ html[data-shell="cockpit"] .mc-dialog-content {
     font-size: var(--text-md);
     font-weight: 600;
   }
-  .cockpit-chat-documents .mc-next-panel-kicker {
-    color: var(--cockpit-accent);
-    font-size: var(--text-xs);
-    font-weight: 700;
-    text-transform: uppercase;
-  }
   .cockpit-chat-documents .mc-next-context-card-title-row {
     display: flex;
     align-items: start;
@@ -614,12 +608,6 @@ html[data-shell="cockpit"] .mc-dialog-content {
     font-size: var(--text-md);
     font-weight: 600;
     overflow-wrap: anywhere;
-  }
-  .cockpit-chat-documents .generated-artifact-kicker {
-    color: var(--cockpit-accent);
-    font-size: var(--text-xs);
-    font-weight: 700;
-    text-transform: uppercase;
   }
   .cockpit-chat-documents .generated-artifact-chip-row,
   .cockpit-chat-documents .generated-artifact-meta {

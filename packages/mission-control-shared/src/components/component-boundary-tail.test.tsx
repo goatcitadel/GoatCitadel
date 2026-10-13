@@ -60,6 +60,8 @@ describe("shared boundary and presentation tail components", () => {
     );
 
     expect(textOf(renderer.toJSON())).toContain("hit a render failure");
+    // The heading says what happened; no "Page unavailable" kicker above it (craft floor: no eyebrows).
+    expect(textOf(renderer.toJSON())).not.toContain("Page unavailable");
     expect(consoleSpy).toHaveBeenCalledWith(
       "[PageErrorBoundary] page render failed",
       expect.objectContaining({ pageLabel: "Tasks" }),
