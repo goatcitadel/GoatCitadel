@@ -7252,6 +7252,7 @@ export class ChatTurnAgentRunner {
     let preflight = this.preflightToolInvocation({
       toolName: input.toolName,
       rawArgs: input.rawArgs,
+      designSkillReceipt: hasDesignSkillReceipt(input.input.capabilityProfile),
       userContent: input.input.content,
       historyMessages: input.input.historyMessages,
       webMode: input.input.webMode,
@@ -7265,7 +7266,6 @@ export class ChatTurnAgentRunner {
           workspaceId: input.input.workspaceId,
           capabilityProfile: input.input.capabilityProfile,
         }),
-      designSkillReceipt: hasDesignSkillReceipt(input.input.capabilityProfile),
     });
     if (input.input.content.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) {
       preflight = {
