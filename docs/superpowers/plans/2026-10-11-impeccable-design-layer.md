@@ -219,6 +219,8 @@ DOCX theming beyond the blob removal; PDF font embedding.
 
 `pnpm docs:check`, `pnpm verify:design:quality`, `pnpm verify:skills:catalog`, `pnpm verify:fast`, `git diff --check`.
 
+Proof results (2026-10-13, branch `feat/impeccable-phase-6`): `docs:check`, `verify:skills:catalog`, and `git diff --check` pass. `verify:design:quality` passes every `impeccable.*` check and exits 1 only on the pre-existing `mission-control.raw-color-budget` (95 raw colours against the 92 budget in `__demo__/chat-demo.css`), which this phase does not touch and leaves open. `verify:fast` passed 22 of 24 lanes; `fast.repo-hygiene` was the GNU-tar-under-Git-Bash false red (green under PowerShell) and `fast.test.gateway.shard3` was the remote-worker restart e2e under full-lane load (green alone). `verify:visual:regression` ran as report only: 554 passed, 62 failed, the same cockpit pages and diff ratios as before this phase; baselines were not updated and that drift stays open.
+
 ---
 
 ## Dependencies

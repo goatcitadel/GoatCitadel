@@ -102,6 +102,14 @@ describe("design-quality evidence", () => {
     expect(check?.nextAction).toContain("npx impeccable");
   });
 
+  it("catches the launcher behind npx options such as -y", async () => {
+    const root = await createFixture({ skillAppend: "\nRun `npx -y impeccable` to set up.\n" });
+
+    const check = readDesignQualityEvidence(root).checks.find((item) => item.id === "impeccable.launcher-strings");
+
+    expect(check).toMatchObject({ severity: "P0", status: "blocking" });
+  });
+
   it("scans only the injectable files, not the provenance notes that document the launcher", async () => {
     const root = await createFixture({
       upstreamText:
@@ -113,8 +121,9 @@ describe("design-quality evidence", () => {
     expect(check).toMatchObject({ severity: "P3", status: "passing" });
   });
 
-  it("reports an oversized artifacts module as advisory", async () => {
-    const root = await createFixture({ artifactsBytes: 9 * 1024 });
+  it("reports an oversized artifacts module as advisory, measuring UTF-8 bytes rather than string length", async () => {
+    // 4,200 two-byte characters: 8,400 bytes but a string length well under 8 KiB.
+    const root = await createFixture({ artifactsPadding: "é".repeat(4200) });
 
     const check = readDesignQualityEvidence(root).checks.find((item) => item.id === "impeccable.artifacts-budget");
 
@@ -158,7 +167,7 @@ async function createFixture(
     omitSkillModule?: string;
     omitProvenanceFile?: "UPSTREAM.md" | "LICENSE" | "NOTICE";
     upstreamText?: string;
-    artifactsBytes?: number;
+    artifactsPadding?: string;
     appSource?: string;
     skillAppend?: string;
   } = {},
@@ -192,8 +201,8 @@ async function createFixture(
   for (const [file, content] of modules) {
     if (file === options.omitSkillModule) continue;
     const body =
-      file === "reference/artifacts.md" && options.artifactsBytes
-        ? `${content}\n${"x".repeat(options.artifactsBytes)}`
+      file === "reference/artifacts.md" && options.artifactsPadding
+        ? `${content}\n${options.artifactsPadding}`
         : content;
     await fs.mkdir(path.dirname(path.join(skillDir, file)), { recursive: true });
     await fs.writeFile(path.join(skillDir, file), body, "utf8");

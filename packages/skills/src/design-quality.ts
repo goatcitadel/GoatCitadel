@@ -53,7 +53,8 @@ const UPSTREAM_COMMIT_PATTERN = /Commit:\s*`[0-9a-f]{40}`/u;
 // point at it, and no injectable file may name the providers the repo excludes.
 const LAUNCHER_PATTERNS = [
   { id: "unresolved {{placeholder}}", re: /\{\{/u },
-  { id: "npx impeccable", re: /npx impeccable/iu },
+  // `npx impeccable`, `npx -y impeccable`, `npx --yes impeccable@latest`, `npx -p impeccable impeccable ...`
+  { id: "npx impeccable", re: /\bnpx\b(?:\s+-{1,2}[\w-]+(?:=\S+)?)*\s+impeccable\b/iu },
   { id: "impeccable launcher verb", re: /\bimpeccable (?:detect|pin|hooks|context|doctor)\b/iu },
   { id: "~/.impeccable", re: /~\/\.impeccable/u },
   { id: ".impeccable/ path", re: /\.impeccable\//u },
