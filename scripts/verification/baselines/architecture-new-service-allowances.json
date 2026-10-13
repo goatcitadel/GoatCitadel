@@ -1904,10 +1904,10 @@
     {
       "planStep": "C1",
       "path": "apps/gateway/src/services/chat-feature-admission-service.ts",
-      "maxHostCallbacks": 35,
-      "maxDependencyMemberAccesses": 35,
-      "reason": "Reviewed new selected-feature admission adapter. Composes current schedule, heartbeat, fanout, skill, provider and connection owners into the existing immutable admission aggregate. Durable replay reuses its exact hash; feature switches cannot activate previously admitted work. Callable skill lifecycle/content checks precede binding. No replacement capability catalog, policy or run store is created. Original baseline and existing-owner caps remain unchanged.",
-      "evidence": "FEATURE_QUALITY_EXECUTION.md retains admission, skill reuse/revoke, routed context, durable recovery and runtime-truth checkpoints. Current focused requester/mesh/remote callers and Gateway typechecks pass. The full architecture snapshot measures35/35; live model acceptance remains deferred."
+      "maxHostCallbacks": 37,
+      "maxDependencyMemberAccesses": 37,
+      "reason": "Reviewed integration adapter for current main and feature-quality completion. Preserves existing policy, exact-byte skill routing, workspace-only context, lifecycle transaction, audit and post-commit owners. Original architecture baseline and all existing-owner caps remain unchanged.",
+      "evidence": "Feature-quality merge validation records focused skill, requester, lifecycle and artifact tests, wrapped Gateway typecheck and a fresh named architecture gate. Imported type/Pick scanner blind spots are conservatively capped. Live model trials and two-machine acceptance remain deferred."
     },
     {
       "planStep": "C1",
@@ -2048,10 +2048,10 @@
     {
       "planStep": "C2",
       "path": "apps/gateway/src/services/chat-skill-selection-runtime.ts",
-      "maxHostCallbacks": 7,
-      "maxDependencyMemberAccesses": 7,
-      "reason": "Callable skill nomination, lifecycle suppression, revision loading, confidence and confirmation remain separate; usage writes still use SkillStateService. Original baseline and all existing-owner caps remain unchanged.",
-      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+      "maxHostCallbacks": 10,
+      "maxDependencyMemberAccesses": 10,
+      "reason": "Reviewed integration adapter for current main and feature-quality completion. Preserves existing policy, exact-byte skill routing, workspace-only context, lifecycle transaction, audit and post-commit owners. Original architecture baseline and all existing-owner caps remain unchanged.",
+      "evidence": "Feature-quality merge validation records focused skill, requester, lifecycle and artifact tests, wrapped Gateway typecheck and a fresh named architecture gate. Imported type/Pick scanner blind spots are conservatively capped. Live model trials and two-machine acceptance remain deferred."
     },
     {
       "planStep": "C1",
@@ -2176,10 +2176,10 @@
     {
       "planStep": "C3",
       "path": "apps/gateway/src/services/chat-turn-feature-runtime.ts",
-      "maxHostCallbacks": 19,
-      "maxDependencyMemberAccesses": 19,
-      "reason": "Shared stateless Chat feature guards restore exact MCP/mesh receipts and approval continuations, enforce current durable/tool-use fences, and retain admitted context binding. Effects, budgets and execution stay in ChatTurnAgentRunner. Imported Pick types obscure 19 inspected host accesses; the dependency cap records all of them. Original baseline and all existing-owner caps remain unchanged.",
-      "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+      "maxHostCallbacks": 20,
+      "maxDependencyMemberAccesses": 20,
+      "reason": "Reviewed integration adapter for current main and feature-quality completion. Preserves existing policy, exact-byte skill routing, workspace-only context, lifecycle transaction, audit and post-commit owners. Original architecture baseline and all existing-owner caps remain unchanged.",
+      "evidence": "Feature-quality merge validation records focused skill, requester, lifecycle and artifact tests, wrapped Gateway typecheck and a fresh named architecture gate. Imported type/Pick scanner blind spots are conservatively capped. Live model trials and two-machine acceptance remain deferred."
     },
     {
       "planStep": "C4",
@@ -2212,6 +2212,38 @@
       "maxDependencyMemberAccesses": 10,
       "reason": "Inherited new Nextcloud probe owner absent the original inventory is reviewed with configured-input/network preflight. Signed bounded room sends preserve ambiguous outcomes and require explicit operator testing; no new integration is introduced. Original baseline and all existing-owner caps remain unchanged.",
       "evidence": "FEATURE_QUALITY_EXECUTION.md records architecture-owner-remediation-measurements.json and focused architecture runtime/owner regression logs, typecheck and named architecture closure. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/workspace-skill-context-docs.ts",
+      "maxHostCallbacks": 1,
+      "maxDependencyMemberAccesses": 1,
+      "reason": "Reviewed integration adapter for current main and feature-quality completion. Preserves existing policy, exact-byte skill routing, workspace-only context, lifecycle transaction, audit and post-commit owners. Original architecture baseline and all existing-owner caps remain unchanged.",
+      "evidence": "Feature-quality merge validation records focused skill, requester, lifecycle and artifact tests, wrapped Gateway typecheck and a fresh named architecture gate. Imported type/Pick scanner blind spots are conservatively capped. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/release-bound-skill-retrust-owner.ts",
+      "maxHostCallbacks": 5,
+      "maxDependencyMemberAccesses": 5,
+      "reason": "Reviewed integration adapter for current main and feature-quality completion. Preserves existing policy, exact-byte skill routing, workspace-only context, lifecycle transaction, audit and post-commit owners. Original architecture baseline and all existing-owner caps remain unchanged.",
+      "evidence": "Feature-quality merge validation records focused skill, requester, lifecycle and artifact tests, wrapped Gateway typecheck and a fresh named architecture gate. Imported type/Pick scanner blind spots are conservatively capped. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/skill-hub-lifecycle-filesystem-composition.ts",
+      "maxHostCallbacks": 2,
+      "maxDependencyMemberAccesses": 2,
+      "reason": "Reviewed integration adapter for current main and feature-quality completion. Preserves existing policy, exact-byte skill routing, workspace-only context, lifecycle transaction, audit and post-commit owners. Original architecture baseline and all existing-owner caps remain unchanged.",
+      "evidence": "Feature-quality merge validation records focused skill, requester, lifecycle and artifact tests, wrapped Gateway typecheck and a fresh named architecture gate. Imported type/Pick scanner blind spots are conservatively capped. Live model trials and two-machine acceptance remain deferred."
+    },
+    {
+      "planStep": "C1",
+      "path": "apps/gateway/src/services/mcp-admission-tool-policy-guard.ts",
+      "maxHostCallbacks": 5,
+      "maxDependencyMemberAccesses": 5,
+      "reason": "Reviewed integration adapter for current main and feature-quality completion. Preserves existing policy, exact-byte skill routing, workspace-only context, lifecycle transaction, audit and post-commit owners. Original architecture baseline and all existing-owner caps remain unchanged.",
+      "evidence": "Feature-quality merge validation records focused skill, requester, lifecycle and artifact tests, wrapped Gateway typecheck and a fresh named architecture gate. Imported type/Pick scanner blind spots are conservatively capped. Live model trials and two-machine acceptance remain deferred."
     }
   ]
 }

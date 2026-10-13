@@ -257,3 +257,15 @@ export async function resumeFeatureTurnApprovals(
     await host.resumeFanoutApprovals?.(input);
   }
 }
+
+/** Remains lazy: artifact preflight alone decides whether the frozen workspace brand is needed. */
+export function createChatWorkspaceDesignBrandResolver(
+  host: Pick<ChatTurnAgentRunnerDeps, "resolveWorkspaceDesignBrand">,
+  input: ChatTurnAgentRunnerInput,
+) {
+  return () =>
+    host.resolveWorkspaceDesignBrand?.({
+      workspaceId: input.workspaceId,
+      capabilityProfile: input.capabilityProfile,
+    });
+}

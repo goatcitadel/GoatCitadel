@@ -22,6 +22,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/approvals", async (importOrigin
   fetchApproval: vi.fn().mockResolvedValue(null),
   fetchApprovalReplay: vi.fn().mockRejectedValue(new Error("No replay fixture")),
 }));
+// Approval follow-on reads the lifecycle owner beside the replay; keep it off the network.
+vi.mock("@goatcitadel/mission-control-shared/api/sessions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/sessions")>()),
+  fetchRuntimeLifecycle: vi.fn().mockRejectedValue(new Error("No lifecycle fixture")),
+}));
 
 vi.mock("react-virtuoso", () => ({
   Virtuoso: ({
@@ -117,7 +122,9 @@ describe("ChatTranscript", () => {
   it("hydrates missing approval risk from the matching pending canonical record", async () => {
     const onApprovePending = vi.fn();
     vi.mocked(fetchApproval).mockResolvedValueOnce({
-      preview: { targets: ["/workspace/fixture.txt"] }, payload: {}, createdAt: "2026-10-01T00:00:00Z",
+      preview: { targets: ["/workspace/fixture.txt"] },
+      payload: {},
+      createdAt: "2026-10-01T00:00:00Z",
       approvalId: "hydrate-risk",
       kind: "tool_invoke",
       status: "pending",
@@ -171,7 +178,9 @@ describe("ChatTranscript", () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     });
-    expect(container.textContent).toContain(record?.status === "approved" ? "Decision recorded" : "Current approval unavailable");
+    expect(container.textContent).toContain(
+      record?.status === "approved" ? "Decision recorded" : "Current approval unavailable",
+    );
     expect(container.textContent).not.toContain("Approve once");
   });
   it("follows measured growth of the same streamed turn only while pinned and enabled", async () => {
@@ -380,7 +389,14 @@ describe("ChatTranscript", () => {
       toolName: "write_file",
       reason: "Reviewed file",
     };
-    const canonical = { ...approval, status: "pending", preview: { targets: ["/workspace/reviewed.txt"] }, payload: {}, createdAt: "2026-10-01T00:00:00Z", explanationStatus: "not_requested" };
+    const canonical = {
+      ...approval,
+      status: "pending",
+      preview: { targets: ["/workspace/reviewed.txt"] },
+      payload: {},
+      createdAt: "2026-10-01T00:00:00Z",
+      explanationStatus: "not_requested",
+    };
     vi.mocked(fetchApproval).mockResolvedValue(canonical as never);
     const props = {
       ...sessionProps([turn("visible", true)]),
@@ -398,7 +414,9 @@ describe("ChatTranscript", () => {
         ),
       );
     await render(props);
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
     await act(async () =>
       [...container.querySelectorAll("button")].find((button) => button.textContent === "Review approval")!.click(),
     );
@@ -410,7 +428,13 @@ describe("ChatTranscript", () => {
     });
     expect(document.querySelector('[role="dialog"]')).not.toBeNull();
     expect(onApprovePending).not.toHaveBeenCalled();
-    await act(async () => { client.setQueryData(["approvals", "record", "default", approval.approvalId], { ...canonical, preview: { targets: ["/workspace/different.txt"] } }); await new Promise(resolve => setTimeout(resolve, 20)); });
+    await act(async () => {
+      client.setQueryData(["approvals", "record", "default", approval.approvalId], {
+        ...canonical,
+        preview: { targets: ["/workspace/different.txt"] },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
     expect(document.querySelector('[role="dialog"][data-state="open"]')).toBeNull();
     expect(onApprovePending).not.toHaveBeenCalled();
   });
@@ -607,8 +631,16 @@ describe("ChatTranscript", () => {
       ),
     );
     expect(container.textContent).toContain("Background run");
-    await act(async () => container.querySelector('button[aria-label="More message actions"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
-    await act(async () => [...document.querySelectorAll('[role="menuitem"]')].find((item) => item.textContent === "Run details")?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await act(async () =>
+      container
+        .querySelector('button[aria-label="More message actions"]')
+        ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+    );
+    await act(async () =>
+      [...document.querySelectorAll('[role="menuitem"]')]
+        .find((item) => item.textContent === "Run details")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+    );
     expect(onInspectTurn).toHaveBeenCalledWith("run-turn");
     await act(async () =>
       [...container.querySelectorAll("button")].find((button) => button.textContent === "Inspect run")?.click(),
@@ -684,18 +716,27 @@ describe("ChatTranscript", () => {
   });
 });
 
-it.each(["Partial answer retained", ""])("shows one canonical recovery recommendation for interrupted content %j", async (content) => {
-  const item = turn("partial", true, "failed");
-  item.trace.status = "partial";
-  item.trace.failure = { failureClass: "unknown", recommendedAction: "retry" } as never;
-  if (content) item.assistantMessage = { content } as never;
-  await act(async () => renderWithProviders(<InspectorProvider><ChatTranscript props={sessionProps([item])} /></InspectorProvider>));
-  const recovery = container.querySelectorAll('[aria-label="Response recovery"]');
-  expect(recovery).toHaveLength(1);
-  expect(recovery[0]?.textContent).toContain("Run the same turn again once.");
-  if (content) expect(container.textContent).toContain(content);
-  expect(recovery[0]?.getAttribute("role")).not.toBe("alert");
-});
+it.each(["Partial answer retained", ""])(
+  "shows one canonical recovery recommendation for interrupted content %j",
+  async (content) => {
+    const item = turn("partial", true, "failed");
+    item.trace.status = "partial";
+    item.trace.failure = { failureClass: "unknown", recommendedAction: "retry" } as never;
+    if (content) item.assistantMessage = { content } as never;
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript props={sessionProps([item])} />
+        </InspectorProvider>,
+      ),
+    );
+    const recovery = container.querySelectorAll('[aria-label="Response recovery"]');
+    expect(recovery).toHaveLength(1);
+    expect(recovery[0]?.textContent).toContain("Run the same turn again once.");
+    if (content) expect(container.textContent).toContain(content);
+    expect(recovery[0]?.getAttribute("role")).not.toBe("alert");
+  },
+);
 it("keeps unresolved warnings visible while only routine updates fold into history", async () => {
   const input = sessionProps([]);
   input.notices = [
@@ -703,16 +744,36 @@ it("keeps unresolved warnings visible while only routine updates fold into histo
     { id: "info", tone: "neutral", content: "Routine update", timestamp: "2026-10-06T00:01:00Z" },
     { id: "success", tone: "success", content: "A different action succeeded", timestamp: "2026-10-06T00:02:00Z" },
   ];
-  await act(async () => renderWithProviders(<InspectorProvider><ChatTranscript props={input} /></InspectorProvider>));
+  await act(async () =>
+    renderWithProviders(
+      <InspectorProvider>
+        <ChatTranscript props={input} />
+      </InspectorProvider>,
+    ),
+  );
   expect(container.querySelector('[aria-label="Conversation warning"]')?.textContent).toBe("Action blocked by policy");
   expect(container.querySelector('[aria-label="Conversation warning"]')?.closest("details")).toBeNull();
-  expect(container.querySelector('[aria-label="Latest conversation update"]')?.textContent).toBe("A different action succeeded");
-  await act(async () => renderWithProviders(<InspectorProvider><ChatTranscript props={{ ...input, selectedSessionId: "other", notices: [] }} /></InspectorProvider>));
+  expect(container.querySelector('[aria-label="Latest conversation update"]')?.textContent).toBe(
+    "A different action succeeded",
+  );
+  await act(async () =>
+    renderWithProviders(
+      <InspectorProvider>
+        <ChatTranscript props={{ ...input, selectedSessionId: "other", notices: [] }} />
+      </InspectorProvider>,
+    ),
+  );
   expect(container.querySelector('[aria-label="Conversation warning"]')).toBeNull();
 });
 it("counts a new assistant message within an existing turn once, excluding tokens and tool changes", async () => {
-  const item = turn("running", true, "failed"); item.trace.status = "running";
-  const render = (entry: ChatThreadTurnRecord, followOutput: boolean) => renderWithProviders(<InspectorProvider><ChatTranscript props={{ ...sessionProps([entry]), followOutput }} /></InspectorProvider>);
+  const item = turn("running", true, "failed");
+  item.trace.status = "running";
+  const render = (entry: ChatThreadTurnRecord, followOutput: boolean) =>
+    renderWithProviders(
+      <InspectorProvider>
+        <ChatTranscript props={{ ...sessionProps([entry]), followOutput }} />
+      </InspectorProvider>,
+    );
   await act(async () => render(item, true));
   await act(async () => render(item, false));
   viewport.preview = { turnId: item.turnId, visibleText: "A" };
@@ -725,18 +786,30 @@ it("counts a new assistant message within an existing turn once, excluding token
   expect(container.textContent).toContain("1 new message");
 });
 
-
 it("names transcript regions and makes the historical viewport keyboard focusable without live announcements", async () => {
   const props = sessionProps([turn("one", true, "failed")]);
-  await act(async () => renderWithProviders(<InspectorProvider><ChatTranscript props={props} /></InspectorProvider>));
+  await act(async () =>
+    renderWithProviders(
+      <InspectorProvider>
+        <ChatTranscript props={props} />
+      </InspectorProvider>,
+    ),
+  );
   const messages = container.querySelector('[aria-label="Messages"]');
   expect(messages?.getAttribute("role")).toBe("region");
   expect(messages?.hasAttribute("aria-live")).toBe(false);
-  await act(async () => renderWithProviders(<InspectorProvider><ChatTranscript props={{ ...props, historicalWindow: { anchor: { state: "found" }, items: [] } as never }} /></InspectorProvider>));
+  await act(async () =>
+    renderWithProviders(
+      <InspectorProvider>
+        <ChatTranscript props={{ ...props, historicalWindow: { anchor: { state: "found" }, items: [] } as never }} />
+      </InspectorProvider>,
+    ),
+  );
   const history = container.querySelector('[aria-label="Historical messages"]') as HTMLElement;
   expect(history?.getAttribute("role")).toBe("region");
   expect(history?.tabIndex).toBe(0);
-  history.focus(); expect(document.activeElement).toBe(history);
+  history.focus();
+  expect(document.activeElement).toBe(history);
   expect(history.className).toContain("focus-visible:outline");
   expect(history.hasAttribute("aria-live")).toBe(false);
 });

@@ -1,3 +1,4 @@
+import { applyReleaseBoundSkillRetrust } from "./release-bound-skill-retrust-owner.js";
 /* eslint-disable max-lines */
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
@@ -73,6 +74,10 @@ import {
   ValidationError,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
+import {
+  resolveBundledSkillLockEntry,
+  type BundledSkillLockEntry,
+} from "@goatcitadel/skills";
 import {
   buildCapabilityLifecycleApprovalBinding,
   buildCapabilityLifecycleApprovalPayload,
@@ -229,6 +234,11 @@ export interface CapabilitySystemServiceOptions {
   /** Durable aggregates using a revoked grant must request child cancellation immediately. */
   onAutonomousActivationGrantRevoked?: (grantId: string) => void | Promise<void>;
   spawnCodeModeChild?: typeof spawn;
+  /**
+   * Release-bound exact-byte lock for shipped (`bundled`/`managed`) skill trees. Defaults to the
+   * compiled `@goatcitadel/skills` lock; tests inject synthetic entries.
+   */
+  resolveBundledSkillLockEntry?: (skillId: string) => BundledSkillLockEntry | undefined;
 }
 
 interface CodeModeWrapperManifest {
@@ -506,9 +516,28 @@ export class CapabilitySystemService {
       if (!existing) {
         return await this.options.storage.skillLifecycle.upsert(projected);
       }
-      if (!skillLifecycleExactIntegrityMatches(existing, projected)) {
+      // Revocation is durable deny-wins truth for shipped skills too. Filesystem drift must never
+      // rewrite a revoked row into a candidate, which the release-bound re-trust below could later
+      // accept; the row stays exactly as revoked.
+      if (existing.lifecycleState === "revoked") {
+        return existing;
+      }
+      const integrityMatches = skillLifecycleExactIntegrityMatches(existing, projected);
+      const retrust = resolveReleaseBoundSkillRetrust({
+        skill,
+        existing,
+        projected,
+        integrityMatches,
+        resolveLockEntry: this.options.resolveBundledSkillLockEntry ?? resolveBundledSkillLockEntry,
+      });
+      if (retrust) {
+        // The loaded tree is exactly what the release lock vouches for: the hash change is the
+        // release shipping new bytes, not tampering.
+        return await applyReleaseBoundSkillRetrust(this.options, skill, existing, projected, retrust);
+      }
+      if (!integrityMatches) {
         projected.lifecycleState = "candidate";
-        projected.trustLabel = "Exact-byte review required";
+        projected.trustLabel = EXACT_BYTE_REVIEW_TRUST_LABEL;
         projected.reviewWarning = existing.provenance?.contentIntegrity
           ? "Skill content changed after its trusted exact-byte lifecycle binding; review and reactivate this version before use."
           : "Legacy skill lifecycle is missing exact-byte provenance; review and reactivate this version before use.";
@@ -5041,6 +5070,66 @@ function skillLifecycleExactIntegrityMatches(existing: SkillLifecycleRecord, pro
   );
 }
 
+/** Trust label shared by every exact-byte demotion of a non-imported skill row. */
+const EXACT_BYTE_REVIEW_TRUST_LABEL = "Exact-byte review required";
+
+interface ReleaseBoundSkillRetrust {
+  lockEntry: BundledSkillLockEntry;
+}
+
+/**
+ * Release-bound re-trust for shipped skill trees.
+ *
+ * A `bundled`/`managed` row whose stored exact-byte binding no longer matches the loaded tree is
+ * normally demoted to a non-callable candidate, and no operator path promotes a `built_in` row
+ * back. When the loaded tree equals the compiled release lock entry for that skill id, the
+ * difference is the release shipping new bytes rather than tampering, so the row may be re-bound
+ * to the new hashes and stay trusted. Eligible rows are a `trusted` row whose hashes drifted and a
+ * `candidate` row carrying the exact-byte review label, which only the drift demotion above and a
+ * failed exact-byte capture at first insert produce (so upgraded installs that already ran the
+ * demotion, and transient capture failures, self-heal once the tree equals the lock). Revoked rows
+ * never reach this function; a tree that matches neither the row nor the lock keeps the tamper
+ * demotion. The generated lock covers `skills/bundled` only, so managed rows re-trust only when a
+ * caller supplies an entry for them.
+ */
+function resolveReleaseBoundSkillRetrust(input: {
+  skill: LoadedSkill;
+  existing: SkillLifecycleRecord;
+  projected: SkillLifecycleRecord;
+  integrityMatches: boolean;
+  resolveLockEntry: (skillId: string) => BundledSkillLockEntry | undefined;
+}): ReleaseBoundSkillRetrust | undefined {
+  const { skill, existing, projected } = input;
+  if (skill.source !== "bundled" && skill.source !== "managed") {
+    return undefined;
+  }
+  if (existing.lifecycleState === "revoked" || existing.category !== projected.category) {
+    return undefined;
+  }
+  const releaseShippedNewBytes = existing.lifecycleState === "trusted" && !input.integrityMatches;
+  const demotedByExactByteDrift =
+    existing.lifecycleState === "candidate" && existing.trustLabel === EXACT_BYTE_REVIEW_TRUST_LABEL;
+  if (!releaseShippedNewBytes && !demotedByExactByteDrift) {
+    return undefined;
+  }
+  // The freshly captured tree must be bound (trusted projection) and equal the lock exactly.
+  const current = projected.provenance?.contentIntegrity;
+  if (projected.lifecycleState !== "trusted" || !current?.verified) {
+    return undefined;
+  }
+  const lockEntry = input.resolveLockEntry(skill.skillId);
+  if (
+    !lockEntry ||
+    lockEntry.manifestVersion !== current.manifestVersion ||
+    lockEntry.treeSha256 !== current.treeSha256 ||
+    lockEntry.fileCount !== current.fileCount ||
+    lockEntry.totalBytes !== current.totalBytes
+  ) {
+    return undefined;
+  }
+  return { lockEntry };
+}
+
 interface SkillSourceManifestRead {
   provenance?: SkillLifecycleRecord["provenance"];
   integrityStatus?: "verified" | "missing" | "mismatch";
@@ -5148,7 +5237,7 @@ function mapSkillSource(
       return {
         category: "built_in",
         lifecycleState: exactBytesUnavailable ? "candidate" : "trusted",
-        trustLabel: exactBytesUnavailable ? "Exact-byte review required" : "Built-in",
+        trustLabel: exactBytesUnavailable ? EXACT_BYTE_REVIEW_TRUST_LABEL : "Built-in",
         reviewWarning: exactBytesUnavailable
           ? "Built-in skill content could not be bound to a bounded exact-byte manifest and is not callable."
           : undefined,
@@ -5157,7 +5246,7 @@ function mapSkillSource(
       return {
         category: "optional",
         lifecycleState: exactBytesUnavailable ? "candidate" : "trusted",
-        trustLabel: exactBytesUnavailable ? "Exact-byte review required" : "Managed optional",
+        trustLabel: exactBytesUnavailable ? EXACT_BYTE_REVIEW_TRUST_LABEL : "Managed optional",
         reviewWarning: exactBytesUnavailable
           ? "Managed skill content could not be bound to a bounded exact-byte manifest and is not callable."
           : undefined,
@@ -5166,7 +5255,7 @@ function mapSkillSource(
       return {
         category: "project_local",
         lifecycleState: exactBytesUnavailable ? "candidate" : "approved",
-        trustLabel: exactBytesUnavailable ? "Exact-byte review required" : "Project-local",
+        trustLabel: exactBytesUnavailable ? EXACT_BYTE_REVIEW_TRUST_LABEL : "Project-local",
         reviewWarning: exactBytesUnavailable
           ? "Workspace skill content could not be bound to a bounded exact-byte manifest and is not callable."
           : undefined,

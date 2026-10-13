@@ -1,3 +1,5 @@
+import { assertMcpAdmissionToolAllowed } from "./mcp-admission-tool-policy-guard.js";
+import { buildChatRuntimeSkillReceipts } from "./chat-skill-selection-runtime.js";
 import { executeApprovedIntegrationDryRunCommit } from "./approved-integration-dry-run-owner.js";
 import { commitProviderSecretGeneration } from "./provider-secret-generation-owner.js";
 import { resolveChatRuntimeSkillSelection } from "./chat-skill-selection-runtime.js";
@@ -510,7 +512,7 @@ import {
   InboundChannelTurnTerminalError,
   type InboundChannelDeterministicIdentity,
 } from "./inbound-channel-event-service.js";
-import { CronAutomationService } from "./gateway/cron-automation-service.js";
+import { CronAutomationService, type CronSystemHandlerOutcome } from "./gateway/cron-automation-service.js";
 import {
   runCostReportSchedulerIfDue,
   runMemoryConsolidationSchedulerIfDue,
@@ -680,9 +682,12 @@ import {
   type ChatTurnCapabilityProfileResolution,
 } from "./chat-turn-capability-profile-service.js";
 import {
-  buildGovernedActivatedSkillReceipts,
   renderGovernedActivatedSkillInstructions,
+  type SkillContextDocReader,
 } from "./governed-skill-instruction-service.js";
+import { createWorkspaceSkillContextDocReader } from "./workspace-skill-context-docs.js";
+import { resolveWorkspaceDesignBrand } from "./workspace-design-brand.js";
+import { detectDocumentArtifactIntent, detectPresentationArtifactIntent } from "./chat-artifact-intent.js";
 import { prepareApprovedPresentationVisuals } from "./presentation-visual-executor.js";
 import { normalizeAgentInputFromSend } from "./chat-agent-input-normalization.js";
 import * as chatTurnTraceHydration from "./chat-turn-trace-hydration.js";
@@ -952,10 +957,6 @@ const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
 ] as const;
 const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
 
-export const PRIVATE_BETA_BACKUP_SCHEDULE_LABEL = "30 2 * * * America/Los_Angeles";
-export const MEMORY_FLUSH_DAILY_SCHEDULE_LABEL = "0 3 * * * America/Los_Angeles";
-export const COST_REPORT_HOURLY_SCHEDULE_LABEL = "0 * * * * America/Los_Angeles";
-export const UPDATE_REVIEW_DAILY_SCHEDULE_LABEL = "15 4 * * * America/Los_Angeles";
 /**
  * P2-S1 background-review counter gate. A successful, eligible root turn bumps
  * this counter; the self-improvement review runs (and resets it) once it reaches
@@ -1833,6 +1834,11 @@ export class GatewayService {
       createChatCompletionStream: async (request, attribution) =>
         await this.createChatCompletionStream(request, attribution),
       generateImage: (request, attribution) => this.llmService.generateImage(request, attribution),
+      // Workspace DESIGN.md brand for deck/document tools, only when the frozen profile injected it.
+      resolveWorkspaceDesignBrand: ({ workspaceId, capabilityProfile }) =>
+        workspaceId
+          ? resolveWorkspaceDesignBrand(capabilityProfile, this.createWorkspaceSkillContextDocReader(workspaceId))
+          : undefined,
       invokeTool: async (request, options) => await this.invokeTool(request, options),
       invokeToolWithEffectTruth: async (request, options) => await this.invokeTool(request, options),
       persistToolArtifact: (input) => chatToolArtifactService.persistChatToolArtifact(this, input),
@@ -1966,25 +1972,30 @@ export class GatewayService {
         },
         agentTurn: async (input) => await this.runCronAgentTurn(input),
         improvement: async () => {
-          await this.improvementService.runWeeklyImprovementSchedulerIfDue({ force: true, recordCronState: false });
+          const improvement = this.improvementService;
+          return await improvement.runWeeklyImprovementSchedulerIfDue({ force: true, recordCronState: false });
         },
         backup: async () => {
-          await this.runPrivateBetaBackupSchedulerIfDue({ force: true, recordCronState: false });
+          return await this.runPrivateBetaBackupSchedulerIfDue({ force: true, recordCronState: false });
         },
         memoryFlush: async () => {
-          await this.runMemoryFlushSchedulerIfDue({ force: true, recordCronState: false });
+          return await this.runMemoryFlushSchedulerIfDue({ force: true, recordCronState: false });
         },
         memoryConsolidation: async () => {
-          await this.runMemoryConsolidationSchedulerIfDue({ force: true, recordCronState: false });
+          return await this.runMemoryConsolidationSchedulerIfDue({ force: true, recordCronState: false });
         },
         costReport: async () => {
-          await this.runCostReportSchedulerIfDue({ force: true, recordCronState: false });
+          return await this.runCostReportSchedulerIfDue({ force: true, recordCronState: false });
         },
-        updateReview: async () => {
-          await this.runUpdateReviewSchedulerIfDue({ force: true, recordCronState: false });
+        updateReview: async (context) => {
+          return await this.runUpdateReviewSchedulerIfDue({
+            force: true,
+            recordCronState: false,
+            reviewTrigger: context?.trigger,
+          });
         },
         curator: async () => {
-          await this.curatorService.runCuratorWeeklyIfDue({ force: true, recordCronState: false });
+          return await this.curatorService.runCuratorWeeklyIfDue({ force: true, recordCronState: false });
         },
         watchdog: async (job) => await this.runCronWatchdog(job),
         noAgent: (input) => runNoAgentCommand(input),
@@ -5853,24 +5864,34 @@ export class GatewayService {
     };
   }
 
-  private async runPrivateBetaBackupSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runPrivateBetaBackupSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runPrivateBetaBackupSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runPrivateBetaBackupSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
-  private async runMemoryConsolidationSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runMemoryConsolidationSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runMemoryConsolidationSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runMemoryConsolidationSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
-  private async runMemoryFlushSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runMemoryFlushSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runMemoryFlushSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runMemoryFlushSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
-  private async runCostReportSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runCostReportSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runCostReportSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runCostReportSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
-  private async runUpdateReviewSchedulerIfDue(options: SystemCronSchedulerOptions = {}): Promise<void> {
-    await runUpdateReviewSchedulerIfDue(this.systemCronSchedulerDeps(), options);
+  private async runUpdateReviewSchedulerIfDue(
+    options: SystemCronSchedulerOptions = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    return await runUpdateReviewSchedulerIfDue(this.systemCronSchedulerDeps(), options);
   }
 
   public async hasRunningTurn(sessionId: string): Promise<boolean> {
@@ -7523,13 +7544,11 @@ export class GatewayService {
           return { configured: Boolean(provider.hasApiKey), local };
         },
         classifyWorkPassport: (workspaceId, content) => this.workPassportService.classify(workspaceId, content),
-        resolveActivatedSkills: async ({ content, trustedSkills }) =>
-          buildGovernedActivatedSkillReceipts({
-            content,
-            decision: await this.resolveSkillActivationForRuntime({ text: content }, false, input.workspaceId),
-            trustedSkills,
-            lifecycleRows: await this.storage.skillLifecycle.list(),
-          }),
+        resolveActivatedSkills: ({ content, trustedSkills }) => buildChatRuntimeSkillReceipts({
+          resolveSkills: (text, workspaceId) => this.resolveSkillActivationForRuntime({ text }, false, workspaceId),
+          listLifecycle: () => this.storage.skillLifecycle.list(),
+          contextDocs: (workspaceId) => this.createWorkspaceSkillContextDocReader(workspaceId),
+        }, { content, trustedSkills, workspaceId: input.workspaceId }),
       },
       {
         sessionId: input.sessionId,
@@ -7634,6 +7653,7 @@ export class GatewayService {
       profile,
       loadedSkills,
       lifecycleRows: await this.storage.skillLifecycle.list(),
+      contextDocs: this.createWorkspaceSkillContextDocReader(profile.identity.workspaceId),
     });
   }
 
@@ -7648,6 +7668,7 @@ export class GatewayService {
         this.resolveSkillActivationForRuntime({ text: content }, false, workspaceId),
       listCallable: (workspaceId) => this.capabilitySystemService.listCatalog("callable", "ALL", workspaceId),
       listLifecycle: () => this.storage.skillLifecycle.list(),
+      contextDocs: (workspaceId) => this.createWorkspaceSkillContextDocReader(workspaceId),
       listLoadedSkills: (workspaceId) => this.capabilitySystemService.listSkills("ALL", workspaceId),
       getModelContextWindow: (providerId, model) => this.llmService.getModelContextWindow(providerId, model),
       routeFingerprint: (primary, fallback) => fingerprintChatProviderFallbackRoute(this.llmService, primary, fallback),
@@ -7705,46 +7726,13 @@ export class GatewayService {
     scope: import("@goatcitadel/contracts").McpRequesterAdmissionScope,
     canonicalName: string,
   ): Promise<void> {
-    const matches = (await this.readMcpServers()).filter((server) =>
-      canonicalName.startsWith(`mcp.${server.serverId}.`),
-    );
-    if (matches.length !== 1) throw new McpRequesterResolutionError("requester_scope_mismatch");
-    const server = matches[0]!;
-    const nativeToolName = canonicalName.slice(`mcp.${server.serverId}.`.length);
-    await this.assertMcpServerInCapabilityScope({
-      serverId: server.serverId,
-      toolName: nativeToolName,
-      workspaceId: scope.workspaceId,
-      sessionId: scope.sessionId,
-      agentId: "assistant",
-    });
-    const request = await this.prepareToolAccessEvaluation({
-      toolName: canonicalName,
-      args: {},
-      agentId: "assistant",
-      workspaceId: scope.workspaceId,
-      sessionId: scope.sessionId,
-      surface: "chat",
-      policyContext: { authActorId: scope.actorId, authActorSource: scope.actorSource, workspaceId: scope.workspaceId },
-    });
-    const access = await this.policyEngine.inspectAccess(request, {
-      mcpToolBinding: createMcpToolPolicyBinding({
-        canonicalName,
-        serverId: server.serverId,
-        nativeToolName,
-      }),
-    });
-    if (!access.allowed) {
-      this.recordDevDiagnostic({
-        level: "warn",
-        category: "mcp",
-        event: "mcp.admission.policy_denied",
-        message: "Selected MCP tool is blocked by current Chat permissions or server policy.",
-        sessionId: scope.sessionId,
-        context: { reasonCodes: access.reasonCodes, permissionProfileId: access.permissionProfileId },
-      });
-      throw new McpRequesterResolutionError("operation_denied");
-    }
+    return assertMcpAdmissionToolAllowed({
+      readMcpServers: () => this.readMcpServers(),
+      assertMcpServerInCapabilityScope: (request) => this.assertMcpServerInCapabilityScope(request),
+      prepareToolAccessEvaluation: (request) => this.prepareToolAccessEvaluation(request),
+      inspectAccess: (request, options) => this.policyEngine.inspectAccess(request, options),
+      recordDevDiagnostic: (diagnostic) => this.recordDevDiagnostic(diagnostic),
+    }, scope, canonicalName);
   }
 
   public resolveChatFeatureAdmission(
@@ -7787,6 +7775,14 @@ export class GatewayService {
       ...(admission.durableClaim ? { durableClaim: admission.durableClaim } : {}),
       references,
     });
+  }
+
+  /** Workspace PRODUCT.md / DESIGN.md reader for governed skill routes that declare context docs (never global). */
+  private createWorkspaceSkillContextDocReader(workspaceId: string): SkillContextDocReader {
+    return createWorkspaceSkillContextDocReader(
+      { config: this.config, normalizeWorkspaceId: (value) => this.normalizeWorkspaceId(value) },
+      workspaceId,
+    );
   }
 
   public resolveChatTurnEffectiveRoute(sessionId: string, request: ChatSendMessageRequest) {

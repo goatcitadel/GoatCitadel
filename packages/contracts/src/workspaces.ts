@@ -41,7 +41,16 @@ export interface WorkspaceUpdateInput {
   workspacePrefs?: WorkspacePrefs;
 }
 
-export type GuidanceDocType = "goatcitadel" | "agents" | "claude" | "contributing" | "security" | "vision";
+/** `product` and `design` (PRODUCT.md / DESIGN.md) are workspace-only: there is no global copy and no runtime-guidance fallback. */
+export type GuidanceDocType =
+  | "goatcitadel"
+  | "agents"
+  | "claude"
+  | "contributing"
+  | "security"
+  | "vision"
+  | "product"
+  | "design";
 
 export interface GuidanceDocumentRecord {
   docType: GuidanceDocType;

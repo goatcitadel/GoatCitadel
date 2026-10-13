@@ -22,6 +22,7 @@ import {
 } from "./config-generation-service.js";
 import {
   computeNextCronRunAt,
+  isScheduledCronAction,
   normalizeCronContextFrom,
   normalizeCronEndAt,
   normalizeCronJobDescription,
@@ -188,8 +189,16 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
           updateSpecs: (specs) => upsertCanonicalSpec(specs, desired),
         };
       }
+      // A changed schedule (e.g. a built-in re-zoned on startup) invalidates the
+      // persisted nextRunAt; re-project it as startup reconciliation does.
+      const scheduleChanged = current.schedule !== desired.schedule;
       return {
-        mutation: { kind: "update", spec: desired, expectedRevision: current.revision },
+        mutation: {
+          kind: "update",
+          spec: desired,
+          expectedRevision: current.revision,
+          ...(scheduleChanged ? { telemetry: { nextRunAt: projectNextRunAt(desired) } } : {}),
+        },
         updateSpecs: (specs) => upsertCanonicalSpec(specs, desired),
         noOpResult: cronJobSpecMatches(current, desired) ? current : undefined,
       };
@@ -358,11 +367,7 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
       const changed = !before || !cronJobSpecMatches(before, spec);
       let next = await this.storage.cronJobs.reconcileSpec(spec);
       if (changed) {
-        next = await this.storage.cronJobs.mergeRuntimeTelemetry(spec.jobId, {
-          nextRunAt: isSelfScheduledAction(spec.action)
-            ? (computeNextCronRunAt(spec.schedule, new Date(), spec.endAt) ?? null)
-            : null,
-        });
+        next = await this.storage.cronJobs.mergeRuntimeTelemetry(spec.jobId, { nextRunAt: projectNextRunAt(spec) });
       }
       saved.push(next);
     }
@@ -528,14 +533,10 @@ function hasTelemetryFields(patch: CronJobRuntimeTelemetryPatch): boolean {
   return Object.keys(patch).length > 0;
 }
 
-function isSelfScheduledAction(action: CronJobAction): boolean {
-  return (
-    action === "task" ||
-    action === "watchdog" ||
-    action === "curator" ||
-    action === "no_agent" ||
-    action === "agent_turn"
-  );
+function projectNextRunAt(spec: CronJobSpecInput): string | null {
+  return isScheduledCronAction(spec.action)
+    ? (computeNextCronRunAt(spec.schedule, new Date(), spec.endAt) ?? null)
+    : null;
 }
 
 function findResourceConflict(error: unknown): ConflictError | undefined {

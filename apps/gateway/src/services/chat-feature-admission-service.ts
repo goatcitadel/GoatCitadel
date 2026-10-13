@@ -1,3 +1,4 @@
+import { detectPresentationArtifactIntent, detectDocumentArtifactIntent } from "./chat-artifact-intent.js";
 import {
   canonicalJsonString,
   ConflictError,
@@ -40,6 +41,7 @@ export interface ChatFeatureAdmissionHost {
     | "chatFanoutInvocations"
     | "heartbeatOccurrences"
   >;
+  contextDocs?(workspaceId: string): import("./governed-skill-instruction-service.js").SkillContextDocReader;
   listToolNames(): string[];
   assertTurnAdmissionWrite(admission: ActiveTurnAdmission): Promise<void>;
   isFeatureEnabled(flag: string): Promise<boolean>;
@@ -166,6 +168,11 @@ export async function resolveChatFeatureAdmission(
     );
     const activatedSkills = buildGovernedActivatedSkillReceipts({
       content: input.content,
+      artifactIntent: {
+        presentation: detectPresentationArtifactIntent(input.content),
+        document: detectDocumentArtifactIntent(input.content),
+      },
+      contextDocs: host.contextDocs?.(workspaceId),
       decision,
       trustedSkills,
       lifecycleRows,
@@ -284,5 +291,6 @@ export async function renderAdmittedSkillInstructions(
     loadedSkills,
     lifecycleRows,
     maxTokens: selected.instructionBudgetTokens,
+    contextDocs: host.contextDocs?.(workspaceId),
   });
 }

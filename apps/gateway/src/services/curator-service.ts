@@ -19,14 +19,15 @@ import {
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { CronSpecMutationOwner } from "./cron-config-generation-owner.js";
+import type { CronSystemHandlerOutcome } from "./gateway/cron-automation-service.js";
 import { computeSkillImmunity, gradeSkillUsage } from "./curator-grader.js";
 import { planCuratorIdleSweep, type CuratorIdleSweepResult, type CuratorIdleSweepDeps } from "./curator-idle-sweep.js";
 import { getZonedDateParts, toWeekKeyForTimezone } from "./improvement-replay.js";
+import { systemCronScheduleLabel, systemCronTimeZoneForSchedule } from "./cron-job-schedule-labels.js";
 
 const CURATOR_WEEKLY_JOB_ID = "curator_weekly";
-const CURATOR_WEEKLY_SCHEDULE_LABEL = "0 2 * * 0 America/Los_Angeles";
+const CURATOR_WEEKLY_CADENCE = "0 2 * * 0";
 const CURATOR_WEEKLY_DEDUP_SETTING_KEY = "curator_weekly_last_week_key_v1";
-const CURATOR_WEEKLY_TIME_ZONE = "America/Los_Angeles";
 
 /** Dedup/cadence key for the S3 idle sweep (last successful sweep epoch ms). */
 const CURATOR_IDLE_SWEEP_LAST_RUN_SETTING_KEY = "curator_idle_sweep_last_run_ms_v1";
@@ -291,26 +292,29 @@ export class CuratorService {
       name: "Curator Weekly Report",
       action: "curator",
       description: "Generate a proposal-only curator report over the skill registry.",
-      schedule: CURATOR_WEEKLY_SCHEDULE_LABEL,
+      schedule: systemCronScheduleLabel(CURATOR_WEEKLY_CADENCE),
       enabled: existing?.enabled ?? true,
       endAt: existing?.endAt,
     });
   }
 
-  public async runCuratorWeeklyIfDue(options: { force?: boolean; recordCronState?: boolean } = {}): Promise<void> {
-    if (!this.deps.storage) return;
+  public async runCuratorWeeklyIfDue(
+    options: { force?: boolean; recordCronState?: boolean } = {},
+  ): Promise<CronSystemHandlerOutcome> {
+    if (!this.deps.storage) return { status: "skipped", reason: "storage_unavailable" };
     const job = await this.deps.storage.cronJobs.get(CURATOR_WEEKLY_JOB_ID);
-    if (!job?.enabled) return;
+    if (!job?.enabled) return { status: "skipped", reason: "job_disabled" };
     const now = this.deps.now();
+    const timeZone = systemCronTimeZoneForSchedule(job.schedule);
     if (!options.force) {
-      const parts = getZonedDateParts(now, CURATOR_WEEKLY_TIME_ZONE);
+      const parts = getZonedDateParts(now, timeZone);
       // Sunday=0, 02:00 hour gate (matches improvement_weekly cadence)
-      if (parts.weekday !== 0 || parts.hour !== 2) return;
+      if (parts.weekday !== 0 || parts.hour !== 2) return { status: "skipped", reason: "not_due" };
     }
-    const weekKey = toWeekKeyForTimezone(now, CURATOR_WEEKLY_TIME_ZONE);
+    const weekKey = toWeekKeyForTimezone(now, timeZone);
     const lastWeekKey = (await this.deps.storage.systemSettings.get<string>(CURATOR_WEEKLY_DEDUP_SETTING_KEY))?.value;
-    if (!options.force && lastWeekKey === weekKey) return;
-    await this.runCurator({ sync: false, dryRun: true, triggerMode: "scheduled" });
+    if (!options.force && lastWeekKey === weekKey) return { status: "skipped", reason: "already_ran_this_week" };
+    const curatorRun = await this.runCurator({ sync: false, dryRun: true, triggerMode: "scheduled" });
     await this.deps.storage.systemSettings.set(CURATOR_WEEKLY_DEDUP_SETTING_KEY, weekKey);
     const finishedAt = this.deps.now().toISOString();
     if (options.recordCronState !== false) {
@@ -318,13 +322,27 @@ export class CuratorService {
         job.jobId,
         {
           lastRunAt: finishedAt,
-          // Note: force-runs set nextRunAt = now + 7d which drifts from the Sunday 02:00 PT schedule.
+          // Note: force-runs set nextRunAt = now + 7d which drifts from the Sunday 02:00 schedule.
           // Normal scheduled runs naturally re-align since the time-of-week guard only fires on Sunday 02:00.
           nextRunAt: new Date(this.deps.now().getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
         },
         finishedAt,
       );
     }
+    return {
+      status: "completed",
+      summary: {
+        curatorRunId: curatorRun.runId,
+        dryRun: true,
+        ...(curatorRun.report
+          ? {
+              totalSkills: curatorRun.report.totalSkills,
+              proposalCount: curatorRun.report.proposalCount,
+              archivedCount: curatorRun.report.archivedCount,
+            }
+          : {}),
+      },
+    };
   }
 
   /**
@@ -355,11 +373,17 @@ export class CuratorService {
       await this.recordIdleSweepRun();
       return result;
     } catch (error) {
-      // Best-effort: a janitor failure must never crash the maintenance tick.
-      await this.deps.publishRealtime("curator", {
-        type: "curator_idle_sweep_failed",
-        error: error instanceof Error ? error.message : String(error),
-      });
+      // Best-effort: a janitor failure must never crash the maintenance tick, so
+      // publishing the failure is best-effort too (publishRealtime may reject).
+      try {
+        await this.deps.publishRealtime("curator", {
+          type: "curator_idle_sweep_failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } catch (publishError) {
+        void publishError;
+        // The realtime bus is unavailable; the cadence cursor still retries next tick.
+      }
       return undefined;
     }
   }
@@ -438,7 +462,7 @@ export class CuratorService {
     if (payload.triggerMode !== "scheduled" && payload.triggerMode !== "manual") {
       throw new Error("curator.tick: invalid payload triggerMode");
     }
-    await this.runCurator({ sync: false, dryRun: true, triggerMode: "scheduled" });
+    await this.runCurator({ sync: false, dryRun: true, triggerMode: payload.triggerMode });
   }
 }
 

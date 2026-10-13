@@ -37,6 +37,7 @@ import {
   resolveSelectOption,
   resolveThreadDurableCorrelation,
   resolveUniqueEditableLocatorCandidate,
+  setRegisteredStepShell,
   startSettingsBrowserFixtureServer,
   USABILITY_BROWSER_ACTION_GATEWAY_ENV,
   USABILITY_LOCAL_MCP_POLICY,
@@ -3249,4 +3250,13 @@ test("tool prompt-mode approval proof rejects cross-owner, stale and substituted
     { ...plan, request: { ...request, change: { ...request.change, mode: "bypass" } } },
   ])
     assert.throws(() => validateBrowserSettingsPlan(changed, "plan-1", 12, request), /exact reviewed fixture request/);
+});
+
+test("registered steps pin Classic for one visit while Cockpit bundles keep Cockpit", () => {
+  const classic = new URLSearchParams({ theme: "dark" });
+  setRegisteredStepShell(classic, false);
+  assert.equal(classic.toString(), "theme=dark&shell=classic&shellScope=visit");
+  const cockpit = new URLSearchParams({ theme: "dark" });
+  setRegisteredStepShell(cockpit, true);
+  assert.equal(cockpit.toString(), "theme=dark&shell=cockpit");
 });

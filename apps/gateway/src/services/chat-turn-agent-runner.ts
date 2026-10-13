@@ -1,3 +1,4 @@
+import { createChatWorkspaceDesignBrandResolver } from "./chat-turn-feature-runtime.js";
 import { filterFeatureContextToolSchema, bindFeatureContextRequest, assertFeatureTurnExternalDispatch,
   buildFeatureMcpTurnContext, buildFeatureMeshTurnContext, restoreFeatureTurnToolSchemas, resumeFeatureTurnApprovals } from "./chat-turn-feature-runtime.js";
 import { createMcpRequesterAdmissionTurnContext, type McpChatTurnContextHandle, type McpRequesterAdmissionTurnContextHandle } from "./mcp-requester-admission-context.js";
@@ -234,6 +235,7 @@ import {
   type RuntimeConfigurationTargetId,
   type McpToolPolicyBinding,
   type MeshToolPolicyBinding,
+  type ArtifactBrandInput,
   MESH_TOOL_POLICY_DEFINITION,
 } from "@goatcitadel/policy-engine";
 import { MAX_PARALLEL_TOOL_CALLS, decideToolBatchParallelism } from "./chat-tool-parallelism.js";
@@ -873,6 +875,14 @@ export interface ChatTurnAgentRunnerDeps {
     request: ImageGenerationRequest,
     attribution?: ModelUsageAttributionContext,
   ) => Promise<ImageGenerationResponse>;
+  /**
+   * Workspace DESIGN.md brand for deck/document tools when the frozen profile injected the
+   * workspace design context; a host without it leaves `design.brand` to the model.
+   */
+  resolveWorkspaceDesignBrand?: (input: {
+    workspaceId?: string;
+    capabilityProfile?: ChatTurnCapabilityProfileRecord;
+  }) => ArtifactBrandInput | undefined;
   invokeTool: (
     request: ToolInvokeRequest,
     options?: {
@@ -7387,6 +7397,7 @@ export class ChatTurnAgentRunner {
       priorToolRuns: input.priorToolRuns,
       evalIntegrityTurn: input.input.normalizationProfile === "prompt_pack_harness",
       quickWebProfile: input.input.normalizationProfile === "quick_web",
+      workspaceDesignBrand: createChatWorkspaceDesignBrandResolver(this.deps, input.input),
     });
     if (input.input.content.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) {
       preflight = {
@@ -8663,6 +8674,8 @@ export class ChatTurnAgentRunner {
     priorToolRuns?: ChatToolRunRecord[];
     evalIntegrityTurn?: boolean;
     quickWebProfile?: boolean;
+    /** Lazily read workspace brand; consulted only for non-plain artifact tools without a model brand. */
+    workspaceDesignBrand?: () => ArtifactBrandInput | undefined;
   }): {
     toolName: string;
     args: Record<string, unknown>;
@@ -8688,11 +8701,13 @@ export class ChatTurnAgentRunner {
     if (input.toolName === "fs.read" && !input.evalIntegrityTurn && typeof args.path === "string") {
       const requestedPath = args.path.replaceAll("\\", "/").replace(/^\.\//u, "");
       const artifactRun = /^tool-artifacts\//u.test(requestedPath)
-        ? input.priorToolRuns?.find((run) =>
-            run.status === "executed" &&
-            typeof run.result?.artifactId === "string" &&
-            typeof run.result?.artifactPath === "string" &&
-            run.result.artifactPath.replaceAll("\\", "/") === requestedPath)
+        ? input.priorToolRuns?.find(
+            (run) =>
+              run.status === "executed" &&
+              typeof run.result?.artifactId === "string" &&
+              typeof run.result?.artifactPath === "string" &&
+              run.result.artifactPath.replaceAll("\\", "/") === requestedPath,
+          )
         : undefined;
       if (artifactRun) {
         // Re-enter normal capability/policy/approval evaluation for the reader;
@@ -8831,7 +8846,7 @@ export class ChatTurnAgentRunner {
     }
 
     if (!input.evalIntegrityTurn) {
-      attachArtifactDesignSkillArgs(input.toolName, args, input.userContent);
+      attachArtifactDesignSkillArgs(input.toolName, args, input.userContent, input.workspaceDesignBrand);
     }
 
     if (LOCAL_PATH_TOOL_NAMES.has(input.toolName) && typeof args.path === "string") {
@@ -9566,7 +9581,12 @@ function buildEssentialToolSet(input: {
     ];
   }
   const tools = new Set<string>(["time.now"]);
-  if (input.webLookupIntent || input.presentationArtifactIntent || input.documentArtifactIntent || input.localFileIntent) {
+  if (
+    input.webLookupIntent ||
+    input.presentationArtifactIntent ||
+    input.documentArtifactIntent ||
+    input.localFileIntent
+  ) {
     tools.add("tool_artifact.read");
   }
   if (input.subagentFanoutEligible) {
@@ -9638,7 +9658,7 @@ function buildToolAccessProbeArgs(toolName: string, safeWriteFallbackDir?: strin
       path: buildSafeWritePath("tool-access-probe.pptx", safeWriteFallbackDir),
       title: "Tool access probe",
       slides: [{ title: "Probe", bullets: ["Verifies the tool can write inside the workspace jail."] }],
-      design: { mode: "polished", skillId: "design-intelligence" },
+      design: { mode: "polished", skillId: "impeccable" },
     };
   }
   if (toolName === "documents.create") {
@@ -9647,7 +9667,7 @@ function buildToolAccessProbeArgs(toolName: string, safeWriteFallbackDir?: strin
       format: "docx",
       title: "Tool access probe",
       body: "Verifies the tool can write inside the workspace jail.",
-      design: { mode: "polished", skillId: "design-intelligence" },
+      design: { mode: "polished", skillId: "impeccable" },
     };
   }
   if (toolName === "artifacts.create") {
@@ -9684,7 +9704,12 @@ function buildToolAccessProbeArgs(toolName: string, safeWriteFallbackDir?: strin
   return {};
 }
 
-function attachArtifactDesignSkillArgs(toolName: string, args: Record<string, unknown>, userContent: string): void {
+function attachArtifactDesignSkillArgs(
+  toolName: string,
+  args: Record<string, unknown>,
+  userContent: string,
+  workspaceDesignBrand?: () => ArtifactBrandInput | undefined,
+): void {
   if (toolName !== "presentations.create" && toolName !== "documents.create" && toolName !== "artifacts.create") {
     return;
   }
@@ -9698,11 +9723,14 @@ function attachArtifactDesignSkillArgs(toolName: string, args: Record<string, un
     };
     return;
   }
+  // The model's brand wins; otherwise the workspace DESIGN.md brand block (when the turn injected it).
+  const modelBrand = typeof rawDesign.brand === "object" && rawDesign.brand !== null;
+  const workspaceBrand = modelBrand ? undefined : workspaceDesignBrand?.();
   args.design = {
     ...rawDesign,
     mode: existingMode ?? "polished",
-    skillId:
-      typeof rawDesign.skillId === "string" && rawDesign.skillId.trim() ? rawDesign.skillId : "design-intelligence",
+    skillId: typeof rawDesign.skillId === "string" && rawDesign.skillId.trim() ? rawDesign.skillId : "impeccable",
+    ...(workspaceBrand ? { brand: workspaceBrand } : {}),
   };
 }
 

@@ -757,7 +757,7 @@ function validateResearchMetadata(
       continue;
     }
     const values = readStringArray(research[field]);
-    if (field !== "exclusions" && values.length === 0) {
+    if (values.length === 0) {
       findings.push(`Research metadata must include at least one \`${field}\` entry.`);
     }
     if (ccgBenchmark && values.length === 0) {
@@ -1669,10 +1669,6 @@ function isAuthoritativeDomainForCompetitor(source: Record<string, unknown>, com
 function authoritativeCompetitorAliases(competitor: string): string[] {
   const normalized = normalizeComparisonText(competitor);
   const allWords = normalized.split(" ").filter(Boolean);
-  const words = allWords.filter(
-    (word) => !["and", "the", "card", "game", "trading", "collectible", "world", "super"].includes(word),
-  );
-  const acronym = words.map((word) => word[0] ?? "").join("");
   const brandAcronym = allWords
     .filter((word) => !["the", "card", "game", "trading", "collectible", "world"].includes(word))
     .map((word) => word[0] ?? "")
@@ -1683,9 +1679,9 @@ function authoritativeCompetitorAliases(competitor: string): string[] {
     ...new Set([
       ...competitorAliases(competitor),
       ...fixedCoreAliases,
-      ...words.filter((word) => word.length >= 5),
-      ...(acronym.length >= 3 ? [acronym.slice(0, 3)] : []),
-      ...(brandAcronym.length >= 3 ? [brandAcronym, brandAcronym.slice(0, 3)] : []),
+      // Only explicit aliases and the full brand acronym: matching is substring-based, so
+      // single words ("piece", "unlimited") or truncated acronyms ("sta") match unrelated text.
+      ...(brandAcronym.length >= 3 ? [brandAcronym] : []),
     ]),
   ];
 }

@@ -71,28 +71,28 @@ No design-intelligence file changes (D1).
 
 ### 1a Module routes in code
 
-- [ ] Create `packages/skills/src/skill-module-routes.ts`: typed table keyed by `skillId` with `core[]`, `commands{name → {modules[], maxBytes}}`, `intents[{pattern, command}]`, `budgetBytes`, optional `contextDocs`; pure `resolveSkillModules(skillId, text, explicitCommand)`. The impeccable entry: artifact intent (pptx/docx/pdf/slides/report/brief) → `SKILL.md` + `reference/artifacts.md` only (no craft-floor; the renderer ignores CSS); any other design intent → `SKILL.md` + `reference/craft-floor.md` + at most one command module; total budget about 24 KiB (constant to agree). The design-intelligence entry reproduces today's behavior byte for byte only until Phase 1b removes it from activation. Export from `packages/skills/src/index.ts`.
-- [ ] Modify `apps/gateway/src/services/governed-skill-instruction-service.ts`: replace the hard-coded `DESIGN_SKILL_ID`/`PRESENTATION_MODULE` branch with `resolveSkillModules`; enforce per-module and total byte budgets by throwing, never truncating; keep per-module manifest verification; old frozen profiles keep rendering because render uses `expected.modules`.
+- [x] Create `packages/skills/src/skill-module-routes.ts`: typed table keyed by `skillId` with `core[]`, `commands{name → {modules[], maxBytes}}`, `intents[{pattern, command}]`, `budgetBytes`, optional `contextDocs`; pure `resolveSkillModules(skillId, text, explicitCommand)`. The impeccable entry: artifact intent (pptx/docx/pdf/slides/report/brief) → `SKILL.md` + `reference/artifacts.md` only (no craft-floor; the renderer ignores CSS); any other design intent → `SKILL.md` + `reference/craft-floor.md` + at most one command module; total budget about 24 KiB (constant to agree). The design-intelligence entry reproduces today's behavior byte for byte only until Phase 1b removes it from activation. Export from `packages/skills/src/index.ts`.
+- [x] Modify `apps/gateway/src/services/governed-skill-instruction-service.ts`: replace the hard-coded `DESIGN_SKILL_ID`/`PRESENTATION_MODULE` branch with `resolveSkillModules`; enforce per-module and total byte budgets by throwing, never truncating; keep per-module manifest verification; old frozen profiles keep rendering because render uses `expected.modules`.
 
 ### 1b One design skill: broad activation for impeccable, retire design-intelligence from activation (code only, no file edits under `skills/bundled/design-intelligence`)
 
-- [ ] Modify `packages/contracts/src/skills.ts` `SkillRoutingHints`: add optional `commands?: Array<{ name: string; summary: string }>`. Rebuild `@goatcitadel/contracts` before package tests.
-- [ ] Modify `packages/skills/src/routing-hints.generated.ts`: add `impeccable` with broad design coverage (design, redesign, polish, critique, landing page, website, dashboard UI, component, page, form, onboarding, empty state, typography, color, layout, animation, html, slides, deck, pptx, docx, pdf, report, brief, artifact) plus `commands`; replace the `design-intelligence` entry with an empty hint set so it never activates by keyword (keep the phrases `design-quality.ts` requires in the file only until Phase 6 switches that checker to impeccable).
-- [ ] Modify activation so artifact intents also activate impeccable: `apps/gateway/src/services/gateway-service.ts` `resolveActivatedSkills` passes the turn's `presentationArtifactIntent`/`documentArtifactIntent` (from `chat-artifact-intent.ts`) and the module router treats them as the artifacts route.
-- [ ] Replace every code reference to `design-intelligence` with `impeccable`: `chat-turn-agent-runner.ts` `attachArtifactDesignSkillArgs` and `buildToolAccessProbeArgs`, `chat-turn-agent-runner/artifact-write-helpers.ts`, `packages/policy-engine/src/tool-registry.ts` (`skillId` enum and usage hints), `packages/policy-engine/src/artifact-design.ts` (`skillId` type and report copy), `governed-skill-instruction-service.ts` (`DESIGN_SKILL_ID`/`PRESENTATION_MODULE` constants fold into the route table), `scripts/verification/research-artifact-reliability.mjs` and `async-gateway-postgres-proof.mjs` (module path and ≤ 8 KiB assertion now point at `skills/bundled/impeccable/reference/artifacts.md`).
-- [ ] Modify `scripts/evaluate-skill-selection.ts`: impeccable cases for UI, deck, document, and negative (backend) prompts.
+- [x] Modify `packages/contracts/src/skills.ts` `SkillRoutingHints`: add optional `commands?: Array<{ name: string; summary: string }>`. Rebuild `@goatcitadel/contracts` before package tests.
+- [x] Modify `packages/skills/src/routing-hints.generated.ts`: add `impeccable` with broad design coverage (design, redesign, polish, critique, landing page, website, dashboard UI, component, page, form, onboarding, empty state, typography, color, layout, animation, html, slides, deck, pptx, docx, pdf, report, brief, artifact) plus `commands`; replace the `design-intelligence` entry with an empty hint set so it never activates by keyword (keep the phrases `design-quality.ts` requires in the file only until Phase 6 switches that checker to impeccable).
+- [x] Modify activation so artifact intents also activate impeccable: `apps/gateway/src/services/gateway-service.ts` `resolveActivatedSkills` passes the turn's `presentationArtifactIntent`/`documentArtifactIntent` (from `chat-artifact-intent.ts`) and the module router treats them as the artifacts route.
+- [x] Replace every code reference to `design-intelligence` with `impeccable`: `chat-turn-agent-runner.ts` `attachArtifactDesignSkillArgs` and `buildToolAccessProbeArgs`, `chat-turn-agent-runner/artifact-write-helpers.ts`, `packages/policy-engine/src/tool-registry.ts` (`skillId` enum and usage hints), `packages/policy-engine/src/artifact-design.ts` (`skillId` type and report copy), `governed-skill-instruction-service.ts` (`DESIGN_SKILL_ID`/`PRESENTATION_MODULE` constants fold into the route table), `scripts/verification/research-artifact-reliability.mjs` and `async-gateway-postgres-proof.mjs` (module path and ≤ 8 KiB assertion now point at `skills/bundled/impeccable/reference/artifacts.md`).
+- [x] Modify `scripts/evaluate-skill-selection.ts`: impeccable cases for UI, deck, document, and negative (backend) prompts.
 
 ### 1c Explicit invocation
 
-- [ ] Modify `apps/gateway/src/services/callable-skill-activation.ts` and `packages/skills/src/activation.ts`: recognise `$<skillId>` as explicit (closes the `1_0_CONTRACT.md` line 34 "compatibility `$` alias" gap); parse the word after an explicit `impeccable` mention as the command (`@skill impeccable critique …`).
-- [ ] Modify `packages/threaded-surface-core/src/chat/useChatComposerPaletteController.ts`: for callable skills with `routingHints.commands`, add palette items labelled `/impeccable <cmd>` whose `applyValue` is `@skill impeccable <cmd> `; the draft does not start with `/`, so it sends as a normal message and needs no Gateway command plumbing. Confirm the skills list route returns `routingHints`.
+- [x] Modify `apps/gateway/src/services/callable-skill-activation.ts` and `packages/skills/src/activation.ts`: recognise `$<skillId>` as explicit (closes the `1_0_CONTRACT.md` line 34 "compatibility `$` alias" gap); parse the word after an explicit `impeccable` mention as the command (`@skill impeccable critique …`).
+- [x] Modify `packages/threaded-surface-core/src/chat/useChatComposerPaletteController.ts`: for callable skills with `routingHints.commands`, add palette items labelled `/impeccable <cmd>` whose `applyValue` is `@skill impeccable <cmd> `; the draft does not start with `/`, so it sends as a normal message and needs no Gateway command plumbing. Confirm the skills list route returns `routingHints`.
 
 ### Tests
 
-- [ ] `governed-skill-instruction-service.test.ts`: module selection per command; budget overflow throws; design-intelligence presentation receipt identical byte for byte to today's; an old receipt still renders.
-- [ ] `activation.test.ts`: broad activation matrix (UI, deck, document, negative), design-intelligence never selected by keyword, `$` explicit parsing, command extraction.
-- [ ] `useChatComposerPaletteController.test.ts`: command items present only when impeccable is callable.
-- [ ] `bundled-skill.test.ts`: impeccable routing precision (no activation on backend prompts; activation on "polish this landing page").
+- [x] `governed-skill-instruction-service.test.ts`: module selection per command; budget overflow throws; design-intelligence presentation receipt identical byte for byte to today's; an old receipt still renders.
+- [x] `activation.test.ts`: broad activation matrix (UI, deck, document, negative), design-intelligence never selected by keyword, `$` explicit parsing, command extraction.
+- [x] `useChatComposerPaletteController.test.ts`: command items present only when impeccable is callable.
+- [x] `bundled-skill.test.ts`: impeccable routing precision (no activation on backend prompts; activation on "polish this landing page").
 
 ### Proof
 
@@ -106,22 +106,22 @@ A Gateway `/design` command; editing or deleting design-intelligence files (dele
 
 ## Phase 2: Project context (PRODUCT.md / DESIGN.md, operator-owned)
 
-- [ ] Modify `packages/contracts/src/workspaces.ts` `GuidanceDocType`: add `"product" | "design"`.
-- [ ] Modify `apps/gateway/src/services/guidance-doc-files.ts`: map to `PRODUCT.md` and `DESIGN.md`.
-- [ ] Modify `apps/gateway/src/services/guidance-service.ts`: add both to `WORKSPACE_GUIDANCE_DOC_TYPES`; do not add to `RUNTIME_GUIDANCE_DOC_TYPES` (the 6000-character shared budget must not be spent on design text every turn); exclude from global listing and global writes (D3).
-- [ ] Modify `apps/gateway/src/routes/workspaces.ts`: add both to the workspace zod enum only.
-- [ ] Modify `governed-skill-instruction-service.ts`: when a module route declares `contextDocs`, read the workspace docs; scan them with a distinct guidance-security error (not "skill security"); truncate deterministically to about 6 KiB each with a `truncated` flag; append a "Project design context" section; record `contextDocuments?: [{docType, scope, sha256, bytes, truncated}]` in the receipt.
-- [ ] Modify `packages/contracts/src/chat-capability-profile.ts`: optional receipt field, omitted when empty so earlier frozen profiles stay canonical-JSON-equal.
-- [ ] Brand block: define a small fenced block in DESIGN.md (name, up to six hex colors, up to three font names, optional logo path inside the workspace jail) parsed by a pure helper in `packages/skills`; `attachArtifactDesignSkillArgs` fills `design.brand` from it when the turn has a design receipt and the model supplied none, so `artifact-design.ts` `applyBrandColors`/`resolveTypography` use the workspace brand for decks and documents.
-- [ ] Writing the documents (`init` / `document` commands): the model drafts PRODUCT.md/DESIGN.md as a normal reply; the operator saves it as a generated artifact (existing `createChatGeneratedArtifactFromTurn`); a new explicit operator action "Apply as workspace DESIGN.md / PRODUCT.md" calls `updateWorkspaceGuidance` and records the artifact hash. Add a minimal guidance editor plus apply control as a new cockpit settings section (`apps/mission-control-next/src/cockpit/areas/settings/WorkspaceDesignContextSettings.tsx`, following `AppearanceSettings.tsx` patterns), since no guidance editor UI exists in the cockpit today. No Classic counterpart.
-- [ ] Create root `DESIGN.md` and `PRODUCT.md` for repo coding agents only, seeded from `docs/superpowers/specs/2026-09-27-mission-control-cockpit-design.md`, `docs/superpowers/specs/2026-09-22-goatcitadel-mark-and-icons-design.md`, `docs/review/mission-control-claude-design-convergence-audit.md`, `apps/mission-control-next/src/styles/mission-control-next-tokens.css`, `apps/mission-control-next/src/cockpit/styles/cockpit-tokens.css`, and the AGENTS.md North Star / UI-UX Direction sections; the cockpit follows impeccable's craft floor (D6) and Classic is marked retiring and out of scope. One sentence in AGENTS.md pointing to them.
+- [x] Modify `packages/contracts/src/workspaces.ts` `GuidanceDocType`: add `"product" | "design"`.
+- [x] Modify `apps/gateway/src/services/guidance-doc-files.ts`: map to `PRODUCT.md` and `DESIGN.md`.
+- [x] Modify `apps/gateway/src/services/guidance-service.ts`: add both to `WORKSPACE_GUIDANCE_DOC_TYPES`; do not add to `RUNTIME_GUIDANCE_DOC_TYPES` (the 6000-character shared budget must not be spent on design text every turn); exclude from global listing and global writes (D3).
+- [x] Modify `apps/gateway/src/routes/workspaces.ts`: add both to the workspace zod enum only.
+- [x] Modify `governed-skill-instruction-service.ts`: when a module route declares `contextDocs`, read the workspace docs; scan them with a distinct guidance-security error (not "skill security"); truncate deterministically to about 6 KiB each with a `truncated` flag; append a "Project design context" section; record `contextDocuments?: [{docType, scope, sha256, bytes, truncated}]` in the receipt.
+- [x] Modify `packages/contracts/src/chat-capability-profile.ts`: optional receipt field, omitted when empty so earlier frozen profiles stay canonical-JSON-equal.
+- [x] Brand block: define a small fenced block in DESIGN.md (name, up to six hex colors, up to three font names, optional logo path inside the workspace jail) parsed by a pure helper in `packages/skills`; `attachArtifactDesignSkillArgs` fills `design.brand` from it when the turn has a design receipt and the model supplied none, so `artifact-design.ts` `applyBrandColors`/`resolveTypography` use the workspace brand for decks and documents.
+- [x] Writing the documents (`init` / `document` commands): the model drafts PRODUCT.md/DESIGN.md as a normal reply; the operator saves it as a generated artifact (existing `createChatGeneratedArtifactFromTurn`); a new explicit operator action "Apply as workspace DESIGN.md / PRODUCT.md" calls `updateWorkspaceGuidance` and records the artifact hash. Add a minimal guidance editor plus apply control as a new cockpit settings section (`apps/mission-control-next/src/cockpit/areas/settings/WorkspaceDesignContextSettings.tsx`, following `AppearanceSettings.tsx` patterns), since no guidance editor UI exists in the cockpit today. No Classic counterpart.
+- [x] Create root `DESIGN.md` and `PRODUCT.md` for repo coding agents only, seeded from `docs/superpowers/specs/2026-09-27-mission-control-cockpit-design.md`, `docs/superpowers/specs/2026-09-22-goatcitadel-mark-and-icons-design.md`, `docs/review/mission-control-claude-design-convergence-audit.md`, `apps/mission-control-next/src/styles/mission-control-next-tokens.css`, `apps/mission-control-next/src/cockpit/styles/cockpit-tokens.css`, and the AGENTS.md North Star / UI-UX Direction sections; the cockpit follows impeccable's craft floor (D6) and Classic is marked retiring and out of scope. One sentence in AGENTS.md pointing to them.
 
 ### Tests
 
-- [ ] `guidance-service.test.ts`: workspace-only types; global listing excludes them.
-- [ ] `routes/workspaces.test.ts`: enum.
-- [ ] Receipt test: context hash drift fails closed with a clear message; old receipts unaffected.
-- [ ] Mission Control component test for the apply action.
+- [x] `guidance-service.test.ts`: workspace-only types; global listing excludes them.
+- [x] `routes/workspaces.test.ts`: enum.
+- [x] Receipt test: context hash drift fails closed with a clear message; old receipts unaffected.
+- [x] Mission Control component test for the apply action.
 
 ### Proof
 
@@ -309,3 +309,149 @@ Steps:
 5. Run `pnpm verify:repo:hygiene` from PowerShell. Expected: pass.
 6. Run `git diff --check`, `pnpm --filter @goatcitadel/skills typecheck`, `pnpm --filter @goatcitadel/gateway typecheck`. Expected: clean.
 7. Commit: `chore(skills): register impeccable in catalog coverage and third-party notices`.
+
+---
+
+## Phase 1 Task Breakdown (execution order; TDD per task)
+
+Module names used by every task: `main` (SKILL.md), `craft-floor` (reference/craft-floor.md), `artifacts` (reference/artifacts.md), and `<command>` (reference/<command>.md). design-intelligence keeps `main` and `presentation`. Budgets: impeccable 40 KiB total, 24 KiB per module; craft-floor loads only for the default design route and the fifteen refine/enhance/fix commands (polish, bolder, quieter, distill, harden, onboard, animate, colorize, typeset, layout, delight, overdrive, clarify, adapt, optimize), never for shape, init, document, extract, audit, or the artifacts route.
+
+### Task 5: Module route table and explicit command parsing
+
+Files: `packages/contracts/src/skills.ts` (add `commands?: Array<{ name: string; summary: string }>` to `SkillRoutingHints`), `packages/skills/src/skill-module-routes.ts` (new), `packages/skills/src/skill-module-routes.test.ts` (new), `packages/skills/src/index.ts` (export).
+
+Produces: `resolveSkillModules({ skillId, skillName, text, artifactIntent? }) -> { routeId, command?, modules: Array<{ name, relativePath, maxBytes? }>, budgetBytes }`; `extractExplicitSkillCommand(text, skillName, commands) -> string | undefined` (accepts `@skill impeccable <cmd>`, `use impeccable <cmd>`, `$bundled:impeccable <cmd>`); constants `IMPECCABLE_COMMANDS`, `IMPECCABLE_CRAFT_COMMANDS`, `IMPECCABLE_BUDGET_BYTES`, `IMPECCABLE_MODULE_MAX_BYTES`. The design-intelligence route reproduces today's rule byte for byte: the presentation regex selects `presentation.md` (maxBytes 8192) else `SKILL.md`; any other skill gets `main` only. Budget for those: 64 KiB.
+
+Steps:
+1. Write `skill-module-routes.test.ts`: impeccable default text -> `main` + `craft-floor`; artifact intent (presentation or document) -> `main` + `artifacts`; `@skill impeccable polish the settings page` -> `main` + `craft-floor` + `polish`; `@skill impeccable document` -> `main` + `document` (no craft-floor); `$bundled:impeccable typeset the hero` -> `typeset`; `use impeccable audit this page` -> `audit`; `@skill impeccable fly` (unknown word) -> default route; design-intelligence "Create a slide deck" -> `[{ name: "presentation", relativePath: "presentation.md", maxBytes: 8192 }]`; design-intelligence other text -> `[{ name: "main", relativePath: "SKILL.md" }]`; an unknown skill -> `main`; `extractExplicitSkillCommand` unit cases.
+2. Run `pnpm --filter @goatcitadel/skills exec vitest run src/skill-module-routes.test.ts`. Expected: fails (module missing).
+3. Add the contract field, implement the module, export it from the package index.
+4. Run `pnpm --filter @goatcitadel/contracts build`, then the test. Expected: pass. `pnpm --filter @goatcitadel/skills typecheck` clean.
+5. Commit: `feat(skills): add per-command module routes for runtime skills`.
+
+### Task 6: Governed injection routes modules per command with byte budgets
+
+Files: `apps/gateway/src/services/governed-skill-instruction-service.ts`, `governed-skill-instruction-service.test.ts`, `apps/gateway/src/services/gateway-service.ts` (`resolveActivatedSkills` computes `artifactIntent` with `detectPresentationArtifactIntent` and `detectDocumentArtifactIntent` from `chat-artifact-intent.ts`).
+
+Steps:
+1. Extend the test with an impeccable harness (temp skill dir: SKILL.md, reference/craft-floor.md, reference/polish.md, reference/document.md, reference/artifacts.md; trusted lifecycle; `name: "impeccable"`): "Polish the settings page" -> modules `main`, `craft-floor`; `artifactIntent: { presentation: true, document: false }` -> `main`, `artifacts`; "@skill impeccable polish the settings page" -> `main`, `craft-floor`, `polish` and the rendered instruction contains `Runtime skill module: bundled:impeccable/polish`; an oversized reference/polish.md (25 KiB) -> throws `/exceeds the 24576-byte limit/`; three 15 KiB modules -> throws `/exceeds the 40960-byte budget/`; the existing design-intelligence cases stay green and the presentation receipt's modules equal `[{ name: "presentation", relativePath: "presentation.md", sha256, bytes }]`.
+2. Run `pnpm --filter @goatcitadel/gateway exec vitest run src/services/governed-skill-instruction-service.test.ts`. Expected: new cases fail.
+3. Implement: drop the `DESIGN_SKILL_ID`/`PRESENTATION_*` constants; `buildReceipt` takes `modulePaths` from `resolveSkillModules` (fresh receipts) or `expected.modules` (render); enforce per-module `maxBytes` (message `<name> module exceeds the <max>-byte limit`) and the route budget (message `exceeds the <budget>-byte budget`); `buildGovernedActivatedSkillReceipts` accepts `artifactIntent`; `gateway-service.ts` passes it.
+4. Run the service test, `chat-turn-prep-service.governed-skills.test.ts`, and `pnpm --filter @goatcitadel/gateway typecheck`. Expected: pass.
+5. Commit: `feat(gateway): route governed skill modules per command with byte budgets`.
+
+### Task 7: Activation routes design prompts to impeccable; design-intelligence leaves keyword routing
+
+Files: `packages/skills/src/routing-hints.generated.ts`, `activation.ts`, `activation.test.ts`, `bundled-skill.test.ts`; `apps/gateway/src/services/callable-skill-activation.ts`; `scripts/evaluate-skill-selection.ts`.
+
+Steps:
+1. Tests first: `activation.test.ts` -> impeccable (with its generated hints) activates on "Create a real PowerPoint slide deck and a PDF brief with good document design." with `routing_keyword` and `routing_phrase`, on "Make the dashboard landing page look less generic.", and not on "Fix the TypeScript error in the gateway route and add a regression test."; design-intelligence (with its generated hints) does not activate on the deck prompt; `$bundled:impeccable polish this` is explicit for a skill whose skillId is `bundled:impeccable`; `bundled-skill.test.ts` keyword precision stays green.
+2. Run the skills tests. Expected: new cases fail.
+3. Implement: impeccable hints (phrases including every phrase `design-quality.ts` requires: design quality, anti-slop, visual polish, design-system audit, document design, presentation design; keywords including pptx and artifact; `commands` with the twenty command summaries); design-intelligence hints become empty `phrases` and `keywords`; `activation.ts` and `callable-skill-activation.ts` accept `$<skillId|name>` as explicit and match explicit tokens against `skillId` as well as `name`; `evaluate-skill-selection.ts` expects impeccable.
+4. Run the skills tests, `pnpm verify:design:quality`, `pnpm verify:skills:catalog` (impeccable warning gone), `pnpm tsx scripts/evaluate-skill-selection.ts` (every case hits). Expected: pass.
+5. Commit: `feat(skills): route design prompts to impeccable and retire design-intelligence keywords`.
+
+### Task 8: Point artifact design references at impeccable
+
+Files: `apps/gateway/src/services/chat-turn-agent-runner.ts` (`buildToolAccessProbeArgs`, `attachArtifactDesignSkillArgs`), `apps/gateway/src/services/chat-turn-agent-runner/artifact-write-helpers.ts`, `packages/policy-engine/src/tool-registry.ts` (enum and usage hints), `packages/policy-engine/src/artifact-design.ts` (type literal, check detail, report copy), `scripts/verification/research-artifact-reliability.mjs` and `scripts/verification/async-gateway-postgres-proof.mjs` (module path becomes `skills/bundled/impeccable/reference/artifacts.md`), `scripts/verification/lib/ccg-research-deck-fixture.mjs`; tests: `chat-turn-agent-runner.loop24.test.ts`, `chat-turn-prep-service.governed-skills.test.ts`, `artifact-design.test.ts`, `tool-executor-tail.coverage.test.ts`, `engine.test.ts`, `policy-support.coverage.test.ts`, `tool-registry.test.ts`.
+
+Steps:
+1. Update the test expectations first (`skillId: "impeccable"` / `"bundled:impeccable"`, enum `["impeccable"]`). Run `tool-registry.test.ts` and `artifact-design.test.ts`. Expected: fail.
+2. Implement the renames. Run the policy-engine tests named above, the two gateway tests, and `pnpm --filter @goatcitadel/policy-engine typecheck`. Expected: pass. `node --check` both verification scripts.
+3. Commit: `refactor: point artifact design skill references at impeccable`.
+
+### Task 9: Composer palette offers impeccable commands as explicit mentions
+
+Files: `packages/threaded-surface-core/src/chat/useChatComposerPaletteController.ts`, `useChatComposerPaletteController.test.ts`.
+
+Steps:
+1. Test first: with an installed, enabled, callable skill `bundled:impeccable` whose `routingHints.commands` is `[{ name: "polish", summary: "Final quality pass before shipping" }]`, the skills source yields an item with `command: "/impeccable polish"`, `applyValue: "@skill impeccable polish "`, `action: { type: "insert_command", value: "@skill impeccable polish " }`; with `callable: false` no command item exists. Expected: fails.
+2. Implement in the skills source. Run the test and `pnpm --filter @goatcitadel/threaded-surface-core typecheck`. Expected: pass.
+3. Commit: `feat(composer): offer impeccable commands as explicit skill mentions`.
+
+### Task 10: Proof lanes and plan ticks
+
+Steps:
+1. `pnpm typecheck` (root), `pnpm verify:skills:catalog`, `pnpm verify:design:quality`, `pnpm verify:routed-context:snapshots`, `git diff --check`. Expected: pass; record any lane that cannot run locally with its reason.
+2. Tick the Phase 1 boxes in this plan. Commit: `docs(plan): mark impeccable Phase 1 done`.
+
+---
+
+## Phase 2 Task Breakdown (execution order; TDD per task)
+
+Vocabulary used by every task: a **context doc** is a workspace guidance document of type `product` (file `PRODUCT.md`) or `design` (file `DESIGN.md`) under `workspaces/<workspaceId>/`; there is never a global copy (D3). The **brand block** is a fenced code block in DESIGN.md whose info string is `brand`, holding `key: value` lines (`name`, `colors`, `fonts`, `logo`). The **context ceiling** is 6144 bytes per doc. Context docs are injected only through impeccable's module routes, never through `resolveRuntimeGuidance` (its 6000-character budget stays for GOATCITADEL/AGENTS/CLAUDE).
+
+### Task 11: Workspace-only PRODUCT.md and DESIGN.md guidance docs
+
+Files: `packages/contracts/src/workspaces.ts` (`GuidanceDocType` gains `"product" | "design"`), `apps/gateway/src/services/guidance-doc-files.ts` (`product: "PRODUCT.md"`, `design: "DESIGN.md"`), `apps/gateway/src/services/guidance-service.ts` (`WORKSPACE_GUIDANCE_DOC_TYPES` gains both; new `WORKSPACE_ONLY_GUIDANCE_DOC_TYPES = ["product", "design"]`; `listGlobalGuidance` skips them; `updateGlobalGuidance` throws `Global guidance is not supported for <docType>; it is workspace-only.`; `RUNTIME_GUIDANCE_DOC_TYPES` unchanged), `apps/gateway/src/routes/workspaces.ts` (`workspaceDocTypeSchema` gains both; `globalDocTypeSchema` unchanged), tests `guidance-service.test.ts`, `routes/workspaces.test.ts`.
+
+Produces: `GuidanceDocType` includes `product`/`design`; `GET /api/v1/workspaces/:id/guidance` returns them in `workspace`; `PUT /api/v1/workspaces/:id/guidance/design` writes `workspaces/<id>/DESIGN.md`; `PUT /api/v1/guidance/global/design` is a 400 (enum); `GuidanceService.updateGlobalGuidance("design", …)` throws.
+
+Steps:
+1. Tests first: `guidance-service.test.ts` — workspace listing includes `product` and `design` records with `fileName` `PRODUCT.md`/`DESIGN.md`; global listing has no `product`/`design`; `updateGlobalGuidance("design", "x")` rejects with `/workspace-only/`; `resolveRuntimeGuidance` ignores a workspace DESIGN.md (no `DESIGN.md` in `workspaceFilesUsed`). `routes/workspaces.test.ts` — PUT workspace `design` reaches the service with `("default", "design", content)`; PUT global `design` is 400.
+2. Run `pnpm --filter @goatcitadel/gateway exec vitest run src/services/guidance-service.test.ts src/routes/workspaces.test.ts`. Expected: new cases fail.
+3. Implement; `pnpm --filter @goatcitadel/contracts build`; rerun; `pnpm --filter @goatcitadel/gateway typecheck`. Expected: pass.
+4. Commit: `feat(guidance): add workspace-only PRODUCT.md and DESIGN.md guidance docs`.
+
+### Task 12: Brand block parser
+
+Files: `packages/skills/src/design-brand.ts` (new), `design-brand.test.ts` (new), `packages/skills/src/index.ts` (export).
+
+Produces: `parseDesignBrandBlock(markdown: string): DesignBrand | undefined` where `DesignBrand = { name?: string; colors?: string[]; fonts?: string[]; logoPath?: string }` (same shape as policy-engine `ArtifactBrandInput`, which this package must not import). Rules: first fenced block whose info string is exactly `brand` (case-insensitive) wins; lines are `key: value`, unknown keys ignored; `colors` is comma-separated, each normalised to `#rrggbb` (accepts `#rgb`, `#rrggbb`, with or without `#`; invalid entries dropped), at most 6 kept; `fonts` comma-separated, trimmed, non-empty, at most 3; `logo` kept as `logoPath` only when it is a relative path with forward slashes, no `..` segment, no leading `/`, no drive letter, no URL scheme; `name` trimmed, at most 80 chars. Returns `undefined` when there is no block or the block yields no fields. Also exports `DESIGN_BRAND_BLOCK_EXAMPLE` (a 5-line example string used by the settings help text).
+
+Steps:
+1. Test first (RED): full block parses; limits (7 colors → 6, 4 fonts → 3); invalid color dropped; `logo: ../x.svg`, `/abs.svg`, `C:/x.svg`, `https://x` all dropped; no block → undefined; block with only unknown keys → undefined; second `brand` block ignored; a `css` block is not a brand block.
+2. Implement; `pnpm --filter @goatcitadel/skills exec vitest run src/design-brand.test.ts`; typecheck. Expected: pass.
+3. Commit: `feat(skills): parse the DESIGN.md brand block`.
+
+### Task 13: Module routes declare context docs; receipts carry them and fail closed on drift
+
+Files: `packages/skills/src/skill-module-routes.ts` (+test), `packages/contracts/src/chat-capability-profile.ts`, `apps/gateway/src/services/governed-skill-instruction-service.ts` (+test), `apps/gateway/src/services/workspace-skill-context-docs.ts` (new, +test), `apps/gateway/src/services/gateway-service.ts`.
+
+Produces:
+- `SkillModuleResolution.contextDocs?: SkillContextDocType[]` with `SkillContextDocType = "product" | "design"`; every impeccable route declares `["product", "design"]`; other skills declare nothing. `enumerateSkillRoutes` carries the field.
+- Contract: `ChatTurnCapabilityActivatedSkillContextDocument { docType: "product" | "design"; scope: "workspace"; sha256: string; bytes: number; truncated: boolean }` and `ChatTurnCapabilityActivatedSkill.contextDocuments?: …[]` (omitted when empty so earlier frozen profiles stay canonical-JSON-equal).
+- `SkillContextDocReader = (docType) => { exists: boolean; content: string }` (sync). `createWorkspaceSkillContextDocReader(host: GuidanceDocumentHost, workspaceId)` reads `workspaces/<id>/PRODUCT.md|DESIGN.md` with `resolveGuidancePath` + `readFileSync`; a missing file is `{ exists: false, content: "" }`.
+- `buildGovernedActivatedSkillReceipts` takes `contextDocs?: SkillContextDocReader`; `renderGovernedActivatedSkillInstructions` takes the same. `buildReceipt` reads the route's declared docs (freeze) or the frozen receipt's `contextDocuments` doc types (render): for each existing non-blank doc, `sha256` and `bytes` of the full stored content, content cut to the ceiling on a UTF-8 character boundary with `truncated: true` when cut, scanned with `scanPromptwareContent({ source: "memory_context", sourcePath: "workspace-guidance:<docType>" })`; any finding throws `GuidanceSecurityBlockedError` (`failureClass: "guidance_security_blocked"`, `recoveryAction: "review_workspace_guidance"`, message `Workspace <FILE> blocked the turn before provider execution; review it in Settings › Workspaces.`), never `SkillSecurityBlockedError`. The rendered instruction appends `## Project design context: <FILE> (workspace)` sections after the modules, with `[truncated to 6144 bytes]` as the last line when cut; `instructionSha256`/`instructionBytes` cover them. At render time a doc whose `sha256` differs from the frozen receipt throws `Workspace <FILE> changed after this turn's profile froze; send the message again.` before the generic drift check. A frozen receipt without `contextDocuments` never reads docs.
+- `gateway-service.ts`: `resolveActivatedSkills` passes `contextDocs: createWorkspaceSkillContextDocReader(this, input.workspaceId)`; `resolveActivatedSkillInstructions` passes one for `profile.identity.workspaceId`.
+
+Steps:
+1. Tests first: route test — impeccable routes carry `contextDocs: ["product", "design"]`, coding route carries none. Service test (impeccable harness + a reader stub): with DESIGN.md `"# Design\n\n```brand\nname: Acme\n```"` the receipt has `contextDocuments: [{ docType: "design", scope: "workspace", sha256, bytes, truncated: false }]` and the instruction contains `Project design context: DESIGN.md (workspace)`; no docs → `contextDocuments` absent and the receipt canonical-equal to the no-reader receipt; 9000-byte DESIGN.md → `truncated: true`, injected text ≤ 6144 bytes + marker; DESIGN.md containing `ignore all previous instructions` → throws `GuidanceSecurityBlockedError` with `failureClass "guidance_security_blocked"`; render with a reader whose DESIGN.md changed → throws `/changed after this turn's profile froze/`; render of a receipt without `contextDocuments` with a reader that throws if called → renders. Reader test — reads an existing file, reports missing, never escapes `workspaces/<id>/`.
+2. Run the three test files. Expected: new cases fail.
+3. Implement; `pnpm --filter @goatcitadel/contracts build`; rerun with `chat-turn-prep-service.governed-skills.test.ts`; gateway + skills typecheck. Expected: pass.
+4. Commit: `feat(gateway): inject workspace design context into impeccable turns with hashed receipts`.
+
+### Task 14: Workspace brand reaches deck and document tools
+
+Files: `apps/gateway/src/services/chat-turn-agent-runner.ts` (`ChatTurnAgentRunnerInput.workspaceDesignBrand?: ArtifactBrandInput`; `attachArtifactDesignSkillArgs(toolName, args, userContent, workspaceBrand?)` fills `design.brand` when the design is non-plain and the model supplied no brand), `chat-turn-agent-runner.loop24.test.ts`, `apps/gateway/src/services/gateway-service.ts` (where the runner input is built: when the frozen profile has an activated-skill receipt whose `contextDocuments` includes `design`, read DESIGN.md through the reader and `parseDesignBrandBlock` it; pass the result as `workspaceDesignBrand`; no receipt → undefined), a focused gateway test for that helper (`workspace-design-brand.test.ts`, new, pure helper `resolveWorkspaceDesignBrand(profile, reader)`).
+
+Steps:
+1. Tests first: loop24 — a polished `presentations.create` call with no model brand gets `design.brand` equal to the input brand; a model-supplied brand is kept; a plain-format call gets no brand. Helper test — receipt with design context doc + DESIGN.md with a brand block → brand; receipt without context docs → undefined; DESIGN.md without block → undefined.
+2. Run; Expected: fail. Implement; rerun with `pnpm --filter @goatcitadel/gateway typecheck`. Expected: pass.
+3. Commit: `feat(gateway): apply the workspace brand block to governed artifact tools`.
+
+### Task 15: Cockpit settings section for PRODUCT.md and DESIGN.md
+
+Files: `apps/mission-control-next/src/cockpit/areas/settings/WorkspaceDesignContextSettings.tsx` (new), `WorkspaceDesignContextSettings.test.tsx` (new), `settings-controls.ts` (preloadable + `"workspaces"` list), `SettingsArea.tsx` (render under `case "workspaces"` after `WorkspaceSettings`, keyed by `activeWorkspaceId`), `settings-index.ts` (add `design context product design brand DESIGN.md PRODUCT.md` to the `workspaces` keywords). Cockpit only; no Classic counterpart.
+
+Produces: a `<section aria-label="Design context">` with, per doc (`PRODUCT.md`, `DESIGN.md`): a textarea bound to the workspace guidance content from `fetchWorkspaceGuidance(workspaceId)`, a Save button calling `updateWorkspaceGuidance(workspaceId, docType, content)`, a status line (`Saved`, errors); a help block with `DESIGN_BRAND_BLOCK_EXAMPLE` copy inlined as a string constant in the component (the cockpit depends on contracts only, not on `@goatcitadel/skills`); and an "Apply a generated artifact" control: a select listing the workspace's generated artifacts from `fetchChatGeneratedArtifacts({ workspaceId, kind: "document" })` whose `content` is non-empty, with buttons "Apply as DESIGN.md" / "Apply as PRODUCT.md" that save `<!-- applied from generated artifact <artifactId> contentHash <contentHash> -->\n` + artifact content, so the applied hash is recorded in the document itself.
+
+Steps:
+1. Test first (happy-dom; mock `fetchWorkspaceGuidance`, `updateWorkspaceGuidance`, `fetchChatGeneratedArtifacts` from `@goatcitadel/mission-control-shared/api/client`): renders both editors with fetched content; Save sends `("ws-1", "design", edited)`; Apply sends the provenance comment + artifact content and shows `Saved`.
+2. Run `pnpm --filter @goatcitadel/mission-control-next exec vitest run src/cockpit/areas/settings/WorkspaceDesignContextSettings.test.tsx`. Expected: fail (module missing). Implement; rerun; `pnpm --filter @goatcitadel/mission-control-next typecheck`. Expected: pass.
+3. Commit: `feat(cockpit): add workspace design context settings for DESIGN.md and PRODUCT.md`.
+
+### Task 16: Root DESIGN.md and PRODUCT.md for repo coding agents
+
+Files: `DESIGN.md` (new, root), `PRODUCT.md` (new, root), `AGENTS.md` (one sentence under "How Agents Should Work" pointing at both). Seeded from the sources listed in the Phase 2 section; the cockpit follows impeccable's craft floor (D6); Classic is marked retiring and out of scope; no personal paths; DESIGN.md carries a `brand` block with the GoatCitadel token colors and fonts so the parser has a real example.
+
+Steps:
+1. Write both files (DESIGN.md ≤ 12 KiB, PRODUCT.md ≤ 8 KiB). Add the AGENTS.md sentence.
+2. `pnpm --filter @goatcitadel/skills exec vitest run src/design-brand.test.ts` with a case that parses the root DESIGN.md brand block (added test-first in this task); `node scripts/validate-governance-docs.mjs`; `node scripts/verify-repo-hygiene.mjs`. Expected: pass.
+3. Commit: `docs: add DESIGN.md and PRODUCT.md for repo coding agents`.
+
+### Task 17: Proof lanes and plan ticks
+
+Steps:
+1. `pnpm typecheck`, `pnpm docs:check`, `pnpm verify:routed-context:snapshots`, `pnpm verify:runtime:truth`, `pnpm verify:surface:regression`, `git diff --check`. Expected: pass; record any lane that cannot run locally with its reason.
+2. Tick the Phase 2 boxes. Commit: `docs(plan): mark impeccable Phase 2 done`.

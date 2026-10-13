@@ -436,7 +436,10 @@ export class CronJobRepository {
       contextFrom: row.context_from ?? undefined,
       lastRunOutput: row.last_run_output ?? undefined,
       lastRunId: row.last_run_id ?? undefined,
-      lastRunStatus: row.last_run_status === "ok" || row.last_run_status === "failed" ? row.last_run_status : undefined,
+      lastRunStatus:
+        row.last_run_status === "ok" || row.last_run_status === "failed" || row.last_run_status === "skipped"
+          ? row.last_run_status
+          : undefined,
       lastRunEvidenceEnvelopeId: row.last_run_evidence_envelope_id ?? undefined,
       lastFailureAt: row.last_failure_at ?? undefined,
       ...(lastFailure ? { lastFailure } : {}),

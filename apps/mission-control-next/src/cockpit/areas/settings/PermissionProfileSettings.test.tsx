@@ -21,8 +21,11 @@ const api = vi.hoisted(() => ({
   activatePermissionProfile: vi.fn(),
   fetchAutonomousActivationGrants: vi.fn(),
   revokeAutonomousActivationGrant: vi.fn(),
+  fetchWorkspaces: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
+// AutonomousGrantsSettings names workspaces through the direct workspaces owner, not the client barrel.
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({ fetchWorkspaces: api.fetchWorkspaces }));
 const profile: PermissionProfileSnapshotRecord = {
   profileId: "safe",
   label: "Safe",
@@ -77,6 +80,7 @@ beforeEach(() => {
   api.fetchSettings.mockResolvedValue({ deploymentProfile: "local_dev" });
   api.fetchActiveLocalOperatorOverrides.mockResolvedValue({ items: [] });
   api.fetchAutonomousActivationGrants.mockResolvedValue({ items: [] });
+  api.fetchWorkspaces.mockResolvedValue({ items: [] });
   api.getGatewayApiBaseUrl.mockReturnValue("http://gateway-a");
   api.reviewPermissionProfileSelection.mockImplementation(async (input) => ({
     input,

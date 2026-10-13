@@ -4,6 +4,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ensureCostReportCronJob,
+  ensureMemoryConsolidationCronJob,
   ensureMemoryFlushCronJob,
   ensurePrivateBetaBackupCronJob,
   ensureUpdateReviewCronJob,
@@ -14,6 +15,7 @@ import {
 const TEMP_ROOTS: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   while (TEMP_ROOTS.length > 0) {
     const root = TEMP_ROOTS.pop();
     if (root) {
@@ -101,6 +103,33 @@ describe("cron job config helpers", () => {
         }),
       );
     }
+  });
+
+  it("re-zones persisted Pacific built-in schedules to the host timezone on ensure", async () => {
+    const actual = Intl.DateTimeFormat.prototype.resolvedOptions;
+    vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockImplementation(function (this: Intl.DateTimeFormat) {
+      return { ...actual.call(this), timeZone: "UTC" };
+    });
+    const host = createHost("F:/tmp/goatcitadel");
+    host.storage.cronJobs.get.mockImplementation((jobId: string) => ({
+      jobId,
+      enabled: true,
+      schedule: "30 2 * * * America/Los_Angeles",
+    }));
+
+    await ensurePrivateBetaBackupCronJob(host);
+    await ensureMemoryFlushCronJob(host);
+    await ensureMemoryConsolidationCronJob(host);
+    await ensureCostReportCronJob(host);
+    await ensureUpdateReviewCronJob(host);
+
+    expect(host.cronConfigGenerationOwner.reconcileSpec.mock.calls.map(([record]) => record.schedule)).toEqual([
+      "30 2 * * * UTC",
+      "0 3 * * * UTC",
+      "30 2 * * 0 UTC",
+      "0 * * * * UTC",
+      "15 4 * * * UTC",
+    ]);
   });
 
   it("repairs canonical actions for built-in cron job ids loaded from config", async () => {

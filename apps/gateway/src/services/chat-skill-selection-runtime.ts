@@ -1,3 +1,9 @@
+import {
+  buildGovernedActivatedSkillReceipts,
+  type SkillContextDocReader,
+} from "./governed-skill-instruction-service.js";
+import { detectPresentationArtifactIntent, detectDocumentArtifactIntent } from "./chat-artifact-intent.js";
+import type { ChatTurnCapabilityTrustedSkill } from "@goatcitadel/contracts";
 import type {
   SkillResolveInput,
   SkillListItem,
@@ -120,4 +126,28 @@ function computeSkillActivationConfidence(reasons: string[], isExplicit: boolean
     return 0.68;
   }
   return 0.5;
+}
+
+export async function buildChatRuntimeSkillReceipts(
+  host: {
+    resolveSkills(
+      content: string,
+      workspaceId: string,
+    ): Promise<import("@goatcitadel/contracts").SkillActivationDecision>;
+    listLifecycle(): Promise<import("@goatcitadel/contracts").SkillLifecycleRecord[]>;
+    contextDocs(workspaceId: string): SkillContextDocReader;
+  },
+  input: { content: string; trustedSkills: ChatTurnCapabilityTrustedSkill[]; workspaceId: string },
+) {
+  return buildGovernedActivatedSkillReceipts({
+    content: input.content,
+    trustedSkills: input.trustedSkills,
+    decision: await host.resolveSkills(input.content, input.workspaceId),
+    lifecycleRows: await host.listLifecycle(),
+    artifactIntent: {
+      presentation: detectPresentationArtifactIntent(input.content),
+      document: detectDocumentArtifactIntent(input.content),
+    },
+    contextDocs: host.contextDocs(input.workspaceId),
+  });
 }

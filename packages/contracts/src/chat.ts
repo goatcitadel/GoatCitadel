@@ -971,6 +971,7 @@ export type ChatTurnFailureClass =
   | "approval_required"
   | "interrupted_by_restart"
   | "skill_security_blocked"
+  | "guidance_security_blocked"
   | "unknown";
 
 export type ChatTurnCompletionStatus = "complete" | "truncated" | "interrupted" | "backgrounded";
@@ -993,6 +994,7 @@ export type ChatTurnRecoveryAction =
   | "approve_pending_step"
   | "switch_to_deep_mode"
   | "review_skill_security"
+  | "review_workspace_guidance"
   | "check_gateway_connection";
 
 export interface ChatTurnFailureRecord {
@@ -1008,6 +1010,8 @@ export interface ChatTurnFailureRecord {
 export interface ChatSkillSecurityFailureRecord {
   scannerVersion: string;
   skillIds: string[];
+  /** Workspace guidance files (PRODUCT.md / DESIGN.md) that failed the scan; present for guidance_security_blocked. */
+  guidanceFiles?: string[];
   ruleIds: string[];
   evidenceHashes: string[];
 }
@@ -1138,6 +1142,8 @@ export function getChatTurnRecoveryAction(failureClass: ChatTurnFailureClass): C
       return "retry";
     case "skill_security_blocked":
       return "review_skill_security";
+    case "guidance_security_blocked":
+      return "review_workspace_guidance";
     default:
       return "retry";
   }
@@ -1161,6 +1167,8 @@ export function getChatTurnRecoveryActionLabel(action: ChatTurnRecoveryAction): 
       return "Check the gateway connection";
     case "review_skill_security":
       return "Review skill security";
+    case "review_workspace_guidance":
+      return "Review workspace guidance";
   }
 }
 
@@ -1182,6 +1190,8 @@ export function getChatTurnRecoveryActionSummary(action: ChatTurnRecoveryAction)
       return "Check the gateway or network connection, then retry the turn.";
     case "review_skill_security":
       return "Disable or re-review the named skill, then retry the turn after it passes the current security scan.";
+    case "review_workspace_guidance":
+      return "Edit the workspace PRODUCT.md or DESIGN.md named in the error under Settings › Workspaces › Design context, then send the message again.";
   }
 }
 

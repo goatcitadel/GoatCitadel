@@ -51,8 +51,8 @@ describe("governed skill turn preparation", () => {
         ...base.selection,
         activatedSkills: [
           {
-            capabilityId: "skill:bundled:design-intelligence",
-            skillId: "bundled:design-intelligence",
+            capabilityId: "skill:bundled:impeccable",
+            skillId: "bundled:impeccable",
             confidence: 0.98,
             reasons: ["routing_keyword"],
             treeSha256: "3".repeat(64),

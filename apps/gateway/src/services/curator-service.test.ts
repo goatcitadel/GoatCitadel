@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { CuratorRunReport, DurableRunRecord, SkillListItem } from "@goatcitadel/contracts";
 import { CuratorService } from "./curator-service.js";
+import { toWeekKeyForTimezone } from "./improvement-replay.js";
 
 function makeSkill(overrides: Partial<SkillListItem> = {}): SkillListItem {
   return {
@@ -548,7 +549,15 @@ describe("CuratorService cron scheduler", () => {
     };
   }
 
-  it("ensureCuratorWeeklyCronJob registers the cron with action=curator and Sunday 02:00 PT schedule", async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("ensureCuratorWeeklyCronJob registers the cron with action=curator and Sunday 02:00 host-zone schedule", async () => {
+    const actualResolvedOptions = Intl.DateTimeFormat.prototype.resolvedOptions;
+    vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockImplementation(function (this: Intl.DateTimeFormat) {
+      return { ...actualResolvedOptions.call(this), timeZone: "UTC" };
+    });
     const storageStub = makeStorageStub();
     const service = new CuratorService({
       listSkills: () => [],
@@ -575,7 +584,40 @@ describe("CuratorService cron scheduler", () => {
     expect(job?.name).toBe("Curator Weekly Report");
     expect(job?.description).toBe("Generate a proposal-only curator report over the skill registry.");
     expect(job?.enabled).toBe(true);
-    expect(job?.schedule).toBe("0 2 * * 0 America/Los_Angeles");
+    expect(job?.schedule).toBe("0 2 * * 0 UTC");
+  });
+
+  it("runCuratorWeeklyIfDue opens its Sunday 02:00 window in the zone the job's schedule names", async () => {
+    const storageStub = makeStorageStub();
+    storageStub.crons.set("curator_weekly", {
+      jobId: "curator_weekly",
+      name: "x",
+      action: "curator",
+      schedule: "0 2 * * 0 UTC",
+      enabled: true,
+    });
+    let runCalls = 0;
+    const service = new CuratorService({
+      listSkills: () => {
+        runCalls += 1;
+        return [];
+      },
+      archiveSkill: () => makeSkill(),
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-17T02:10:00Z"), // Sunday 02:10 UTC, still Saturday in Pacific time
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+      storage: storageStub as never,
+    });
+    await expect(service.runCuratorWeeklyIfDue()).resolves.toMatchObject({
+      status: "completed",
+      summary: { dryRun: true, totalSkills: 0 },
+    });
+    expect(runCalls).toBe(1);
+    expect(storageStub.settings.get("curator_weekly_last_week_key_v1")).toBe(
+      toWeekKeyForTimezone(new Date("2026-05-17T02:10:00Z"), "UTC"),
+    );
   });
 
   it("runCuratorWeeklyIfDue no-ops when cron job is missing or disabled", async () => {
@@ -595,7 +637,7 @@ describe("CuratorService cron scheduler", () => {
       storage: storageStub as never,
     });
     // job not registered yet — should no-op
-    await service.runCuratorWeeklyIfDue();
+    await expect(service.runCuratorWeeklyIfDue()).resolves.toEqual({ status: "skipped", reason: "job_disabled" });
     expect(runCalls).toBe(0);
 
     // register but disabled — should no-op
@@ -606,7 +648,7 @@ describe("CuratorService cron scheduler", () => {
       schedule: "0 2 * * 0 America/Los_Angeles",
       enabled: false,
     });
-    await service.runCuratorWeeklyIfDue();
+    await expect(service.runCuratorWeeklyIfDue()).resolves.toEqual({ status: "skipped", reason: "job_disabled" });
     expect(runCalls).toBe(0);
   });
 
@@ -755,6 +797,33 @@ describe("CuratorService.maybeRunIdleCurator (S3 idle janitor)", () => {
       cycleDays: 7,
     });
     await expect(service.maybeRunIdleCurator()).resolves.toBeUndefined();
+  });
+
+  it("never throws even when publishing the sweep failure also rejects", async () => {
+    const publishRealtime = vi.fn(async () => {
+      throw new Error("realtime bus unavailable");
+    });
+    const service = new CuratorService({
+      listSkills: () => {
+        throw new Error("skill registry unavailable");
+      },
+      archiveSkill: () => makeSkill(),
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-06-15T12:00:00Z"),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime,
+      cycleDays: 7,
+      idleSweep: {
+        isWorkspaceIdle: () => true,
+        isAutonomyEnabled: () => true,
+        snapshotSkill: () => undefined,
+      },
+    });
+    await expect(service.maybeRunIdleCurator({ force: true })).resolves.toBeUndefined();
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "curator",
+      expect.objectContaining({ type: "curator_idle_sweep_failed", error: "skill registry unavailable" }),
+    );
   });
 
   it("does NOT sweep while the workspace is not idle (a turn is active)", async () => {
@@ -908,6 +977,33 @@ describe("CuratorService.executeDurableCuratorTickRun", () => {
     expect(ran).toBe(true);
     expect(archived).toEqual([]);
     expect(reports[0]).toMatchObject({ triggerMode: "scheduled", dryRun: true, proposalCount: 1, archivedCount: 0 });
+  });
+
+  it("records the payload's manual trigger mode instead of forcing scheduled", async () => {
+    const reports: CuratorRunReport[] = [];
+    const service = new CuratorService({
+      listSkills: () => [makeSkill({ name: "alpha", usageCount: 0 })],
+      archiveSkill: () => makeSkill({ name: "alpha", state: "disabled" }),
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-15T12:00:00Z"),
+      writeReport: async (report) => {
+        reports.push(report);
+        return "/tmp/dummy";
+      },
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    await service.executeDurableCuratorTickRun(
+      makeRun({
+        version: "curator.tick.v1",
+        runId: "curator-run-manual",
+        triggerMode: "manual",
+        cycleDays: 7,
+        requestedAt: "2026-05-15T12:00:00Z",
+      }),
+      undefined,
+    );
+    expect(reports[0]).toMatchObject({ triggerMode: "manual", dryRun: true });
   });
 
   it("throws on invalid version", async () => {

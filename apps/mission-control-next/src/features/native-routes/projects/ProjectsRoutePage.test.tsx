@@ -47,6 +47,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   restoreChatProject: vi.fn(),
   updateChatProject: vi.fn(),
 }));
+// The cross-project recents row reads the direct chat owner, not the client barrel; keep it off the network.
+vi.mock("@goatcitadel/mission-control-shared/api/chat", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/chat")>()),
+  fetchCrossProjectRecentSessions: vi.fn().mockResolvedValue({ items: [] }),
+}));
 
 const mockedArchiveChatProject = vi.mocked(archiveChatProject);
 const mockedCreateChatSession = vi.mocked(createChatSession);
@@ -458,7 +463,9 @@ describe("ProjectsRoutePage", () => {
       theme: "ops",
     });
 
-    await act(async () => { findButton(renderer.root, "New project").props.onClick(); });
+    await act(async () => {
+      findButton(renderer.root, "New project").props.onClick();
+    });
     act(() => {
       expect(renderer.root.findByProps({ "aria-label": "New project name" })).toBeTruthy();
       expect(renderer.root.findByProps({ "aria-label": "New project workspace path" })).toBeTruthy();
@@ -483,7 +490,9 @@ describe("ProjectsRoutePage", () => {
     });
     expect(navigate).toHaveBeenCalledWith({ area: "projects", projectId: "project-created", theme: "ops" });
 
-    await act(async () => { findButton(renderer.root, "Edit project").props.onClick(); });
+    await act(async () => {
+      findButton(renderer.root, "Edit project").props.onClick();
+    });
     const alphaNameInput = findFieldByAriaLabel(renderer.root, "Edit project name");
     expect(alphaNameInput).toBeDefined();
     expect(findFieldByAriaLabel(renderer.root, "Edit project workspace path")).toBeDefined();
@@ -505,7 +514,9 @@ describe("ProjectsRoutePage", () => {
       }),
     );
 
-    await act(async () => { findButton(renderer.root, "Close editor").props.onClick(); });
+    await act(async () => {
+      findButton(renderer.root, "Close editor").props.onClick();
+    });
     await act(async () => {
       findButtonByAriaLabel(renderer.root, "Archive project Alpha renamed").props.onClick();
       await Promise.resolve();
@@ -513,7 +524,9 @@ describe("ProjectsRoutePage", () => {
     expect(mockedArchiveChatProject).toHaveBeenCalledWith("project-alpha", 7);
     expect(navigate).toHaveBeenCalledWith({ area: "projects", theme: "ops" }, { replace: true });
 
-    await act(async () => { renderer.update(<ProjectsRoutePage {...defaultProps({ route: { area: "projects", theme: "ops" }, navigate })} />); });
+    await act(async () => {
+      renderer.update(<ProjectsRoutePage {...defaultProps({ route: { area: "projects", theme: "ops" }, navigate })} />);
+    });
     act(() => {
       findButton(renderer.root, "Archived").props.onClick();
     });
@@ -534,7 +547,9 @@ describe("ProjectsRoutePage", () => {
     const renderer = await renderPage(
       defaultProps({ route: { area: "projects", projectId: "project-alpha", theme: "ops" } }),
     );
-    await act(async () => { findButton(renderer.root, "Edit project").props.onClick(); });
+    await act(async () => {
+      findButton(renderer.root, "Edit project").props.onClick();
+    });
     const localDescriptionInput = findFieldByAriaLabel(renderer.root, "Edit project description");
     act(() => {
       localDescriptionInput.props.onChange({

@@ -507,7 +507,12 @@ describe("GatewayService memory consolidation scheduler", () => {
         cronJobs: {
           get: vi.fn((jobId: string) =>
             jobId === MEMORY_CONSOLIDATION_WEEKLY_JOB_ID
-              ? { jobId: MEMORY_CONSOLIDATION_WEEKLY_JOB_ID, enabled: true }
+              ? {
+                  jobId: MEMORY_CONSOLIDATION_WEEKLY_JOB_ID,
+                  enabled: true,
+                  // The gate reads the zone from the persisted schedule; pin it so the test is host-independent.
+                  schedule: "30 2 * * 0 America/Los_Angeles",
+                }
               : undefined,
           ),
           upsert: cronJobUpsert,

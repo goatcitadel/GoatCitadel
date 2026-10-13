@@ -4,6 +4,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readPassedTestCount } from "./lib/scenarios/external-sources-lane.mjs";
+import { parseCliArgs } from "./lib/shared.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const execFileAsync = promisify(execFile);
@@ -222,7 +223,9 @@ const CHECK_GROUPS = Object.freeze({
           "src/routes/chat.routes.test.ts",
         ],
         {
-          timeoutMs: 180_000,
+          // Takes ~45-56s locally, but a loaded Windows host passed 180s mid-run with
+          // tests still progressing (2026-10-11). Budgets bound hangs, not loaded schedulers.
+          timeoutMs: 360_000,
           expectedStdout: [
             "chat workbench helpers",
             "runs commands in an existing workbench worktree and updates validation state",
@@ -810,29 +813,10 @@ function quoteWindowsCommand(parts) {
     .join(" ");
 }
 
+// Delegates to the shared, unit-tested parser so inline values keep every "=" after the first.
 function parseArgs(argv) {
-  const parsed = { _: [] };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (!arg.startsWith("--")) {
-      parsed._.push(arg);
-      continue;
-    }
-    const [rawKey, inlineValue] = arg.split("=", 2);
-    const key = rawKey.slice(2);
-    if (inlineValue !== undefined) {
-      parsed[key] = inlineValue;
-      continue;
-    }
-    const next = argv[index + 1];
-    if (!next || next.startsWith("--")) {
-      parsed[key] = true;
-      continue;
-    }
-    parsed[key] = next;
-    index += 1;
-  }
-  return parsed;
+  const { positional, options } = parseCliArgs(argv);
+  return { _: positional, ...options };
 }
 
 main().catch((error) => {

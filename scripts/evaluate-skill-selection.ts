@@ -20,7 +20,8 @@ const skills: LoadedSkill[] = Object.entries(GENERATED_SKILL_ROUTING_HINTS).map(
 }));
 const cases = [
   { text: "Fix a code bug and add a regression test", expected: "coding" },
-  { text: "Review presentation design and slide deck accessibility", expected: "design-intelligence" },
+  { text: "Review presentation design and slide deck accessibility", expected: "impeccable" },
+  { text: "Make the landing page hero feel less generic", expected: "impeccable" },
   { text: "Review skill architecture and runtime governance", expected: "agentic-skill-architect" },
   { text: "@skill coding", expected: "coding" },
   { text: "Decode this word", expected: undefined },

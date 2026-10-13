@@ -6,6 +6,7 @@ const OWNER_SID = /^S-\d+(?:-\d+)+$/u;
 const MAX_PATH_BYTES = 32 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
 const IDLE_SHUTDOWN_MS = 100;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export type SkillHubWindowsAclKind = "directory" | "file";
 
@@ -92,13 +93,43 @@ interface PendingRequest {
   timeout: ReturnType<typeof setTimeout>;
 }
 
-class PowerShellSkillHubWindowsSecurityProtocol implements SkillHubWindowsSecurityProtocol {
+export interface PowerShellSkillHubWindowsSecurityProtocolOptions {
+  /**
+   * Idle time before the worker process exits; the next request starts a new one.
+   * `Infinity` keeps one worker until `dispose()`, for callers that issue many
+   * requests in bursts (test suites) and would otherwise respawn PowerShell repeatedly.
+   */
+  idleShutdownMs?: number;
+}
+
+export class PowerShellSkillHubWindowsSecurityProtocol implements SkillHubWindowsSecurityProtocol {
+  private readonly idleShutdownMs: number;
   private child: ChildProcessWithoutNullStreams | undefined;
   private nextRequestId = 0;
   private readonly pending = new Map<string, PendingRequest>();
+  // Requests the caller cancelled while the worker may still answer them; their late responses are ignored.
+  private readonly abandoned = new Set<string>();
   private stdoutBuffer = "";
   private stderrBytes = 0;
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
+
+  public constructor(options: PowerShellSkillHubWindowsSecurityProtocolOptions = {}) {
+    const idleShutdownMs = options.idleShutdownMs ?? IDLE_SHUTDOWN_MS;
+    // Node turns a finite timer delay above MAX_TIMER_DELAY_MS into 1ms, which
+    // would quietly restore per-request respawns; only Infinity means "never".
+    const validFinite = Number.isFinite(idleShutdownMs) && idleShutdownMs >= 0 && idleShutdownMs <= MAX_TIMER_DELAY_MS;
+    if (!validFinite && idleShutdownMs !== Number.POSITIVE_INFINITY) {
+      throw new TypeError(
+        "Skill Hub Windows security idle shutdown must be Infinity or a duration from 0 to 2147483647ms.",
+      );
+    }
+    this.idleShutdownMs = idleShutdownMs;
+  }
+
+  /** Stops the worker process and fails any request still waiting on it. */
+  public dispose(): void {
+    this.failWorker(new SkillHubWindowsSecurityError("cancelled"));
+  }
 
   public async request(
     operation: "acl" | "attributes",
@@ -118,7 +149,16 @@ class PowerShellSkillHubWindowsSecurityProtocol implements SkillHubWindowsSecuri
     const line = `${requestId}|${operation}|${kind}|${encodedPath}\n`;
 
     return new Promise<string>((resolve, reject) => {
-      const abortHandler = () => this.failWorker(new SkillHubWindowsSecurityError("cancelled"));
+      // Cancelling one request must not kill the shared worker or reject the others' requests.
+      const abortHandler = () => {
+        const pendingRequest = this.pending.get(requestId);
+        if (!pendingRequest) return;
+        this.pending.delete(requestId);
+        this.abandoned.add(requestId);
+        clearTimeout(pendingRequest.timeout);
+        pendingRequest.signal.removeEventListener("abort", pendingRequest.abortHandler);
+        pendingRequest.reject(new SkillHubWindowsSecurityError("cancelled"));
+      };
       const timeout = setTimeout(
         () => this.failWorker(new SkillHubWindowsSecurityError("command_failed")),
         REQUEST_TIMEOUT_MS,
@@ -193,6 +233,10 @@ class PowerShellSkillHubWindowsSecurityProtocol implements SkillHubWindowsSecuri
     }
     const pending = this.pending.get(match[1]);
     if (!pending) {
+      if (this.abandoned.delete(match[1])) {
+        this.scheduleIdleShutdown();
+        return;
+      }
       this.failWorker(new SkillHubWindowsSecurityError("invalid_response"));
       return;
     }
@@ -205,11 +249,11 @@ class PowerShellSkillHubWindowsSecurityProtocol implements SkillHubWindowsSecuri
   }
 
   private scheduleIdleShutdown(): void {
-    if (this.pending.size > 0 || !this.child) return;
+    if (this.pending.size > 0 || !this.child || !Number.isFinite(this.idleShutdownMs)) return;
     this.idleTimer = setTimeout(() => {
       this.idleTimer = undefined;
       if (this.pending.size === 0) this.stopChild();
-    }, IDLE_SHUTDOWN_MS);
+    }, this.idleShutdownMs);
     this.idleTimer.unref();
   }
 
@@ -232,6 +276,7 @@ class PowerShellSkillHubWindowsSecurityProtocol implements SkillHubWindowsSecuri
     this.idleTimer = undefined;
     const child = this.child;
     this.child = undefined;
+    this.abandoned.clear();
     if (!child) return;
     child.stdin.destroy();
     child.kill();

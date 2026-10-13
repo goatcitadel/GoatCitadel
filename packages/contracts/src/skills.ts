@@ -19,6 +19,8 @@ export interface SkillRoutingHints {
   whenToUse: string[];
   whenNotToUse: string[];
   confidenceBoost?: number;
+  /** Named sub-commands a caller can invoke as `@skill <name> <command>`; drives composer suggestions. */
+  commands?: Array<{ name: string; summary: string }>;
 }
 
 export interface LoadedSkill {

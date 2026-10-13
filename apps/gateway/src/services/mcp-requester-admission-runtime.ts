@@ -165,7 +165,7 @@ export function composeMcpRequesterAdmissionRuntime(
     try {
       host.recordDiagnostic(code);
     } catch {
-      /* Observability cannot change authority. */
+      /* Preserve the original authority failure when optional observability fails. */
     }
     return code;
   };

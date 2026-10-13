@@ -6,6 +6,26 @@ This is the working acceptance record for the approved sequence in
 
 ## Current acceptance checkpoint
 
+### Main integration checkpoint, 2026-10-12
+
+The completed feature snapshot was committed as `edb34df37` and reconciled with
+local main `8a0fb792e`. The isolated integration retains main's per-command skill
+module routing, workspace design context, lazy artifact branding, release-bound
+skill re-trust, and filesystem test ports. New adapters preserve the existing
+policy, lifecycle transaction, audit-before-write and post-commit signal order.
+The original architecture baseline and all original-owner limits are unchanged.
+The integrated architecture scan passed at
+`artifacts/verification/2026-10-13T01-21-31-657Z-architecture-metrics-79bc1f51`:
+Gateway 13,107/13,132 lines with zero regressions. Wrapped Gateway typecheck
+passed. Focused integration tests passed 276 tests across ten owner files with
+zero skips; async-boundary and full documentation checks passed. Merge validation
+logs are retained under `output/feature-quality/merge-*`.
+The earlier failed integration scan remains available; it is not acceptance proof.
+Existing edits in the primary checkout are excluded from the feature commit and
+are separately backed up and reconciled as uncommitted work before main advances.
+No push, installation, deployment, live model trials or two-machine acceptance
+is included in this integration.
+
 Runtime feature changes are present in the isolated checkout; restoration
 switches remain disabled by default. Additional comparison adapter/supervisor
 source validation has retained the closure results below. The following queue is current as

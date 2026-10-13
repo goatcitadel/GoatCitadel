@@ -3,7 +3,11 @@ export * from "./policy-resolver.js";
 export * from "./approval-gate.js";
 export * from "./engine.js";
 export { createMcpToolPolicyBinding, type McpToolPolicyBinding } from "./mcp-tool-policy-binding.js";
-export { createMeshToolPolicyBinding, MESH_TOOL_POLICY_DEFINITION, type MeshToolPolicyBinding } from "./mesh-tool-policy-binding.js";
+export {
+  createMeshToolPolicyBinding,
+  MESH_TOOL_POLICY_DEFINITION,
+  type MeshToolPolicyBinding,
+} from "./mesh-tool-policy-binding.js";
 export * from "./tool-executor.js";
 export * from "./presentation-visual-runtime.js";
 export * from "./tool-security.js";
@@ -28,3 +32,5 @@ export * from "./sandbox/shell-risk-gate.js";
 export * from "./sandbox/argument-risk-gate.js";
 export * from "./policy-axes.js";
 export { validateResearchPresentationArgs } from "./presentation-model.js";
+/** Artifact design request shapes shared with the gateway (brand block → deck/document renderers). */
+export type { ArtifactBrandInput, ArtifactDesignRequest } from "./artifact-design.js";

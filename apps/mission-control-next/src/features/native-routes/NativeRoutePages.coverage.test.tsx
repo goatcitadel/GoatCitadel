@@ -137,6 +137,19 @@ vi.mock("@goatcitadel/mission-control-shared/api/journey", () => ({
   fetchJourneyTimeline: journeyMocks.fetchJourneyTimeline,
 }));
 
+// The knowledge page's external sources section reads its direct owner, not the client barrel; keep it off the network.
+vi.mock("@goatcitadel/mission-control-shared/api/external-sources", async (importOriginal) => {
+  const { EXTERNAL_SOURCE_SCHEMA_VERSION } = await import("@goatcitadel/contracts");
+  return {
+    ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/external-sources")>()),
+    fetchExternalSources: vi.fn(async (workspaceId: string) => ({
+      schemaVersion: EXTERNAL_SOURCE_SCHEMA_VERSION,
+      workspaceId,
+      items: [],
+    })),
+  };
+});
+
 vi.mock("./SettingsNativePage", () => ({
   SettingsNativePage: () => "Settings child route",
 }));

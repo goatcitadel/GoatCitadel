@@ -65,7 +65,7 @@
     "verify:repo:hygiene": "node scripts/run-with-worktree-output-lock.mjs --label=verify:repo:hygiene:build -- pnpm exec tsc -b apps/gateway/tsconfig.json apps/remote-worker/tsconfig.json packages/policy-engine/tsconfig.json && node scripts/run-script-tests.mjs --suite=hygiene && node scripts/verify-repo-hygiene.mjs && node scripts/verify-supply-chain-posture.mjs",
     "verify:supply-chain": "node --test scripts/verify-supply-chain-posture.test.mjs && node scripts/verify-supply-chain-posture.mjs",
     "verify:design:quality": "pnpm tsx scripts/verify-design-quality.ts",
-    "verify:skills:catalog": "node --test scripts/sync-impeccable.test.mjs && node scripts/check-skill-catalog.mjs",
+    "verify:skills:catalog": "node --test scripts/sync-impeccable.test.mjs && node scripts/check-skill-catalog.mjs && pnpm tsx scripts/bundled-skill-lock.ts --check",
     "verify:workflows": "node scripts/verify-workflows.mjs",
     "verify:bundled-postgres:restart": "node scripts/verify-bundled-postgres-restart.mjs",
     "verify:security:evals": "node scripts/verification/run.mjs security-evals",
@@ -74,6 +74,7 @@
     "verify:gateway:async-boundary": "node --test scripts/verify-async-gateway-boundary.test.mjs && node scripts/verify-async-gateway-boundary.mjs",
     "verify:gateway:async-postgres": "node --test scripts/verification/async-gateway-postgres-proof.test.mjs && node scripts/verification/async-gateway-postgres-proof.mjs",
     "update:storage:migration-manifest": "node scripts/update-storage-migration-manifest.mjs",
+    "update:skills:lock": "pnpm tsx scripts/bundled-skill-lock.ts --write",
     "check:buttons": "node scripts/check-button-types.mjs",
     "check:launcher": "node scripts/check-launcher-ui-target.mjs",
     "check:docker-secrets": "node --test scripts/docker-secrets.test.mjs",
@@ -259,7 +260,9 @@
       "pptxgenjs>image-size": "2.0.3",
       "http-cache-semantics@^4.0.0": "4.3.0",
       "proxy-addr@^2.0.0": "2.0.8",
-      "source-map-js@^1.0.0": "1.2.2"
+      "source-map-js@^1.0.0": "1.2.2",
+      "compression@^1.0.0": "1.8.2",
+      "katex@^0.16.0": "0.18.2"
     }
   },
   "devDependencies": {

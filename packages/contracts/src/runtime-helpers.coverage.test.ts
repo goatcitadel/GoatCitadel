@@ -120,6 +120,7 @@ describe("chat contract helpers", () => {
       approval_required: "approve_pending_step",
       interrupted_by_restart: "retry",
       skill_security_blocked: "review_skill_security",
+      guidance_security_blocked: "review_workspace_guidance",
       unknown: "retry",
     };
 
@@ -138,6 +139,7 @@ describe("chat contract helpers", () => {
       "switch_to_deep_mode",
       "check_gateway_connection",
       "review_skill_security",
+      "review_workspace_guidance",
     ];
     for (const action of actions) {
       expect(getChatTurnRecoveryActionLabel(action)).toBeTypeOf("string");

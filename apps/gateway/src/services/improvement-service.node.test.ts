@@ -13,6 +13,7 @@ import {
   readRetryRepairThreshold,
 } from "./improvement-tune-reads.js";
 import { IMPROVEMENT_WEEKLY_JOB_ID } from "./gateway/cron-job-ids.js";
+import { systemCronScheduleLabel } from "./cron-job-schedule-labels.js";
 import type { ServiceContext } from "./service-context.js";
 
 interface Harness {
@@ -458,7 +459,7 @@ describe("ImprovementService ledger lifecycle", () => {
     // sampled chat/tool traces to the LLM judge and must not start running
     // until an operator explicitly opts in from Mission Control settings.
     assert.equal(cronJob?.enabled, false);
-    assert.equal(cronJob?.schedule, "0 2 * * 0 America/Los_Angeles");
+    assert.equal(cronJob?.schedule, systemCronScheduleLabel("0 2 * * 0"));
 
     const startedAt = "2026-05-10T02:00:00.000Z";
     harness.storage.gatewaySql
