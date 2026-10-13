@@ -21,11 +21,9 @@ import type {
   RuntimeLifecycleTurnSummary,
   RuntimeLifecycleToolRunSummary,
 } from "@goatcitadel/contracts";
-import { request } from "./client-core.js";
-import {
-  parseDurableBackgroundTaskControlResponse,
-  parseDurableBackgroundTaskRail,
-} from "./durable-background-task-validation.js";
+import { getGatewayApiBaseUrl, request } from "./client-core.js";
+import { getGatewayAccessRevision, getGatewayCallerScopeRevision } from "./access-scope.js";
+import { ApiRequestError } from "./http-internal.js";
 
 export type RunTraceAvailabilityState = "available" | "not_available" | "unknown";
 
@@ -277,12 +275,16 @@ export async function fetchDurableBackgroundTaskRail(
   input: { workspaceId: string; sessionId: string },
   options?: { signal?: AbortSignal },
 ): Promise<DurableBackgroundTaskRailResponse> {
-  const query = new URLSearchParams({ workspaceId: input.workspaceId, sessionId: input.sessionId });
-  const payload = await request<unknown>(
-    `/api/v1/durable/runs/${encodeURIComponent(parentRunId)}/background-tasks?${query.toString()}`,
-    { cache: "no-store", ...(options?.signal ? { signal: options.signal } : {}) },
-  );
-  return parseDurableBackgroundTaskRail(payload, { parentRunId, ...input });
+  const expected = { parentRunId, workspaceId: input.workspaceId, sessionId: input.sessionId };
+  const query = new URLSearchParams({ workspaceId: expected.workspaceId, sessionId: expected.sessionId });
+  const path = `/api/v1/durable/runs/${encodeURIComponent(parentRunId)}/background-tasks?${query.toString()}`;
+  const signal = options?.signal;
+  const assertCurrent = durableBackgroundTaskScopeFence("GET", path, signal);
+  const payload = await request<unknown>(path, { cache: "no-store", ...(signal ? { signal } : {}) });
+  assertCurrent();
+  const { parseDurableBackgroundTaskRail } = await import("./durable-background-task-validation.js");
+  assertCurrent();
+  return parseDurableBackgroundTaskRail(payload, expected);
 }
 
 export async function controlDurableBackgroundTask(
@@ -290,17 +292,29 @@ export async function controlDurableBackgroundTask(
   watcherId: string,
   input: DurableBackgroundTaskControlRequest,
 ): Promise<DurableBackgroundTaskControlResponse> {
-  const payload = await request<unknown>(
-    `/api/v1/durable/runs/${encodeURIComponent(parentRunId)}/background-tasks/${encodeURIComponent(watcherId)}/control`,
-    { method: "POST", body: JSON.stringify(input) },
-  );
-  return parseDurableBackgroundTaskControlResponse(payload, {
-    parentRunId,
-    watcherId,
-    workspaceId: input.workspaceId,
-    sessionId: input.sessionId,
-    action: input.action,
-  });
+  const path = `/api/v1/durable/runs/${encodeURIComponent(parentRunId)}/background-tasks/${encodeURIComponent(watcherId)}/control`;
+  const assertCurrent = durableBackgroundTaskScopeFence("POST", path);
+  const snapshot = { ...input };
+  const body = JSON.stringify(snapshot);
+  const expected = { parentRunId, watcherId, workspaceId: snapshot.workspaceId, sessionId: snapshot.sessionId, action: snapshot.action };
+  // A failed or stale validator load must never send a governed mutation.
+  const { parseDurableBackgroundTaskControlResponse } = await import("./durable-background-task-validation.js");
+  assertCurrent();
+  const payload = await request<unknown>(path, { method: "POST", body });
+  assertCurrent();
+  return parseDurableBackgroundTaskControlResponse(payload, expected);
+}
+
+function durableBackgroundTaskScopeFence(method: "GET" | "POST", path: string, signal?: AbortSignal): () => void {
+  const installation = getGatewayApiBaseUrl();
+  const accessRevision = getGatewayAccessRevision();
+  const callerRevision = getGatewayCallerScopeRevision();
+  return () => {
+    signal?.throwIfAborted();
+    if (installation !== getGatewayApiBaseUrl() || accessRevision !== getGatewayAccessRevision() || callerRevision !== getGatewayCallerScopeRevision()) {
+      throw new ApiRequestError("Gateway access changed while durable background-task validation was pending. Refresh current caller state.", { kind: "protocol", method, path });
+    }
+  };
 }
 
 export async function detachDurableChildWatcher(watcherId: string): Promise<DurableChildWatcherRecord> {
