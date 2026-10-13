@@ -62,6 +62,13 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
   fetchChatSessionSearch: (...args: unknown[]) => fetchChatSessionSearchMock(...args),
   fetchChatSpecialistCandidates: (...args: unknown[]) => fetchChatSpecialistCandidatesMock(...args),
   fetchChatThread: (...args: unknown[]) => fetchChatThreadMock(...args),
+  fetchChatSessionCoreState: async (sessionId: string, options: { includeThread?: boolean } = {}) => {
+    const [thread, binding, prefs] = await Promise.all([
+      options.includeThread === false ? undefined : fetchChatThreadMock(sessionId),
+      fetchChatSessionBindingMock(sessionId), fetchChatSessionPrefsMock(sessionId),
+    ]);
+    return { sessionId, thread, binding: binding.item, prefs };
+  },
   fetchMcpServers: (...args: unknown[]) => fetchMcpServersMock(...args),
   fetchMcpTemplates: (...args: unknown[]) => fetchMcpTemplatesMock(...args),
   fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),

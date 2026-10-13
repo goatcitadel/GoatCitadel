@@ -24,6 +24,7 @@ import type {
   ChatGeneratedArtifactKind,
   ChatGeneratedArtifactRecord,
   ChatGeneratedArtifactSourceSurface,
+  ChatSessionCoreStateResponse,
   ChatGoalRequest,
   ChatGoalStatusResponse,
   ChatHistoryWindowResponse,
@@ -984,6 +985,13 @@ export async function removeThreadKnowledgeAttachment(
     {
       method: "DELETE",
     },
+  );
+}
+
+export async function fetchChatSessionCoreState(sessionId: string, options: { includeThread?: boolean } = {}): Promise<ChatSessionCoreStateResponse> {
+  const query = options.includeThread === false ? "?includeThread=false" : "";
+  return request<ChatSessionCoreStateResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/core-state${query}`,
   );
 }
 

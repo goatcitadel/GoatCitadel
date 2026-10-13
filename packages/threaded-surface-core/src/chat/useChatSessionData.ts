@@ -26,12 +26,10 @@ import {
   fetchChatProjects,
   fetchChatProactiveRuns,
   fetchChatProactiveStatus,
-  fetchChatSessionBinding,
-  fetchChatSessionPrefs,
+  fetchChatSessionCoreState,
   fetchChatSessions,
   fetchChatSessionSearch,
   fetchChatSpecialistCandidates,
-  fetchChatThread,
   fetchThreadKnowledgeAttachments,
   fetchMcpServers,
   fetchMcpTemplates,
@@ -666,11 +664,13 @@ export function useChatSessionData(input: {
         setMessagesLoading(true);
       }
       try {
-        const [nextThread, nextBinding, nextPrefs] = await Promise.all([
-          includeThread ? fetchChatThread(sessionId) : Promise.resolve(undefined),
-          fetchChatSessionBinding(sessionId),
-          fetchChatSessionPrefs(sessionId),
-        ]);
+        const core = await fetchChatSessionCoreState(sessionId, { includeThread });
+        if (core.sessionId !== sessionId || (includeThread && (!core.thread || core.thread.sessionId !== sessionId))) {
+          throw new Error("Conversation core state did not match the requested session.");
+        }
+        const nextThread = core.thread;
+        const nextBinding = { item: core.binding };
+        const nextPrefs = core.prefs;
         if (generation !== loadCoreGenerationRef.current) return false;
         if (nextThread) {
           applyFetchedThreadRef.current(nextThread, messageVersionAtStart);

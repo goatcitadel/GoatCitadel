@@ -507,6 +507,7 @@ export {
   fetchChatToolArtifact,
   fetchChatTurnCapabilityProfile,
   fetchChatThread,
+  fetchChatSessionCoreState,
   fetchThreadKnowledgeAttachments,
   hardDeleteChatProject,
   pinChatSession,
