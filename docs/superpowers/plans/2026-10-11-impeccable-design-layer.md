@@ -207,13 +207,13 @@ DOCX theming beyond the blob removal; PDF font embedding.
 
 ## Phase 6: Docs, contract, evidence
 
-- [ ] `docs/1_0_CONTRACT.md`: one paragraph on the design layer: vendored impeccable prose at a pinned SHA with no launcher or binary; module receipts; the advisory detector is a subset, not impeccable's engine; rendering is evidence, not a quality claim; vision critique is capability-gated. Line 42 stays. Fix line 34 if `$` handling changes.
-- [ ] `docs/CANONICAL_RUNTIME_STATE_MODEL.md`: receipts with `contextDocuments`.
-- [ ] `packages/skills/src/design-quality.ts`: switch `REQUIRED_SKILL_MODULES`, `REQUIRED_SKILL_PHRASES`, and `REQUIRED_ROUTING_PHRASES` to the impeccable module set and routing entry; add impeccable checks (`UPSTREAM.md`, `LICENSE`, `NOTICE` present; no launcher strings; no broken links; `artifacts.md` ≤ 8 KiB).
+- [x] `docs/1_0_CONTRACT.md`: one paragraph on the design layer: vendored impeccable prose at a pinned SHA with no launcher or binary; module receipts; the advisory detector is a subset, not impeccable's engine; rendering is evidence, not a quality claim; vision critique is capability-gated. Line 42 stays. Fix line 34 if `$` handling changes.
+- [x] `docs/CANONICAL_RUNTIME_STATE_MODEL.md`: receipts with `contextDocuments`.
+- [x] `packages/skills/src/design-quality.ts`: switch `REQUIRED_SKILL_MODULES`, `REQUIRED_SKILL_PHRASES`, and `REQUIRED_ROUTING_PHRASES` to the impeccable module set and routing entry; add impeccable checks (`UPSTREAM.md`, `LICENSE`, `NOTICE` present; no launcher strings; no broken links; `artifacts.md` ≤ 8 KiB).
 - [ ] Delete `skills/bundled/design-intelligence/` in a small follow-up PR after D1 has shipped, and remove `bundled:design-intelligence` from `skills/catalog-coverage.json`. Confirm a stale lifecycle row for a skill that no longer loads is tolerated by `listSkills` and the Library skills view on an upgraded install (dual-lineage test).
-- [ ] Cockpit craft-floor alignment (D6): remove the kicker label from the four shared components the cockpit embeds (`packages/mission-control-shared/src/components/CommandPalette.tsx`, `GatewayAccessGate.tsx`, `PageErrorBoundary.tsx`, `chat/GeneratedArtifactViewer.tsx`) where the heading already carries the meaning, and drop the three cockpit CSS hooks (`cockpit/areas/chat/chat-build-editor.css`, `cockpit/styles/cockpit.css`). Classic also renders those four components, so its baselines shift in the same all-or-nothing visual rebaseline; no other Classic file is touched.
-- [ ] Ops Quality UI copy in the cockpit (`cockpit/areas/system/quality/QualityDesign.tsx`) lists the new checks; the Classic `QualityDashboardRoutePage.tsx` is not updated.
-- [ ] README verification table: mention the new checks only if a lane name changes.
+- [x] Cockpit craft-floor alignment (D6): remove the kicker label from the four shared components the cockpit embeds (`packages/mission-control-shared/src/components/CommandPalette.tsx`, `GatewayAccessGate.tsx`, `PageErrorBoundary.tsx`, `chat/GeneratedArtifactViewer.tsx`) where the heading already carries the meaning, and drop the three cockpit CSS hooks (`cockpit/areas/chat/chat-build-editor.css`, `cockpit/styles/cockpit.css`). Classic also renders those four components, so its baselines shift in the same all-or-nothing visual rebaseline; no other Classic file is touched.
+- [x] Ops Quality UI copy in the cockpit (`cockpit/areas/system/quality/QualityDesign.tsx`) lists the new checks; the Classic `QualityDashboardRoutePage.tsx` is not updated.
+- [x] README verification table: mention the new checks only if a lane name changes.
 
 ### Proof
 
@@ -657,3 +657,55 @@ Steps:
 1. Render the sample deck/PDF/DOCX "after" set with the same script as the "before" set and export the PPTX slides to PNG through PowerPoint. Compare: if a layout reads worse without the placeholder art (an empty panel card, for instance), fix it under TDD and commit it as its own `feat(artifacts)` commit.
 2. `pnpm typecheck`, `pnpm verify:research-artifact:reliability`, `pnpm verify:research-artifact:powerpoint`, `pnpm verify:ux:budgets`, `pnpm verify:visual:regression` (report only; never rebaseline), `pnpm verify:design:quality`, `git diff --check`. Expected: pass; record any lane that is red for a pre-existing reason with the evidence.
 3. Tick the Phase 5 boxes. Commit: `docs(plan): mark impeccable Phase 5 done`.
+
+## Phase 6 Task Breakdown (execution order; TDD per task)
+
+Phase 6 lands in two pull requests: Tasks 37–41 (docs, design-quality checks, craft-floor cleanup, proof) in one, and Task 42 (delete `design-intelligence`) as the small follow-up the plan calls for, once the first has merged and nothing reads that directory any more.
+
+### Task 37: Design-quality checks follow impeccable
+
+Files: `packages/skills/src/design-quality.ts`, `design-quality.test.ts`.
+
+Produces: `readDesignQualityEvidence` reads `skills/bundled/impeccable`. `REQUIRED_SKILL_MODULES` = `SKILL.md`, `reference/craft-floor.md`, `reference/artifacts.md`, `reference/critique.md`, `reference/critique/01-reference-material.md`, `reference/audit.md`, `reference/polish.md` (the modules the routes in `skill-module-routes.ts` load). `REQUIRED_SKILL_PHRASES` = `Vendored from`, `PRODUCT.md`, `DESIGN.md`, `Core principles`, `Not available in this vendored build`. `REQUIRED_ROUTING_PHRASES` = `design quality`, `anti-slop`, `visual polish`, `design-system audit`, `document design`, `presentation design`, `pptx deck`, `html artifact`. Check ids: `impeccable.modules` (P0/blocking when a module is missing), `impeccable.lifecycle` (P1/advisory when a phrase is missing), `impeccable.placeholders` (P0/blocking on a broken local link or placeholder), new `impeccable.provenance` (P0/blocking unless `UPSTREAM.md`, `LICENSE`, and `NOTICE` exist and `UPSTREAM.md` names a 40-hex commit), new `impeccable.launcher-strings` (P0/blocking when any injectable file contains `{{`, `npx impeccable`, `impeccable detect|pin|hooks|context|doctor`, `~/.impeccable`, `.impeccable/`, `grok`, `xai`, or `x.ai`), new `impeccable.artifacts-budget` (P1/advisory when `reference/artifacts.md` exceeds 8 KiB). The routing check's next action names impeccable. Every other check is unchanged.
+
+Steps:
+1. Test first: the fixture builder writes an impeccable tree (SKILL.md with the phrases, the seven modules, `UPSTREAM.md` with `Commit: \`<40 hex>\``, `LICENSE`, `NOTICE`); the complete fixture passes with the three new ids present; a missing `reference/craft-floor.md` blocks `impeccable.modules`; a broken link blocks `impeccable.placeholders`; a missing `NOTICE` blocks `impeccable.provenance`; `npx impeccable` in a module blocks `impeccable.launcher-strings`; a 9 KiB `artifacts.md` makes `impeccable.artifacts-budget` advisory. Expected: fail. Implement; rerun the file; `pnpm verify:design:quality` on the real tree. Expected: pass with the raw-color budget unchanged.
+2. Commit: `feat(skills): point the design-quality checks at impeccable`.
+
+### Task 38: Contract and state model
+
+Files: `docs/1_0_CONTRACT.md`, `docs/CANONICAL_RUNTIME_STATE_MODEL.md`.
+
+Produces: one contract paragraph after the document-editing paragraph: impeccable prose vendored at a pinned commit with no launcher or binary; module receipts name the injected modules and workspace context documents; the runtime design detector is an advisory subset, never impeccable's engine; renders are evidence, not a quality claim; vision critique is capability-gated. Line 34 (`$` alias) is unchanged because `$` handling did not change. The state model's skill section gains one sentence: receipts carry `contextDocuments` (`docType`, `scope`, `sha256`, `bytes`, `truncated`) for the workspace `PRODUCT.md` / `DESIGN.md` a route injected.
+
+Steps:
+1. `pnpm docs:check` before and after. Expected: pass both times (no verbatim-README phrase is touched).
+2. Commit: `docs: describe the impeccable design layer in the contract and state model`.
+
+### Task 39: Cockpit craft-floor alignment (D6)
+
+Files: `packages/mission-control-shared/src/components/CommandPalette.tsx`, `GatewayAccessGate.tsx`, `PageErrorBoundary.tsx`, `chat/GeneratedArtifactViewer.tsx`, `apps/mission-control-next/src/cockpit/areas/chat/chat-build-editor.css`, `apps/mission-control-next/src/cockpit/styles/cockpit.css`, and the tests that assert the removed labels.
+
+Produces: the four kicker `<p>` elements (`Command Center`, the access-gate kicker, `Page unavailable`, `Generated artifact`) are gone where the heading already carries the meaning; the `.cockpit-build-editor .mc-next-panel-kicker`, `.cockpit-chat-documents .mc-next-panel-kicker`, and `.cockpit-chat-documents .generated-artifact-kicker` rules are gone. Classic also renders the four components, so its visual baselines shift in the same all-or-nothing rebaseline; no other Classic file changes.
+
+Steps:
+1. Test first: the component tests assert the kicker text is absent and the heading is present. Expected: fail. Implement; rerun the shared and cockpit test files; `pnpm verify:design:quality` (the kicker-eyebrow advisory count drops). Expected: pass.
+2. Commit: `refactor(ui): drop the kicker labels the headings already carry`.
+
+### Task 40: Ops Quality copy and README
+
+Produces: `QualityDesign.tsx` renders whatever checks the evidence returns, so the new ids appear without a copy change; the README verification table is unchanged because no lane name changed. Both are verified by reading, and recorded in the ledger as rulings if no edit is needed.
+
+### Task 41: Proof lanes and plan ticks
+
+Steps:
+1. `pnpm docs:check`, `pnpm verify:design:quality`, `pnpm verify:skills:catalog`, `pnpm verify:fast` (or its gateway/skills/ui shards when the full lane cannot run locally), `pnpm verify:visual:regression` (report; rebaseline only when every page passes), `git diff --check`. Expected: pass; record any lane that is red for a pre-existing reason with the evidence.
+2. Tick the Phase 6 boxes except the deletion. Commit: `docs(plan): mark impeccable Phase 6 docs and checks done`.
+
+### Task 42: Delete design-intelligence (follow-up PR)
+
+Files: `skills/bundled/design-intelligence/` (delete), `skills/catalog-coverage.json`, `packages/skills/src/bundled-skill-lock.generated.ts` (via `pnpm update:skills:lock`), `packages/skills/src/routing-hints.generated.ts` and `activation.test.ts`, `packages/mission-control-shared/src/components/chat/chat-tool-diagnostics.ts` and its test (copy says "design instructions"), plus a dual-lineage test that a stale `bundled:design-intelligence` lifecycle row is tolerated by `listSkills` and the Library skills view on an upgraded install.
+
+Steps:
+1. Test first: the stale-row test on both the fresh and the upgraded lineage. Expected: fail or not apply; implement; `pnpm verify:skills:catalog`, the skills and gateway skill suites, `pnpm verify:design:quality`. Expected: pass.
+2. Commit: `chore(skills): retire the design-intelligence skill`. Tick the last Phase 6 box.
