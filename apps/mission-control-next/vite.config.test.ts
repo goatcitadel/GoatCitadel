@@ -4,6 +4,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import viteConfig, {
+  createCockpitBootChunkSelector,
   buildManagedUiHealthPayload,
   buildWorkspaceSourceAliases,
   WORKSPACE_SOURCE_PACKAGES,
@@ -171,4 +172,28 @@ describe("mission-control-next vite config", () => {
       "vendor-markdown",
     );
   });
+});
+
+
+it("groups retained static Cockpit modules without assigning dynamic destinations or discarded barrels", () => {
+  const modules = new Map([
+    ["C:/repo/src/cockpit-entry.tsx", { isIncluded: true, importedIds: ["bridge", "barrel", "shared-preference"] }],
+    ["C:/repo/src/main.tsx", { isIncluded: true, importedIds: ["shared-preference"] }],
+    ["shared-preference", { isIncluded: true, importedIds: [] }],
+    ["bridge", { isIncluded: true, importedIds: ["react"] }],
+    ["react", { isIncluded: true, importedIds: ["bridge"] }],
+    ["barrel", { isIncluded: false, importedIds: ["leaf"] }],
+    ["leaf", { isIncluded: true, importedIds: [] }],
+    ["optional-workbench", { isIncluded: true, importedIds: [] }],
+  ]);
+  const graph = { getModuleIds: () => modules.keys(), getModuleInfo: (id: string) => modules.get(id) ?? null };
+  const select = createCockpitBootChunkSelector();
+  expect(select("bridge", graph)).toBe("cockpit-entry");
+  expect(select("react", graph)).toBe("cockpit-entry");
+  expect(select("leaf", graph)).toBe("cockpit-entry");
+  expect(select("barrel", graph)).toBeUndefined();
+  expect(select("shared-preference", graph)).toBeUndefined();
+  expect(select("C:/repo/src/main.tsx", graph)).toBeUndefined();
+  expect(select("optional-workbench", graph)).toBeUndefined();
+  expect(createCockpitBootChunkSelector()("optional-workbench", graph)).toBeUndefined();
 });

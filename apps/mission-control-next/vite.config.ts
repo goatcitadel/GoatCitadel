@@ -220,6 +220,72 @@ export function readDevResetId(command: string, rootDir: string = repoRoot): str
   }
 }
 
+/** Group retained static Cockpit dependencies; dynamic destinations keep their own chunks. */
+export function createCockpitBootChunkSelector() {
+  let bootModules: Set<string> | undefined;
+  return (id: string, graph?: {
+    getModuleIds: () => IterableIterator<string>;
+    getModuleInfo: (id: string) => { isIncluded: boolean | null; importedIds: readonly string[] } | null;
+  }): string | undefined => {
+    if (graph) {
+      if (!bootModules) {
+        bootModules = new Set<string>();
+        const initialModules = new Set<string>();
+        const roots = [...graph.getModuleIds()];
+        const visit = (moduleId: string, target: Set<string>, seen: Set<string>, retainedOnly: boolean) => {
+          if (seen.has(moduleId)) return;
+          seen.add(moduleId);
+          const info = graph.getModuleInfo(moduleId);
+          if (!info) return;
+          if (!retainedOnly || info.isIncluded) target.add(moduleId);
+          for (const dependency of info.importedIds) visit(dependency, target, seen, retainedOnly);
+        };
+        for (const moduleId of roots) {
+          const normalized = moduleId.replaceAll("\\", "/");
+          if (normalized.endsWith("/src/main.tsx")) visit(moduleId, initialModules, new Set(), false);
+          if (normalized.endsWith("/src/cockpit-entry.tsx")) visit(moduleId, bootModules, new Set(), true);
+        }
+        // Shared preference/reset helpers must not make main.tsx initialize a shell before storage reset.
+        for (const moduleId of initialModules) bootModules.delete(moduleId);
+      }
+      if (bootModules.has(id)) {
+        const normalized = id.replaceAll("\\", "/");
+        // Keep the existing per-chunk cap; partition along the current one-way ownership dependencies.
+        if (normalized.includes("/node_modules/") || id.startsWith("\0")) return "cockpit-runtime";
+        if (normalized.includes("/packages/threaded-surface-core/")) return "cockpit-controller";
+        if (normalized.includes("/packages/")) return "cockpit-foundation";
+        return "cockpit-entry";
+      }
+    }
+    const normalized = id.replaceAll("\\", "/");
+    if (!normalized.includes("/node_modules/")) {
+      return undefined;
+    }
+    if (normalized.includes("/node_modules/react-dom/") || normalized.includes("/node_modules/react/")) {
+      return "vendor-react";
+    }
+    if (normalized.includes("/node_modules/@radix-ui/")) {
+      return "vendor-radix";
+    }
+    if (normalized.includes("/node_modules/@react-three/")) {
+      return "vendor-r3f";
+    }
+    if (normalized.includes("/node_modules/three/")) {
+      return "vendor-three";
+    }
+    if (normalized.includes("/node_modules/@assistant-ui/")) {
+      return "vendor-assistant-ui";
+    }
+    if (
+      normalized.includes("/node_modules/react-markdown/") ||
+      normalized.includes("/node_modules/remark-gfm/")
+    ) {
+      return "vendor-markdown";
+    }
+    return undefined;
+  };
+}
+
 export default defineConfig(({ mode, command }) => {
   const env = {
     ...process.env,
@@ -263,34 +329,8 @@ export default defineConfig(({ mode, command }) => {
       chunkSizeWarningLimit: 900,
       rollupOptions: {
         output: {
-          manualChunks(id) {
-            const normalized = id.replaceAll("\\", "/");
-            if (!normalized.includes("/node_modules/")) {
-              return undefined;
-            }
-            if (normalized.includes("/node_modules/react-dom/") || normalized.includes("/node_modules/react/")) {
-              return "vendor-react";
-            }
-            if (normalized.includes("/node_modules/@radix-ui/")) {
-              return "vendor-radix";
-            }
-            if (normalized.includes("/node_modules/@react-three/")) {
-              return "vendor-r3f";
-            }
-            if (normalized.includes("/node_modules/three/")) {
-              return "vendor-three";
-            }
-            if (normalized.includes("/node_modules/@assistant-ui/")) {
-              return "vendor-assistant-ui";
-            }
-            if (
-              normalized.includes("/node_modules/react-markdown/") ||
-              normalized.includes("/node_modules/remark-gfm/")
-            ) {
-              return "vendor-markdown";
-            }
-            return undefined;
-          },
+          onlyExplicitManualChunks: true,
+          manualChunks: createCockpitBootChunkSelector(),
         },
       },
     },
