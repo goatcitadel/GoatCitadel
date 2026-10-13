@@ -47,9 +47,13 @@ export function McpServerInspection({
   ]);
   // The last inspection (and any open review in its controls) stays while it is read again.
   const view = recordView(query);
+  const evidenceView = recordView(testEvidence);
+  const availabilityView = recordView(settings, (value) => value.chatFeatureAvailability?.staticMcp);
   const data = view.record;
   const checking = view.phase === "checking";
   const lastVersion = lastVersionNote(view);
+  const inspectionStale = view.stale || query.isError;
+  const setupStale = inspectionStale || evidenceView.stale || availabilityView.stale || testEvidence.isError || settings.isError;
   return (
     <Sheet
       open
@@ -78,12 +82,25 @@ export function McpServerInspection({
             {lastVersion ? ` ${lastVersion}` : ""}
           </p>
         ) : null}
+        {evidenceView.phase === "checking" || availabilityView.phase === "checking" ? (
+          <p role="status">Checking test evidence and Chat availability for changes…</p>
+        ) : null}
+        {testEvidence.isError ? (
+          <p role="alert" className="text-status-failed">
+            Could not refresh retained test evidence. Refresh before relying on the last recorded result.
+          </p>
+        ) : null}
+        {settings.isError ? (
+          <p role="alert" className="text-status-failed">
+            Could not refresh Chat availability. Refresh before relying on the last recorded status.
+          </p>
+        ) : null}
         {data ? (
           <>
             <h4 className="text-base font-semibold text-fg">{data.server.label}</h4>
-            <McpSetupProgress key={`${workspaceId}:${data.server.serverId}:${data.server.revision}`} server={data.server} tools={data.tools} stale={checking || query.isError}
-              testEvidence={testEvidence.isFetching || testEvidence.isError ? undefined : testEvidence.data}
-              staticMcpAvailable={settings.isError || settings.isFetching ? undefined : settings.data?.chatFeatureAvailability?.staticMcp}
+            <McpSetupProgress key={`${workspaceId}:${data.server.serverId}:${data.server.revision}`} server={data.server} tools={data.tools} stale={setupStale}
+              testEvidence={evidenceView.record}
+              staticMcpAvailable={availabilityView.record}
               availabilityChecking={settings.isFetching} refreshAvailability={() => void settings.refetch()} />
             <dl className="cockpit-definition-grid grid gap-x-3 gap-y-2">
               <dt>Server ID</dt>
@@ -159,7 +176,7 @@ export function McpServerInspection({
               server={data.server}
               scope={workspaceId}
               button={(label, click, disabled) => (
-                <Button size="sm" onClick={click} disabled={disabled || checking}>
+                <Button size="sm" onClick={click} disabled={disabled || inspectionStale}>
                   {label}
                 </Button>
               )}
@@ -169,7 +186,7 @@ export function McpServerInspection({
               scope={workspaceId}
               onSettled={refreshConnectionEvidence}
               button={(label, click, disabled) => (
-                <Button size="sm" onClick={click} disabled={disabled || checking}>
+                <Button size="sm" onClick={click} disabled={disabled || inspectionStale}>
                   {label}
                 </Button>
               )}
@@ -179,7 +196,7 @@ export function McpServerInspection({
               scope={workspaceId}
               onSettled={refreshConnectionEvidence}
               button={(label, click, disabled) => (
-                <Button size="sm" onClick={click} disabled={disabled || checking}>
+                <Button size="sm" onClick={click} disabled={disabled || inspectionStale}>
                   {label}
                 </Button>
               )}
