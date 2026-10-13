@@ -483,7 +483,8 @@ function buildAssetPlan(
       description: `Provider-generated visual for ${input.title}.`,
       altText: `Provider visual supporting ${input.title}.`,
       source: "configured image provider",
-      license: "Generated locally by GoatCitadel",
+      // The provider's own terms govern a remotely generated image; no local-generation claim.
+      license: "Per the configured image provider's terms",
     },
     {
       id: "built-in-shapes-icons",
@@ -650,7 +651,7 @@ function resolveGoogleImportStatus(
 
 const PROVIDER_IMAGE_NOT_SUPPLIED_REASON = "No provider image was supplied; no placeholder art stands in for it.";
 const PROVIDER_IMAGE_NOT_EMBEDDED_REASON =
-  "A provider image was supplied but the selected layout did not embed it (table, chart, semantic, and fallback pages carry no image).";
+  "A provider image was supplied but no page embedded it: the selected layout places no image (table, chart, semantic, and fallback pages), or the renderer could not decode the bytes (see the render warnings).";
 
 function finalizeAssetPlan(
   assets: ArtifactAssetPlanItem[],

@@ -281,7 +281,11 @@ describe("provider image skip reasons", () => {
 
     const generated = report.skippedAssets.find((asset) => asset.id === "renderer-generated-visual");
     expect(generated?.reason).toMatch(/supplied but/iu);
+    // The renderer may also have failed to decode the bytes; the reason must not blame the layout alone.
+    expect(generated?.reason).toMatch(/decode/iu);
     expect(generated?.reason).not.toMatch(/no provider image was supplied/iu);
+    // A remote provider's image is not "generated locally".
+    expect(generated?.license ?? "").not.toMatch(/locally/iu);
     expect(report.residualRisks.join("\n")).toMatch(/supplied but/iu);
     expect(report.residualRisks.join("\n")).not.toMatch(/without visuals/iu);
   });
