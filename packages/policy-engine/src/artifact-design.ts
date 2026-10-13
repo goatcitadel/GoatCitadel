@@ -476,7 +476,7 @@ function buildAssetPlan(
       status: "planned",
       description: `Generated or renderer-produced visual system for ${input.title}.`,
       altText: `Abstract visual supporting ${input.title}.`,
-      source: "configured image provider or local renderer",
+      source: "configured image provider",
       license: "Generated locally by GoatCitadel",
     },
     {
@@ -645,7 +645,15 @@ function resolveGoogleImportStatus(
 function finalizeAssetPlan(assets: ArtifactAssetPlanItem[], usedAssetIds: string[]): ArtifactAssetPlanItem[] {
   const used = new Set(usedAssetIds);
   return assets.map((asset) =>
-    used.has(asset.id) && asset.status === "planned" ? { ...asset, status: "used" } : asset,
+    used.has(asset.id) && asset.status === "planned"
+      ? { ...asset, status: "used" }
+      : asset.id === "renderer-generated-visual" && asset.status === "planned"
+        ? {
+            ...asset,
+            status: "skipped",
+            reason: "No provider image was supplied; the artifact ships without placeholder visuals.",
+          }
+        : asset,
   );
 }
 
@@ -691,10 +699,13 @@ function buildResidualRisks(
   designQuality: ArtifactDesignQualityReport,
 ): string[] {
   const risks: string[] = [];
-  if (assets.some((asset) => asset.status === "skipped" && asset.type !== "built_in")) {
+  if (assets.some((asset) => asset.status === "skipped" && asset.type !== "built_in" && asset.type !== "generated")) {
     risks.push(
       "Some external or web assets were skipped because source, license, provider, or approval data was unavailable.",
     );
+  }
+  if (assets.some((asset) => asset.type === "generated" && asset.status === "skipped")) {
+    risks.push("No provider image was supplied, so the artifact ships without visuals.");
   }
   if (google.requested && google.status !== "imported") {
     risks.push("Google import was requested, but only the local artifact was produced in this runtime.");

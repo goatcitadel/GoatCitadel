@@ -586,7 +586,7 @@ function presentationAssetSpecificityFindings(
       id: "asset-specificity",
       severity: "P2",
       dimension: "Visual Coherence",
-      message: "Presentation used local renderer-only visuals because no provider-generated visual asset was supplied.",
+      message: "Presentation ships without visuals because no provider-generated visual asset was supplied.",
       repaired: false,
     },
   ];
@@ -618,7 +618,7 @@ function documentAssetSpecificityFindings(
       id: "asset-specificity",
       severity: "P3",
       dimension: "Visual Coherence",
-      message: "DOCX output used local decorative renderer visuals rather than provider-generated imagery.",
+      message: "DOCX output ships without imagery because no provider-generated visual was supplied.",
       repaired: false,
     },
   ];
@@ -653,7 +653,6 @@ function usedDocumentAssetIds(format: DocumentArtifactFormat, mode: string): str
   }
   switch (format) {
     case "docx":
-      return ["renderer-generated-visual", "built-in-shapes-icons"];
     case "html":
       return ["built-in-shapes-icons"];
     default:

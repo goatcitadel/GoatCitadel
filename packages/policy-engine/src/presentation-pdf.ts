@@ -139,7 +139,7 @@ export async function createPresentationPdf(input: PresentationPdfInput): Promis
     }),
     layoutNames,
     warnings,
-    usedAssetIds: ["renderer-generated-visual", "built-in-shapes-icons"],
+    usedAssetIds: images.size > 0 ? ["renderer-generated-visual", "built-in-shapes-icons"] : ["built-in-shapes-icons"],
   };
 }
 

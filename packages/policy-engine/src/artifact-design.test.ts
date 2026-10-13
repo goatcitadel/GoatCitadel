@@ -252,7 +252,7 @@ describe("artifact design brief selection", () => {
             id: "asset-specificity",
             severity: "P2",
             dimension: "Visual Coherence",
-            message: "Presentation used local renderer-only visuals.",
+            message: "Presentation ships without visuals because no provider-generated visual asset was supplied.",
             repaired: false,
           },
         ],
@@ -262,6 +262,8 @@ describe("artifact design brief selection", () => {
     expect(report.designQuality?.status).toBe("warning");
     expect(report.validation.find((check) => check.id === "asset-specificity")?.status).toBe("warning");
     expect(report.validation.find((check) => check.id === "artifact-audit")?.status).toBe("warning");
-    expect(report.residualRisks).toContain("Presentation used local renderer-only visuals.");
+    expect(report.residualRisks).toContain(
+      "Presentation ships without visuals because no provider-generated visual asset was supplied.",
+    );
   });
 });

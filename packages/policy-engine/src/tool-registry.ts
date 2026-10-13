@@ -2123,7 +2123,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       "Do not satisfy a requested PowerPoint by returning markdown-only slide text unless this tool is unavailable or blocked.",
       "Use design.mode polished or design.preset when the user asks for a visually appealing deck.",
       "Set design.skillId to impeccable for non-plain decks so Design Quality V1 checks asset specificity, layout integrity, and placeholder/provenance cleanup.",
-      "Prefer provider-generated visuals with provenance when available; otherwise the design report must disclose local-renderer fallback visuals.",
+      "Prefer provider-generated visuals with provenance when available; without one the deck ships with no placeholder imagery and the design report marks the generated visual as skipped.",
       "For research decks, provide canonical sources, complete research metadata, rich cited bullets, and semantic matrix/chart slides; source appendix slides are generated automatically.",
       "presentations.create does not accept model-authored presenter notes. Trusted direct-render callers may supply human-authored notes; renderer, model, prompt, layout, and provenance diagnostics belong only in the returned design report and render manifest.",
     ],

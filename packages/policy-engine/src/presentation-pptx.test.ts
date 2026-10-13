@@ -261,7 +261,7 @@ describe("presentation PPTX layout selection", () => {
     expect(quality.contentWarnings).toEqual([expect.stringContaining("very brief bullets")]);
   });
 
-  it("builds unique local support visuals for each generated slide", async () => {
+  it("ships no placeholder visual when no provider asset exists", async () => {
     const design = createArtifactDesignPlan({
       kind: "presentation",
       format: "pptx",
@@ -283,8 +283,8 @@ describe("presentation PPTX layout selection", () => {
     const visuals = await buildPresentationSlideVisuals("Benefits of Daily Walking", deckSlides, design, layoutPlan);
 
     expect(visuals).toHaveLength(deckSlides.length);
-    expect(visuals.every((visual) => visual.source === "local-renderer")).toBe(true);
-    expect(new Set(visuals.map((visual) => visual.dataUri)).size).toBe(deckSlides.length);
+    // The hashed abstract SVG is gone: without a provider image a slide carries no visual at all.
+    expect(visuals.every((visual) => visual.source === "none" && visual.dataUri === undefined)).toBe(true);
   });
 
   it("uses provided generated imagery only as the cover anchor", async () => {
@@ -313,8 +313,8 @@ describe("presentation PPTX layout selection", () => {
       dataUri: "data:image/png;base64,cover-image-base64",
       source: "openai:gpt-image-2",
     });
-    expect(visuals[1]?.source).toBe("local-renderer");
-    expect(visuals[1]?.dataUri).not.toBe(visuals[0]?.dataUri);
+    expect(visuals[1]?.source).toBe("none");
+    expect(visuals[1]?.dataUri).toBeUndefined();
   });
 
   it("places ephemeral generated assets on their mapped section slides", async () => {
@@ -331,7 +331,7 @@ describe("presentation PPTX layout selection", () => {
     ]);
 
     expect(visuals[0]?.dataUri).toContain("cover-bytes");
-    expect(visuals[1]?.source).toBe("local-renderer");
+    expect(visuals[1]?.source).toBe("none");
     expect(visuals[2]).toMatchObject({
       dataUri: "data:image/png;base64,section-bytes",
       source: "openai:gpt-image-2",
@@ -549,7 +549,9 @@ describe("presentation PPTX layout selection", () => {
     const visuals = await buildPresentationSlideVisuals(undefined as unknown as string, deckSlides, design, layoutPlan);
 
     expect(visuals).toHaveLength(1);
-    expect(visuals[0]?.dataUri).toMatch(/^data:image\/png;base64,/u);
+    expect(visuals[0]).toMatchObject({ source: "none" });
+    expect(visuals[0]?.dataUri).toBeUndefined();
+    expect(typeof visuals[0]?.altText).toBe("string");
   });
 
   it("renders semantic tables, charts, clickable citations, clean notes, and a truthful manifest", async () => {

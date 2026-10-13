@@ -45,7 +45,8 @@ export function drawPresentationSlide(input: {
   slide: PptxSlideLike;
   content: PresentationSlide;
   design: ArtifactDesignPlan;
-  visualData: string;
+  /** A provider image for this slide; absent means the slide renders without a visual. */
+  visualData?: string;
   index: number;
   layoutDecision?: PresentationSlideLayoutDecision;
   hasMappedVisual: boolean;
@@ -173,12 +174,14 @@ function drawHeroSlide(
   slide: PptxSlideLike,
   content: PresentationSlide,
   design: ArtifactDesignPlan,
-  visualData: string,
+  visualData?: string,
 ): void {
+  // With a provider image the cover splits text and image; without one the text panel is the cover.
+  const panelWidth = visualData ? 7 : 12;
   slide.addShape(shape(pptx, "roundRect"), {
     x: 0.66,
     y: 0.64,
-    w: 7,
+    w: panelWidth,
     h: 6,
     rectRadius: 0.08,
     fill: { color: design.tokens.surface, transparency: design.preset === "cyberpunk-ops" ? 10 : 0 },
@@ -188,7 +191,7 @@ function drawHeroSlide(
     objectName: "gc:title",
     x: 1,
     y: 1.08,
-    w: 6.25,
+    w: panelWidth - 0.75,
     h: 1.55,
     fontFace: design.typography.headingFont,
     fontSize: 34,
@@ -203,7 +206,7 @@ function drawHeroSlide(
       objectName: "gc:subtitle",
       x: 1.04,
       y: 2.85,
-      w: 5.85,
+      w: panelWidth - 1.15,
       h: 1.1,
       fontFace: design.typography.bodyFont,
       fontSize: 18,
@@ -212,15 +215,17 @@ function drawHeroSlide(
       valign: "top",
     });
   }
-  slide.addImage({
-    data: visualData,
-    x: 8.05,
-    y: 0.72,
-    w: 4.6,
-    h: 5.7,
-    altText: `Supporting visual for ${content.title}`,
-    objectName: "GoatCitadel cover visual",
-  });
+  if (visualData) {
+    slide.addImage({
+      data: visualData,
+      x: 8.05,
+      y: 0.72,
+      w: 4.6,
+      h: 5.7,
+      altText: `Supporting visual for ${content.title}`,
+      objectName: "GoatCitadel cover visual",
+    });
+  }
 }
 
 function drawContentTitle(slide: PptxSlideLike, content: PresentationSlide, design: ArtifactDesignPlan): void {
@@ -245,15 +250,16 @@ function drawImageTextSlide(
   slide: PptxSlideLike,
   content: PresentationSlide,
   design: ArtifactDesignPlan,
-  visualData: string,
+  visualData: string | undefined,
   sources: readonly PresentationSource[],
-  showVisual: boolean,
+  hasMappedVisual: boolean,
 ): void {
+  const showVisual = hasMappedVisual && Boolean(visualData);
   // Narrative bullets sit directly on the background; a bordered card around prose is a default
   // container the craft floor rejects (cards are for things that are actually discrete).
   void pptx;
   addBulletBlock(slide, content.bullets, design, 0.9, 1.6, showVisual ? 6.5 : 11.3, 4.4, sources);
-  if (showVisual) {
+  if (showVisual && visualData) {
     slide.addImage({
       data: visualData,
       x: 8.35,
