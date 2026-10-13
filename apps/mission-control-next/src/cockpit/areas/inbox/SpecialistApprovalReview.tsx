@@ -1,5 +1,5 @@
 import type { ApprovalRequest } from "@goatcitadel/contracts";
-import { nativeRuntimeReviewForApproval } from "../../../features/native-routes/ops/NativeRuntimeApprovalReview";
+import { nativeRuntimeReviewForApproval } from "../../../features/native-routes/ops/native-runtime-approval-evidence";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { handleEvidenceScrollKeyDown } from "../../ui/evidence-scroll";
 import type { SpecialistEvidence } from "./specialist-approval-evidence";

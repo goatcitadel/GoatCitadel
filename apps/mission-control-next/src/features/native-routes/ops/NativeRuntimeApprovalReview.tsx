@@ -1,16 +1,7 @@
-import type { ApprovalNativeRuntimeReview, ApprovalReplaySnapshot, ApprovalRequest } from "@goatcitadel/contracts";
+import type { ApprovalNativeRuntimeReview } from "@goatcitadel/contracts";
+export { nativeRuntimeReviewForApproval } from "./native-runtime-approval-evidence";
 
-export function nativeRuntimeReviewForApproval(approval: ApprovalRequest, replay?: ApprovalReplaySnapshot): ApprovalNativeRuntimeReview | undefined {
-  const binding = approval.payload.nativeRuntime as { expectation?: { requestSha256?: unknown } } | undefined;
-  const review = replay?.nativeRuntimeReview;
-  const disclosure = approval.payload.nativeFileDisclosure as { destination?: unknown; executionWorkspaceId?: unknown } | undefined;
-  if (Boolean(disclosure) !== Boolean(review?.fileDisclosure) || (disclosure &&
-      (disclosure.destination !== "gateway_artifacts" || review?.fileDisclosure?.destination !== disclosure.destination ||
-       review.fileDisclosure.workspaceId !== disclosure.executionWorkspaceId))) return undefined;
-  return approval.kind === "remote_worker.native_runtime" && replay?.approval.approvalId === approval.approvalId &&
-    typeof binding?.expectation?.requestSha256 === "string" && review?.requestSha256 === binding.expectation.requestSha256
-    ? review : undefined;
-}
+
 
 export function NativeRuntimeApprovalReview({ review }: { review?: ApprovalNativeRuntimeReview }) {
   if (!review) return <p role="status">Launch details are unavailable. Refresh the approval; if they have expired or the gateway restarted, reject this request and create a new review.</p>;

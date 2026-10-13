@@ -53,7 +53,7 @@ import "./styles/run-variables.css";
 import "./styles/change-plans.css";
 import "./styles/calm-chat.css";
 
-export { formatRelativeTime } from "./ThreadedSessionGroup";
+export { formatRelativeTime } from "./format-relative-time";
 
 const PANE_WIDTHS = {
   rail: { initial: 216, min: 184, max: 300 },

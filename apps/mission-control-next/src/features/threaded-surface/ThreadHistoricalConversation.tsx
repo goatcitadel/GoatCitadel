@@ -1,5 +1,5 @@
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { formatRelativeTime } from "./ThreadedSessionGroup";
+import { formatRelativeTime } from "./format-relative-time";
 
 export function HistoricalConversationView({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
   if (props.historicalWindowLoading) {
