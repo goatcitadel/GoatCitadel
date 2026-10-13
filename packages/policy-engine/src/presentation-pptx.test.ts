@@ -10,7 +10,9 @@ import {
   createPresentationPptxWithDiagnostics,
   type PresentationPackageAuditReport,
 } from "./presentation-pptx.js";
-import { stablePresentationSourceId } from "./presentation-model.js";
+import { stablePresentationSourceId, type PresentationSlide } from "./presentation-model.js";
+import { createFallbackPresentationPptx } from "./presentation-pptx-fallback.js";
+import { readPresentationZipEntries } from "./presentation-pptx-audit.js";
 
 afterEach(() => {
   vi.doUnmock("pptxgenjs");
@@ -653,6 +655,122 @@ describe("presentation PPTX layout selection", () => {
       minimumBodyFontSize: 16,
     });
     expect(result.manifest.hyperlinkCount).toBeGreaterThanOrEqual(4);
+  });
+
+  it("draws a quiet frame and no body card on narrative slides", async () => {
+    const shapesBySlide: Array<Array<{ type: unknown; options: Record<string, unknown> }>> = [];
+    const textsBySlide: Array<Array<{ text: unknown; options: Record<string, unknown> }>> = [];
+    vi.doMock("sharp", () => ({
+      default: () => ({ png: () => ({ toBuffer: async () => Buffer.from("mock-png") }) }),
+    }));
+    vi.doMock("pptxgenjs", () => ({
+      default: class RecordingPptxGen {
+        public layout = "";
+        public author = "";
+        public company = "";
+        public subject = "";
+        public title = "";
+        public theme = {};
+        public ShapeType = { rect: "rect", roundRect: "roundRect" };
+
+        public addSlide() {
+          const shapes: Array<{ type: unknown; options: Record<string, unknown> }> = [];
+          const texts: Array<{ text: unknown; options: Record<string, unknown> }> = [];
+          shapesBySlide.push(shapes);
+          textsBySlide.push(texts);
+          const slide: Record<string, unknown> = {};
+          slide.addShape = (type: unknown, options: Record<string, unknown>) => {
+            shapes.push({ type, options });
+            return slide;
+          };
+          slide.addImage = () => slide;
+          slide.addText = (text: unknown, options: Record<string, unknown>) => {
+            texts.push({ text, options });
+            return slide;
+          };
+          slide.addNotes = () => slide;
+          return slide;
+        }
+
+        public async write() {
+          return Buffer.from("PKmock");
+        }
+      },
+    }));
+
+    const slides: PresentationSlide[] = [
+      { title: "Daily Walking", bullets: ["Why thirty minutes a day matters"] },
+      {
+        title: "Morning versus evening",
+        bullets: [
+          "Morning: daylight anchors the circadian rhythm and protects the habit from the day's surprises",
+          "Evening: eases digestion and winds down screen time, but competes with family and fatigue",
+          "Either works; the consistent slot wins",
+          "Pick the slot you can keep on a bad day, not the ideal one",
+        ],
+      },
+      {
+        title: "A four-week plan",
+        bullets: [
+          "Week 1: ten minutes after lunch, every day",
+          "Week 2: add a second ten-minute walk after dinner",
+          "Week 3: merge into one twenty-five-minute route",
+          "Week 4: thirty minutes with one hill or set of stairs",
+          "Track only the days you walked, never the pace",
+        ],
+      },
+    ];
+    const design = createArtifactDesignPlan({
+      kind: "presentation",
+      format: "pptx",
+      title: "Daily Walking",
+      slides: slides.map((slide) => ({
+        title: slide.title,
+        bullets: slide.bullets.map((bullet) => (typeof bullet === "string" ? bullet : bullet.text)),
+      })),
+    });
+    const plan = resolvePresentationDeckLayoutPlan(design, slides);
+    await createPresentationPptxWithDiagnostics({ title: "Daily Walking", slides, design });
+
+    const allShapes = shapesBySlide.flat();
+    // No 0.13 in accent stripe down the left edge.
+    expect(allShapes.some((shape) => shape.options.x === 0 && shape.options.w === 0.13)).toBe(false);
+    // The slide number stays (audits key on it) but is quiet: regular weight in the muted text color.
+    const numbers = textsBySlide.flat().filter((text) => text.options.objectName === "gc:slide-number");
+    // One per rendered slide (pagination or a source appendix may add slides beyond the input).
+    expect(numbers.length).toBe(shapesBySlide.length);
+    expect(numbers.length).toBeGreaterThanOrEqual(slides.length);
+    expect(numbers.every((text) => text.options.bold === false && text.options.color === design.tokens.mutedText)).toBe(
+      true,
+    );
+    // Narrative slides (image-text, stacked-list) draw bullets on the background; columns keep their cards.
+    plan.forEach((decision, index) => {
+      const roundRects = (shapesBySlide[index] ?? []).filter((shape) => shape.type === "roundRect");
+      if (decision.renderer === "image-text" || decision.renderer === "stacked-list") {
+        expect(roundRects, `${decision.renderer} slide ${index + 1}`).toHaveLength(0);
+      }
+      if (decision.renderer === "two-column" || decision.renderer === "comparison") {
+        expect(roundRects.length, `${decision.renderer} slide ${index + 1}`).toBeGreaterThan(0);
+      }
+    });
+    expect(plan.some((decision) => decision.renderer === "image-text" || decision.renderer === "stacked-list")).toBe(
+      true,
+    );
+  });
+
+  it("keeps the fallback slide number regular weight", () => {
+    const buffer = createFallbackPresentationPptx({
+      title: "Fallback Deck",
+      slides: [{ title: "Only Slide", bullets: ["A safe text fallback"] }],
+    });
+    const entries = readPresentationZipEntries(buffer);
+    const slideXml = [...entries.entries()]
+      .find(([name]) => /ppt\/slides\/slide\d+\.xml$/u.test(name))?.[1]
+      ?.toString("utf8");
+    const numberShape = slideXml?.match(/<p:sp>(?:(?!<\/p:sp>)[\s\S])*gc:slide-number[\s\S]*?<\/p:sp>/u)?.[0];
+
+    expect(numberShape).toBeDefined();
+    expect(numberShape).not.toContain('b="1"');
   });
 
   it("returns truthful diagnostics when the PPTX renderer falls back", async () => {

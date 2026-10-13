@@ -143,14 +143,7 @@ function drawSlideFrame(
     fill: { color: design.tokens.background },
     line: { color: design.tokens.background, transparency: 100 },
   });
-  slide.addShape(shape(pptx, "rect"), {
-    x: 0,
-    y: 0,
-    w: 0.13,
-    h: SLIDE_H,
-    fill: { color: design.tokens.accent },
-    line: { color: design.tokens.accent, transparency: 100 },
-  });
+  // No accent side stripe: a colored bar on every slide is decoration, not hierarchy (craft floor).
   slide.addShape(shape(pptx, "rect"), {
     x: 0.52,
     y: 6.95,
@@ -159,16 +152,17 @@ function drawSlideFrame(
     fill: { color: design.tokens.border, transparency: 40 },
     line: { color: design.tokens.border, transparency: 100 },
   });
+  // The page number is wayfinding, not a feature: regular weight in the muted text color.
   slide.addText(String(index + 1).padStart(2, "0"), {
     objectName: "gc:slide-number",
     x: 12,
     y: 6.96,
     w: 0.55,
     h: 0.3,
-    fontFace: design.typography.headingFont,
+    fontFace: design.typography.bodyFont,
     fontSize: 10,
-    bold: true,
-    color: design.tokens.accent,
+    bold: false,
+    color: design.tokens.mutedText,
     align: "right",
     margin: 0,
   });
@@ -255,17 +249,10 @@ function drawImageTextSlide(
   sources: readonly PresentationSource[],
   showVisual: boolean,
 ): void {
-  const contentWidth = showVisual ? 7.05 : 11.62;
-  slide.addShape(shape(pptx, "roundRect"), {
-    x: 0.76,
-    y: 1.42,
-    w: contentWidth,
-    h: 4.86,
-    rectRadius: 0.05,
-    fill: { color: design.tokens.surface },
-    line: { color: design.tokens.border, transparency: 15 },
-  });
-  addBulletBlock(slide, content.bullets, design, 1.08, 1.72, showVisual ? 6.32 : 10.98, 4.25, sources);
+  // Narrative bullets sit directly on the background; a bordered card around prose is a default
+  // container the craft floor rejects (cards are for things that are actually discrete).
+  void pptx;
+  addBulletBlock(slide, content.bullets, design, 0.9, 1.6, showVisual ? 6.5 : 11.3, 4.4, sources);
   if (showVisual) {
     slide.addImage({
       data: visualData,
@@ -310,16 +297,8 @@ function drawStackedListSlide(
   design: ArtifactDesignPlan,
   sources: readonly PresentationSource[],
 ): void {
-  slide.addShape(shape(pptx, "roundRect"), {
-    x: 0.76,
-    y: 1.42,
-    w: 11.62,
-    h: 4.86,
-    rectRadius: 0.05,
-    fill: { color: design.tokens.surface },
-    line: { color: design.tokens.border, transparency: 15 },
-  });
-  addBulletBlock(slide, content.bullets, design, 1.08, 1.72, 10.98, 4.25, sources, "gc:body:stacked");
+  void pptx;
+  addBulletBlock(slide, content.bullets, design, 0.9, 1.6, 11.3, 4.4, sources, "gc:body:stacked");
 }
 
 function drawCalloutSlide(
