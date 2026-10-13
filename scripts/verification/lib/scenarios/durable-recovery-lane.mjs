@@ -139,15 +139,28 @@ export async function runDurableRecoveryLane(context, _options = {}, deps) {
   const commands = [
     {
       id: "durable-recovery.gateway.worker-tests",
-      title: "Durable worker restart, retry, and DLQ recovery tests",
+      title: "Durable worker and restored scheduled/child admission, restart, retry, and DLQ recovery tests",
       args: [
         "--filter",
         "@goatcitadel/gateway",
         "exec",
         "vitest",
         "run",
+        "--maxWorkers=1",
         "src/services/chat-durable-run-service.test.ts",
         "src/services/durable-run-service.test.ts",
+        "src/services/chat-turn-interruption-recovery-service.test.ts",
+        "src/scheduled-tool-turn.integration.test.ts",
+        "src/heartbeat-tool-turn.integration.test.ts",
+        "src/services/commitment-scheduled-turns.test.ts",
+        "src/services/heartbeat-chat-authority.test.ts",
+        "src/services/durable-heartbeat-settlement.test.ts",
+        "src/services/chat-automatic-child-admission.test.ts",
+        "src/services/chat-durable-fanout-service.test.ts",
+        "src/services/chat-fanout-wait-evidence.test.ts",
+        "src/chat-automatic-fanout.integration.test.ts",
+        "src/services/chat-delegated-result-contract.test.ts",
+        "src/services/delegated-child-process-cleanup.test.ts",
       ],
     },
     {
@@ -164,13 +177,15 @@ export async function runDurableRecoveryLane(context, _options = {}, deps) {
     },
     {
       id: "durable-recovery.gateway.orchestration-phase-parking-tests",
-      title: "Orchestration phases park the durable worker, wake from their child turn, and settle with their durable run",
+      title:
+        "Orchestration phases park the durable worker, wake from their child turn, and settle with their durable run",
       args: [
         "--filter",
         "@goatcitadel/gateway",
         "exec",
         "vitest",
         "run",
+        "--maxWorkers=1",
         "src/services/orchestration-lifecycle-service.test.ts",
         "src/services/orchestration-lifecycle-service.loop43.test.ts",
         "src/services/orchestration-phase-execution-service.test.ts",
@@ -192,6 +207,7 @@ export async function runDurableRecoveryLane(context, _options = {}, deps) {
       async () => {
         const result = await runCommand(pnpmCommand(), command.args, {
           cwd: repoRoot,
+          env: { GOATCITADEL_SQLITE_SCHEMA_TEMPLATE: "1" },
           artifactRoot: path.join(context.artifactRoot, "diagnostics"),
           logName: command.id,
         });
@@ -201,6 +217,7 @@ export async function runDurableRecoveryLane(context, _options = {}, deps) {
           metrics: {
             exitCode: result.code,
             durationMs: result.durationMs,
+            sqliteSchemaTemplate: true,
           },
           artifacts: {
             diagnostics: [],
@@ -214,5 +231,4 @@ export async function runDurableRecoveryLane(context, _options = {}, deps) {
       },
     );
   }
-
 }

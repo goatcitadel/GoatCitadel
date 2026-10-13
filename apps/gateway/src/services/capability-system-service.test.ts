@@ -468,6 +468,52 @@ describe("CapabilitySystemService", () => {
     expect(manifest.wrappers[0]).toMatchObject({ name: "tool.safe_read" });
   });
 
+  it("admits a fresh profile-free Chat Code Mode proposal through approval and checks immutable source before execution", async () => {
+    const spawnCodeModeChild = vi.fn();
+    const harness = await createHarness({
+      sandboxConfig: { required: false, bestEffortHostEnabled: false },
+      spawnCodeModeChild,
+    });
+    harness.storage.chatSessionMeta.patch("chat-live", { workspaceId: "workspace-live" });
+    harness.storage.chatTurnTraces.create({
+      turnId: "turn-live",
+      sessionId: "chat-live",
+      durable: { runId: "durable-live" },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      originSurface: "chat",
+      workspaceId: "workspace-live",
+      sessionId: "chat-live",
+      turnId: "turn-live",
+      requestedOutputIntent: "Review a reusable capability from Chat",
+      saveCandidateOnSuccess: false,
+    });
+    expect(run).toMatchObject({
+      originSurface: "chat",
+      sessionId: "chat-live",
+      turnId: "turn-live",
+      status: "approval_pending",
+    });
+    expect(run.codeArtifact.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(harness.createApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "code_mode.run",
+        linkage: expect.objectContaining({ originSurface: "chat", sessionId: "chat-live", turnId: "turn-live" }),
+      }),
+    );
+    expect(spawnCodeModeChild).not.toHaveBeenCalled();
+    expect(harness.invokeTool).not.toHaveBeenCalled();
+    await fs.writeFile(path.resolve(harness.rootDir, run.codeArtifact.relPath), "return { ok: false };", "utf8");
+    const result = await harness.service.executeApprovedCodeModeRun(run.approvalId!);
+    expect(result).toMatchObject({
+      result: { status: "failed", error: expect.stringContaining("Code Mode source artifact hash mismatch") },
+    });
+    expect(spawnCodeModeChild).not.toHaveBeenCalled();
+    expect(harness.invokeTool).not.toHaveBeenCalled();
+  });
+
   it("records capability profile decision evidence for Code Mode run creation", async () => {
     const harness = await createHarness({
       toolCatalog: [
@@ -5251,23 +5297,33 @@ describe("CapabilitySystemService", () => {
         .filter(([eventType]) => eventType === "candidate_skill_staged")
         .map(([, , payload]) => payload.revision),
     ).toEqual([1, 2]);
-    const older = detail.versions.find(version => version.originatingRunId === firstRun.runId)!;
-    const latest = detail.versions.find(version => version.originatingRunId === secondRun.runId)!;
+    const older = detail.versions.find((version) => version.originatingRunId === firstRun.runId)!;
+    const latest = detail.versions.find((version) => version.originatingRunId === secondRun.runId)!;
     expect(detail.originatingRun?.runId).toBe(secondRun.runId);
     const readRun = vi.fn((runId: string) => harness.service.getCodeModeRun(runId));
     expect(await resolveCandidateLifecycleWorkspace(detail, older, readRun)).toBe(workspaceId);
     expect(readRun).toHaveBeenCalledExactlyOnceWith(firstRun.runId);
     const promote = await harness.service.promoteCandidate(candidateId, detail.revision, latest.versionId);
     if (!promote.pendingApproval) throw new Error("Expected governed latest-version promotion");
-    harness.storage.approvals.resolve(promote.pendingApproval.approvalId, { decision: "approve", resolvedBy: "operator" });
-    const promoted = await harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: promote.pendingApproval.approvalId });
+    harness.storage.approvals.resolve(promote.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: "operator",
+    });
+    const promoted = await harness.service.executeApprovedCapabilityLifecycleMutation({
+      approvalId: promote.pendingApproval.approvalId,
+    });
     expect(promoted.detail.activeVersion?.versionId).toBe(latest.versionId);
     expect(await resolveCandidateLifecycleWorkspace(promoted.detail, older, readRun)).toBe(workspaceId);
     const rollback = await harness.service.rollbackCandidate(candidateId, older.versionId, promoted.revision);
     if (!rollback.pendingApproval) throw new Error("Expected governed historical rollback");
     expect((await harness.service.getCandidateDetail(candidateId)).activeVersion?.versionId).toBe(latest.versionId);
-    harness.storage.approvals.resolve(rollback.pendingApproval.approvalId, { decision: "approve", resolvedBy: "operator" });
-    const restored = await harness.service.executeApprovedCapabilityLifecycleMutation({ approvalId: rollback.pendingApproval.approvalId });
+    harness.storage.approvals.resolve(rollback.pendingApproval.approvalId, {
+      decision: "approve",
+      resolvedBy: "operator",
+    });
+    const restored = await harness.service.executeApprovedCapabilityLifecycleMutation({
+      approvalId: rollback.pendingApproval.approvalId,
+    });
     expect(restored.revision).toBe(promoted.revision + 1);
     expect(restored.detail.activeVersion?.versionId).toBe(older.versionId);
     expect(restored.detail.originatingRun?.runId).toBe(firstRun.runId);
@@ -5699,7 +5755,7 @@ async function createHarness(input?: {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-capability-system-"));
   tempRoots.push(rootDir);
   const approvals = new Map<string, ApprovalRequest>();
-  const storage = createFakeStorage(approvals);
+  const storage = createFakeStorage(rootDir, approvals);
   const publishRealtime = vi.fn(async () => undefined);
   const invokeTool = vi.fn(
     input?.invokeTool ??
@@ -5870,12 +5926,18 @@ function fakeCodeModeDispatchChild(input: {
   return child;
 }
 
-function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
+function createFakeStorage(rootDir: string, approvalsById = new Map<string, ApprovalRequest>()) {
   // HX-402 P2: the governed lifecycle owner, approvals, and Journey are REAL
   // storage — the approval-first candidate lifecycle and one-transaction
   // proposal evidence run against the trigger-protected schema, while
   // unrelated collaborators stay lightweight fakes.
-  const realStorage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+  // A separate owned file preserves real transactions/triggers while allowing
+  // the existing opt-in schema-only test template to avoid repeated migrations.
+  const realStorage = new Storage({
+    dbPath: path.join(rootDir, "state.sqlite"),
+    transcriptsDir: path.join(rootDir, "transcripts"),
+    auditDir: path.join(rootDir, "audit"),
+  });
   const asyncRealStorage = createSqliteAsyncStorage(realStorage);
   storageCleanups.push(async () => await asyncRealStorage.close());
   const snapshots = new Map<string, CapabilityCatalogSnapshotRecord>();

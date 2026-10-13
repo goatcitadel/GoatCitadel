@@ -348,6 +348,18 @@ describe("ChatCapabilityProfilePanel", () => {
     act(() => renderer.unmount());
   });
 
+  it("shows admitted context provenance without claiming a frozen capability profile", () => {
+    const renderer = render(<ChatCapabilityProfileRunDetail inspection={{ status: "admission_verified", profile: null,
+      mismatchFields: [], routedContext: routedContextReceipt(), message: "Current source access was checked." }} />);
+    const text = renderedText(renderer);
+    expect(text).toContain("Recorded context");
+    expect(text).toContain("Current source access was checked.");
+    expect(text).toContain("Routed context");
+    expect(text).not.toContain("Exact profile match");
+    expect(text).not.toContain("private-memory-id");
+    act(() => renderer.unmount());
+  });
+
   it("renders an unavailable persisted snapshot without inferring repository health", () => {
     const profile = persistedProfile();
     profile.selection.workspaceSnapshot = {

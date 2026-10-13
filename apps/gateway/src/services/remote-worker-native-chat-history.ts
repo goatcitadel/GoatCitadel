@@ -4,6 +4,7 @@ import {
   appendRemoteWorkerChatToolResults,
   appendRemoteWorkerNativeChatContext,
   canonicalJsonString,
+  sameRemoteWorkerCapabilityBinding,
   normalizeRemoteWorkerInferenceAuthorizedSubmission,
   normalizeRemoteWorkerInferenceMessages,
   normalizeRemoteWorkerNativeChatContext,
@@ -19,7 +20,7 @@ import {
   type RemoteWorkerNativeChatContext,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage, RemoteWorkerInferenceRequestRecord } from "@goatcitadel/storage";
-import { readCanonicalWorkerInferenceOutput, type RemoteWorkerChatSequenceContext } from "./remote-worker-chat-output-service.js";
+import { readCanonicalWorkerInferenceOutput, readRemoteWorkerSequenceEvidence, type RemoteWorkerChatSequenceContext } from "./remote-worker-chat-output-service.js";
 import { readCanonicalWorkerModelToolResult } from "./remote-worker-chat-tool-result.js";
 
 /** Rehydrate prior messages only from immutable Gateway requests, frame chains
@@ -73,7 +74,7 @@ export async function readRemoteWorkerNativeChatHistory(
     if (output.toolCalls) {
       const results = [];
       for (const call of output.toolCalls) {
-        const result = await readCanonicalWorkerModelToolResult(context.toolStorage, entry.record, context.profile, call);
+        const result = await readCanonicalWorkerModelToolResult(context.toolStorage, entry.record, readRemoteWorkerSequenceEvidence(context), call);
         if (result?.status !== "completed") throw new Error("Native Chat history has unresolved tools.");
         results.push({ ...result, callId: call.callId, modelToolName: call.modelToolName });
         toolIntentIds.push(result.intentId);
@@ -108,12 +109,13 @@ function readBoundRequest(record: RemoteWorkerInferenceRequestRecord, scope: Rem
     modelIntentSha256: record.modelIntentSha256, outputTokenCeiling: record.outputTokenCeiling,
     reasoningTokenCeiling: record.reasoningTokenCeiling, temperatureMilli: record.temperatureMilli,
   });
+  const evidence = readRemoteWorkerSequenceEvidence(context);
   if (record.registryWorkspaceId !== scope.registryWorkspaceId || record.assignmentId !== scope.assignmentId ||
     record.assignmentGeneration !== scope.assignmentGeneration || record.workerId !== context.workerId ||
     record.workerGeneration !== context.workerGeneration || record.taskId !== context.taskId ||
-    record.executionWorkspaceId !== context.profile.identity.workspaceId || record.sessionId !== context.profile.identity.sessionId ||
-    record.turnId !== context.profile.identity.turnId || record.durableRunId !== context.profile.identity.durableRunId ||
-    record.capabilityProfileSha256 !== context.profile.hashes.profileHash || record.contextSha256 !== context.contextSha256 ||
+    record.executionWorkspaceId !== evidence.identity.workspaceId || record.sessionId !== evidence.identity.sessionId ||
+    record.turnId !== evidence.identity.turnId || record.durableRunId !== evidence.identity.durableRunId ||
+    !sameRemoteWorkerCapabilityBinding(record, evidence.binding) || record.contextSha256 !== context.contextSha256 ||
     record.routedContextSha256 !== context.contextSha256 || digest(submission.messages) !== record.inputSha256 ||
     canonicalJsonString(body) !== canonicalJsonString(remoteWorkerInferenceCanonicalRequestBody(submission)) ||
     remoteWorkerInferenceRequestSha256(submission) !== record.requestSha256)

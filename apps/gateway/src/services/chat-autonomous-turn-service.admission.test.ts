@@ -3,13 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { canonicalJsonString, NotFoundError } from "@goatcitadel/contracts";
+import { canonicalJsonString, NotFoundError, buildCronCreatorAuthority, SCHEDULED_RESTRICTED_PROFILE } from "@goatcitadel/contracts";
 import type { CronJobRecord, DurableRunRecord } from "@goatcitadel/contracts";
 import {
   createSqliteAsyncStorage,
   sealChatTurnCapabilityProfile,
   Storage,
   type SessionAutonomyPrefsRecord,
+  type HeartbeatOccurrenceRecord,
 } from "@goatcitadel/storage";
 import {
   buildCronChatAdmissionIdentity,
@@ -45,6 +46,9 @@ import {
   SessionControlRuntimeOwner,
 } from "./session-control-runtime-owner.js";
 import { SessionControlService } from "./session-control-service.js";
+import { buildScheduledOccurrenceReference } from "./scheduled-chat-authority.js";
+import { buildHeartbeatOccurrencePlan } from "./heartbeat-occurrence-service.js";
+import type { ActiveTurnAdmission } from "./chat-turn-types.js";
 
 type DurableCreateInput = Parameters<ChatAutonomousTurnDeps["createDurableRun"]>[0];
 type PrepareOptions = Parameters<ChatAutonomousTurnDeps["prepareAgentChatTurn"]>[2];
@@ -229,6 +233,7 @@ function buildDeps(overrides: Partial<ChatAutonomousTurnDeps> = {}) {
           turnId: prepared.turnId,
           userMessageId: prepared.userEventId,
           assistantMessageId: prepared.assistantMessageId,
+          ...(prepared.featureAdmission ? { featureReferenceSha256: prepared.featureAdmission.referenceSha256 } : {}),
           branchKind: prepared.branchKind,
           threadEventType: "chat_thread_turn_appended",
           request: frozenRequest,
@@ -543,6 +548,95 @@ async function finalizeRealAutonomousRun(
 }
 
 describe("deterministic autonomous Chat child admission", () => {
+  it.each([false, true])("admits only enabled exact preclaimed heartbeat authority without creating a second admission (enabled %s)", async (enabled) => {
+    const plan = buildHeartbeatOccurrencePlan({ workspaceId: "default", sessionId: "session-heartbeat", expectedPriorCadence: {}, idleFloorSeconds: 300 });
+    const occurrence = { occurrenceId: "heartbeat-occurrence", admissionId: "heartbeat-admission", admissionCorrelationId: "heartbeat-occurrence",
+      workspaceId: "default", sessionId: "session-heartbeat", sessionIncarnationId: "heartbeat-incarnation",
+      systemActorId: "system-heartbeat", admissionMaterialSha256: plan.frozenRequestSha256, frozenRequestSha256: plan.frozenRequestSha256,
+      frozenObjectiveSha256: plan.frozenObjectiveSha256, evaluatedPolicySha256: plan.evaluatedPolicySha256, claimSha256: "a".repeat(64),
+      priorCadence: {}, idleFloorSeconds: 300, aggregateRevision: 1, controllerGeneration: 1, state: "admitted",
+      turnId: "heartbeat-turn", durableRunId: "heartbeat-durable", userMessageId: "heartbeat-user", assistantMessageId: "heartbeat-assistant",
+    } as HeartbeatOccurrenceRecord;
+    const turnAdmission = { identity: { admissionId: occurrence.admissionId, workspaceId: occurrence.workspaceId, sessionId: occurrence.sessionId,
+      sessionIncarnationId: occurrence.sessionIncarnationId, turnId: occurrence.turnId, aggregateRevision: 1, controllerGeneration: 1,
+      materialSha256: plan.frozenRequestSha256 }, admittedRequest: freezeChatTurnExecutionRequest(plan.request),
+      requestActor: { actorKind: "system", actorId: "system-heartbeat" }, systemHeartbeatOccurrence: {
+        kind: "system_heartbeat_occurrence", operation: "chat_system_heartbeat", occurrenceId: occurrence.occurrenceId,
+        correlationId: occurrence.admissionCorrelationId, claimSha256: occurrence.claimSha256, durableRunId: occurrence.durableRunId },
+      requestClaim: { runtimeOwnerId: "heartbeat-runtime", leaseRevision: 1 },
+    } as ActiveTurnAdmission;
+    const markDurableBound = vi.fn(async () => ({ disposition: "created", occurrence }));
+    const f = buildDeps({ isFeatureEnabled: vi.fn(async (flag) => flag === "durableKernelV1Enabled" || (enabled && flag === "proactiveHeartbeatTurnsV1Enabled")),
+      storage: { heartbeatOccurrences: { find: vi.fn(async () => occurrence), markDurableBound },
+        capabilityCatalogSnapshots: {}, chatTurnCapabilityProfiles: {} } as unknown as ChatAutonomousTurnDeps["storage"] });
+    f.prepareAgentChatTurn.mockImplementation(async (sessionId, request, options) => {
+      const prepared = buildPrepared(sessionId, request.content, options);
+      const references = { version: "chat.turn.feature-references.v1" as const, heartbeatOccurrence: options.heartbeatOccurrence };
+      prepared.featureAdmission = { references, referenceSha256: createHash("sha256").update(canonicalJsonString(references)).digest("hex") };
+      prepared.serverOnlyPosture = options.serverOnlyPosture;
+      return prepared;
+    });
+    const operation = enqueueAutonomousChatTurn(f.deps, { kind: "heartbeat", systemActorId: "system-heartbeat", sessionId: occurrence.sessionId,
+      prompt: plan.request.content, reason: plan.reason, runId: plan.sourceRunId, deliverMode: "on_notify",
+      heartbeatOccurrence: { occurrence, turnAdmission, request: plan.request } });
+    if (enabled) {
+      await expect(operation).resolves.toMatchObject({ runId: occurrence.durableRunId });
+      expect(markDurableBound).toHaveBeenCalledWith(expect.objectContaining({ featureReferenceSha256: expect.stringMatching(/^[a-f0-9]{64}$/u) }));
+      expect(f.createDurableRun.mock.calls[0]?.[0].payload).not.toHaveProperty("capabilityProfileId");
+      expect(f.requestDurableRunProcessing).toHaveBeenCalledTimes(1);
+    } else {
+      await expect(operation).rejects.toThrow("temporarily unavailable");
+      expect(f.prepareAgentChatTurn).not.toHaveBeenCalled();
+      expect(f.createDurableRun).not.toHaveBeenCalled();
+    }
+    expect(f.admitSystemChatTurn).not.toHaveBeenCalled();
+    expect(f.persistChatStreamChunk).not.toHaveBeenCalled();
+  });
+
+  it("admits an enabled canonical scheduled occurrence with live feature references and no frozen capability profile", async () => {
+    const config = { prompt: "Read one authorized fixture", sessionId: "session-cron",
+      createdBy: { operatorId: "fixture-operator", permissionProfileId: "fixture-creator" } };
+    const occurrence = { ...CRON_TOKEN, status: "admitting", action: "agent_turn", createdAt: "2026-10-11T00:00:00Z",
+      actionSnapshot: { action: "agent_turn", actionConfig: { agentTurn: config } } };
+    const job = { jobId: CRON_TOKEN.jobId, activeRunId: CRON_TOKEN.runId, executionGeneration: CRON_TOKEN.executionGeneration,
+      name: "Review", action: "agent_turn", enabled: true, schedule: "0 9 * * 1" } as CronJobRecord;
+    job.creatorAuthority = buildCronCreatorAuthority({ ...job, actionConfig: { agentTurn: config } },
+      { actorId: "fixture-operator", source: "authenticated_operator" });
+    const { deps, prepareAgentChatTurn, createDurableRun, admitSystemChatTurn } = buildDeps({
+      isFeatureEnabled: vi.fn(async (flag) => flag === "durableKernelV1Enabled" || flag === "scheduledChatTurnsV1Enabled"),
+      storage: { cronRuns: { get: vi.fn(async () => occurrence) }, cronJobs: { get: vi.fn(async () => job) },
+        capabilityCatalogSnapshots: {}, chatTurnCapabilityProfiles: {},
+        permissionProfiles: { getProfile: vi.fn(async () => ({ ...SCHEDULED_RESTRICTED_PROFILE,
+          profileId: "fixture-creator", scope: "global", scopeRef: undefined })) } } as unknown as ChatAutonomousTurnDeps["storage"],
+    });
+    prepareAgentChatTurn.mockImplementation(async (sessionId, request, options) => {
+      const prepared = buildPrepared(sessionId, request.content, options);
+      const references = { version: "chat.turn.feature-references.v1" as const, scheduledOccurrence: options.scheduledOccurrence };
+      prepared.featureAdmission = { references, referenceSha256: createHash("sha256").update(canonicalJsonString(references)).digest("hex") };
+      return prepared;
+    });
+    const identity = buildCronChatAdmissionIdentity(CRON_TOKEN);
+    await expect(runCronAgentTurn(deps, { job, runId: CRON_TOKEN.runId, cronRun: CRON_TOKEN, config })).resolves.toMatchObject({
+      mode: "agent_turn", durableRunId: identity.durableRunId, turnId: identity.turnId,
+    });
+    expect(admitSystemChatTurn).toHaveBeenCalledTimes(1);
+    expect(prepareAgentChatTurn.mock.calls[0]?.[2].scheduledOccurrence).toEqual(buildScheduledOccurrenceReference(identity));
+    expect(createDurableRun.mock.calls[0]?.[0].payload).toMatchObject({ cronAdmission: identity, featureReferenceSha256: expect.stringMatching(/^[a-f0-9]{64}$/u) });
+    expect(createDurableRun.mock.calls[0]?.[0].payload).not.toHaveProperty("capabilityProfileId");
+  });
+
+  it("refuses enabled schedule launch when the canonical occurrence generation has changed", async () => {
+    const { deps, prepareAgentChatTurn, admitSystemChatTurn } = buildDeps({
+      isFeatureEnabled: vi.fn(async (flag) => flag === "durableKernelV1Enabled" || flag === "scheduledChatTurnsV1Enabled"),
+      storage: { cronRuns: { get: vi.fn(async () => ({ ...CRON_TOKEN, status: "admitting", action: "agent_turn" })) },
+        cronJobs: { get: vi.fn(async () => ({ activeRunId: "new-occurrence", executionGeneration: 8 })) } } as unknown as ChatAutonomousTurnDeps["storage"],
+    });
+    await expect(runCronAgentTurn(deps, { job: { jobId: CRON_TOKEN.jobId } as CronJobRecord, runId: CRON_TOKEN.runId,
+      cronRun: CRON_TOKEN, config: { prompt: "Read fixture" } })).rejects.toThrow("execution generation");
+    expect(admitSystemChatTurn).not.toHaveBeenCalled();
+    expect(prepareAgentChatTurn).not.toHaveBeenCalled();
+  });
+
   it("routes a new scheduled Chat run to its deterministic inbox task before creating a session", async () => {
     const createCronInboxTask = vi.fn((_job: CronJobRecord, options?: { taskId?: string }) => ({
       taskId: options?.taskId ?? "unexpected-random-task",
@@ -1643,6 +1737,7 @@ describe("deterministic autonomous Chat child admission", () => {
     );
     const claimAndEnqueueHeartbeat = vi.fn(async () => ({ disposition: "enqueued" as const }));
     const { deps } = buildDeps({
+      isFeatureEnabled: vi.fn((flag: string) => flag === "durableKernelV1Enabled" || flag === "proactiveHeartbeatTurnsV1Enabled"),
       storage: {
         gatewaySql: workspaceSql.gatewaySql,
         chatSessionMeta: {
@@ -1681,6 +1776,7 @@ describe("deterministic autonomous Chat child admission", () => {
     const listChatSessions = vi.fn((query: { cursor?: string }) => (query.cursor ? [target] : disabled));
     const claimAndEnqueueHeartbeat = vi.fn(async () => ({ disposition: "enqueued" as const }));
     const { deps } = buildDeps({
+      isFeatureEnabled: vi.fn((flag: string) => flag === "durableKernelV1Enabled" || flag === "proactiveHeartbeatTurnsV1Enabled"),
       storage: {
         gatewaySql: workspaceSql.gatewaySql,
         chatSessionMeta: {
@@ -1715,6 +1811,7 @@ describe("deterministic autonomous Chat child admission", () => {
     const workspaceSql = heartbeatWorkspaceSql(workspaceIds);
     const listChatSessions = vi.fn(() => []);
     const { deps } = buildDeps({
+      isFeatureEnabled: vi.fn((flag: string) => flag === "durableKernelV1Enabled" || flag === "proactiveHeartbeatTurnsV1Enabled"),
       storage: {
         gatewaySql: workspaceSql.gatewaySql,
       } as unknown as ChatAutonomousTurnDeps["storage"],
@@ -1743,6 +1840,7 @@ describe("deterministic autonomous Chat child admission", () => {
     const repeated = Array.from({ length: 500 }, (_, index) => heartbeatSession(`session-${index + 1}`, index));
     const workspaceSql = heartbeatWorkspaceSql(["workspace-1"]);
     const { deps } = buildDeps({
+      isFeatureEnabled: vi.fn((flag: string) => flag === "durableKernelV1Enabled" || flag === "proactiveHeartbeatTurnsV1Enabled"),
       storage: {
         gatewaySql: workspaceSql.gatewaySql,
       } as unknown as ChatAutonomousTurnDeps["storage"],

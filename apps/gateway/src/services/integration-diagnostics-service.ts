@@ -1,4 +1,5 @@
-import { runNextcloudTalkLiveChecks } from "./nextcloud-talk-live-probes.js";
+import { runDiscordConnectionLiveChecks } from "./discord-connection-diagnostics.js";
+import { runConfiguredNextcloudTalkChecks } from "./nextcloud-talk-live-probes.js";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
 import { evaluateChannelInboundAccess } from "@goatcitadel/contracts";
 import type {
@@ -559,7 +560,7 @@ export async function runIntegrationConnectionLiveChecks(
       });
     }
     case "discord":
-      return runDiscordConnectionLiveChecks(deps, connection, options);
+      return runDiscordConnectionLiveChecks(deps, connection, options, runGovernedWebhookLiveChecks);
     case "telegram": {
       const token = resolveSecret("botToken", "botTokenEnv") ?? resolveSecret("token", "tokenEnv");
       if (!token) {
@@ -686,12 +687,7 @@ export async function runIntegrationConnectionLiveChecks(
       });
     }
     case "nextcloud-talk": {
-      const baseUrl = deps.readConnectionConfigValue(config, "baseUrl");
-      const token = resolveSecret("token", "tokenEnv");
-      const roomId = deps.readConnectionConfigValue(config, "defaultRoomId");
-      if (!baseUrl || !token || !roomId) return { checks: [{ key: "nextcloud_input", status: "fail", message: "Nextcloud Talk requires its URL, token and room before probing." }] };
-      if (!deps.isConnectionUrlAllowlisted(baseUrl)) return { checks: [{ key: "nextcloud_network", status: "fail", message: "The Nextcloud Talk host is outside the network allowlist." }] };
-      return runNextcloudTalkLiveChecks({ baseUrl, token, roomId, includeSandboxSend: options.includeSandboxSend, fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init) });
+      return runConfiguredNextcloudTalkChecks(deps, connection, options.includeSandboxSend);
     }
     case "line": {
       const channelAccessToken =
@@ -795,38 +791,6 @@ function readIMessageBridgeProvider(
   return provider === "photon" ? "photon" : "bluebubbles";
 }
 
-async function runDiscordConnectionLiveChecks(
-  deps: IntegrationDiagnosticsPort,
-  connection: IntegrationConnection,
-  options: {
-    includeSandboxSend: boolean;
-    discordRuntimeReadiness?: "required" | "deferred";
-  },
-): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
-  const config = connection.config;
-  const token =
-    deps.resolveConnectionSecret(config, "botToken", "botTokenEnv", connection.catalogId) ??
-    deps.resolveConnectionSecret(config, "token", "tokenEnv", connection.catalogId);
-  const runtimeMode = deps.readConnectionConfigValue(config, "runtimeMode") === "gateway" ? "gateway" : "bridge";
-  const webhookUrl = deps.resolveConnectionSecret(config, "webhookUrl", "webhookUrlEnv", connection.catalogId);
-  if (!token && webhookUrl && runtimeMode === "bridge") return runGovernedWebhookLiveChecks(deps, { channelKey: "discord", webhookUrl, includeSandboxSend: options.includeSandboxSend, fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init) });
-  return runDiscordBotLiveChecks({
-    token,
-    channelId: deps.readConnectionConfigValue(config, "defaultChannelId"),
-    guildId: deps.readConnectionConfigValue(config, "defaultGuildId"),
-    runtimeMode,
-    webhookUrl,
-    includeSandboxSend: options.includeSandboxSend,
-    runtimeReadiness: options.discordRuntimeReadiness,
-    deferDestination: runtimeMode === "gateway" && deps.readConnectionConfigValue(config, "guildPolicy") === "off" && !deps.readConnectionConfigValue(config, "defaultChannelId"),
-    runtimeStatus:
-      runtimeMode === "gateway" && options.discordRuntimeReadiness !== "deferred"
-        ? deps.getDiscordRuntimeStatus(connection.connectionId)
-        : undefined,
-    fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
-  });
-}
-
 /**
  * Egress posture for operator-driven diagnostics. It mirrors
  * `GatewayService.fetchWithDiagnosticsTimeout`, which fetches through
@@ -840,7 +804,7 @@ export function isDiagnosticsDestinationAllowed(urlValue: string, operatorAllowl
   return connectionUrlHelpers.isConnectionUrlRemoteSafe(urlValue) && evaluateHostEgress(urlValue, [...operatorAllowlist, "*"]).allowed;
 }
 
-async function runGovernedWebhookLiveChecks(deps: IntegrationDiagnosticsPort, input: Parameters<typeof runWebhookDestinationLiveChecks>[0]): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
+export async function runGovernedWebhookLiveChecks(deps: IntegrationDiagnosticsPort, input: Parameters<typeof runWebhookDestinationLiveChecks>[0]): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
   if (input.webhookUrl && !isDiagnosticsDestinationAllowed(input.webhookUrl, deps.config.toolPolicy.sandbox.networkAllowlist)) {
     const step = { key: input.channelKey.replace(/-/g, "_") + "_sandbox_send", label: "Webhook destination", status: "fail" as const, disposition: "blocking" as const, message: "The webhook destination must be a public HTTPS endpoint. Private, loopback, and reserved hosts stay blocked unless the operator allowlists them explicitly." };
     return { checks: [{ key: step.key, status: "fail", message: step.message }], probe: { kind: input.channelKey + "_webhook", checkedAt: new Date().toISOString(), steps: [step] } };

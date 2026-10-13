@@ -86,6 +86,17 @@ export function parseNodeTestCounts(text) {
   return { failed, passed, skipped: skipped ?? 0 };
 }
 
+/** Preserve aggregate Vitest summaries and recognize complete Node runner counters. */
+export function readPassedTestCount(output) {
+  const clean = String(output ?? "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+  const normalized = clean.replace(/\s+/g, " ");
+  const matches = [...normalized.matchAll(/Tests\s+(\d+)\s+passed/g)];
+  if (matches.length > 0) {
+    return matches.reduce((total, match) => total + Number(match[1] ?? 0), 0);
+  }
+  return parseNodeTestCounts(clean)?.passed ?? 0;
+}
+
 /**
  * Derive one check's honest status from its exit code and (when a counter
  * kind is declared) the parsed runner counts. Zero executed tests on exit 0

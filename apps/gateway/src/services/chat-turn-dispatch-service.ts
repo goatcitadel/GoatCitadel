@@ -387,7 +387,7 @@ export async function executePreparedAgentChatTurnBackground(
       {
         ...options,
         ...(canonicalWriteFence ? { canonicalWriteFence } : {}),
-        ...(durableRunId ? { deferGeneralPostCommit: true } : {}),
+        ...(durableRunId ? { deferGeneralPostCommit: true, canonicalDurableRunId: durableRunId } : {}),
       },
     )) {
       const chunk =
@@ -850,7 +850,7 @@ export async function launchPreparedAgentChatTurnStream(
               turnId: prepared.turnId,
               userMessageId: prepared.userMessage.messageId,
               assistantMessageId: prepared.assistantMessageId,
-            });
+            }, host);
           }
           await options.onChildDurableRunAdmitted!(runId);
         }

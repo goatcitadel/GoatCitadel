@@ -6,6 +6,7 @@ import { PendingApprovalActionRepository } from "./pending-approval-action-repo.
 import { RemoteWorkerRuntimeResultRepository } from "./remote-worker-runtime-result-repo.js";
 import type { RemoteWorkerNativeChatContext } from "@goatcitadel/contracts";
 import { RemoteWorkerChatPlacementRepository } from "./remote-worker-chat-placement-repo.js";
+import { readRemoteWorkerAdmissionFeatureBinding } from "./remote-worker-chat-admission-reference.js";
 import { RemoteWorkerArtifactRepository } from "./remote-worker-artifact-repo.js";
 import { RemoteWorkerEffectRepository } from "./remote-worker-effect-repo.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
@@ -41,6 +42,10 @@ import {
   assertRemoteWorkerAssignmentRecord,
   assertRemoteWorkerAssignmentSettlementRecord,
   canonicalJsonString,
+  normalizeRemoteWorkerCapabilityBinding,
+  remoteWorkerCapabilityBindingForTurn,
+  sameRemoteWorkerCapabilityBinding,
+  type RemoteWorkerCapabilityBinding,
   buildRemoteWorkerAssignmentFlowControl,
   normalizeAppendRemoteWorkerAssignmentEventsCommand,
   normalizeControlRemoteWorkerAssignmentCommand,
@@ -266,7 +271,7 @@ export interface RemoteWorkerAssignmentOfferCursor {
   readonly assignmentId: string;
 }
 
-export interface RemoteWorkerAssignmentWorkloadIdentity {
+export interface RemoteWorkerAssignmentWorkloadIdentity extends RemoteWorkerCapabilityBinding {
   readonly nativeChatHistory?: import("@goatcitadel/contracts").RemoteWorkerNativeChatHistory;
   readonly nativeContinuation?: RemoteWorkerNativeContinuation;
   readonly nativeChatContext?: RemoteWorkerNativeChatContext;
@@ -277,8 +282,7 @@ export interface RemoteWorkerAssignmentWorkloadIdentity {
   readonly durableRunId: string;
   readonly durableRunVersion: number;
   readonly durableRunPayloadSha256: string;
-  readonly capabilityProfileId: string;
-  readonly capabilityProfileSha256: string;
+  readonly capabilityProfileId?: string;
   readonly contextSnapshotSha256: string;
   readonly workloadSha256: string;
 }
@@ -558,11 +562,13 @@ export class RemoteWorkerAssignmentRepository {
       )
         throw conflict("remote worker Chat offer admission identity");
       const profile = new ChatTurnCapabilityProfileRepository(this.db).findByRun(durableRunId);
-      if (
+      const capabilityBinding = remoteWorkerCapabilityBindingForTurn(authority);
+      const admitted = capabilityBinding.admissionReference ? readRemoteWorkerAdmissionFeatureBinding(this.db, authority) : undefined;
+      if (!admitted && (
         !profile ||
         profile.profileId !== payload.capabilityProfileId ||
         profile.hashes.profileHash !== payload.capabilityProfileHash
-      )
+      ))
         throw conflict("remote worker Chat offer capability profile");
       const chatContext = new RemoteWorkerChatContextRepository(this.db).findForRun(durableRunId);
       if (!chatContext) throw conflict("remote worker Chat offer frozen context is missing");
@@ -576,8 +582,12 @@ export class RemoteWorkerAssignmentRepository {
           snapshot.workspaceId !== executionWorkspaceId ||
           snapshot.sessionId !== sessionId ||
           snapshot.turnId !== turnId ||
-          snapshot.capabilityProfileId !== profile.profileId ||
-          snapshot.capabilityProfileHash !== profile.hashes.profileHash
+          snapshot.capabilityProfileId !== profile?.profileId ||
+          snapshot.capabilityProfileHash !== profile?.hashes.profileHash ||
+          (admitted && canonicalJsonString(snapshot.admissionBinding) !== canonicalJsonString({
+            admissionId: authority.admissionId, sessionIncarnationId: authority.sessionIncarnationId,
+            materialSha256: authority.admissionMaterialSha256, aggregateRevision: authority.admissionAggregateRevision,
+            controllerGeneration: authority.admissionControllerGeneration }))
         )
           throw conflict("remote worker Chat offer routed context snapshot");
       }
@@ -617,19 +627,19 @@ export class RemoteWorkerAssignmentRepository {
           turnId,
           durableRunId,
           taskId,
-          capabilityProfileSha256: profile.hashes.profileHash,
+          ...capabilityBinding,
           contextSnapshotSha256,
           toolEffectPostureSha256: sha256({
             schemaVersion: "goatcitadel.remote-worker-chat-tool-posture.v1",
-            tools: profile.selection.tools,
-            governance: profile.governance,
+            tools: admitted?.placement.selectedTools ?? profile!.selection.tools,
+            governance: admitted ? { permission: admitted.placement.permission } : profile!.governance,
           }),
           pathJailSha256,
           parentContextSha256: digest(
             String(generatedTask?.parentContextSha256 ?? metadata.remoteWorkerAssignmentParentContextSha256 ?? ""),
             "parentContextSha256",
           ),
-          requiredCapabilityClasses: profile.selection.tools.length
+          requiredCapabilityClasses: (admitted?.placement.selectedTools ?? profile!.selection.tools).length
             ? ["artifact_stage", "durable_compute", "gateway_inference", "governed_tool"]
             : ["artifact_stage", "durable_compute", "gateway_inference"],
           deadlineAt: input.deadlineAt,
@@ -3147,8 +3157,9 @@ export class RemoteWorkerAssignmentRepository {
           })
         : undefined;
     const metadata = parseJsonRecord(run.metadata_json ?? "{}", "remote worker assignment durable Chat metadata");
-    const capabilityProfileId = identifier(String(payload.capabilityProfileId ?? ""), "capabilityProfileId");
-    const capabilityProfileSha256 = digest(String(payload.capabilityProfileHash ?? ""), "capabilityProfileSha256");
+    const capabilityBinding = remoteWorkerCapabilityBindingForTurn(durablePayloadAuthority);
+    const capabilityProfileId = durablePayloadAuthority.capabilityProfileId;
+    const admitted = capabilityBinding.admissionReference ? readRemoteWorkerAdmissionFeatureBinding(this.db, durablePayloadAuthority) : undefined;
     if (
       run.workflow_key !== "chat.turn.execute" ||
       payload.version !== "chat.turn.execute.v2" ||
@@ -3156,9 +3167,9 @@ export class RemoteWorkerAssignmentRepository {
       payload.sessionId !== assignment.manifest.sessionId ||
       payload.turnId !== assignment.manifest.turnId ||
       (taskBinding?.taskId ?? request.policyTaskId) !== assignment.manifest.taskId ||
-      capabilityProfileSha256 !== assignment.manifest.capabilityProfileSha256 ||
+      !sameRemoteWorkerCapabilityBinding(capabilityBinding, assignment.manifest) ||
       metadata.capabilityProfileId !== capabilityProfileId ||
-      metadata.capabilityProfileHash !== capabilityProfileSha256
+      metadata.capabilityProfileHash !== capabilityBinding.capabilityProfileSha256
     ) {
       throw conflict("remote worker assignment durable Chat workload binding");
     }
@@ -3181,15 +3192,15 @@ export class RemoteWorkerAssignmentRepository {
       });
     }
     const profile = new ChatTurnCapabilityProfileRepository(this.db).findByRun(run.run_id);
-    if (
+    if (!admitted && (
       !profile ||
       profile.profileId !== capabilityProfileId ||
-      profile.hashes.profileHash !== capabilityProfileSha256 ||
+      profile.hashes.profileHash !== capabilityBinding.capabilityProfileSha256 ||
       profile.identity.durableRunId !== run.run_id ||
       profile.identity.workspaceId !== assignment.manifest.executionWorkspaceId ||
       profile.identity.sessionId !== assignment.manifest.sessionId ||
       profile.identity.turnId !== assignment.manifest.turnId
-    ) {
+    )) {
       throw conflict("remote worker assignment capability profile authority");
     }
     const routedContextSnapshotId = payload.routedContextSnapshotId;
@@ -3261,8 +3272,8 @@ export class RemoteWorkerAssignmentRepository {
       durableRunId: run.run_id,
       durableRunVersion,
       durableRunPayloadSha256,
-      capabilityProfileId,
-      capabilityProfileSha256,
+      ...(capabilityProfileId ? { capabilityProfileId } : {}),
+      ...normalizeRemoteWorkerCapabilityBinding(capabilityBinding),
       contextSnapshotSha256: assignment.manifest.contextSnapshotSha256,
       ...(nativeContinuation ? { nativeContinuation } : {}),
       ...(nativeChatContext ? { nativeChatContext } : {}),

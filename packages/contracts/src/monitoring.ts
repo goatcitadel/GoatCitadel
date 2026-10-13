@@ -121,6 +121,8 @@ export interface CronNoAgentConfig {
 export type CronAgentTurnDeliverMode = "always" | "on_notify";
 
 export interface CronAgentTurnConfig {
+  /** Internal reference to a frozen commitment owned by the canonical cron occurrence. */
+  commitment?: import("./commitments.js").CommitmentOccurrenceReference;
   /**
    * Optional stable session id to run the scheduled turn in. When omitted, a
    * deterministic per-job cron session is created/reused.
@@ -182,6 +184,8 @@ export interface CronWatchdogRunResult {
 export interface CronJobRecord {
   jobId: string;
   revision: number;
+  /** Canonical server receipt; excluded from config imports and public mutation inputs. */
+  creatorAuthority?: CronJobCreatorAuthority;
   /** Monotonic fencing generation for canonical cron_runs admission. */
   executionGeneration?: number;
   /** Canonical non-terminal run currently holding this job generation. */
@@ -210,6 +214,17 @@ export interface CronJobRecord {
   };
   failureCount?: number;
   backoffUntil?: string;
+}
+
+export interface CronJobCreatorAuthorityInput {
+  actorId: string;
+  source: "authenticated_operator" | "admitted_chat";
+}
+
+export interface CronJobCreatorAuthority extends CronJobCreatorAuthorityInput {
+  version: "cron.creator-authority.v1";
+  jobId: string;
+  actionSha256: string;
 }
 
 export interface OperatorSummary {

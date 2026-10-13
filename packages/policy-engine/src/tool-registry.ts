@@ -87,6 +87,48 @@ const ARTIFACT_DESTINATION_ARG_SCHEMA = {
 
 const BUILTIN_TOOLS: ToolDefinition[] = [
   {
+    name: "capabilities.search",
+    category: "knowledge",
+    riskLevel: "safe",
+    requiresApproval: false,
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: false,
+    description: "Find currently callable tools or skills by task. Results are discovery only; tool execution still requires current policy and approvals.",
+    pack: "core",
+    recommendedContexts: ["chat"],
+    argSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", minLength: 1, maxLength: 512 },
+        limit: { type: "integer", minimum: 1, maximum: 5 },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "skills.read",
+    category: "knowledge",
+    riskLevel: "safe",
+    requiresApproval: false,
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: false,
+    description: "Read an exact, verified instruction file from a currently callable trusted skill. Defaults to SKILL.md; reading grants no tool permissions and executes no scripts.",
+    pack: "core",
+    recommendedContexts: ["chat"],
+    argSchema: {
+      type: "object",
+      properties: {
+        skillId: { type: "string", minLength: 1, maxLength: 256 },
+        relativePath: { type: "string", minLength: 1, maxLength: 512 },
+      },
+      required: ["skillId"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "tool_artifact.read",
     category: "research",
     riskLevel: "safe",
@@ -851,6 +893,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
               },
               label: { type: "string", description: "Short display label for the subtask." },
               expectedOutput: { type: "string", description: "What the subtask should hand back." },
+              resultSchema: { type: "object", description: "Optional bounded JSON Schema for the final child JSON result. Supported types: object, array, string, number, integer, boolean, null. Objects require properties and additionalProperties:false; arrays require maxItems<=128 and items; strings require maxLength<=8192. No refs, patterns or schema combinators." },
             },
             required: ["objective"],
           },

@@ -14,10 +14,11 @@ import {
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { fetchProfile } = vi.hoisted(() => ({ fetchProfile: vi.fn() }));
+const { fetchProfile, fetchContext } = vi.hoisted(() => ({ fetchProfile: vi.fn(), fetchContext: vi.fn() }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchChatTurnCapabilityProfile: (...args: unknown[]) => fetchProfile(...args),
+  fetchChatTurnRoutedContext: (...args: unknown[]) => fetchContext(...args),
 }));
 
 function makeTurn(overrides: Partial<ChatThreadTurnRecord["trace"]> = {}): ChatThreadTurnRecord {
@@ -189,6 +190,30 @@ async function renderInspection(turn: ChatThreadTurnRecord): Promise<{
 describe("useChatCapabilityProfileInspection", () => {
   beforeEach(() => {
     fetchProfile.mockReset();
+    fetchContext.mockReset();
+  });
+
+  it("inspects a profile-free context receipt through its scoped owner without claiming a profile match", async () => {
+    const routedContext = makeRoutedContext();
+    fetchContext.mockResolvedValue({ state: "admission_bound", sessionId: "session-1", turnId: "turn-1", workspaceId: "workspace-1", routedContext });
+    const result = await renderInspection(makeTurn({ capabilityProfileId: undefined, capabilityProfileHash: undefined,
+      routing: { routedContext } }));
+    expect(fetchContext).toHaveBeenCalledExactlyOnceWith("session-1", "turn-1", "workspace-1");
+    expect(fetchProfile).not.toHaveBeenCalled();
+    expect(result.latest()).toMatchObject({ status: "admission_verified", profile: null, routedContext });
+    act(() => result.renderer.unmount());
+  });
+
+  it.each(["scope", "hash", "revoked"])("hides profile-free context details after %s drift", async (drift) => {
+    const routedContext = makeRoutedContext();
+    if (drift === "revoked") fetchContext.mockRejectedValue({ status: 403 });
+    else fetchContext.mockResolvedValue({ state: "admission_bound", sessionId: drift === "scope" ? "other" : "session-1",
+      turnId: "turn-1", workspaceId: "workspace-1", routedContext: { ...routedContext, ...(drift === "hash" ? { contentHash: "wrong" } : {}) } });
+    const result = await renderInspection(makeTurn({ capabilityProfileId: undefined, capabilityProfileHash: undefined,
+      routing: { routedContext } }));
+    expect(result.latest()?.status).toBe(drift === "revoked" ? "forbidden" : "invalid");
+    expect(result.latest()?.routedContext).toBeUndefined();
+    act(() => result.renderer.unmount());
   });
 
   it("fetches in the selected workspace scope and exposes only an exact trace/profile match", async () => {

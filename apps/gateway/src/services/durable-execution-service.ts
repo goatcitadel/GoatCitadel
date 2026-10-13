@@ -1,3 +1,4 @@
+import { verifyDurableAdmittedExplicitContextSnapshot } from "./chat-explicit-context-admission.js";
 import {
   loadDurableChatWorkerContext,
   injectDurableChatWorkerContext,
@@ -13,6 +14,7 @@ import {
 
 import {
   CHAT_TURN_ACTIVE_STATUSES,
+  CHAT_ROUTED_CONTEXT_ADMISSION_SNAPSHOT_VERSION,
   type ChannelSendInput,
   type ChannelActivityInput,
   type ChannelActivityResult,
@@ -34,6 +36,7 @@ import {
   type ChatRoutedContextSnapshotRecord,
   type ChatToolRunRecord,
   type ChatTurnTraceRecord,
+  type ChatTurnFailureRecord,
   type ConnectorDeliveryWorkflowPayload,
   type CuratorTickWorkflowPayload,
   type DurableRunRecord,
@@ -67,6 +70,7 @@ import type { ChatProactiveService } from "./chat-proactive-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import { readChatTurnControl } from "./chat-turn-control.js";
 import { hasConfirmedDelegationWaitingEvidence } from "./chat-confirmed-delegation-service.js";
+import { hasDurableFanoutWaitingEvidence } from "./chat-fanout-wait-evidence.js";
 import {
   hasAutonomousChatPostCommitPending,
   persistPreparedChatCapabilityAdmission,
@@ -219,12 +223,14 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
       assistantMessageId?: string;
       capabilityProfileId?: string;
       capabilityProfileHash?: string;
+      featureReferenceSha256?: string;
       capabilityProfileContent?: string;
       skipProviderPreparation?: boolean;
       turnAdmission?: import("./chat-turn-types.js").ActiveTurnAdmission;
       serverOnlyPosture?: SystemHeartbeatTurnPrepPosture;
     },
   ): Promise<PreparedAgentChatTurn>;
+  revalidateChatRoutedContextSnapshot?(snapshot: ChatRoutedContextSnapshotRecord): Promise<void>;
   requireConnectorRecord(connectorId: string): Promise<ConnectorRecord>;
   /**
    * Enqueue a `connector.delivery` durable run that routes an autonomous turn's
@@ -332,6 +338,7 @@ export type DurableChatTurnWorkflowHost = chatTurnDispatchService.ChatTurnDispat
     | "storage"
     | "durableRunService"
     | "prepareAgentChatTurn"
+    | "revalidateChatRoutedContextSnapshot"
     | "registerActiveChatTurnStream"
     | "persistChatStreamChunk"
     | "enqueueAutonomousChannelDelivery"
@@ -1997,7 +2004,8 @@ export async function executeDurableChatTurnRun(
   }
   const routedContextSnapshot = await loadAndVerifyDurableChatRoutedContextSnapshot(host, run, payload);
   const remoteContext = await loadDurableChatWorkerContext(host, run);
-  const recoveryTrace = await validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId, userMessage, run);
+  const recoveryTrace = await validateCommittedDurableChatTurnRecoveryTrace(host, payload, run.runId, userMessage, run,
+    { resumeSettledFanout: true });
   if (recoveryTrace.outcome === "invalid") {
     throw new Error(recoveryTrace.reason);
   }
@@ -2045,6 +2053,7 @@ export async function executeDurableChatTurnRun(
     assistantMessageId: payload.assistantMessageId,
     capabilityProfileId: payload.capabilityProfileId ?? existingCapabilityProfile?.profileId,
     capabilityProfileHash: payload.capabilityProfileHash ?? existingCapabilityProfile?.hashes.profileHash,
+    featureReferenceSha256: payload.featureReferenceSha256,
     capabilityProfileContent: heartbeatIdentity ? payload.request.content : userMessage!.content,
     turnAdmission,
     ...(heartbeatIdentity
@@ -2360,7 +2369,7 @@ function createSystemHeartbeatDispatchHost(
 }
 
 export async function loadAndVerifyDurableChatRoutedContextSnapshot(
-  host: Pick<DurableChatTurnWorkflowHost, "storage">,
+  host: Pick<DurableChatTurnWorkflowHost, "storage" | "revalidateChatRoutedContextSnapshot">,
   run: DurableRunRecord,
   payload: DurableChatTurnPayload,
 ): Promise<ChatRoutedContextSnapshotRecord | undefined> {
@@ -2369,11 +2378,18 @@ export async function loadAndVerifyDurableChatRoutedContextSnapshot(
   }
   const snapshotStore = host.storage.routedContextSnapshots;
   const profileStore = host.storage.chatTurnCapabilityProfiles;
-  if (!snapshotStore || !profileStore || !payload.capabilityProfileId || !payload.capabilityProfileHash) {
+  if (!snapshotStore) {
     throw new Error(`Durable Chat run ${run.runId} cannot load its frozen routed-context binding.`);
   }
   const snapshot = await snapshotStore.get(payload.routedContextSnapshotId);
   verifyChatRoutedContextSnapshot(snapshot);
+  if (snapshot.schemaVersion === CHAT_ROUTED_CONTEXT_ADMISSION_SNAPSHOT_VERSION) {
+    await verifyDurableAdmittedExplicitContextSnapshot(host, run, payload, snapshot);
+    return snapshot;
+  }
+  if (!profileStore || !payload.capabilityProfileId || !payload.capabilityProfileHash) {
+    throw new Error(`Durable Chat run ${run.runId} cannot load its historical routed-context binding.`);
+  }
   const profile = await profileStore.get(payload.capabilityProfileId);
   const trace = await host.storage.chatTurnTraces.get(payload.turnId);
   const traceBinding = trace?.routing?.routedContext;
@@ -2995,7 +3011,7 @@ async function validateCommittedDurableChatTurnRecoveryTrace(
   expectedRunId: string,
   observedUserMessage?: { role?: unknown; sessionId?: unknown },
   observedRun?: DurableRunRecord,
-  options: { allowFailedPartialWithoutOutput?: boolean } = {},
+  options: { allowFailedPartialWithoutOutput?: boolean; resumeSettledFanout?: boolean } = {},
 ): Promise<DurableChatRecoveryTraceValidation> {
   const storage = host.storage;
   let heartbeatIdentity: ExactSystemHeartbeatExecutionIdentity | undefined;
@@ -3131,10 +3147,18 @@ async function validateCommittedDurableChatTurnRecoveryTrace(
   }
   if (isDurableChatWaitingStatus(trace.status)) {
     const toolRuns = await storage.chatToolRuns.listByTurn(payload.turnId);
+    // An exact child wake resumes the original parent/tool. The runner refreshes
+    // its retained aggregate output before synthesis under the fresh live claim.
+    // General recovery/post-commit validation still treats this trace as resting.
+    if (options.resumeSettledFanout && trace.status === "waiting_for_tool" &&
+        await hasDurableFanoutWaitingEvidence(storage, durableRun, trace, toolRuns, { requireSettled: true })) {
+      return { outcome: "not_resting", trace };
+    }
     const hasEvidence =
       trace.status === "waiting_for_tool" && trace.routing?.confirmedDelegation
         ? await hasConfirmedDelegationWaitingEvidence(storage, durableRun, trace)
-        : hasDurableChatWaitingEvidence(trace, toolRuns);
+        : hasDurableChatWaitingEvidence(trace, toolRuns) ||
+          (trace.status === "waiting_for_tool" && await hasDurableFanoutWaitingEvidence(storage, durableRun, trace, toolRuns));
     if (!hasEvidence) {
       return {
         outcome: "invalid",
@@ -3792,6 +3816,11 @@ async function markDurableChatTurnUnrecoverable(
     return;
   }
   const systemHeartbeat = Boolean(readExactSystemHeartbeatExecutionIdentity(run, payload));
+  const executionFailure: ChatTurnFailureRecord = {
+    failureClass: "unknown",
+    message: redactStructuredSecrets(reason).value.slice(0, 2000),
+    retryable: false,
+  };
   const durableFailure = {
     runId: run.runId,
     status: "failed" as const,
@@ -3805,7 +3834,7 @@ async function markDurableChatTurnUnrecoverable(
           host.publishRealtime(eventType, source, payload, options),
         recordDevDiagnostic: (input) => host.recordDevDiagnostic(input),
       },
-      { runId: run.runId, turnId: payload.turnId },
+      { runId: run.runId, turnId: payload.turnId, failure: executionFailure },
     );
   }
   await host.storage.runImmediateTransaction(async () => {
@@ -3832,9 +3861,18 @@ async function markDurableChatTurnUnrecoverable(
       !repairIncompleteHeartbeatCompletion &&
       !CHAT_TURN_ACTIVE_STATUSES.includes(trace.status as (typeof CHAT_TURN_ACTIVE_STATUSES)[number])
     ) {
+      const needsTerminalChunk = !systemHeartbeat && trace.status === "failed" && trace.durable?.checkpointKind !== "run_failed";
       await host.storage.chatTurnTraces.patchIfStatus(payload.turnId, [trace.status], {
         durable: durableFailure,
       });
+      if (needsTerminalChunk) {
+        await host.persistChatStreamChunk({
+          type: "error",
+          sessionId: payload.sessionId,
+          turnId: payload.turnId,
+          error: trace.failure?.message ?? executionFailure.message,
+        }, run.runId);
+      }
       return;
     }
     const failureOwnerStatuses = repairIncompleteHeartbeatCompletion
@@ -3843,12 +3881,7 @@ async function markDurableChatTurnUnrecoverable(
     const failedTrace = await host.storage.chatTurnTraces.patchIfStatus(payload.turnId, failureOwnerStatuses, {
       status: "failed",
       finishedAt: new Date().toISOString(),
-      failure: {
-        failureClass: systemHeartbeat ? "unknown" : "interrupted_by_restart",
-        message: reason,
-        retryable: !systemHeartbeat,
-        ...(!systemHeartbeat ? { recommendedAction: "retry" as const } : {}),
-      },
+      failure: executionFailure,
       completion: {
         finishReason: trace.completion?.finishReason,
         status: "interrupted",
@@ -3874,7 +3907,7 @@ async function markDurableChatTurnUnrecoverable(
           type: "error",
           sessionId: payload.sessionId,
           turnId: payload.turnId,
-          error: reason,
+          error: executionFailure.message,
         },
         run.runId,
       );

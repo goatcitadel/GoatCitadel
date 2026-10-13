@@ -11,7 +11,9 @@ import type {
   McpServerUpdateRequest,
   McpTemplateDiscoveryResult,
   McpToolRecord,
+  McpServerTestEvidence,
 } from "@goatcitadel/contracts";
+import type { McpTestEvidenceScope } from "./mcp-server-test-evidence.js";
 import type { McpElicitationService } from "./mcp-elicitation-service.js";
 import { preserveMcpServerSecretsForPublicUpdate, projectMcpPublicValue } from "./mcp-public-projection.js";
 import { NotFoundError } from "@goatcitadel/contracts";
@@ -30,6 +32,7 @@ export interface McpRoutePort {
   listMcpTemplateDiscovery(): Promise<McpTemplateDiscoveryResult[]>;
   listMcpTemplates(): Promise<Array<McpServerTemplateRecord & { installed: boolean }>>;
   listMcpTools(serverId: string): Promise<McpToolRecord[]>;
+  readMcpServerTestEvidence?(serverId: string, scope: McpTestEvidenceScope): Promise<McpServerTestEvidence>;
   runMcpServerHealthCheck(serverId: string): Promise<ConnectorDiagnosticReport>;
   startMcpOAuth(serverId: string, review?: McpServerConnectionReview, onCommitted?: () => void | Promise<void>): Promise<McpOAuthStartResponse>;
   updateMcpServer(serverId: string, input: McpServerUpdateRequest, onCommitted?: () => void | Promise<void>): Promise<McpServerRecord>;
@@ -52,6 +55,14 @@ export class McpRouteService {
 
   public async getMcpServer(serverId: string) {
     return projectMcpPublicValue(await this.requireServer(serverId));
+  }
+
+  public async getMcpServerTestEvidence(serverId: string, scope: McpTestEvidenceScope): Promise<McpServerTestEvidence> {
+    await this.requireServer(serverId);
+    return this.mcp.readMcpServerTestEvidence?.(serverId, scope) ?? {
+      serverId, workspaceId: scope.workspaceId, state: "unavailable", observedAt: new Date().toISOString(),
+      historyLimit: 32, toolLimitPerTurn: 32, schemaSource: "cached_inventory",
+    };
   }
 
   private async requireServer(serverId: string) {

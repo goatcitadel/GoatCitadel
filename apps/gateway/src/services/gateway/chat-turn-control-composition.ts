@@ -9,6 +9,7 @@ import {
 import type { ChatTurnAgentRunnerInput } from "../chat-turn-agent-runner.js";
 import { assertChatTurnToolUseOpen } from "../chat-turn-control.js";
 import { preserveCancelledChatTurnOutput } from "../chat-turn-interruption-recovery-service.js";
+import { reconcileDelegatedChildProcessCleanup } from "../delegated-child-process-cleanup.js";
 
 type DelegationReconciliationHost = Parameters<typeof reconcileConfirmedDelegationChild>[0];
 
@@ -27,7 +28,13 @@ export function composeChatTurnControl(host: ChatTurnControlCompositionHost) {
   const { storage } = host;
   return {
     resolveConfirmedDelegation: (input: ChatTurnAgentRunnerInput) => resolveConfirmedDelegation(host, input),
-    reconcileWaitingDelegations: () => reconcileWaitingConfirmedDelegations(host),
+    reconcileWaitingDelegations: async () => {
+      try {
+        await reconcileWaitingConfirmedDelegations(host);
+      } finally {
+        await reconcileDelegatedChildProcessCleanup(storage);
+      }
+    },
     reconcileDelegationChild: (input: Parameters<typeof reconcileConfirmedDelegationChild>[1]) =>
       reconcileConfirmedDelegationChild(host, input),
     readParentProfile: (stepId?: string) => readConfirmedDelegationParentProfile(storage, stepId),

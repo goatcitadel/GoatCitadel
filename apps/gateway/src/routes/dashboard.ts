@@ -15,6 +15,7 @@ import {
 } from "@goatcitadel/contracts";
 import { sendRouteError } from "./_error-handler.js";
 import { settingsChangePlanRequest, type SettingsChangePlanInput } from "./dashboard-settings-change-plan.js";
+import { bindPublicCronCreator } from "./dashboard-cron-authority.js";
 
 const memoryQuerySchema = z.object({
   dir: z.string().default("memory"),
@@ -79,6 +80,7 @@ const cronJobCreateSchema = z
         "update_review",
         "watchdog",
         "no_agent",
+        "agent_turn",
       ])
       .optional(),
     actionConfig: z.record(z.string(), z.unknown()).optional(),
@@ -107,6 +109,7 @@ const cronJobUpdateSchema = z
         "update_review",
         "watchdog",
         "no_agent",
+        "agent_turn",
       ])
       .optional(),
     actionConfig: z.union([z.record(z.string(), z.unknown()), z.null()]).optional(),
@@ -293,6 +296,19 @@ export const updateSettingsSchema = z.object({
       plannerFanoutV1Disabled: z.boolean().optional(),
       subagentFanoutV1Disabled: z.boolean().optional(),
       durableChatFanoutV1Enabled: z.boolean().optional(),
+      chatProviderFallbackV1Enabled: z.boolean().optional(),
+      chatSkillInstructionsV1Enabled: z.boolean().optional(),
+      boundedToolExposureV1Enabled: z.boolean().optional(),
+      scheduledChatTurnsV1Enabled: z.boolean().optional(),
+      chatExplicitContextV1Enabled: z.boolean().optional(),
+      chatAutomaticFanoutV1Enabled: z.boolean().optional(),
+      chatDelegationControlsV1Enabled: z.boolean().optional(),
+      proactiveHeartbeatTurnsV1Enabled: z.boolean().optional(),
+      commitmentScheduledTurnsV1Enabled: z.boolean().optional(),
+      chatMeshCapabilitiesV1Enabled: z.boolean().optional(),
+      chatRemotePlacementV1Enabled: z.boolean().optional(),
+      chatRequesterMcpV1Enabled: z.boolean().optional(),
+      chatStaticMcpV1Enabled: z.boolean().optional(),
       evolutionControlPlaneV1Enabled: z.boolean().optional(),
       improvementLocalObservationV1Enabled: z.boolean().optional(),
       improvementModelEvaluationV1Enabled: z.boolean().optional(),
@@ -526,7 +542,10 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const job = await fastify.services.cron.createCronJob(parsed.data);
+      const job = await fastify.services.cron.createCronJob({ ...parsed.data,
+        ...(parsed.data.actionConfig !== undefined
+          ? { actionConfig: bindPublicCronCreator(parsed.data.actionConfig, request.authActorId) } : {}),
+      }, ...(request.authActorId ? [{ actorId: request.authActorId, source: "authenticated_operator" }] : []));
       return reply.code(201).send(projectPublicSecretValue(job));
     } catch (error) {
       if (isGoatError(error)) {
@@ -551,15 +570,18 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: "No update fields were provided." });
     }
     try {
-      const update = containsPublicProjectionMarker(parsedUpdate)
+      const reconciled = containsPublicProjectionMarker(parsedUpdate)
         ? reconcileCronPublicUpdate(
             (await fastify.services.cron.getCronJob(parsedParams.data.jobId)) as unknown as Record<string, unknown>,
             parsedUpdate as Record<string, unknown>,
           )
         : parsedUpdate;
+      const update = reconciled.actionConfig === undefined ? reconciled : { ...reconciled,
+        actionConfig: bindPublicCronCreator(reconciled.actionConfig, request.authActorId) };
       return reply.send(
         projectPublicSecretValue(
-          await fastify.services.cron.updateCronJob(parsedParams.data.jobId, update, expectedRevision),
+          await fastify.services.cron.updateCronJob(parsedParams.data.jobId, update, expectedRevision,
+            ...(request.authActorId ? [{ actorId: request.authActorId, source: "authenticated_operator" }] : [])),
         ),
       );
     } catch (error) {

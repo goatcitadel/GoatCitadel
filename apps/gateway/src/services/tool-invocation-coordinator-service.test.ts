@@ -374,7 +374,7 @@ describe("ToolInvocationCoordinatorService", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-tool-boundary-"));
     integrationTempRoots.push(root);
     const storage = new Storage({
-      dbPath: ":memory:",
+      dbPath: path.join(root, "gateway.sqlite"),
       transcriptsDir: path.join(root, "transcripts"),
       auditDir: path.join(root, "audit"),
     });
@@ -439,7 +439,7 @@ describe("ToolInvocationCoordinatorService", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-tool-boundary-"));
     integrationTempRoots.push(root);
     const storage = new Storage({
-      dbPath: ":memory:",
+      dbPath: path.join(root, "gateway.sqlite"),
       transcriptsDir: path.join(root, "transcripts"),
       auditDir: path.join(root, "audit"),
     });
@@ -1485,7 +1485,7 @@ describe("ToolInvocationCoordinatorService", () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-mcp-dispatch-"));
       integrationTempRoots.push(root);
       const storage = new Storage({
-        dbPath: ":memory:",
+        dbPath: path.join(root, "gateway.sqlite"),
         transcriptsDir: path.join(root, "transcripts"),
         auditDir: path.join(root, "audit"),
       });
@@ -1619,7 +1619,7 @@ describe("ToolInvocationCoordinatorService", () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-native-mcp-dispatch-"));
       integrationTempRoots.push(root);
       const storage = new Storage({
-        dbPath: ":memory:",
+        dbPath: path.join(root, "gateway.sqlite"),
         transcriptsDir: path.join(root, "transcripts"),
         auditDir: path.join(root, "audit"),
       });

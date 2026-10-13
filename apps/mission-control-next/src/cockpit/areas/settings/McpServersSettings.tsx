@@ -89,6 +89,9 @@ export function McpServersSettings({ workspaceId }: { workspaceId: string }) {
           Loading MCP servers…
         </p>
       ) : null}
+      {query.isFetching && items ? <p role="status" className="text-sm text-fg-muted">
+        Refreshing server records. Connection states below are from the last read.
+      </p> : null}
       {query.isError ? (
         <p role="alert" className="text-sm text-status-failed">
           MCP servers unavailable: {describeApiError(query.error).summary}
@@ -169,7 +172,7 @@ export function McpServersSettings({ workspaceId }: { workspaceId: string }) {
         />
       ) : null}
       {creating ? (
-        <McpServerCreate key={`create:${workspaceId}`} workspaceId={workspaceId} onClose={() => setCreating(false)} />
+        <McpServerCreate key={`create:${workspaceId}`} workspaceId={workspaceId} onClose={() => setCreating(false)} onInspect={(serverId) => { setCreating(false); setInspecting(serverId); }} />
       ) : null}
       {inspecting ? (
         <McpServerInspection

@@ -1,6 +1,7 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { buildCronCreatorAuthority, hasCurrentCronCreatorAuthority } from "@goatcitadel/contracts";
 import { CronJobRepository } from "./cron-job-repo.js";
 import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
 import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
@@ -16,6 +17,29 @@ function createRepo(): CronJobRepository {
 }
 
 describe("CronJobRepository", () => {
+  it("never imports creator proof, binds only an exact server actor, preserves harmless edits and invalidates changed actions", () => {
+    const repo = createRepo();
+    const spec = { jobId: "creator-proof", name: "Creator proof", action: "agent_turn" as const,
+      schedule: "0 12 * * * UTC", enabled: true, actionConfig: { agentTurn: { prompt: "Read current status",
+        createdBy: { operatorId: "operator", authActorId: "operator", permissionProfileId: "trusted_local_power" } } } };
+    const forged = buildCronCreatorAuthority(spec, { actorId: "operator", source: "authenticated_operator" });
+    const imported = repo.reconcileSpec({ ...spec, creatorAuthority: forged } as typeof spec);
+    assert.equal(imported.creatorAuthority, undefined);
+    assert.throws(() => repo.bindCreatorAuthority(spec.jobId, imported.revision, { actorId: "foreign", source: "authenticated_operator" }), /canonical actor/u);
+    assert.throws(() => repo.bindCreatorAuthority(spec.jobId, imported.revision + 1, { actorId: "operator", source: "authenticated_operator" }), /changed since/u);
+    const bound = repo.bindCreatorAuthority(spec.jobId, imported.revision, { actorId: "operator", source: "authenticated_operator" });
+    assert.equal(hasCurrentCronCreatorAuthority(bound), true);
+    assert.deepEqual(bound.creatorAuthority, forged);
+    const renamed = repo.updateSpecWithRevision(spec.jobId, { name: "Reviewed schedule" }, bound.revision);
+    assert.deepEqual(renamed.creatorAuthority, forged);
+    const changed = repo.reconcileSpec({ ...spec, actionConfig: { agentTurn: { ...spec.actionConfig.agentTurn, prompt: "Changed objective" } } });
+    assert.equal(changed.creatorAuthority, undefined);
+    const reviewed = repo.bindCreatorAuthority(spec.jobId, changed.revision, { actorId: "operator", source: "authenticated_operator" });
+    assert.equal(hasCurrentCronCreatorAuthority(reviewed), true);
+    assert.notEqual(reviewed.creatorAuthority?.actionSha256, forged.actionSha256);
+    assert.equal(repo.reconcileSpec({ ...spec, jobId: "copied-job", creatorAuthority: forged } as typeof spec).creatorAuthority, undefined);
+  });
+
   it("reuses the existing row when a cron job is unchanged", () => {
     const repo = createRepo();
     const job = {

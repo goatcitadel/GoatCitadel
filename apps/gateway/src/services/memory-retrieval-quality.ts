@@ -1,9 +1,13 @@
+import { ValidationError } from "@goatcitadel/contracts";
 import type {
   MemoryItemRecord,
   MemoryFeedbackRecord,
   MemoryFeedbackTargetKind,
   MemoryContextPack,
   MemoryRetrievalStrategy,
+  MemoryRetrievalBenchmarkLabel,
+  MemoryRetrievalRelevanceMetrics,
+  MemoryCitation,
 } from "@goatcitadel/contracts";
 
 interface NearDuplicateMemoryItems {
@@ -117,6 +121,57 @@ export function calculateLexicalOverlap(prompt: string, contextText: string): nu
     }
   }
   return Number((matches / promptTerms.size).toFixed(3));
+}
+
+/** Ground-truth relevance evaluates exact source identities, never lexical overlap or model self-grading. */
+export function calculateLabeledRetrievalRelevance(
+  citations: readonly MemoryCitation[],
+  label: MemoryRetrievalBenchmarkLabel,
+): MemoryRetrievalRelevanceMetrics {
+  const key = (source: Pick<MemoryCitation, "sourceType" | "sourceRef">) => JSON.stringify([source.sourceType, source.sourceRef]);
+  const retrieved = [...new Set(citations.map(key))];
+  const relevant = new Set(label.relevantSources.map(key));
+  const forbidden = new Set(label.forbiddenSources?.map(key));
+  const matchedRelevantCount = retrieved.filter((source) => relevant.has(source)).length;
+  const firstRelevant = retrieved.findIndex((source) => relevant.has(source));
+  const noResults = label.expectNoResults === true;
+  return {
+    retrievedSourceCount: retrieved.length, relevantSourceCount: relevant.size, matchedRelevantCount,
+    precision: retrieved.length ? matchedRelevantCount / retrieved.length : noResults ? 1 : 0,
+    recall: relevant.size ? matchedRelevantCount / relevant.size : noResults && retrieved.length === 0 ? 1 : 0,
+    reciprocalRank: firstRelevant >= 0 ? 1 / (firstRelevant + 1) : noResults && retrieved.length === 0 ? 1 : 0,
+    forbiddenSourceCount: retrieved.filter((source) => forbidden.has(source)).length,
+    ...(noResults ? { abstentionCorrect: retrieved.length === 0 } : {}),
+  };
+}
+
+/** Validate labels independently of routes so internal evaluation calls cannot create ambiguous scores. */
+export function indexRetrievalBenchmarkLabels(
+  prompts: readonly string[],
+  labels: readonly MemoryRetrievalBenchmarkLabel[] = [],
+): Map<string, MemoryRetrievalBenchmarkLabel> {
+  if (labels.length > 25) throw new ValidationError({ field: "labels", message: "Memory benchmark supports at most 25 labels." });
+  const available = new Set(prompts);
+  const result = new Map<string, MemoryRetrievalBenchmarkLabel>();
+  for (const label of labels) {
+    const prompt = label.prompt.trim();
+    if (!available.has(prompt) || result.has(prompt) || label.relevantSources.length > 100 ||
+        (label.forbiddenSources?.length ?? 0) > 100 ||
+        (label.expectNoResults === true ? label.relevantSources.length > 0 : label.relevantSources.length === 0)) {
+      throw new ValidationError({ field: "labels", message: "Memory benchmark labels must uniquely match a prompt and specify relevant sources or an empty-result expectation." });
+    }
+    const relevant = new Set(label.relevantSources.map((source) => JSON.stringify([source.sourceType, source.sourceRef])));
+    for (const source of [...label.relevantSources, ...(label.forbiddenSources ?? [])]) {
+      if (!["transcript", "file", "memory_item"].includes(source.sourceType) || !source.sourceRef || source.sourceRef.length > 1024) {
+        throw new ValidationError({ field: "labels", message: "Memory benchmark source labels require bounded exact source identities." });
+      }
+    }
+    if (label.forbiddenSources?.some((source) => relevant.has(JSON.stringify([source.sourceType, source.sourceRef])))) {
+      throw new ValidationError({ field: "labels", message: "Memory benchmark sources cannot be both relevant and forbidden." });
+    }
+    result.set(prompt, label);
+  }
+  return result;
 }
 
 export function resolveBenchmarkRetrievalStrategy(pack: MemoryContextPack): MemoryRetrievalStrategy | undefined {

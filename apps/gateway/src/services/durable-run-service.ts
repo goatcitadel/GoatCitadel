@@ -712,6 +712,7 @@ export class DurableRunService {
       /** Runs inside the cancellation transaction, after the Chat trace is fenced. */
       onChatTurnCancelled?: (sessionId: string, turnId: string, actorId: string) => Promise<void>;
       reconcileWaitingChatDelegations?: () => Promise<void>;
+      reconcileWaitingChatFanouts?: () => Promise<void>;
       /** Wakes orchestration runs parked on a phase child that has already settled. */
       reconcileWaitingOrchestrationPhases?: () => Promise<void>;
       /** Settles active orchestration runs whose linked durable run already ended. */
@@ -3153,6 +3154,7 @@ export class DurableRunService {
       heartbeatOccurrenceId?: unknown;
       capabilityProfileId?: unknown;
       capabilityProfileHash?: unknown;
+      featureReferenceSha256?: unknown;
     };
     if (payload.heartbeatOccurrenceId === undefined) return;
     const occurrences = (this.ctx.storage as Partial<Storage>).heartbeatOccurrences;
@@ -3160,13 +3162,15 @@ export class DurableRunService {
       if (process.env.NODE_ENV === "test") return;
       throw new Error("Heartbeat occurrence repository is unavailable during terminal Chat handoff.");
     }
+    const featureBound = typeof payload.featureReferenceSha256 === "string" && /^[a-f0-9]{64}$/u.test(payload.featureReferenceSha256) &&
+      payload.capabilityProfileId === undefined && payload.capabilityProfileHash === undefined;
+    const profileBound = payload.featureReferenceSha256 === undefined &&
+      typeof payload.capabilityProfileId === "string" && Boolean(payload.capabilityProfileId.trim()) &&
+      typeof payload.capabilityProfileHash === "string" && /^[a-f0-9]{64}$/u.test(payload.capabilityProfileHash);
     if (
       typeof payload.heartbeatOccurrenceId !== "string" ||
       !payload.heartbeatOccurrenceId.trim() ||
-      typeof payload.capabilityProfileId !== "string" ||
-      !payload.capabilityProfileId.trim() ||
-      typeof payload.capabilityProfileHash !== "string" ||
-      !payload.capabilityProfileHash.trim()
+      (!featureBound && !profileBound)
     ) {
       throw new Error(`System heartbeat ${run.runId} has no exact occurrence settlement identity.`);
     }
@@ -3178,8 +3182,8 @@ export class DurableRunService {
       admissionId: admission.admissionId,
       turnId: admission.turnId,
       durableRunId: run.runId,
-      capabilityProfileId: payload.capabilityProfileId,
-      capabilityProfileHash: payload.capabilityProfileHash,
+      ...(featureBound ? { featureReferenceSha256: payload.featureReferenceSha256 as string }
+        : { capabilityProfileId: payload.capabilityProfileId as string, capabilityProfileHash: payload.capabilityProfileHash as string }),
     });
     if (settlement.disposition === "still_bound") {
       throw new Error(`System heartbeat ${run.runId} terminal handoff did not settle its occurrence.`);
@@ -4432,6 +4436,11 @@ export class DurableRunService {
   }
 
   private async reconcileDurableChildWatchers(): Promise<void> {
+    try {
+      await this.deps?.reconcileWaitingChatFanouts?.();
+    } catch (error) {
+      this.resolveLogger().warn({ error: boundedRecoveryError(error) }, "durable fanout wake reconciliation deferred");
+    }
     try {
       await this.ctx.storage.durableChildWatchers.catchUpAttached({
         watcherLimit: 100,

@@ -1,3 +1,4 @@
+import { readAuthorizedChatProviderFallback, requiresChatProviderFallbackAuthorization } from "./chat-provider-fallback-authority.js";
 import { CHAT_SESSION_ACTIVITY_COUNT_KEYS } from "@goatcitadel/contracts";
 import type {
   ChatMode,
@@ -57,9 +58,12 @@ export function deriveChatSessionTitleFromContent(content: string): string | und
 }
 
 export function shouldAllowCrossProviderFallback(
-  request: Pick<ChatCompletionRequest, "providerId" | "model">,
+  request: Pick<ChatCompletionRequest, "providerId" | "model" | "memory" | "requiredRuntimeTarget">,
 ): boolean {
-  return request.providerId == null;
+  if (request.requiredRuntimeTarget) return false;
+  if (readAuthorizedChatProviderFallback(request as ChatCompletionRequest)) return true;
+  // Only legacy non-Chat direct completions retain the omitted-provider heuristic.
+  return !requiresChatProviderFallbackAuthorization(request) && request.providerId == null;
 }
 
 export function buildChatSessionUpdatedPayload(
@@ -168,6 +172,7 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
     | "mode"
     | "planningMode"
     | "providerId"
+    | "providerFallback"
     | "model"
     | "imageProviderId"
     | "imageModel"
@@ -200,6 +205,7 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
     | "mode"
     | "planningMode"
     | "providerId"
+    | "providerFallback"
     | "model"
     | "imageProviderId"
     | "imageModel"
@@ -221,6 +227,7 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
     mode: input.mode,
     planningMode: input.planningMode,
     providerId: input.providerId,
+    providerFallback: input.providerFallback,
     model: input.model,
     imageProviderId: input.imageProviderId,
     imageModel: input.imageModel,

@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { fetchSettings, fetchMcpServerTestEvidence } from "@goatcitadel/mission-control-shared/api/client";
 import { inspectMcpServer } from "../../../features/native-routes/settings/mcp-server-inspection";
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordView } from "../../data/record-view";
 import { Button } from "../../ui/Button";
@@ -9,6 +10,7 @@ import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { McpConfigurationReport } from "../../../features/native-routes/settings/McpConfigurationReport";
 import { McpConnectionControls } from "../../../features/native-routes/settings/McpConnectionControls";
 import { McpOAuthControls } from "../../../features/native-routes/settings/McpOAuthControls";
+import { McpSetupProgress } from "./McpSetupProgress";
 
 const readable = (value: string | undefined) => value?.replaceAll("_", " ") ?? "Unavailable";
 export function McpServerInspection({
@@ -20,12 +22,29 @@ export function McpServerInspection({
   workspaceId: string;
   onClose: () => void;
 }) {
+  const queryClient = useQueryClient();
   const [limit, setLimit] = useState(30);
   const query = useQuery({
     queryKey: ["settings", "mcp-inspection", serverId],
     queryFn: () => inspectMcpServer(serverId),
     retry: false,
   });
+  const settings = useQuery({
+    queryKey: ["system", "managed-runtime-settings"],
+    queryFn: fetchSettings,
+    retry: false,
+  });
+  const testEvidence = useQuery({
+    queryKey: ["settings", "mcp-test-evidence", workspaceId, serverId, query.data?.server.revision, query.data?.server.connectionRevision],
+    queryFn: () => fetchMcpServerTestEvidence(serverId, workspaceId),
+    enabled: Boolean(query.data),
+    retry: false,
+  });
+  const refreshConnectionEvidence = () => Promise.all([
+    query.refetch(),
+    testEvidence.refetch(),
+    queryClient.invalidateQueries({ queryKey: ["settings", "mcp-servers"] }),
+  ]);
   // The last inspection (and any open review in its controls) stays while it is read again.
   const view = recordView(query);
   const data = view.record;
@@ -45,7 +64,7 @@ export function McpServerInspection({
           Installation-wide saved metadata and cached tools. Opening this inspection does not connect a server, test its
           transport or invoke a tool. Actions below require an explicit review.
         </p>
-        <Button disabled={query.isFetching} onClick={() => void query.refetch()}>
+        <Button disabled={query.isFetching} onClick={() => void refreshConnectionEvidence()}>
           Refresh MCP inspection
         </Button>
         {view.phase === "loading" ? (
@@ -62,6 +81,10 @@ export function McpServerInspection({
         {data ? (
           <>
             <h4 className="text-base font-semibold text-fg">{data.server.label}</h4>
+            <McpSetupProgress key={`${workspaceId}:${data.server.serverId}:${data.server.revision}`} server={data.server} tools={data.tools} stale={checking || query.isError}
+              testEvidence={testEvidence.isFetching || testEvidence.isError ? undefined : testEvidence.data}
+              staticMcpAvailable={settings.isError || settings.isFetching ? undefined : settings.data?.chatFeatureAvailability?.staticMcp}
+              availabilityChecking={settings.isFetching} refreshAvailability={() => void settings.refetch()} />
             <dl className="cockpit-definition-grid grid gap-x-3 gap-y-2">
               <dt>Server ID</dt>
               <dd>
@@ -144,7 +167,7 @@ export function McpServerInspection({
             <McpConnectionControls
               server={data.server}
               scope={workspaceId}
-              onSettled={() => query.refetch()}
+              onSettled={refreshConnectionEvidence}
               button={(label, click, disabled) => (
                 <Button size="sm" onClick={click} disabled={disabled || checking}>
                   {label}
@@ -154,7 +177,7 @@ export function McpServerInspection({
             <McpOAuthControls
               server={data.server}
               scope={workspaceId}
-              onSettled={() => query.refetch()}
+              onSettled={refreshConnectionEvidence}
               button={(label, click, disabled) => (
                 <Button size="sm" onClick={click} disabled={disabled || checking}>
                   {label}

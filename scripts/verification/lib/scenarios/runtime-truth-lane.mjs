@@ -427,21 +427,28 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
           // Verify the default Cockpit against the exact recovered Chat run,
           // then inspect the explicit Classic approval owner. Once the browser
           // and server are available, readiness and identity failures are failures.
+          let shellStage = "cockpit-navigation";
           try {
-            const threadResponse = page.waitForResponse(response =>
-              new URL(response.url()).pathname === `/api/v1/chat/sessions/${encodeURIComponent(durableTruth.sessionId)}/thread` && response.status() === 200,
-            ).catch(() => null);
-            await page.goto(buildVerificationUiUrl(ui.uiUrl, `/chat?sessionId=${encodeURIComponent(durableTruth.sessionId)}`), { waitUntil: "domcontentloaded" });
-            await waitForVerificationRouteReady(page, {
-              href: "/chat", readySelector: 'section[aria-label="Chat"] [aria-label="Messages"]',
-            }, NEXT_UI_PACKAGE);
-            const response = await threadResponse;
-            if (!response) throw new Error("Cockpit did not read the recovered session thread.");
+            const threadResponse = observeRecoveredThreadResponse(page, durableTruth.sessionId);
+            let response;
+            try {
+              await page.goto(buildVerificationUiUrl(ui.uiUrl, `/chat?sessionId=${encodeURIComponent(durableTruth.sessionId)}`), { waitUntil: "domcontentloaded" });
+              shellStage = "cockpit-readiness";
+              await waitForVerificationRouteReady(page, {
+                href: "/chat", readySelector: 'section[aria-label="Chat"] [aria-label="Messages"]',
+              }, NEXT_UI_PACKAGE);
+              shellStage = "recovered-thread-identity";
+              response = threadResponse.read() ?? await page.waitForResponse(threadResponse.matches);
+            } finally {
+              threadResponse.dispose();
+            }
             const thread = await response.json();
             if (!thread.turns?.some(turn => turn.trace?.durable?.runId === durableTruth.durableRunId && turn.trace.status === "completed")) {
               throw new Error("Default Cockpit did not load the exact recovered completed Chat run.");
             }
+            shellStage = "recovered-reply-visibility";
             await page.getByText("Verification restart reply.", { exact: false }).first().waitFor({ timeout: 15000 });
+            shellStage = "classic-approval-navigation";
             await page.goto(
               buildVerificationUiUrl(
                 ui.uiUrl,
@@ -449,6 +456,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
               ),
               { waitUntil: "domcontentloaded" },
             );
+            shellStage = "classic-approval-readiness";
             await waitForVerificationRouteReady(
               page,
               {
@@ -460,7 +468,32 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
               NEXT_UI_PACKAGE,
             );
           } catch (error) {
-            throw new Error(`Served Mission Control shell failed its recovered-run cross-check: ${clampString(errorMessage(error), 240)}`, { cause: error });
+            const statePath = path.join(context.artifactRoot, "diagnostics", "runtime-truth-shell-failure-state.json");
+            const state = await page.evaluate(() => ({
+              pathname: location.pathname,
+              queryKeys: [...new URL(location.href).searchParams.keys()].slice(0, 12),
+              shell: document.documentElement.dataset.shell,
+              theme: document.documentElement.dataset.theme,
+              cockpitReady: document.querySelector("[data-cockpit-ready]")?.getAttribute("data-cockpit-ready"),
+              classicArea: document.querySelector(".mc-next-shell")?.getAttribute("data-area"),
+              classicSection: document.querySelector(".mc-next-shell")?.getAttribute("data-section"),
+              accessGateStatus: document.querySelector(".gateway-access-shell")?.getAttribute("data-status"),
+              visibleStatusCount: [...document.querySelectorAll('[role="status"], [aria-busy="true"]')]
+                .filter(element => element.getClientRects().length > 0).length,
+              mainPresent: Boolean(document.querySelector("#main-content")),
+              messagesPresent: Boolean(document.querySelector('section[aria-label="Chat"] [aria-label="Messages"]')),
+            })).catch(() => ({ unavailable: true }));
+            await writeJson(statePath, { stage: shellStage, state });
+            const artifacts = await captureBrowserArtifacts(context, {
+              slug: "runtime-truth-shell-failure", page, browserLog, gatewayUrl: stack.gatewayUrl,
+              correlationId, logCursor: browserLogCursor,
+            }).catch(() => ({ diagnostics: [] }));
+            artifacts.diagnostics = [...(artifacts.diagnostics ?? []), relativeToRun(context, statePath)];
+            return {
+              status: "failed",
+              error: new Error(`Served Mission Control shell failed its recovered-run cross-check at ${shellStage}: ${clampString(errorMessage(error), 240)}`, { cause: error }).stack,
+              artifacts,
+            };
           }
 
           // Shell is ready — the cross-check assertions below are real pass/fail.
@@ -513,6 +546,19 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
     await llmStub?.close().catch(() => undefined);
     restoreUiPackage();
   }
+}
+
+/** Capture before navigation without spending the response wait during hydration.
+ * Retain only the first exact successful GET; identity/body assertions remain
+ * with the canonical lane. The caller must dispose on readiness success/failure. */
+export function observeRecoveredThreadResponse(page, sessionId) {
+  const pathname = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread`;
+  const matches = response => new URL(response.url()).pathname === pathname &&
+    response.status() === 200 && response.request().method() === "GET";
+  let retained;
+  const observe = response => { if (!retained && matches(response)) retained = response; };
+  page.on("response", observe);
+  return { matches, read: () => retained, dispose: () => page.off("response", observe) };
 }
 
 const VERIFICATION_STUB_LLM_KEY = "verification-stub-key";

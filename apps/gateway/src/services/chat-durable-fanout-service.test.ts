@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { canonicalJsonString } from "@goatcitadel/contracts";
+import { buildFanoutAdmissionReference } from "./chat-fanout-admission-reference.js";
 import type { AutonomousActivationGrantRecord, ChatFanoutInvocationRecord } from "@goatcitadel/contracts";
 import {
   CHAT_DURABLE_FANOUT_CHILD_COST_CEILING_USD,
@@ -19,6 +22,7 @@ function prepared(): PreparedAgentChatTurn {
     content: "Compare the three candidates and return cited findings.",
     prefs: { providerId: "provider-1", model: "model-1" },
     compactionDimensionHash: "compaction-hash-1",
+    capabilityProfile: { hashes: { profileHash: "historical-profile-hash" }, governance: {} },
     turnAdmission: { durableClaim: { durableRunId: "parent-run-1" } },
   } as never;
 }
@@ -238,6 +242,190 @@ function execute(service: ChatDurableFanoutService, subtasks = [subtask("A"), su
     subtasks,
   });
 }
+
+function liveFixture() {
+  const f = createHost({ responseStatus: "running", childStatuses: ["running"] });
+  const digest = (value: unknown) => createHash("sha256").update(canonicalJsonString(value)).digest("hex");
+  const request = { content: "Parent", mode: "chat", subagentPolicy: "auto_when_useful" };
+  const materialSha256 = digest({ version: 2, request });
+  const identity = { admissionId: "admission-1", sessionIncarnationId: "incarnation-1", workspaceId: "workspace-1",
+    sessionId: "session-1", turnId: "turn-1", aggregateRevision: 1, controllerGeneration: 1, materialSha256 };
+  const requestActor = { actorKind: "operator" as const, actorId: "operator-1" };
+  const admission = { identity, requestActor, admittedRequest: request,
+    durableClaim: { durableRunId: "parent-run-1", leaseOwnerId: "worker", attemptCount: 1 } };
+  const project = { projectId: "project-1", workspaceId: "workspace-1", lifecycleStatus: "active", revision: 1 };
+  const references = { version: "chat.turn.feature-references.v1" as const,
+    childWork: buildFanoutAdmissionReference(admission as never, project as never) };
+  const featureAdmission = { references, referenceSha256: digest(references) };
+  const payload = { version: "chat.turn.execute.v2", admissionId: identity.admissionId, sessionIncarnationId: identity.sessionIncarnationId,
+    workspaceId: identity.workspaceId, sessionId: identity.sessionId, turnId: identity.turnId,
+    admissionAggregateRevision: 1, admissionControllerGeneration: 1, admissionMaterialSha256: materialSha256,
+    effectiveRequestMaterialSha256: digest({ version: 1, admissionMaterialSha256: materialSha256, request }),
+    requestActor, policyRunIdDerivation: { version: 1, kind: "durable_run_id", runId: "parent-run-1" },
+    featureReferenceSha256: featureAdmission.referenceSha256, request,
+    userMessageId: "user-1", assistantMessageId: "assistant-1", branchKind: "append", threadEventType: "chat_thread_turn_appended" };
+  const run = { runId: "parent-run-1", workflowKey: "chat.turn.execute", status: "running", payload };
+  const preferences = { subagentPolicy: "auto_when_useful" };
+  const admitted = { ...identity, admissionKind: "turn_write", status: "active", actorKind: "operator", actorId: "operator-1" };
+  const control = { generation: 1, ownerKind: "operator", leaseState: "operator_active" };
+  const binding = { durableRunId: "parent-run-1" };
+  f.host.storage.durableRuns = { getRun: vi.fn(async () => run) } as never;
+  f.host.storage.chatSessionPrefs = { get: vi.fn(async () => preferences) } as never;
+  f.host.storage.sessionMutationAdmissions = { findDurableRunBinding: vi.fn(async () => binding),
+    findFeatureReferences: vi.fn(async () => featureAdmission), get: vi.fn(async () => admitted) } as never;
+  f.host.storage.sessionControls = { resolveMutationAuthority: vi.fn(async (input: { expectedGeneration: number }) => {
+    if (input.expectedGeneration !== control.generation || control.ownerKind !== "operator" || control.leaseState !== "operator_active") {
+      throw new Error("Session control generation is stale or controlled externally.");
+    }
+    return control;
+  }) } as never;
+  f.host.isLiveAdmissionEnabled = vi.fn(async () => true);
+  const livePrepared = { ...prepared(), capabilityProfile: undefined, turnAdmission: admission,
+    prefs: { subagentPolicy: "auto_when_useful", providerId: "provider-1", model: "model-1" }, featureAdmission } as PreparedAgentChatTurn;
+  const input = { prepared: livePrepared, parentRunId: run.runId, toolRunId: "live-tool-1", subtasks: [subtask("A")] };
+  return { ...f, payload, run, admitted, control, binding, preferences, featureAdmission, input };
+}
+
+describe("admission-bound automatic fanout", () => {
+  async function recoveryFixture() {
+    const f = liveFixture();
+    const service = new ChatDurableFanoutService(f.host);
+    const toolResult = await service.execute(f.input);
+    const invocation = [...f.invocations.values()][0]!;
+    const step = (await f.host.storage.chatDelegationSteps.listByRun(invocation.delegationRunId!))[0]!;
+    const trace = { status: "waiting_for_tool", sessionId: "session-1", turnId: "turn-1", durable: { runId: "parent-run-1" } };
+    const childTrace = { status: "completed", sessionId: step.childSessionId, turnId: step.childTurnId,
+      assistantMessageId: "child-answer", durable: { runId: step.durableRunId } };
+    Object.assign(f.run, { status: "waiting", metadata: { waitForEvent: { eventKey: "chat.fanout.resolved", correlationId: invocation.invocationId } } });
+    f.host.storage.durableRuns.getRun = vi.fn(async (id: string) => id === f.run.runId ? f.run : {
+      runId: step.durableRunId, status: "completed" }) as never;
+    f.host.storage.chatFanoutInvocations.listWaitingParentCandidateIds = vi.fn(async () => f.run.status === "waiting" ? [...f.invocations.keys()] : []) as never;
+    f.host.storage.chatTurnTraces = { get: vi.fn(async (id: string) => id === "turn-1" ? trace : childTrace) } as never;
+    f.host.storage.chatMessages = { get: vi.fn(async () => ({ content: "committed child answer" })) } as never;
+    f.host.storage.chatToolRuns = { listByTurn: vi.fn(async () => [{ toolRunId: "live-tool-1", toolName: "agent.fanout", status: "executed",
+      sessionId: "session-1", turnId: "turn-1", result: toolResult }]) } as never;
+    f.host.storage.chatDelegationRuns = { get: vi.fn(async () => ({ runId: invocation.delegationRunId, parentRunId: f.run.runId,
+      sessionId: "session-1", workflowTemplate: CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE, executionPlanId: invocation.invocationId })) } as never;
+    f.host.storage.durableChildWatchers = { get: vi.fn(async () => ({ parentRunId: f.run.runId, childRunId: step.durableRunId,
+      source: "chat_delegation", lastConsumedSequence: 99, metadata: { delegationRunId: invocation.delegationRunId,
+        stepId: step.stepId, childSessionId: step.childSessionId, childTurnId: step.childTurnId } })) } as never;
+    f.wakeDurableChatRun.mockImplementation(async () => { f.run.status = "queued"; });
+    return { ...f, invocation, step, trace, childTrace, service };
+  }
+
+  it("recovers a terminal aggregate after a lost wake with a fresh owner and no duplicate child materialization", async () => {
+    const f = await recoveryFixture();
+    f.wakeDurableChatRun.mockRejectedValueOnce(new Error("process stopped before wake commit"));
+    await expect(f.service.reconcileWaitingParents()).rejects.toThrow("Fanout recovery");
+    expect([...f.invocations.values()][0]?.status).toBe("completed");
+    expect(await f.host.storage.chatFanoutInvocations.listActive()).toEqual([]);
+    expect(f.materializeTerminalDelegatedChild).toHaveBeenCalledOnce();
+    const restarted = new ChatDurableFanoutService(f.host);
+    await restarted.reconcileWaitingParents();
+    await restarted.reconcileWaitingParents();
+    expect(f.run.status).toBe("queued");
+    expect(f.wakeDurableChatRun).toHaveBeenCalledTimes(2);
+    expect(f.materializeTerminalDelegatedChild).toHaveBeenCalledOnce();
+    expect(f.runChatDelegation).toHaveBeenCalledOnce();
+    expect(f.reserves).toHaveBeenCalledOnce();
+  });
+
+  it.each(["cancelled", "superseded", "wrong wait"])("refuses %s parent recovery without reactivating its children", async (state) => {
+    const f = await recoveryFixture();
+    if (state === "cancelled") f.run.status = "cancelled";
+    if (state === "superseded") f.binding.durableRunId = "replacement";
+    if (state === "wrong wait") Object.assign(f.run, { metadata: { waitForEvent: { eventKey: "other", correlationId: f.invocation.invocationId } } });
+    if (state === "superseded") await expect(f.service.reconcileWaitingParents()).rejects.toThrow("Fanout recovery");
+    else await f.service.reconcileWaitingParents();
+    expect(f.wakeDurableChatRun).not.toHaveBeenCalled();
+    expect(f.materializeTerminalDelegatedChild).not.toHaveBeenCalled();
+  });
+
+  it("rechecks parent cancellation after child settlement before the wake", async () => {
+    const f = await recoveryFixture();
+    const materialize = f.host.materializeTerminalDelegatedChild;
+    f.host.materializeTerminalDelegatedChild = async (input) => {
+      const result = await materialize(input); f.run.status = "cancelled"; return result;
+    };
+    await expect(f.service.reconcileWaitingParents()).rejects.toThrow("Fanout recovery");
+    expect(f.wakeDurableChatRun).not.toHaveBeenCalled();
+  });
+
+  it.each(["generation", "external control", "completed admission", "admission identity"])("refuses recovery after %s changes without a replacement lease", async (state) => {
+    const f = await recoveryFixture();
+    if (state === "generation") f.control.generation = 2;
+    if (state === "external control") f.control.ownerKind = "external_companion";
+    if (state === "completed admission") f.admitted.status = "completed";
+    if (state === "admission identity") f.admitted.aggregateRevision = 2;
+    await expect(f.service.reconcileWaitingParents()).rejects.toThrow("Fanout recovery");
+    expect(f.wakeDurableChatRun).not.toHaveBeenCalled();
+    expect(f.materializeTerminalDelegatedChild).not.toHaveBeenCalled();
+    expect(f.host.storage.sessionControls.resolveMutationAuthority).toHaveBeenCalledWith({
+      actorKind: "operator", workspaceId: "workspace-1", sessionId: "session-1", expectedGeneration: 1,
+    });
+  });
+
+  it("rechecks the current session generation after child settlement before the wake", async () => {
+    const f = await recoveryFixture();
+    const materialize = f.host.materializeTerminalDelegatedChild;
+    f.host.materializeTerminalDelegatedChild = async (input) => {
+      const result = await materialize(input); f.control.generation = 2; return result;
+    };
+    await expect(f.service.reconcileWaitingParents()).rejects.toThrow("Fanout recovery");
+    expect(f.wakeDurableChatRun).not.toHaveBeenCalled();
+  });
+
+  it("advances the bounded recovery cursor past malformed owners and wraps after later candidates", async () => {
+    const f = await recoveryFixture();
+    const invalidIds = Array.from({ length: 100 }, (_, index) => `bad-${index.toString().padStart(3, "0")}`);
+    const list = vi.fn().mockResolvedValueOnce(invalidIds).mockResolvedValueOnce([f.invocation.invocationId]).mockResolvedValueOnce([]);
+    f.host.storage.chatFanoutInvocations.listWaitingParentCandidateIds = list;
+    await expect(f.service.reconcileWaitingParents()).rejects.toThrow("Fanout recovery");
+    await f.service.reconcileWaitingParents();
+    await f.service.reconcileWaitingParents();
+    expect(list.mock.calls).toEqual([[100, undefined], [100, "bad-099"], [100, undefined]]);
+    expect(f.wakeDurableChatRun).toHaveBeenCalledOnce();
+  });
+  it("resumes the same aggregate without reserving twice or creating a frozen profile", async () => {
+    const f = liveFixture();
+    await new ChatDurableFanoutService(f.host).execute(f.input);
+    await new ChatDurableFanoutService(f.host).execute(f.input);
+    expect(f.invocations.size).toBe(1);
+    expect(f.reserves).toHaveBeenCalledTimes(1);
+    expect([...f.invocations.values()][0]?.parentAdmission).toEqual({ admissionId: "admission-1",
+      sessionIncarnationId: "incarnation-1", materialSha256: f.payload.admissionMaterialSha256,
+      featureReferenceSha256: f.featureAdmission.referenceSha256 });
+    expect(f.input.prepared.capabilityProfile).toBeUndefined();
+    expect([...f.invocations.values()][0]?.capabilityProfileHash).toBeUndefined();
+    expect([...f.invocations.values()][0]?.policyProfileHash).toBeUndefined();
+  });
+
+  it.each(["missing", "flag", "selection", "run", "actor", "binding", "hash"])("refuses %s drift before reserving or dispatching", async (kind) => {
+    const f = liveFixture();
+    if (kind === "missing") f.input.prepared.featureAdmission = undefined;
+    if (kind === "flag") f.host.isLiveAdmissionEnabled = async () => false;
+    if (kind === "selection") f.preferences.subagentPolicy = "off";
+    if (kind === "run") f.run.status = "cancelled";
+    if (kind === "actor") f.admitted.actorId = "other";
+    if (kind === "binding") f.binding.durableRunId = "other";
+    if (kind === "hash") f.payload.featureReferenceSha256 = "0".repeat(64);
+    await expect(new ChatDurableFanoutService(f.host).execute(f.input)).rejects.toThrow();
+    expect(f.reserves).not.toHaveBeenCalled();
+    expect(f.runChatDelegation).not.toHaveBeenCalled();
+  });
+
+  it("revalidates live selection for a running child and refuses unbound dispatch", async () => {
+    const f = liveFixture();
+    const service = new ChatDurableFanoutService(f.host);
+    await service.execute(f.input);
+    const invocation = [...f.invocations.values()][0]!;
+    await expect(service.assertInvocationAuthority(invocation.invocationId)).resolves.toBeUndefined();
+    f.preferences.subagentPolicy = "off";
+    await expect(service.assertInvocationAuthority(invocation.invocationId)).rejects.toThrow(/selection/);
+    await expect(service.assertFeatureDispatchCurrent({ sessionId: "session-1", turnId: "turn-1",
+      workspaceId: "workspace-1", policyRunId: "parent-run-1", featureAdmission: f.featureAdmission })).rejects.toThrow(/fence/);
+  });
+});
 
 describe("ChatDurableFanoutService", () => {
   it("fails closed before any admission or child launch while the rollout is disabled", async () => {

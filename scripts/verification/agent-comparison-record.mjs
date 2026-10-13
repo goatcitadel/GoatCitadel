@@ -2,11 +2,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { recordComparisonCell } from "./lib/agent-comparison-record.mjs";
 
-const [manifestFile, taskId, trialText, workspace, evidence, journalFile, measurementsFile, output, ...extra] =
-  process.argv.slice(2);
+const [
+  manifestFile,
+  taskId,
+  trialText,
+  workspace,
+  evidence,
+  journalFile,
+  measurementsFile,
+  output,
+  pilotJournalFile,
+  ...extra
+] = process.argv.slice(2);
 if (!output || extra.length || !/^[1-9][0-9]*$/u.test(trialText ?? ""))
   throw new Error(
-    "Usage: node scripts/verification/agent-comparison-record.mjs MANIFEST TASK TRIAL WORKSPACE EVIDENCE JOURNAL MEASUREMENTS NEW_RESULT_FILE",
+    "Usage: node scripts/verification/agent-comparison-record.mjs MANIFEST TASK TRIAL WORKSPACE EVIDENCE JOURNAL MEASUREMENTS NEW_RESULT_FILE [PILOT_JOURNAL]",
   );
 async function json(filename) {
   const handle = await fs.open(path.resolve(filename), "r");
@@ -33,6 +43,7 @@ const result = await recordComparisonCell({
   workspaceRoot: path.resolve(workspace),
   evidenceRoot: path.resolve(evidence),
   journal: await json(journalFile),
+  ...(pilotJournalFile ? { pilotJournal: await json(pilotJournalFile) } : {}),
   measurements: await json(measurementsFile),
 });
 await fs.writeFile(path.resolve(output), JSON.stringify(result, null, 2) + "\n", { flag: "wx" });

@@ -10,6 +10,22 @@ import {
 } from "./integration-plugin-author-contract.js";
 
 describe("integration plugin author contract", () => {
+  it("retains versioned configuration metadata under the descriptor hash and clears it on legacy replacement", () => {
+    const source = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-plugin-configuration-"));
+    const manifest = { pluginId: "form-plugin", label: "Form Plugin", version: "1.0.0", capabilities: ["fixture.read"] };
+    const configurationForm = { version: "goatcitadel.extension-configuration.v1", fields: [{ key: "credential", label: "Credential reference", kind: "secret_ref", referenceKind: "credential", required: true }] };
+    try {
+      const filename = path.join(source, INTEGRATION_PLUGIN_MANIFEST_FILENAME);
+      fs.writeFileSync(filename, JSON.stringify({ ...manifest, configurationForm }), "utf8");
+      const created = buildInstalledIntegrationPluginRecord({ now: "2026-10-11T00:00:00.000Z", pluginId: manifest.pluginId, source });
+      expect(created.configurationForm).toEqual(configurationForm);
+      expect(created.descriptorHealth?.status).toBe("healthy");
+      fs.writeFileSync(filename, JSON.stringify(manifest), "utf8");
+      const replacement = buildInstalledIntegrationPluginRecord({ now: "2026-10-11T01:00:00.000Z", pluginId: manifest.pluginId, source, existing: created });
+      expect(replacement.configurationForm).toBeUndefined();
+      expect(replacement.descriptorHealth?.evidence.descriptorHash).not.toBe(created.descriptorHealth?.evidence.descriptorHash);
+    } finally { fs.rmSync(source, { recursive: true, force: true }); }
+  });
   it("validates the reference manifest shape", () => {
     expect(() =>
       validateIntegrationPluginAuthorManifest({

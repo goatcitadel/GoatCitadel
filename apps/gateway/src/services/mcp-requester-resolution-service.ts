@@ -1,5 +1,19 @@
 /* eslint-disable max-lines -- Stage-specific resolution and attempt lifecycles remain auditable in one seam. */
-import { freezeRequesterScopedProfileTool, freezeRequesterScopedProfileCatalog } from "./mcp-requester-profile-freeze.js";
+import {
+  freezeRequesterScopedProfileTool,
+  freezeRequesterScopedProfileCatalog,
+} from "./mcp-requester-profile-freeze.js";
+import {
+  assertMcpAdmissionAuthority,
+  assertMcpAdmissionCurrent,
+  type McpAdmissionDiscoveryAuthority,
+  type McpAdmissionToolCallAuthority,
+  type McpRequesterAdmissionCurrentState,
+} from "./mcp-requester-admission-authority.js";
+import {
+  McpRequesterAdmissionResolverRegistry,
+  type McpRequesterAdmissionResolver,
+} from "./mcp-requester-admission-resolvers.js";
 import { createHash } from "node:crypto";
 import { types as nodeTypes } from "node:util";
 import {
@@ -399,14 +413,14 @@ class ResolutionLease {
 
 class McpProfileDiscoveryResolutionAttemptValue implements McpProfileDiscoveryResolutionAttempt {
   public readonly stage = "profile_discovery" as const;
-  readonly #requester: McpProfileDiscoveryAuthority;
+  readonly #requester: McpProfileDiscoveryAuthority | McpAdmissionDiscoveryAuthority;
   readonly #lease: ResolutionLease;
   readonly #abortListener: () => void;
   readonly #authorizedOperations = new Set<McpProfileDiscoveryOperation>();
   readonly #pendingOperations = new Set<McpProfileDiscoveryOperation>();
   readonly #issuedPermits = new Map<McpProfileDiscoveryOperation, McpProfileDiscoveryOperationPermit>();
 
-  public constructor(requester: McpProfileDiscoveryAuthority, lease: ResolutionLease) {
+  public constructor(requester: McpProfileDiscoveryAuthority | McpAdmissionDiscoveryAuthority, lease: ResolutionLease) {
     this.#requester = requester;
     this.#lease = lease;
     this.#abortListener = () => this.#revokeIssuedPermits();
@@ -510,7 +524,7 @@ class McpProfileDiscoveryResolutionAttemptValue implements McpProfileDiscoveryRe
 
 class McpToolCallResolutionAttemptValue implements McpToolCallResolutionAttempt {
   public readonly stage = "tool_call" as const;
-  readonly #requester: McpToolCallAuthority;
+  readonly #requester: McpToolCallAuthority | McpAdmissionToolCallAuthority;
   readonly #lease: ResolutionLease;
   readonly #abortListener: () => void;
   #revalidationAuthorized = false;
@@ -522,7 +536,7 @@ class McpToolCallResolutionAttemptValue implements McpToolCallResolutionAttempt 
   #callAuthorizationPending = false;
   #issuedCallPermit: McpToolCallOperationPermit | undefined;
 
-  public constructor(requester: McpToolCallAuthority, lease: ResolutionLease) {
+  public constructor(requester: McpToolCallAuthority | McpAdmissionToolCallAuthority, lease: ResolutionLease) {
     this.#requester = requester;
     this.#lease = lease;
     this.#abortListener = () => this.#revokeIssuedPermits();
@@ -764,13 +778,89 @@ class ResolutionAbortLatch {
 
 export class McpRequesterResolutionService {
   readonly #registry: McpRequesterResolverRegistry;
+  readonly #admissionRegistry: McpRequesterAdmissionResolverRegistry;
   readonly #now: () => number;
   readonly #activeProfileDiscoveryAuthorities = new Set<string>();
   readonly #activeToolCallAuthorities = new Set<string>();
 
-  public constructor(registry: McpRequesterResolverRegistry, options?: { now?: () => number }) {
+  public constructor(
+    registry: McpRequesterResolverRegistry,
+    options?: { now?: () => number; admissionResolvers?: readonly McpRequesterAdmissionResolver[] },
+  ) {
     this.#registry = registry;
+    this.#admissionRegistry = new McpRequesterAdmissionResolverRegistry(options?.admissionResolvers);
     this.#now = options?.now ?? Date.now;
+  }
+
+  /** Explicit feature-admission authority; legacy profile resolver registrations are never reused implicitly. */
+  public async resolveForAdmissionDiscovery(input: {
+    requester: McpAdmissionDiscoveryAuthority;
+    server: McpRequesterScopedServerSnapshot;
+    readCurrentState(): Promise<McpRequesterAdmissionCurrentState>;
+    signal?: AbortSignal;
+  }): Promise<McpProfileDiscoveryResolutionAttempt> {
+    assertMcpAdmissionAuthority(input.requester, "admission_discovery");
+    const requester = input.requester;
+    const server = snapshotMcpRequesterScopedServerSnapshot(input.server);
+    const readCurrentState = input.readCurrentState;
+    const assertCurrent = async (generation?: number, rotation?: number) => {
+      const current = await readCurrentState();
+      assertMcpAdmissionCurrent(requester, current, generation, rotation);
+      if (mcpRequesterScopedServerConfigHash(server) !== requester.serverConfigSha256) {
+        throw new McpRequesterResolutionError("resolver_binding_drift");
+      }
+    };
+    await assertCurrent();
+    const resolver = this.#admissionRegistry.resolveExact(requester);
+    const releaseClaim = this.#claimAuthority(this.#activeProfileDiscoveryAuthorities, requester.authoritySha256);
+    try {
+      const lease = await this.#resolveConnection({
+        server,
+        signals: { signal: input.signal },
+        assertCurrent,
+        resolve: (signal) => resolver.resolveForAdmissionDiscovery({ requester, signal }),
+        onDispose: releaseClaim,
+      });
+      return new McpProfileDiscoveryResolutionAttemptValue(requester, lease);
+    } catch (error) {
+      releaseClaim();
+      throw error;
+    }
+  }
+
+  public async resolveForAdmissionToolCall(input: {
+    requester: McpAdmissionToolCallAuthority;
+    server: McpRequesterScopedServerSnapshot;
+    readCurrentState(): Promise<McpRequesterAdmissionCurrentState>;
+    signal?: AbortSignal;
+  }): Promise<McpToolCallResolutionAttempt> {
+    assertMcpAdmissionAuthority(input.requester, "admission_tool_call");
+    const requester = input.requester;
+    const server = snapshotMcpRequesterScopedServerSnapshot(input.server);
+    const readCurrentState = input.readCurrentState;
+    const assertCurrent = async (generation?: number, rotation?: number) => {
+      const current = await readCurrentState();
+      assertMcpAdmissionCurrent(requester, current, generation, rotation);
+      if (mcpRequesterScopedServerConfigHash(server) !== requester.serverConfigSha256) {
+        throw new McpRequesterResolutionError("resolver_binding_drift");
+      }
+    };
+    await assertCurrent();
+    const resolver = this.#admissionRegistry.resolveExact(requester);
+    const releaseClaim = this.#claimAuthority(this.#activeToolCallAuthorities, requester.authoritySha256);
+    try {
+      const lease = await this.#resolveConnection({
+        server,
+        signals: { signal: input.signal },
+        assertCurrent,
+        resolve: (signal) => resolver.resolveForAdmissionToolCall({ requester, signal }),
+        onDispose: releaseClaim,
+      });
+      return new McpToolCallResolutionAttemptValue(requester, lease);
+    } catch (error) {
+      releaseClaim();
+      throw error;
+    }
   }
 
   public async resolveForProfileDiscovery(
@@ -2086,7 +2176,9 @@ export async function resolveRequesterScopedCatalogBindingsForProfileFreeze(
   input: McpRequesterScopedCatalogFreezeInput,
 ): Promise<McpRequesterResolutionBinding[] | undefined> {
   if (input.hook.tools.length === 0) return [];
-  return withRequesterScopedProfileDiscovery(input, (discovery) => freezeRequesterScopedProfileCatalog(input, discovery));
+  return withRequesterScopedProfileDiscovery(input, (discovery) =>
+    freezeRequesterScopedProfileCatalog(input, discovery),
+  );
 }
 
 /**

@@ -1,3 +1,4 @@
+import { bindScheduledCreatorAuthority } from "./scheduled-cron-storage-guards.js";
 import {
   ConflictError,
   NotFoundError,
@@ -5,6 +6,7 @@ import {
   type CronJobAction,
   type CronJobActionConfig,
   type CronJobRecord,
+  type CronJobCreatorAuthorityInput,
 } from "@goatcitadel/contracts";
 import type {
   CronJobRuntimeTelemetryPatch,
@@ -67,11 +69,12 @@ export interface CronConfigGenerationOwnerHooks {
 }
 
 export interface CronSpecMutationOwner {
-  createSpec(spec: CronJobSpecInput, telemetry?: CronJobRuntimeTelemetryPatch): Promise<CronJobRecord>;
+  createSpec(spec: CronJobSpecInput, telemetry?: CronJobRuntimeTelemetryPatch, creatorAuthority?: CronJobCreatorAuthorityInput): Promise<CronJobRecord>;
   updateSpec(
     spec: CronJobSpecInput,
     expectedRevision: number,
     telemetry?: CronJobRuntimeTelemetryPatch,
+    creatorAuthority?: CronJobCreatorAuthorityInput,
   ): Promise<CronJobRecord>;
   deleteSpec(jobId: string, expectedRevision: number): Promise<boolean>;
   reconcileSpec(spec: CronJobSpecInput): Promise<CronJobRecord>;
@@ -81,11 +84,13 @@ export type CronStorageMutation =
   | {
       kind: "create";
       spec: CronJobSpecInput;
+      creatorAuthority?: CronJobCreatorAuthorityInput;
       telemetry?: CronJobRuntimeTelemetryPatch;
     }
   | {
       kind: "update";
       spec: CronJobSpecInput;
+      creatorAuthority?: CronJobCreatorAuthorityInput;
       expectedRevision: number;
       telemetry?: CronJobRuntimeTelemetryPatch;
     }
@@ -116,7 +121,7 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
     private readonly hooks: CronConfigGenerationOwnerHooks = {},
   ) {}
 
-  public async createSpec(spec: CronJobSpecInput, telemetry?: CronJobRuntimeTelemetryPatch): Promise<CronJobRecord> {
+  public async createSpec(spec: CronJobSpecInput, telemetry?: CronJobRuntimeTelemetryPatch, creatorAuthority?: CronJobCreatorAuthorityInput): Promise<CronJobRecord> {
     const desired = projectCanonicalCronSpec(spec);
     return await this.commitMutation<CronJobRecord>(async () => {
       const existing = await this.storage.cronJobs.get(desired.jobId);
@@ -133,7 +138,7 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
         });
       }
       return {
-        mutation: { kind: "create", spec: desired, ...(telemetry ? { telemetry } : {}) },
+        mutation: { kind: "create", spec: desired, ...(telemetry ? { telemetry } : {}), ...(creatorAuthority ? { creatorAuthority } : {}) },
         updateSpecs: (specs) => upsertCanonicalSpec(specs, desired),
       };
     });
@@ -143,6 +148,7 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
     spec: CronJobSpecInput,
     expectedRevision: number,
     telemetry?: CronJobRuntimeTelemetryPatch,
+    creatorAuthority?: CronJobCreatorAuthorityInput,
   ): Promise<CronJobRecord> {
     const desired = projectCanonicalCronSpec(spec);
     return await this.commitMutation<CronJobRecord>(async () => {
@@ -153,9 +159,10 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
           spec: desired,
           expectedRevision,
           ...(telemetry ? { telemetry } : {}),
+          ...(creatorAuthority ? { creatorAuthority } : {}),
         },
         updateSpecs: (specs) => upsertCanonicalSpec(specs, desired),
-        noOpResult: cronJobSpecMatches(current, desired) ? current : undefined,
+        noOpResult: !creatorAuthority && cronJobSpecMatches(current, desired) ? current : undefined,
       };
     });
   }
@@ -329,6 +336,7 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
       } else {
         result = await this.reconcileAllSpecs(mutation.specs, mutation.deleteExtraneous);
       }
+      result = await bindScheduledCreatorAuthority(this.storage, mutation, result);
       this.hooks.afterStorageMutation?.(mutation);
       return result;
     });

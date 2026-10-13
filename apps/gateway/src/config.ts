@@ -97,6 +97,20 @@ export interface FeatureFlagsConfig {
   subagentFanoutV1Disabled?: boolean;
   /** Default-disabled Chat-native durable fan-out aggregate (no legacy fallback). */
   durableChatFanoutV1Enabled?: boolean;
+  /** Feature-specific Chat admission restorations remain opt-in. */
+  chatProviderFallbackV1Enabled?: boolean;
+  chatSkillInstructionsV1Enabled?: boolean;
+  boundedToolExposureV1Enabled?: boolean;
+  scheduledChatTurnsV1Enabled?: boolean;
+  chatExplicitContextV1Enabled?: boolean;
+  chatAutomaticFanoutV1Enabled?: boolean;
+  chatDelegationControlsV1Enabled?: boolean;
+  proactiveHeartbeatTurnsV1Enabled?: boolean;
+  commitmentScheduledTurnsV1Enabled?: boolean;
+  chatMeshCapabilitiesV1Enabled?: boolean;
+  chatRemotePlacementV1Enabled?: boolean;
+  chatRequesterMcpV1Enabled?: boolean;
+  chatStaticMcpV1Enabled?: boolean;
   /** Gateway-owned governed Change Plan authority. Default-on after foundation proof, with an explicit kill switch. */
   evolutionControlPlaneV1Enabled?: boolean;
   /** Cheap local improvement signal collection. Enabled only after the control plane rolls out. */
@@ -808,6 +822,19 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["plannerFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_PLANNER_FANOUT_V1_DISABLED],
     ["subagentFanoutV1Disabled", process.env.GOATCITADEL_FEATURE_SUBAGENT_FANOUT_V1_DISABLED],
     ["durableChatFanoutV1Enabled", process.env.GOATCITADEL_FEATURE_DURABLE_CHAT_FANOUT_V1_ENABLED],
+    ["chatProviderFallbackV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_PROVIDER_FALLBACK_V1_ENABLED],
+    ["chatSkillInstructionsV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_SKILL_INSTRUCTIONS_V1_ENABLED],
+    ["boundedToolExposureV1Enabled", process.env.GOATCITADEL_FEATURE_BOUNDED_TOOL_EXPOSURE_V1_ENABLED],
+    ["scheduledChatTurnsV1Enabled", process.env.GOATCITADEL_FEATURE_SCHEDULED_CHAT_TURNS_V1_ENABLED],
+    ["chatExplicitContextV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_EXPLICIT_CONTEXT_V1_ENABLED],
+    ["chatAutomaticFanoutV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_AUTOMATIC_FANOUT_V1_ENABLED],
+    ["chatDelegationControlsV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_DELEGATION_CONTROLS_V1_ENABLED],
+    ["proactiveHeartbeatTurnsV1Enabled", process.env.GOATCITADEL_FEATURE_PROACTIVE_HEARTBEAT_TURNS_V1_ENABLED],
+    ["commitmentScheduledTurnsV1Enabled", process.env.GOATCITADEL_FEATURE_COMMITMENT_SCHEDULED_TURNS_V1_ENABLED],
+    ["chatMeshCapabilitiesV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_MESH_CAPABILITIES_V1_ENABLED],
+    ["chatRemotePlacementV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_REMOTE_PLACEMENT_V1_ENABLED],
+    ["chatRequesterMcpV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_REQUESTER_MCP_V1_ENABLED],
+    ["chatStaticMcpV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_STATIC_MCP_V1_ENABLED],
     ["evolutionControlPlaneV1Enabled", process.env.GOATCITADEL_FEATURE_EVOLUTION_CONTROL_PLANE_V1_ENABLED],
     ["improvementLocalObservationV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_LOCAL_OBSERVATION_V1_ENABLED],
     ["improvementModelEvaluationV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_MODEL_EVALUATION_V1_ENABLED],
@@ -1414,6 +1441,19 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       plannerFanoutV1Disabled: featuresInput.plannerFanoutV1Disabled ?? false,
       subagentFanoutV1Disabled: featuresInput.subagentFanoutV1Disabled ?? false,
       durableChatFanoutV1Enabled: featuresInput.durableChatFanoutV1Enabled ?? false,
+      chatProviderFallbackV1Enabled: featuresInput.chatProviderFallbackV1Enabled ?? false,
+      chatSkillInstructionsV1Enabled: featuresInput.chatSkillInstructionsV1Enabled ?? false,
+      boundedToolExposureV1Enabled: featuresInput.boundedToolExposureV1Enabled ?? false,
+      scheduledChatTurnsV1Enabled: featuresInput.scheduledChatTurnsV1Enabled ?? false,
+      chatExplicitContextV1Enabled: featuresInput.chatExplicitContextV1Enabled ?? false,
+      chatAutomaticFanoutV1Enabled: featuresInput.chatAutomaticFanoutV1Enabled ?? false,
+      chatDelegationControlsV1Enabled: featuresInput.chatDelegationControlsV1Enabled ?? false,
+      proactiveHeartbeatTurnsV1Enabled: featuresInput.proactiveHeartbeatTurnsV1Enabled ?? false,
+      commitmentScheduledTurnsV1Enabled: featuresInput.commitmentScheduledTurnsV1Enabled ?? false,
+      chatMeshCapabilitiesV1Enabled: featuresInput.chatMeshCapabilitiesV1Enabled ?? false,
+      chatRemotePlacementV1Enabled: featuresInput.chatRemotePlacementV1Enabled ?? false,
+      chatRequesterMcpV1Enabled: featuresInput.chatRequesterMcpV1Enabled ?? false,
+      chatStaticMcpV1Enabled: featuresInput.chatStaticMcpV1Enabled ?? false,
       evolutionControlPlaneV1Enabled: featuresInput.evolutionControlPlaneV1Enabled ?? true,
       improvementLocalObservationV1Enabled: featuresInput.improvementLocalObservationV1Enabled ?? true,
       improvementModelEvaluationV1Enabled: featuresInput.improvementModelEvaluationV1Enabled ?? false,

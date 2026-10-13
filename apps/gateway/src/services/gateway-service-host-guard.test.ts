@@ -255,6 +255,7 @@ describe("gateway service host guard", () => {
       export type LocalDelegationAuthorityStorage = Pick<
         AsyncStorage,
         | "chatDelegationRuns"
+        | "chatFanoutInvocations"
         | "chatDelegationSteps"
         | "chatSessionMeta"
         | "chatSessionLifecycles"
@@ -269,7 +270,9 @@ describe("gateway service host guard", () => {
     expect(prep).toMatch(
       /import\s*\{[^}]*\btype LocalDelegationAuthorityStorage\b[^}]*\}\s*from "\.\/chat-local-delegation-authority\.js";/,
     );
-    expect(prep).toMatch(/export interface ChatTurnPrepHost\s*\{\s*readonly storage: ChatTurnPrepStorage;/);
+    const prepHost = prep.match(/export interface ChatTurnPrepHost\s*\{[\s\S]*?^\}/m)?.[0] ?? "";
+    expect(prepHost).toMatch(/\breadonly storage: ChatTurnPrepStorage;/);
+    expect(prepHost).toMatch(/readonly explicitContextPreparation\?: ExplicitContextPreparationPort;/);
     expect(entry).toContain('Omit<ChatTurnPrepHost, "storage">');
     for (const collaborator of [
       "ChatTurnActiveExecutionControl",

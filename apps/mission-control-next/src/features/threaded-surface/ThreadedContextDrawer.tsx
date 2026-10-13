@@ -20,6 +20,7 @@ import { describeRouteBlockedReason } from "./chat-route-readiness";
 import { ContextDisclosure } from "./ThreadedContextDisclosure";
 import { ThreadedDocumentsPanel } from "./ThreadedDocumentsPanel";
 import { ThreadedContextConflictNotices } from "./ThreadedContextConflictNotices";
+import { ChatProviderFallbackSettings } from "./ChatProviderFallbackSettings";
 
 type DrawerTab = "context" | "documents" | "trace" | "assist" | "session";
 
@@ -292,6 +293,7 @@ export function ThreadedContextDrawer({
                 </button>
               </div>
             </ContextDisclosure>
+            <ChatProviderFallbackSettings key={props.selectedSessionId} {...props} />
             {props.routePreflight?.degradedReason ? <p>{props.routePreflight.degradedReason}</p> : null}
             {props.routePreflight?.blockedReason ? <p>{describeRouteBlockedReason(props.routePreflight)}</p> : null}
             {onCopyTrustReport && props.selectedSessionId ? (
@@ -447,7 +449,7 @@ export function ThreadedContextDrawer({
               <span>Subagents</span>
               <select
                 value={effectiveSubagentPolicy}
-                disabled
+                disabled={props.sending || (!props.supervisedDelegationAvailable && !automaticFanout?.enabled)}
                 onChange={(event) => handleSubagentPolicyChange(event.target.value as ChatSubagentPolicy)}
                 aria-label="Subagent policy"
               >
@@ -460,7 +462,10 @@ export function ThreadedContextDrawer({
             </label>
             <div className="mc-next-context-field" role="status" aria-live="polite">
               <span>Subagent delegation</span>
-              <p>Temporarily unavailable for new Chat turns. Your saved preference remains visible.</p>
+              <p>{props.supervisedDelegationAvailable
+                ? "Ask before delegating keeps each proposed plan under operator review."
+                : "Supervised delegation is not enabled for this runtime. Your saved preference remains visible."}</p>
+              {automaticFanout?.unavailableReason ? <p>{automaticFanout.unavailableReason}</p> : null}
             </div>
             <div className="mc-next-context-actions">
               <button
@@ -473,6 +478,19 @@ export function ThreadedContextDrawer({
               </button>
             </div>
           </section>
+
+          {props.supervisedDelegationAvailable ? <section className="mc-next-context-card">
+            <p className="mc-next-panel-kicker">Supervised delegation</p>
+            <p>Review a proposed plan, or start a coding delegate for the bound project. Coding delegates use existing Chat tools and approvals. Governed Code Mode runs have a separate code review and hash check.</p>
+            <div className="mc-next-context-actions">
+              <button type="button" className="mc-next-panel-button" disabled={props.sending}
+                onClick={() => void props.onSuggestDelegation()}>Suggest delegation</button>
+              {(["implement", "review", "test", "ship"] as const).map((preset) => <button key={preset} type="button"
+                className="mc-next-panel-button" disabled={props.sending || !props.codingDelegationAvailable}
+                onClick={() => void props.onRunCodeDelegation(preset)}>{preset === "implement" ? "Delegate implementation" : preset === "review" ? "Delegate review" : preset === "test" ? "Delegate tests" : "Delegate release preparation"}</button>)}
+            </div>
+            {!props.codingDelegationAvailable ? <p>Bind this Chat to an active project before delegating coding work.</p> : null}
+          </section> : null}
 
           <section className="mc-next-context-card">
             <p className="mc-next-panel-kicker">Assist posture</p>
@@ -520,10 +538,10 @@ export function ThreadedContextDrawer({
                 <button
                   type="button"
                   className="mc-next-panel-button primary"
-                  disabled
+                  disabled={props.sending || !props.supervisedDelegationAvailable}
                   onClick={() => void props.onAcceptDelegation()}
                 >
-                  Subagents unavailable
+                  {props.supervisedDelegationAvailable ? "Approve delegation" : "Subagents unavailable"}
                 </button>
               </div>
             </section>

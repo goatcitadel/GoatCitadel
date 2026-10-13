@@ -4,13 +4,22 @@ import type {
   SkillActivationDecision,
   SkillResolveInput,
 } from "@goatcitadel/contracts";
-import { rankSkillSelectionCandidates, resolveSkillActivation } from "@goatcitadel/skills";
+import { rankSkillSelectionCandidates, resolveSkillActivation, type SkillSelectionRanking } from "@goatcitadel/skills";
 
-interface CallableSkillSelectionInput {
+export interface CallableSkillSelectionInput {
   request: SkillResolveInput;
   loadedSkills: LoadedSkill[];
   inspectableCatalog: CapabilityCatalogEntry[];
   callableCatalog: CapabilityCatalogEntry[];
+}
+
+export type CallableSkillSelectionMode = "legacy" | "shadow" | "ranked";
+
+export interface CallableSkillSelectionResult {
+  mode: CallableSkillSelectionMode;
+  decision: SkillActivationDecision;
+  /** Bounded metadata evidence only. Scores never supply activation authority. */
+  ranking?: SkillSelectionRanking;
 }
 
 /** Explicit evaluation entry point; never replaces the runtime decision or activates a skill. */
@@ -37,6 +46,15 @@ export function evaluateCallableSkillSelection(input: CallableSkillSelectionInpu
  * implicit activation grant.
  */
 export function resolveCallableSkillActivation(input: CallableSkillSelectionInput): SkillActivationDecision {
+  return resolveCallableSkillSelection(input).decision;
+}
+
+/** Runtime state, first-use confirmation, and policy remain the caller's canonical gates. */
+export function resolveCallableSkillSelection(
+  input: CallableSkillSelectionInput,
+  options: { mode?: CallableSkillSelectionMode } = {},
+): CallableSkillSelectionResult {
+  const mode = options.mode ?? "legacy";
   const loadedBySkillId = new Map(input.loadedSkills.map((skill) => [skill.skillId, skill]));
   const callableEntries = input.callableCatalog.filter(
     (entry): entry is CapabilityCatalogEntry & { skillId: string } =>
@@ -51,13 +69,11 @@ export function resolveCallableSkillActivation(input: CallableSkillSelectionInpu
   const normalizedExplicit = explicitTokens
     .map((token) => callableAliases.get(normalizeAlias(token)))
     .filter((name): name is string => Boolean(name));
-  const decision = resolveSkillActivation(
-    {
-      ...input.request,
-      explicitSkills: normalizedExplicit,
-    },
-    callableSkills,
-  );
+  const request = { ...input.request, explicitSkills: normalizedExplicit };
+  const ranking = mode === "legacy" ? undefined : rankSkillSelectionCandidates(request, callableSkills, 5);
+  const decision = mode === "ranked" && ranking
+    ? resolveRankedCandidates(request, callableSkills, ranking)
+    : resolveSkillActivation(request, callableSkills);
 
   const noncallableAliases = buildAliasIndex(
     input.inspectableCatalog.filter(
@@ -71,7 +87,47 @@ export function resolveCallableSkillActivation(input: CallableSkillSelectionInpu
     blocked.push({ skill: token, reason: "skill_not_callable" });
   }
 
-  return { ...decision, blocked };
+  return { mode, decision: { ...decision, blocked }, ...(ranking ? { ranking } : {}) };
+}
+
+function resolveRankedCandidates(
+  request: SkillResolveInput,
+  callableSkills: LoadedSkill[],
+  ranking: SkillSelectionRanking,
+): SkillActivationDecision {
+  const explicitNames = new Set(request.explicitSkills?.map(normalizeAlias));
+  const explicitSkills = callableSkills.filter((skill) => explicitNames.has(normalizeAlias(skill.name)));
+  const explicitIds = new Set(explicitSkills.map((skill) => skill.skillId));
+  const implicitIds = new Set(
+    ranking.candidates.filter((candidate) => !explicitIds.has(candidate.skillId)).slice(0, 3)
+      .map((candidate) => candidate.skillId),
+  );
+  const nominatedNames = callableSkills
+    .filter((skill) => explicitIds.has(skill.skillId) || implicitIds.has(skill.skillId))
+    .map((skill) => normalizeAlias(skill.name));
+  // Reuse the established dependency/selection resolver. This intermediate
+  // nomination is not operator intent: replace its reasons before returning,
+  // so ranked matches cannot bypass the canonical sleeping/first-use gates.
+  const loadedById = new Map(callableSkills.map((skill) => [skill.skillId, skill]));
+  const nominated = resolveSkillActivation(
+    { text: "", explicitSkills: nominatedNames },
+    callableSkills.map((skill) => ({
+      ...skill,
+      keywords: [],
+      ...(skill.routingHints ? { routingHints: { ...skill.routingHints, keywords: [], phrases: [] } } : {}),
+    })),
+  );
+  const reasons: Record<string, string[]> = {};
+  for (const skill of nominated.selected) {
+    reasons[skill.name] = [explicitIds.has(skill.skillId)
+      ? "explicit"
+      : implicitIds.has(skill.skillId) ? "metadata_ranked" : "dependency"];
+  }
+  return {
+    ...nominated,
+    selected: nominated.selected.map((skill) => ({ ...skill, ...loadedById.get(skill.skillId) })),
+    reasons,
+  };
 }
 
 function buildAliasIndex(entries: CapabilityCatalogEntry[]): Map<string, string> {

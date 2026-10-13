@@ -7,6 +7,7 @@ import {
   CHAT_ROUTED_CONTEXT_MAX_REFS,
   CHAT_ROUTED_CONTEXT_MAX_SNAPSHOT_BYTES,
   CHAT_ROUTED_CONTEXT_SNAPSHOT_VERSION,
+  CHAT_ROUTED_CONTEXT_ADMISSION_SNAPSHOT_VERSION,
   CHAT_ROUTED_CONTEXT_LEGACY_SNAPSHOT_VERSION,
   NotFoundError,
   canonicalJsonString,
@@ -25,6 +26,7 @@ const SNAPSHOT_KEYS = [
   "workspaceId",
   "capabilityProfileId",
   "capabilityProfileHash",
+  "admissionBinding",
   "sourceRequestHash",
   "contentHash",
   "snapshotHash",
@@ -79,8 +81,13 @@ interface RoutedContextSnapshotRow {
   turn_id: string;
   session_id: string;
   workspace_id: string;
-  capability_profile_id: string;
-  capability_profile_hash: string;
+  capability_profile_id: string | null;
+  capability_profile_hash: string | null;
+  admission_id: string | null;
+  session_incarnation_id: string | null;
+  admission_material_sha256: string | null;
+  admission_aggregate_revision: number | null;
+  admission_controller_generation: number | null;
   source_request_hash: string;
   content_hash: string;
   snapshot_hash: string;
@@ -119,7 +126,8 @@ export class RoutedContextSnapshotRepository {
         context_window_tokens, prompt_reserved_tokens, output_reserved_tokens,
         hard_cap_tokens, effective_budget_tokens, used_tokens, source_count,
         included_count, truncated_count, omitted_count, already_attached_count,
-        estimator_version, budget_policy_version, snapshot_json, created_at
+        estimator_version, budget_policy_version, snapshot_json, created_at,
+        admission_id, session_incarnation_id, admission_material_sha256, admission_aggregate_revision, admission_controller_generation
       ) VALUES (
         @snapshotId, @schemaVersion, @turnId, @sessionId, @workspaceId,
         @capabilityProfileId, @capabilityProfileHash, @sourceRequestHash,
@@ -127,7 +135,8 @@ export class RoutedContextSnapshotRepository {
         @contextWindowTokens, @promptReservedTokens, @outputReservedTokens,
         @hardCapTokens, @effectiveBudgetTokens, @usedTokens, @sourceCount,
         @includedCount, @truncatedCount, @omittedCount, @alreadyAttachedCount,
-        @estimatorVersion, @budgetPolicyVersion, @snapshotJson, @createdAt
+        @estimatorVersion, @budgetPolicyVersion, @snapshotJson, @createdAt,
+        @admissionId, @sessionIncarnationId, @admissionMaterialSha256, @admissionAggregateRevision, @admissionControllerGeneration
       ) ON CONFLICT(snapshot_id) DO NOTHING
     `);
     this.getStmt = db.prepare("SELECT * FROM chat_routed_context_snapshots WHERE snapshot_id = ?");
@@ -147,8 +156,13 @@ export class RoutedContextSnapshotRepository {
       turnId: input.turnId,
       sessionId: input.sessionId,
       workspaceId: input.workspaceId,
-      capabilityProfileId: input.capabilityProfileId,
-      capabilityProfileHash: input.capabilityProfileHash,
+      capabilityProfileId: input.capabilityProfileId ?? null,
+      capabilityProfileHash: input.capabilityProfileHash ?? null,
+      admissionId: input.admissionBinding?.admissionId ?? null,
+      sessionIncarnationId: input.admissionBinding?.sessionIncarnationId ?? null,
+      admissionMaterialSha256: input.admissionBinding?.materialSha256 ?? null,
+      admissionAggregateRevision: input.admissionBinding?.aggregateRevision ?? null,
+      admissionControllerGeneration: input.admissionBinding?.controllerGeneration ?? null,
       sourceRequestHash: input.sourceRequestHash,
       contentHash: input.contentHash,
       snapshotHash: input.snapshotHash,
@@ -201,6 +215,9 @@ export function rebindChatRoutedContextSnapshot(
   snapshot: ChatRoutedContextSnapshotRecord,
   binding: { profileId: string; profileHash: string },
 ): ChatRoutedContextSnapshotRecord {
+  if (snapshot.schemaVersion === CHAT_ROUTED_CONTEXT_ADMISSION_SNAPSHOT_VERSION) {
+    throw new Error("An admission-bound context snapshot cannot be rebound to a capability profile.");
+  }
   const { snapshotHash: _snapshotHash, ...draft } = snapshot;
   return sealChatRoutedContextSnapshot({
     ...draft,
@@ -213,7 +230,24 @@ export function verifyChatRoutedContextSnapshot(input: ChatRoutedContextSnapshot
   if (!input || typeof input !== "object" || Array.isArray(input) || !Array.isArray(input.entries)) {
     throw new Error("Routed context snapshot is malformed.");
   }
-  assertExactKeys(input, SNAPSHOT_KEYS, "snapshot");
+  const admissionBound = input.schemaVersion === CHAT_ROUTED_CONTEXT_ADMISSION_SNAPSHOT_VERSION;
+  assertExactKeys(input, SNAPSHOT_KEYS, "snapshot", new Set(admissionBound
+    ? ["capabilityProfileId", "capabilityProfileHash"] : ["admissionBinding"]));
+  if (admissionBound) {
+    if (input.capabilityProfileId !== undefined || input.capabilityProfileHash !== undefined || !input.admissionBinding) {
+      throw new Error("Admission-bound routed context cannot contain a capability profile.");
+    }
+    const binding = input.admissionBinding;
+    assertExactKeys(binding, ["admissionId", "sessionIncarnationId", "materialSha256", "aggregateRevision", "controllerGeneration"], "admission binding");
+    assertBoundedIdentifier(binding.admissionId, "admissionId", 256);
+    assertBoundedIdentifier(binding.sessionIncarnationId, "sessionIncarnationId", 256);
+    if (!SHA256.test(binding.materialSha256) || !Number.isSafeInteger(binding.aggregateRevision) || binding.aggregateRevision < 1 ||
+      !Number.isSafeInteger(binding.controllerGeneration) || binding.controllerGeneration < 1) throw new Error("Invalid routed context admission binding.");
+  } else {
+    if (input.admissionBinding !== undefined) throw new Error("Historical routed context cannot contain an admission binding.");
+    assertBoundedIdentifier(input.capabilityProfileId!, "capabilityProfileId", 256);
+    if (!input.capabilityProfileHash || !SHA256.test(input.capabilityProfileHash)) throw new Error("Invalid routed context profile hash.");
+  }
   if (!input.budget || typeof input.budget !== "object" || Array.isArray(input.budget)) {
     throw new Error(`Routed context snapshot ${String(input.snapshotId)} has a malformed budget.`);
   }
@@ -222,11 +256,11 @@ export function verifyChatRoutedContextSnapshot(input: ChatRoutedContextSnapshot
   assertBoundedIdentifier(input.turnId, "turnId", 256);
   assertBoundedIdentifier(input.sessionId, "sessionId", 256);
   assertBoundedIdentifier(input.workspaceId, "workspaceId", 80);
-  assertBoundedIdentifier(input.capabilityProfileId, "capabilityProfileId", 256);
   assertBoundedIdentifier(input.budget.effectiveProviderId, "effectiveProviderId", 128);
   assertBoundedIdentifier(input.budget.effectiveModel, "effectiveModel", 256);
   if (
     input.schemaVersion !== CHAT_ROUTED_CONTEXT_SNAPSHOT_VERSION &&
+    input.schemaVersion !== CHAT_ROUTED_CONTEXT_ADMISSION_SNAPSHOT_VERSION &&
     input.schemaVersion !== CHAT_ROUTED_CONTEXT_LEGACY_SNAPSHOT_VERSION
   ) {
     throw new Error(`Routed context snapshot ${input.snapshotId} has an unsupported schema version.`);
@@ -239,7 +273,6 @@ export function verifyChatRoutedContextSnapshot(input: ChatRoutedContextSnapshot
     throw new Error(`Routed context snapshot ${input.snapshotId} has invalid creation evidence.`);
   }
   for (const [field, value] of [
-    ["capabilityProfileHash", input.capabilityProfileHash],
     ["sourceRequestHash", input.sourceRequestHash],
     ["contentHash", input.contentHash],
     ["snapshotHash", input.snapshotHash],
@@ -456,8 +489,13 @@ function mapVerifiedRow(row: RoutedContextSnapshotRow): ChatRoutedContextSnapsho
     turn_id: parsed.turnId,
     session_id: parsed.sessionId,
     workspace_id: parsed.workspaceId,
-    capability_profile_id: parsed.capabilityProfileId,
-    capability_profile_hash: parsed.capabilityProfileHash,
+    capability_profile_id: parsed.capabilityProfileId ?? null,
+    capability_profile_hash: parsed.capabilityProfileHash ?? null,
+    admission_id: parsed.admissionBinding?.admissionId ?? null,
+    session_incarnation_id: parsed.admissionBinding?.sessionIncarnationId ?? null,
+    admission_material_sha256: parsed.admissionBinding?.materialSha256 ?? null,
+    admission_aggregate_revision: parsed.admissionBinding?.aggregateRevision ?? null,
+    admission_controller_generation: parsed.admissionBinding?.controllerGeneration ?? null,
     source_request_hash: parsed.sourceRequestHash,
     content_hash: parsed.contentHash,
     snapshot_hash: parsed.snapshotHash,

@@ -1,4 +1,5 @@
 import { createLlmStreamAttemptObserver } from "./llm-stream-attempt-observer.js";
+import { recordPreparedPromptDiagnostics } from "./llm-prompt-diagnostics.js";
 /**
  * LLM completion service.
  *
@@ -7,12 +8,19 @@ import { createLlmStreamAttemptObserver } from "./llm-stream-attempt-observer.js
  */
 
 import { randomUUID } from "node:crypto";
+import { bindCanonicalStreamRouting } from "./llm-stream-routing.js";
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatTurnTraceRecord,
   ModelUsageAttributionContext,
 } from "@goatcitadel/contracts";
+import { dispatchAdmittedChatCompletion, streamAdmittedChatCompletion } from "./chat-feature-dispatch-authority.js";
+import {
+  assertChatProviderFallbackPrimaryRoute,
+  prepareCurrentChatProviderFallbackDispatch,
+  readAuthorizedChatProviderFallback,
+} from "./chat-provider-fallback-authority.js";
 import { shouldAllowCrossProviderFallback } from "./chat-session-utils.js";
 import { ChatTurnCancelledError, isChatTurnCancelledError } from "./chat-turn-helpers.js";
 import {
@@ -68,6 +76,7 @@ export async function createChatCompletion(
   attributionInput: ModelUsageAttributionContext = {},
 ): Promise<ChatCompletionResponse> {
   const completionStartedAt = Date.now();
+  const completionDeadline = createChatCompletionDeadline(request.timeoutMs);
   host.recordDevDiagnostic({
     level: "debug",
     category: "chat",
@@ -195,6 +204,7 @@ export async function createChatCompletion(
     memoryContext,
     memoryContextPlacement,
   });
+  recordPreparedPromptDiagnostics(host, hookableRequest, completionStartedAt);
   await runtimeLifecycleHookDispatcher.runObserveHook(host.hooksService, {
     workspaceId: chatHookWorkspaceId,
     trigger: "llm_input",
@@ -233,6 +243,9 @@ export async function createChatCompletion(
     requestedModelId: primaryModel,
     requestedReasoningLevel: hookableRequest.reasoning?.effort,
   });
+  assertChatProviderFallbackPrimaryRoute(hookableRequest, { providerId: primaryProviderId, model: primaryModel });
+  const authorizedFallback = readAuthorizedChatProviderFallback(hookableRequest);
+  const fallbackAttemptLimit = authorizedFallback ? 1 : CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
   const allowCrossProviderFallback = shouldAllowCrossProviderFallback(hookableRequest);
   const routing: ChatTurnTraceRecord["routing"] = {
     primaryProviderId,
@@ -260,7 +273,6 @@ export async function createChatCompletion(
     normalizeToolProtocolRetryRequest(hookableRequest, TOOL_PROTOCOL_RETRY_NORMALIZED),
     normalizeToolProtocolRetryRequest(hookableRequest, TOOL_PROTOCOL_RETRY_MINIMAL_THINKING),
   ];
-  const completionDeadline = createChatCompletionDeadline(hookableRequest.timeoutMs);
   let lastError: Error | undefined;
 
   attemptLoop: for (let index = 0; index < retryAttempts.length; index += 1) {
@@ -277,7 +289,7 @@ export async function createChatCompletion(
       try {
         throwIfChatCompletionRequestAborted(attemptRequest.signal, memoryInput?.turnId);
         const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
-        response = await host.llmService.chatCompletions(
+        response = await dispatchAdmittedChatCompletion(host.llmService, attemptRequest,
           {
             ...attemptRequest,
             timeoutMs: attemptTimeoutMs ?? attemptRequest.timeoutMs,
@@ -379,7 +391,7 @@ export async function createChatCompletion(
   if (!response && allowCrossProviderFallback && (!lastError || shouldAttemptCrossProviderFallback(lastError))) {
     const fallbackRequiresToolProtocolNormalization = Boolean(lastError && shouldRetryToolProtocolError(lastError));
     const fallbacks = filterCrossProviderFallbackTargets(
-      host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
+      authorizedFallback ? [authorizedFallback] : host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
       primaryProviderId,
     );
     fallbackLoop: for (const [fallbackOrdinal, fallback] of fallbacks.entries()) {
@@ -396,30 +408,24 @@ export async function createChatCompletion(
       }
       for (
         let transientRetryIndex = 0;
-        transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
+        transientRetryIndex < fallbackAttemptLimit;
         transientRetryIndex += 1
       ) {
         try {
           throwIfChatCompletionRequestAborted(hookableRequest.signal, memoryInput?.turnId);
-          const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
           const fallbackRequest = fallbackRequiresToolProtocolNormalization
             ? normalizeToolProtocolRetryRequest(hookableRequest, TOOL_PROTOCOL_RETRY_MINIMAL_THINKING)
             : hookableRequest;
+          const dispatchRequest = { ...fallbackRequest, providerId: fallback.providerId, model: fallback.model };
+          const guard = await prepareCurrentChatProviderFallbackDispatch(host, hookableRequest, dispatchRequest);
+          throwIfChatCompletionRequestAborted(hookableRequest.signal, memoryInput?.turnId);
+          dispatchRequest.timeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
           lastAttemptTarget = { providerId: fallback.providerId, model: fallback.model };
-          response = await host.llmService.chatCompletions(
-            {
-              ...fallbackRequest,
-              providerId: fallback.providerId,
-              model: fallback.model,
-              timeoutMs: attemptTimeoutMs ?? hookableRequest.timeoutMs,
-            },
-            usageAttribution.next({
-              callKind: "chat_fallback",
-              fallbackIndex: fallbackOrdinal + 1,
-              repairIndex: fallbackRequiresToolProtocolNormalization ? TOOL_PROTOCOL_RETRY_MINIMAL_THINKING : 0,
-              dispatchedReasoningEffort: fallbackRequest.reasoning?.effort,
-            }),
-          );
+          response = await dispatchAdmittedChatCompletion(host.llmService, dispatchRequest, dispatchRequest, usageAttribution.next({
+            callKind: "chat_fallback", fallbackIndex: fallbackOrdinal + 1,
+            repairIndex: fallbackRequiresToolProtocolNormalization ? TOOL_PROTOCOL_RETRY_MINIMAL_THINKING : 0,
+            dispatchedReasoningEffort: fallbackRequest.reasoning?.effort,
+          }), guard);
           throwIfChatCompletionRequestAborted(hookableRequest.signal, memoryInput?.turnId);
           host.recordDevDiagnostic({
             level: "info",
@@ -454,7 +460,7 @@ export async function createChatCompletion(
             break fallbackLoop;
           }
           if (
-            transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
+            transientRetryIndex < fallbackAttemptLimit - 1 &&
             shouldRetryTransientProviderError(lastError)
           ) {
             if (
@@ -635,6 +641,7 @@ export async function* createChatCompletionStream(
   attributionInput: ModelUsageAttributionContext = {},
 ): AsyncGenerator<Record<string, unknown>> {
   const completionStartedAt = Date.now();
+  const completionDeadline = createChatCompletionDeadline(request.timeoutMs);
   const idleWatchdogDisabled = host.config.assistant.features?.streamIdleWatchdogV1Disabled === true;
   const idleTimeoutMs = resolveStreamIdleTimeoutMs(host.config.assistant.streamIdleTimeoutMs);
   const chatHookWorkspaceId = await host.resolveChatCompletionHookWorkspaceId(request);
@@ -704,6 +711,7 @@ export async function* createChatCompletionStream(
     memoryContext,
     memoryContextPlacement,
   });
+  recordPreparedPromptDiagnostics(host, withContext, completionStartedAt);
   await runtimeLifecycleHookDispatcher.runObserveHook(host.hooksService, {
     workspaceId: chatHookWorkspaceId,
     trigger: "llm_input",
@@ -743,6 +751,9 @@ export async function* createChatCompletionStream(
     requestedModelId: primaryModel,
     requestedReasoningLevel: withContext.reasoning?.effort,
   });
+  assertChatProviderFallbackPrimaryRoute(withContext, { providerId: primaryProviderId, model: primaryModel });
+  const authorizedFallback = readAuthorizedChatProviderFallback(withContext);
+  const fallbackAttemptLimit = authorizedFallback ? 1 : CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
   const allowCrossProviderFallback = shouldAllowCrossProviderFallback(withContext);
   const routing: ChatTurnTraceRecord["routing"] = {
     primaryProviderId,
@@ -774,7 +785,6 @@ export async function* createChatCompletionStream(
     normalizeToolProtocolRetryRequest(withContext, TOOL_PROTOCOL_RETRY_NORMALIZED),
     normalizeToolProtocolRetryRequest(withContext, TOOL_PROTOCOL_RETRY_MINIMAL_THINKING),
   ];
-  const completionDeadline = createChatCompletionDeadline(withContext.timeoutMs);
   let streamed = false;
   let streamFailedAfterEmit = false;
   let lastError: Error | undefined;
@@ -804,7 +814,7 @@ export async function* createChatCompletionStream(
             ? AbortSignal.any([attemptRequest.signal, idleAbort.signal])
             : idleAbort.signal;
         const recordFirstChunk = startProviderAttempt(lastAttemptTarget.providerId, lastAttemptTarget.model, false);
-        const providerStream = host.llmService.chatCompletionsStream(
+        const providerStream = streamAdmittedChatCompletion(host.llmService, attemptRequest,
           {
             ...attemptRequest,
             stream: true,
@@ -841,7 +851,7 @@ export async function* createChatCompletionStream(
         let returnedModel: string | undefined;
         for await (const chunk of attemptStream) {
           throwIfChatCompletionRequestAborted(attemptRequest.signal, memoryInput?.turnId);
-          if (!attemptStreamed) recordFirstChunk();
+          recordFirstChunk(chunk);
           attemptStreamed = true;
           streamed = true;
           returnedModel = readReturnedStreamModel(chunk) ?? returnedModel;
@@ -995,7 +1005,7 @@ export async function* createChatCompletionStream(
   if (!streamed && allowCrossProviderFallback && (!lastError || shouldAttemptCrossProviderFallback(lastError))) {
     const fallbackRequiresToolProtocolNormalization = Boolean(lastError && shouldRetryToolProtocolError(lastError));
     const fallbacks = filterCrossProviderFallbackTargets(
-      host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
+      authorizedFallback ? [authorizedFallback] : host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
       primaryProviderId,
     );
     fallbackLoop: for (const [fallbackOrdinal, fallback] of fallbacks.entries()) {
@@ -1012,16 +1022,19 @@ export async function* createChatCompletionStream(
       }
       for (
         let transientRetryIndex = 0;
-        transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT;
+        transientRetryIndex < fallbackAttemptLimit;
         transientRetryIndex += 1
       ) {
         let attemptStreamed = false;
         try {
           throwIfChatCompletionRequestAborted(withContext.signal, memoryInput?.turnId);
-          const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
           const fallbackRetryRequest = fallbackRequiresToolProtocolNormalization
             ? normalizeToolProtocolRetryRequest(withContext, TOOL_PROTOCOL_RETRY_MINIMAL_THINKING)
             : withContext;
+          const dispatchRequest = { ...fallbackRetryRequest, providerId: fallback.providerId, model: fallback.model };
+          const guard = await prepareCurrentChatProviderFallbackDispatch(host, withContext, dispatchRequest);
+          throwIfChatCompletionRequestAborted(withContext.signal, memoryInput?.turnId);
+          const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
           lastAttemptTarget = { providerId: fallback.providerId, model: fallback.model };
           const idleAbort = new AbortController();
           const fallbackSignal = idleWatchdogDisabled
@@ -1030,11 +1043,9 @@ export async function* createChatCompletionStream(
               ? AbortSignal.any([fallbackRetryRequest.signal, idleAbort.signal])
               : idleAbort.signal;
           const recordFirstChunk = startProviderAttempt(fallback.providerId, fallback.model, true);
-          const fallbackProviderStream = host.llmService.chatCompletionsStream(
+          const fallbackProviderStream = streamAdmittedChatCompletion(host.llmService, dispatchRequest,
             {
-              ...fallbackRetryRequest,
-              providerId: fallback.providerId,
-              model: fallback.model,
+              ...dispatchRequest,
               stream: true,
               timeoutMs: attemptTimeoutMs ?? withContext.timeoutMs,
               signal: fallbackSignal,
@@ -1045,6 +1056,7 @@ export async function* createChatCompletionStream(
               repairIndex: fallbackRequiresToolProtocolNormalization ? TOOL_PROTOCOL_RETRY_MINIMAL_THINKING : 0,
               dispatchedReasoningEffort: fallbackRetryRequest.reasoning?.effort,
             }),
+            guard,
           );
           const fallbackStream = idleWatchdogDisabled
             ? fallbackProviderStream
@@ -1070,7 +1082,7 @@ export async function* createChatCompletionStream(
           let returnedModel: string | undefined;
           for await (const chunk of fallbackStream) {
             throwIfChatCompletionRequestAborted(withContext.signal, memoryInput?.turnId);
-            if (!attemptStreamed) recordFirstChunk();
+            recordFirstChunk(chunk);
             attemptStreamed = true;
             streamed = true;
             returnedModel = readReturnedStreamModel(chunk) ?? returnedModel;
@@ -1132,7 +1144,7 @@ export async function* createChatCompletionStream(
             break;
           }
           if (
-            transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
+            transientRetryIndex < fallbackAttemptLimit - 1 &&
             shouldRetryTransientProviderError(lastError)
           ) {
             if (
@@ -1376,7 +1388,7 @@ export async function* createChatCompletionStream(
       citationsCount: memoryContext.citations.length,
     };
   }
-  yield finalChunk;
+  yield bindCanonicalStreamRouting(finalChunk, routing);
 }
 
 function appendTelemetryChunk(target: Array<Record<string, unknown>>, chunk: Record<string, unknown>): void {

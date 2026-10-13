@@ -10,7 +10,7 @@ const NEW_TURN_CONTEXT_NOTICE =
 type ThreadedExternalSourceControls = NonNullable<MissionThreadedActiveSessionSurfaceProps["externalSourceControls"]>;
 
 /**
- * HX-407 C3/C4b read-only external-source picker. New-turn inclusion is unavailable; source
+ * HX-407 C3/C4b read-only external-source picker. Explicit inclusion is rollout gated; source
  * evidence remains immutable, and attach/detach/knowledge-copy mutations stay
  * behind the Gateway's live session-incarnation check.
  */
@@ -40,6 +40,10 @@ export function ExternalSourceStrip({
     Map<string, { sourceLabel: string; importedAt: string }>
   >(() => new Map());
   const selectedCount = controls.selectedAttachmentIds.length;
+  const inclusionEnabled = controls.contextInclusionEnabled === true;
+  const contextNotice = inclusionEnabled
+    ? "Select attached sources to include their exact content in the next turn. The Gateway checks access when you send and before further use. Attaching alone does not include a source in model context."
+    : NEW_TURN_CONTEXT_NOTICE;
   // On phone the full notices leave Chat only a sliver of transcript. Keep a one-line
   // truthful status in view and the exact notices one tap away (rendered once, not duplicated).
   const compact = useMediaQuery("(max-width: 639px)");
@@ -119,9 +123,9 @@ export function ExternalSourceStrip({
         <strong>Read-only sources</strong>
         <span aria-live="polite">
           {selectedCount > 0
-            ? `${selectedCount} retained source selection(s). Clear the selection to send.`
+            ? inclusionEnabled ? `${selectedCount} source(s) selected for the next turn.` : `${selectedCount} retained source selection(s). Clear the selection to send.`
             : compact
-              ? "New-turn context unavailable"
+              ? inclusionEnabled ? "Select sources for the next turn" : "New-turn context unavailable"
               : SOURCES_AVAILABLE_NOTICE}
         </span>
         {selectedCount > 0 ? (
@@ -148,11 +152,11 @@ export function ExternalSourceStrip({
       {compact ? (
         <details className="mc-next-composer-external-hint mt-2 text-fg-secondary">
           <summary className="mc-next-composer-inline-button inline-flex min-h-11 cursor-pointer items-center text-accent">About read-only sources</summary>
-          <p className="mc-next-composer-external-hint my-2">{NEW_TURN_CONTEXT_NOTICE}</p>
+          <p className="mc-next-composer-external-hint my-2">{contextNotice}</p>
           {selectedCount > 0 ? null : <p className="mc-next-composer-external-hint my-2">{SOURCES_AVAILABLE_NOTICE}</p>}
         </details>
       ) : (
-        <p className="mc-next-composer-external-hint my-2 text-fg-secondary">{NEW_TURN_CONTEXT_NOTICE}</p>
+        <p className="mc-next-composer-external-hint my-2 text-fg-secondary">{contextNotice}</p>
       )}
       {pickerOpen ? (
         <div className="mc-next-source-picker-backdrop fixed inset-0 z-50 grid place-items-center bg-sunken/90 p-3">
@@ -167,7 +171,7 @@ export function ExternalSourceStrip({
             <header className="mc-next-source-picker-header flex items-start justify-between gap-3">
               <div>
                 <h2 id={`${stripInstanceId}-picker-title`}>Attached sources</h2>
-                <p id={`${stripInstanceId}-selection-restriction`}>Including external sources in new Chat turns is temporarily unavailable while Chat uses live capabilities. Clear any retained selection to send. Read-only inspection and governed Knowledge copies remain available.</p>
+                <p id={`${stripInstanceId}-selection-restriction`}>{inclusionEnabled ? "Select sources for this next turn only. Each selection is checked and captured by the Gateway when you send." : "Including external sources in new Chat turns is temporarily unavailable while Chat uses live capabilities. Clear any retained selection to send. Read-only inspection and governed Knowledge copies remain available."}</p>
               </div>
               <button
                 ref={pickerCloseRef}
@@ -218,7 +222,7 @@ export function ExternalSourceStrip({
                             id={checkboxId}
                             type="checkbox"
                             checked={selected}
-                            disabled={disabled || busy || controls.loading || !selected}
+                            disabled={disabled || busy || controls.loading || (!selected && (!inclusionEnabled || !controls.canMutate))}
                             aria-describedby={`${stripInstanceId}-selection-restriction`}
                             onChange={() => controls.onToggleSelect(attachment.attachmentId)}
                             aria-label={`Include ${sourceName} in the next turn`}
@@ -270,7 +274,7 @@ export function ExternalSourceStrip({
               <summary>Attach a verified import</summary>
               <div id={attachFormId} className="mc-next-composer-external-attach-form grid gap-3">
                 <p className="mc-next-composer-external-hint my-2 text-fg-secondary">
-                  Attach a verified import for read-only inspection or a governed Knowledge copy. Attachment does not enable next-turn context.
+                  Attach a verified import for read-only inspection or a governed Knowledge copy. Attachment alone does not include content in a turn.
                 </p>
                 {controls.loading ? (
                   <p className="mc-next-composer-external-hint my-2 text-fg-secondary" role="status">
@@ -367,7 +371,7 @@ export function ExternalSourceStrip({
             <footer className="mc-next-source-picker-footer mt-3 flex flex-wrap items-center justify-between gap-3">
               <span aria-live="polite">
                 {selectedCount > 0
-                  ? `${selectedCount} retained source selection(s); clear before sending`
+                  ? inclusionEnabled ? `${selectedCount} source(s) selected for the next turn` : `${selectedCount} retained source selection(s); clear before sending`
                   : "No sources selected"}
               </span>
               <button type="button" className="mc-next-composer-inline-button inline-flex min-h-11 items-center rounded-md border border-line px-3 text-accent disabled:opacity-50" onClick={closePicker}>

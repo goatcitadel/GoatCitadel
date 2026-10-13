@@ -2,7 +2,8 @@ import { canonicalJsonString, normalizeRemoteWorkerRuntimeResultExpectation, typ
 import { snapshotRemoteWorkerRuntimeRequestPreparation, snapshotRemoteWorkerCellCapacityInventoryAdmission, type AsyncStorage, type RemoteWorkerRuntimeRequestPreparationInput,
   type RemoteWorkerRuntimeAdmissionInput, type RemoteWorkerRuntimeAdmissionResult, type NativePolicyReservationLookup } from "@goatcitadel/storage";
 import { normalizeWindowsRuntimeDispatch } from "@goatcitadel/contracts/remote-worker-runtime-node";
-import { resolveRemoteWorkerChatProfile, type RemoteWorkerChatAuthorityDependencies } from "./remote-worker-chat-authority.js";
+import { resolveRemoteWorkerChatAuthority, remoteWorkerChatEvidenceMaterial, type RemoteWorkerChatAuthorityDependencies } from "./remote-worker-chat-authority.js";
+import { revalidateRemoteWorkerExecutionAuthority } from "./remote-worker-execution-authority-guard.js";
 export interface RemoteWorkerNativeRuntimePolicyPort {
   authorize(input: RemoteWorkerRuntimeRequestPreparationInput & { signal?: AbortSignal }): Promise<void>;
   authorizeAdmitted(input: RemoteWorkerRuntimeRequestPreparationInput & { nonce: string; requestSha256: string; signal?: AbortSignal }): Promise<void>;
@@ -26,18 +27,18 @@ export function createRemoteWorkerNativeRuntimePolicy(dependencies: RemoteWorker
     const read = async () => {
       signal?.throwIfAborted();
       const execution = await dependencies.storage.remoteWorkerAssignments.resolveActiveChatExecution(command, command.protectedAuthority);
-      const binding = await resolveRemoteWorkerChatProfile(dependencies, execution);
+      const binding = await revalidateRemoteWorkerExecutionAuthority(dependencies, command, execution, "Native runtime admission changed.");
       signal?.throwIfAborted();
-      const manifest = execution.authority.assignment.manifest, selected = binding.profile.selection.tools.find(tool => tool.canonicalName === "shell.exec");
+      const manifest = execution.authority.assignment.manifest, selected = binding.evidence.tools.find(tool => tool.canonicalName === "shell.exec");
       if (!manifest.requiredCapabilityClasses.includes("durable_compute") || !manifest.requiredCapabilityClasses.includes("governed_tool") ||
           selected?.runtimeOwner?.kind !== "builtin" || !selected.effectPotential)
         throw new Error("Native runtime requires its admitted builtin shell capability.");
       return { binding, manifest };
     };
-    const before = await read(), { profile, policy } = before.binding;
-    const expectedProfile = canonicalJsonString(profile), expectedManifest = canonicalJsonString(before.manifest), expectedPolicy = canonicalJsonString(policy);
-    const policyRequest: ToolAccessEvaluateRequest = { toolName: "shell.exec", agentId: "assistant", sessionId: profile.identity.sessionId,
-      workspaceId: profile.identity.workspaceId, citadelId: profile.identity.citadelId, taskId: before.manifest.taskId,
+    const before = await read(), { evidence, policy } = before.binding;
+    const expectedEvidence = canonicalJsonString(remoteWorkerChatEvidenceMaterial(evidence)), expectedManifest = canonicalJsonString(before.manifest), expectedPolicy = canonicalJsonString(policy);
+    const policyRequest: ToolAccessEvaluateRequest = { toolName: "shell.exec", agentId: "assistant", sessionId: evidence.identity.sessionId,
+      workspaceId: evidence.identity.workspaceId, citadelId: evidence.identity.citadelId, taskId: before.manifest.taskId,
       runId: before.manifest.durableRunId, surface: "chat", policyContext: policy, permissionProfileId: policy.permissionProfileId,
       args: { command: launch.commandLine, cwd: launch.directory } };
     const decision = await check(policyRequest);
@@ -50,7 +51,7 @@ export function createRemoteWorkerNativeRuntimePolicy(dependencies: RemoteWorker
     if (decision.wardEffect !== undefined && decision.wardEffect !== "allow" && decision.wardEffect !== "require_approval")
       throw new Error("Native runtime cannot enforce the current Ward restriction.");
     const after = await read();
-    if (canonicalJsonString(after.binding.profile) !== expectedProfile || canonicalJsonString(after.manifest) !== expectedManifest ||
+    if (canonicalJsonString(remoteWorkerChatEvidenceMaterial(after.binding.evidence)) !== expectedEvidence || canonicalJsonString(after.manifest) !== expectedManifest ||
         canonicalJsonString(after.binding.policy) !== expectedPolicy) throw new Error("Native runtime policy context changed during review.");
     return policyRequest;
   };

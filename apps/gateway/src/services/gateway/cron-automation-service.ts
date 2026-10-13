@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- Cron automation keeps scheduling, run lookup, failure metadata, and operator actions co-located while gateway ownership is still centralized. */
 import { observeActiveCronAgentRun, reconcileCompletedCronChannelDelivery } from "./cron-channel-reconciliation.js";
+import { requireClaimedCommitmentOccurrence } from "../scheduled-cron-storage-guards.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   isCronRunTerminalStatus,
@@ -239,7 +240,7 @@ export class CronAutomationService {
     actionConfig?: unknown;
     workdir?: string;
     contextFrom?: string;
-  }): Promise<CronJobRecord> {
+  }, creatorAuthority?: import("@goatcitadel/contracts").CronJobCreatorAuthorityInput): Promise<CronJobRecord> {
     const jobId = normalizeCronJobId(input.jobId);
     if (await this.deps.storage.cronJobs.get(jobId)) {
       throw new Error(`Cron job already exists: ${jobId}`);
@@ -266,7 +267,7 @@ export class CronAutomationService {
     }
     const saved = await this.deps.specOwner.createSpec(job, {
       nextRunAt: job.nextRunAt ?? null,
-    });
+    }, job.action === "agent_turn" && job.actionConfig?.agentTurn?.createdBy?.permissionProfileId ? creatorAuthority : undefined);
     await this.deps.publishRealtime("system", "cron", {
       type: "cron_job_created",
       jobId: saved.jobId,
@@ -292,6 +293,7 @@ export class CronAutomationService {
       contextFrom?: string | null;
     },
     expectedRevision: number,
+    creatorAuthority?: import("@goatcitadel/contracts").CronJobCreatorAuthorityInput,
   ): Promise<CronJobRecord> {
     const current = await this.getCronJob(jobId);
     const action = input.action !== undefined ? normalizeCronJobAction(input.action) : current.action;
@@ -319,7 +321,7 @@ export class CronAutomationService {
     }
     const saved = await this.deps.specOwner.updateSpec(updated, expectedRevision, {
       nextRunAt: updated.nextRunAt ?? null,
-    });
+    }, input.actionConfig !== undefined && updated.action === "agent_turn" && updated.actionConfig?.agentTurn?.createdBy?.permissionProfileId ? creatorAuthority : undefined);
     await this.deps.publishRealtime("system", "cron", {
       type: "cron_job_updated",
       jobId: saved.jobId,
@@ -582,6 +584,12 @@ export class CronAutomationService {
     } finally {
       if (lifecycleAdmission?.admitted) lifecycleAdmission.reservation.release();
     }
+  }
+
+  /** Internal maintenance entry: only resume an occurrence already atomically claimed by its commitment owner. */
+  public async processCommitmentOccurrence(runId: string): Promise<CronRunResult> {
+    const run = await requireClaimedCommitmentOccurrence(this.deps, runId);
+    return await this.processCanonicalAgentTurnCronRun(run);
   }
 
   private async beginCanonicalInlineCronRun(

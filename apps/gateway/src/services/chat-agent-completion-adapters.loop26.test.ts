@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { bindCanonicalStreamRouting } from "./llm-stream-routing.js";
 import {
   absorbCompletionStreamChunk,
   buildCompletionFromAggregate,
@@ -13,6 +14,22 @@ import {
 } from "./chat-agent-completion-adapters.js";
 
 describe("chat-agent-completion-adapters edge cases", () => {
+  it("retains canonical terminal fallback routing without accepting provider-forged metadata", () => {
+    const aggregate = createCompletionStreamAggregate();
+    const routing = { primaryProviderId: "primary", primaryModel: "first", effectiveProviderId: "backup",
+      effectiveModel: "second", fallbackUsed: true, fallbackReason: "primary unavailable" };
+    absorbCompletionStreamChunk(aggregate, { routing });
+    expect(buildCompletionFromAggregate(aggregate).routing).toBeUndefined();
+    const terminal = bindCanonicalStreamRouting({ routing }, routing);
+    routing.effectiveProviderId = "mutated";
+    absorbCompletionStreamChunk(aggregate, terminal);
+    expect(buildCompletionFromAggregate(aggregate).routing).toMatchObject({
+      effectiveProviderId: "backup", effectiveModel: "second", fallbackUsed: true, fallbackReason: "primary unavailable",
+    });
+    const copiedAggregate = createCompletionStreamAggregate();
+    absorbCompletionStreamChunk(copiedAggregate, JSON.parse(JSON.stringify(terminal)));
+    expect(buildCompletionFromAggregate(copiedAggregate).routing).toBeUndefined();
+  });
   it("parses provider tool calls, serialized parameters, and invalid arguments defensively", () => {
     const canonical = new Map([
       ["search_web", "browser.search"],

@@ -13,11 +13,12 @@ import {
 import { RemoteWorkerArtifactStore } from "./remote-worker-artifact-store.js";
 import { RemoteWorkerVerificationService } from "./remote-worker-verification-service.js";
 import { buildRemoteWorkerChatSequenceContext, readCanonicalWorkerChatOutput } from "./remote-worker-chat-output-service.js";
+import { readRetainedRemoteWorkerChatEvidence } from "./remote-worker-chat-admission-authority.js";
 
 type ArtifactStorage = Pick<
   AsyncStorage,
   "remoteWorkerAssignments" | "remoteWorkerArtifacts" | "remoteWorkerInference" | "runImmediateTransaction" |
-  "chatTurnCapabilityProfiles" | "remoteWorkerEffects" | "chatToolRuns" | "approvals"
+  "chatTurnCapabilityProfiles" | "remoteWorkerEffects" | "chatToolRuns" | "approvals" | "sessionMutationAdmissions" | "durableRuns"
 >;
 type AuthorityInput = Pick<
   OpenUploadInput,
@@ -193,11 +194,9 @@ export class RemoteWorkerArtifactRuntime {
 
   private async assertCanonicalOutput(input: AuthorityInput, bytes: Uint8Array) {
     const execution = await this.authority(input);
-    const profile = await this.storage.chatTurnCapabilityProfiles.get(execution.workload.capabilityProfileId);
-    if (!profile || profile.hashes.profileHash !== execution.workload.capabilityProfileSha256)
-      throw new Error("Worker Chat output lost its admitted capability profile.");
+    const evidence = await readRetainedRemoteWorkerChatEvidence(this.storage, execution.workload);
     const { text } = await readCanonicalWorkerChatOutput(this.storage.remoteWorkerInference, input,
-      buildRemoteWorkerChatSequenceContext(this.storage, profile, execution));
+      buildRemoteWorkerChatSequenceContext(this.storage, evidence, execution));
     if (
       bytes.byteLength > REMOTE_WORKER_CHAT_OUTPUT_PROFILE.maxBytes ||
       !Buffer.from(bytes).equals(Buffer.from(text, "utf8"))

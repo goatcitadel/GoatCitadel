@@ -1,4 +1,4 @@
-import type { CronJobRecord } from "@goatcitadel/contracts";
+import type { CronJobRecord, CronJobCreatorAuthorityInput } from "@goatcitadel/contracts";
 import type { CronJobRuntimeTelemetryPatch, CronJobSpecInput, CronJobSpecPatch } from "@goatcitadel/storage";
 import type { CronSpecMutationOwner } from "../cron-config-generation-owner.js";
 
@@ -9,26 +9,27 @@ interface TestCronJobRepository {
   mergeRuntimeTelemetry(jobId: string, patch: CronJobRuntimeTelemetryPatch): CronJobRecord;
   deleteWithRevision(jobId: string, expectedRevision: number): boolean;
   reconcileSpec?(spec: CronJobSpecInput): CronJobRecord;
+  bindCreatorAuthority(jobId: string, expectedRevision: number, input: CronJobCreatorAuthorityInput): CronJobRecord;
 }
 
 /** Test-only synchronous-repository adapter for CronAutomationService unit fakes. */
 export function createTestCronSpecOwner(repository: unknown): CronSpecMutationOwner {
   const cronJobs = repository as TestCronJobRepository;
   return {
-    createSpec: async (spec, telemetry) => {
+    createSpec: async (spec, telemetry, creatorAuthority) => {
       let saved = cronJobs.createSpec(spec);
       if (telemetry && Object.keys(telemetry).length > 0) {
         saved = cronJobs.mergeRuntimeTelemetry(spec.jobId, telemetry);
       }
-      return saved;
+      return creatorAuthority ? cronJobs.bindCreatorAuthority(saved.jobId, saved.revision, creatorAuthority) : saved;
     },
-    updateSpec: async (spec, expectedRevision, telemetry) => {
+    updateSpec: async (spec, expectedRevision, telemetry, creatorAuthority) => {
       const before = cronJobs.get(spec.jobId);
       let saved = cronJobs.updateSpecWithRevision(spec.jobId, fullPatch(spec), expectedRevision);
       if (before && saved.revision !== before.revision && telemetry && Object.keys(telemetry).length > 0) {
         saved = cronJobs.mergeRuntimeTelemetry(spec.jobId, telemetry);
       }
-      return saved;
+      return creatorAuthority ? cronJobs.bindCreatorAuthority(saved.jobId, saved.revision, creatorAuthority) : saved;
     },
     deleteSpec: async (jobId, expectedRevision) => cronJobs.deleteWithRevision(jobId, expectedRevision),
     reconcileSpec: async (spec) => {

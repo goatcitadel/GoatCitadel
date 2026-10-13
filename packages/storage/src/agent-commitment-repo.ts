@@ -1,4 +1,15 @@
 import type { DatabaseClient } from "./db.js";
+import {
+  buildCommitmentCheckInPrompt,
+  canonicalJsonString,
+  ConflictError,
+  type CommitmentCreatorReceipt,
+  type CronAgentTurnConfig,
+  type CronRunRecord,
+} from "@goatcitadel/contracts";
+import { CronJobRepository } from "./cron-job-repo.js";
+import { CronRunRepository } from "./cron-run-repo.js";
+import { commitmentSha256, readCommitmentCreatorReceipt } from "./commitment-creator-receipt.js";
 import type {
   AgentCommitmentCreatedBy,
   AgentCommitmentKind,
@@ -19,6 +30,12 @@ interface AgentCommitmentRow {
   created_by: string;
   created_at: string;
   sent_at: string | null;
+  revision: number;
+  creator_receipt_json: string | null;
+  creator_receipt_sha256: string | null;
+  scheduled_job_id: string | null;
+  scheduled_run_id: string | null;
+  scheduled_material_sha256: string | null;
 }
 
 /** Input for {@link AgentCommitmentRepository.upsertByDedupe}. */
@@ -33,6 +50,8 @@ export interface AgentCommitmentUpsertInput {
   suggestedText: string;
   status?: AgentCommitmentStatus;
   createdBy?: AgentCommitmentCreatedBy;
+  /** Internal canonical turn pointer, never classifier-generated authority. */
+  sourceTurnId?: string;
 }
 
 /**
@@ -59,17 +78,23 @@ export class AgentCommitmentRepository {
     this.upsertStmt = db.prepare(`
       INSERT INTO agent_commitments (
         commitment_id, session_id, workspace_id, kind, due_at, confidence,
-        dedupe_key, suggested_text, status, created_by, created_at, sent_at
+        dedupe_key, suggested_text, status, created_by, created_at, sent_at,
+        revision, creator_receipt_json, creator_receipt_sha256
       ) VALUES (
         @commitmentId, @sessionId, @workspaceId, @kind, @dueAt, @confidence,
-        @dedupeKey, @suggestedText, @status, @createdBy, @createdAt, NULL
+        @dedupeKey, @suggestedText, @status, @createdBy, @createdAt, NULL,
+        1, @creatorReceiptJson, @creatorReceiptSha256
       )
       ON CONFLICT(session_id, dedupe_key) DO UPDATE SET
         kind = excluded.kind,
         due_at = excluded.due_at,
         confidence = excluded.confidence,
         suggested_text = excluded.suggested_text,
-        workspace_id = excluded.workspace_id
+        workspace_id = excluded.workspace_id,
+        revision = agent_commitments.revision + 1,
+        creator_receipt_json = excluded.creator_receipt_json,
+        creator_receipt_sha256 = excluded.creator_receipt_sha256
+      WHERE agent_commitments.scheduled_run_id IS NULL
     `);
     this.getStmt = db.prepare(`
       SELECT * FROM agent_commitments WHERE commitment_id = ?
@@ -129,6 +154,7 @@ export class AgentCommitmentRepository {
    * refresh inferred fields; lifecycle (`status`/`sent_at`) is preserved.
    */
   public upsertByDedupe(input: AgentCommitmentUpsertInput, now = new Date().toISOString()): AgentCommitmentRecord {
+    const receipt = readCommitmentCreatorReceipt(this.db, input);
     this.upsertStmt.run({
       commitmentId: input.commitmentId,
       sessionId: input.sessionId,
@@ -141,6 +167,8 @@ export class AgentCommitmentRepository {
       status: input.status ?? "pending",
       createdBy: input.createdBy ?? "classifier",
       createdAt: now,
+      creatorReceiptJson: receipt ? canonicalJsonString(receipt) : null,
+      creatorReceiptSha256: receipt ? commitmentSha256(receipt) : null,
     });
     const stored = this.getByDedupe(input.sessionId, input.dedupeKey);
     if (!stored) {
@@ -155,6 +183,162 @@ export class AgentCommitmentRepository {
   public get(commitmentId: string): AgentCommitmentRecord | undefined {
     const row = toRow(this.getStmt.get(commitmentId));
     return row ? mapRow(row) : undefined;
+  }
+
+  /** Atomically freeze inferred material and reserve exactly one existing cron occurrence. */
+  public claimScheduledOccurrence(input: {
+    commitmentId: string;
+    expectedRevision: number;
+    deliveryChannel?: CronAgentTurnConfig["deliveryChannel"];
+  }): CronRunRecord {
+    return this.db.transaction("immediate", () => {
+      const observed = this.get(input.commitmentId);
+      if (!observed) throw new ConflictError({ message: "Commitment no longer exists." });
+      // Share the session admission lock before taking the commitment row lock.
+      if (this.db.dialect === "postgres") this.db.prepare("SELECT pg_advisory_xact_lock(hashtextextended(@sessionId, 411))")
+        .get({ sessionId: observed.sessionId });
+      // A no-op update obtains the PostgreSQL row lock before rereading; SQLite already holds the write lock.
+      this.db.prepare("UPDATE agent_commitments SET status = status WHERE commitment_id = ?").run(input.commitmentId);
+      const row = this.get(input.commitmentId);
+      if (!row) throw new ConflictError({ message: "Commitment no longer exists." });
+      const runs = new CronRunRepository(this.db);
+      if (row.scheduledRunId) {
+        const existing = runs.get(row.scheduledRunId);
+        if (!existing) throw new ConflictError({ message: "Commitment occurrence owner is missing." });
+        return existing;
+      }
+      const nowRow = this.db
+        .prepare(
+          this.db.dialect === "postgres"
+            ? `SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS now_iso`
+            : `SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now') AS now_iso`,
+        )
+        .get<{ now_iso: string }>();
+      const now = nowRow!.now_iso;
+      if (row.status !== "pending" || row.revision !== input.expectedRevision || row.dueAt > now)
+        throw new ConflictError({ message: "Commitment revision is stale or not due." });
+      const active = this.db.prepare(`SELECT 1 FROM agent_commitments c JOIN cron_runs r ON r.run_id = c.scheduled_run_id
+        WHERE c.session_id = @sessionId AND c.workspace_id = @workspaceId
+          AND r.status IN ('admitting', 'admitted', 'running', 'waiting') LIMIT 1`)
+        .get({ sessionId: row.sessionId, workspaceId: row.workspaceId });
+      if (active) throw new ConflictError({ message: "Another commitment occurrence is already active for this session." });
+      const creator = this.readCurrentCreator(row);
+      const materialSha256 = commitmentSha256(commitmentMaterial(row));
+      const suffix = commitmentSha256({ commitmentId: row.commitmentId }).slice(0, 40);
+      const jobId = `commitment_${suffix}`;
+      const runId = `cron_commitment_${suffix}`;
+      const config: CronAgentTurnConfig = {
+        sessionId: row.sessionId,
+        prompt: buildCommitmentCheckInPrompt(row.suggestedText),
+        deliverMode: "always",
+        commitment: { commitmentId: row.commitmentId, revision: row.revision!, materialSha256 },
+        ...(creator && input.deliveryChannel
+          ? {
+              deliveryChannel: input.deliveryChannel,
+              createdBy: { operatorId: creator.actorId, permissionProfileId: creator.permissionProfileId, depth: 0 },
+            }
+          : { inertInboxFallback: true }),
+      };
+      new CronJobRepository(this.db).createSpec(
+        {
+          jobId,
+          name: "Commitment follow-up",
+          action: "agent_turn",
+          actionConfig: { agentTurn: config },
+          schedule: "0 0 1 1 *",
+          enabled: false,
+          description: "One frozen commitment occurrence; execution and delivery are owned by cron.",
+        },
+        now,
+      );
+      const admitted = runs.beginAdmission(
+        {
+          jobId,
+          runId,
+          admissionKey: `commitment:${row.commitmentId}`,
+          scheduledFor: row.dueAt,
+          trigger: "scheduled_due",
+        },
+        now,
+      );
+      if (admitted.outcome === "blocked") throw new ConflictError({ message: "Commitment occurrence overlap." });
+      this.db
+        .prepare(
+          `UPDATE agent_commitments SET status = 'delivery_pending', scheduled_job_id = @jobId,
+        scheduled_run_id = @runId, scheduled_material_sha256 = @materialSha256
+        WHERE commitment_id = @commitmentId AND scheduled_run_id IS NULL AND revision = @revision`,
+        )
+        .run({
+          jobId,
+          runId,
+          materialSha256,
+          commitmentId: row.commitmentId,
+          revision: row.revision,
+        });
+      return admitted.run;
+    });
+  }
+
+  /** The immutable cron snapshot must agree with both frozen material and the current source owner. */
+  public assertScheduledOccurrence(runId: string, config: CronAgentTurnConfig): AgentCommitmentRecord {
+    const ref = config.commitment;
+    const row = ref ? this.get(ref.commitmentId) : undefined;
+    const creator = row ? this.readCurrentCreator(row) : undefined;
+    if (
+      !row ||
+      !ref ||
+      !creator ||
+      row.scheduledRunId !== runId ||
+      row.revision !== ref.revision ||
+      row.scheduledMaterialSha256 !== ref.materialSha256 ||
+      commitmentSha256(commitmentMaterial(row)) !== ref.materialSha256 ||
+      config.sessionId !== row.sessionId ||
+      config.prompt !== buildCommitmentCheckInPrompt(row.suggestedText) ||
+      config.createdBy?.operatorId !== creator.actorId ||
+      config.createdBy?.permissionProfileId !== creator.permissionProfileId ||
+      config.inertInboxFallback ||
+      row.status !== "delivery_pending"
+    )
+      throw new ConflictError({ message: "Commitment occurrence or creator receipt is stale." });
+    return row;
+  }
+
+  /** Only the canonical cron terminal receipt settles a scheduled commitment; delivery retries never rerun its model. */
+  public reconcileScheduled(limit = 100): number {
+    const rows = this.db
+      .prepare(
+        `SELECT c.commitment_id, r.status, r.outcome_json FROM agent_commitments c
+      JOIN cron_runs r ON r.run_id = c.scheduled_run_id
+      WHERE c.status = 'delivery_pending' ORDER BY c.due_at LIMIT ?`,
+      )
+      .all<{ commitment_id: string; status: string; outcome_json: string | null }>(clampLimit(limit));
+    let count = 0;
+    for (const row of rows) {
+      if (row.status === "completed") {
+        const outcome = row.outcome_json ? (JSON.parse(row.outcome_json) as Record<string, unknown>) : {};
+        if (outcome.mode === "inbox" || outcome.status === "inbox_created") {
+          this.db
+            .prepare(
+              "UPDATE agent_commitments SET status = 'dismissed' WHERE commitment_id = ? AND status = 'delivery_pending'",
+            )
+            .run(row.commitment_id);
+        } else if (outcome.deliveryStatus === "sent" && typeof outcome.deliveryId === "string") {
+          this.markSent(row.commitment_id);
+        } else this.markDeliveryFailed(row.commitment_id);
+        count++;
+      } else if (["failed", "cancelled", "manual_reconciliation_required"].includes(row.status)) {
+        this.markDeliveryFailed(row.commitment_id);
+        count++;
+      }
+    }
+    return count;
+  }
+
+  private readCurrentCreator(row: AgentCommitmentRecord): CommitmentCreatorReceipt | undefined {
+    const receipt = row.creatorReceipt;
+    if (!receipt || commitmentSha256(receipt) !== row.creatorReceiptSha256) return undefined;
+    const current = readCommitmentCreatorReceipt(this.db, { ...row, sourceTurnId: receipt.sourceTurnId });
+    return current && canonicalJsonString(current) === canonicalJsonString(receipt) ? current : undefined;
   }
 
   public getByDedupe(sessionId: string, dedupeKey: string): AgentCommitmentRecord | undefined {
@@ -225,6 +409,29 @@ function mapRow(row: AgentCommitmentRow): AgentCommitmentRecord {
     createdBy: row.created_by as AgentCommitmentCreatedBy,
     createdAt: row.created_at,
     sentAt: row.sent_at ?? undefined,
+    revision: Number(row.revision),
+    creatorReceipt: row.creator_receipt_json
+      ? (JSON.parse(row.creator_receipt_json) as CommitmentCreatorReceipt)
+      : undefined,
+    creatorReceiptSha256: row.creator_receipt_sha256 ?? undefined,
+    scheduledJobId: row.scheduled_job_id ?? undefined,
+    scheduledRunId: row.scheduled_run_id ?? undefined,
+    scheduledMaterialSha256: row.scheduled_material_sha256 ?? undefined,
+  };
+}
+
+function commitmentMaterial(row: AgentCommitmentRecord) {
+  return {
+    version: "commitment.occurrence.v1",
+    commitmentId: row.commitmentId,
+    revision: row.revision,
+    sessionId: row.sessionId,
+    workspaceId: row.workspaceId,
+    kind: row.kind,
+    dueAt: row.dueAt,
+    dedupeKey: row.dedupeKey,
+    suggestedText: row.suggestedText,
+    creatorReceiptSha256: row.creatorReceiptSha256 ?? null,
   };
 }
 

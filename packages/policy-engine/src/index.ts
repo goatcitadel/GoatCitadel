@@ -12,6 +12,7 @@ export {
   BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_CODE,
   BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_MESSAGE,
   describeBrowserSessionState,
+  forgetBrowserSessionState,
   type BrowserExecutionContext,
 } from "./browser-tools.js";
 export * from "./tool-patterns.js";

@@ -408,6 +408,15 @@ export interface AgentsResponse {
 }
 
 export interface RuntimeSettingsResponse {
+  /** Effective rollout availability only. Current grants, approval and model health still apply. */
+  chatFeatureAvailability?: {
+    durableExecution: boolean;
+    explicitContext: boolean;
+    supervisedDelegation: boolean;
+    automaticFanout: boolean;
+    providerFallback: boolean;
+    staticMcp?: boolean;
+  };
   /** Opaque monotonic revision required by settings mutation requests. */
   revision: number;
   /** Present when the compatibility save was governed by a Change Plan. */
@@ -590,6 +599,19 @@ export interface RuntimeSettingsResponse {
     plannerFanoutV1Disabled?: boolean;
     subagentFanoutV1Disabled?: boolean;
     durableChatFanoutV1Enabled?: boolean;
+    chatProviderFallbackV1Enabled?: boolean;
+    chatSkillInstructionsV1Enabled?: boolean;
+    boundedToolExposureV1Enabled?: boolean;
+    scheduledChatTurnsV1Enabled?: boolean;
+    chatExplicitContextV1Enabled?: boolean;
+    chatAutomaticFanoutV1Enabled?: boolean;
+    chatDelegationControlsV1Enabled?: boolean;
+    proactiveHeartbeatTurnsV1Enabled?: boolean;
+    commitmentScheduledTurnsV1Enabled?: boolean;
+    chatMeshCapabilitiesV1Enabled?: boolean;
+    chatRemotePlacementV1Enabled?: boolean;
+    chatRequesterMcpV1Enabled?: boolean;
+    chatStaticMcpV1Enabled?: boolean;
     evolutionControlPlaneV1Enabled?: boolean;
     improvementLocalObservationV1Enabled?: boolean;
     improvementModelEvaluationV1Enabled?: boolean;

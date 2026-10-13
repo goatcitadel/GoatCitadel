@@ -8,7 +8,7 @@ import type {
   DelegatedFilesystemScopeControl,
   DelegatedWorkResult,
 } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { NotFoundError, readChatDelegationResultSchema } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface ChatDelegationStepRow {
@@ -857,6 +857,14 @@ export class ChatDelegationStepRepository {
     return rows.map(mapRow);
   }
 
+  /** Bounded primary-key traversal for existing-owner resource reconciliation. */
+  public listResourceCleanupPage(afterStepId = "", limit = 32): ChatDelegationStepRecord[] {
+    const bounded = Number.isSafeInteger(limit) ? Math.max(1, Math.min(32, limit)) : 32;
+    return toChatDelegationStepRows(this.db.prepare(`
+      SELECT * FROM chat_delegation_steps WHERE step_id > ? ORDER BY step_id ASC LIMIT ?
+    `).all(afterStepId, bounded)).map(mapRow);
+  }
+
   /** Locks all steps for an aggregate transition. Call inside a storage transaction. */
   public listByRunForUpdate(runId: string): ChatDelegationStepRecord[] {
     const rows = toChatDelegationStepRows(this.listByRunForUpdateStmt.all({ runId }));
@@ -1293,10 +1301,11 @@ function parseInstructionSnapshot(
   } catch {
     throw new Error("Delegation step has a malformed instruction snapshot.");
   }
-  if (!isRecord(value) || Object.keys(value).some((key) => !["objective", "label", "expectedOutput"].includes(key)) ||
+  if (!isRecord(value) || Object.keys(value).some((key) => !["objective", "label", "expectedOutput", "resultSchema"].includes(key)) ||
     [value.objective, value.label, value.expectedOutput].some((field) => field !== undefined && typeof field !== "string")) {
     throw new Error("Delegation step has a malformed instruction snapshot.");
   }
+  if (value.resultSchema !== undefined) readChatDelegationResultSchema(value.resultSchema);
   return value as ChatDelegationStepRecord["instructionSnapshot"];
 }
 

@@ -458,6 +458,19 @@ describe("GatewayService low-hanging facade delegation", () => {
     expect(gateway.finalizeDurableChatRun).toHaveBeenCalledWith("run-1", {}, {}, "lease-owner-1");
   });
 
+  it("keeps explicit-context source revalidation bound through the shipped durable workflow host", async () => {
+    const gateway = createGatewayHarness();
+    gateway.revalidateChatRoutedContextSnapshot = vi.fn(async () => undefined);
+    const host = (GatewayService.prototype as unknown as {
+      buildDurableChatTurnWorkflowHost(this: unknown): { revalidateChatRoutedContextSnapshot(snapshot: unknown): Promise<void> };
+    }).buildDurableChatTurnWorkflowHost.call(gateway);
+    const snapshot = { snapshotId: "admitted-snapshot" };
+    await expect(host.revalidateChatRoutedContextSnapshot(snapshot)).resolves.toBeUndefined();
+    expect(gateway.revalidateChatRoutedContextSnapshot).toHaveBeenCalledExactlyOnceWith(snapshot);
+    gateway.revalidateChatRoutedContextSnapshot.mockRejectedValueOnce(new Error("source access revoked"));
+    await expect(host.revalidateChatRoutedContextSnapshot(snapshot)).rejects.toThrow("source access revoked");
+  });
+
   it("delegates dev diagnostics recording and logger attachment", () => {
     const gateway = createGatewayHarness();
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };

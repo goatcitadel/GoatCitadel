@@ -17,10 +17,10 @@ export function ComposerDelegationApproval({ props }: { props: MissionThreadedAc
     <section className="mc-next-composer-delegation-approval" role="alert" aria-live="assertive">
       <div className="mc-next-composer-delegation-head">
         <StatusChip tone="warning">Subagent approval</StatusChip>
-        <strong>Subagents unavailable</strong>
+        <strong>{props.supervisedDelegationAvailable ? "Review proposed delegation" : "Subagents unavailable"}</strong>
         {confidenceLabel ? <span>{confidenceLabel}</span> : null}
       </div>
-      <p>Subagent delegation is temporarily unavailable. This saved suggestion can be dismissed.</p>
+      <p>{props.supervisedDelegationAvailable ? "Approve this plan to start supervised local delegates under the current Chat permissions." : "Subagent delegation is temporarily unavailable. This saved suggestion can be dismissed."}</p>
       <p className="mc-next-composer-delegation-objective">{suggestion.objective}</p>
       {reason ? <p className="mc-next-composer-delegation-reason">{reason}</p> : null}
       {suggestion.roles.length > 0 ? (
@@ -36,10 +36,10 @@ export function ComposerDelegationApproval({ props }: { props: MissionThreadedAc
         <button
           type="button"
           className="mc-next-composer-inline-button primary"
-          disabled
+          disabled={props.sending || !props.supervisedDelegationAvailable}
           onClick={() => void props.onAcceptDelegation()}
         >
-          Subagents unavailable
+          {props.supervisedDelegationAvailable ? "Approve delegation" : "Subagents unavailable"}
         </button>
         <button
           type="button"

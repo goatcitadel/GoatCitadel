@@ -12,6 +12,7 @@ import { Dialog } from "../../ui/Dialog";
 import { ChannelDraftEvidencePanel } from "../../../features/native-routes/settings/channel-setup/ChannelDraftEvidencePanel";
 import { ChannelWizardFields, channelInputClass } from "./ChannelWizardFields";
 import { ChannelFeedback, ChannelRichBlocks, ChannelStepHelp } from "./ChannelWizardContent";
+import { ExtensionConfigurationGuidance } from "./ExtensionConfigurationGuidance";
 
 export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
   const wizard = useChannelWizard({ ...props, allowAdvancedInput: false });
@@ -68,6 +69,7 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
         <p className="text-xs text-fg-muted">Use the adapter's typed fields. Credentials are held by the dedicated secure-input owner and sent only through secure fields.</p>
       </div>
       </details>
+      <ExtensionConfigurationGuidance guidance={props.definition.configurationGuidance} />
       {wizard.advancedMode ? (
         <label className="block text-sm">
           Draft JSON

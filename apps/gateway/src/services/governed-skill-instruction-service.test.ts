@@ -11,7 +11,11 @@ import type {
 import { captureSkillContentIntegritySync } from "./skill-content-integrity.js";
 import {
   buildGovernedActivatedSkillReceipts,
+  estimateGovernedSkillInstructionTokens,
   renderGovernedActivatedSkillInstructions,
+  renderGovernedSkillInstructions,
+  readGovernedSkillContent,
+  SkillInstructionBudgetExceededError,
   SkillSecurityBlockedError,
 } from "./governed-skill-instruction-service.js";
 
@@ -34,6 +38,105 @@ afterEach(async () => {
 });
 
 describe("governed runtime skill instructions", () => {
+  it("reads exact UTF-8 bytes from a fresh callable trusted manifest without granting permissions", async () => {
+    const harness = buildHarness();
+    const input = {
+      skillId: harness.trusted.skillId, loadedSkill: harness.decision.selected[0], trustedSkill: harness.trusted, lifecycle: harness.lifecycle,
+      callableEntry: { capabilityId: harness.trusted.capabilityId, kind: "skill" as const, category: "built_in" as const,
+        callable: true, skillId: harness.trusted.skillId, title: "Design", summary: "Design skill" },
+    };
+    expect(readGovernedSkillContent(input)).toMatchObject({
+      content: await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8"), readOnly: true, permissionsGranted: false,
+    });
+    expect(() => readGovernedSkillContent({ ...input, callableEntry: { ...input.callableEntry, callable: false } })).toThrow(/not currently callable/);
+    expect(() => readGovernedSkillContent({ ...input, relativePath: "../outside.md" })).toThrow(/inside its verified manifest/);
+    expect(() => readGovernedSkillContent({ ...input, relativePath: "source.json" })).toThrow(/absent from its frozen manifest/);
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "tampered");
+    expect(() => readGovernedSkillContent(input)).toThrow(/exact-byte lifecycle verification/);
+  });
+
+  it("rejects oversized and non-UTF8 content rather than truncating skill instructions", async () => {
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "x".repeat(65537));
+    const harness = buildHarness();
+    const input = {
+      skillId: harness.trusted.skillId, loadedSkill: harness.decision.selected[0], trustedSkill: harness.trusted, lifecycle: harness.lifecycle,
+      callableEntry: { capabilityId: harness.trusted.capabilityId, kind: "skill" as const, category: "built_in" as const,
+        callable: true, skillId: harness.trusted.skillId, title: "Design", summary: "Design skill" },
+    };
+    expect(() => readGovernedSkillContent(input)).toThrow(/exceeds 65536 bytes/);
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), Buffer.from([0xff]));
+    const refreshed = buildHarness();
+    expect(() => readGovernedSkillContent({ ...input, trustedSkill: refreshed.trusted, lifecycle: refreshed.lifecycle })).toThrow(/not canonical UTF-8/);
+  });
+
+  it("refuses a directory link before reading content outside the frozen skill tree", async () => {
+    const harness = buildHarness();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "skill-read-outside-"));
+    try {
+      await fs.writeFile(path.join(outside, "private.md"), "outside-only content");
+      await fs.symlink(outside, path.join(skillDir, "jump"), "junction");
+      expect(() => readGovernedSkillContent({
+        skillId: harness.trusted.skillId, relativePath: "jump/private.md", loadedSkill: harness.decision.selected[0],
+        trustedSkill: harness.trusted, lifecycle: harness.lifecycle,
+        callableEntry: { capabilityId: harness.trusted.capabilityId, kind: "skill", category: "built_in", callable: true,
+          skillId: harness.trusted.skillId, title: "Design", summary: "Design skill" },
+      })).toThrow(/symbolic links/);
+    } finally {
+      await fs.rm(path.join(skillDir, "jump"), { force: true });
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+  it("renders feature-specific receipts with the same exact bytes as historical profile replay", () => {
+    const harness = buildHarness();
+    const receipts = buildGovernedActivatedSkillReceipts({
+      content: "Create a presentation.", decision: harness.decision,
+      trustedSkills: [harness.trusted], lifecycleRows: [harness.lifecycle],
+    });
+    const input = { receipts, trustedSkills: [harness.trusted], loadedSkills: harness.decision.selected, lifecycleRows: [harness.lifecycle] };
+    const historical = renderGovernedActivatedSkillInstructions({
+      profile: { selection: { trustedSkills: [harness.trusted], activatedSkills: receipts } } as ChatTurnCapabilityProfileRecord,
+      loadedSkills: input.loadedSkills, lifecycleRows: input.lifecycleRows,
+    });
+    const rendered = renderGovernedSkillInstructions(input)!;
+    expect(rendered).toBe(historical);
+    const estimated = estimateGovernedSkillInstructionTokens(rendered);
+    expect(renderGovernedSkillInstructions({ ...input, maxTokens: estimated })).toBe(rendered);
+    expect(() => renderGovernedSkillInstructions({ ...input, maxTokens: estimated - 1 }))
+      .toThrow(SkillInstructionBudgetExceededError);
+    expect(() => renderGovernedSkillInstructions({ ...input, maxTokens: Number.POSITIVE_INFINITY }))
+      .toThrow(/positive safe integer/);
+  });
+
+  it("never truncates an explicit skill or its receipt to meet a smaller budget", () => {
+    const harness = buildHarness();
+    harness.decision.reasons["design-intelligence"] = ["explicit"];
+    const receipts = buildGovernedActivatedSkillReceipts({
+      content: "Create a presentation.", decision: harness.decision,
+      trustedSkills: [harness.trusted], lifecycleRows: [harness.lifecycle],
+    });
+    const before = JSON.stringify(receipts);
+    expect(() => renderGovernedSkillInstructions({
+      receipts, trustedSkills: [harness.trusted], loadedSkills: harness.decision.selected,
+      lifecycleRows: [harness.lifecycle], maxTokens: 1,
+    })).toThrow(/Reduce the selected skills/);
+    expect(JSON.stringify(receipts)).toBe(before);
+    expect(estimateGovernedSkillInstructionTokens("操作手順")).toBe(4);
+  });
+
+  it("rejects revoked or changed content when rendering direct receipt bindings", async () => {
+    const harness = buildHarness();
+    const receipts = buildGovernedActivatedSkillReceipts({
+      content: "Create a presentation.", decision: harness.decision,
+      trustedSkills: [harness.trusted], lifecycleRows: [harness.lifecycle],
+    });
+    const input = { receipts, trustedSkills: [harness.trusted], loadedSkills: harness.decision.selected, lifecycleRows: [harness.lifecycle] };
+    harness.lifecycle.lifecycleState = "revoked";
+    expect(() => renderGovernedSkillInstructions(input)).toThrow(/exact-byte lifecycle verification/);
+    harness.lifecycle.lifecycleState = "trusted";
+    await fs.writeFile(path.join(skillDir, "presentation.md"), "Changed instruction content");
+    expect(() => renderGovernedSkillInstructions(input)).toThrow(/exact-byte lifecycle verification/);
+  });
+
   it("freezes and rehydrates only the compact presentation module", () => {
     const harness = buildHarness();
     const receipts = buildGovernedActivatedSkillReceipts({
@@ -82,6 +185,13 @@ describe("governed runtime skill instructions", () => {
         lifecycleRows: [harness.lifecycle],
       }),
     ).toEqual([]);
+
+    harness.decision.selected[0]!.state = "disabled";
+    expect(buildGovernedActivatedSkillReceipts({
+      content: "Create a presentation.", decision: harness.decision,
+      trustedSkills: [harness.trusted], lifecycleRows: [harness.lifecycle],
+    })).toEqual([]);
+    harness.decision.selected[0]!.state = "enabled";
 
     process.env.GOATCITADEL_DISABLE_GOVERNED_SKILL_INJECTION = "true";
     expect(

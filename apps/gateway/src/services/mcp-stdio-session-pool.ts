@@ -3,6 +3,11 @@ export interface RetainedMcpClient {
   close(): void;
   isClosed(): boolean;
 }
+/** Supplied only by the canonical Chat invocation owner, never a tool DTO. */
+export interface McpStdioResourceOwner {
+  sessionId: string;
+  turnId: string;
+}
 
 interface Session<C extends RetainedMcpClient> {
   serverId: string;
@@ -13,6 +18,7 @@ interface Session<C extends RetainedMcpClient> {
   invalidated: boolean;
   abort: AbortController;
   idleTimer?: ReturnType<typeof setTimeout>;
+  resourceOwner?: Readonly<McpStdioResourceOwner>;
 }
 
 export class McpStdioSessionPool<C extends RetainedMcpClient> {
@@ -31,12 +37,14 @@ export class McpStdioSessionPool<C extends RetainedMcpClient> {
     create: (signal: AbortSignal) => Promise<C>,
     run: (client: C) => Promise<T>,
     signal?: AbortSignal,
+    resourceOwner?: McpStdioResourceOwner,
   ): Promise<T> {
     if (this.closed) throw new Error("MCP session owner is closed.");
     signal?.throwIfAborted();
+    const owner = resourceOwner ? readResourceOwner(resourceOwner) : undefined;
     const key = JSON.stringify([serverId, scopeKey]);
     let session = this.sessions.get(key);
-    if (session && session.binding !== binding) {
+    if (session && (session.binding !== binding || !sameResourceOwner(session.resourceOwner, owner))) {
       this.invalidate(key, session);
       session = undefined;
     }
@@ -54,6 +62,7 @@ export class McpStdioSessionPool<C extends RetainedMcpClient> {
         users: 0,
         invalidated: false,
         abort,
+        resourceOwner: owner,
       };
       this.sessions.set(key, session);
       // Observe creation failure even if the caller cancels while waiting.
@@ -99,13 +108,31 @@ export class McpStdioSessionPool<C extends RetainedMcpClient> {
   /** Capture before a configuration write; delayed cleanup must leave replacement sessions alone. */
   public captureServerCloser(serverId: string): () => void {
     const owned = [...this.sessions].filter(([, session]) => session.serverId === serverId);
-    return () => { for (const [key, session] of owned) this.invalidate(key, session); };
+    return () => {
+      for (const [key, session] of owned) this.invalidate(key, session);
+    };
   }
 
   public closeSession(serverId: string, scopeKey: string): void {
     const key = JSON.stringify([serverId, scopeKey]);
     const session = this.sessions.get(key);
     if (session) this.invalidate(key, session);
+  }
+
+  /** Capture object identities before delayed settlement; never close a later
+   * replacement or another turn sharing a server. Count requests, not OS exits. */
+  public captureOwnerCloser(resourceOwner: McpStdioResourceOwner): () => number {
+    const owner = readResourceOwner(resourceOwner);
+    const owned = [...this.sessions].filter(([, session]) => sameResourceOwner(session.resourceOwner, owner));
+    return () => {
+      let requested = 0;
+      for (const [key, session] of owned) {
+        if (session.invalidated) continue;
+        this.invalidate(key, session);
+        requested += 1;
+      }
+      return requested;
+    };
   }
 
   public close(): void {
@@ -119,9 +146,24 @@ export class McpStdioSessionPool<C extends RetainedMcpClient> {
     session.abort.abort();
     clearTimeout(session.idleTimer);
     if (this.sessions.get(key) === session) this.sessions.delete(key);
-    void session.client.then(
-      (client) => client.close(),
-      () => undefined,
-    );
+    void session.client
+      .then(
+        (client) => client.close(),
+        () => undefined,
+      )
+      .catch(() => undefined);
   }
+}
+
+function readResourceOwner(owner: McpStdioResourceOwner): Readonly<McpStdioResourceOwner> {
+  if (
+    ![owner.sessionId, owner.turnId].every(
+      (value) => typeof value === "string" && value.trim().length > 0 && value.length <= 512,
+    )
+  )
+    throw new Error("MCP resource cleanup requires an exact Chat turn owner.");
+  return Object.freeze({ sessionId: owner.sessionId, turnId: owner.turnId });
+}
+function sameResourceOwner(a?: McpStdioResourceOwner, b?: McpStdioResourceOwner): boolean {
+  return a === undefined || b === undefined ? a === b : a.sessionId === b.sessionId && a.turnId === b.turnId;
 }

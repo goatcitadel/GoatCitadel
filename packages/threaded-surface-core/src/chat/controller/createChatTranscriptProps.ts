@@ -70,8 +70,9 @@ type Input = {
     | "historicalContinuationError"
     | "loadHistoricalContinuation"
     | "thread"
+    | "settings"
   >;
-  contextActions: Pick<ReturnType<typeof useChatContextActions>, "delegationSuggestion" | "setDelegationSuggestion">;
+  contextActions: Pick<ReturnType<typeof useChatContextActions>, "delegationSuggestion" | "setDelegationSuggestion" | "handleAcceptDelegation">;
   sessionStatus: Pick<ReturnType<typeof useChatSessionStatus>, "panel" | "refresh" | "stopFanout" | "close">;
   outbound: Pick<
     ReturnType<typeof useChatOutboundExecution>,
@@ -208,6 +209,7 @@ export function createChatTranscriptProps({
   | "onOpenLibraryImports"
   | "onOpenOpsRuntime"
   | "onAcceptDelegation"
+  | "supervisedDelegationAvailable"
   | "onDismissDelegationSuggestion"
   | "onApprovePending"
   | "onDenyPending"
@@ -335,8 +337,13 @@ export function createChatTranscriptProps({
     onOpenLibraryImports,
     onOpenOpsRuntime,
     onAcceptDelegation: async () => {
-      if (!blockHistoricalMutation()) pushLocalNotice("Subagent delegation is temporarily unavailable.", "warning");
+      if (blockHistoricalMutation()) return;
+      if (sessionData.settings?.chatFeatureAvailability?.supervisedDelegation !== true) {
+        pushLocalNotice("Subagent delegation is temporarily unavailable.", "warning"); return;
+      }
+      await contextActions.handleAcceptDelegation();
     },
+    supervisedDelegationAvailable: sessionData.settings?.chatFeatureAvailability?.supervisedDelegation === true && !historicalModeActive,
     onDismissDelegationSuggestion: () => setDelegationSuggestion(null),
     // Historical transcript reads are mutation-locked. Only stop/cancel
     // controls remain live as safety escapes; approvals and input do not.

@@ -1,14 +1,17 @@
 import {
   canonicalJsonString,
+  mcpRequesterAdmissionScopeSchema,
   NotFoundError,
   type ChatTurnCapabilityProfileRecord,
   type ToolAccessEvaluateRequest,
   type ToolInvokeRequest,
+  type McpRequesterAdmissionScope,
 } from "@goatcitadel/contracts";
 import { ToolExecutionPreconditionError } from "@goatcitadel/policy-engine";
 import { verifyChatTurnCapabilityCatalogBinding, verifyChatTurnCapabilityProfile,
   type AsyncStorage } from "@goatcitadel/storage";
 import { resolveMeshChatToolSchemas, type MeshChatToolSchema } from "./mesh-chat-catalog.js";
+import { resolveAdmittedMeshToolBinding } from "../chat-mesh-admission-service.js";
 
 const brand: unique symbol = Symbol("MeshChatTurnContext");
 export interface MeshChatTurnContextHandle { readonly [brand]: true }
@@ -20,7 +23,20 @@ export function isMeshChatToolName(name: string): boolean {
 }
 const contexts = new WeakMap<MeshChatTurnContextHandle, {
   profileId: string; profileHash: string; identity: ChatTurnCapabilityProfileRecord["identity"];
-}>();
+} | { scope: McpRequesterAdmissionScope; referenceSha256: string; assertCurrent(): Promise<void> }>();
+
+export function createMeshAdmissionTurnContext(scope: McpRequesterAdmissionScope, referenceSha256: string,
+  assertCurrent: () => Promise<void>): MeshChatTurnContextHandle {
+  if (!/^[a-f0-9]{64}$/u.test(referenceSha256) || typeof assertCurrent !== "function") invalidBinding();
+  const handle = Object.freeze({ [brand]: true as const, toJSON(): never { throw new Error("Mesh admission context cannot be serialized"); } });
+  contexts.set(handle, { scope: Object.freeze(mcpRequesterAdmissionScopeSchema.parse(scope)), referenceSha256, assertCurrent });
+  return handle;
+}
+
+export function readMeshAdmissionTurnContext(handle: MeshChatTurnContextHandle | undefined) {
+  const context = handle ? contexts.get(handle) : undefined;
+  return context && "scope" in context ? { ...context, scope: { ...context.scope } } : undefined;
+}
 
 function invalidBinding(): never {
   throw new ToolExecutionPreconditionError("Mesh tool requires its exact current frozen Chat capability binding");
@@ -45,12 +61,16 @@ export function createMeshChatTurnContext(profile: ChatTurnCapabilityProfileReco
 export async function resolveMeshChatToolBinding(
   deps: Parameters<typeof resolveMeshChatToolSchemas>[0] & {
     storage: Pick<AsyncStorage, "chatTurnCapabilityProfiles" | "capabilityCatalogSnapshots" | "meshCapabilityPublications">;
+    restoreAdmissionSchemas?: (handle: MeshChatTurnContextHandle) => Promise<MeshChatToolSchema[]>;
   },
   request: ToolAccessEvaluateRequest & Partial<Pick<ToolInvokeRequest, "turnId">>,
   handle: MeshChatTurnContextHandle | undefined,
 ): Promise<MeshChatToolBinding | undefined> {
   if (!request.toolName.startsWith("mesh:")) return undefined;
   const context = handle ? contexts.get(handle) : undefined;
+  if (context && "scope" in context) {
+    return resolveAdmittedMeshToolBinding(deps, request, context, handle!);
+  }
   if (!context || request.sessionId !== context.identity.sessionId ||
     request.workspaceId !== context.identity.workspaceId ||
     request.policyContext?.authActorId !== context.identity.authActorId ||

@@ -32,6 +32,23 @@ export async function recordPreparedTurnDecisions(
   const webMode = prepared.normalized.webMode ?? prepared.prefs.webMode;
   const memoryMode = prepared.normalized.memoryMode ?? prepared.prefs.memoryMode;
   const executionProfile = executionProfileFromNormalizationProfile(prepared.normalized.normalizationProfile);
+  if (prepared.promptPreparation) {
+    const metrics = prepared.promptPreparation;
+    await safeRecordRuntimeDecision(host, {
+      kind: "chat_turn_prepared",
+      scope: { workspaceId: prepared.workspaceId, sessionId: prepared.session.sessionId, turnId: prepared.turnId },
+      selected: "Prompt preparation measured",
+      rationale: "Hashes and estimates describe prepared Chat history before completion-time memory and hooks, without retaining its text.",
+      signals: [
+        { source: "context", key: "preparation_ms", value: metrics.durationMs },
+        { source: "context", key: "prompt_sha256", value: metrics.promptSha256 },
+        { source: "context", key: "estimated_prompt_tokens", value: metrics.estimatedTokens },
+        { source: "context", key: "system_block_hashes", value: metrics.systemBlockHashes.join(",").slice(0, 1000) },
+        { source: "capability", key: "feature_reference_sha256", value: prepared.featureAdmission?.referenceSha256 ?? "none" },
+        { source: "capability", key: "activated_skill_count", value: prepared.featureAdmission?.references.selectedSkills?.activatedSkills.length ?? 0 },
+      ],
+    });
+  }
   await safeRecordRuntimeDecision(host, {
     kind: "chat_turn_prepared",
     scope: {

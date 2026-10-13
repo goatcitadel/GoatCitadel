@@ -452,6 +452,15 @@ function buildHeartbeatInput(profile: ChatTurnCapabilityProfileRecord) {
   };
 }
 
+function heartbeatInputWithBinding(profile: ChatTurnCapabilityProfileRecord, featureBinding: boolean) {
+  const input = buildHeartbeatInput(profile);
+  if (!featureBinding) return input;
+  return { ...input, capabilityProfile: undefined, subagentPolicy: "off" as const,
+    canonicalWriteFence: async <T>(operation: () => T | Promise<T>) => await operation(),
+    featureAdmission: { referenceSha256: "b".repeat(64), references: { version: "chat.turn.feature-references.v1" as const,
+      heartbeatOccurrence: { ownerId: input.serverOnlyPosture.occurrenceId, revision: "1", sha256: input.serverOnlyPosture.claimSha256 } } } };
+}
+
 describe("ChatTurnAgentRunner frozen capability profiles", () => {
   it("executes an explorer provider read under safe_auto while ignoring an unfrozen tool call", async () => {
     const { profile, snapshot } = buildExplorerProfile();
@@ -991,10 +1000,14 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
     expect(invokeTool).not.toHaveBeenCalled();
   });
 
-  it("terminally blocks exact system-heartbeat approval drift before invocation or tool-row creation", async () => {
+  it.each([false, true])("terminally blocks exact system-heartbeat approval drift before invocation or tool-row creation (feature binding %s)", async (featureBinding) => {
     const createChatCompletion = vi
       .fn()
-      .mockResolvedValueOnce(namedToolCallCompletion("browser.search", { query: "heartbeat status" }));
+      .mockImplementationOnce(async (request: ChatCompletionRequest) => {
+        const offered = request.tools?.[0] as { function?: { name?: string } } | undefined;
+        expect(offered?.function?.name).toBeTruthy();
+        return namedToolCallCompletion(offered!.function!.name!, { query: "heartbeat status" });
+      });
     const invokeTool = vi.fn();
     const profile = buildProfile({ heartbeat: true });
     const storage = createProfileStorage(profile);
@@ -1004,17 +1017,13 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       listCapabilityCatalog: () => liveCallableCatalog(profile),
       createChatCompletion,
       invokeTool,
-      evaluateToolAccess: vi
-        .fn()
-        .mockReturnValueOnce({ allowed: true, requiresApproval: false, reasonCodes: ["heartbeat_allow"] })
-        .mockReturnValue({
-          allowed: true,
-          requiresApproval: true,
-          reasonCodes: ["risk_posture_drift"],
-        }),
+      assertFeatureReferencesCurrent: vi.fn(async () => undefined),
+      evaluateToolAccess: vi.fn(() => createChatCompletion.mock.calls.length === 0
+        ? { allowed: true, requiresApproval: false, reasonCodes: ["heartbeat_allow"] }
+        : { allowed: true, requiresApproval: true, reasonCodes: ["risk_posture_drift"] }),
     });
 
-    await expect(runner.run(buildHeartbeatInput(profile))).rejects.toMatchObject({
+    await expect(runner.run(heartbeatInputWithBinding(profile, featureBinding))).rejects.toMatchObject({
       name: "SystemHeartbeatToolInvocationBlockedError",
     });
 
@@ -1023,7 +1032,7 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
     expect(storage.chatToolRuns.listByTurn("turn-frozen")).toEqual([]);
   });
 
-  it("omits approval-requiring tools from the exact system-heartbeat provider catalog", async () => {
+  it.each([false, true])("omits approval-requiring tools from the exact system-heartbeat provider catalog (feature binding %s)", async (featureBinding) => {
     const completionRequests: ChatCompletionRequest[] = [];
     const createChatCompletion = vi.fn(async (request: ChatCompletionRequest) => {
       completionRequests.push(request);
@@ -1041,6 +1050,7 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       listCapabilityCatalog: () => liveCallableCatalog(profile),
       createChatCompletion,
       invokeTool,
+      assertFeatureReferencesCurrent: vi.fn(async () => undefined),
       evaluateToolAccess: vi.fn(() => ({
         allowed: true,
         requiresApproval: true,
@@ -1048,7 +1058,7 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       })),
     });
 
-    const result = await runner.run(buildHeartbeatInput(profile));
+    const result = await runner.run(heartbeatInputWithBinding(profile, featureBinding));
 
     expect(completionRequests[0]?.tools).toBeUndefined();
     expect(invokeTool).not.toHaveBeenCalled();

@@ -6,6 +6,7 @@ import { Dialog } from "../../ui/Dialog";
 import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { integrationInputClass } from "./IntegrationFormFields";
 import { useActiveWorkspaceLabel } from "../../data/use-workspace-name";
+import { ExtensionConfigurationGuidance } from "./ExtensionConfigurationGuidance";
 
 export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSettingsOwner }) {
   const workspaceLabel = useActiveWorkspaceLabel();
@@ -166,6 +167,8 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
                   {warning.severity}: {warning.message}
                 </p>
               ))}
+              {plugin.configurationForm ? <ExtensionConfigurationGuidance guidance={{ pluginId: plugin.pluginId, pluginVersion: plugin.version,
+                form: plugin.configurationForm, supportedFieldKeys: [] }} /> : null}
             </article>
           ))}
         </>

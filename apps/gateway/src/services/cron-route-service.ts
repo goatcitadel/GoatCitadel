@@ -21,7 +21,7 @@ export type CronRouteService = RouteService<CronRouteMethod>;
 
 export function createCronRoutePort(cronAutomationService: CronAutomationService): CronRoutePort {
   return {
-    createCronJob: (input) => cronAutomationService.createCronJob(input),
+    createCronJob: (input, creatorAuthority) => cronAutomationService.createCronJob(input, creatorAuthority),
     deleteCronJob: (jobId, expectedRevision) => cronAutomationService.deleteCronJob(jobId, expectedRevision),
     findCronRunById: (runId) => cronAutomationService.findCronRunById(runId),
     getCronJob: (jobId) => cronAutomationService.getCronJob(jobId),
@@ -32,8 +32,8 @@ export function createCronRoutePort(cronAutomationService: CronAutomationService
     runCronJobNow: (jobId) => cronAutomationService.runCronJobNow(jobId),
     setCronJobEnabled: (jobId, enabled, expectedRevision) =>
       cronAutomationService.setCronJobEnabled(jobId, enabled, expectedRevision),
-    updateCronJob: (jobId, input, expectedRevision) =>
-      cronAutomationService.updateCronJob(jobId, input, expectedRevision),
+    updateCronJob: (jobId, input, expectedRevision, creatorAuthority) =>
+      cronAutomationService.updateCronJob(jobId, input, expectedRevision, creatorAuthority),
   };
 }
 

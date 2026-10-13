@@ -175,6 +175,7 @@ export class ChatPostCommitEffectService {
               {
                 sessionId: input.sessionId,
                 workspaceId: input.workspaceId,
+                sourceTurnId: input.turnId,
                 userText: input.userText,
                 assistantText: input.assistantText,
                 ...eligibility.guards,

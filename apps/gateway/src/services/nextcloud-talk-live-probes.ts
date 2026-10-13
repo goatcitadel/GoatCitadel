@@ -1,6 +1,19 @@
 import { createHmac, randomBytes } from "node:crypto";
 import type { ChannelProbeReport, ConnectorDiagnosticReport } from "@goatcitadel/contracts";
 import { readBoundedResponseJson } from "./bounded-response-reader.js";
+import type { IntegrationConnection } from "@goatcitadel/contracts";
+import type { IntegrationDiagnosticsPort } from "./integration-diagnostics-service.js";
+
+/** Setup preflight retains credential custody and the diagnostics network owner. */
+export async function runConfiguredNextcloudTalkChecks(deps: IntegrationDiagnosticsPort, connection: IntegrationConnection, includeSandboxSend: boolean) {
+  const config = connection.config;
+  const baseUrl = deps.readConnectionConfigValue(config, "baseUrl");
+  const token = deps.resolveConnectionSecret(config, "token", "tokenEnv", connection.catalogId);
+  const roomId = deps.readConnectionConfigValue(config, "defaultRoomId");
+  if (!baseUrl || !token || !roomId) return { checks: [{ key: "nextcloud_input", status: "fail" as const, message: "Nextcloud Talk requires its URL, token and room before probing." }] };
+  if (!deps.isConnectionUrlAllowlisted(baseUrl)) return { checks: [{ key: "nextcloud_network", status: "fail" as const, message: "The Nextcloud Talk host is outside the network allowlist." }] };
+  return runNextcloudTalkLiveChecks({ baseUrl, token, roomId, includeSandboxSend, fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init) });
+}
 export async function runNextcloudTalkLiveChecks(input: { baseUrl: string; token: string; roomId: string; includeSandboxSend: boolean; fetcher: (url: string, init?: RequestInit) => Promise<Response> }): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
   const probe: ChannelProbeReport = { kind: "nextcloud_talk_bot", mode: "signed_api", checkedAt: new Date().toISOString(), steps: [] };
   if (!input.includeSandboxSend) { probe.steps.push({ key: "nextcloud_sandbox_send", label: "Signed room delivery", status: "skipped", disposition: "deferred", message: "Run the explicit guided test to verify signed room delivery." }); return { checks: [], probe }; }

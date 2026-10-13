@@ -3,6 +3,8 @@ import {
   REMOTE_WORKER_CELL_EVIDENCE_GENESIS_SHA256,
   REMOTE_WORKER_CELL_EVIDENCE_SCHEMA_VERSION,
   canonicalJsonString,
+  normalizeRemoteWorkerCapabilityBinding,
+  type RemoteWorkerCapabilityBinding,
   normalizeRemoteWorkerCellEvidencePayload,
   normalizeRemoteWorkerCellPlatformIdentity,
   normalizeRemoteWorkerCellProfile,
@@ -136,7 +138,7 @@ export interface RemoteWorkerCellBackupTransitionInput extends RemoteWorkerCellK
   readonly now: string;
 }
 
-export interface RemoteWorkerCellRecord {
+export interface RemoteWorkerCellRecord extends RemoteWorkerCapabilityBinding {
   readonly registryWorkspaceId: string;
   readonly assignmentId: string;
   readonly assignmentGeneration: number;
@@ -237,7 +239,8 @@ export class RemoteWorkerCellRepository {
         logicalRootSha256: profile.logicalRootSha256,
         assignmentManifestSha256: profile.assignmentManifestSha256,
         pathJailSha256: profile.pathJailSha256,
-        capabilityProfileSha256: profile.capabilityProfileSha256,
+        capabilityProfileSha256: profile.capabilityProfileSha256 ?? null,
+        admissionReferenceJson: profile.admissionReference ? canonicalJsonString(profile.admissionReference) : null,
         contextSnapshotSha256: profile.contextSnapshotSha256,
         toolEffectPostureSha256: profile.toolEffectPostureSha256,
         runtimeAttestationSha256: profile.runtimeAttestationSha256,
@@ -831,7 +834,7 @@ export class RemoteWorkerCellRepository {
       `INSERT INTO remote_worker_cells (
          registry_workspace_id, assignment_id, assignment_generation, cell_id, worker_id, worker_generation,
          backend, idempotency_key, profile_sha256, request_sha256, logical_root_sha256, assignment_manifest_sha256,
-         path_jail_sha256, capability_profile_sha256, context_snapshot_sha256, tool_effect_posture_sha256,
+         path_jail_sha256, capability_profile_sha256, admission_reference_json, context_snapshot_sha256, tool_effect_posture_sha256,
          runtime_attestation_sha256, launcher_attestation_sha256, logical_disk_bytes, allocated_disk_bytes,
          file_limit, inode_limit, process_limit, cpu_limit_milli, wall_limit_ms, memory_limit_bytes,
          raw_output_limit_bytes, diagnostic_limit_bytes, artifact_ceiling_bytes, backup_staging_bytes,
@@ -841,7 +844,7 @@ export class RemoteWorkerCellRepository {
        ) VALUES (
          @registryWorkspaceId, @assignmentId, @assignmentGeneration, @cellId, @workerId, @workerGeneration,
          @backend, @idempotencyKey, @profileSha256, @requestSha256, @logicalRootSha256, @assignmentManifestSha256,
-         @pathJailSha256, @capabilityProfileSha256, @contextSnapshotSha256, @toolEffectPostureSha256,
+         @pathJailSha256, @capabilityProfileSha256, @admissionReferenceJson, @contextSnapshotSha256, @toolEffectPostureSha256,
          @runtimeAttestationSha256, @launcherAttestationSha256, @logicalDiskBytes, @allocatedDiskBytes,
          @fileLimit, @inodeLimit, @processLimit, @cpuLimitMilli, @wallLimitMs, @memoryLimitBytes,
          @rawOutputLimitBytes, @diagnosticLimitBytes, @artifactCeilingBytes, @backupStagingBytes,
@@ -854,6 +857,8 @@ export class RemoteWorkerCellRepository {
 }
 
 interface CellRow {
+  capability_profile_sha256: string | null;
+  admission_reference_json: string | null;
   env_allowlist_sha256: string;
   registry_workspace_id: string;
   assignment_id: string;
@@ -926,6 +931,8 @@ interface EvidenceRow {
 
 function mapCell(row: CellRow): RemoteWorkerCellRecord {
   return {
+    ...normalizeRemoteWorkerCapabilityBinding({ capabilityProfileSha256: row.capability_profile_sha256 ?? undefined,
+      admissionReference: row.admission_reference_json ? JSON.parse(row.admission_reference_json) : undefined }),
     registryWorkspaceId: row.registry_workspace_id,
     assignmentId: row.assignment_id,
     assignmentGeneration: asInt(row.assignment_generation),

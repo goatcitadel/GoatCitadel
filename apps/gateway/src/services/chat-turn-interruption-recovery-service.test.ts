@@ -407,6 +407,23 @@ describe("reconcileInterruptedChatTurns", () => {
     });
   });
 
+  it.each([false, true])("retains a known durable execution failure without inventing a restart (prefix %s)", async (withPrefix) => {
+    const storage = createStorage();
+    seedSession(storage);
+    const run = storage.durableRuns.createRun({ workflowKey: "chat.turn.execute", status: "running" });
+    storage.durableRuns.updateRun({ runId: run.runId, status: "failed", clearLease: true });
+    storage.chatMessages.upsert(userMessage());
+    storage.chatTurnTraces.create(activeTrace({ assistantMessageId: "msg-assistant", durable: { runId: run.runId, status: "running" } }));
+    if (withPrefix) appendStreamChunk(storage, 1, { type: "delta", sessionId: "session-a", turnId: "turn-active", messageId: "msg-assistant", delta: "retained prefix" }, run.runId);
+    const failure = { failureClass: "unknown" as const, message: "Explicit context access revalidation is unavailable.", retryable: false };
+    const deps = buildDeps(storage);
+    await reconcileInterruptedDurableChatTurn(deps, { runId: run.runId, turnId: "turn-active", failure });
+    expect(storage.chatTurnTraces.get("turn-active")).toMatchObject({ status: "failed", failure, completion: { status: "interrupted" } });
+    expect(JSON.stringify(deps.publishRealtime.mock.calls)).not.toContain("after_restart");
+    expect(JSON.stringify(deps.publishRealtime.mock.calls)).not.toContain("interrupted_by_restart");
+    if (withPrefix) expect(storage.chatMessages.get("msg-assistant")?.content).toBe("retained prefix");
+  });
+
   it("bounds a recovered prefix on complete UTF-8 code points", async () => {
     const storage = createStorage();
     seedSession(storage);
@@ -640,15 +657,17 @@ describe("reconcileInterruptedChatTurns", () => {
 
   it("drains active traces beyond one page without retrying a failing first row", async () => {
     const storage = createStorage();
-    for (let index = 0; index < 501; index += 1) {
-      storage.chatTurnTraces.create(
-        activeTrace({
-          turnId: `turn-page-${index.toString().padStart(3, "0")}`,
-          userMessageId: `msg-page-${index.toString().padStart(3, "0")}`,
-          startedAt: new Date(Date.parse("2026-07-07T19:00:00.000Z") + index).toISOString(),
-        }),
-      );
-    }
+    storage.runImmediateTransaction(() => {
+      for (let index = 0; index < 501; index += 1) {
+        storage.chatTurnTraces.create(
+          activeTrace({
+            turnId: `turn-page-${index.toString().padStart(3, "0")}`,
+            userMessageId: `msg-page-${index.toString().padStart(3, "0")}`,
+            startedAt: new Date(Date.parse("2026-07-07T19:00:00.000Z") + index).toISOString(),
+          }),
+        );
+      }
+    });
     const originalPatch = storage.chatTurnTraces.patch.bind(storage.chatTurnTraces);
     vi.spyOn(storage.chatTurnTraces, "patch").mockImplementation((turnId, patch) => {
       if (turnId === "turn-page-000") {

@@ -38,6 +38,16 @@ const statsQuerySchema = z.object({
 
 const retrievalBenchmarkSchema = z.object({
   prompts: z.array(z.string().trim().min(1)).min(1).max(25),
+  labels: z.array(z.object({
+    prompt: z.string().trim().min(1).max(8192),
+    relevantSources: z.array(z.object({
+      sourceType: z.enum(["transcript", "file", "memory_item"]), sourceRef: z.string().min(1).max(1024),
+    }).strict()).max(100),
+    forbiddenSources: z.array(z.object({
+      sourceType: z.enum(["transcript", "file", "memory_item"]), sourceRef: z.string().min(1).max(1024),
+    }).strict()).max(100).optional(),
+    expectNoResults: z.boolean().optional(),
+  }).strict()).max(25).optional(),
   workspace: z.string().trim().min(1).optional(),
   relationScope: z.enum(["self", "peer", "project"]).optional(),
   maxContextTokens: z.number().int().positive().optional(),

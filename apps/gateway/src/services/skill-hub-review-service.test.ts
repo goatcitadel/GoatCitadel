@@ -22,11 +22,11 @@ interface Harness {
   service: SkillHubReviewService;
 }
 
-const harnesses: Harness[] = [];
+const harnesses: Array<{ rootDir: string; storage?: Storage }> = [];
 
 afterEach(async () => {
   for (const harness of harnesses.splice(0)) {
-    harness.storage.close();
+    harness.storage?.close();
     await fs.rm(harness.rootDir, { recursive: true, force: true });
   }
 });
@@ -227,7 +227,7 @@ describe("SkillHubReviewService", { timeout: 120_000 }, () => {
       expect(databaseCount(harness.storage, "candidate_skill_versions")).toBe(0);
       expect(databaseCount(harness.storage, "skill_lifecycle")).toBe(0);
     }
-  }, 45_000);
+  }, 90_000); // Seven independently migrated SQLite + filesystem review fixtures.
 
   it("rejects credentialed, fragmented, local, and marketplace source URLs before materialization", async () => {
     const harness = await createHarness();
@@ -440,6 +440,8 @@ async function createHarness(
   ) => Promise<MaterializedSkillReviewContext>,
 ): Promise<Harness> {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "gc-skill-hub-review-"));
+  const owned: (typeof harnesses)[number] = { rootDir };
+  harnesses.push(owned);
   const sourceDir = path.join(rootDir, "source");
   await fs.mkdir(sourceDir, { recursive: true });
   await fs.writeFile(
@@ -464,6 +466,7 @@ async function createHarness(
     transcriptsDir: path.join(rootDir, "transcripts"),
     auditDir: path.join(rootDir, "audit"),
   });
+  owned.storage = storage;
   const artifactStore = new SkillHubArtifactStore(path.join(rootDir, "data", "skill-hub", "artifacts"));
   const context = async (): Promise<MaterializedSkillReviewContext> => {
     const integrity = await captureSkillContentIntegrity(sourceDir);
@@ -494,7 +497,6 @@ async function createHarness(
     service: undefined as unknown as SkillHubReviewService,
   };
   harness.service = serviceFor(harness);
-  harnesses.push(harness);
   return harness;
 }
 

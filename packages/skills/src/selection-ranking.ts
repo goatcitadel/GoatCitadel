@@ -22,13 +22,13 @@ const STOP_WORDS = new Set([
 ]);
 
 export interface SkillSelectionRanking {
-  method: "metadata_bm25_v1";
+  method: "metadata_bm25_v2";
   candidates: Array<{ skillId: string; score: number; explicit: boolean }>;
   queryTruncated: boolean;
   candidatesTruncated: boolean;
 }
 
-/** Evaluation only. Metadata scores are not confidence, activation, or permission. */
+/** Metadata scores nominate candidates; they are not confidence, activation, or permission. */
 export function rankSkillSelectionCandidates(
   input: SkillResolveInput,
   skills: readonly LoadedSkill[],
@@ -56,9 +56,10 @@ export function rankSkillSelectionCandidates(
         ]),
       ),
       tokenize(boundedMetadata(skill.routingHints?.whenToUse ?? [])),
+      tokenize((skill.description ?? "").slice(0, MAX_FIELD_CHARS)),
     ],
   }));
-  const averageLengths = [0, 1, 2].map(
+  const averageLengths = [0, 1, 2, 3].map(
     (field) =>
       documents.reduce((sum, document) => sum + (document.fields[field]?.length ?? 0), 0) /
       Math.max(1, documents.length),
@@ -69,7 +70,7 @@ export function rankSkillSelectionCandidates(
       documents.filter((document) => document.fields.some((field) => field.includes(term))).length,
     ]),
   );
-  const weights = [8, 4, 1];
+  const weights = [8, 4, 1, 2];
   const ranked = documents
     .map((document) => {
       let score = 0;
@@ -100,7 +101,7 @@ export function rankSkillSelectionCandidates(
         (left.skillId < right.skillId ? -1 : left.skillId > right.skillId ? 1 : 0),
     );
   return {
-    method: "metadata_bm25_v1",
+    method: "metadata_bm25_v2",
     candidates: ranked.slice(0, boundedLimit),
     queryTruncated: input.text.length > MAX_QUERY_CHARS || new Set(queryTokens).size > MAX_TERMS,
     candidatesTruncated: skills.length > MAX_CANDIDATES || ranked.length > boundedLimit,

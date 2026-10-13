@@ -33,6 +33,7 @@ type Input = {
     | "externalControl"
     | "externalSourceAttachments"
     | "documentContext"
+    | "explicitContextEnabled"
   >;
   lockSurface: NonNullable<MissionThreadedControllerHostProps["lockSurface"]>;
   surface: MissionThreadedControllerHostProps["surface"];
@@ -311,8 +312,9 @@ export function useChatSurfaceComposition({
     !session.externalControl.sessionControlSendLocked &&
     !oneShotContext.modelCouncilEnabled &&
     !oneShotContext.workspaceSnapshotRequest &&
-    session.externalSourceAttachments.selectedAttachmentIds.length === 0 &&
-    session.documentContext.pendingDocumentContextRefs.length === 0 &&
+    ((session.explicitContextEnabled && !submission.orchestration.editingTurnId) ||
+      (session.externalSourceAttachments.selectedAttachmentIds.length === 0 &&
+        session.documentContext.pendingDocumentContextRefs.length === 0)) &&
     (!routeBoundaryAckRequired || submission.currentRouteBoundaryAcknowledged);
   const canSend = composerAdmissionReady && !sending;
   const canSendWhileRunning = composerAdmissionReady && sending && Boolean(coordination.activeStreamRef.current) && !submission.orchestration.editingTurnId;
@@ -320,9 +322,9 @@ export function useChatSurfaceComposition({
     ? "Model council is temporarily unavailable. Turn Council off to send."
     : oneShotContext.workspaceSnapshotRequest
       ? "Workspace snapshots are temporarily unavailable. Remove the snapshot to send."
-      : session.externalSourceAttachments.selectedAttachmentIds.length > 0
+      : (!session.explicitContextEnabled || submission.orchestration.editingTurnId) && session.externalSourceAttachments.selectedAttachmentIds.length > 0
         ? "Routed external sources are temporarily unavailable. Clear the source selection to send."
-        : session.documentContext.pendingDocumentContextRefs.length > 0
+        : (!session.explicitContextEnabled || submission.orchestration.editingTurnId) && session.documentContext.pendingDocumentContextRefs.length > 0
           ? "Routed documents are temporarily unavailable. Remove the document selection to send."
           : undefined;
   const blockHistoricalMutation = useCallback(() => {

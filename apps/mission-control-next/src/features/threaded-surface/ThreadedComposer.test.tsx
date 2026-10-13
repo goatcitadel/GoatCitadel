@@ -1248,6 +1248,17 @@ describe("ThreadedComposer", () => {
     expect(onDismissDelegationSuggestion).toHaveBeenCalledTimes(1);
   });
 
+  it("offers explicit approval for an available supervised delegation", async () => {
+    const onAcceptDelegation = vi.fn(async () => undefined);
+    const renderer = await renderComposer({ supervisedDelegationAvailable: true, onAcceptDelegation,
+      delegationSuggestion: { suggestionId: "suggestion-1", sessionId: "session-1", objective: "Review the change", roles: ["QA"], mode: "parallel", confidence: 0.8, source: "heuristic", createdAt: "2026-10-11T00:00:00Z" } });
+    const button = findButton(renderer.root, "Approve delegation");
+    expect(button.props.disabled).toBe(false);
+    await click(button);
+    expect(onAcceptDelegation).toHaveBeenCalledOnce();
+    expect(collectText(renderer.root)).not.toContain("Subagents unavailable");
+  });
+
   it("covers residual route, mode, and primary label branches", async () => {
     expect(buildMarkup({ editingTurnId: "turn-chat-edit" })).toContain("Send branch");
     expect(buildMarkup({ currentWebMode: "deep" })).toContain("Deep web");

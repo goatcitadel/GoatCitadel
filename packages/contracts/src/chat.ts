@@ -666,6 +666,13 @@ export interface ChatMessageRecord {
   parentDelegationStepId?: string;
 }
 
+/** One explicitly selected recovery target; absent means fallback is off. */
+export interface ChatProviderFallbackPreference {
+  providerId: string;
+  model: string;
+  allowLocalToCloud: boolean;
+}
+
 export interface ChatSessionPrefsRecord {
   sessionId: string;
   revision: number;
@@ -673,6 +680,7 @@ export interface ChatSessionPrefsRecord {
   planningMode: ChatPlanningMode;
   providerId?: string;
   model?: string;
+  providerFallback?: ChatProviderFallbackPreference;
   imageProviderId?: string;
   imageModel?: string;
   webMode: ChatWebMode;
@@ -709,6 +717,7 @@ export interface ChatSessionPrefsPatch {
   planningMode?: ChatPlanningMode;
   providerId?: string;
   model?: string;
+  providerFallback?: ChatProviderFallbackPreference | null;
   imageProviderId?: string;
   imageModel?: string;
   webMode?: ChatWebMode;
@@ -1703,7 +1712,8 @@ export interface ChatDelegationStepRecord {
   runId: string;
   role: string;
   /** Frozen step instructions used to reject replay drift and restore pending work. */
-  instructionSnapshot?: { objective?: string; label?: string; expectedOutput?: string };
+  instructionSnapshot?: { objective?: string; label?: string; expectedOutput?: string;
+    resultSchema?: import("./chat-delegation-result.js").ChatDelegationResultSchema };
   label?: string;
   status: ChatDelegationStepStatus;
   index: number;
@@ -1761,6 +1771,7 @@ export interface ChatDelegateStepRequest {
   /** Compact operator-facing label retained on the canonical delegation step. */
   label?: string;
   expectedOutput?: string;
+  resultSchema?: import("./chat-delegation-result.js").ChatDelegationResultSchema;
   parallelizable?: boolean;
   dependsOnStepIds?: string[];
 }
@@ -2046,6 +2057,7 @@ export interface RoutingPreflightRequest {
   workspaceSnapshot?: import("./chat-workspace-snapshot.js").ChatWorkspaceSnapshotRequest;
   providerId?: string;
   model?: string;
+  providerFallback?: ChatProviderFallbackPreference | null;
   mode?: ChatMode;
   webMode?: ChatWebMode;
   memoryMode?: ChatMemoryMode;
@@ -2075,6 +2087,7 @@ export interface RoutingDecisionSnapshot {
   effectiveModel?: string;
   selectionSource: RoutingPreflightSelectionSource;
   normalizationReason?: string;
+  providerFallback?: ChatProviderFallbackPreference;
   fallbackPolicy: RoutingPreflightFallbackPolicy;
   fallbackResult: RoutingPreflightFallbackResult;
   runtimeReachability: RoutingPreflightRuntimeReachability;
@@ -2095,6 +2108,7 @@ export interface RoutingPreflightResult {
   effectiveModel?: string;
   selectionSource: RoutingPreflightSelectionSource;
   normalizationReason?: string;
+  providerFallback?: ChatProviderFallbackPreference;
   fallbackPolicy: RoutingPreflightFallbackPolicy;
   fallbackResult: RoutingPreflightFallbackResult;
   runtimeReachability: RoutingPreflightRuntimeReachability;

@@ -1253,6 +1253,7 @@ describe("mesh Chat current policy binding", () => {
       prepareToolAccessEvaluation: vi.fn(async (request: ToolInvokeRequest) => request),
       storage: fixture.runtime.storage,
       meshCapabilityActivationService: fixture.runtime.activations,
+      meshChatBindingDeps: () => fixture.runtime,
       policyEngine: { inspectAccess, evaluateAccess },
     } as unknown as GatewayService;
     expect(

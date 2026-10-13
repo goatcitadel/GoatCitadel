@@ -78,6 +78,9 @@ export class RemoteWorkerChatPlacementService {
   ): Promise<string | undefined> {
     const { storage, enabled } = this.dependencies;
     const profile = prepared.capabilityProfile;
+    const placement = prepared.featureAdmission?.references.remotePlacement;
+    const admitted = placement && "version" in placement && placement.version === "chat.remote-placement.admission.v1" ? placement : undefined;
+    const tools = admitted?.selectedTools ?? profile?.selection.tools ?? [];
     const request = run.payload?.request as Record<string, unknown> | undefined;
     // Admit the bounded model/tool loop only when every selected tool can enter
     // RemoteWorkerEffectRuntime. Scoped MCP and mesh use their Gateway owners;
@@ -85,15 +88,16 @@ export class RemoteWorkerChatPlacementService {
     if (
       !enabled ||
       run.attemptCount !== 0 ||
-      !profile ||
+      (!profile && (!admitted || !this.dependencies.resolveAdmissionAuthority)) ||
       !request ||
       !run.metadata?.remoteWorkerChatContextSha256 ||
-      profile.selection.tools.some((tool) =>
+      tools.some((tool) =>
         !tool.runtimeOwner || !tool.effectPotential ||
-        (tool.meshPublication && (!this.dependencies.meshToolExecutionAvailable || !this.dependencies.revalidateMeshTool)) ||
+        ("meshPublication" in tool && tool.meshPublication && (!this.dependencies.meshToolExecutionAvailable || !this.dependencies.revalidateMeshTool)) ||
         (isNativeMcpToolName(tool.canonicalName) &&
-          ((!tool.mcpRequesterResolution && !tool.mcpStaticBinding) || !this.dependencies.revalidateRequesterTool))) ||
-      profile.selection.subagentPolicy !== "off" ||
+          !admitted && (!(("mcpRequesterResolution" in tool && tool.mcpRequesterResolution) ||
+            ("mcpStaticBinding" in tool && tool.mcpStaticBinding)) || !this.dependencies.revalidateRequesterTool))) ||
+      (profile && profile.selection.subagentPolicy !== "off") ||
       request.modelCouncil ||
       request.parentDelegationStepId ||
       request.sideChatContext ||
@@ -106,7 +110,7 @@ export class RemoteWorkerChatPlacementService {
     if (priorUsage.items.length > 0 || (await storage.chatToolRuns.listByTurn(prepared.turnId)).length > 0)
       return undefined;
     const requiredCapabilities = ["artifact_stage", "durable_compute", "gateway_inference"];
-    if (profile.selection.tools.length > 0) requiredCapabilities.push("governed_tool");
+    if (tools.length > 0) requiredCapabilities.push("governed_tool");
     const balances = await storage.remoteWorkerBudgets.listExecutionGrants(prepared.workspaceId, actorId);
     for (const { grant, availableRequests, availableCostMicrousd } of balances) {
       const registryWorkspaceId = grant.registryWorkspaceId;

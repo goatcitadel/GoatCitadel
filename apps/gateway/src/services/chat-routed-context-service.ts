@@ -8,6 +8,7 @@ import {
   CHAT_ROUTED_CONTEXT_CONTROL_PATTERN,
   CHAT_ROUTED_CONTEXT_REF_PATTERN,
   CHAT_ROUTED_CONTEXT_SNAPSHOT_VERSION,
+  CHAT_ROUTED_CONTEXT_ADMISSION_SNAPSHOT_VERSION,
   ConflictError,
   ValidationError,
   canonicalJsonString,
@@ -17,6 +18,7 @@ import {
   type ChatRoutedContextRef,
   type ChatRoutedContextSnapshotEntry,
   type ChatRoutedContextSnapshotRecord,
+  type ChatRoutedContextAdmissionBinding,
   type ChatTurnCapabilityProfileRecord,
   type ExternalSessionAttachmentRecord,
   type MemoryContextAccessMode,
@@ -29,6 +31,7 @@ import {
   renderChatRoutedContextEntries,
   sealChatRoutedContextSnapshot,
   verifyChatRoutedContextSnapshot,
+  type AsyncStorage,
 } from "@goatcitadel/storage";
 
 export const CHAT_ROUTED_CONTEXT_MAX_SOURCE_BYTES = 256 * 1024;
@@ -120,12 +123,22 @@ export interface BuildChatRoutedContextSnapshotInput {
   turnId: string;
   sessionId: string;
   workspaceId: string;
-  capabilityProfile: ChatTurnCapabilityProfileRecord;
+  capabilityProfile?: ChatTurnCapabilityProfileRecord;
+  admission?: {
+    binding: ChatRoutedContextAdmissionBinding;
+    providerId: string;
+    model: string;
+    memoryMode: "auto" | "on" | "off";
+    tools: NonNullable<ChatCompletionRequest["tools"]>;
+  };
   /** Exact server-owned metadata for the already-frozen effective provider/model. */
   routeContextWindowTokens: number;
   baseHistoryMessages: ChatCompletionRequest["messages"];
   createdAt?: string;
 }
+
+// Compatibility export; feature-specific admission checks have one owner.
+export { revalidateChatRoutedContextSnapshotAccess } from "./chat-explicit-context-admission.js";
 
 /** Read and attest every mutable source once; results stay in request order. */
 export async function resolveChatRoutedContextSources(
@@ -341,18 +354,22 @@ export function buildChatRoutedContextSnapshot(
   input: BuildChatRoutedContextSnapshotInput,
 ): ChatRoutedContextSnapshotRecord {
   const profile = input.capabilityProfile;
+  const admission = input.admission;
+  if (Boolean(profile) === Boolean(admission)) {
+    throw new ConflictError({ message: "Routed context requires exactly one historical profile or live admission binding." });
+  }
   if (
-    profile.identity.turnId !== input.turnId ||
+    profile && (profile.identity.turnId !== input.turnId ||
     profile.identity.sessionId !== input.sessionId ||
-    profile.identity.workspaceId !== input.workspaceId
+    profile.identity.workspaceId !== input.workspaceId)
   ) {
     throw new ConflictError({ message: "Routed context identity does not match the effective capability profile." });
   }
   if (input.resolved.sources.some((source) => source.kind === "memory_item")) {
     if (
-      profile.selection.memory?.mode === "off" ||
+      admission?.memoryMode === "off" || (profile && (profile.selection.memory?.mode === "off" ||
       profile.selection.memory?.workspaceId !== input.workspaceId ||
-      profile.selection.memory?.sessionId !== input.sessionId
+      profile.selection.memory?.sessionId !== input.sessionId))
     ) {
       throw new ConflictError({ message: "Routed memory context does not match the final capability profile scope." });
     }
@@ -361,8 +378,8 @@ export function buildChatRoutedContextSnapshot(
   if (input.resolved.sourceRequestHash !== expectedSourceRequestHash) {
     throw new ConflictError({ message: "Routed context source-request binding is invalid." });
   }
-  const providerId = profile.selection.effectiveProviderId;
-  const model = profile.selection.effectiveModel;
+  const providerId = admission?.providerId ?? profile?.selection.effectiveProviderId;
+  const model = admission?.model ?? profile?.selection.effectiveModel;
   if (!providerId || !model) {
     throw new ConflictError({ message: "Routed context requires a frozen effective provider and model." });
   }
@@ -374,7 +391,7 @@ export function buildChatRoutedContextSnapshot(
     estimateTokensFromText(
       canonicalJsonString({
         messages: input.baseHistoryMessages,
-        tools: profile.selection.tools.map((tool) => tool.providerDefinition),
+        tools: admission?.tools ?? profile!.selection.tools.map((tool) => tool.providerDefinition),
       }),
       { model },
     ) + CHAT_ROUTED_CONTEXT_PROMPT_SAFETY_TOKENS;
@@ -414,12 +431,14 @@ export function buildChatRoutedContextSnapshot(
       sessionId: input.sessionId,
       workspaceId: input.workspaceId,
     }).slice(0, 48)}`,
-    schemaVersion: CHAT_ROUTED_CONTEXT_SNAPSHOT_VERSION,
+    schemaVersion: admission ? CHAT_ROUTED_CONTEXT_ADMISSION_SNAPSHOT_VERSION : CHAT_ROUTED_CONTEXT_SNAPSHOT_VERSION,
     turnId: input.turnId,
     sessionId: input.sessionId,
     workspaceId: input.workspaceId,
-    capabilityProfileId: profile.profileId,
-    capabilityProfileHash: profile.hashes.profileHash,
+    ...(admission ? { admissionBinding: admission.binding } : {
+      capabilityProfileId: profile!.profileId,
+      capabilityProfileHash: profile!.hashes.profileHash,
+    }),
     sourceRequestHash: input.resolved.sourceRequestHash,
     contentHash: digestText(contextText),
     budget: {

@@ -331,6 +331,28 @@ function toRunning(s: Seeded) {
 }
 
 describe("RemoteWorkerCellRepository (SQLite)", () => {
+  it("stores immutable admission references without fabricating a historical profile", () => {
+    const s = seed("admission-reference");
+    const reference = {
+      version: "goatcitadel.remote-worker-admission-reference.v1" as const,
+      scope: { admissionId: "admission", sessionIncarnationId: "incarnation", workspaceId: "default",
+        sessionId: "session-admission-reference", turnId: "turn-admission-reference", aggregateRevision: 1,
+        controllerGeneration: 1, materialSha256: D("material"), actorId: "operator", actorSource: "loopback" as const },
+      featureReferenceSha256: D("feature-reference"),
+    };
+    const profile = { ...s.profile, capabilityProfileSha256: undefined, admissionReference: reference };
+    const input = { profile, idempotencyKey: "cell:reference", createdAt: s.now };
+    const created = s.cells.profileOrReplay(input);
+    assert.equal(created.cell.capabilityProfileSha256, undefined);
+    assert.deepEqual(created.cell.admissionReference, reference);
+    assert.equal(s.cells.profileOrReplay(input).disposition, "replayed");
+    assert.throws(() => s.cells.profileOrReplay({ ...input, profile: { ...profile,
+      admissionReference: { ...reference, featureReferenceSha256: D("changed") } } }), /replay does not match/u);
+    assert.throws(() => s.cells.profileOrReplay({ ...input, profile: { ...profile, capabilityProfileSha256: D("mixed") } }), /exactly one/u);
+    assert.throws(() => s.db.prepare("UPDATE remote_worker_cells SET admission_reference_json = '{}' WHERE cell_id = ?")
+      .run(profile.cellId), /immutable/u);
+  });
+
   it("retains the native provisioning plan and exact ordered checkpoints under its winning lease", { timeout: 30_000 }, async () => {
     const s = seed("canonical-checkpoints");
     await assertCanonicalProvisioningCheckpoints(s.db, s.profile);

@@ -1,6 +1,7 @@
+import { createChannelSetupGuidancePort, createIntegrationFormGuidancePort } from "./integration-setup-guidance-port.js";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { ChannelOAuthStagingService } from "./channel-oauth-staging-service.js";
+import { createChannelOAuthStagingService } from "./channel-oauth-staging-service.js";
 import type {
   ExternalSideEffectRunListQuery,
   IntegrationCatalogEntry,
@@ -37,6 +38,7 @@ import {
   type IntegrationActionHost,
 } from "./integration-action-service.js";
 import { readIntegrationPlugins, writeIntegrationPlugins } from "./integration-plugin-store.js";
+import { projectIntegrationConfigurationGuidance, projectIntegrationPluginConfiguration } from "./integration-configuration-guidance.js";
 import {
   IntegrationChannelService,
   type IntegrationChannelPort as IntegrationChannelServicePort,
@@ -79,12 +81,7 @@ export function composeIntegrationChannelRouteDependencies(
   });
   const notificationRouting = createNotificationRoutingServiceForGateway(gateway);
   const channelSetupDeps = createChannelSetupHostForGateway(gateway, integrationDiagnostics, integrationChannel);
-  const channelOAuth = new ChannelOAuthStagingService({
-    installationId: "root-" + createHash("sha256").update(path.resolve(gateway.config.rootDir)).digest("hex").slice(0, 24),
-    storage: gateway.storage, channelSecrets: channelSetupDeps.channelSecrets,
-    recentChannelSetupTests: gateway.recentChannelSetupTests,
-    fetcher: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
-  });
+  const channelOAuth = createChannelOAuthStagingService(gateway, channelSetupDeps);
   const channelSetup = createChannelSetupRoutePort({
     createChannelSetupDraft: (input) => channelSetupService.createChannelSetupDraft(channelSetupDeps, input),
     createChannelSetupRepairDraft: (connectionId) =>
@@ -103,9 +100,7 @@ export function composeIntegrationChannelRouteDependencies(
       catch { throw Object.assign(new Error("The draft was discarded, but staged OAuth cleanup needs recovery."), { mutationCommitted: true }); }
       return result;
     },
-    getChannelSetupDefinition: (catalogId) =>
-      channelSetupService.getChannelSetupDefinition(channelSetupDeps, catalogId),
-    listChannelSetupDefinitions: () => channelSetupService.listChannelSetupDefinitions(channelSetupDeps),
+    ...createChannelSetupGuidancePort(integrationChannel, channelSetupDeps),
     listChannelSetupDrafts: (options) => channelSetupService.listChannelSetupDrafts(channelSetupDeps, options),
     getChannelSetupDraft: (draftId) => channelSetupService.getChannelSetupDraft(channelSetupDeps, draftId),
     getChannelSetupDraftEvidence: (draftId, expectedRevision) => channelSetupService.getChannelSetupDraftEvidence(channelSetupDeps, draftId, expectedRevision),
@@ -151,14 +146,16 @@ export function composeIntegrationChannelRouteDependencies(
       integrationChannel.runIntegrationConnectionDiagnostics(connectionId),
   });
   const listIntegrationCatalog = async (kind?: IntegrationKind): Promise<IntegrationCatalogEntry[]> => {
+    const plugins = await integrationChannel.listIntegrationPlugins();
     const pluginIds = new Set(
-      (await integrationChannel.listIntegrationPlugins())
+      plugins
         .map((item) => item.pluginId.trim().toLowerCase())
         .filter((item) => item.length > 0),
     );
     const mapped: IntegrationCatalogEntry[] = [
       ...INTEGRATION_CATALOG.map((entry) => ({
         ...entry,
+        formSchema: entry.formSchema && projectIntegrationConfigurationGuidance(entry.formSchema, entry, plugins),
         maturity: resolveIntegrationCatalogMaturity(entry, pluginIds),
         runtimeAvailability: resolveIntegrationCatalogRuntimeAvailability(entry, pluginIds),
       })),
@@ -174,18 +171,7 @@ export function composeIntegrationChannelRouteDependencies(
     deleteIntegrationConnection: (connectionId, expectedRevision, onCommitted) =>
       integrationChannel.deleteIntegrationConnection(connectionId, expectedRevision, onCommitted),
     getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
-    getIntegrationFormSchema: (catalogId) => {
-      if (catalogId.startsWith("external_connector.")) {
-        throw new Error(
-          `External connector catalog entries are review-only and do not expose connection forms: ${catalogId}`,
-        );
-      }
-      const schema = getIntegrationFormSchema(catalogId);
-      if (!schema) {
-        throw new Error(`Unknown integration catalog id: ${catalogId}`);
-      }
-      return schema;
-    },
+    ...createIntegrationFormGuidancePort(integrationChannel),
     getExternalConnectorAction: (sourceId, serviceId, actionId, workspaceId) =>
       externalConnectorCatalog.getAction(sourceId, serviceId, actionId, workspaceId),
     getExternalConnectorService: (sourceId, serviceId, workspaceId) =>
@@ -210,7 +196,7 @@ export function composeIntegrationChannelRouteDependencies(
     listExternalConnectorSources: () => externalConnectorCatalog.listSources(),
     listIntegrationCatalog,
     listIntegrationConnections: (kind, limit) => integrationChannel.listIntegrationConnections(kind, limit),
-    listIntegrationPlugins: () => integrationChannel.listIntegrationPlugins(),
+    listIntegrationPlugins: async () => (await integrationChannel.listIntegrationPlugins()).map(projectIntegrationPluginConfiguration),
     listNotificationDeliveries: async (workspaceId, limit) => {
       await gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
       return notificationRouting.listDeliveries(workspaceId, limit);

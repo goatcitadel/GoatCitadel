@@ -11,7 +11,7 @@ import {
 } from "@goatcitadel/contracts";
 import { handleInternalMcpApprovalInboxInvoke, isInternalMcpApprovalInboxServer } from "./mcp-approval-inbox.js";
 import { handleInternalMcpDurableTasksInvoke, isInternalMcpDurableTasksServer } from "./mcp-durable-tasks.js";
-import type { McpRequesterScopedTurnContextHandle } from "./mcp-requester-resolution-service.js";
+import type { McpChatTurnContextHandle } from "./mcp-requester-admission-context.js";
 import type { McpRuntimeInvocationResult } from "./mcp-runtime.js";
 import type { ToolInvocationCoordinatorHost } from "./tool-invocation-coordinator-service.js";
 
@@ -42,7 +42,7 @@ export async function executeMcpRuntime(
   wardEffect?: WardEffect,
   markExternalCallStarted?: () => void | Promise<void>,
   executionFence?: () => Promise<void>,
-  mcpRequesterTurnContext?: McpRequesterScopedTurnContextHandle,
+  mcpRequesterTurnContext?: McpChatTurnContextHandle,
   nativeCanonicalToolName?: string,
 ): Promise<McpInvokeResponse> {
   // Capability-scope choke point: every MCP invocation path converges here (model

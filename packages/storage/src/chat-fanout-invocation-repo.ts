@@ -4,7 +4,7 @@ import type {
   ChatFanoutInvocationRecord,
   ChatFanoutInvocationStatus,
 } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { NotFoundError, readChatDelegationResultSchema } from "@goatcitadel/contracts";
 
 interface ChatFanoutInvocationRow {
   invocation_id: string;
@@ -23,6 +23,7 @@ interface ChatFanoutInvocationRow {
   objective: string;
   capability_profile_hash: string | null;
   policy_profile_hash: string | null;
+  parent_admission_json: string | null;
   project_binding_hash: string;
   grant_binding_hash: string;
   created_at: string;
@@ -63,13 +64,13 @@ export class ChatFanoutInvocationRepository {
         session_id, workspace_id, project_id, status, child_count, grant_id,
         subtasks_json, reserved_activations, reserved_budget_usd, objective,
         capability_profile_hash, policy_profile_hash, project_binding_hash,
-        grant_binding_hash, created_at, updated_at, finished_at, terminal_reason
+        grant_binding_hash, created_at, updated_at, finished_at, terminal_reason, parent_admission_json
       ) VALUES (
         @invocationId, @parentRunId, @toolRunId, @delegationRunId,
         @sessionId, @workspaceId, @projectId, @status, @childCount, @grantId,
         @subtasksJson, @reservedActivations, @reservedBudgetUsd, @objective,
         @capabilityProfileHash, @policyProfileHash, @projectBindingHash,
-        @grantBindingHash, @createdAt, @updatedAt, @finishedAt, @terminalReason
+        @grantBindingHash, @createdAt, @updatedAt, @finishedAt, @terminalReason, @parentAdmissionJson
       )
       ON CONFLICT(parent_run_id, tool_run_id) DO NOTHING
     `);
@@ -123,6 +124,7 @@ export class ChatFanoutInvocationRepository {
         objective: input.objective,
         capabilityProfileHash: input.capabilityProfileHash ?? null,
         policyProfileHash: input.policyProfileHash ?? null,
+        parentAdmissionJson: input.parentAdmission ? JSON.stringify(readParentAdmission(input.parentAdmission)) : null,
         projectBindingHash: input.projectBindingHash,
         grantBindingHash: input.grantBindingHash,
         createdAt: input.createdAt,
@@ -146,6 +148,22 @@ export class ChatFanoutInvocationRepository {
 
   public findByParentAndTool(parentRunId: string, toolRunId: string): ChatFanoutInvocationRecord | undefined {
     return mapRow(this.getByParentToolStmt.get(parentRunId, toolRunId));
+  }
+
+  /** Bounded discovery only; the aggregate owner verifies the exact keyed wait. */
+  public listWaitingParentCandidateIds(limit = 100, afterInvocationId?: string): string[] {
+    const safeLimit = Math.max(1, Math.min(100, Math.floor(limit) || 100));
+    // Portable SQLite/PostgreSQL join. JSON authority is validated by its shared
+    // runtime reader after discovery, never inferred from text SQL comparisons.
+    const rows = this.db.prepare(`
+      SELECT invocation.invocation_id FROM chat_fanout_invocations invocation
+      JOIN durable_runs parent ON parent.run_id = invocation.parent_run_id
+      WHERE parent.workflow_key = 'chat.turn.execute' AND parent.status = 'waiting'
+        AND invocation.delegation_run_id IS NOT NULL
+        AND invocation.invocation_id > @afterInvocationId
+      ORDER BY invocation.invocation_id ASC LIMIT @limit
+    `).all<{ invocation_id: string }>({ afterInvocationId: afterInvocationId ?? "", limit: safeLimit });
+    return rows.map((row) => row.invocation_id);
   }
 
   public patch(
@@ -243,6 +261,7 @@ function mapRow(value: unknown): ChatFanoutInvocationRecord | undefined {
     objective: row.objective,
     ...(row.capability_profile_hash ? { capabilityProfileHash: row.capability_profile_hash } : {}),
     ...(row.policy_profile_hash ? { policyProfileHash: row.policy_profile_hash } : {}),
+    ...(row.parent_admission_json ? { parentAdmission: readParentAdmission(JSON.parse(row.parent_admission_json)) } : {}),
     projectBindingHash: row.project_binding_hash,
     grantBindingHash: row.grant_binding_hash,
     createdAt: row.created_at,
@@ -250,6 +269,18 @@ function mapRow(value: unknown): ChatFanoutInvocationRecord | undefined {
     ...(row.finished_at ? { finishedAt: row.finished_at } : {}),
     ...(row.terminal_reason ? { terminalReason: row.terminal_reason } : {}),
   };
+}
+
+function readParentAdmission(value: unknown): NonNullable<ChatFanoutInvocationRecord["parentAdmission"]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid fanout parent admission");
+  const row = value as Record<string, unknown>;
+  if (Object.keys(row).length !== 4 || typeof row.admissionId !== "string" || !row.admissionId ||
+    typeof row.sessionIncarnationId !== "string" || !row.sessionIncarnationId ||
+    typeof row.materialSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(row.materialSha256) ||
+    typeof row.featureReferenceSha256 !== "string" || !/^[a-f0-9]{64}$/u.test(row.featureReferenceSha256)) {
+    throw new Error("Invalid fanout parent admission");
+  }
+  return row as NonNullable<ChatFanoutInvocationRecord["parentAdmission"]>;
 }
 
 function parseSubtasks(value: string): ChatFanoutInvocationRecord["subtasks"] | undefined {
@@ -266,6 +297,7 @@ function parseSubtasks(value: string): ChatFanoutInvocationRecord["subtasks"] | 
         ...(typeof record.expectedOutput === "string" && record.expectedOutput.trim()
           ? { expectedOutput: record.expectedOutput }
           : {}),
+        ...(record.resultSchema !== undefined ? { resultSchema: readChatDelegationResultSchema(record.resultSchema) } : {}),
       };
     });
     return subtasks.every(Boolean) ? (subtasks as ChatFanoutInvocationRecord["subtasks"]) : undefined;

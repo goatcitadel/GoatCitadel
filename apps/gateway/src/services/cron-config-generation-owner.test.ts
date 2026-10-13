@@ -23,6 +23,32 @@ afterEach(async () => {
 });
 
 describe("CronConfigGenerationOwner", () => {
+  it("records creator proof atomically outside imported config and reviews unchanged historical actions", async () => {
+    const job = spec({ action: "agent_turn", actionConfig: { agentTurn: { prompt: "Read status",
+      createdBy: { operatorId: "operator", permissionProfileId: "trusted_local_power" } } } });
+    const { root } = await createRoot([job]);
+    const storage = createStorage(root);
+    const config = new ConfigGenerationService(root);
+    const owner = new CronConfigGenerationOwner(config, createSqliteAsyncStorage(storage));
+    await owner.reconcileStartupGeneration();
+    const historical = storage.cronJobs.get(job.jobId)!;
+    expect(historical.creatorAuthority).toBeUndefined();
+    const reviewed = await owner.updateSpec(job, historical.revision, undefined,
+      { actorId: "operator", source: "authenticated_operator" });
+    expect(reviewed.creatorAuthority).toMatchObject({ actorId: "operator", jobId: job.jobId, version: "cron.creator-authority.v1" });
+    expect(JSON.stringify(config.getActivePayload().cronJobs)).not.toContain("creatorAuthority");
+    await owner.reconcileCommittedGeneration();
+    expect(storage.cronJobs.get(job.jobId)?.creatorAuthority).toEqual(reviewed.creatorAuthority);
+    const changed = { ...job, actionConfig: { agentTurn: { ...job.actionConfig!.agentTurn!, prompt: "New action" } } };
+    const failing = new CronConfigGenerationOwner(config, createSqliteAsyncStorage(storage), {
+      afterStorageMutation: () => { throw new Error("Injected owner rollback"); },
+    });
+    await expect(failing.updateSpec(changed, reviewed.revision, undefined,
+      { actorId: "operator", source: "authenticated_operator" })).rejects.toThrow();
+    expect(storage.cronJobs.get(job.jobId)?.creatorAuthority).toEqual(reviewed.creatorAuthority);
+    expect(storage.cronJobs.get(job.jobId)?.actionConfig).toEqual(job.actionConfig);
+  });
+
   it("serializes config and resource CAS so the stale cron client cannot publish a generation", async () => {
     const job = spec({ name: "Original" });
     const { root } = await createRoot([job]);

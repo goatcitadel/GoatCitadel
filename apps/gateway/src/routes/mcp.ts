@@ -232,6 +232,19 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     catch (error) { return sendRouteError(reply, error, request.log); }
   });
 
+  fastify.get("/api/v1/mcp/servers/:serverId/test-evidence", operatorReadRoute, async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const params = serverParamsSchema.safeParse(request.params);
+    const query = z.object({ workspaceId: z.string().trim().min(1).max(256) }).strict().safeParse(request.query);
+    if (!params.success || !query.success) return reply.code(400).send({ error: "A server and workspace are required." });
+    try {
+      await fastify.services.workspaces.getWorkspace(query.data.workspaceId);
+      return reply.send(await fastify.services.mcp.getMcpServerTestEvidence(params.data.serverId, {
+        workspaceId: query.data.workspaceId, actorId: request.authActorId?.trim() ?? "", actorSource: request.authActorSource,
+      }));
+    } catch (error) { return sendRouteError(reply, error, request.log); }
+  });
+
   fastify.get("/api/v1/mcp/templates", operatorReadRoute, async (_request, reply) => {
     return reply.send(projectMcpPublicValue({ items: await fastify.services.mcp.listMcpTemplates() }));
   });

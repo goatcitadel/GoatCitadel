@@ -157,6 +157,17 @@ export async function readBoundedSkillTextFile(
   return decodeExactSkillUtf8(raw, label);
 }
 
+export function readBoundedSkillTextFileSync(
+  filePath: string,
+  maxBytes = SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes,
+  label = "Skill payload file",
+): string {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes) {
+    throw new Error(`Invalid bounded skill read limit: ${maxBytes}.`);
+  }
+  return decodeExactSkillUtf8(readBoundedFileSync(filePath, maxBytes, label), label);
+}
+
 /** Decode without silently replacing malformed byte sequences. */
 export function decodeExactSkillUtf8(raw: Uint8Array, label = "Skill payload file"): string {
   const bytes = Buffer.from(raw);

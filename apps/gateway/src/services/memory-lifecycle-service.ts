@@ -4,6 +4,8 @@ import {
   calculateLexicalOverlap,
   resolveBenchmarkRetrievalStrategy,
   buildMemoryBenchmarkCoverageNote,
+  calculateLabeledRetrievalRelevance,
+  indexRetrievalBenchmarkLabels,
 } from "./memory-retrieval-quality.js";
 /* eslint-disable max-lines -- MemoryLifecycleService centralizes memory lifecycle writes, write-gate evidence, and structured memory governance until repository ownership is split. */
 import fsSync from "node:fs";
@@ -25,6 +27,8 @@ import type {
   MemoryBatchMutationResult,
   MemoryChangeEvent,
   MemoryContextComposeRequest,
+  MemoryContextCompositionDiagnostics,
+  MemoryRetrievalRelevanceMetrics,
   MemoryContextPack,
   MemoryDecisionInput,
   MemoryDecisionRecord,
@@ -2775,7 +2779,9 @@ export class MemoryLifecycleService {
   public composeContext(
     input: MemoryContextComposeRequest,
     usageLineage?: TrustedUtilityModelUsageLineage,
+    observeComposition?: (diagnostics: Readonly<MemoryContextCompositionDiagnostics>) => void,
   ): Promise<MemoryContextPack> {
+    if (observeComposition) return this.deps.context.compose(input, usageLineage, observeComposition);
     return usageLineage ? this.deps.context.compose(input, usageLineage) : this.deps.context.compose(input);
   }
 
@@ -3469,9 +3475,11 @@ export class MemoryLifecycleService {
     if (requestedPrompts.length > prompts.length) {
       warnings.push("Duplicate or excess benchmark prompts were ignored.");
     }
+    const labels = indexRetrievalBenchmarkLabels(prompts, input.labels);
     const items: MemoryRetrievalBenchmarkItem[] = [];
     for (const prompt of prompts) {
       const startedAt = Date.now();
+      let composition: MemoryContextCompositionDiagnostics | undefined;
       try {
         const pack = await this.composeContext({
           scope: "chat",
@@ -3482,7 +3490,7 @@ export class MemoryLifecycleService {
           relationScope: input.relationScope,
           maxContextTokens: input.maxContextTokens,
           forceRefresh: true,
-        });
+        }, undefined, (diagnostics) => { composition = structuredClone(diagnostics); });
         const sourceText = [pack.contextText, ...pack.citations.map((citation) => citation.snippet ?? "")]
           .filter(Boolean)
           .join("\n");
@@ -3495,6 +3503,8 @@ export class MemoryLifecycleService {
           originalTokenEstimate: pack.originalTokenEstimate,
           distilledTokenEstimate: pack.distilledTokenEstimate,
           overlapScore: calculateLexicalOverlap(prompt, sourceText),
+          ...(labels.has(prompt) ? { relevance: calculateLabeledRetrievalRelevance(pack.citations, labels.get(prompt)!) } : {}),
+          ...(composition ? { composition } : {}),
           retrievalStrategy: resolveBenchmarkRetrievalStrategy(pack),
           semanticCoverageNote: buildMemoryBenchmarkCoverageNote(pack),
           qmdStatus: pack.quality.status,
@@ -3511,12 +3521,21 @@ export class MemoryLifecycleService {
           distilledTokenEstimate: 0,
           overlapScore: 0,
           error: message,
+          ...(composition ? { composition } : {}),
         });
       }
     }
+    const relevance = items.map((item) => item.relevance).filter((metrics): metrics is MemoryRetrievalRelevanceMetrics => Boolean(metrics));
     return {
       generatedAt: new Date().toISOString(),
       itemCount: items.length,
+      ...(relevance.length ? { relevanceSummary: {
+        evaluatedItemCount: relevance.length, avgPrecision: average(relevance.map((item) => item.precision)),
+        avgRecall: average(relevance.map((item) => item.recall)), meanReciprocalRank: average(relevance.map((item) => item.reciprocalRank)),
+        forbiddenSourceCount: relevance.reduce((sum, item) => sum + item.forbiddenSourceCount, 0),
+        noResultCaseCount: relevance.filter((item) => item.abstentionCorrect !== undefined).length,
+        correctAbstentions: relevance.filter((item) => item.abstentionCorrect === true).length,
+      } } : {}),
       avgLatencyMs: average(items.map((item) => item.latencyMs)),
       avgOverlapScore: average(items.filter((item) => item.status === "completed").map((item) => item.overlapScore)),
       retrievalStrategies: Array.from(
@@ -3525,7 +3544,7 @@ export class MemoryLifecycleService {
         ),
       ),
       semanticCoverageNote:
-        "Retrieval benchmark overlap is lexical and provenance-aware. Hybrid ranking uses BM25-style lexical signals, operator-visible semantic hints, optional caller-supplied embeddings, recency, and source diversity.",
+        "Retrieval benchmark overlap is lexical and provenance-aware. Hybrid ranking uses BM25-style lexical signals, operator-visible semantic hints, optional embeddings, recency, and source diversity. Optional ground-truth labels separately score unique returned source identities; unlabelled runs do not establish relevance quality. Stage timings are measured runtime durations; token sizes are estimates.",
       items,
       warnings,
     };

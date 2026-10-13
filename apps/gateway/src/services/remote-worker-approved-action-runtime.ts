@@ -9,8 +9,11 @@ import {
 } from "./gateway/external-runtime-approval-adapter.js";
 import type { ToolInvocationCoordinatorService } from "./tool-invocation-coordinator-service.js";
 import type { RemoteWorkerApprovedActionInput } from "./remote-worker-effect-runtime.js";
+import { resolveRemoteWorkerNativeBinding, resolveRemoteWorkerMeshBinding } from "./remote-worker-external-tool-binding.js";
 
 export interface RemoteWorkerApprovedActionDependencies {
+  restoreRequesterAdmissionSchemas?: Parameters<typeof resolveNativeMcpChatToolBinding>[3];
+  restoreMeshAdmissionSchemas?: Parameters<typeof resolveMeshChatToolBinding>[0]["restoreAdmissionSchemas"];
   storage: ApprovedExternalRuntimePendingActionPort["storage"] &
     Parameters<typeof resolveNativeMcpChatToolBinding>[0] &
     Parameters<typeof resolveMeshChatToolBinding>[0]["storage"];
@@ -44,15 +47,11 @@ export async function executeApprovedRemoteWorkerAction(
       storage: dependencies.storage,
       resolveNativeMcpChatToolBinding: async (request) => {
         await input.checkExecution();
-        return await resolveNativeMcpChatToolBinding(dependencies.storage, request, input.mcpRequesterTurnContext);
+        return await resolveRemoteWorkerNativeBinding(dependencies, request, input.mcpRequesterTurnContext);
       },
       resolveMeshChatToolBinding: async (request) => {
         await input.checkExecution();
-        return await resolveMeshChatToolBinding(
-          { storage: dependencies.storage, activations: dependencies.activations },
-          request,
-          input.meshTurnContext,
-        );
+        return await resolveRemoteWorkerMeshBinding(dependencies, request, input.meshTurnContext);
       },
       invokeApprovedMeshRuntime: async (request, policyResult, approvalId, markStarted) => {
         await input.checkExecution();
