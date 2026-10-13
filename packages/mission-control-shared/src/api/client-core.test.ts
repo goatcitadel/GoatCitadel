@@ -21,6 +21,7 @@ import {
   subscribeGatewayAuthRejection,
 } from "./client-core";
 import { ApiRequestError } from "./http-internal";
+import { setGatewayCallerScope } from "./access-scope";
 import { withFreshReads } from "./fresh-reads";
 
 class MemoryStorage implements Storage {
@@ -144,6 +145,7 @@ describe("client-core", () => {
   });
 
   afterEach(() => {
+    setGatewayCallerScope("");
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -690,6 +692,58 @@ describe("client-core", () => {
     resolvers.forEach((resolve) => resolve(jsonResponse({ success: true, data: { ok: true } })));
     await expect(unauthenticated).rejects.toMatchObject({ kind: "protocol" });
     await expect(authenticated).resolves.toEqual({ ok: true });
+  });
+
+  it.each([false, true])("does not share pending reads across server caller custody changes (returning=%s)", async (returning) => {
+    const resolvers: Array<(response: Response) => void> = [];
+    const fetchMock = vi.fn().mockImplementation(() => new Promise<Response>((resolve) => resolvers.push(resolve)));
+    vi.stubGlobal("fetch", fetchMock);
+    setGatewayCallerScope("caller-a");
+    const old = request<{ caller: string }>("/api/v1/coalesce/caller-change");
+    const oldResult = expect(old).rejects.toMatchObject({ kind: "protocol" });
+    setGatewayCallerScope("caller-b");
+    if (returning) setGatewayCallerScope("caller-a");
+    const current = request<{ caller: string }>("/api/v1/coalesce/caller-change");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    resolvers[0]!(jsonResponse({ caller: "old" }));
+    resolvers[1]!(jsonResponse({ caller: "current" }));
+    await oldResult;
+    await expect(current).resolves.toEqual({ caller: "current" });
+    setGatewayCallerScope("");
+  });
+
+  it("rejects old caller data when custody changes during body decoding", async () => {
+    let enter!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    let finish!: (body: string) => void;
+    const response = jsonResponse({});
+    vi.spyOn(response, "text").mockImplementation(() => { enter(); return new Promise<string>((resolve) => { finish = resolve; }); });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+    setGatewayCallerScope("caller-a");
+    const old = request("/api/v1/coalesce/body-custody");
+    const rejected = expect(old).rejects.toMatchObject({ kind: "protocol" });
+    await entered;
+    setGatewayCallerScope("caller-b");
+    finish(JSON.stringify({ caller: "old" }));
+    await rejected;
+  });
+
+  it("does not retire current access when an old caller receives an authentication rejection", async () => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => new Promise<Response>((resolve) => { finish = resolve; })));
+    setGatewayCallerScope("caller-a");
+    const rejection = vi.fn();
+    const unsubscribe = subscribeGatewayAuthRejection(rejection);
+    const revision = getGatewayAccessRevision();
+    try {
+      const old = request("/api/v1/coalesce/stale-auth");
+      const rejected = expect(old).rejects.toMatchObject({ status: 401 });
+      setGatewayCallerScope("caller-b");
+      finish(jsonResponse({ error: "Authentication required", authMode: "token" }, { status: 401 }));
+      await rejected;
+      expect(rejection).not.toHaveBeenCalled();
+      expect(getGatewayAccessRevision()).toBe(revision);
+    } finally { unsubscribe(); }
   });
 
   it("clears the coalescing entry once a GET settles so later calls re-fetch", async () => {
