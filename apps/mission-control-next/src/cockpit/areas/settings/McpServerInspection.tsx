@@ -35,16 +35,24 @@ export function McpServerInspection({
     retry: false,
   });
   const testEvidence = useQuery({
-    queryKey: ["settings", "mcp-test-evidence", workspaceId, serverId, query.data?.server.revision, query.data?.server.connectionRevision],
+    queryKey: [
+      "settings",
+      "mcp-test-evidence",
+      workspaceId,
+      serverId,
+      query.data?.server.revision,
+      query.data?.server.connectionRevision,
+    ],
     queryFn: () => fetchMcpServerTestEvidence(serverId, workspaceId),
     enabled: Boolean(query.data),
     retry: false,
   });
-  const refreshConnectionEvidence = () => Promise.all([
-    query.refetch(),
-    testEvidence.refetch(),
-    queryClient.invalidateQueries({ queryKey: ["settings", "mcp-servers"] }),
-  ]);
+  const refreshConnectionEvidence = () =>
+    Promise.all([
+      query.refetch(),
+      testEvidence.refetch(),
+      queryClient.invalidateQueries({ queryKey: ["settings", "mcp-servers"] }),
+    ]);
   // The last inspection (and any open review in its controls) stays while it is read again.
   const view = recordView(query);
   const data = view.record;
@@ -81,10 +89,16 @@ export function McpServerInspection({
         {data ? (
           <>
             <h4 className="text-base font-semibold text-fg">{data.server.label}</h4>
-            <McpSetupProgress key={`${workspaceId}:${data.server.serverId}:${data.server.revision}`} server={data.server} tools={data.tools} stale={checking || query.isError}
-              testEvidence={testEvidence.isFetching || testEvidence.isError ? undefined : testEvidence.data}
-              staticMcpAvailable={settings.isError || settings.isFetching ? undefined : settings.data?.chatFeatureAvailability?.staticMcp}
-              availabilityChecking={settings.isFetching} refreshAvailability={() => void settings.refetch()} />
+            <McpSetupProgress
+              key={`${workspaceId}:${data.server.serverId}:${data.server.revision}`}
+              server={data.server}
+              tools={data.tools}
+              stale={checking || query.isError}
+              testEvidence={testEvidence.isError ? undefined : testEvidence.data}
+              staticMcpAvailable={settings.isError ? undefined : settings.data?.chatFeatureAvailability?.staticMcp}
+              availabilityChecking={settings.isFetching}
+              refreshAvailability={() => void settings.refetch()}
+            />
             <dl className="cockpit-definition-grid grid gap-x-3 gap-y-2">
               <dt>Server ID</dt>
               <dd>
