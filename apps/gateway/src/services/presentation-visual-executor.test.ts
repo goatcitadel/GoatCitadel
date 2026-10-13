@@ -110,7 +110,9 @@ describe("approved presentation visual execution", () => {
     expect(result.plan.map((item) => item.slideIndex)).toEqual([0, 1, 5, 8]);
     expect(result.providerCalls).toBe(4);
     expect(result.assets).toHaveLength(3);
-    expect(result.warnings.join(" ")).toMatch(/native renderer visual used|temporary image provider outage/i);
+    // No native placeholder art exists any more: a provider miss means the slide ships without a visual.
+    expect(result.warnings.join(" ")).toMatch(/ships without a visual/i);
+    expect(result.warnings.join(" ")).not.toMatch(/native renderer visual used/i);
   });
 });
 

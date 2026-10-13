@@ -193,7 +193,7 @@ A new preview component; running JavaScript in renders; replacing `presentations
 
 ### Tests
 
-- [ ] `presentation-pptx.test.ts`, `presentation-pptx-audit.test.ts`, `presentation-pdf.test.ts`, `artifact-design.test.ts`, `document-artifacts.test.ts`, `pptx-package-audit.test.mjs`.
+- [x] `presentation-pptx.test.ts`, `presentation-pptx-audit.test.ts`, `presentation-pdf.test.ts`, `artifact-design.test.ts`, `document-artifacts.hero.test.ts` (new), `tool-executor-tail.coverage.test.ts`, `pptx-package-audit.test.mjs`, `research-artifact-powerpoint.test.mjs`.
 
 ### Proof
 

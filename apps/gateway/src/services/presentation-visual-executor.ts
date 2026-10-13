@@ -74,7 +74,7 @@ export async function prepareApprovedPresentationVisuals(input: {
         const image = response.data.find((item) => typeof item.b64Json === "string" && item.b64Json.length > 0);
         if (!image?.b64Json) {
           warnings.push(
-            `No image bytes were returned for slide ${current.item.slideIndex} (${current.item.slideTitle}); native renderer visual used.`,
+            `No image bytes were returned for slide ${current.item.slideIndex} (${current.item.slideTitle}); the slide ships without a visual.`,
           );
           continue;
         }
@@ -97,7 +97,7 @@ export async function prepareApprovedPresentationVisuals(input: {
         const normalized = error instanceof Error ? error : new Error(String(error));
         if (isAuthoritativeModelUsageAccountingError(normalized)) throw normalized;
         warnings.push(
-          `Image generation failed for slide ${current.item.slideIndex} (${current.item.slideTitle}); native renderer visual used. Cause: ${normalized.message.slice(0, 240)}`,
+          `Image generation failed for slide ${current.item.slideIndex} (${current.item.slideTitle}); the slide ships without a visual. Cause: ${normalized.message.slice(0, 240)}`,
         );
       }
     }

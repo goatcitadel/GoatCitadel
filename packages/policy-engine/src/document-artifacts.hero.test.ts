@@ -12,6 +12,9 @@ const sections = [
   { heading: "The plan", body: "Four weeks, one slot, no pace tracking.", bullets: ["Week 1: ten minutes"] },
 ];
 
+const ONE_PIXEL_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
 describe("artifacts without provider visuals", () => {
   it("ships a polished DOCX with no placeholder hero image", async () => {
     const design = createArtifactDesignPlan({
@@ -52,6 +55,32 @@ describe("artifacts without provider visuals", () => {
     expect(mediaParts).toEqual([]);
     expect(result.usedAssetIds).toEqual(["built-in-shapes-icons"]);
     expect(result.manifest.visualCount).toBe(0);
+  });
+
+  it("does not report the generated visual as used when a mapped image lands on a semantic slide", async () => {
+    // The renderer prepends the title slide, so slideIndex 1 is the first content slide. A comparison
+    // archetype keeps its semantic renderer, which never draws the mapped image.
+    const result = await createPresentationPptxWithDiagnostics({
+      title: "Daily Walking",
+      slides: [
+        {
+          title: "Morning versus evening",
+          archetype: "comparison",
+          bullets: ["Morning: daylight anchors the habit", "Evening: winds down screen time"],
+        },
+      ],
+      visualAssets: [
+        {
+          slideIndex: 1,
+          asset: { bytesBase64: ONE_PIXEL_PNG_BASE64, source: "openai", sourceModel: "gpt-image-2" },
+        },
+      ],
+    });
+
+    expect(result.renderer).toBe("pptxgenjs");
+    expect(result.manifest.layoutCounts).toMatchObject({ hero: 1, comparison: 1 });
+    expect(result.manifest.visualCount).toBe(0);
+    expect(result.usedAssetIds).toEqual(["built-in-shapes-icons"]);
   });
 
   it("marks the generated visual as skipped with a reason when nothing was supplied", () => {

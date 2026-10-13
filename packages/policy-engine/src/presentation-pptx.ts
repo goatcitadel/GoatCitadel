@@ -338,27 +338,27 @@ async function createPptxGenPresentation(
   });
 
   const output = await pptx.write({ outputType: "nodebuffer", compression: true });
-  const embeddedAnyVisual = slideVisuals.some((visual) => Boolean(visual.dataUri));
+  // Only the cover and image-text slides draw a provider image; a mapped asset that lands on a
+  // semantic slide (comparison, table, section, ...) is never embedded, so it is not "used".
+  const embeddedProviderImages =
+    (slideVisuals[0]?.dataUri ? 1 : 0) +
+    layoutPlan.filter(
+      (decision) =>
+        decision.slideIndex > 0 &&
+        decision.renderer === "image-text" &&
+        mappedVisualSlideIndexes.has(decision.slideIndex),
+    ).length;
   const manifest = buildPresentationRenderManifest({
     slides: input.slides,
     sources: input.sources ?? [],
     layoutNames: layoutPlan.map((decision) => decision.renderer),
-    visualCount:
-      (slideVisuals[0]?.dataUri ? 1 : 0) +
-      layoutPlan.filter(
-        (decision) =>
-          decision.slideIndex > 0 &&
-          decision.renderer === "image-text" &&
-          mappedVisualSlideIndexes.has(decision.slideIndex),
-      ).length +
-      input.slides.filter((slide) => Boolean(slide.table || slide.chart)).length,
+    visualCount: embeddedProviderImages + input.slides.filter((slide) => Boolean(slide.table || slide.chart)).length,
   });
   return {
     buffer: toBuffer(output),
     manifest,
-    usedAssetIds: embeddedAnyVisual
-      ? ["renderer-generated-visual", "built-in-shapes-icons"]
-      : ["built-in-shapes-icons"],
+    usedAssetIds:
+      embeddedProviderImages > 0 ? ["renderer-generated-visual", "built-in-shapes-icons"] : ["built-in-shapes-icons"],
   };
 }
 
