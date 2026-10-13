@@ -202,9 +202,11 @@ foreach ($slideFile in $slideFiles) {
       throw "Exported slide has unexpected dimensions: $($slideFile.FullName) ($($bitmap.Width)x$($bitmap.Height))"
     }
 
+    # Sample densely enough to land on body-text glyphs: a text-only slide has no card or image
+    # for a coarse grid to hit, and would otherwise read as blank.
     $sampledColors = [System.Collections.Generic.HashSet[int]]::new()
-    for ($y = 0; $y -lt $bitmap.Height; $y += 75) {
-      for ($x = 0; $x -lt $bitmap.Width; $x += 100) {
+    for ($y = 0; $y -lt $bitmap.Height; $y += 15) {
+      for ($x = 0; $x -lt $bitmap.Width; $x += 25) {
         [void]$sampledColors.Add($bitmap.GetPixel($x, $y).ToArgb())
       }
     }
