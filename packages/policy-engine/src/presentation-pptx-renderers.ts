@@ -176,21 +176,25 @@ function drawHeroSlide(
   design: ArtifactDesignPlan,
   visualData?: string,
 ): void {
-  // With a provider image the cover splits text and image; without one the text panel is the cover.
+  // With a provider image the cover splits a text panel and the image; without one the cover is
+  // typographic: no empty panel, the title sits in the lower half of the slide.
   const panelWidth = visualData ? 7 : 12;
-  slide.addShape(shape(pptx, "roundRect"), {
-    x: 0.66,
-    y: 0.64,
-    w: panelWidth,
-    h: 6,
-    rectRadius: 0.08,
-    fill: { color: design.tokens.surface, transparency: design.preset === "cyberpunk-ops" ? 10 : 0 },
-    line: { color: design.tokens.border, transparency: 15 },
-  });
+  const titleTop = visualData ? 1.08 : 2.4;
+  if (visualData) {
+    slide.addShape(shape(pptx, "roundRect"), {
+      x: 0.66,
+      y: 0.64,
+      w: panelWidth,
+      h: 6,
+      rectRadius: 0.08,
+      fill: { color: design.tokens.surface, transparency: design.preset === "cyberpunk-ops" ? 10 : 0 },
+      line: { color: design.tokens.border, transparency: 15 },
+    });
+  }
   slide.addText(content.title, {
     objectName: "gc:title",
     x: 1,
-    y: 1.08,
+    y: titleTop,
     w: panelWidth - 0.75,
     h: 1.55,
     fontFace: design.typography.headingFont,
@@ -205,7 +209,7 @@ function drawHeroSlide(
     slide.addText(subtitle, {
       objectName: "gc:subtitle",
       x: 1.04,
-      y: 2.85,
+      y: titleTop + 1.77,
       w: panelWidth - 1.15,
       h: 1.1,
       fontFace: design.typography.bodyFont,

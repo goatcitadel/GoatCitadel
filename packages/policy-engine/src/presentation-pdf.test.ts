@@ -288,7 +288,8 @@ describe("createPresentationPdf", () => {
     // The page number is set in the regular face, never the bold accent.
     expect(all).toMatch(/BT \/F1 10 Tf [\d.]+ [\d.]+ [\d.]+ rg [\d.]+ [\d.]+ Td \(02\) Tj ET/u);
     expect(all).not.toMatch(/BT \/F2 10 Tf [^\n]*\(02\) Tj ET/u);
-    // The cover carries title, rule, and subtitle only: no three-rectangle motif.
+    // The cover carries title, rule, and subtitle only: no three-rectangle motif and no empty panel card.
+    expect(all).not.toContain(" 870 432 re");
     expect(all).not.toContain(" 150 110 re");
     // A stacked (narrative) page draws bullets on the background, not inside the full-width card.
     expect(all).not.toContain("55 54 836 382 re B");

@@ -272,15 +272,20 @@ function drawSlide(context: SlideContext, renderer: PresentationDeckRenderer): v
 
 function drawCover(context: SlideContext): void {
   const { page, slide, theme, image } = context;
+  // With a provider image the cover splits a text panel and the image; without one the cover is
+  // typographic: no empty panel, the title sits in the lower half of the page.
   const panelWidth = image ? 504 : 870;
-  page.rect(47.5, 46, panelWidth, 432, theme.surface, { color: theme.border, width: 0.75 });
-  page.rect(72, 92, 64, 5, theme.accent);
+  const titleTop = image ? 112 : 200;
+  if (image) {
+    page.rect(47.5, 46, panelWidth, 432, theme.surface, { color: theme.border, width: 0.75 });
+  }
+  page.rect(72, titleTop - 20, 64, 5, theme.accent);
   const titleWidth = panelWidth - 50;
   const titleSize = fitTextSize(slide.title, "bold", titleWidth, image ? 40 : 46, 28, 3);
   const titleHeight = drawWrappedText(
     page,
     slide.title,
-    { x: 72, y: 112, w: titleWidth },
+    { x: 72, y: titleTop, w: titleWidth },
     {
       font: "bold",
       size: titleSize,
@@ -293,7 +298,7 @@ function drawCover(context: SlideContext): void {
     drawWrappedText(
       page,
       subtitle,
-      { x: 74, y: 112 + titleHeight + 18, w: titleWidth - 20 },
+      { x: 74, y: titleTop + titleHeight + 18, w: titleWidth - 20 },
       {
         font: "regular",
         size: 20,
@@ -305,7 +310,6 @@ function drawCover(context: SlideContext): void {
   if (image) {
     drawImage(context, { x: 580, y: 52, w: 331, h: 410 });
   }
-  // Without a provider image the cover is typographic: title, rule, and subtitle carry it.
 }
 
 function drawContentTitle(context: SlideContext): void {

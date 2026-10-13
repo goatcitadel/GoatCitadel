@@ -746,9 +746,10 @@ describe("presentation PPTX layout selection", () => {
       true,
     );
     // Narrative slides (image-text, stacked-list) draw bullets on the background; columns keep their cards.
+    // A cover without a provider image is typographic: no empty panel card behind the title.
     plan.forEach((decision, index) => {
       const roundRects = (shapesBySlide[index] ?? []).filter((shape) => shape.type === "roundRect");
-      if (decision.renderer === "image-text" || decision.renderer === "stacked-list") {
+      if (decision.renderer === "image-text" || decision.renderer === "stacked-list" || decision.renderer === "hero") {
         expect(roundRects, `${decision.renderer} slide ${index + 1}`).toHaveLength(0);
       }
       if (decision.renderer === "two-column" || decision.renderer === "comparison") {
