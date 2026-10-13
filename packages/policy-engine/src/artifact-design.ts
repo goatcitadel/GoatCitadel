@@ -240,10 +240,10 @@ const PRESET_TOKENS: Record<Exclude<ArtifactDesignPreset, "auto">, ArtifactColor
     surface: "FFFFFF",
     text: "111827",
     mutedText: "4B5563",
-    accent: "7C3AED",
+    accent: "0F766E",
     accent2: "06B6D4",
     accent3: "F97316",
-    border: "DDD6FE",
+    border: "99F6E4",
   },
   "technical-report": {
     background: "F8FAFC",
@@ -424,25 +424,11 @@ function resolvePreset(
   if (design.preset && design.preset !== "auto") {
     return design.preset;
   }
-  if (mode === "minimal" || mode === "plain") {
-    return "clean-professional";
-  }
-  const text = collectContentText(input);
-  if (/\b(walk|walking|wellness|health|stress|sleep|fitness|mindful|mood|energy)\b/u.test(text)) {
-    return "wellness";
-  }
-  if (/\b(lesson|course|teach|student|classroom|guide|worksheet|learn|training)\b/u.test(text)) {
-    return "education";
-  }
-  if (/\b(pitch|investor|fundraise|market|revenue|growth|proposal|offer)\b/u.test(text)) {
-    return "pitch";
-  }
-  if (/\b(api|runtime|security|audit|report|technical|architecture|benchmark|incident|diagnostic)\b/u.test(text)) {
-    return "technical-report";
-  }
-  if (/\b(cyberpunk|mission control|ops|observability|operator|neon|gateway)\b/u.test(text)) {
-    return "cyberpunk-ops";
-  }
+  // A look is a request, never an inference: content words used to pick wellness/pitch/... presets,
+  // which made every walking deck green and every pitch deck purple. The calm default stands unless
+  // the caller names a preset; a brand recolors whichever preset applies.
+  void input;
+  void mode;
   return "clean-professional";
 }
 
@@ -779,11 +765,14 @@ function buildArtifactDesignQualityValidationResults(
     };
   }
   const runtimeInstructionsInjected = designQuality.runtimeInstructions?.status === "injected";
+  const injectedModules = (designQuality.runtimeInstructions?.skills ?? [])
+    .map((skill) => `${skill.skillId} [${skill.modules.join(", ")}]`)
+    .join("; ");
   return {
     "design-skill-applied": {
       status: runtimeInstructionsInjected ? "passed" : "warning",
       detail: runtimeInstructionsInjected
-        ? `Injected governed impeccable design instructions (${designQuality.register}, ${designQuality.lifecycle}); no external design runtime was invoked.`
+        ? `Injected governed impeccable design instructions (${designQuality.register}, ${designQuality.lifecycle}): ${injectedModules || "receipt lists no modules"}; no external design runtime was invoked.`
         : "Renderer design defaults ran, but no governed runtime design-instruction receipt was attached.",
     },
     "visible-placeholder-copy": validationStatusForFinding(

@@ -16,11 +16,70 @@ describe("artifact design brief selection", () => {
     });
 
     expect(plan.mode).toBe("polished");
-    expect(plan.preset).toBe("wellness");
+    // Content words never pick a look; the default is the calm clean-professional preset.
+    expect(plan.preset).toBe("clean-professional");
     expect(plan.visualLevel).toBe("polished");
     expect(plan.assetPolicy).toBe("generated-first");
     expect(plan.layouts.map((layout) => layout.name)).toContain("hero");
     expect(plan.assetPlan.some((asset) => asset.type === "generated" && asset.status === "planned")).toBe(true);
+  });
+
+  it("chooses a preset only when the request names one, recolored by a brand when given", () => {
+    const walking = { kind: "presentation" as const, format: "pptx", title: "Benefits of Daily Walking" };
+    expect(createArtifactDesignPlan({ ...walking, design: { preset: "wellness" } }).preset).toBe("wellness");
+    expect(createArtifactDesignPlan({ ...walking, title: "Investor pitch for growth" }).preset).toBe(
+      "clean-professional",
+    );
+    const branded = createArtifactDesignPlan({ ...walking, design: { brand: { colors: ["#123456"] } } });
+    expect(branded.preset).toBe("clean-professional");
+    expect(branded.tokens.accent).toBe("123456");
+  });
+
+  it("keeps every preset token off the anti-slop indigo and violet list", () => {
+    const antiSlop = new Set(["6366F1", "4F46E5", "4338CA", "3730A3", "8B5CF6", "7C3AED", "A855F7"]);
+    for (const preset of [
+      "clean-professional",
+      "education",
+      "wellness",
+      "pitch",
+      "technical-report",
+      "cyberpunk-ops",
+    ] as const) {
+      const plan = createArtifactDesignPlan({
+        kind: "presentation",
+        format: "pptx",
+        title: "Deck",
+        design: { preset },
+      });
+      for (const [name, value] of Object.entries(plan.tokens)) {
+        expect(antiSlop.has(value.toUpperCase()), `${preset}.${name} = ${value}`).toBe(false);
+      }
+    }
+  });
+
+  it("reports the injected skill modules by name on design-skill-applied", () => {
+    const plan = createArtifactDesignPlan({ kind: "presentation", format: "pptx", title: "Quarterly Pitch" });
+    const report = buildArtifactDesignReport(plan, {
+      localPath: "deck.pptx",
+      designQuality: {
+        runtimeInstructions: {
+          status: "injected",
+          skills: [
+            {
+              skillId: "bundled:impeccable",
+              treeSha256: "1".repeat(64),
+              instructionSha256: "2".repeat(64),
+              modules: ["main", "craft-floor", "artifacts"],
+            },
+          ],
+        },
+      },
+    });
+
+    const check = report.validation.find((item) => item.id === "design-skill-applied");
+    expect(check?.status).toBe("passed");
+    expect(check?.detail).toContain("bundled:impeccable [main, craft-floor, artifacts]");
+    expect(check?.detail).not.toContain("planned");
   });
 
   it("keeps raw data artifacts minimal", () => {

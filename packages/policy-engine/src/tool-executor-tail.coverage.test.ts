@@ -321,7 +321,8 @@ describe("tool executor tail coverage", () => {
       },
       designReport: {
         mode: "polished",
-        preset: "wellness",
+        // No preset was requested, so the calm default applies regardless of the deck's words.
+        preset: "clean-professional",
         google: { requested: false, status: "not_requested" },
       },
     });
