@@ -78,12 +78,29 @@ const remoteResolveSchema = z.object({
   resolutionNote: z.string().max(4096).optional(),
 });
 
-const listQuerySchema = z.object({
-  status: z.enum(["pending", "approved", "rejected", "edited"]).optional(),
-  limit: z.coerce.number().int().min(1).max(200).default(100),
-  cursor: z.string().min(1).optional(),
-  workspaceId: z.string().min(1).optional(),
-});
+const listQuerySchema = z
+  .object({
+    status: z.enum(["pending", "approved", "rejected", "edited"]).optional(),
+    limit: z.coerce.number().int().min(1).max(200).default(100),
+    cursor: z.string().min(1).optional(),
+    workspaceId: z.string().trim().min(1).optional(),
+    runId: z.string().trim().min(1).max(256).optional(),
+    sessionId: z.string().trim().min(1).max(256).optional(),
+  })
+  .superRefine((input, context) => {
+    if (input.runId && !input.workspaceId)
+      context.addIssue({
+        code: "custom",
+        path: ["workspaceId"],
+        message: "Workspace is required for run-linked approval history",
+      });
+    if (input.sessionId && !input.runId)
+      context.addIssue({
+        code: "custom",
+        path: ["runId"],
+        message: "Run is required for session-linked approval history",
+      });
+  });
 
 const approvalParamsSchema = z.object({ approvalId: z.string().trim().min(1).max(256) });
 const getQuerySchema = z.object({ workspaceId: z.string().min(1).optional() });
@@ -164,8 +181,12 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
           limit?: number;
           cursor?: string;
           workspaceId?: string;
+          runId?: string;
+          sessionId?: string;
         }) => Promise<{ items: unknown[]; nextCursor?: string }>;
       };
+      if (parsed.data.runId && !pagedApprovals.listApprovalsPage)
+        return reply.code(503).send({ error: "Run-linked approval history is unavailable." });
       if (request.authActorSource === "companion") {
         reply.header("Cache-Control", "private, no-store");
       }
@@ -177,6 +198,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
                 limit: parsed.data.limit,
                 cursor: parsed.data.cursor,
                 workspaceId: parsed.data.workspaceId,
+                ...(parsed.data.runId ? { runId: parsed.data.runId, sessionId: parsed.data.sessionId } : {}),
               })
             : {
                 items: await approvals.listApprovals(parsed.data.status, parsed.data.limit, parsed.data.workspaceId),

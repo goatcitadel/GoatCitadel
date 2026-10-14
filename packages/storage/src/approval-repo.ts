@@ -435,11 +435,34 @@ export class ApprovalRepository {
   }
 
   /** Exact, indexed canonical execution linkage; never broaden a missing scope. */
-  public listByRunLinkage(input: { workspaceId: string; runId: string; sessionId?: string; status?: ApprovalRequest["status"]; limit?: number; cursor?: string }): ApprovalListResponse {
-    if (!input.workspaceId || !input.runId) throw new ValidationError({ message: "Workspace and run are required for approval linkage lookup" });
+  public listByRunLinkage(input: {
+    workspaceId: string;
+    runId: string;
+    sessionId?: string;
+    status?: ApprovalRequest["status"];
+    limit?: number;
+    cursor?: string;
+  }): ApprovalListResponse {
+    if (!input.workspaceId || !input.runId)
+      throw new ValidationError({ message: "Workspace and run are required for approval linkage lookup" });
     const limit = Number.isFinite(input.limit) ? Math.max(1, Math.min(Math.floor(input.limit!), 200)) : 100;
     const cursor = decodeApprovalListCursor(input.cursor);
-    const rows = toApprovalRows(this.db.prepare(`
+    const expiresAtValue = this.db.dialect === "postgres" ? "approval.expires_at_ts" : "julianday(approval.expires_at)";
+    const databaseNowInstant = this.db.dialect === "postgres" ? "statement_timestamp()" : "julianday('now')";
+    const activePending =
+      input.status === "pending"
+        ? "AND (approval.expires_at IS NULL OR (" +
+          expiresAtValue +
+          " IS NOT NULL AND " +
+          expiresAtValue +
+          " > " +
+          databaseNowInstant +
+          "))"
+        : "";
+    const rows = toApprovalRows(
+      this.db
+        .prepare(
+          `
       SELECT approval.* FROM approvals approval
       JOIN approval_execution_linkages link ON link.approval_id = approval.approval_id
       WHERE link.approval_id IN (
@@ -449,10 +472,20 @@ export class ApprovalRepository {
       )
         ${input.sessionId ? "AND (link.session_id IS NULL OR link.session_id = @sessionId)" : ""}
         ${input.status ? "AND approval.status = @status" : ""}
+        ${activePending}
         ${cursor ? "AND (link.created_at < @createdAt OR (link.created_at = @createdAt AND link.approval_id < @approvalId))" : ""}
       ORDER BY link.created_at DESC, link.approval_id DESC LIMIT @limit
-    `).all({ workspaceId: input.workspaceId, runId: input.runId, limit: limit + 1,
-      ...(input.sessionId ? { sessionId: input.sessionId } : {}), ...(input.status ? { status: input.status } : {}), ...(cursor ?? {}) }));
+    `,
+        )
+        .all({
+          workspaceId: input.workspaceId,
+          runId: input.runId,
+          limit: limit + 1,
+          ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+          ...(input.status ? { status: input.status } : {}),
+          ...(cursor ?? {}),
+        }),
+    );
     const items = rows.slice(0, limit).map(mapRow);
     return { items, nextCursor: rows.length > limit ? encodeApprovalListCursor(items.at(-1)!) : undefined };
   }
