@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "sourceDigest": "4b3b80eacc6bcef81bb157edb62621507020cc1ba2cb5ab547252d41063bee1d",
-  "revision": "392130a9a84169ae414f7b7203eeb69dd4c54baf",
+  "sourceDigest": "60746558fcd7c4cf938964669240d9ddae7b39eec065066df4dd14459a4c6948",
+  "revision": "b29ae46d1be3a5dba09b5aadc48baa9d5bb34ea7",
   "ciRevision": "c47bee024f7fd005fdfa3c6313e5af5d111a46a5",
   "priorTaskSlices": {
     "ledger": {
@@ -39802,6 +39802,277 @@
         "All required release lanes, reviewed visuals and designated cloud/mesh/packaged Windows evidence"
       ],
       "allFinalGatesFalse": true
+    },
+    {
+      "recordedAt": "2026-10-14T12:30:39.289Z",
+      "candidate": {
+        "revision": "392130a9a84169ae414f7b7203eeb69dd4c54baf",
+        "sourceDigest": "4b3b80eacc6bcef81bb157edb62621507020cc1ba2cb5ab547252d41063bee1d",
+        "sourceDigestAlgorithm": "sha256-source-files-v1"
+      },
+      "currentHeadRevision": "392130a9a84169ae414f7b7203eeb69dd4c54baf",
+      "sourceCount": 8977,
+      "status": "Native implementation committed locally; UI/UX and release sign-off incomplete",
+      "committedScope": {
+        "paths": 331,
+        "parentRevision": "3bfab9622704a873a0567ba17f00bf8a21fa3806",
+        "normalHooks": "Root verified normal hooks, exact committed blobs, unchanged source and clean checkout",
+        "publication": "No push, release issuance, installation or live-profile migration"
+      },
+      "matchedColdPerformance": {
+        "artifact": "artifacts/verification/2026-10-14T11-41-08-239Z-ux-budgets-63ccc637/manifest.json",
+        "manifestSha256": "e92d699a7ed44aec4bbdd6cf5fb6cf73d8b832d6b5b662ae9bb2e9b9c21abc4f",
+        "candidate": {
+          "revision": "392130a9a84169ae414f7b7203eeb69dd4c54baf",
+          "sourceDigest": "4b3b80eacc6bcef81bb157edb62621507020cc1ba2cb5ab547252d41063bee1d",
+          "sourceDigestAlgorithm": "sha256-source-files-v1"
+        },
+        "candidateUnchanged": true,
+        "passed": 0,
+        "failed": 3,
+        "skipped": 0,
+        "limits": {
+          "startupRequests": 20,
+          "idleRequestsPerTwoMinutes": 12,
+          "elsewhereTurnRequests": 10,
+          "initialJavaScriptGzipBytes": 350000,
+          "cls": 0.1
+        },
+        "runs": [
+          {
+            "run": 1,
+            "artifact": "artifacts/verification/2026-10-14T11-41-08-239Z-ux-budgets-63ccc637/diagnostics/cockpit-performance-1.json",
+            "sha256": "159b7cdbb48808240db59c443bfbe6956b0f1ba8e5d17a9385bf975224c23582",
+            "startupRequests": 18,
+            "idleRequests": 12,
+            "elsewhereTurnRequests": 6,
+            "initialJavaScriptGzipBytes": 387708,
+            "cls": 0.06363123293694808,
+            "firstFrameTheme": "dark",
+            "inverseFirstFrameTheme": "light",
+            "chatReadyWithinStartupWindow": true,
+            "failures": ["initialJavaScriptGzipBytes: 387708 exceeds 350000"]
+          },
+          {
+            "run": 2,
+            "artifact": "artifacts/verification/2026-10-14T11-41-08-239Z-ux-budgets-63ccc637/diagnostics/cockpit-performance-2.json",
+            "sha256": "ac14c16d08488df7d9086c0d366d984ae1fa0a8a2ad2d84539016bddb2235523",
+            "startupRequests": 20,
+            "idleRequests": 12,
+            "elsewhereTurnRequests": 4,
+            "initialJavaScriptGzipBytes": 387708,
+            "cls": 0.06363123293694808,
+            "firstFrameTheme": "dark",
+            "inverseFirstFrameTheme": "light",
+            "chatReadyWithinStartupWindow": true,
+            "failures": ["initialJavaScriptGzipBytes: 387708 exceeds 350000"]
+          },
+          {
+            "run": 3,
+            "artifact": "artifacts/verification/2026-10-14T11-41-08-239Z-ux-budgets-63ccc637/diagnostics/cockpit-performance-3.json",
+            "sha256": "9b6a882e4fae440b963811de35b16aa18d747fc58e656c71b1760ce56f0a2c31",
+            "startupRequests": 20,
+            "idleRequests": 12,
+            "elsewhereTurnRequests": 4,
+            "initialJavaScriptGzipBytes": 387708,
+            "cls": 0.06363123293694808,
+            "firstFrameTheme": "dark",
+            "inverseFirstFrameTheme": "light",
+            "chatReadyWithinStartupWindow": true,
+            "failures": ["initialJavaScriptGzipBytes: 387708 exceeds 350000"]
+          }
+        ],
+        "componentDisposition": {
+          "startupRequests": "passed_all_three",
+          "idleRequests": "passed_all_three",
+          "elsewhereTurnRequests": "passed_all_three",
+          "layoutShift": "passed_all_three",
+          "firstFrameTheme": "passed_dark_and_inverse_light_all_three",
+          "timelyReadiness": "passed_all_three",
+          "actualLoadedJavaScript": "failed_all_three"
+        },
+        "remainingJavaScriptGzipBytes": 37708,
+        "measurementBoundary": "Official windows/exclusions/budgets unchanged; dynamic Chat chunks included"
+      },
+      "browserEvidence": {
+        "public12": {
+          "artifact": "artifacts/verification/2026-10-14T11-11-27-145Z-ux-budgets-91645597/manifest.json",
+          "sha256": "15187b8851b883200410647a263155e59d3031ef09c379f77622743e1ff818f9",
+          "passed": 12,
+          "failed": 0,
+          "skipped": 0,
+          "degraded": 0,
+          "notConfigured": 0,
+          "candidate": {
+            "revision": "3bfab9622704a873a0567ba17f00bf8a21fa3806",
+            "sourceDigest": "4b3b80eacc6bcef81bb157edb62621507020cc1ba2cb5ab547252d41063bee1d",
+            "sourceDigestAlgorithm": "sha256-source-files-v1"
+          },
+          "candidateUnchanged": true,
+          "currentReuse": "Same measured source bytes were committed at392130a9; original precommit revision3bf provenance remains."
+        },
+        "approval12": {
+          "artifact": "artifacts/verification/2026-10-14T11-13-54-867Z-ux-budgets-a9c8ec96/manifest.json",
+          "sha256": "6d3ad5bc3568eb4c7e5dc53b1068eb2c50b85fc2cf4e7b4152f19ce992e970c3",
+          "passed": 12,
+          "failed": 0,
+          "skipped": 0,
+          "degraded": 0,
+          "notConfigured": 0,
+          "candidate": {
+            "revision": "3bfab9622704a873a0567ba17f00bf8a21fa3806",
+            "sourceDigest": "4b3b80eacc6bcef81bb157edb62621507020cc1ba2cb5ab547252d41063bee1d",
+            "sourceDigestAlgorithm": "sha256-source-files-v1"
+          },
+          "candidateUnchanged": true,
+          "currentReuse": "Same measured source bytes were committed at392130a9; original precommit revision3bf provenance remains."
+        },
+        "sheetPalette16": {
+          "artifact": "artifacts/verification/2026-10-14T11-16-46-990Z-ux-budgets-1f607145/manifest.json",
+          "sha256": "5f9dbd13dfaf8880b6183e7d368aae86e1e7b484b9ff804b55f87a09e3b9d45d",
+          "passed": 16,
+          "failed": 0,
+          "skipped": 0,
+          "degraded": 0,
+          "notConfigured": 0,
+          "candidate": {
+            "revision": "3bfab9622704a873a0567ba17f00bf8a21fa3806",
+            "sourceDigest": "4b3b80eacc6bcef81bb157edb62621507020cc1ba2cb5ab547252d41063bee1d",
+            "sourceDigestAlgorithm": "sha256-source-files-v1"
+          },
+          "candidateUnchanged": true,
+          "currentReuse": "Same measured source bytes were committed at392130a9; original precommit revision3bf provenance remains."
+        },
+        "classic4": {
+          "artifact": "artifacts/verification/2026-10-14T11-22-14-222Z-ux-budgets-23d53e27/manifest.json",
+          "sha256": "cbc1a7ef7696d7b5d57c019fdee9d936c48eae3ab4f85fb8e2fd234a22d043ee",
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "degraded": 0,
+          "notConfigured": 0,
+          "candidate": {
+            "revision": "3bfab9622704a873a0567ba17f00bf8a21fa3806",
+            "sourceDigest": "4b3b80eacc6bcef81bb157edb62621507020cc1ba2cb5ab547252d41063bee1d",
+            "sourceDigestAlgorithm": "sha256-source-files-v1"
+          },
+          "candidateUnchanged": true,
+          "currentReuse": "Same measured source bytes were committed at392130a9; original precommit revision3bf provenance remains."
+        }
+      },
+      "nativeTests": {
+        "report": ".tmp/root-roundtrip-worker-fixture-type1-20261014/revision-1/reviewed-adoption/native-full-correct-cwd.json",
+        "passed": 5879,
+        "failed": 0,
+        "skipped": 0,
+        "reportSourceDigest": "fa5b73d0eb9586904a6d2f864c823040e3bb78cb159aa73bc34dd2aa5cb5e733",
+        "currentReuse": "Root-reviewed later two test-format changes preserve semantic meaning; not a fresh full native run at392130a9."
+      },
+      "coreTests": {
+        "report": ".tmp/root-native-palette-fixture4-20261014/revision-1/reviewed-adoption/core-full.json",
+        "passed": 777,
+        "failed": 0,
+        "skipped": 0,
+        "reportSourceDigest": "4da1545922db7ff33adf8418148bfd645ee53824ea99431ed979a9babdfd8fbf",
+        "currentReuse": "Later shell/compatibility/test changes do not change Core runtime; reuse remains within root-reviewed boundary."
+      },
+      "migrationIntegration": {
+        "status": "Integrated locally; OLD number collision below remains historical, not current NEW integration blocker",
+        "integrationRevision": "4e01f7804dab1a01ddd955469a19896020d62f86",
+        "authority": "Published upstream lineage retained; current named PostgreSQL/release proof still required"
+      },
+      "currentReleaseDisposition": {
+        "fast": "Fresh full required Fast on final candidate pending; older artifacts retain provenance",
+        "postgres": "Owned v4 Storage passes62 tests with zero skips and normal bounded cleanup. Earlier v2/v3 failures remain historical. Other PostgreSQL proof sets and full required release verification remain pending.",
+        "surfaceVisual": "Current required surface/visual and Ubuntu baseline acceptance pending",
+        "manual": "Designated cloud/mesh/external-client and packaged Windows evidence pending"
+      },
+      "runtimeHoldCurrentEvidence": {
+        "remoteWorkers": {
+          "currentNativeDestination": "/system/runtime/workers",
+          "owner": "apps/mission-control-next/src/features/native-routes/ops/RemoteWorkersRoutePage.tsx",
+          "disposition": "Existing inspection/budget/runtime owner native and tested locally; enrollment/containment/live/durable holds unchanged"
+        },
+        "nextTurnRoutedContext": "Next-turn context/workspace-snapshot/model-council hold unchanged"
+      },
+      "reconciliation": {
+        "annotatedFindings": 8,
+        "annotatedCapabilities": 25,
+        "unchangedOtherFindings": 225,
+        "unchangedOtherCapabilities": 123,
+        "completeParityAccepted": false,
+        "localAnnotationField": "currentIntegratedLocalEvidence20261014"
+      },
+      "remainingDependencies": [
+        "Remove37,708 actual loaded gzip bytes without changing budgets/windows/exclusions",
+        "Complete remaining233-finding/148-entry acceptance and Task15-17 carries",
+        "Full148-entry parameterized route/action acceptance on the final candidate",
+        "Remaining finding criteria and Task15-17 carries, accessibility, enlarged text, forced colors and fractional breakpoints",
+        "All required release lanes, reviewed visuals and designated cloud/mesh/packaged Windows evidence"
+      ],
+      "allFinalGatesFalse": true,
+      "postCheckpointStorageEvidence20261014": {
+        "artifact": ".tmp/owned-postgres-integrated-wrapper-v4-20261014/runs/2026-10-14T12-25-38.630Z-084b2cb3-f02a-4bcd-8172-b9c832764ae9/ownership-and-result.json",
+        "sha256": "c42bafa6a2310c2e34841c9f86791d2c8f1dd0cb2dae763ad0cb6f7ecabf8691",
+        "proofSet": "Storage",
+        "status": "passed",
+        "candidate": {
+          "revision": "392130a9a84169ae414f7b7203eeb69dd4c54baf",
+          "sourceDigest": "4b3b80eacc6bcef81bb157edb62621507020cc1ba2cb5ab547252d41063bee1d",
+          "sourceDigestAlgorithm": "sha256-source-files-v1"
+        },
+        "candidateUnchanged": true,
+        "commands": [
+          {
+            "id": "storage-dependencies",
+            "args": ["--filter", "@goatcitadel/storage...", "build"],
+            "exitCode": 0,
+            "durationMs": 886
+          },
+          {
+            "id": "storage-postgres",
+            "args": ["--filter", "@goatcitadel/storage", "test:postgres"],
+            "exitCode": 0,
+            "durationMs": 275048
+          }
+        ],
+        "tests": 62,
+        "passed": 62,
+        "failed": 0,
+        "skipped": 0,
+        "storageLog": ".tmp/owned-postgres-integrated-wrapper-v4-20261014/runs/2026-10-14T12-25-38.630Z-084b2cb3-f02a-4bcd-8172-b9c832764ae9/logs/storage-postgres.000009.stdout.log",
+        "storageLogSha256": "ebbe75590f48c9f73e608c5f2f1dda5f863aacac9fc23b4e37070110f2094e2c",
+        "cleanup": {
+          "stopExitCode": 0,
+          "postmasterAbsent": true,
+          "pidFileAbsent": true,
+          "listenerAbsent": true,
+          "portBindable": true,
+          "cleanShutdown": true
+        },
+        "durability": "on|on|on|30s|scram-sha-256",
+        "scramVerified": true,
+        "remainingSchemas": [],
+        "parentEnvironmentUnchanged": true,
+        "startedAt": "2026-10-14T12:25:38.678Z",
+        "finishedAt": "2026-10-14T12:30:39.289Z",
+        "claimBoundary": "Named Storage subset only; Full/Fast/coverage/NativePolicy/AsyncGateway/PostgresRecovery and remaining release proof are not certified."
+      },
+      "localTestEvidenceBoundary": {
+        "originalNativeRevision": "3bfab9622704a873a0567ba17f00bf8a21fa3806",
+        "originalNativeSourceDigest": "fa5b73d0eb9586904a6d2f864c823040e3bb78cb159aa73bc34dd2aa5cb5e733",
+        "nativeReportSha256": "33de03098e99d3bf92fbe91391f68388bad14e533cb9d89a7ee3b04064cde419",
+        "currentReuse": "Root-reviewed later two test-format changes preserve semantic meaning; not a fresh full native run at392130a9.",
+        "annotationSemantics": "Current implementation owner hashes are392/4b; named tests retain original fa5 source and root-reviewed semantic reuse. These are local evidence annotations, not current parity/criterion verification."
+      },
+      "sourceOwnershipAudit": {
+        "uniqueAnnotatedOwnerFiles": 49,
+        "actualHashesMatch": true,
+        "uniqueNamedSuites": 42,
+        "exactReportCountsMatch": true,
+        "historical381RowsPreserved": true,
+        "allFourGatesFalse": true
+      }
     }
   ],
   "latestFastCi": {
@@ -39822,277 +40093,236 @@
     "disposition": "Hosted Fast and all 13 jobs pass at c47bee, including real PostgreSQL. This is upstream evidence, not the local f532/f667 candidate. Latest release run remains failed on b2b; no single candidate release acceptance."
   },
   "currentCheckpoint": {
-    "recordedAt": "2026-10-14T12:30:39.289Z",
+    "recordedAt": "2026-10-14T22:23:27.854Z",
+    "status": "Committed local implementation checkpoint; user requested wrap-up; Cockpit and release sign-off incomplete",
     "candidate": {
-      "revision": "392130a9a84169ae414f7b7203eeb69dd4c54baf",
-      "sourceDigest": "4b3b80eacc6bcef81bb157edb62621507020cc1ba2cb5ab547252d41063bee1d",
+      "revision": "b29ae46d1be3a5dba09b5aadc48baa9d5bb34ea7",
+      "sourceDigest": "60746558fcd7c4cf938964669240d9ddae7b39eec065066df4dd14459a4c6948",
       "sourceDigestAlgorithm": "sha256-source-files-v1"
     },
-    "currentHeadRevision": "392130a9a84169ae414f7b7203eeb69dd4c54baf",
-    "sourceCount": 8977,
-    "status": "Native implementation committed locally; UI/UX and release sign-off incomplete",
     "committedScope": {
-      "paths": 331,
-      "parentRevision": "3bfab9622704a873a0567ba17f00bf8a21fa3806",
-      "normalHooks": "Root verified normal hooks, exact committed blobs, unchanged source and clean checkout",
-      "publication": "No push, release issuance, installation or live-profile migration"
+      "native": {
+        "revision": "b29ae46d1be3a5dba09b5aadc48baa9d5bb34ea7",
+        "branch": "codex/cockpit-native-context-20261014",
+        "paths": 62,
+        "receipt": {
+          "artifact": ".tmp/native-context-verified-commit-20261014/committed.json",
+          "sha256": "68c810983ca1d8ac2008639fd63523dae3686ad19671305f84b04e8e83b459c8"
+        }
+      },
+      "windowsProcessIdentity": {
+        "revision": "234af5ff06b6dbe110689921b35198af115b1368",
+        "receipt": {
+          "artifact": ".tmp/windows-owner-verified-commit-20261014/committed.json",
+          "sha256": "3bd6dfef66fb515d6007a20ac4d2ec9d3fc959bb77107c60085e6cde9d5bd64c"
+        }
+      },
+      "separateBackendBranch": {
+        "root": "C:\\Users\\spurn\\.codex\\worktrees\\cockpit-finalization\\personal-ai",
+        "branch": "codex/cockpit-finalization-20261014",
+        "revision": "9d18d074fa8a6c3a2b8bef3ef8316bf677ae0f48",
+        "previousRevision": "cfeec1acbd3ab8bb022e865be84b9791e4b56a4d",
+        "integratedWithNative": false,
+        "scope": "Bounded verification fixtures and session-control unique-index convergence; focused PostgreSQL/migration evidence only"
+      }
+    },
+    "nativeChanges": [
+      "Six supported context actions use native destinations and shared Gateway owners with canonical receipts, frozen consent, scope/history/ABA fences and original uncertainty locks",
+      "Binding draft acknowledgement preserves newer edits; lost-response inspection cannot replay or settle a mutation from record matching alone",
+      "Classic rollback, theme/modal compatibility, reload guards, progressive technical disclosure and accessible native context controls retain the current design"
+    ],
+    "verification": {
+      "native": {
+        "passed": 5895,
+        "files": 599,
+        "failed": 0,
+        "skipped": 0,
+        "report": {
+          "artifact": ".tmp/native-final-r12-checks.json",
+          "sha256": "f7af68665fb9ff56bfdfaf82d4778137cd98a117c68594ee867269cdb10ba789"
+        }
+      },
+      "shared": {
+        "passed": 1234,
+        "files": 178,
+        "failed": 0,
+        "skipped": 0
+      },
+      "core": {
+        "passed": 805,
+        "files": 84,
+        "failed": 0,
+        "skipped": 0
+      },
+      "sharedCoreReuse": {
+        "artifact": ".tmp/native-final-r12-reused-core-evidence.json",
+        "sha256": "bdb271f281b6514096b317a6a6131d4125a3c9818062e25face397ef08242f00"
+      },
+      "proofScriptTests": 33,
+      "browser": {
+        "artifact": "artifacts/verification/2026-10-14T21-59-49-628Z-ux-budgets-c6508cbb/manifest.json",
+        "sha256": "be1d421bfae2a4ff7236cb9cbaa5d1e509b2806e9b5abdbe21cb1aa55764f15f",
+        "passed": 11,
+        "failed": 0,
+        "skipped": 0,
+        "originalCandidate": {
+          "revision": "234af5ff06b6dbe110689921b35198af115b1368",
+          "sourceDigest": "981b804e8b9cb459f340b12df832e06a5e225a8f518849b842a2414b3e74ada9",
+          "sourceDigestAlgorithm": "sha256-source-files-v1"
+        },
+        "candidateUnchanged": true,
+        "boundary": "Four context theme/viewport profiles, four thread/timer cases and three shell-control cases; real disposable Gateway writes, cancellation, lost-response lock, read-only inspection, Classic roundtrip, zero blocking axe and no overflow. Does not certify all parity/accessibility criteria."
+      },
+      "normalHooks": true,
+      "postCommit": {
+        "artifact": ".tmp/native-postcommit-r13-checks.json",
+        "sha256": "f317f2cf5993980a40f4233073669c649d3e4f4e181ba9a3bec75f2bcf3c5b64"
+      },
+      "formatOnlyProof": {
+        "artifact": ".tmp/native-context-verified-commit-20261014/formatter-proof-r2.json",
+        "sha256": "0cf2f442b2c73d9fa1f9d43672a0c2d8fcc332ff8a12f2a8789908ecf96187b9"
+      },
+      "postCommitBoundary": "Normal hooks formatted two files only; exact preimages and identical semantic ASTs recorded. Fresh focused64 tests and typecheck pass. Full suite/browser results retain precommit provenance; they were not rerun in full after formatting.",
+      "surfaceContracts": "passed; raw shell build caps do not certify actual loaded Chat gzip budget",
+      "documentation": {
+        "command": "pnpm docs:check",
+        "exitCode": 1,
+        "governanceDocs": "passed",
+        "checksBeforeFailure": "Buttons, inline SQL ownership, memory ownership and bounded response reads passed",
+        "failure": "check-no-empty-catch: packages/mission-control-shared/src/state/scoped-operation-attempts.ts:74 has a comment-only catch; source repair and required check rerun remain pending",
+        "laterChainedChecks": "Not executed because the command stopped at the failure"
+      }
     },
     "matchedColdPerformance": {
-      "artifact": "artifacts/verification/2026-10-14T11-41-08-239Z-ux-budgets-63ccc637/manifest.json",
-      "manifestSha256": "e92d699a7ed44aec4bbdd6cf5fb6cf73d8b832d6b5b662ae9bb2e9b9c21abc4f",
-      "candidate": {
-        "revision": "392130a9a84169ae414f7b7203eeb69dd4c54baf",
-        "sourceDigest": "4b3b80eacc6bcef81bb157edb62621507020cc1ba2cb5ab547252d41063bee1d",
+      "artifact": "artifacts/verification/2026-10-14T21-30-14-679Z-ux-budgets-f413aef3/manifest.json",
+      "sha256": "7f0bfe507d2b733e2bf85e9f37e6ea05a9166a41a7b324aa84c300f078009da6",
+      "originalCandidate": {
+        "revision": "234af5ff06b6dbe110689921b35198af115b1368",
+        "sourceDigest": "5a90264b62a515a146fc9f28457c1b0f5f124ca8dd3729feeecc563518eaa4c4",
         "sourceDigestAlgorithm": "sha256-source-files-v1"
       },
       "candidateUnchanged": true,
-      "passed": 0,
-      "failed": 3,
-      "skipped": 0,
-      "limits": {
+      "startupRequests": [18, 19, 19],
+      "idleRequestsPer120Seconds": [12, 12, 12],
+      "elsewhereTurnRequests": [5, 5, 5],
+      "initialJavaScriptGzipBytes": [391595, 391595, 391595],
+      "cls": 0.058297899603614756,
+      "firstFrameTheme": "dark and inverse light pass",
+      "timelyReadiness": true,
+      "targets": {
         "startupRequests": 20,
-        "idleRequestsPerTwoMinutes": 12,
+        "idleRequestsPer120Seconds": 12,
         "elsewhereTurnRequests": 10,
         "initialJavaScriptGzipBytes": 350000,
         "cls": 0.1
       },
-      "runs": [
+      "remainingJavaScriptGzipBytes": 41595,
+      "accepted": false,
+      "boundary": "Latest three matched cold runs precede final warning polish and normal-hook formatting; original windows, exclusions and budgets retained, dynamic chunks included. Current source needs a new matched run after bundle repairs."
+    },
+    "currentConfiguredSizeDiagnostic": {
+      "artifact": ".tmp/optional-presentation-current-config-size-r12/baseline.json",
+      "sha256": "9cd218256f3224a70a77181cbd2282cf5b2cd6df88971f9ea5e54e4be12f5cbf",
+      "gzipBytes": 391608,
+      "coldChunks": 6,
+      "acceptance": false,
+      "boundary": "Source-free current-config static closure diagnostic at b29ae46d1, not a matched cold performance pass",
+      "optionalProposal": "Unapplied eleven-file optional-presentation proposal saved only1148 gzip bytes in a corrected counterfactual; unverified and not adopted. Earlier memoized-selector comparison invalidated; no new modal/timer refactor started."
+    },
+    "requiredReleaseRun": {
+      "root": "C:\\Users\\spurn\\.codex\\worktrees\\cockpit-finalization\\personal-ai",
+      "revision": "9d18d074fa8a6c3a2b8bef3ef8316bf677ae0f48",
+      "artifact": "artifacts/verification/2026-10-14T20-02-43-608Z-fast-3a5df6e6/manifest.json",
+      "completedScenarios": 15,
+      "totalRequiredFastScenarios": 24,
+      "failedScenarios": [
+        "fast.repo-hygiene",
+        "fast.test.gateway.shard3",
+        "fast.test.gateway.shard4",
+        "fast.test.storage.shard2"
+      ],
+      "state": "Failed so far and interrupted at user request before completion; not a passing release lane",
+      "interruptionArtifact": ".tmp/owned-postgres-finalization-full-20261014/runs/2026-10-14T20-02-09.432Z-8f2d8e30-d508-41c1-ba89-535d5bac8315/user-requested-interruption.json",
+      "cleanup": {
+        "portBindable": true,
+        "stopExitCode": 0,
+        "listenerAbsent": true,
+        "pidFileAbsent": true,
+        "cleanShutdown": true,
+        "postmasterAbsent": true
+      },
+      "remainingOwnedProcesses": 0,
+      "remainingCommands": "Full Fast completion, dedicated PostgreSQL and production coverage collection/gate were not completed by this run",
+      "failureDetails": [
         {
-          "run": 1,
-          "artifact": "artifacts/verification/2026-10-14T11-41-08-239Z-ux-budgets-63ccc637/diagnostics/cockpit-performance-1.json",
-          "sha256": "159b7cdbb48808240db59c443bfbe6956b0f1ba8e5d17a9385bf975224c23582",
-          "startupRequests": 18,
-          "idleRequests": 12,
-          "elsewhereTurnRequests": 6,
-          "initialJavaScriptGzipBytes": 387708,
-          "cls": 0.06363123293694808,
-          "firstFrameTheme": "dark",
-          "inverseFirstFrameTheme": "light",
-          "chatReadyWithinStartupWindow": true,
-          "failures": ["initialJavaScriptGzipBytes: 387708 exceeds 350000"]
+          "id": "fast.repo-hygiene",
+          "passed": 1853,
+          "failed": 1,
+          "skipped": 1,
+          "issue": "Concurrent packaged launch WMI process-creation identity under load; separate234af5ff fix has55 script tests and14 actual packaged launcher fixture cases, but is not present in frozen9d18 candidate"
         },
         {
-          "run": 2,
-          "artifact": "artifacts/verification/2026-10-14T11-41-08-239Z-ux-budgets-63ccc637/diagnostics/cockpit-performance-2.json",
-          "sha256": "ac14c16d08488df7d9086c0d366d984ae1fa0a8a2ad2d84539016bddb2235523",
-          "startupRequests": 20,
-          "idleRequests": 12,
-          "elsewhereTurnRequests": 4,
-          "initialJavaScriptGzipBytes": 387708,
-          "cls": 0.06363123293694808,
-          "firstFrameTheme": "dark",
-          "inverseFirstFrameTheme": "light",
-          "chatReadyWithinStartupWindow": true,
-          "failures": ["initialJavaScriptGzipBytes: 387708 exceeds 350000"]
+          "id": "fast.test.gateway.shard3",
+          "passed": 3238,
+          "failed": 2,
+          "skipped": 15,
+          "issues": [
+            "Explorer durable background repair15-second timeout; isolated reproduction pending",
+            "Held remote-worker restart settlement artifact.open403 exact execution-lease revision; no retry of ambiguous execution and no authority weakening"
+          ]
         },
         {
-          "run": 3,
-          "artifact": "artifacts/verification/2026-10-14T11-41-08-239Z-ux-budgets-63ccc637/diagnostics/cockpit-performance-3.json",
-          "sha256": "9b6a882e4fae440b963811de35b16aa18d747fc58e656c71b1760ce56f0a2c31",
-          "startupRequests": 20,
-          "idleRequests": 12,
-          "elsewhereTurnRequests": 4,
-          "initialJavaScriptGzipBytes": 387708,
-          "cls": 0.06363123293694808,
-          "firstFrameTheme": "dark",
-          "inverseFirstFrameTheme": "light",
-          "chatReadyWithinStartupWindow": true,
-          "failures": ["initialJavaScriptGzipBytes: 387708 exceeds 350000"]
+          "id": "fast.test.gateway.shard4",
+          "passed": 3494,
+          "failed": 1,
+          "skipped": 1,
+          "issue": "Mesh capability revoke/projection15-second timeout; isolated reproduction pending"
+        },
+        {
+          "id": "fast.test.storage.shard2",
+          "passed": 475,
+          "failed": 2,
+          "skipped": 0,
+          "issue": "Populatedv262 ASC/DESC approval-linkage repair tests compare migration history without new SQLite264 session-control migration; reconcile fixture at its owner and reproduce before classification/acceptance"
         }
       ],
-      "componentDisposition": {
-        "startupRequests": "passed_all_three",
-        "idleRequests": "passed_all_three",
-        "elsewhereTurnRequests": "passed_all_three",
-        "layoutShift": "passed_all_three",
-        "firstFrameTheme": "passed_dark_and_inverse_light_all_three",
-        "timelyReadiness": "passed_all_three",
-        "actualLoadedJavaScript": "failed_all_three"
-      },
-      "remainingJavaScriptGzipBytes": 37708,
-      "measurementBoundary": "Official windows/exclusions/budgets unchanged; dynamic Chat chunks included"
-    },
-    "browserEvidence": {
-      "public12": {
-        "artifact": "artifacts/verification/2026-10-14T11-11-27-145Z-ux-budgets-91645597/manifest.json",
-        "sha256": "15187b8851b883200410647a263155e59d3031ef09c379f77622743e1ff818f9",
-        "passed": 12,
+      "storageShard1": {
+        "passed": 530,
         "failed": 0,
-        "skipped": 0,
-        "degraded": 0,
-        "notConfigured": 0,
-        "candidate": {
-          "revision": "3bfab9622704a873a0567ba17f00bf8a21fa3806",
-          "sourceDigest": "4b3b80eacc6bcef81bb157edb62621507020cc1ba2cb5ab547252d41063bee1d",
-          "sourceDigestAlgorithm": "sha256-source-files-v1"
-        },
-        "candidateUnchanged": true,
-        "currentReuse": "Same measured source bytes were committed at392130a9; original precommit revision3bf provenance remains."
+        "skipped": 0
       },
-      "approval12": {
-        "artifact": "artifacts/verification/2026-10-14T11-13-54-867Z-ux-budgets-a9c8ec96/manifest.json",
-        "sha256": "6d3ad5bc3568eb4c7e5dc53b1068eb2c50b85fc2cf4e7b4152f19ce992e970c3",
-        "passed": 12,
-        "failed": 0,
-        "skipped": 0,
-        "degraded": 0,
-        "notConfigured": 0,
-        "candidate": {
-          "revision": "3bfab9622704a873a0567ba17f00bf8a21fa3806",
-          "sourceDigest": "4b3b80eacc6bcef81bb157edb62621507020cc1ba2cb5ab547252d41063bee1d",
-          "sourceDigestAlgorithm": "sha256-source-files-v1"
-        },
-        "candidateUnchanged": true,
-        "currentReuse": "Same measured source bytes were committed at392130a9; original precommit revision3bf provenance remains."
-      },
-      "sheetPalette16": {
-        "artifact": "artifacts/verification/2026-10-14T11-16-46-990Z-ux-budgets-1f607145/manifest.json",
-        "sha256": "5f9dbd13dfaf8880b6183e7d368aae86e1e7b484b9ff804b55f87a09e3b9d45d",
-        "passed": 16,
-        "failed": 0,
-        "skipped": 0,
-        "degraded": 0,
-        "notConfigured": 0,
-        "candidate": {
-          "revision": "3bfab9622704a873a0567ba17f00bf8a21fa3806",
-          "sourceDigest": "4b3b80eacc6bcef81bb157edb62621507020cc1ba2cb5ab547252d41063bee1d",
-          "sourceDigestAlgorithm": "sha256-source-files-v1"
-        },
-        "candidateUnchanged": true,
-        "currentReuse": "Same measured source bytes were committed at392130a9; original precommit revision3bf provenance remains."
-      },
-      "classic4": {
-        "artifact": "artifacts/verification/2026-10-14T11-22-14-222Z-ux-budgets-23d53e27/manifest.json",
-        "sha256": "cbc1a7ef7696d7b5d57c019fdee9d936c48eae3ab4f85fb8e2fd234a22d043ee",
-        "passed": 4,
-        "failed": 0,
-        "skipped": 0,
-        "degraded": 0,
-        "notConfigured": 0,
-        "candidate": {
-          "revision": "3bfab9622704a873a0567ba17f00bf8a21fa3806",
-          "sourceDigest": "4b3b80eacc6bcef81bb157edb62621507020cc1ba2cb5ab547252d41063bee1d",
-          "sourceDigestAlgorithm": "sha256-source-files-v1"
-        },
-        "candidateUnchanged": true,
-        "currentReuse": "Same measured source bytes were committed at392130a9; original precommit revision3bf provenance remains."
-      }
-    },
-    "nativeTests": {
-      "report": ".tmp/root-roundtrip-worker-fixture-type1-20261014/revision-1/reviewed-adoption/native-full-correct-cwd.json",
-      "passed": 5879,
-      "failed": 0,
-      "skipped": 0,
-      "reportSourceDigest": "fa5b73d0eb9586904a6d2f864c823040e3bb78cb159aa73bc34dd2aa5cb5e733",
-      "currentReuse": "Root-reviewed later two test-format changes preserve semantic meaning; not a fresh full native run at392130a9."
-    },
-    "coreTests": {
-      "report": ".tmp/root-native-palette-fixture4-20261014/revision-1/reviewed-adoption/core-full.json",
-      "passed": 777,
-      "failed": 0,
-      "skipped": 0,
-      "reportSourceDigest": "4da1545922db7ff33adf8418148bfd645ee53824ea99431ed979a9babdfd8fbf",
-      "currentReuse": "Later shell/compatibility/test changes do not change Core runtime; reuse remains within root-reviewed boundary."
-    },
-    "migrationIntegration": {
-      "status": "Integrated locally; OLD number collision below remains historical, not current NEW integration blocker",
-      "integrationRevision": "4e01f7804dab1a01ddd955469a19896020d62f86",
-      "authority": "Published upstream lineage retained; current named PostgreSQL/release proof still required"
-    },
-    "currentReleaseDisposition": {
-      "fast": "Fresh full required Fast on final candidate pending; older artifacts retain provenance",
-      "postgres": "Owned v4 Storage passes62 tests with zero skips and normal bounded cleanup. Earlier v2/v3 failures remain historical. Other PostgreSQL proof sets and full required release verification remain pending.",
-      "surfaceVisual": "Current required surface/visual and Ubuntu baseline acceptance pending",
-      "manual": "Designated cloud/mesh/external-client and packaged Windows evidence pending"
-    },
-    "runtimeHoldCurrentEvidence": {
-      "remoteWorkers": {
-        "currentNativeDestination": "/system/runtime/workers",
-        "owner": "apps/mission-control-next/src/features/native-routes/ops/RemoteWorkersRoutePage.tsx",
-        "disposition": "Existing inspection/budget/runtime owner native and tested locally; enrollment/containment/live/durable holds unchanged"
-      },
-      "nextTurnRoutedContext": "Next-turn context/workspace-snapshot/model-council hold unchanged"
-    },
-    "reconciliation": {
-      "annotatedFindings": 8,
-      "annotatedCapabilities": 25,
-      "unchangedOtherFindings": 225,
-      "unchangedOtherCapabilities": 123,
-      "completeParityAccepted": false,
-      "localAnnotationField": "currentIntegratedLocalEvidence20261014"
+      "existingSkips": "Recorded existing skips only; none introduced or used to obtain acceptance"
     },
     "remainingDependencies": [
-      "Remove37,708 actual loaded gzip bytes without changing budgets/windows/exclusions",
-      "Complete remaining233-finding/148-entry acceptance and Task15-17 carries",
-      "Full148-entry parameterized route/action acceptance on the final candidate",
-      "Remaining finding criteria and Task15-17 carries, accessibility, enlarged text, forced colors and fractional breakpoints",
-      "All required release lanes, reviewed visuals and designated cloud/mesh/packaged Windows evidence"
+      "Reduce actual loaded Chat JavaScript to350000 gzip bytes and rerun three unchanged matched cold runs",
+      "Backend canonical effect-subject linkage for six context mutation-attempt status routes: current record matching/completed status cannot safely settle a lost response; full reload recovery remains incomplete",
+      "Integrate the separate verified branches deliberately, repair required Fast failures and complete every required release lane on one candidate",
+      "Complete all233 findings,148 parity entries, parameterized supported record/action acceptance and Task15-17 carries; existing historical/local annotations are not wholesale acceptance",
+      "Review surface/Ubuntu visuals and complete forced-colors, enlarged-text, fractional-breakpoint, keyboard and focus acceptance; prior556-pass/60-fail/55-unreviewed visual evidence remains historical",
+      "Designated live cloud-provider, external-client/mesh and real packaged Windows cold-start/recovery evidence remains unavailable",
+      "Minor native follow-up: uncertain binding readback still shows generic discard/save guidance while the uncertainty lock disables writes; clarify copy without releasing the lock",
+      "Repair the documented comment-only catch in scoped-operation-attempts.ts:74 and rerun pnpm docs:check; this wrap-up does not change implementation or weaken the guard"
     ],
+    "runtimeHoldCurrentEvidence": "Existing remote-worker and next-turn context/workspace-snapshot/model-council holds preserved unchanged; canonical context effect-linkage gap is a separate backend defect, not a new runtime hold",
+    "reconciliation": {
+      "findings": 233,
+      "capabilities": 148,
+      "historicalRowsPreserved": true,
+      "completeParityAccepted": false
+    },
     "allFinalGatesFalse": true,
-    "postCheckpointStorageEvidence20261014": {
-      "artifact": ".tmp/owned-postgres-integrated-wrapper-v4-20261014/runs/2026-10-14T12-25-38.630Z-084b2cb3-f02a-4bcd-8172-b9c832764ae9/ownership-and-result.json",
-      "sha256": "c42bafa6a2310c2e34841c9f86791d2c8f1dd0cb2dae763ad0cb6f7ecabf8691",
-      "proofSet": "Storage",
-      "status": "passed",
-      "candidate": {
-        "revision": "392130a9a84169ae414f7b7203eeb69dd4c54baf",
-        "sourceDigest": "4b3b80eacc6bcef81bb157edb62621507020cc1ba2cb5ab547252d41063bee1d",
-        "sourceDigestAlgorithm": "sha256-source-files-v1"
-      },
-      "candidateUnchanged": true,
-      "commands": [
-        {
-          "id": "storage-dependencies",
-          "args": ["--filter", "@goatcitadel/storage...", "build"],
-          "exitCode": 0,
-          "durationMs": 886
-        },
-        {
-          "id": "storage-postgres",
-          "args": ["--filter", "@goatcitadel/storage", "test:postgres"],
-          "exitCode": 0,
-          "durationMs": 275048
-        }
-      ],
-      "tests": 62,
-      "passed": 62,
-      "failed": 0,
-      "skipped": 0,
-      "storageLog": ".tmp/owned-postgres-integrated-wrapper-v4-20261014/runs/2026-10-14T12-25-38.630Z-084b2cb3-f02a-4bcd-8172-b9c832764ae9/logs/storage-postgres.000009.stdout.log",
-      "storageLogSha256": "ebbe75590f48c9f73e608c5f2f1dda5f863aacac9fc23b4e37070110f2094e2c",
-      "cleanup": {
-        "stopExitCode": 0,
-        "postmasterAbsent": true,
-        "pidFileAbsent": true,
-        "listenerAbsent": true,
-        "portBindable": true,
-        "cleanShutdown": true
-      },
-      "durability": "on|on|on|30s|scram-sha-256",
-      "scramVerified": true,
-      "remainingSchemas": [],
-      "parentEnvironmentUnchanged": true,
-      "startedAt": "2026-10-14T12:25:38.678Z",
-      "finishedAt": "2026-10-14T12:30:39.289Z",
-      "claimBoundary": "Named Storage subset only; Full/Fast/coverage/NativePolicy/AsyncGateway/PostgresRecovery and remaining release proof are not certified."
-    },
-    "localTestEvidenceBoundary": {
-      "originalNativeRevision": "3bfab9622704a873a0567ba17f00bf8a21fa3806",
-      "originalNativeSourceDigest": "fa5b73d0eb9586904a6d2f864c823040e3bb78cb159aa73bc34dd2aa5cb5e733",
-      "nativeReportSha256": "33de03098e99d3bf92fbe91391f68388bad14e533cb9d89a7ee3b04064cde419",
-      "currentReuse": "Root-reviewed later two test-format changes preserve semantic meaning; not a fresh full native run at392130a9.",
-      "annotationSemantics": "Current implementation owner hashes are392/4b; named tests retain original fa5 source and root-reviewed semantic reuse. These are local evidence annotations, not current parity/criterion verification."
-    },
-    "sourceOwnershipAudit": {
-      "uniqueAnnotatedOwnerFiles": 49,
-      "actualHashesMatch": true,
-      "uniqueNamedSuites": 42,
-      "exactReportCountsMatch": true,
-      "historical381RowsPreserved": true,
-      "allFourGatesFalse": true
+    "delivery": {
+      "pushed": false,
+      "published": false,
+      "installed": false,
+      "liveProfileMigrated": false,
+      "releaseIssued": false,
+      "stableRetentionCycleElapsed": false,
+      "classicRetired": false,
+      "primaryCheckout": "C:\\personal-ai remains untouched; unrelated dirty work preserved"
     }
   },
-  "sourceDigestDisposition": "Clean integrated commit392130a9 preserves measured source4b. Official matched cold runs fail only loaded JavaScript387708>350000; request/idle/elsewhere/CLS/theme/readiness pass. Imported evidence remains historical; current complete release/acceptance is pending.",
+  "sourceDigestDisposition": "Implementation checkpoint b29ae46d1 before this documentation-only commit; measured artifacts retain their original revision/source identities. This is not one passing release candidate.",
   "historicalImportedHeader20261014": {
     "originCheckout": "C:\\Users\\spurn\\.codex\\worktrees\\cockpit-release-closure\\personal-ai",
     "originRegisterSha256": "ba058dca79e0fd55b76864008fe581988b63d5764d227b5b0c0ad2aadafb4664",
@@ -40103,5 +40333,10 @@
     "previousCheckpointLocation": "previousImplementationCheckpoints last entry preserves original currentCheckpoint exactly",
     "portTargetFilesPreviouslyAbsent": true,
     "evidenceDisposition": "Imported CI/release rows/criteria/owners/acceptance fields/holds retain original candidate. They are not current-candidate acceptance."
+  },
+  "implementationHeaderBeforeWrap20261014": {
+    "revision": "392130a9a84169ae414f7b7203eeb69dd4c54baf",
+    "sourceDigest": "4b3b80eacc6bcef81bb157edb62621507020cc1ba2cb5ab547252d41063bee1d",
+    "sourceDigestDisposition": "Clean integrated commit392130a9 preserves measured source4b. Official matched cold runs fail only loaded JavaScript387708>350000; request/idle/elsewhere/CLS/theme/readiness pass. Imported evidence remains historical; current complete release/acceptance is pending."
   }
 }
