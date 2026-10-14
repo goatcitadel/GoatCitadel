@@ -1,3 +1,4 @@
+import { hasUnsettledChatContextMutation } from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import { observeDeferredOverlayFocus } from "./deferred-overlay-focus-observer";
 import { locationRevision, subscribeLocation, readLocationRevision } from "./deferred-overlay-location";
 import {
@@ -324,7 +325,8 @@ export function useDeferredOverlay<T>({
   }, []);
   const confirmReload = useCallback(
     (saved: ReloadReview | undefined) => {
-      if (!saved || reloadConsent.current !== saved || !reloadCurrent(saved)) return;
+      if (hasUnsettledChatContextMutation() || !saved || reloadConsent.current !== saved || !reloadCurrent(saved))
+        return;
       reloadConsent.current = undefined;
       reloadReturnFocus.current = undefined;
       setReloadReview((value) => (value === saved ? undefined : value));

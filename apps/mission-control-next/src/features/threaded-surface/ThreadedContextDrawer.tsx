@@ -121,7 +121,6 @@ function getProjectSummary(props: MissionThreadedContextDockProps): string {
   return matchedProjectOption ?? props.selectedSession?.projectName ?? sessionProjectId ?? "No project bound";
 }
 
-
 export function ThreadedContextDrawer({
   surface,
   props,
@@ -138,18 +137,22 @@ export function ThreadedContextDrawer({
   onCopyTrustReport?: (sessionId?: string | null, turnId?: string | null) => void;
 }) {
   const [tab, setActiveTab] = useState<DrawerTab>("context");
-  const activeTab=focusedTab??tab;
-  const leave=useDraftLeave();
+  const activeTab = focusedTab ?? tab;
+  const leave = useDraftLeave();
+  const lockedContextActions = Object.values(props.contextMutations ?? {}).filter((owner) => owner.locked);
+  const contextActionLocked = lockedContextActions.length > 0;
   const projectOptions = useMemo(() => props.projectOptions ?? [], [props.projectOptions]);
   const [pendingSubagentAuto, setPendingSubagentAuto] = useState<ChatSubagentPolicy | null>(null);
   const thinkingLevel: ChatThinkingLevel = props.prefs?.thinkingLevel ?? "standard";
   const speedMode: ChatSpeedMode = props.prefs?.speedMode ?? "standard";
   const isOpenAiRoute = props.selectedProviderId === "openai" || props.selectedProviderId === "openai-codex";
-  const fastAvailable = !isOpenAiRoute ||
+  const fastAvailable =
+    !isOpenAiRoute ||
     (props.selectedModelFastAvailable ?? supportsOpenAiFastMode(props.selectedProviderId, props.selectedModel));
   const supportsThinking = (level: ChatThinkingLevel) =>
     (!isOpenAiRoute || level !== "ultra") &&
-    (!props.selectedModelReasoningEfforts?.length || props.selectedModelReasoningEfforts.includes(THINKING_EFFORT[level]));
+    (!props.selectedModelReasoningEfforts?.length ||
+      props.selectedModelReasoningEfforts.includes(THINKING_EFFORT[level]));
   const subagentPolicy: ChatSubagentPolicy = props.prefs?.subagentPolicy ?? "ask_when_useful";
   const planningMode: ChatPlanningMode = props.prefs?.planningMode ?? props.planningMode ?? "off";
   const planningEnabled = planningMode === "advisory";
@@ -180,39 +183,75 @@ export function ThreadedContextDrawer({
   return (
     <div className="mc-next-context-drawer" data-mode={surface}>
       {leave.dialog}
-      {!focusedTab ? <><div className="mc-next-context-drawer-head">
-        <p className="mc-next-panel-kicker">Working Context</p>
-        <h3>Thread grounding</h3>
-      </div>
-      <div
-        className="mc-next-panel-tab-row mc-next-context-tab-row"
-        role="tablist"
-        aria-label="Context drawer panels"
-        data-layout="balanced-grid"
-      >
-        {(["context", "documents", "trace", "assist", "session"] as DrawerTab[]).map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            role="tab"
-            aria-selected={activeTab === tab}
-            className={`mc-next-panel-tab${activeTab === tab ? " active" : ""}`}
-            onClick={() => leave.request(()=>setActiveTab(tab))}
+      {!focusedTab ? (
+        <>
+          <div className="mc-next-context-drawer-head">
+            <p className="mc-next-panel-kicker">Working Context</p>
+            <h3>Thread grounding</h3>
+          </div>
+          <div
+            className="mc-next-panel-tab-row mc-next-context-tab-row"
+            role="tablist"
+            aria-label="Context drawer panels"
+            data-layout="balanced-grid"
           >
-            {tab === "context"
-              ? "Context"
-              : tab === "documents"
-                ? "Documents"
-                : tab === "trace"
-                  ? "Trace"
-                  : tab === "assist"
-                    ? "Assist"
-                    : "Session"}
-          </button>
-        ))}
-      </div></> : null}
+            {(["context", "documents", "trace", "assist", "session"] as DrawerTab[]).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab}
+                className={`mc-next-panel-tab${activeTab === tab ? " active" : ""}`}
+                onClick={() => leave.request(() => setActiveTab(tab))}
+              >
+                {tab === "context"
+                  ? "Context"
+                  : tab === "documents"
+                    ? "Documents"
+                    : tab === "trace"
+                      ? "Trace"
+                      : tab === "assist"
+                        ? "Assist"
+                        : "Session"}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
 
       <ThreadedContextConflictNotices props={props} />
+      {contextActionLocked ? (
+        <section className="mc-next-context-card" aria-label="Unconfirmed context action">
+          <p role="status">
+            {lockedContextActions[0]?.message ??
+              "A Chat context action is pending or unconfirmed. Further context writes remain locked."}
+          </p>
+          <p>
+            Switching layouts does not settle or replay this result. Inspecting current records cannot confirm a lost
+            mutation response.
+          </p>
+          {lockedContextActions.map((owner) => (
+            <div key={owner.family}>
+              {owner.inspectionError ? <p role="status">{owner.inspectionError}</p> : null}
+              <button
+                type="button"
+                className="mc-next-panel-button"
+                disabled={!owner.isCurrent()}
+                onClick={() => {
+                  if (owner.isCurrent()) void owner.onInspect();
+                }}
+              >
+                Inspect{" "}
+                {owner.family === "specialists"
+                  ? "specialists"
+                  : owner.family === "learned-memory"
+                    ? "learned memory"
+                    : "external binding"}
+              </button>
+            </div>
+          ))}
+        </section>
+      ) : null}
 
       {activeTab === "context" ? (
         <div className="mc-next-context-section-stack">
@@ -419,17 +458,34 @@ export function ThreadedContextDrawer({
                 onChange={(event) => void props.onPrefPatch({ thinkingLevel: event.target.value as ChatThinkingLevel })}
                 aria-label="Thinking level"
               >
-                <option value="off" disabled={!supportsThinking("off")}>No thinking</option>
-                <option value="minimal" disabled={!supportsThinking("minimal")}>Minimal</option>
-                <option value="standard" disabled={!supportsThinking("standard")}>Standard</option>
-                <option value="extended" disabled={!supportsThinking("extended")}>Extended</option>
-                <option value="deep" disabled={!supportsThinking("deep")}>Deep</option>
-                <option value="max" disabled={!supportsThinking("max")}>Maximum (supported models only)</option>
-                <option value="ultra" disabled={!supportsThinking("ultra")}>Ultra (supported models only)</option>
+                <option value="off" disabled={!supportsThinking("off")}>
+                  No thinking
+                </option>
+                <option value="minimal" disabled={!supportsThinking("minimal")}>
+                  Minimal
+                </option>
+                <option value="standard" disabled={!supportsThinking("standard")}>
+                  Standard
+                </option>
+                <option value="extended" disabled={!supportsThinking("extended")}>
+                  Extended
+                </option>
+                <option value="deep" disabled={!supportsThinking("deep")}>
+                  Deep
+                </option>
+                <option value="max" disabled={!supportsThinking("max")}>
+                  Maximum (supported models only)
+                </option>
+                <option value="ultra" disabled={!supportsThinking("ultra")}>
+                  Ultra (supported models only)
+                </option>
               </select>
             </label>
             {isOpenAiRoute && !supportsThinking(thinkingLevel) ? (
-              <p role="status">This thinking level is unavailable for the selected OpenAI model. Choose a supported level before sending.</p>
+              <p role="status">
+                This thinking level is unavailable for the selected OpenAI model. Choose a supported level before
+                sending.
+              </p>
             ) : null}
             <label className="mc-next-context-field">
               <span>Speed</span>
@@ -439,7 +495,9 @@ export function ThreadedContextDrawer({
                 aria-label="Speed mode"
               >
                 <option value="standard">Standard</option>
-                <option value="fast" disabled={!fastAvailable}>Fast</option>
+                <option value="fast" disabled={!fastAvailable}>
+                  Fast
+                </option>
               </select>
             </label>
             {isOpenAiRoute && !fastAvailable && speedMode === "fast" ? (
@@ -462,9 +520,11 @@ export function ThreadedContextDrawer({
             </label>
             <div className="mc-next-context-field" role="status" aria-live="polite">
               <span>Subagent delegation</span>
-              <p>{props.supervisedDelegationAvailable
-                ? "Ask before delegating keeps each proposed plan under operator review."
-                : "Supervised delegation is not enabled for this runtime. Your saved preference remains visible."}</p>
+              <p>
+                {props.supervisedDelegationAvailable
+                  ? "Ask before delegating keeps each proposed plan under operator review."
+                  : "Supervised delegation is not enabled for this runtime. Your saved preference remains visible."}
+              </p>
               {automaticFanout?.unavailableReason ? <p>{automaticFanout.unavailableReason}</p> : null}
             </div>
             <div className="mc-next-context-actions">
@@ -479,18 +539,45 @@ export function ThreadedContextDrawer({
             </div>
           </section>
 
-          {props.supervisedDelegationAvailable ? <section className="mc-next-context-card">
-            <p className="mc-next-panel-kicker">Supervised delegation</p>
-            <p>Review a proposed plan, or start a coding delegate for the bound project. Coding delegates use existing Chat tools and approvals. Governed Code Mode runs have a separate code review and hash check.</p>
-            <div className="mc-next-context-actions">
-              <button type="button" className="mc-next-panel-button" disabled={props.sending}
-                onClick={() => void props.onSuggestDelegation()}>Suggest delegation</button>
-              {(["implement", "review", "test", "ship"] as const).map((preset) => <button key={preset} type="button"
-                className="mc-next-panel-button" disabled={props.sending || !props.codingDelegationAvailable}
-                onClick={() => void props.onRunCodeDelegation(preset)}>{preset === "implement" ? "Delegate implementation" : preset === "review" ? "Delegate review" : preset === "test" ? "Delegate tests" : "Delegate release preparation"}</button>)}
-            </div>
-            {!props.codingDelegationAvailable ? <p>Bind this Chat to an active project before delegating coding work.</p> : null}
-          </section> : null}
+          {props.supervisedDelegationAvailable ? (
+            <section className="mc-next-context-card">
+              <p className="mc-next-panel-kicker">Supervised delegation</p>
+              <p>
+                Review a proposed plan, or start a coding delegate for the bound project. Coding delegates use existing
+                Chat tools and approvals. Governed Code Mode runs have a separate code review and hash check.
+              </p>
+              <div className="mc-next-context-actions">
+                <button
+                  type="button"
+                  className="mc-next-panel-button"
+                  disabled={props.sending}
+                  onClick={() => void props.onSuggestDelegation()}
+                >
+                  Suggest delegation
+                </button>
+                {(["implement", "review", "test", "ship"] as const).map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    className="mc-next-panel-button"
+                    disabled={props.sending || !props.codingDelegationAvailable}
+                    onClick={() => void props.onRunCodeDelegation(preset)}
+                  >
+                    {preset === "implement"
+                      ? "Delegate implementation"
+                      : preset === "review"
+                        ? "Delegate review"
+                        : preset === "test"
+                          ? "Delegate tests"
+                          : "Delegate release preparation"}
+                  </button>
+                ))}
+              </div>
+              {!props.codingDelegationAvailable ? (
+                <p>Bind this Chat to an active project before delegating coding work.</p>
+              ) : null}
+            </section>
+          ) : null}
 
           <section className="mc-next-context-card">
             <p className="mc-next-panel-kicker">Assist posture</p>
@@ -559,6 +646,7 @@ export function ThreadedContextDrawer({
                       <button
                         type="button"
                         className="mc-next-panel-button"
+                        disabled={contextActionLocked}
                         onClick={() => void props.onCreateSpecialistDraft(suggestion)}
                       >
                         Draft
@@ -566,6 +654,7 @@ export function ThreadedContextDrawer({
                       <button
                         type="button"
                         className="mc-next-panel-button"
+                        disabled={contextActionLocked}
                         onClick={() => void props.onActivateCatalogSpecialist(suggestion)}
                       >
                         Activate
@@ -589,6 +678,7 @@ export function ThreadedContextDrawer({
                       <button
                         type="button"
                         className="mc-next-panel-button"
+                        disabled={contextActionLocked}
                         onClick={() => void props.onUpdateMemoryStatus(item.itemId, "active")}
                       >
                         Keep active
@@ -596,6 +686,7 @@ export function ThreadedContextDrawer({
                       <button
                         type="button"
                         className="mc-next-panel-button"
+                        disabled={contextActionLocked}
                         onClick={() => void props.onUpdateMemoryStatus(item.itemId, "superseded")}
                       >
                         Mark stale
@@ -607,6 +698,7 @@ export function ThreadedContextDrawer({
               <button
                 type="button"
                 className="mc-next-panel-button"
+                disabled={contextActionLocked}
                 onClick={() => void props.onRebuildLearnedMemory()}
               >
                 Rebuild learned memory
@@ -707,7 +799,12 @@ export function ThreadedContextDrawer({
                 placeholder="Target thread / channel"
               />
             </label>
-            <button type="button" className="mc-next-panel-button" onClick={() => void props.onSaveExternalBinding()}>
+            <button
+              type="button"
+              className="mc-next-panel-button"
+              disabled={contextActionLocked}
+              onClick={() => void props.onSaveExternalBinding()}
+            >
               Save binding
             </button>
           </section>

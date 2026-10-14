@@ -75,6 +75,7 @@ type Input = {
   >;
   sessionControls: Pick<
     ReturnType<typeof useChatSessionControls>,
+    | "bindingMutation"
     | "sessionControlPending"
     | "integrationConnectionId"
     | "integrationTarget"
@@ -118,6 +119,8 @@ type Input = {
   >;
   contextActions: Pick<
     ReturnType<typeof useChatContextActions>,
+    | "specialistMutation"
+    | "learnedMemoryMutation"
     | "proactivePolicyDraft"
     | "proactivePolicyConflict"
     | "capabilitySuggestions"
@@ -183,10 +186,17 @@ export function createChatContextDockProps({
   metadataActions,
 }: Input): Pick<MissionThreadedRenderSurfaceInput, "contextDockProps"> {
   const { selectedSession } = threadController;
-  const codingDelegationAvailable = sessionData.settings?.chatFeatureAvailability?.supervisedDelegation === true &&
-    Boolean(selectedSession?.projectId && sessionData.projects?.items.some((project) =>
-      project.projectId === selectedSession.projectId && project.lifecycleStatus === "active" &&
-      (project.workspaceId ?? "default") === (selectedSession.workspaceId ?? "default")));
+  const codingDelegationAvailable =
+    sessionData.settings?.chatFeatureAvailability?.supervisedDelegation === true &&
+    Boolean(
+      selectedSession?.projectId &&
+      sessionData.projects?.items.some(
+        (project) =>
+          project.projectId === selectedSession.projectId &&
+          project.lifecycleStatus === "active" &&
+          (project.workspaceId ?? "default") === (selectedSession.workspaceId ?? "default"),
+      ),
+    );
   const { setStreamEnabled } = streamPreferences;
   const { setVisualStreamMode } = streamPreferences;
   const { handleRetryPreferenceDraft } = preferenceActions;
@@ -215,6 +225,11 @@ export function createChatContextDockProps({
   return {
     contextDockProps: selectedSession
       ? {
+          contextMutations: {
+            specialists: contextActions.specialistMutation,
+            learnedMemory: contextActions.learnedMemoryMutation,
+            binding: sessionControls.bindingMutation,
+          },
           mode: surfaceState.messageMode,
           dockOpen: workbenchController.dockOpen,
           dockSectionStyle: workbenchController.dockSectionStyle,
@@ -266,9 +281,14 @@ export function createChatContextDockProps({
           selectedTurn: surfaceState.selectedTurn,
           capabilityProfileInspection,
           activeGeneratedArtifact,
-          documents: documents ? { ...documents, onToggleInclude: (ref) => {
-            if (!blockHistoricalMutation()) documents.onToggleInclude(ref);
-          } } : undefined,
+          documents: documents
+            ? {
+                ...documents,
+                onToggleInclude: (ref) => {
+                  if (!blockHistoricalMutation()) documents.onToggleInclude(ref);
+                },
+              }
+            : undefined,
           routePreflight: currentRoutePreflight,
           trust: runPresentation.sessionTrust,
           providerLabelById: runPresentation.providerLabelById,
@@ -311,7 +331,8 @@ export function createChatContextDockProps({
           onSuggestDelegation: async () => {
             if (blockHistoricalMutation()) return;
             if (sessionData.settings?.chatFeatureAvailability?.supervisedDelegation !== true) {
-              pushLocalNotice("Subagent delegation is temporarily unavailable.", "warning"); return;
+              pushLocalNotice("Subagent delegation is temporarily unavailable.", "warning");
+              return;
             }
             await contextActions.handleSuggestDelegation();
           },
@@ -324,10 +345,12 @@ export function createChatContextDockProps({
           onRunCodeDelegation: async (preset) => {
             if (blockHistoricalMutation()) return;
             if (sessionData.settings?.chatFeatureAvailability?.supervisedDelegation !== true) {
-              pushLocalNotice("Code delegation is temporarily unavailable.", "warning"); return;
+              pushLocalNotice("Code delegation is temporarily unavailable.", "warning");
+              return;
             }
             if (!codingDelegationAvailable) {
-              pushLocalNotice("Bind this Chat to an active project before delegating coding work.", "warning"); return;
+              pushLocalNotice("Bind this Chat to an active project before delegating coding work.", "warning");
+              return;
             }
             await contextActions.handleRunCodeDelegation(preset);
           },
@@ -346,7 +369,8 @@ export function createChatContextDockProps({
           onAcceptDelegation: async () => {
             if (blockHistoricalMutation()) return;
             if (sessionData.settings?.chatFeatureAvailability?.supervisedDelegation !== true) {
-              pushLocalNotice("Subagent delegation is temporarily unavailable.", "warning"); return;
+              pushLocalNotice("Subagent delegation is temporarily unavailable.", "warning");
+              return;
             }
             await contextActions.handleAcceptDelegation();
           },
@@ -395,8 +419,8 @@ export function createChatContextDockProps({
           onIntegrationTargetChange: (value) => {
             if (!blockHistoricalMutation()) setIntegrationTarget(value);
           },
-          onSaveExternalBinding: async () => {
-            if (!blockHistoricalMutation()) await handleSaveExternalBinding();
+          onSaveExternalBinding: async (reviewedDraft) => {
+            if (!blockHistoricalMutation()) await handleSaveExternalBinding(reviewedDraft);
           },
         }
       : null,

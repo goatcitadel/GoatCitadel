@@ -36,7 +36,7 @@ import type {
   ChatGeneratedArtifactRecord,
   ThreadKnowledgeRetrievalMode,
 } from "@goatcitadel/contracts";
-import { useDeferredValue, useLayoutEffect, useState } from "react";
+import { useCallback, useDeferredValue, useLayoutEffect, useRef, useState } from "react";
 
 import { type AgenticRunTreeResponse } from "@goatcitadel/mission-control-shared/api/agentic";
 
@@ -159,14 +159,33 @@ export function MissionThreadedControllerHost({
   coworkViewModelFactory,
 }: MissionThreadedControllerHostProps) {
   const selection = useChatSessionSelection({ initialModeOverride });
-  const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
+  const [selectedTurnId, setSelectedTurnIdState] = useState<string | null>(null);
+  const selectedTurnRevisionRef = useRef(0);
+  const selectedTurnIntentRef = useRef(selectedTurnId);
+  useLayoutEffect(() => {
+    selectedTurnIntentRef.current = selectedTurnId;
+  }, [selectedTurnId]);
+  const [, setSelectedTurnRevision] = useState(0);
+  const setSelectedTurnId = useCallback<React.Dispatch<React.SetStateAction<string | null>>>((next) => {
+    if (typeof next === "function" || next !== selectedTurnIntentRef.current) {
+      selectedTurnRevisionRef.current += 1;
+      setSelectedTurnRevision(selectedTurnRevisionRef.current);
+    }
+    if (typeof next !== "function") selectedTurnIntentRef.current = next;
+    setSelectedTurnIdState(next);
+  }, []);
   const [selectedContextTurnIds, setSelectedContextTurnIds] = useState<string[]>([]);
   const [workbenchRequested, setWorkbenchRequested] = useState(false);
   const [pendingThreadContext, setPendingThreadContext] = useState<OutboundContextBlock | null>(null);
   const [draft, setDraft] = useState("");
   const [pinnedGoal, setPinnedGoal] = useState<string | undefined>(undefined);
   const [search, setSearch] = useState("");
-  const [sending, setSending] = useState(false);
+  const [sending, setSendingState] = useState(false);
+  const sendingRevisionRef = useRef(0);
+  const setSending = useCallback<React.Dispatch<React.SetStateAction<boolean>>>((next) => {
+    sendingRevisionRef.current += 1;
+    setSendingState(next);
+  }, []);
   const oneShotContext = useChatOneShotContext();
   const { restoreWorkspaceSnapshotRequest } = oneShotContext;
 
@@ -217,6 +236,7 @@ export function MissionThreadedControllerHost({
   const notices = useChatNoticesAndPresetRefresh({ setLocalNotices, coordination, presetCatalog });
   const { pushLocalNotice } = notices;
   const session = useChatSessionComposition({
+    sendingRevisionRef,
     catalogEvidenceEnabled:
       secondaryEvidenceEnabled === undefined ||
       secondaryEvidenceEnabled ||
@@ -285,6 +305,8 @@ export function MissionThreadedControllerHost({
     changePlanState,
   });
   const execution = useChatOutboundComposition({
+    selectedTurnRevisionRef,
+    sendingRevisionRef,
     workspaceId,
     selection,
     session,

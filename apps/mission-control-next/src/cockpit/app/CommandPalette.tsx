@@ -1,3 +1,7 @@
+import {
+  hasUnsettledChatContextMutation,
+  CHAT_CONTEXT_RELOAD_NOTE,
+} from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchLlmConfig } from "@goatcitadel/mission-control-shared/api/platform";
@@ -52,10 +56,11 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     activeWorkspaceId,
     activeCitadelId,
     () =>
-      !activeWorkspaceId ||
-      !chatSessionCreationBlocked(
-        readChatSessionCreation(chatSessionCreationKey(getGatewayApiBaseUrl(), activeWorkspaceId)),
-      ),
+      !hasUnsettledChatContextMutation() &&
+      (!activeWorkspaceId ||
+        !chatSessionCreationBlocked(
+          readChatSessionCreation(chatSessionCreationKey(getGatewayApiBaseUrl(), activeWorkspaceId)),
+        )),
   );
   const View = viewCode.View;
   const [query, setQuery] = useState("");
@@ -247,8 +252,9 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                 </Button>
                 {!viewCode.reloadAllowed ? (
                   <p>
-                    A conversation creation is still pending or unconfirmed. Close the palette and inspect conversation
-                    history before reloading.
+                    {hasUnsettledChatContextMutation()
+                      ? CHAT_CONTEXT_RELOAD_NOTE
+                      : "A conversation creation is still pending or unconfirmed. Close the palette and inspect conversation history before reloading."}
                   </p>
                 ) : null}
               </div>

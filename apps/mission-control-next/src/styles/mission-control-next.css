@@ -354,8 +354,8 @@
   display: none;
 }
 
-.theme-signal-noir .mc-gc-combobox-content,
-.theme-signal-noir .mc-gc-modal-content {
+:where(html[data-shell="classic"]) :is(.theme-signal-noir .mc-gc-combobox-content),
+:where(html[data-shell="classic"]) :is(.theme-signal-noir .mc-gc-modal-content) {
   border-color: rgba(255, 255, 255, 0.16);
   background: rgba(70, 82, 104, 0.98);
   color: oklch(0.968 0.004 255);
@@ -363,8 +363,8 @@
   backdrop-filter: blur(20px);
 }
 
-.theme-citadel-light .mc-gc-combobox-content,
-.theme-citadel-light .mc-gc-modal-content {
+:where(html[data-shell="classic"]) :is(.theme-citadel-light .mc-gc-combobox-content),
+:where(html[data-shell="classic"]) :is(.theme-citadel-light .mc-gc-modal-content) {
   border-color: rgba(54, 67, 90, 0.16);
   background: rgba(252, 253, 255, 0.98);
   color: oklch(0.17 0.012 255);
@@ -372,7 +372,7 @@
   backdrop-filter: blur(18px);
 }
 
-.mc-dialog-overlay {
+:where(html[data-shell="classic"]) :is(.mc-dialog-overlay) {
   position: fixed;
   inset: 0;
   isolation: isolate;
@@ -381,7 +381,7 @@
   backdrop-filter: blur(3px);
 }
 
-.mc-dialog-content {
+:where(html[data-shell="classic"]) :is(.mc-dialog-content) {
   position: fixed;
   top: 50%;
   left: 50%;

@@ -1,3 +1,7 @@
+import {
+  hasUnsettledChatContextMutation,
+  CHAT_CONTEXT_RELOAD_NOTE,
+} from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import type { SheetOwner, ReloadReview } from "./sheet-owner-types";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import {
@@ -28,18 +32,7 @@ import { readCockpitHistory, subscribeCockpitHistory } from "../app/cockpit-hist
 import { Dialog } from "./Dialog";
 import { Button } from "./Button";
 
-type DrawerModule = typeof import("vaul");
-type DrawerContent = DrawerModule["Drawer"]["Content"];
-// A scope-neutral code cache only. Public children and their state mount once the SDK is ready.
-let drawerLoad: Promise<DrawerModule> | undefined;
-let loadedDrawer: DrawerModule | undefined;
-function loadDrawer() {
-  drawerLoad ??= import("vaul").then((code) => {
-    loadedDrawer = code;
-    return code;
-  });
-  return drawerLoad;
-}
+import { loadDrawer, readLoadedDrawer, type DrawerModule, type DrawerContent } from "./sheet-drawer-code";
 
 type PendingFocus = { owner: SheetOwner; node: HTMLElement; kind?: "close" | "panel" };
 
@@ -85,11 +78,11 @@ export function Sheet({
   const pendingHost = useRef<HTMLElement | null>(null),
     pendingFocus = useRef<PendingFocus | undefined>(undefined);
   const sdkClose = useRef<HTMLButtonElement>(null),
-    drawerCommitted = useRef(Boolean(loadedDrawer));
+    drawerCommitted = useRef(Boolean(readLoadedDrawer()));
   const cancelButton = useRef<HTMLButtonElement>(null);
   const activeReview = useRef<ReloadReview | undefined>(undefined),
     returnFocus = useRef<ReloadReview | undefined>(undefined);
-  const [code, setCode] = useState<DrawerModule | undefined>(() => loadedDrawer);
+  const [code, setCode] = useState<DrawerModule | undefined>(() => readLoadedDrawer());
   const [failedOwner, setFailedOwner] = useState<SheetOwner>();
   const [review, setReview] = useState<ReloadReview>();
   const activation = useRef<PendingFocus | undefined>(undefined);
@@ -283,6 +276,7 @@ export function Sheet({
     setReview(saved);
   };
   const reload = (saved: ReloadReview | undefined) => {
+    if (hasUnsettledChatContextMutation()) return;
     if (!saved || activeReview.current !== saved || !failed || !currentReview(saved)) return;
     activeReview.current = undefined;
     returnFocus.current = undefined;
@@ -395,7 +389,12 @@ export function Sheet({
           <Button ref={cancelButton} onClick={() => closeReview(review)}>
             Cancel
           </Button>
-          <Button variant="danger" disabled={!review || !currentReview(review)} onClick={() => reload(review)}>
+          <Button
+            variant="danger"
+            disabled={hasUnsettledChatContextMutation() || !review || !currentReview(review)}
+            title={hasUnsettledChatContextMutation() ? CHAT_CONTEXT_RELOAD_NOTE : undefined}
+            onClick={() => reload(review)}
+          >
             Reload app
           </Button>
         </div>

@@ -8,7 +8,8 @@
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 @custom-variant compact (&:where([data-density="compact"], [data-density="compact"] *));
 
-html[data-shell="cockpit"] {
+html[data-shell="cockpit"],
+html[data-shell="cockpit"] body {
   /* Classic owner CSS can be loaded by a cancelled lazy handoff. Keep the
      cockpit's existing typography tokens above classic's unscoped :root. */
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
@@ -27,6 +28,16 @@ html[data-shell="cockpit"] {
   --bg-surface-2: var(--cockpit-raised);
   --bg-surface-3: var(--cockpit-sunken);
   --border-subtle: var(--cockpit-border);
+  /* Shared renderers and body portals retain Cockpit roles after Classic loads its stylesheet. */
+  --background: var(--cockpit-canvas);
+  --foreground: var(--cockpit-text);
+  --text-primary: var(--cockpit-text);
+  --text-secondary: var(--cockpit-text-secondary);
+  --text-muted: var(--cockpit-text-muted);
+  --accent: var(--cockpit-accent);
+  --risk-safe: var(--cockpit-done);
+  --risk-caution: var(--cockpit-waiting);
+  --risk-danger: var(--cockpit-failed);
   --fg-primary: var(--cockpit-text);
   --fg-secondary: var(--cockpit-text-secondary);
   --fg-muted: var(--cockpit-text-muted);

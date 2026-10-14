@@ -57,7 +57,12 @@ vi.mock("@goatcitadel/mission-control-shared/api/shell-client", () => ({
   fetchWorkspaces: appMocks.fetchWorkspaces,
   getGatewayApiBaseUrl: appMocks.getGatewayApiBaseUrl,
   preflightGatewayAccess: appMocks.preflightGatewayAccess,
-  fetchGatewayCurrentAccess: vi.fn(async () => ({ actorId: null, actorSource: "none", operatorAccess: true, readStatusScope: "browser_local" })),
+  fetchGatewayCurrentAccess: vi.fn(async () => ({
+    actorId: null,
+    actorSource: "none",
+    operatorAccess: true,
+    readStatusScope: "browser_local",
+  })),
   subscribeGatewayAuthRejection: appMocks.subscribeGatewayAuthRejection,
 }));
 
@@ -511,9 +516,9 @@ describe("MissionControlNextApp", () => {
     // laptop breakpoint, while text badges stay outside the icon-only selector.
     expect(css).toContain(".mc-next-topbar-more-menu {");
     expect(css).toContain("z-index: var(--z-dropdown);");
-    expect(css).toContain(".mc-dialog-overlay {");
+    expect(css).toContain(':where(html[data-shell="classic"]) :is(.mc-dialog-overlay) {');
     expect(css).toContain("z-index: var(--z-modal);");
-    expect(css).toContain(".mc-dialog-content {");
+    expect(css).toContain(':where(html[data-shell="classic"]) :is(.mc-dialog-content) {');
     expect(css).toContain("transform: translate(-50%, -50%);");
     expect(css).toContain("@media (max-width: 1279px) {");
     expect(sidebarCss).toContain("@media (max-width: 1279px)");

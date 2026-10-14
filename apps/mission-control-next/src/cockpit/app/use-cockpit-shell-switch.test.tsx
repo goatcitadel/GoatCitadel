@@ -2,7 +2,12 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
+import {
+  __resetApprovalOperationAttemptsForTests,
+  beginApprovalOperation,
+  updateApprovalOperation,
+} from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
+import { ChatContextHandoffNotice, useCockpitShellSwitch } from "./use-cockpit-shell-switch";
 
 const shell = vi.hoisted(() => ({ switchShell: vi.fn<typeof import("../../shell-preference").switchShell>() }));
 vi.mock("../../shell-preference", async (importOriginal) => ({
@@ -25,6 +30,7 @@ function Probe() {
 }
 
 beforeEach(() => {
+  __resetApprovalOperationAttemptsForTests();
   shell.switchShell.mockReset();
   shell.switchShell.mockResolvedValue("opened");
   window.history.replaceState(null, "", "/chat?sessionId=session-a&shell=cockpit");
@@ -36,6 +42,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  __resetApprovalOperationAttemptsForTests();
 });
 
 describe("cockpit shell switch", () => {
@@ -62,4 +69,53 @@ describe("cockpit shell switch", () => {
     expect(options.href).toBeUndefined();
     expect(options.sessionId).toBe("session-a");
   });
+});
+
+it("does not repeat the retained context warning beside every navigation entrypoint", async () => {
+  const key = JSON.stringify([
+    "library-operation",
+    JSON.stringify(["installation", "caller", JSON.stringify(["chat-context", "workspace-a", "session-a"])]),
+  ]);
+  const token = beginApprovalOperation(key, "revision")!;
+  updateApprovalOperation(key, token, "uncertain", "lost response");
+  await act(async () =>
+    root.render(
+      <>
+        <Probe />
+        <Probe />
+      </>,
+    ),
+  );
+  expect(
+    Array.from(container.querySelectorAll('[role="status"]')).filter((node) =>
+      node.textContent?.includes("unconfirmed Chat context action"),
+    ),
+  ).toHaveLength(0);
+});
+
+it("announces the retained context lock once and removes it only after canonical settlement", async () => {
+  const key = JSON.stringify([
+    "library-operation",
+    JSON.stringify(["installation", "caller", JSON.stringify(["chat-context", "workspace-a", "session-a"])]),
+  ]);
+  const token = beginApprovalOperation(key, "revision")!;
+  updateApprovalOperation(key, token, "uncertain", "lost response");
+  await act(async () =>
+    root.render(
+      <>
+        <Probe />
+        <Probe />
+        <ChatContextHandoffNotice />
+      </>,
+    ),
+  );
+  expect(
+    Array.from(container.querySelectorAll('[role="status"]')).filter((node) =>
+      node.textContent?.includes("unconfirmed Chat context action"),
+    ),
+  ).toHaveLength(1);
+  await act(async () => {
+    updateApprovalOperation(key, token, "resolved", "canonical receipt");
+  });
+  expect(container.textContent).not.toContain("unconfirmed Chat context action");
 });

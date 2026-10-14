@@ -68,7 +68,7 @@ export function createTransientInputOwner(allowUnattributedRecovery = false) {
     const caller = useSyncExternalStore(subscribeGatewayCallerScope, getGatewayCallerScope, () => "");
     const unscopedKey = key;
     key = scopedDraftKey(key, caller);
-    useSessionDraftVersion();
+    const observedVersion = useSessionDraftVersion();
     const entry = drafts.get(key) as DraftEntry<T> | undefined;
     const source = signature(canonical, revision);
     const available = options.available !== false;
@@ -188,6 +188,8 @@ export function createTransientInputOwner(allowUnattributedRecovery = false) {
       setValue,
       isDirty: entry?.dirty ?? false,
       inputVersion: entry?.inputVersion ?? 0,
+      /** Captured review custody; the existing owner version detects even edit/discard ABA. */
+      isSnapshotCurrent: () => getGatewayCallerScope() === caller && version === observedVersion,
       baseRevision: entry?.baseRevision ?? revision,
       hasRemoteChanges: Boolean(entry?.dirty && available && entry.baseRevision !== revision),
       discard,

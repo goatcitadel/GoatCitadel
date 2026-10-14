@@ -1,3 +1,4 @@
+import { useUnsettledChatContextMutation } from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import { createElement, useLayoutEffect, useRef, useState } from "react";
 import { canonicalJsonString } from "@goatcitadel/contracts";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
@@ -15,8 +16,13 @@ import {
 import { switchShell, type ShellPreference } from "../shell-preference";
 import { SHELL_NAVIGATION_EVENTS } from "./shell-transition";
 
+export const CHAT_CONTEXT_HANDOFF_WARNING =
+  "An unconfirmed Chat context action remains locked in this document. Switching layouts does not settle or replay its result.";
+
 /** A reviewed presentation transition; runtime owners and their session locks remain in the document. */
 export function useShellHandoff(scope: unknown) {
+  const contextActionPending = useUnsettledChatContextMutation();
+  const contextWarning = contextActionPending ? CHAT_CONTEXT_HANDOFF_WARNING : undefined;
   const leave = useDraftLeave();
   const identity = canonicalJsonString(scope);
   const renderedInstallation = getGatewayApiBaseUrl();
@@ -125,6 +131,7 @@ export function useShellHandoff(scope: unknown) {
   };
   const dialogProps: DraftLeaveDialogProps = {
     ...leave.dialogProps,
+    warning: contextWarning,
     open: leave.dialogProps.open && reviewCurrent(),
     isCurrent: reviewCurrent,
     onContinue: () => completeReview(leave.dialogProps.onContinue),
@@ -141,6 +148,7 @@ export function useShellHandoff(scope: unknown) {
   }
   const visible = feedback.identity === identity && feedback.epoch === live.current.epoch;
   return {
+    contextWarning,
     request,
     requestNavigation,
     requestTransition,

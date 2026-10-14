@@ -19,6 +19,13 @@ import { useChatMemoryRefreshActions } from "./useChatMemoryRefreshActions";
 import { useChatSpecialistCapabilityActions } from "./useChatSpecialistCapabilityActions";
 
 export function useChatContextActions(input: {
+  workspaceId?: string;
+  historicalRevisionRef?: { readonly current: number };
+  historicalReadOnly?: boolean;
+
+  selectionRevisionRef?: { readonly current: number };
+  turnRevisionRef?: { readonly current: number };
+  sendingRevisionRef?: { readonly current: number };
   selectedSessionId: string | null;
   selectedSession: ChatSessionRecord | null;
   selectedTurnId: string | null;
@@ -57,6 +64,11 @@ export function useChatContextActions(input: {
 }) {
   const delegationPolicyActions = useChatDelegationPolicyActions(input);
   const memoryRefreshActions = useChatMemoryRefreshActions({
+    workspaceId: input.workspaceId,
+    historicalRevisionRef: input.historicalRevisionRef,
+    historicalReadOnly: input.historicalReadOnly,
+    selectionRevisionRef: input.selectionRevisionRef,
+    sendingRevisionRef: input.sendingRevisionRef,
     selectedSession: input.selectedSession,
     sending: input.sending,
     setSending: input.setSending,
@@ -64,6 +76,12 @@ export function useChatContextActions(input: {
     setLearnedMemory: input.setLearnedMemory,
   });
   const specialistCapabilityActions = useChatSpecialistCapabilityActions({
+    workspaceId: input.workspaceId,
+    historicalRevisionRef: input.historicalRevisionRef,
+    historicalReadOnly: input.historicalReadOnly,
+    selectionRevisionRef: input.selectionRevisionRef,
+    turnRevisionRef: input.turnRevisionRef,
+    sendingRevisionRef: input.sendingRevisionRef,
     selectedSessionId: input.selectedSessionId,
     selectedSession: input.selectedSession,
     selectedTurnId: input.selectedTurnId,

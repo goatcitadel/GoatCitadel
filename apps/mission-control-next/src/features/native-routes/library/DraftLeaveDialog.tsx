@@ -12,6 +12,8 @@ import {
 export type DraftLeaveDialogProps = {
   open: boolean;
   keys: readonly string[];
+  /** Retained runtime uncertainty is separate from draft disposal. */
+  warning?: string;
   onContinue: () => void;
   onCancel: () => void;
   onDiscard?: () => void;
@@ -19,7 +21,14 @@ export type DraftLeaveDialogProps = {
   isCurrent?: () => boolean;
 };
 
-export function useDraftLeaveDialogState({ open, keys, onContinue, onDiscard, isCurrent }: DraftLeaveDialogProps) {
+export function useDraftLeaveDialogState({
+  open,
+  keys,
+  onContinue,
+  onDiscard,
+  isCurrent,
+  warning,
+}: DraftLeaveDialogProps) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const saveAttempt = useRef<object | null>(null);
@@ -72,7 +81,7 @@ export function useDraftLeaveDialogState({ open, keys, onContinue, onDiscard, is
     canSave,
     saveAndContinue,
     discard,
-    description: `You have unsaved changes in ${describeDirtySections(keys) || "this editor"}.`,
+    description: `You have unsaved changes in ${describeDirtySections(keys) || "this editor"}.${warning ? " " + warning : ""}`,
   };
 }
 

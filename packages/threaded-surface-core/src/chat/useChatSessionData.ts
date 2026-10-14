@@ -1,3 +1,4 @@
+import { chatSidebarScopeKey } from "./chat-sidebar-scope-key";
 import {
   CHAT_TURN_ACTIVE_STATUSES,
   type ChatHistoryWindowResponse,
@@ -140,17 +141,7 @@ export function useChatSessionData(input: ChatSessionDataInput) {
   const loadCoreGenerationRef = useRef(0);
   const loadSecondaryGenerationRef = useRef(0);
   const loadSidebarGenerationRef = useRef(0);
-  const sidebarScopeKey = JSON.stringify([
-    workspaceId,
-    input.viewIdentity,
-    surfaceMode,
-    historyView,
-    searchQuery,
-    getGatewayAccessRevision(),
-    getGatewayCallerScope(),
-    getGatewayCallerScopeRevision(),
-    getGatewayApiBaseUrl(),
-  ]);
+  const sidebarScopeKey = chatSidebarScopeKey(input);
   const sidebarScope = useRef({ key: sidebarScopeKey });
   if (sidebarScope.current.key !== sidebarScopeKey) sidebarScope.current = { key: sidebarScopeKey };
   const renderedSidebarScope = sidebarScope.current;
@@ -1038,6 +1029,11 @@ export function useChatSessionData(input: ChatSessionDataInput) {
     historicalWindow,
     historicalWindowLoading,
     historicalWindowError,
+    historicalWindowGenerationRef,
+    contextMutationReadOnly:
+      historicalWindowTarget?.workspaceId === workspaceId &&
+      historicalWindowTarget.sessionId === selectedSessionId &&
+      Boolean(historicalWindow || historicalWindowLoading || historicalWindowError),
     historicalWindowTarget,
     historicalContinuationLoading,
     historicalContinuationError,

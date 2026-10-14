@@ -1,3 +1,7 @@
+import {
+  hasUnsettledChatContextMutation,
+  CHAT_CONTEXT_RELOAD_NOTE,
+} from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import {
@@ -288,6 +292,7 @@ export function useCommandPaletteViewCode(
     setReview(saved);
   };
   const reload = (saved: ReloadReview | undefined) => {
+    if (hasUnsettledChatContextMutation()) return;
     if (!saved || activeReview.current !== saved || !failed || !currentReview(saved)) return;
     activeReview.current = undefined;
     returnFocus.current = undefined;
@@ -324,7 +329,12 @@ export function useCommandPaletteViewCode(
         <Button ref={cancelReload} onClick={() => closeReview(review)}>
           Cancel
         </Button>
-        <Button variant="danger" disabled={!review || !currentReview(review)} onClick={() => reload(review)}>
+        <Button
+          variant="danger"
+          disabled={hasUnsettledChatContextMutation() || !review || !currentReview(review)}
+          title={hasUnsettledChatContextMutation() ? CHAT_CONTEXT_RELOAD_NOTE : undefined}
+          onClick={() => reload(review)}
+        >
           Reload app
         </Button>
       </div>

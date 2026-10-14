@@ -1,4 +1,8 @@
 import {
+  hasUnsettledChatContextMutation,
+  CHAT_CONTEXT_RELOAD_NOTE,
+} from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
+import {
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -143,6 +147,7 @@ export function ChatApprovalRenderer({
     setReview(saved);
   };
   const reload = (saved: ReloadReview | undefined) => {
+    if (hasUnsettledChatContextMutation()) return;
     if (!saved || activeReview.current !== saved || !failed || !record || !currentReview(saved)) return;
     // Consume this exact consent before reload; repeat/stale handlers have no effect.
     activeReview.current = undefined;
@@ -211,7 +216,12 @@ export function ChatApprovalRenderer({
           <Button ref={cancelButton} onClick={() => closeReview(review)}>
             Cancel
           </Button>
-          <Button variant="danger" disabled={!review || !currentReview(review)} onClick={() => reload(review)}>
+          <Button
+            variant="danger"
+            disabled={hasUnsettledChatContextMutation() || !review || !currentReview(review)}
+            title={hasUnsettledChatContextMutation() ? CHAT_CONTEXT_RELOAD_NOTE : undefined}
+            onClick={() => reload(review)}
+          >
             Reload app
           </Button>
         </div>

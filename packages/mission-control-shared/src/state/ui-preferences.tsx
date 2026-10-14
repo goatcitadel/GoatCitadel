@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import type { UiEffectsMode } from "./effects-mode";
 import type { OperatorAttentionSoundMode } from "./operator-attention";
 import type { ShellNavMode } from "../components/ShellNavRail";
@@ -15,6 +15,10 @@ export interface UiNotificationPreferences {
 }
 
 interface UiPreferencesValue {
+  /** Advances synchronously on scope intent, including batched away/back transitions. */
+  scopeGenerationRef?: { readonly current: number };
+  /** Committed scope revision also publishes batched away/back changes to consumers. */
+  scopeGeneration?: number;
   mode: UiExperienceMode;
   setMode: (mode: UiExperienceMode) => void;
   density: UiDensity;
@@ -104,31 +108,55 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
   );
   const [activeCitadelId, setActiveCitadelIdState] = useState<string>(() => readCitadelIdFromStorage());
   const [activeWorkspaceId, setActiveWorkspaceIdState] = useState<string>(() => readWorkspaceIdFromStorage());
+  const scopeGenerationRef = useRef(0);
+  const [scopeGeneration, setScopeGeneration] = useState(0);
+  const scopeIntentRef = useRef({ citadelId: activeCitadelId, workspaceId: activeWorkspaceId });
+  const advanceScopeIntent = useCallback((next: { citadelId: string; workspaceId: string }) => {
+    const prior = scopeIntentRef.current;
+    if (prior.citadelId === next.citadelId && prior.workspaceId === next.workspaceId) return;
+    scopeIntentRef.current = next;
+    scopeGenerationRef.current += 1;
+    setScopeGeneration(scopeGenerationRef.current);
+  }, []);
   const [theme, setThemeState] = useState<UiTheme>(() => readThemeFromStorage());
   const [notifications, setNotificationsState] = useState<UiNotificationPreferences>(() =>
     readNotificationPreferencesFromStorage(),
   );
-  const setActiveCitadelId = useCallback((citadelId: string) => {
-    const normalized = normalizeCitadelId(citadelId);
-    setActiveCitadelIdState(normalized);
-    writeStorage(CITADEL_KEY, normalized);
-  }, []);
-  const setActiveWorkspaceId = useCallback((workspaceId: string) => {
-    const normalized = normalizeWorkspaceId(workspaceId);
-    setActiveWorkspaceIdState(normalized);
-    writeStorage(WORKSPACE_KEY, normalized);
-  }, []);
-  const setActiveScope = useCallback((scope: { citadelId: string; workspaceId: string }) => {
-    const normalizedCitadelId = normalizeCitadelId(scope.citadelId);
-    const normalizedWorkspaceId = normalizeWorkspaceId(scope.workspaceId);
-    setActiveCitadelIdState(normalizedCitadelId);
-    setActiveWorkspaceIdState(normalizedWorkspaceId);
-    writeStorage(CITADEL_KEY, normalizedCitadelId);
-    writeStorage(WORKSPACE_KEY, normalizedWorkspaceId);
-  }, []);
+  const setActiveCitadelId = useCallback(
+    (citadelId: string) => {
+      const normalized = normalizeCitadelId(citadelId);
+      advanceScopeIntent({ ...scopeIntentRef.current, citadelId: normalized });
+      setActiveCitadelIdState(normalized);
+      writeStorage(CITADEL_KEY, normalized);
+    },
+    [advanceScopeIntent],
+  );
+  const setActiveWorkspaceId = useCallback(
+    (workspaceId: string) => {
+      const normalized = normalizeWorkspaceId(workspaceId);
+      advanceScopeIntent({ ...scopeIntentRef.current, workspaceId: normalized });
+      setActiveWorkspaceIdState(normalized);
+      writeStorage(WORKSPACE_KEY, normalized);
+    },
+    [advanceScopeIntent],
+  );
+  const setActiveScope = useCallback(
+    (scope: { citadelId: string; workspaceId: string }) => {
+      const normalizedCitadelId = normalizeCitadelId(scope.citadelId);
+      const normalizedWorkspaceId = normalizeWorkspaceId(scope.workspaceId);
+      advanceScopeIntent({ citadelId: normalizedCitadelId, workspaceId: normalizedWorkspaceId });
+      setActiveCitadelIdState(normalizedCitadelId);
+      setActiveWorkspaceIdState(normalizedWorkspaceId);
+      writeStorage(CITADEL_KEY, normalizedCitadelId);
+      writeStorage(WORKSPACE_KEY, normalizedWorkspaceId);
+    },
+    [advanceScopeIntent],
+  );
 
   const value = useMemo<UiPreferencesValue>(
     () => ({
+      scopeGenerationRef,
+      scopeGeneration,
       mode,
       setMode: (nextMode) => {
         setModeState(nextMode);
@@ -196,6 +224,7 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
       },
     }),
     [
+      scopeGeneration,
       mode,
       density,
       effectsMode,

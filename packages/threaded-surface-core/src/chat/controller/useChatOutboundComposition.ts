@@ -18,7 +18,7 @@ import { useChatSubmissionComposition } from "./useChatSubmissionComposition";
 
 type Input = {
   workspaceId: string;
-  selection: Pick<ReturnType<typeof useChatSessionSelection>, "selectedSessionId">;
+  selection: Pick<ReturnType<typeof useChatSessionSelection>, "selectedSessionId" | "selectedSessionRevisionRef">;
   session: Pick<
     ReturnType<typeof useChatSessionComposition>,
     | "threadController"
@@ -32,6 +32,8 @@ type Input = {
     | "runVariables"
   >;
   selectedTurnId: string | null;
+  selectedTurnRevisionRef: { readonly current: number };
+  sendingRevisionRef: { readonly current: number };
   draft: string;
   submission: Pick<
     ReturnType<typeof useChatSubmissionComposition>,
@@ -73,6 +75,8 @@ export function useChatOutboundComposition({
   selection,
   session,
   selectedTurnId,
+  selectedTurnRevisionRef,
+  sendingRevisionRef,
   draft,
   submission,
   oneShotContext,
@@ -95,6 +99,12 @@ export function useChatOutboundComposition({
 
   const runtimeBlockerActiveRef = useRef(false);
   const contextActions = useChatContextActions({
+    workspaceId,
+    historicalRevisionRef: session.sessionData.historicalWindowGenerationRef,
+    historicalReadOnly: session.sessionData.contextMutationReadOnly,
+    selectionRevisionRef: selection.selectedSessionRevisionRef,
+    turnRevisionRef: selectedTurnRevisionRef,
+    sendingRevisionRef,
     selectedSessionId: selection.selectedSessionId,
     selectedSession: session.threadController.selectedSession,
     selectedTurnId,

@@ -65,6 +65,7 @@ function fixture(): MissionThreadedRenderSurfaceInput {
     },
     contextDockProps: {
       selectedSessionId: "session-1",
+      selectedSession: { sessionId: "session-1", workspaceId: "workspace-1", title: "Selected conversation" },
       documents: { includedRefs: [] },
       prefs: { memoryMode: "auto" },
     },
@@ -253,6 +254,9 @@ describe("conversation inspector", () => {
     Object.assign(input.contextDockProps!.prefs as object, { planningMode: "auto", webMode: "off" });
     await act(async () => root.render(<ChatInspector input={input} initialTab="thread" />));
     expect(container.textContent).toContain("Session control for session-1");
+    expect(container.textContent).toContain(
+      "Conversation context actions are unavailable until their current owner is ready.",
+    );
     expect(container.querySelector('[aria-label="Conversation execution settings"]')).not.toBeNull();
   });
 

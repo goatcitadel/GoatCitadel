@@ -1,3 +1,4 @@
+import { ChatConversationSettings } from "./ChatConversationSettings";
 import {
   DetailRow,
   SourcesPanel,
@@ -19,7 +20,6 @@ import { StatusBadge } from "../../ui/StatusBadge";
 import { ChatBackgroundTasks } from "./ChatBackgroundTasks";
 import { SessionControlManager } from "./SessionControlManager";
 import { recordedCostLabel } from "./recorded-cost";
-import { ChatFeatureSettings } from "./ChatFeatureSettings";
 
 export function ChatInspector({
   input,
@@ -384,7 +384,7 @@ export function ChatInspector({
               Use the model and effort controls under the composer to change the next message.
             </p>
             {dock && currentContextMatchesSession && !active.historicalReadOnly ? (
-              <ChatFeatureSettings key={dock.selectedSessionId} dock={dock} />
+              <ChatConversationSettings dock={dock} />
             ) : null}
             {dock?.selectedSessionId ? (
               <SessionControlManager

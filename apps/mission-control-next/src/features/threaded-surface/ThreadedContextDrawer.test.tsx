@@ -29,7 +29,9 @@ function traceFixture(overrides: Record<string, unknown> = {}) {
 }
 
 function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
-  const match = root.findAll((node) => node.type === "button" && collectText(node).includes(label))[0];
+  const match = root.findAll(
+    (node) => node.type === "button" && collectText(node).replace(/\s+/g, " ").trim().includes(label),
+  )[0];
   if (!match) {
     throw new Error(`Unable to find button: ${label}`);
   }
@@ -37,7 +39,9 @@ function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
 }
 
 function findButtons(root: ReactTestInstance, label: string): ReactTestInstance[] {
-  return root.findAll((node) => node.type === "button" && collectText(node).includes(label));
+  return root.findAll(
+    (node) => node.type === "button" && collectText(node).replace(/\s+/g, " ").trim().includes(label),
+  );
 }
 
 function findDisclosure(root: ReactTestInstance, label: string): ReactTestInstance {
@@ -131,22 +135,43 @@ function baseProps(overrides: Record<string, unknown> = {}) {
   } as any;
 }
 
-afterEach(() => { __resetSessionDraftsForTests(); });
+afterEach(() => {
+  __resetSessionDraftsForTests();
+});
 
 describe("ThreadedContextDrawer", () => {
   it("offers available supervised coding delegates and guards unbound projects", async () => {
-    const onSuggestDelegation = vi.fn(), onRunCodeDelegation = vi.fn(), onAcceptDelegation = vi.fn();
+    const onSuggestDelegation = vi.fn(),
+      onRunCodeDelegation = vi.fn(),
+      onAcceptDelegation = vi.fn();
     let renderer: ReactTestRenderer | null = null;
-    const props = baseProps({ supervisedDelegationAvailable: true, codingDelegationAvailable: true, onSuggestDelegation, onRunCodeDelegation, onAcceptDelegation,
-      selectedSession: { sessionId: "session-1", projectId: "project-1" }, selectedProject: { lifecycleStatus: "active" },
-      delegationSuggestion: { mode: "parallel", objective: "Review a change", roles: ["QA"] } });
-    await act(async () => { renderer = create(<ThreadedContextDrawer surface="chat" props={props} />); });
+    const props = baseProps({
+      supervisedDelegationAvailable: true,
+      codingDelegationAvailable: true,
+      onSuggestDelegation,
+      onRunCodeDelegation,
+      onAcceptDelegation,
+      selectedSession: { sessionId: "session-1", projectId: "project-1" },
+      selectedProject: { lifecycleStatus: "active" },
+      delegationSuggestion: { mode: "parallel", objective: "Review a change", roles: ["QA"] },
+    });
+    await act(async () => {
+      renderer = create(<ThreadedContextDrawer surface="chat" props={props} />);
+    });
     await act(async () => findButton(renderer!.root, "Assist").props.onClick());
     expect(renderer!.root.findByProps({ "aria-label": "Subagent policy" }).props.disabled).toBe(false);
-    await act(async () => { findButton(renderer!.root, "Suggest delegation").props.onClick(); findButton(renderer!.root, "Delegate review").props.onClick(); findButton(renderer!.root, "Approve delegation").props.onClick(); });
-    expect(onSuggestDelegation).toHaveBeenCalledOnce(); expect(onRunCodeDelegation).toHaveBeenCalledWith("review"); expect(onAcceptDelegation).toHaveBeenCalledOnce();
+    await act(async () => {
+      findButton(renderer!.root, "Suggest delegation").props.onClick();
+      findButton(renderer!.root, "Delegate review").props.onClick();
+      findButton(renderer!.root, "Approve delegation").props.onClick();
+    });
+    expect(onSuggestDelegation).toHaveBeenCalledOnce();
+    expect(onRunCodeDelegation).toHaveBeenCalledWith("review");
+    expect(onAcceptDelegation).toHaveBeenCalledOnce();
     expect(collectText(renderer!.root)).toContain("separate code review and hash check");
-    await act(async () => renderer!.update(<ThreadedContextDrawer surface="chat" props={{ ...props, codingDelegationAvailable: false }} />));
+    await act(async () =>
+      renderer!.update(<ThreadedContextDrawer surface="chat" props={{ ...props, codingDelegationAvailable: false }} />),
+    );
     expect(findButton(renderer!.root, "Delegate implementation").props.disabled).toBe(true);
   });
   it("keeps informational context disclosures closed with explicit ARIA targets", async () => {
@@ -320,163 +345,114 @@ describe("ThreadedContextDrawer", () => {
     expect(root.findAllByType("textarea")).toHaveLength(0);
     expect(collectText(root)).toContain("is read-only");
   });
-it("retains edited documents through refresh, failed save and reopening with their original revision", async () => {
-  const onSaveNote = vi.fn().mockRejectedValue(new Error("revision conflict"));
-  const onCreateProposal = vi
-    .fn()
-    .mockResolvedValue({ proposalId: "proposal-draft" });
-  const note = {
-    noteId: "draft-note",
-    title: "Draft note",
-    body: "original",
-    revision: 3,
-  };
-  const documents = {
-    enabled: true,
-    loading: false,
-    notes: [note],
-    artifacts: [],
-    proposals: [],
-    includedRefs: [],
-    onSaveNote,
-    onCreateProposal,
-    onRefresh: vi.fn(),
-    onToggleInclude: vi.fn(),
-  };
-  const props = baseProps({ selectedSessionId: "draft-session", documents });
-  let renderer!: ReactTestRenderer;
-  await act(async () => {
-    renderer = create(
-      <ThreadedContextDrawer
-        surface="chat"
-        props={props}
-        focusedTab="documents"
-      />,
+  it("retains edited documents through refresh, failed save and reopening with their original revision", async () => {
+    const onSaveNote = vi.fn().mockRejectedValue(new Error("revision conflict"));
+    const onCreateProposal = vi.fn().mockResolvedValue({ proposalId: "proposal-draft" });
+    const note = {
+      noteId: "draft-note",
+      title: "Draft note",
+      body: "original",
+      revision: 3,
+    };
+    const documents = {
+      enabled: true,
+      loading: false,
+      notes: [note],
+      artifacts: [],
+      proposals: [],
+      includedRefs: [],
+      onSaveNote,
+      onCreateProposal,
+      onRefresh: vi.fn(),
+      onToggleInclude: vi.fn(),
+    };
+    const props = baseProps({ selectedSessionId: "draft-session", documents });
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ThreadedContextDrawer surface="chat" props={props} focusedTab="documents" />);
+    });
+    await act(async () => findButton(renderer.root, "Draft note").props.onClick());
+    await act(async () =>
+      renderer.root.findByType("textarea").props.onChange({ target: { value: "my unsaved input" } }),
     );
-  });
-  await act(async () =>
-    findButton(renderer.root, "Draft note").props.onClick(),
-  );
-  await act(async () =>
-    renderer.root
-      .findByType("textarea")
-      .props.onChange({ target: { value: "my unsaved input" } }),
-  );
-  const refreshed = {
-    ...props,
-    documents: {
-      ...documents,
-      notes: [{ ...note, body: "remote change", revision: 4 }],
-    },
-  };
-  await act(async () =>
-    renderer.update(
-      <ThreadedContextDrawer
-        surface="chat"
-        props={refreshed}
-        focusedTab="documents"
-      />,
-    ),
-  );
-  expect(renderer.root.findByType("textarea").props.value).toBe(
-    "my unsaved input",
-  );
-  expect(collectText(renderer.root)).toContain("changed since editing began");
-  await act(async () =>
-    findButton(renderer.root, "Save directly").props.onClick(),
-  );
-  expect(onSaveNote).toHaveBeenCalledWith(
-    expect.objectContaining({ revision: 3 }),
-    "my unsaved input",
-  );
-  expect(collectText(renderer.root)).toContain("revision conflict");
-  await act(async () =>
-    findButton(renderer.root, "Create review proposal").props.onClick(),
-  );
-  expect(onCreateProposal).toHaveBeenCalledWith(
-    expect.objectContaining({
-      baseRevision: 3,
-      proposedContent: "my unsaved input",
-    }),
-  );
-  await act(async () => renderer.unmount());
-  await act(async () => {
-    renderer = create(
-      <ThreadedContextDrawer
-        surface="chat"
-        props={refreshed}
-        focusedTab="documents"
-      />,
+    const refreshed = {
+      ...props,
+      documents: {
+        ...documents,
+        notes: [{ ...note, body: "remote change", revision: 4 }],
+      },
+    };
+    await act(async () =>
+      renderer.update(<ThreadedContextDrawer surface="chat" props={refreshed} focusedTab="documents" />),
     );
-  });
-  expect(collectText(renderer.root)).toContain("Unsaved");
-  await act(async () =>
-    findButton(renderer.root, "Draft note").props.onClick(),
-  );
-  expect(renderer.root.findByType("textarea").props.value).toBe(
-    "my unsaved input",
-  );
-  await act(async () => renderer.unmount());
-});
-it("keeps text entered during an acknowledged document save", async () => {
-  let resolve!: (value: unknown) => void;
-  const onSaveNote = vi.fn(
-    () =>
-      new Promise((resolveSave) => {
-        resolve = resolveSave;
+    expect(renderer.root.findByType("textarea").props.value).toBe("my unsaved input");
+    expect(collectText(renderer.root)).toContain("changed since editing began");
+    await act(async () => findButton(renderer.root, "Save directly").props.onClick());
+    expect(onSaveNote).toHaveBeenCalledWith(expect.objectContaining({ revision: 3 }), "my unsaved input");
+    expect(collectText(renderer.root)).toContain("revision conflict");
+    await act(async () => findButton(renderer.root, "Create review proposal").props.onClick());
+    expect(onCreateProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseRevision: 3,
+        proposedContent: "my unsaved input",
       }),
-  );
-  const note = {
-    noteId: "save-note",
-    title: "Saving note",
-    body: "original",
-    revision: 1,
-  };
-  const documents = {
-    enabled: true,
-    loading: false,
-    notes: [note],
-    artifacts: [],
-    proposals: [],
-    includedRefs: [],
-    onSaveNote,
-    onRefresh: vi.fn(),
-    onToggleInclude: vi.fn(),
-  };
-  let renderer!: ReactTestRenderer;
-  await act(async () => {
-    renderer = create(
-      <ThreadedContextDrawer
-        surface="chat"
-        props={baseProps({ selectedSessionId: "save-session", documents })}
-        focusedTab="documents"
-      />,
     );
+    await act(async () => renderer.unmount());
+    await act(async () => {
+      renderer = create(<ThreadedContextDrawer surface="chat" props={refreshed} focusedTab="documents" />);
+    });
+    expect(collectText(renderer.root)).toContain("Unsaved");
+    await act(async () => findButton(renderer.root, "Draft note").props.onClick());
+    expect(renderer.root.findByType("textarea").props.value).toBe("my unsaved input");
+    await act(async () => renderer.unmount());
   });
-  await act(async () =>
-    findButton(renderer.root, "Saving note").props.onClick(),
-  );
-  await act(async () =>
-    renderer.root
-      .findByType("textarea")
-      .props.onChange({ target: { value: "submitted" } }),
-  );
-  await act(async () =>
-    findButton(renderer.root, "Save directly").props.onClick(),
-  );
-  await act(async () =>
-    renderer.root
-      .findByType("textarea")
-      .props.onChange({ target: { value: "newer input" } }),
-  );
-  await act(async () => {
-    resolve({ ...note, body: "submitted", revision: 2 });
-    await Promise.resolve();
+  it("keeps text entered during an acknowledged document save", async () => {
+    let resolve!: (value: unknown) => void;
+    const onSaveNote = vi.fn(
+      () =>
+        new Promise((resolveSave) => {
+          resolve = resolveSave;
+        }),
+    );
+    const note = {
+      noteId: "save-note",
+      title: "Saving note",
+      body: "original",
+      revision: 1,
+    };
+    const documents = {
+      enabled: true,
+      loading: false,
+      notes: [note],
+      artifacts: [],
+      proposals: [],
+      includedRefs: [],
+      onSaveNote,
+      onRefresh: vi.fn(),
+      onToggleInclude: vi.fn(),
+    };
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <ThreadedContextDrawer
+          surface="chat"
+          props={baseProps({ selectedSessionId: "save-session", documents })}
+          focusedTab="documents"
+        />,
+      );
+    });
+    await act(async () => findButton(renderer.root, "Saving note").props.onClick());
+    await act(async () => renderer.root.findByType("textarea").props.onChange({ target: { value: "submitted" } }));
+    await act(async () => findButton(renderer.root, "Save directly").props.onClick());
+    await act(async () => renderer.root.findByType("textarea").props.onChange({ target: { value: "newer input" } }));
+    await act(async () => {
+      resolve({ ...note, body: "submitted", revision: 2 });
+      await Promise.resolve();
+    });
+    expect(renderer.root.findByType("textarea").props.value).toBe("newer input");
+    expect(collectText(renderer.root)).toContain("Unsaved");
+    await act(async () => renderer.unmount());
   });
-  expect(renderer.root.findByType("textarea").props.value).toBe("newer input");
-  expect(collectText(renderer.root)).toContain("Unsaved");
-  await act(async () => renderer.unmount());
-});
   it("shows canonical preference truth separately from a retryable conflict draft", async () => {
     const onRetryPreferenceConflictDraft = vi.fn(async () => undefined);
     const onDiscardPreferenceConflictDraft = vi.fn();
@@ -1084,10 +1060,10 @@ it("keeps text entered during an acknowledged document save", async () => {
     await act(async () => {
       findButton(renderer!.root, "Assist").props.onClick();
     });
-    const thinking = renderer!.root.findAllByType("select")
+    const thinking = renderer!.root
+      .findAllByType("select")
       .find((node) => node.props["aria-label"] === "Thinking level")!;
-    const speed = renderer!.root.findAllByType("select")
-      .find((node) => node.props["aria-label"] === "Speed mode")!;
+    const speed = renderer!.root.findAllByType("select").find((node) => node.props["aria-label"] === "Speed mode")!;
     expect(thinking.findAllByType("option").find((node) => node.props.value === "off")?.props.disabled).toBe(true);
     expect(thinking.findAllByType("option").find((node) => node.props.value === "max")?.props.disabled).toBe(false);
     expect(thinking.findAllByType("option").find((node) => node.props.value === "ultra")?.props.disabled).toBe(true);
@@ -1189,4 +1165,56 @@ it("keeps text entered during an acknowledged document save", async () => {
       vi.unstubAllGlobals();
     }
   });
+});
+
+it("keeps a retained unknown context action visible in Classic without replay or mounted reads", async () => {
+  const onInspect = vi.fn(async () => {}),
+    onCreateSpecialistDraft = vi.fn(),
+    onActivateCatalogSpecialist = vi.fn(),
+    onUpdateMemoryStatus = vi.fn(),
+    onRebuildLearnedMemory = vi.fn();
+  const owner = {
+    family: "specialists",
+    workspaceId: "default",
+    sessionId: "session-1",
+    scopeIdentity: "original",
+    phase: "uncertain",
+    locked: true,
+    message: "Original outcome is unknown and locked.",
+    isCurrent: () => true,
+    onInspect,
+  };
+  let renderer!: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      <ThreadedContextDrawer
+        surface="chat"
+        focusedTab="assist"
+        props={baseProps({
+          contextMutations: { specialists: owner },
+          specialistSuggestions: [{ candidateId: "candidate", title: "Candidate", summary: "Review" }],
+          learnedMemory: [{ itemId: "item", content: "Memory", status: "active" }],
+          onCreateSpecialistDraft,
+          onActivateCatalogSpecialist,
+          onUpdateMemoryStatus,
+          onRebuildLearnedMemory,
+        })}
+      />,
+    );
+  });
+  expect(collectText(renderer.root)).toContain("Original outcome is unknown and locked");
+  expect(collectText(renderer.root)).toContain("Switching layouts does not settle or replay");
+  expect(onInspect).not.toHaveBeenCalled();
+  for (const label of ["Draft", "Activate", "Keep active", "Mark stale", "Rebuild learned memory"])
+    expect(findButton(renderer.root, label).props.disabled).toBe(true);
+  await act(async () => findButton(renderer.root, "Inspect specialists").props.onClick());
+  expect(onInspect).toHaveBeenCalledTimes(1);
+  for (const callback of [
+    onCreateSpecialistDraft,
+    onActivateCatalogSpecialist,
+    onUpdateMemoryStatus,
+    onRebuildLearnedMemory,
+  ])
+    expect(callback).not.toHaveBeenCalled();
+  await act(async () => renderer.unmount());
 });

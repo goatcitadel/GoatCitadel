@@ -1,4 +1,8 @@
 import {
+  hasUnsettledChatContextMutation,
+  CHAT_CONTEXT_RELOAD_NOTE,
+} from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
+import {
   createElement,
   forwardRef,
   useCallback,
@@ -323,7 +327,15 @@ export function WindowedRecordList<T>({
               Try again
             </button>
             {" · "}
-            <button type="button" onClick={() => window.location.reload()} className="text-accent underline">
+            <button
+              type="button"
+              disabled={hasUnsettledChatContextMutation()}
+              title={hasUnsettledChatContextMutation() ? CHAT_CONTEXT_RELOAD_NOTE : undefined}
+              onClick={() => {
+                if (!hasUnsettledChatContextMutation()) window.location.reload();
+              }}
+              className="text-accent underline"
+            >
               Reload app
             </button>
           </p>

@@ -1,3 +1,4 @@
+import { hasUnsettledChatContextMutation, CHAT_CONTEXT_RELOAD_NOTE } from "../state/scoped-operation-attempts";
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
 interface PageErrorBoundaryProps {
@@ -50,6 +51,10 @@ export class PageErrorBoundary extends Component<PageErrorBoundaryProps, PageErr
 
   private readonly handleRetry = () => {
     if (isModuleLoadError(this.state.error) && typeof globalThis.location?.reload === "function") {
+      if (hasUnsettledChatContextMutation()) {
+        this.forceUpdate();
+        return;
+      }
       globalThis.location.reload();
       return;
     }
@@ -63,6 +68,7 @@ export class PageErrorBoundary extends Component<PageErrorBoundaryProps, PageErr
           <div className="shell-page-error-card">
             <h3>{this.props.pageLabel} hit a render failure.</h3>
             <p>Retry this surface or return to Chat while Mission Control recovers.</p>
+            {hasUnsettledChatContextMutation() ? <p role="status">{CHAT_CONTEXT_RELOAD_NOTE}</p> : null}
             <div className="shell-page-error-actions">
               <button type="button" onClick={this.handleRetry} className="gc-button">
                 Retry page

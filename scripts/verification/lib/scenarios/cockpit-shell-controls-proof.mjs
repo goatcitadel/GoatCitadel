@@ -4,15 +4,19 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { fillNavigationGrantDraft, reviewNavigationDraft, assertNavigationDraftOwner } from "./cockpit-navigation-draft-proof.mjs";
 import { assertProjectReadRequests } from "./cockpit-chat-project-proof.mjs";
 import { recordCockpitObserverRequest, assertCockpitObserverRequests } from "./cockpit-observer-requests.mjs";
-import { assertCitadelPresenceHeartbeat } from "./cockpit-citadel-directory-proof.mjs";
+import { assertNativeShellPresence } from "./cockpit-native-presence-proof.mjs";
 
 export function assertShellGeometry({ variant, viewportWidth, railWidth, inspectorWidth, mainBefore, mainDuring, overflow }) {
   assert.ok(overflow <= 1, "Shell overflowed its viewport.");
   if (variant === "mobile") { assert.equal(railWidth, 0); assert.ok(inspectorWidth <= viewportWidth); return; }
   assert.ok(Math.abs(railWidth - 56) <= 1, "Collapsed navigation is not the required 56px rail.");
-  assert.ok(inspectorWidth >= 360 && inspectorWidth <= 480, "Inspector width escaped its reviewed bounds.");
-  if (variant === "tablet") assert.ok(Math.abs(mainBefore - mainDuring) <= 1, "Tablet inspector must overlay the content.");
-  else assert.ok(Math.abs(mainBefore - mainDuring - inspectorWidth) <= 1, "Desktop inspector must share the content row.");
+  if (variant === "tablet") {
+    assert.ok(inspectorWidth > 0 && inspectorWidth <= viewportWidth, "Tablet inspector escaped its viewport.");
+    assert.ok(Math.abs(mainBefore - mainDuring) <= 1, "Tablet inspector must overlay the content.");
+  } else {
+    assert.ok(inspectorWidth >= 360 && inspectorWidth <= 480, "Inspector width escaped its reviewed bounds.");
+    assert.ok(Math.abs(mainBefore - mainDuring - inspectorWidth) <= 1, "Desktop inspector must share the content row.");
+  }
 }
 
 /** Only fixture creation writes: two task-owned workspaces and one empty Chat, before observation. No sends or approvals. */
@@ -119,8 +123,8 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
         const mainBefore = await page.locator("#main-content").evaluate(element => element.getBoundingClientRect().width);
         evidence.mainBefore = mainBefore;
         await page.keyboard.press("Control+i");
-        const inspector = page.getByLabel("Inspector: Conversation", { exact: true }); await inspector.waitFor();
-        if (variant !== "mobile") {
+        const inspector = page.getByRole("region", { name: "Inspector: Conversation", exact: true }); await inspector.waitFor();
+        if (variant === "desktop") {
           const handle = page.getByRole("separator", { name: "Resize inspector", exact: true });
           await handle.focus(); await page.keyboard.press("Home"); assert.equal(await handle.getAttribute("aria-valuenow"), "360");
           await page.keyboard.press("End"); assert.equal(await handle.getAttribute("aria-valuenow"), "480");
@@ -133,7 +137,12 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
           await page.waitForFunction(() => document.querySelector('[aria-label="Resize inspector"]')?.getAttribute("aria-valuenow") === "360");
           assert.equal(await handle.getAttribute("aria-valuenow"), "360");
         }
-        if (variant !== "mobile") await page.waitForFunction(() => document.querySelector('[aria-label="Inspector: Conversation"]').getBoundingClientRect().width === 360);
+        if (variant === "desktop") await page.waitForFunction(() => document.querySelector('[aria-label="Inspector: Conversation"]').getBoundingClientRect().width === 360);
+        if (variant === "tablet") {
+          const modal = page.getByRole("dialog", {name:"Conversation",exact:true}); await modal.waitFor();
+          assert.equal(await page.getByRole("separator", {name:"Resize inspector",exact:true}).count(), 0);
+          await page.keyboard.press("Tab"); assert.equal(await modal.evaluate(node=>node.contains(document.activeElement)), true);
+        }
         // Read all geometry in one layout observation after the actual resize.
         evidence.geometry = await page.evaluate(({ variant, viewportWidth, mainBefore }) => ({ variant, viewportWidth, mainBefore,
           railWidth: variant === "mobile" ? 0 : document.querySelector('[aria-label="Cockpit sidebar"]').getBoundingClientRect().width,
@@ -164,7 +173,7 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
         await page.waitForURL(url => url.pathname === "/settings" && url.search === "?shell=cockpit" && !url.hash);
         assert.deepEqual(await scope(), { citadelId: source.citadelId, workspaceId: target.workspaceId });
         await page.getByRole("tab", { name: "Appearance", exact: true }).waitFor();
-        await page.keyboard.press("Control+i"); assert.equal(await page.getByLabel("Inspector: Conversation", { exact: true }).count(), 0);
+        await page.keyboard.press("Control+i"); assert.equal(await page.getByRole("region", { name: "Inspector: Conversation", exact: true }).count(), 0);
         await capture("scope-changed");
         await openScope(source.workspaceId);
         await page.waitForFunction(id => window.localStorage.getItem("goatcitadel.ui.workspace_id.v1") === id, source.workspaceId);
@@ -183,16 +192,17 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
         assert.deepEqual(await read("/api/v1/tools/grants?limit=400"), before); assert.deepEqual(writes, []);
         assertProjectReadRequests(routingReads, { [session.sessionId]: prefs });
         await assertCockpitObserverRequests(observers);
-        const presenceIdentity = await page.evaluate(() => ({ clientId: window.sessionStorage.getItem("goatcitadel.notification-client-id"), leaseId: window.sessionStorage.getItem("goatcitadel.notification-lease-id") }));
+        const presenceIdentity = await page.evaluate(() => ({ clientId: window.sessionStorage.getItem("goatcitadel.notification-client-id") }));
         await Promise.all(presence.map(entry => entry.completed));
+        const presenceLeases = new Map();
         for (const entry of presence) {
           if (entry.error) throw entry.error;
           assert.ok([source.workspaceId, target.workspaceId].includes(entry.body.workspaceId));
-          assertCitadelPresenceHeartbeat(entry, { ...presenceIdentity, workspaceId: entry.body.workspaceId });
+          assertNativeShellPresence(entry, { ...presenceIdentity, sessionsByWorkspace: { [source.workspaceId]:session.sessionId, [target.workspaceId]:undefined } }, presenceLeases);
         }
         return { status: "passed", metrics: { emptyCanonicalWorkIndicator: variant !== "mobile", modalFocusRestored: true, consentCancelFocusRestored: true, currentSelectionShortcut: true, staleSelectionWithheld: true, scopedCancelKeep: true,
           originDraftRetained: true, explicitDraftDiscard: true, sameDocument: true, browserMutations: 0, blockingAxe: 0, overflow: 0,
-          tabletOverlay: variant === "tablet", boundedKeyboardPointerResize: variant !== "mobile", fixtureOnlyEmptySession: true }, artifacts: emptyArtifacts({ screenshots, diagnostics }) };
+          tabletOverlay: variant === "tablet", boundedKeyboardPointerResize: variant === "desktop", fixtureOnlyEmptySession: true }, artifacts: emptyArtifacts({ screenshots, diagnostics }) };
       } catch (error) {
         const dir = path.join(context.artifactRoot, "diagnostics"); await mkdir(dir, { recursive: true });
         const file = path.join(dir, `cockpit-shell-controls-${variant}-failure.json`);

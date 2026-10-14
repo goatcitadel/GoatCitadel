@@ -110,3 +110,21 @@ it("reveals the virtual footer's actual named disclosure without changing its ex
   assert.deepEqual(calls, [["region", { name: "Messages", exact: true }], ["wait-messages"], ["latest"],
     ["group", { name: "Conversation run", exact: true }], ["wait-disclosure", { state: "attached", timeout: 15000 }], ["reveal-disclosure"]]);
 });
+
+it("accepts only canonical saved fallback consent in read-only previews", () => {
+  const path = "/api/v1/chat/sessions/a/route-preflight";
+  const check = (body, prefs = {}) =>
+    assertProjectReadRequests([{ method: "POST", path, body: { action: "send", ...body } }], { a: prefs });
+  assert.equal(check({ providerFallback: null }), 1);
+  const consent = { mode: "armed", sourceProviderId: "provider-a", targetProviderId: "provider-b" };
+  assert.equal(check({ providerFallback: consent }, { providerFallback: consent }), 1);
+  for (const body of [
+    { providerFallback: consent },
+    { providerFallback: false },
+    { providerFallback: null, content: "captured" },
+    { providerFallback: null, workspaceSnapshot: {} },
+    { providerFallback: null, turnId: "turn" },
+  ])
+    assert.throws(() => check(body));
+  assert.throws(() => check({ providerFallback: null }, { providerFallback: consent }));
+});

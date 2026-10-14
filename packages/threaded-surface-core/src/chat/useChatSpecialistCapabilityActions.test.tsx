@@ -1,3 +1,4 @@
+import { __resetApprovalOperationAttemptsForTests } from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import React, { useCallback, useRef, useState } from "react";
 import { act, create } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -85,16 +86,24 @@ function makeCapabilitySuggestion(
 function setupApiDefaults() {
   createChatSpecialistCandidateMock.mockResolvedValue({
     candidateId: "candidate-1",
+    sessionId: "session-1",
     title: "Launch analyst",
   });
   updateChatSpecialistCandidateMock.mockResolvedValue({
     candidateId: "candidate-1",
+    sessionId: "session-1",
     title: "Launch analyst",
     status: "approved",
   });
   activateImportedAgentCatalogEntryMock.mockResolvedValue({
-    catalogEntry: { definition: { frontmatter: { name: "Catalog analyst" } } },
-    specialist: { candidateId: "candidate-catalog", title: "Catalog analyst" },
+    catalogEntry: { entryId: "catalog-1", definition: { frontmatter: { name: "Catalog analyst" } } },
+    specialist: {
+      candidateId: "candidate-catalog",
+      sessionId: "session-1",
+      title: "Catalog analyst",
+      status: "active",
+      routingMode: "manual_only",
+    },
   });
   createCapabilityProposalMock.mockResolvedValue({
     proposalId: "proposal-1",
@@ -211,6 +220,7 @@ async function flushEffects(times = 3) {
 
 describe("useChatSpecialistCapabilityActions", () => {
   beforeEach(() => {
+    __resetApprovalOperationAttemptsForTests();
     latestHarness = null;
     vi.clearAllMocks();
     setupApiDefaults();
@@ -220,6 +230,39 @@ describe("useChatSpecialistCapabilityActions", () => {
     });
   });
 
+  it.each(["draft", "patch", "activate"] as const)(
+    "retains the original %s loss without replaying it",
+    async (kind) => {
+      const failing =
+        kind === "draft"
+          ? createChatSpecialistCandidateMock
+          : kind === "patch"
+            ? updateChatSpecialistCandidateMock
+            : activateImportedAgentCatalogEntryMock;
+      failing.mockRejectedValueOnce(new Error(kind + " failed"));
+      await act(async () => {
+        create(<Harness />);
+        await flushEffects();
+      });
+      const action = () =>
+        kind === "draft"
+          ? latestHarness!.result.handleCreateSpecialistDraft({ title: "Draft" } as never)
+          : kind === "patch"
+            ? latestHarness!.result.handleSpecialistCandidatePatch("candidate-1", { status: "approved" }, "Approved")
+            : latestHarness!.result.handleActivateCatalogSpecialist({
+                candidateId: "catalog-1",
+                title: "Catalog",
+              } as never);
+      await act(async () => {
+        await action();
+        await action();
+      });
+      expect(failing).toHaveBeenCalledTimes(1);
+      expect(latestHarness!.result.specialistMutation.phase).toBe("uncertain");
+      expect(latestHarness!.result.specialistMutation.receipt).toBeUndefined();
+      expect(latestHarness!.errors).toContain(kind + " failed The original attempt remains locked.");
+    },
+  );
   it("creates patches and activates specialist candidates", async () => {
     await act(async () => {
       create(<Harness />);
@@ -663,8 +706,6 @@ describe("useChatSpecialistCapabilityActions", () => {
     expect(createChatSpecialistCandidateMock).not.toHaveBeenCalled();
 
     createChatSpecialistCandidateMock.mockRejectedValueOnce(new Error("draft failed"));
-    updateChatSpecialistCandidateMock.mockRejectedValueOnce(new Error("patch failed"));
-    activateImportedAgentCatalogEntryMock.mockRejectedValueOnce(new Error("activate failed"));
     await act(async () => {
       create(<Harness />);
       await flushEffects();
@@ -681,7 +722,12 @@ describe("useChatSpecialistCapabilityActions", () => {
         title: "Catalog",
       } as any);
     });
-    expect(latestHarness?.errors).toEqual(expect.arrayContaining(["draft failed", "patch failed", "activate failed"]));
+    expect(latestHarness?.errors).toContain("draft failed The original attempt remains locked.");
+    expect(latestHarness?.result.specialistMutation.phase).toBe("uncertain");
+    expect(latestHarness?.result.specialistMutation.locked).toBe(true);
+    expect(createChatSpecialistCandidateMock).toHaveBeenCalledTimes(1);
+    expect(updateChatSpecialistCandidateMock).not.toHaveBeenCalled();
+    expect(activateImportedAgentCatalogEntryMock).not.toHaveBeenCalled();
 
     await act(async () => {
       latestHarness?.result.handleCapabilitySuggestionAction(

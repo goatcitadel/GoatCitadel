@@ -32,6 +32,7 @@ import { useChatScopedErrors } from "./useChatScopedErrors";
 import { useChatSessionSelection } from "./useChatSessionSelection";
 
 type Input = {
+  sendingRevisionRef: { readonly current: number };
   catalogEvidenceEnabled?: boolean;
   secondaryEvidenceEnabled?: boolean;
   workspaceId: NonNullable<MissionThreadedControllerHostProps["workspaceId"]>;
@@ -71,6 +72,7 @@ type Input = {
 
 /** Composes session reads, scope-bound lifecycle, controls and context owners in their original hook order. */
 export function useChatSessionComposition({
+  sendingRevisionRef,
   catalogEvidenceEnabled,
   secondaryEvidenceEnabled,
   workspaceId,
@@ -259,6 +261,10 @@ export function useChatSessionComposition({
   );
 
   const sessionControls = useChatSessionControls({
+    historicalRevisionRef: sessionData.historicalWindowGenerationRef,
+    historicalReadOnly: sessionData.contextMutationReadOnly,
+    selectionRevisionRef: selection.selectedSessionRevisionRef,
+    sendingRevisionRef,
     initialOutboundSessionCreationRef: coordination.initialOutboundSessionCreationRef,
     workspaceId,
     viewIdentity,
